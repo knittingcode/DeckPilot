@@ -457,6 +457,16 @@ pub fn dev_key(paths: &DevPaths) -> Option<DatabaseKey> {
     }
 }
 
+/// Encrypts an unencrypted development database from an earlier version
+/// with [`DEV_PASSWORD`], like the app's migration does.
+pub fn encrypt_legacy(paths: &DevPaths) -> Result<()> {
+    let vault = vault(paths);
+    if vault.state()? == DatabaseState::Plaintext {
+        vault.encrypt_plaintext(&Password::new(DEV_PASSWORD))?;
+    }
+    Ok(())
+}
+
 /// Seeds the development database once per data directory. A new database
 /// is encrypted with [`DEV_PASSWORD`]. An unencrypted database from an
 /// earlier version is left alone so that the app's migration can be tried.

@@ -42,7 +42,13 @@ Commands:
                          Show session logs (follow with -f)
   agent                  Run the agent in the foreground (dev data)
   ui                     Run the app with HMR in the foreground (dev data)
-  seed [--reset]         Fill the dev database with demonstration data
+  seed [--reset] [--encrypt-legacy]
+                         Fill the dev database with demonstration data
+                         (--encrypt-legacy: encrypt an unencrypted database
+                         from an earlier version with the dev password)
+  window <id>            Ask the dev agent to open a native window, e.g.
+                         security.unlock or workflows.execution-summary
+  press <serial> <key>   Press a key of a simulated device
   clean [--data]         Remove logs and session files (and dev data)
   check-versions [--tag <tag>]
                          Verify that all version numbers match
@@ -205,6 +211,79 @@ fn wait_for_agent(paths: &DevPaths, agent: &mut Child, timeout: Duration) -> Res
         std::thread::sleep(Duration::from_millis(200));
     }
     Err("the agent did not become ready in time".into())
+}
+
+/// `seed [--reset] [--encrypt-legacy]`.
+fn seed_command(paths: &DevPaths, reset: bool, encrypt_legacy: bool) -> Result<(), String> {
+    if reset {
+        if Session::load(paths).is_some_and(|s| s.supervisor_alive()) {
+            return Err("stop the session before resetting its data".into());
+        }
+        let _ = std::fs::remove_dir_all(&paths.data);
+    }
+    if encrypt_legacy {
+        if Session::load(paths).is_some_and(|s| s.supervisor_alive()) {
+            return Err("stop the session before encrypting its data".into());
+        }
+        seed::encrypt_legacy(paths).map_err(|e| e.to_string())?;
+        println!("encrypted the development database with the development password");
+    }
+    let seeded = seed::seed(paths).map_err(|e| e.to_string())?;
+    println!(
+        "{}",
+        if seeded {
+            "seeded demonstration data"
+        } else {
+            "already seeded"
+        }
+    );
+    Ok(())
+}
+
+/// `window` and `press`: requests to the running development agent.
+fn agent_command(name: &str, args: &[String], paths: &DevPaths) -> Result<(), String> {
+    match name {
+        "window" => {
+            let id = args.first().ok_or("expected a window identifier")?;
+            dev_request(paths, Request::RequestWindow { window: id.clone() })
+        }
+        "press" => {
+            let (Some(serial), Some(key)) = (args.first(), args.get(1)) else {
+                return Err("expected a simulated device serial and a key index".into());
+            };
+            let index: u16 = key.parse().map_err(|_| "the key index must be a number")?;
+            let status = runtime()
+                .block_on(agent_status(paths))
+                .map_err(|e| e.to_string())?;
+            let device = status
+                .devices
+                .iter()
+                .find(|d| &d.id.serial == serial)
+                .ok_or_else(|| format!("no simulated device {serial}"))?
+                .id
+                .clone();
+            dev_request(
+                paths,
+                Request::SimulateInput {
+                    device,
+                    control: deckpilot_device::ControlId::Key { index },
+                    input: deckpilot_device::ControlInput::Press,
+                },
+            )
+        }
+        other => Err(format!("unknown command `{other}`")),
+    }
+}
+
+/// Sends one request to the development agent.
+fn dev_request(paths: &DevPaths, request: Request) -> Result<(), String> {
+    runtime()
+        .block_on(async {
+            let mut client = AgentClient::connect(&paths.agent_paths(), ClientKind::Other).await?;
+            client.request(request).await
+        })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// Unlocks the development agent with the development password, so that
@@ -619,25 +698,9 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         Some("agent") => foreground_agent(&paths, &devices),
         Some("ui") => foreground_ui(&paths),
-        Some("seed") => {
-            if flag("--reset") {
-                if Session::load(&paths).is_some_and(|s| s.supervisor_alive()) {
-                    return Err("stop the session before resetting its data".into());
-                }
-                let _ = std::fs::remove_dir_all(&paths.data);
-            }
-            let seeded = seed::seed(&paths).map_err(|e| e.to_string())?;
-            println!(
-                "{}",
-                if seeded {
-                    "seeded demonstration data"
-                } else {
-                    "already seeded"
-                }
-            );
-            Ok(())
-        }
+        Some("seed") => seed_command(&paths, flag("--reset"), flag("--encrypt-legacy")),
         Some("clean") => clean(&paths, flag("--data")),
+        Some(command @ ("window" | "press")) => agent_command(command, &args[1..], &paths),
         Some("check-versions") => {
             let version = versions::check(&paths.root, option(args, "--tag").as_deref())?;
             println!("all versions are {version}");
