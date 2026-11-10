@@ -13,7 +13,9 @@ use deckpilot_core::{
 use deckpilot_device::{ControlId, TouchGesture, models};
 use deckpilot_modules::general;
 use deckpilot_modules::projects::{ProjectCatalog, actions};
-use deckpilot_storage::{ConfigStore, Encryption, SqliteStore};
+use deckpilot_storage::crypto::Password;
+use deckpilot_storage::vault::{DatabaseState, Vault};
+use deckpilot_storage::{ConfigStore, DatabaseKey, Encryption, SqliteStore};
 
 use crate::session::DevPaths;
 
@@ -436,14 +438,57 @@ const SEEDED: &str = "dev.seeded";
 
 /// Seeds the development database if it has no profiles. Returns whether
 /// data was written.
+/// Password of the development database. A fixture for `make up` only: it
+/// exists in this development tool, never in the application, and protects
+/// nothing but demonstration data in `.dev/data`.
+pub const DEV_PASSWORD: &str = "deckpilot-dev";
+
+fn vault(paths: &DevPaths) -> Vault {
+    Vault::new(paths.data.join("deckpilot.db"))
+}
+
+/// The key of the development database, if it is encrypted with the
+/// development password.
+pub fn dev_key(paths: &DevPaths) -> Option<DatabaseKey> {
+    let vault = vault(paths);
+    match vault.state() {
+        Ok(DatabaseState::Encrypted) => vault.unlock(&Password::new(DEV_PASSWORD)).ok(),
+        _ => None,
+    }
+}
+
+/// Seeds the development database once per data directory. A new database
+/// is encrypted with [`DEV_PASSWORD`]. An unencrypted database from an
+/// earlier version is left alone so that the app's migration can be tried.
+/// Returns whether data was written.
 pub fn seed(paths: &DevPaths) -> Result<bool> {
     paths.create()?;
-    let store = SqliteStore::open(paths.data.join("deckpilot.db"), &Encryption::None)?;
+    let vault = vault(paths);
+    let key = match vault.state()? {
+        DatabaseState::Missing => vault.initialize(&Password::new(DEV_PASSWORD))?,
+        DatabaseState::Plaintext => {
+            println!(
+                "the development database is unencrypted (created by an earlier version); \
+                 the app offers to encrypt it (the development password is `{DEV_PASSWORD}`)"
+            );
+            return Ok(false);
+        }
+        DatabaseState::Encrypted => {
+            let Ok(key) = vault.unlock(&Password::new(DEV_PASSWORD)) else {
+                println!("the development database uses a different password; not seeding");
+                return Ok(false);
+            };
+            key
+        }
+    };
+    let store = SqliteStore::open(vault.database(), &Encryption::Key(key))?;
     // Seed once per data directory: deleting the demo data must not bring
     // it back on the next `make up`. `seed --reset` starts a new directory.
     if store.setting(SEEDED)?.is_some() {
         return Ok(false);
     }
+    // The app asks for the password once per version; not in development.
+    store.set_setting(CONFIRMED_VERSION, env!("CARGO_PKG_VERSION"))?;
     if !store.list_profiles()?.is_empty() {
         store.set_setting(SEEDED, "existing data")?;
         return Ok(false);
@@ -466,6 +511,10 @@ pub fn seed(paths: &DevPaths) -> Result<bool> {
     store.save_machine_config(&machine(paths)?)?;
     Ok(true)
 }
+
+/// Setting the configuration app uses to ask for the password once after
+/// an update.
+const CONFIRMED_VERSION: &str = "security.confirmedVersion";
 
 #[cfg(test)]
 mod tests {

@@ -31,7 +31,9 @@ Usage: deckpilot-dev <command> [options]
 
 Commands:
   doctor                 Check development dependencies
-  up [--foreground]      Start the agent and the app with live reload
+  up [--foreground] [--locked]
+                         Start the agent and the app with live reload
+                         (--locked: do not unlock with the dev password)
      [--devices <list>]  Simulated devices: mk2,xl,plus (default) or none
   down                   Stop the session started by `up`
   restart                down + up
@@ -205,6 +207,35 @@ fn wait_for_agent(paths: &DevPaths, agent: &mut Child, timeout: Duration) -> Res
     Err("the agent did not become ready in time".into())
 }
 
+/// Unlocks the development agent with the development password, so that
+/// `make up` behaves like an unlocked session. `--locked` (`make up
+/// LOCKED=1`) leaves it locked to try the unlock screens.
+fn unlock_dev_agent(paths: &DevPaths, locked: bool) {
+    if locked {
+        println!(
+            "agent left locked; the development password is `{}`",
+            seed::DEV_PASSWORD
+        );
+        return;
+    }
+    let Some(key) = seed::dev_key(paths) else {
+        println!("agent locked: the app asks for a password");
+        return;
+    };
+    let unlocked = runtime().block_on(async {
+        let mut client = AgentClient::connect(&paths.agent_paths(), ClientKind::Other).await?;
+        client
+            .request(Request::Unlock {
+                key: deckpilot_ipc::KeyMaterial::new(key.to_hex()),
+            })
+            .await
+    });
+    match unlocked {
+        Ok(_) => println!("agent unlocked with the development password"),
+        Err(error) => println!("could not unlock the agent: {error}"),
+    }
+}
+
 fn stop_agent_gracefully(paths: &DevPaths, owned: Option<&OwnedProcess>) {
     let runtime = runtime();
     let requested = runtime
@@ -223,7 +254,12 @@ fn stop_agent_gracefully(paths: &DevPaths, owned: Option<&OwnedProcess>) {
 }
 
 /// Runs the session in this process until a stop is requested.
-fn supervise(paths: &DevPaths, devices: &str, foreground: bool) -> Result<(), String> {
+fn supervise(
+    paths: &DevPaths,
+    devices: &str,
+    foreground: bool,
+    locked: bool,
+) -> Result<(), String> {
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
     ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst)).map_err(|e| e.to_string())?;
@@ -255,6 +291,7 @@ fn supervise(paths: &DevPaths, devices: &str, foreground: bool) -> Result<(), St
         return Err(error);
     }
     println!("agent ready (data: {})", paths.data.display());
+    unlock_dev_agent(paths, locked);
 
     let mut ui_command = Command::new(program("pnpm"));
     ui_command.args(UI_ARGS);
@@ -319,7 +356,7 @@ fn build_agent(paths: &DevPaths) -> Result<(), String> {
     }
 }
 
-fn up(paths: &DevPaths, devices: &str, foreground: bool) -> Result<(), String> {
+fn up(paths: &DevPaths, devices: &str, foreground: bool, locked: bool) -> Result<(), String> {
     paths.ensure_isolated()?;
     paths.create().map_err(|e| e.to_string())?;
     if let Some(session) = Session::load(paths) {
@@ -340,12 +377,15 @@ fn up(paths: &DevPaths, devices: &str, foreground: bool) -> Result<(), String> {
     build_agent(paths)?;
 
     if foreground {
-        return supervise(paths, devices, true);
+        return supervise(paths, devices, true, locked);
     }
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut command = Command::new(exe);
     command.args(["supervise", "--devices", devices]);
+    if locked {
+        command.arg("--locked");
+    }
     command.current_dir(&paths.root);
     let log = std::fs::File::create(logs::log_path(&paths.logs, "supervisor"))
         .map_err(|e| e.to_string())?;
@@ -480,6 +520,18 @@ fn foreground_agent(paths: &DevPaths, devices: &str) -> Result<(), String> {
         .args(["run", "-p", "deckpilot-agent", "--"])
         .args(agent_args(devices));
     dev_env(&mut command, paths);
+    // Unlock the agent once it is listening, as `make up` does.
+    let watcher = paths.clone();
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while Instant::now() < deadline {
+            if runtime().block_on(agent_status(&watcher)).is_ok() {
+                unlock_dev_agent(&watcher, false);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    });
     let status = command.status().map_err(|e| e.to_string())?;
     if status.success() {
         Ok(())
@@ -530,13 +582,13 @@ fn run(args: &[String]) -> Result<(), String> {
     let devices = option(args, "--devices").unwrap_or_else(|| DEFAULT_DEVICES.to_owned());
     match args.first().map(String::as_str) {
         Some("doctor") => doctor(),
-        Some("up") => up(&paths, &devices, flag("--foreground")),
-        Some("supervise") => supervise(&paths, &devices, false),
+        Some("up") => up(&paths, &devices, flag("--foreground"), flag("--locked")),
+        Some("supervise") => supervise(&paths, &devices, false, flag("--locked")),
         Some("down") => down(&paths),
         Some("restart") => {
             let devices = Session::load(&paths).map_or(devices, |s| s.devices);
             down(&paths)?;
-            up(&paths, &devices, false)
+            up(&paths, &devices, false, flag("--locked"))
         }
         Some("status") => {
             status(&paths);
