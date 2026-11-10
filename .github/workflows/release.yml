@@ -202,7 +202,9 @@ jobs:
           releaseName: DeckPilot ${{ env.TAG }}
           releaseBody: ${{ needs.prepare.outputs.notes }}
           releaseDraft: true
-          prerelease: false
+          # Test tags (e.g. v0.5.0-1) become pre-releases: even if published,
+          # they never become "latest", the channel the app reads.
+          prerelease: ${{ contains(env.TAG, '-') }}
           includeUpdaterJson: true
           args: --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json --config src-tauri/tauri.updater.conf.json
       # The updater key compiled into the app must be the configured one;

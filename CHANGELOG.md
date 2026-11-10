@@ -5,6 +5,14 @@ All notable changes to DeckPilot. The format follows
 [Semantic Versioning](https://semver.org/). The section of a version is used
 as the notes of its GitHub release and of the in-app update.
 
+## [0.5.0] - Unreleased
+
+### Changed
+
+- Release validation: test releases (e.g. `v0.5.0-1`) are verified like
+  final ones and are marked as pre-releases, so they never become the
+  release the app updates to.
+
 ## [0.4.0] - Unreleased
 
 ### Added

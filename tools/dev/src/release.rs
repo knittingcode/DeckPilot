@@ -23,11 +23,11 @@ pub fn verify(dir: &Path, public_key: &str, expected_version: &str) -> Result<Ve
         return Err("latest.json lists no platforms".into());
     }
     let mut verified = Vec::new();
+    // URL prefix and signature format, as the client checks them. The
+    // version equals the sources' (above); a pre-release version is accepted
+    // here for test releases, but the stable channel never offers one.
+    manifest.validate_artifacts().map_err(|e| e.to_string())?;
     for (target, artifact) in &manifest.platforms {
-        // Reuse the client-side validation (URL prefix, signature format, stable version).
-        manifest
-            .update_for(&semver::Version::new(0, 0, 0), target)
-            .map_err(|e| format!("{target}: {e}"))?;
         let name = artifact.url.rsplit('/').next().unwrap_or_default();
         let path = dir.join(name);
         let data =
@@ -45,6 +45,12 @@ pub fn verify(dir: &Path, public_key: &str, expected_version: &str) -> Result<Ve
 /// next `## `), without its heading. Fails if it is missing or empty: a
 /// release always has notes.
 pub fn release_notes(changelog: &str, version: &str) -> Result<String, String> {
+    // A test release (`0.5.0-1`) uses the notes of the version it leads to.
+    if let Some((base, _)) = version.split_once('-')
+        && !changelog.contains(&format!("## [{version}]"))
+    {
+        return release_notes(changelog, base);
+    }
     let heading = format!("## [{version}]");
     let mut lines = changelog
         .lines()
@@ -205,6 +211,29 @@ mod tests {
     }
 
     #[test]
+    fn test_releases_with_pre_release_versions_are_verified_too() {
+        let (dir, key) = release_dir("0.5.0-1", Some("0.5.0-1"), "artifact.bin");
+        assert_eq!(
+            verify(&dir, &key, "0.5.0-1").unwrap(),
+            ["linux-x86_64: artifact.bin"]
+        );
+        assert!(
+            verify(&dir, &key, "0.5.0")
+                .unwrap_err()
+                .contains("announces")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+        // The stable channel still refuses it.
+        let text = serde_json::json!({ "version": "0.5.0-1", "platforms": {} }).to_string();
+        let manifest = Manifest::parse(&text).unwrap();
+        assert!(
+            manifest
+                .update_for(&semver::Version::new(0, 4, 0), "linux-x86_64")
+                .is_err()
+        );
+    }
+
+    #[test]
     fn release_notes_come_from_the_changelog() {
         let changelog =
             "# Changelog\n\n## [1.2.3] - 2026-01-01\n\n### Added\n\n- A\n\n## [1.2.2]\n\n- B\n";
@@ -217,6 +246,10 @@ mod tests {
             release_notes(changelog, "1.2.4")
                 .unwrap_err()
                 .contains("no section")
+        );
+        assert_eq!(
+            release_notes(changelog, "1.2.3-1").unwrap(),
+            "### Added\n\n- A"
         );
         assert!(
             release_notes("## [1.0.0]\n\n## [0.9.0]\n- x", "1.0.0")
