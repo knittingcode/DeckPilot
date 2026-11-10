@@ -29,8 +29,24 @@ pub enum ClientError {
 impl From<FrameError> for ClientError {
     fn from(error: FrameError) -> Self {
         match error {
-            FrameError::Io(error) => Self::Io(error),
+            FrameError::Io(error) => Self::from_io(error),
             other => Self::Protocol(other.to_string()),
+        }
+    }
+}
+
+impl ClientError {
+    /// A connection torn down by the agent is reported as [`ClientError::Closed`]
+    /// regardless of how the platform signals it: a clean end of stream on
+    /// macOS and Windows, but often a reset on Linux when the agent exits while
+    /// a request is in flight.
+    fn from_io(error: io::Error) -> Self {
+        match error.kind() {
+            io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::UnexpectedEof => Self::Closed,
+            _ => Self::Io(error),
         }
     }
 }
@@ -153,4 +169,26 @@ pub async fn request_once(
         .await?
         .request(request)
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peer_teardown_is_reported_as_closed() {
+        for kind in [
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::ConnectionAborted,
+            io::ErrorKind::BrokenPipe,
+            io::ErrorKind::UnexpectedEof,
+        ] {
+            let error = ClientError::from(FrameError::Io(io::Error::from(kind)));
+            assert!(matches!(error, ClientError::Closed), "{kind:?}");
+        }
+        let other = ClientError::from(FrameError::Io(io::Error::from(
+            io::ErrorKind::PermissionDenied,
+        )));
+        assert!(matches!(other, ClientError::Io(_)));
+    }
 }
