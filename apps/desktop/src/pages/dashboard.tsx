@@ -20,7 +20,8 @@ import { type PageId, useAppContext } from "@/lib/app-context"
 import { dashboardCards } from "@/modules"
 
 export function DashboardPage() {
-  const { revision, profiles, refresh, agent, updates, navigate, modules } = useAppContext()
+  const { revision, profiles, refresh, agent, updates, navigate, openSettings, modules } =
+    useAppContext()
   const { state } = useAsync(
     () => Promise.all([api.getOverview(), api.launchInfo()]),
     String(revision),
@@ -61,7 +62,7 @@ export function DashboardPage() {
                   variant="outline"
                   className="mt-2"
                   onClick={() => {
-                    navigate("settings")
+                    openSettings("updates")
                   }}
                 >
                   View update <ArrowRight />
