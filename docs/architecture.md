@@ -2,28 +2,32 @@
 
 ## Processes
 
-DeckPilot is designed as two cooperating processes:
+DeckPilot consists of two cooperating processes:
 
-| Process              | Responsibility                                                  | Status      |
-| -------------------- | --------------------------------------------------------------- | ----------- |
-| Background agent     | Talks to devices, dispatches input, runs actions and workflows  | Planned     |
-| Configuration app    | Edits profiles, projects, actions and machine settings          | Implemented |
+| Process                               | Responsibility                                                              |
+| ------------------------------------- | --------------------------------------------------------------------------- |
+| Background agent (`deckpilot-agent`)  | Owns devices, renders layouts, dispatches input, runs actions, system tray |
+| Configuration app (`deckpilot-desktop`) | Edits profiles, projects, actions, layouts and machine settings          |
 
-The agent must run independently of the configuration app. The app is launched
-on demand, and closing its window must never interrupt device handling. Both
-processes share the local SQLite database; the agent will be notified of
-configuration changes over a local IPC channel (to be designed in the agent
-milestone).
+The agent runs independently of the configuration app. The app is launched on
+demand, connects to the agent over local IPC, and closing its window never
+interrupts device handling. The configuration app never opens HID devices and
+never executes actions itself. See [background-agent.md](background-agent.md) for the agent's
+architecture, lifecycle and IPC protocol.
 
-Until the agent exists, the configuration app can test-run hardware-independent
-actions in its own process.
+Both processes open the same local SQLite database. The configuration app
+writes configuration documents and asks the agent to reload them; the agent
+writes runtime state (active profile, active project, brightness).
 
 ## Crates
 
 ```
-deckpilot-device  ◄── deckpilot-core ◄── deckpilot-storage
-        ▲                  ▲                    ▲
-        └──────────────────┴── deckpilot-desktop (Tauri app)
+deckpilot-device ◄── deckpilot-core ◄── deckpilot-storage
+   ▲      ▲               ▲   ▲                ▲
+   │  deckpilot-hid       │  deckpilot-ipc     │
+   │      ▲               │   ▲                │
+   └──────┴── deckpilot-agent (binary) ────────┤
+                          └─── deckpilot-desktop (Tauri app)
 ```
 
 ### `deckpilot-device`
@@ -39,9 +43,31 @@ Hardware-independent description of control surfaces.
   (model + serial)
 - `DeviceRegistry` tracks connection state of multiple devices across hotplug
 - `ModelCatalog` with the built-in Stream Deck MK.2 descriptor
+- `DeviceBackend` (discover, open) and `DeviceHandle` (read input, set images
+  and brightness, flush): the driver interface
+- `Frame`: device-independent RGB image; drivers convert it to their format
+- `KeyStateTracker`: turns key-state snapshots into press/release events
+  without duplicates
+- `mock::MockBackend` (feature `mock`): simulated devices for tests
 
-Nothing in the rest of the system assumes a fixed number of keys. A future HID
-backend only needs to produce `DeviceEvent`s and consume image updates.
+Nothing outside a driver assumes a fixed number of keys.
+
+### `deckpilot-hid`
+
+USB HID driver for the Stream Deck MK.2 using `elgato-streamdeck` and
+`hidapi`. Only models with a descriptor are exposed.
+
+### `deckpilot-ipc`
+
+Shared by the agent and the configuration app: data-directory paths, the
+per-user IPC endpoint, the client token, the versioned protocol types,
+newline-delimited JSON framing and an async client.
+
+### `apps/agent`
+
+The background agent: device sessions and I/O threads, layout rendering,
+request handling, IPC server, system tray, autostart and single-instance
+lock.
 
 ### `deckpilot-core`
 
@@ -61,8 +87,11 @@ The domain model and execution engine.
   `BindingTarget`
 - `profile`: `Profile` and consistency validation
 - `platform`: `Os`
-- `runtime`: `Engine` (runs actions and workflows) and `Runtime` (handles device
-  events, page navigation and folders)
+- `runtime`: `Engine` (runs actions and workflows)
+- `device_runtime`: `Runtime` (active profile and project, connected devices,
+  page navigation and folders, input dispatch, layout status) and
+  `LayoutStatus`
+- `face`: `KeyFace`, the device-independent description of what a key shows
 
 Action handlers are pure with respect to the runtime context: they receive a
 read-only `ExecutionContext` and return `ContextEffect`s (for example "switch to
@@ -84,8 +113,10 @@ receive through the execution context. No such handler exists yet.
 ### `apps/desktop`
 
 Tauri 2 application. The Rust side (`src-tauri`) exposes commands that load
-state from storage, apply one change through the domain model and persist the
-result. The frontend is React + TypeScript with Tailwind CSS and shadcn/ui
+configuration from storage, apply one change through the domain model,
+persist it and notify the agent. Runtime changes and action execution are
+forwarded to the agent; a background task subscribes to agent events and
+forwards them to the window. The frontend is React + TypeScript with Tailwind CSS and shadcn/ui
 components; `src/lib/types.ts` mirrors the serialized Rust types.
 
 ## Configuration separation
@@ -94,7 +125,7 @@ components; `src/lib/types.ts` mirrors the serialized Rust types.
 | ---------------------- | ---------------------------------------------- | -------- |
 | Profiles               | Actions, workflows, projects, layouts          | Yes      |
 | Machine configuration  | Resource bindings, OS                          | No       |
-| Runtime state          | Active profile, active project per profile     | No       |
+| Runtime state          | Active profile, active project per profile, device brightness | No |
 | Secrets (planned)      | Credentials needed by actions                  | Never    |
 
 Portable data never contains absolute paths: `ResourceKey` rejects them by

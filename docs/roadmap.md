@@ -3,7 +3,7 @@
 Milestones are deliberately small. Each one ends with working, tested
 functionality.
 
-## Milestone 0 – Foundation (current)
+## Milestone 0 – Foundation (done)
 
 - Cargo and pnpm workspaces, CI on Linux, macOS and Windows
 - Domain model: actions, workflows, profiles, projects, resources, devices,
@@ -12,14 +12,29 @@ functionality.
 - SQLite storage with migrations; optional SQLCipher build
 - Configuration app: dashboard, actions, profiles, projects, devices, settings
 
-## Milestone 1 – Background agent and MK.2 support
+## Milestone 1 – Background agent and MK.2 support (current)
 
-- `deckpilot-agent` binary that runs independently of the configuration app
-- HID backend for the Stream Deck MK.2 (discovery, hotplug, key input, key
-  images), tested on a physical device before being marked as verified
-- Local IPC between the configuration app and the agent; configuration reload
-- Autostart integration per operating system
-- Key image rendering from labels and icons
+Implemented:
+
+- `deckpilot-agent` binary that runs independently of the configuration app,
+  with a system tray on Linux, macOS and Windows
+- HID driver for the Stream Deck MK.2 (discovery, reconnection, key input, key
+  images, brightness)
+- Authenticated, versioned local IPC; configuration reload; event subscription
+- Profile and project switching without restarting the agent
+- Key image rendering from labels; generated default layouts
+- Per-user start at login
+
+Remaining before the milestone is complete:
+
+- Test the MK.2 driver on a physical device on all three platforms and mark
+  the model as verified
+- Bundle the agent with the configuration app installers
+
+## Milestone 1.x – Polish
+
+- Icons on keys
+- Event-driven device discovery where the OS provides hotplug notifications
 
 ## Milestone 2 – Editors
 
