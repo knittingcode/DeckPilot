@@ -134,7 +134,7 @@ impl Profile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ActionParameters, OnFailure, ProjectKey, builtin};
+    use crate::{ActionParameters, OnFailure, ProjectKey, WorkflowStep, builtin};
 
     fn action(name: &str) -> ActionInstance {
         ActionInstance {
@@ -159,8 +159,14 @@ mod tests {
         home.actions.push(b);
 
         assert_ne!(work.workflows[0].steps, home.workflows[0].steps);
-        assert!(work.validate(&ModelCatalog::builtin()).is_empty());
-        assert!(home.validate(&ModelCatalog::builtin()).is_empty());
+        assert_eq!(
+            work.validate(&ModelCatalog::builtin()),
+            Vec::<ProfileIssue>::new()
+        );
+        assert_eq!(
+            home.validate(&ModelCatalog::builtin()),
+            Vec::<ProfileIssue>::new()
+        );
     }
 
     #[test]
@@ -190,7 +196,7 @@ mod tests {
             .workflows
             .push(Workflow::new("W").step(id, OnFailure::Stop));
         assert!(profile.remove_action(id).is_some());
-        assert!(profile.workflows[0].steps.is_empty());
+        assert_eq!(profile.workflows[0].steps, Vec::<WorkflowStep>::new());
     }
 
     #[test]

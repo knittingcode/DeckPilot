@@ -221,7 +221,7 @@ mod tests {
         assert_eq!(config.bindings.len(), 1);
         assert_eq!(config.bindings[0].value, "/srv/alpha");
         assert!(config.remove_binding(&key("alpha.repository")).is_some());
-        assert!(config.bindings.is_empty());
+        assert_eq!(config.bindings, Vec::<MachineResourceBinding>::new());
     }
 
     #[test]

@@ -43,7 +43,7 @@ docs/                  Architecture, data model, development guide, roadmap
 
 ## Getting started
 
-Requirements: Rust (stable, 1.90 or newer), Node.js 22 or newer, pnpm, and the
+Requirements: Rust via rustup (the version is pinned in `rust-toolchain.toml`), Node.js 22 or newer, pnpm, and the
 [Tauri system prerequisites](https://tauri.app/start/prerequisites/) for your
 operating system.
 

@@ -304,7 +304,10 @@ mod tests {
             Trigger::Press,
             BindingTarget::Back,
         ));
-        assert!(layout.validate(&catalog(), &profile).is_empty());
+        assert_eq!(
+            layout.validate(&catalog(), &profile),
+            Vec::<LayoutIssue>::new()
+        );
     }
 
     #[test]
@@ -378,7 +381,10 @@ mod tests {
             },
             BindingTarget::Back,
         ));
-        assert!(layout.validate(&catalog(), &profile).is_empty());
+        assert_eq!(
+            layout.validate(&catalog(), &profile),
+            Vec::<LayoutIssue>::new()
+        );
 
         let unknown = DeviceLayout::new("X", DeviceModelId::new("vendor.unknown"));
         assert!(matches!(

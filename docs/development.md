@@ -2,8 +2,9 @@
 
 ## Prerequisites
 
-- Rust stable (1.90 or newer); `rust-toolchain.toml` selects the stable channel
-  with `rustfmt` and `clippy`
+- Rust via [rustup](https://rustup.rs/). The version is pinned in
+  `rust-toolchain.toml` (currently 1.99.1, with `rustfmt` and `clippy`); rustup
+  installs it automatically, and CI uses the same file
 - Node.js 22 or newer and pnpm (version pinned in `package.json`)
 - Tauri system dependencies: <https://tauri.app/start/prerequisites/>
   - Debian/Ubuntu: `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev`
