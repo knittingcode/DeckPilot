@@ -12,7 +12,10 @@ The app reads
 GitHub's `latest` alias never points at drafts or pre-releases, so this is the
 stable channel. The manifest is produced by the Tauri bundler and lists one
 artifact per platform target (`darwin-aarch64`, `darwin-x86_64`,
-`linux-x86_64`, `windows-x86_64`).
+`linux-x86_64`, `windows-x86_64`) and, on Linux, per package type: the
+updater installs the same kind of package that is installed (AppImage,
+`.deb` or `.rpm`; the latter two through the system package tools, which
+ask for administrator authorization).
 
 ## Authenticity
 
@@ -20,6 +23,11 @@ artifact per platform target (`darwin-aarch64`, `darwin-x86_64`,
   build. The app downloads an artifact and verifies its signature against the
   public key compiled into the app (`DECKPILOT_UPDATER_PUBKEY` at build time)
   before installing. Checksums alone are not trusted.
+- The signature's signed comment names the version the artifact was built
+  for, and the app requires it to match the announced version
+  (`requireSignedVersion`). The manifest itself is not signed; this binding
+  prevents serving an older, validly signed release as a newer one. The
+  release workflow checks it before a draft can be published.
 - `requireSignedVersion` is enabled: the version is part of the signed data,
   so an old, genuinely signed artifact cannot be offered as a newer version
   (downgrade protection).

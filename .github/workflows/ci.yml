@@ -78,3 +78,47 @@ jobs:
         run: rustup toolchain install && rustc --version && cargo clippy --version
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p deckpilot-storage --features sqlcipher --locked
+
+  # Builds the Linux .deb with the release configuration (bundled agent,
+  # udev rule) to catch packaging mistakes before a release. Nothing is
+  # signed or published.
+  package-linux:
+    name: Package check (Linux .deb)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libudev-dev
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: package-linux
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build and stage the agent
+        run: |
+          cargo build --release --locked -p deckpilot-agent
+          mkdir -p apps/desktop/src-tauri/binaries
+          cp target/release/deckpilot-agent "apps/desktop/src-tauri/binaries/deckpilot-agent-$(rustc -vV | sed -n 's/^host: //p')"
+      - name: Build the .deb
+        run: >
+          pnpm --filter @deckpilot/desktop tauri build --bundles deb
+          --config src-tauri/tauri.release.conf.json
+          --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - name: The package contains the app, the agent and the udev rule
+        run: |
+          deb=$(find target/release/bundle/deb -name '*.deb' | head -n 1)
+          contents=$(dpkg-deb --contents "$deb")
+          echo "$contents"
+          for path in ./usr/bin/deckpilot-agent ./usr/lib/udev/rules.d/70-deckpilot-streamdeck.rules; do
+            echo "$contents" | grep -q -F " $path" || { echo "::error::$deb lacks $path"; exit 1; }
+          done
+          echo "$contents" | grep -q -E " \./usr/share/applications/.*\.desktop$" || { echo "::error::$deb lacks a desktop entry"; exit 1; }
+          echo "$deb contains the app, the agent and the udev rule"

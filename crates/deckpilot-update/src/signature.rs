@@ -14,6 +14,13 @@ pub enum SignatureError {
     InvalidSignature,
     #[error("the signature does not match the artifact")]
     Mismatch,
+    /// The signed (trusted) comment does not name the version. The app
+    /// requires it (`requireSignedVersion`), so such an update would be
+    /// refused by every installation.
+    #[error("the signature does not record the version it was made for")]
+    MissingVersion,
+    #[error("the artifact was signed for version {signed}, but is announced as {announced}")]
+    VersionMismatch { signed: String, announced: String },
 }
 
 fn decode_text(value: &str) -> Option<String> {
@@ -43,6 +50,32 @@ pub fn verify(public_key: &str, signature: &str, data: &[u8]) -> Result<(), Sign
     let signature = decode_signature(signature)?;
     key.verify(data, &signature, false)
         .map_err(|_| SignatureError::Mismatch)
+}
+
+/// Verifies `data` like the installed app does: the signature must match,
+/// and its signed comment must name `version` (`version:<x.y.z>`, written by
+/// the Tauri CLI). This binds the artifact to the announced version and
+/// prevents serving an older, validly signed release as a newer one.
+pub fn verify_release_artifact(
+    public_key: &str,
+    signature: &str,
+    data: &[u8],
+    version: &semver::Version,
+) -> Result<(), SignatureError> {
+    verify(public_key, signature, data)?;
+    let decoded = decode_signature(signature)?;
+    let signed = decoded
+        .trusted_comment()
+        .split('\t')
+        .find_map(|field| field.strip_prefix("version:"))
+        .ok_or(SignatureError::MissingVersion)?;
+    match semver::Version::parse(signed.trim_start_matches('v')) {
+        Ok(signed) if signed == *version => Ok(()),
+        _ => Err(SignatureError::VersionMismatch {
+            signed: signed.to_owned(),
+            announced: version.to_string(),
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -88,6 +121,51 @@ mod tests {
         assert_eq!(
             verify(PUBLIC_KEY, "%%%", ARTIFACT),
             Err(SignatureError::InvalidSignature)
+        );
+    }
+
+    /// Signs `data` with a key made for this test only (never stored).
+    fn signed(data: &[u8], trusted_comment: &str) -> (String, String) {
+        let keys = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        let public = STANDARD.encode(keys.pk.to_box().unwrap().to_string());
+        let signature = minisign::sign(
+            None,
+            &keys.sk,
+            std::io::Cursor::new(data),
+            Some(trusted_comment),
+            None,
+        )
+        .unwrap();
+        (public, STANDARD.encode(signature.to_string()))
+    }
+
+    #[test]
+    fn release_artifacts_must_be_signed_for_their_version() {
+        let version = semver::Version::new(1, 2, 3);
+        let data = b"release artifact";
+        let (key, signature) = signed(data, "timestamp:1\tfile:app.tar.gz\tversion:1.2.3");
+        assert_eq!(
+            verify_release_artifact(&key, &signature, data, &version),
+            Ok(())
+        );
+        // An older release served as a newer one.
+        assert_eq!(
+            verify_release_artifact(&key, &signature, data, &semver::Version::new(1, 2, 4)),
+            Err(SignatureError::VersionMismatch {
+                signed: "1.2.3".into(),
+                announced: "1.2.4".into(),
+            })
+        );
+        // Signed without the version: every installation would refuse it.
+        let (key, unversioned) = signed(data, "timestamp:1\tfile:app.tar.gz");
+        assert_eq!(
+            verify_release_artifact(&key, &unversioned, data, &version),
+            Err(SignatureError::MissingVersion)
+        );
+        // A modified artifact fails before the comment is even read.
+        assert_eq!(
+            verify_release_artifact(&key, &unversioned, b"tampered", &version),
+            Err(SignatureError::Mismatch)
         );
     }
 }

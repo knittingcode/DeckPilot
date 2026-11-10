@@ -33,15 +33,48 @@ pnpm --filter @deckpilot/desktop tauri signer generate -w ~/.config/deckpilot/si
    installations can no longer verify updates; publishing it lets anyone sign
    updates.
 
-Optional, not yet configured: Apple code signing and notarization
-(`APPLE_CERTIFICATE`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`,
-`APPLE_TEAM_ID`) and Windows Authenticode signing. Without them, macOS
-Gatekeeper and Windows SmartScreen warn on first start, and on macOS every
-update changes the agent's code identity, so macOS asks for the login
-keychain password before the agent may read its system-managed database key
-(see [security.md](security.md#system-key)). A Developer ID signature keeps
-the identity stable across updates. The updater signature
-is independent of these platform signatures.
+### macOS: Developer ID signing and notarization (not yet provisioned)
+
+Required for a macOS release. The workflow **refuses to build macOS
+releases** without it, unless the repository variable
+`DECKPILOT_ALLOW_UNSIGNED_MACOS` is set to `true` as a deliberate decision.
+
+Why it matters beyond Gatekeeper: the background agent keeps the database
+key in the Keychain, and the Keychain grants access to the agent's code
+identity. An unsigned (or ad-hoc signed) agent gets a new identity with
+every update, so macOS asks for the login keychain password after each
+update (verified; see [security.md](security.md#system-key)). A Developer ID
+signature keeps the identity (identifier and team) stable across releases.
+
+Needed, as repository secrets (from an Apple Developer Program membership):
+
+| Secret | Content |
+| ------ | ------- |
+| `APPLE_CERTIFICATE` | the *Developer ID Application* certificate with its private key, exported as `.p12` and base64-encoded |
+| `APPLE_CERTIFICATE_PASSWORD` | the `.p12` password |
+| `APPLE_SIGNING_IDENTITY` | e.g. `Developer ID Application: Name (TEAMID)` |
+| `APPLE_ID` | the Apple ID used for notarization |
+| `APPLE_PASSWORD` | an app-specific password of that Apple ID |
+| `APPLE_TEAM_ID` | the team identifier |
+
+With them, the Tauri bundler signs the application and the bundled agent
+with the hardened runtime (`bundle.macOS.hardenedRuntime`), notarizes and
+staples the app. The workflow then verifies the signature
+(`codesign --verify --deep --strict`), that the agent is signed by the team
+with the hardened runtime, Gatekeeper's assessment (`spctl`) and the stapled
+ticket (`stapler validate`). None of this has run yet: no Apple credentials
+are configured, so notarization is **not verified**.
+
+### Windows: Authenticode (not yet provisioned)
+
+Installers are not Authenticode-signed; SmartScreen warns on first start.
+Signing needs a code-signing certificate (or a cloud signing service) and
+`bundle.windows.signCommand` or `certificateThumbprint` in the Tauri
+configuration. The updater signature does not depend on it. Windows has no
+per-application access list on the Credential Manager, so unsigned updates
+do not affect the system-managed database key.
+
+The updater signature is independent of all platform signatures.
 
 ## Checking the signing configuration
 
@@ -77,25 +110,39 @@ Without building or publishing anything:
    checks it too.
 2. Merge to `main`, then tag: `git tag v0.3.0 && git push origin v0.3.0`.
 3. The workflow:
-   - checks that the tag matches the versions and that signing is configured;
+   - checks that the tag matches the versions, that updater signing is
+     configured, that `CHANGELOG.md` has notes for the version (they become
+     the release notes and the notes shown by the in-app updater), and that
+     macOS signing is configured (or explicitly waived);
    - builds the agent and the app for Linux (x86_64), macOS (Apple silicon
      and Intel) and Windows (x86_64), bundling the agent as an external
      binary;
    - signs updater artifacts and uploads everything plus `latest.json` to
      the draft release;
+   - checks that the built app embeds the configured updater public key;
+   - on macOS, verifies code signature, agent identity and notarization when
+     signing is configured;
    - attests build provenance for every artifact
      (`gh attestation verify <file> --repo knittingcode/DeckPilot`);
    - downloads the draft, verifies the manifest and every signature with
-     `deckpilot-dev verify-release`, and attaches `SHA256SUMS`.
-4. Review the draft, edit the release notes (shown in the app) and publish.
+     `deckpilot-dev verify-release` — including that each signature names
+     the announced version, which installations require
+     (`requireSignedVersion`, the protection against downgrade attacks) —
+     and attaches `SHA256SUMS`.
+4. Review the draft and publish it. Missing signing secrets, a missing
+   changelog section or a failed verification stop the workflow before
+   anything could be published.
 
 Publishing the draft is the explicit approval step; the workflow never
 publishes by itself.
 
 ## Status
 
-The signing key pair is provisioned in the repository settings, and the
-public key variable is validated. The release workflow has not run yet: no
-tag has been pushed from this repository. The first release should be treated as a test of the
+The updater signing key pair is provisioned in the repository settings, and
+the *Signing check* workflow verifies that the secrets and the public key
+belong together. A local release build signed with a throwaway key was
+checked with the same verification the workflow uses. Apple and Windows code
+signing are not provisioned. The release workflow has not run yet: no tag
+has been pushed from this repository. The first release should be treated as a test of the
 pipeline, and the first update between two published releases as the test of
 installation (see [updates.md](updates.md)).

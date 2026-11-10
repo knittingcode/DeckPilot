@@ -60,6 +60,7 @@ Commands:
   verify-release <dir>   Check a release's latest.json and artifact signatures
                          (public key from DECKPILOT_UPDATER_PUBKEY)
   check-updater-key      Check that DECKPILOT_UPDATER_PUBKEY is a valid public key
+  release-notes          Print the CHANGELOG.md section of the current version
   verify-signature <file> <file.sig>
                          Verify one updater signature against
                          DECKPILOT_UPDATER_PUBKEY";
@@ -791,9 +792,10 @@ fn run(args: &[String]) -> Result<(), String> {
                 .collect();
             package::package(&paths.root, &extra)
         }
-        Some(command @ ("verify-release" | "check-updater-key" | "verify-signature")) => {
-            release::command(command, &args[1..], &paths.root)
-        }
+        Some(
+            command @ ("verify-release" | "check-updater-key" | "verify-signature"
+            | "release-notes"),
+        ) => release::command(command, &args[1..], &paths.root),
         Some("help" | "--help" | "-h") | None => {
             println!("{USAGE}");
             Ok(())
