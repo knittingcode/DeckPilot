@@ -226,6 +226,9 @@ pub struct ActionType {
     pub parameters: Vec<ParameterSpec>,
     /// Whether the action can only run while a project is active.
     pub requires_project: bool,
+    /// How the action behaves as a workflow node.
+    #[serde(default)]
+    pub node: crate::graph::NodeSpec,
 }
 
 impl ActionType {
@@ -427,6 +430,7 @@ mod tests {
                 },
             ],
             requires_project: false,
+            node: crate::graph::NodeSpec::default(),
         }
     }
 

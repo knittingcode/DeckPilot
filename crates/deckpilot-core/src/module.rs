@@ -721,6 +721,7 @@ fn normalize_config(
         category: String::new(),
         parameters: manifest.config.clone(),
         requires_project: false,
+        node: crate::graph::NodeSpec::default(),
     };
     schema.normalize(config).map_err(ModuleError::InvalidConfig)
 }

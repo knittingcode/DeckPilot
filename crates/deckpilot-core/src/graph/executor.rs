@@ -1,0 +1,729 @@
+//! Executes a validated workflow graph.
+//!
+//! # Semantics
+//!
+//! - **Scheduling.** Nodes run in waves. A wave holds every node whose
+//!   incoming connections are all resolved, in topological order (ties by
+//!   node id), so a run is deterministic. A wave has more than one node only
+//!   after a Parallel node; its nodes run concurrently (at most
+//!   [`ExecutionLimits::max_parallel`] at a time) and their results are
+//!   applied in that same order.
+//! - **Activation.** A node runs if its incoming connection was taken: an
+//!   action took `out` or `error`, a condition `true` or `false`. Otherwise
+//!   it is skipped, and so is everything only reachable through it. A Join
+//!   waits until all incoming branches are resolved and runs if at least one
+//!   of them was taken.
+//! - **Failures.** A failed action continues through `error` when that is
+//!   connected (the failure is handled), through `out` with
+//!   `OnError::Continue`, and otherwise fails the workflow: nodes already
+//!   running in the same wave finish, nothing new starts.
+//! - **Project context.** The active project is captured at the start; only
+//!   actions change it, in order. An action in a parallel wave that changes
+//!   it fails, and its change is discarded.
+//! - **Deadlines.** Actions are synchronous and cannot be interrupted. An
+//!   action that exceeds its timeout is reported as failed and its effects
+//!   are discarded.
+//! - **Cancellation** is checked before every node and attempt and
+//!   interrupts delays and retry waits. Running actions finish.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
+
+use super::mapping::{Outputs, lookup, render};
+use super::{Mapping, NodeId, NodeKind, OnError, Port, Predicate, WorkflowGraph};
+use crate::{
+    ActionInstance, ActionParameters, ActionRegistry, ActionResult, ActiveProjectContext,
+    EngineError, ParameterKind, ParameterValue, Profile, WorkflowId,
+};
+
+/// Stops a run between steps. Cheap to clone; all clones share the flag.
+#[derive(Debug, Clone, Default)]
+pub struct CancellationToken(Arc<AtomicBool>);
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+
+    /// Waits `duration` unless cancelled first; `false` if cancelled.
+    pub fn wait(&self, duration: Duration) -> bool {
+        let end = Instant::now() + duration;
+        while Instant::now() < end {
+            if self.is_cancelled() {
+                return false;
+            }
+            std::thread::sleep((end - Instant::now()).min(Duration::from_millis(20)));
+        }
+        !self.is_cancelled()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ExecutionLimits {
+    /// Nodes of a parallel wave that run at the same time.
+    pub max_parallel: usize,
+}
+
+impl Default for ExecutionLimits {
+    fn default() -> Self {
+        Self { max_parallel: 4 }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NodeStatus {
+    Succeeded,
+    /// Failed; see the report's error. Handled if the error port was taken.
+    Failed,
+    /// Not run: its branch was not taken, or the workflow ended before it.
+    Skipped,
+    Cancelled,
+}
+
+/// A failure, safe to show and to store: no secrets, no raw output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepError {
+    /// Stable: `action.failed`, `timeout`, `cancelled`, `mapping`,
+    /// `parallel-context`, `unavailable`, `loop.failed`.
+    pub code: String,
+    pub message: String,
+    pub retryable: bool,
+}
+
+impl StepError {
+    fn new(code: &str, message: impl Into<String>, retryable: bool) -> Self {
+        Self {
+            code: code.to_owned(),
+            message: message.into(),
+            retryable,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeReport {
+    pub node: NodeId,
+    pub status: NodeStatus,
+    /// Attempts made (actions; 0 for nodes that did not run).
+    pub attempts: u32,
+    /// Milliseconds after the start of the run.
+    pub started_ms: u64,
+    pub duration_ms: u64,
+    /// The action's message, or what the node did.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub message: String,
+    /// Structured outputs, available to later nodes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub output: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<StepError>,
+    /// For actions: the instance that ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<crate::ActionInstanceId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RunStatus {
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphReport {
+    pub workflow: WorkflowId,
+    pub status: RunStatus,
+    pub duration_ms: u64,
+    /// Every node, in the order it was resolved.
+    pub nodes: Vec<NodeReport>,
+}
+
+impl GraphReport {
+    pub fn node(&self, id: &NodeId) -> Option<&NodeReport> {
+        self.nodes.iter().find(|n| &n.node == id)
+    }
+}
+
+/// Progress of a run, for visualization.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ExecutionEvent {
+    NodeStarted {
+        node: NodeId,
+    },
+    Retrying {
+        node: NodeId,
+        attempt: u32,
+        wait_ms: u64,
+    },
+    NodeFinished {
+        report: NodeReport,
+    },
+}
+
+/// Runs one action instance with the given parameter overrides against a
+/// context. Effects are applied to that context.
+pub(crate) type RunAction<'a> = dyn Fn(
+        &ActionInstance,
+        &ActionParameters,
+        &mut ActiveProjectContext,
+    ) -> Result<ActionResult, EngineError>
+    + Sync
+    + 'a;
+
+/// Runs a nested workflow (Loop); `true` if it succeeded.
+pub(crate) type RunNested<'a> =
+    dyn Fn(WorkflowId, &mut ActiveProjectContext) -> Result<bool, EngineError> + Sync + 'a;
+
+pub(crate) struct Executor<'a> {
+    pub workflow: WorkflowId,
+    pub graph: &'a WorkflowGraph,
+    pub profile: &'a Profile,
+    pub registry: &'a ActionRegistry,
+    pub run_action: &'a RunAction<'a>,
+    pub run_nested: &'a RunNested<'a>,
+    pub on_event: &'a (dyn Fn(ExecutionEvent) + Sync),
+    pub cancel: &'a CancellationToken,
+    pub limits: ExecutionLimits,
+}
+
+/// What a node did: its report and the output ports it took.
+struct Outcome {
+    report: NodeReport,
+    ports: Vec<Port>,
+    /// The node failed and nothing handles it.
+    fails_workflow: bool,
+    stops_workflow: bool,
+    /// Context after the node (actions only).
+    context: Option<ActiveProjectContext>,
+}
+
+impl Executor<'_> {
+    pub fn run(&self, context: &mut ActiveProjectContext) -> Result<GraphReport, EngineError> {
+        let start = Instant::now();
+        let order: Vec<NodeId> = self
+            .graph
+            .topological_order()
+            .ok_or_else(|| EngineError::InvalidWorkflow("the workflow contains a cycle".into()))?
+            .into_iter()
+            .cloned()
+            .collect();
+        let mut taken: BTreeMap<NodeId, BTreeSet<Port>> = BTreeMap::new();
+        let mut outputs = Outputs::new();
+        let mut reports = Vec::new();
+        let mut failed = false;
+        let mut stopped = false;
+
+        loop {
+            let wave: Vec<&NodeId> = order
+                .iter()
+                .filter(|id| !taken.contains_key(*id))
+                .filter(|id| self.graph.incoming(id).all(|e| taken.contains_key(&e.from)))
+                .collect();
+            if wave.is_empty() {
+                break;
+            }
+            let mut active = Vec::new();
+            for id in wave {
+                let activated = self.activated(id, &taken);
+                if !activated || failed || stopped || self.cancel.is_cancelled() {
+                    // After a cancellation nothing else runs: everything left
+                    // is reported as cancelled, not as a branch not taken.
+                    let status = if self.cancel.is_cancelled() {
+                        NodeStatus::Cancelled
+                    } else {
+                        NodeStatus::Skipped
+                    };
+                    let report = idle(id, status, ms(start));
+                    (self.on_event)(ExecutionEvent::NodeFinished {
+                        report: report.clone(),
+                    });
+                    reports.push(report);
+                    taken.insert(id.clone(), BTreeSet::new());
+                } else {
+                    active.push(id);
+                }
+            }
+            let parallel = active.len() > 1;
+            let outcomes: Vec<Outcome> = if parallel {
+                self.run_concurrently(&active, context, &outputs, start)
+            } else {
+                active
+                    .iter()
+                    .map(|id| self.node(id, context, &outputs, start))
+                    .collect()
+            };
+            for mut outcome in outcomes {
+                if let Some(after) = outcome.context.take() {
+                    if parallel && after != *context {
+                        outcome.report.status = NodeStatus::Failed;
+                        outcome.report.error = Some(StepError::new(
+                            "parallel-context",
+                            "changing the active project is not allowed in parallel branches",
+                            false,
+                        ));
+                        outcome.report.output.clear();
+                        outcome.ports.clear();
+                        outcome.fails_workflow = true;
+                    } else {
+                        *context = after;
+                    }
+                }
+                failed |= outcome.fails_workflow;
+                stopped |= outcome.stops_workflow;
+                if outcome.report.status == NodeStatus::Succeeded {
+                    outputs.insert(outcome.report.node.clone(), outcome.report.output.clone());
+                }
+                (self.on_event)(ExecutionEvent::NodeFinished {
+                    report: outcome.report.clone(),
+                });
+                taken.insert(
+                    outcome.report.node.clone(),
+                    outcome.ports.into_iter().collect(),
+                );
+                reports.push(outcome.report);
+            }
+        }
+
+        let status = if self.cancel.is_cancelled()
+            && reports.iter().any(|r| r.status == NodeStatus::Cancelled)
+        {
+            RunStatus::Cancelled
+        } else if failed {
+            RunStatus::Failed
+        } else {
+            RunStatus::Succeeded
+        };
+        Ok(GraphReport {
+            workflow: self.workflow,
+            status,
+            duration_ms: ms(start),
+            nodes: reports,
+        })
+    }
+
+    /// Runs the nodes of a parallel wave, at most `max_parallel` at a time,
+    /// each against its own copy of the context. Outcomes keep the order of
+    /// `active`.
+    fn run_concurrently(
+        &self,
+        active: &[&NodeId],
+        context: &ActiveProjectContext,
+        outputs: &Outputs,
+        start: Instant,
+    ) -> Vec<Outcome> {
+        let mut outcomes = Vec::with_capacity(active.len());
+        for chunk in active.chunks(self.limits.max_parallel.max(1)) {
+            let results: Vec<Outcome> = std::thread::scope(|scope| {
+                let handles: Vec<_> = chunk
+                    .iter()
+                    .map(|id| {
+                        let snapshot = context.clone();
+                        scope.spawn(move || self.node(id, &snapshot, outputs, start))
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().expect("a workflow node panicked"))
+                    .collect()
+            });
+            outcomes.extend(results);
+        }
+        outcomes
+    }
+
+    fn activated(&self, id: &NodeId, taken: &BTreeMap<NodeId, BTreeSet<Port>>) -> bool {
+        let node = self.graph.node(id);
+        if matches!(node.map(|n| &n.kind), Some(NodeKind::Trigger)) {
+            return true;
+        }
+        self.graph.incoming(id).any(|edge| {
+            taken
+                .get(&edge.from)
+                .is_some_and(|ports| ports.contains(&edge.port))
+        })
+    }
+
+    fn node(
+        &self,
+        id: &NodeId,
+        context: &ActiveProjectContext,
+        outputs: &Outputs,
+        start: Instant,
+    ) -> Outcome {
+        (self.on_event)(ExecutionEvent::NodeStarted { node: id.clone() });
+        let begun = Instant::now();
+        let started_ms = ms(start);
+        let Some(node) = self.graph.node(id) else {
+            return finished(idle(id, NodeStatus::Skipped, started_ms), vec![]);
+        };
+        let mut outcome = match &node.kind {
+            NodeKind::Trigger | NodeKind::Parallel | NodeKind::Join => {
+                finished(done(id, started_ms, ""), vec![Port::Out])
+            }
+            NodeKind::Stop => {
+                let mut outcome = finished(done(id, started_ms, "workflow stopped"), vec![]);
+                outcome.stops_workflow = true;
+                outcome
+            }
+            NodeKind::Delay { ms: wait } => {
+                if self.cancel.wait(Duration::from_millis(u64::from(*wait))) {
+                    finished(
+                        done(id, started_ms, &format!("waited {wait} ms")),
+                        vec![Port::Out],
+                    )
+                } else {
+                    finished(idle(id, NodeStatus::Cancelled, started_ms), vec![])
+                }
+            }
+            NodeKind::Condition { predicate } => {
+                let met = self.evaluate(predicate, context, outputs);
+                let port = if met { Port::True } else { Port::False };
+                finished(
+                    done(
+                        id,
+                        started_ms,
+                        if met {
+                            "condition met"
+                        } else {
+                            "condition not met"
+                        },
+                    ),
+                    vec![port],
+                )
+            }
+            NodeKind::Loop { workflow, times } => {
+                self.run_loop(id, *workflow, *times, context, started_ms)
+            }
+            NodeKind::Action {
+                action,
+                overrides,
+                mappings,
+                policy,
+            } => self.run_action_node(
+                id, *action, overrides, mappings, *policy, context, outputs, started_ms,
+            ),
+        };
+        outcome.report.duration_ms = u64::try_from(begun.elapsed().as_millis()).unwrap_or(u64::MAX);
+        outcome
+    }
+
+    fn evaluate(
+        &self,
+        predicate: &Predicate,
+        context: &ActiveProjectContext,
+        outputs: &Outputs,
+    ) -> bool {
+        match predicate {
+            Predicate::Equals { reference, value } => lookup(outputs, reference) == Some(value),
+            Predicate::NotEmpty { reference } => {
+                lookup(outputs, reference).is_some_and(|v| !v.is_empty())
+            }
+            // Outputs are recorded for every succeeded node, and only for them.
+            Predicate::Succeeded { node } => outputs.contains_key(node),
+            Predicate::ActiveProject { key } => context
+                .project(self.profile)
+                .ok()
+                .flatten()
+                .is_some_and(|project| project.key.as_str() == key),
+        }
+    }
+
+    fn run_loop(
+        &self,
+        id: &NodeId,
+        workflow: WorkflowId,
+        times: u32,
+        context: &ActiveProjectContext,
+        started_ms: u64,
+    ) -> Outcome {
+        let mut working = context.clone();
+        for iteration in 1..=times {
+            if self.cancel.is_cancelled() {
+                return finished(idle(id, NodeStatus::Cancelled, started_ms), vec![]);
+            }
+            if !matches!((self.run_nested)(workflow, &mut working), Ok(true)) {
+                let mut report = idle(id, NodeStatus::Failed, started_ms);
+                report.attempts = iteration;
+                report.error = Some(StepError::new(
+                    "loop.failed",
+                    format!("iteration {iteration} of {times} failed"),
+                    false,
+                ));
+                let mut outcome = finished(report, vec![]);
+                outcome.fails_workflow = true;
+                return outcome;
+            }
+        }
+        let mut report = done(id, started_ms, &format!("ran {times} times"));
+        report.attempts = times;
+        let mut outcome = finished(report, vec![Port::Out]);
+        outcome.context = Some(working);
+        outcome
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_action_node(
+        &self,
+        id: &NodeId,
+        action: crate::ActionInstanceId,
+        overrides: &ActionParameters,
+        mappings: &BTreeMap<String, Mapping>,
+        policy: super::ErrorPolicy,
+        context: &ActiveProjectContext,
+        outputs: &Outputs,
+        started_ms: u64,
+    ) -> Outcome {
+        let fail = |report: NodeReport, error: StepError| {
+            let mut report = report;
+            report.status = NodeStatus::Failed;
+            report.error = Some(error);
+            report
+        };
+        let Some(instance) = self.profile.action(action) else {
+            let report = fail(
+                idle(id, NodeStatus::Failed, started_ms),
+                StepError::new("unavailable", "the action no longer exists", false),
+            );
+            return self.route_failure(report, policy.on_error, id);
+        };
+        let definition = self.registry.definition(&instance.action_type);
+        let parameters = match self.mapped_parameters(overrides, mappings, instance, outputs) {
+            Ok(parameters) => parameters,
+            Err(message) => {
+                let mut report = fail(
+                    idle(id, NodeStatus::Failed, started_ms),
+                    StepError::new("mapping", message, false),
+                );
+                report.action = Some(action);
+                return self.route_failure(report, policy.on_error, id);
+            }
+        };
+        let spec = definition.map(|d| d.node.clone()).unwrap_or_default();
+        let timeout =
+            Duration::from_millis(u64::from(policy.timeout_ms.unwrap_or(spec.timeout_ms)));
+        let attempts = 1 + if spec.retry_safe {
+            policy.retry.attempts.min(super::MAX_RETRIES)
+        } else {
+            0
+        };
+        let mut last = None;
+        for attempt in 1..=attempts {
+            if self.cancel.is_cancelled() {
+                let mut report = idle(id, NodeStatus::Cancelled, started_ms);
+                report.attempts = attempt - 1;
+                report.action = Some(action);
+                return finished(report, vec![]);
+            }
+            let mut working = context.clone();
+            let begun = Instant::now();
+            let result = (self.run_action)(instance, &parameters, &mut working);
+            let late = begun.elapsed() > timeout;
+            let (status, error, message, output) = classify(result, late, timeout, spec.retry_safe);
+            let report = NodeReport {
+                node: id.clone(),
+                status,
+                attempts: attempt,
+                started_ms,
+                duration_ms: 0,
+                message,
+                output,
+                error,
+                action: Some(action),
+            };
+            if status == NodeStatus::Succeeded {
+                let mut outcome = finished(report, vec![Port::Out]);
+                outcome.context = Some(working);
+                return outcome;
+            }
+            last = Some(report);
+            if attempt < attempts {
+                let wait =
+                    u64::from(policy.retry.backoff_ms).saturating_mul(1 << (attempt - 1).min(16));
+                (self.on_event)(ExecutionEvent::Retrying {
+                    node: id.clone(),
+                    attempt: attempt + 1,
+                    wait_ms: wait,
+                });
+                if !self.cancel.wait(Duration::from_millis(wait)) {
+                    break;
+                }
+            }
+        }
+        let report = last.unwrap_or_else(|| idle(id, NodeStatus::Failed, started_ms));
+        self.route_failure(report, policy.on_error, id)
+    }
+
+    /// A failed action continues through `error` if connected, through `out`
+    /// with `Continue`, and otherwise fails the workflow.
+    fn route_failure(&self, report: NodeReport, on_error: OnError, id: &NodeId) -> Outcome {
+        if self.graph.outgoing(id).any(|e| e.port == Port::Error) {
+            return finished(report, vec![Port::Error]);
+        }
+        match on_error {
+            OnError::Continue => finished(report, vec![Port::Out]),
+            OnError::Stop => {
+                let mut outcome = finished(report, vec![]);
+                outcome.fails_workflow = true;
+                outcome
+            }
+        }
+    }
+
+    /// Overrides plus mapped values, converted to the parameters' kinds.
+    fn mapped_parameters(
+        &self,
+        overrides: &ActionParameters,
+        mappings: &BTreeMap<String, Mapping>,
+        instance: &ActionInstance,
+        outputs: &Outputs,
+    ) -> Result<ActionParameters, String> {
+        let mut parameters = overrides.clone();
+        let definition = self.registry.definition(&instance.action_type);
+        for (key, mapping) in mappings {
+            let text = match mapping {
+                Mapping::Output { reference, default } => match lookup(outputs, reference) {
+                    Some(value) => value.clone(),
+                    None => default
+                        .clone()
+                        .ok_or_else(|| format!("{reference} has no value"))?,
+                },
+                Mapping::Template { template } => {
+                    render(template, outputs).map_err(|e| e.to_string())?
+                }
+            };
+            let kind = definition
+                .and_then(|d| d.parameters.iter().find(|spec| &spec.key == key))
+                .map(|spec| &spec.kind)
+                .ok_or_else(|| format!("`{key}` is not a parameter of this action"))?;
+            let value = match kind {
+                ParameterKind::Text { .. } => ParameterValue::Text(text),
+                ParameterKind::Integer { .. } => ParameterValue::Integer(
+                    text.trim()
+                        .parse()
+                        .map_err(|_| format!("`{key}` expects a whole number, got “{text}”"))?,
+                ),
+                ParameterKind::Boolean => match text.trim() {
+                    "true" => ParameterValue::Boolean(true),
+                    "false" => ParameterValue::Boolean(false),
+                    _ => return Err(format!("`{key}` expects true or false, got “{text}”")),
+                },
+                ParameterKind::Choice { .. } => ParameterValue::Choice(text),
+                ParameterKind::Project => {
+                    let project = self
+                        .profile
+                        .projects
+                        .iter()
+                        .find(|p| p.key.as_str() == text.trim())
+                        .ok_or_else(|| format!("this profile has no project “{text}”"))?;
+                    ParameterValue::Project(project.id)
+                }
+                ParameterKind::Resource { .. } => {
+                    return Err(format!("`{key}` refers to a resource and cannot be mapped"));
+                }
+            };
+            parameters = parameters.with(key.clone(), value);
+        }
+        Ok(parameters)
+    }
+}
+
+fn ms(start: Instant) -> u64 {
+    u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn idle(id: &NodeId, status: NodeStatus, started_ms: u64) -> NodeReport {
+    NodeReport {
+        node: id.clone(),
+        status,
+        attempts: 0,
+        started_ms,
+        duration_ms: 0,
+        message: String::new(),
+        output: BTreeMap::new(),
+        error: None,
+        action: None,
+    }
+}
+
+fn done(id: &NodeId, started_ms: u64, message: &str) -> NodeReport {
+    let mut report = idle(id, NodeStatus::Succeeded, started_ms);
+    message.clone_into(&mut report.message);
+    report
+}
+
+fn finished(report: NodeReport, ports: Vec<Port>) -> Outcome {
+    Outcome {
+        report,
+        ports,
+        fails_workflow: false,
+        stops_workflow: false,
+        context: None,
+    }
+}
+
+/// The outcome of one attempt: status, error, message and outputs. A late
+/// result is a timeout, whatever it was.
+fn classify(
+    result: Result<ActionResult, EngineError>,
+    late: bool,
+    timeout: Duration,
+    retry_safe: bool,
+) -> (
+    NodeStatus,
+    Option<StepError>,
+    String,
+    BTreeMap<String, String>,
+) {
+    match result {
+        Ok(result) if late => (
+            NodeStatus::Failed,
+            Some(StepError::new(
+                "timeout",
+                format!(
+                    "did not finish within {} ms; its result was discarded",
+                    timeout.as_millis()
+                ),
+                true,
+            )),
+            result.message,
+            BTreeMap::new(),
+        ),
+        Ok(result) if result.is_success() => {
+            (NodeStatus::Succeeded, None, result.message, result.data)
+        }
+        Ok(result) => (
+            NodeStatus::Failed,
+            Some(StepError::new(
+                "action.failed",
+                result.message.clone(),
+                retry_safe,
+            )),
+            result.message,
+            BTreeMap::new(),
+        ),
+        Err(error) => (
+            NodeStatus::Failed,
+            Some(StepError::new("action.failed", error.to_string(), false)),
+            String::new(),
+            BTreeMap::new(),
+        ),
+    }
+}

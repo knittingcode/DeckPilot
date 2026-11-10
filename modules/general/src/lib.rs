@@ -99,6 +99,7 @@ impl LogMessage {
                 default: None,
             }],
             requires_project: false,
+            node: deckpilot_core::graph::NodeSpec::default(),
         })
     }
 }

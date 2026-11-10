@@ -1092,6 +1092,7 @@ fn engine_error(error: &EngineError) -> IpcError {
         | EngineError::UnknownWorkflow(_)
         | EngineError::UnknownProject(_) => ErrorCode::NotFound,
         EngineError::NoActiveProfile | EngineError::Context(_) => ErrorCode::Failed,
+        EngineError::InvalidWorkflow(_) => ErrorCode::InvalidRequest,
     };
     IpcError::new(code, error.to_string())
 }

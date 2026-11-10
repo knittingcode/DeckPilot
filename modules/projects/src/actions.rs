@@ -10,6 +10,7 @@
 //! [`ContextEffect::SelectProject`]; the engine applies it only after checking
 //! that the project belongs to the active profile.
 
+use deckpilot_core::graph::{NodeSpec, OutputSpec, ValueKind};
 use deckpilot_core::{
     ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, ContextEffect,
     CycleDirection, ExecutionContext, KeyFace, ParameterKind, ParameterSpec, Profile, Project,
@@ -87,6 +88,51 @@ fn action_type(id: ActionTypeId, name: &str, description: &str) -> ActionType {
         category: "Projects".into(),
         parameters: Vec::new(),
         requires_project: false,
+        node: NodeSpec::default(),
+    }
+}
+
+fn output(key: &str, label: &str, kind: ValueKind) -> OutputSpec {
+    OutputSpec {
+        key: key.into(),
+        label: label.into(),
+        kind,
+        always: true,
+    }
+}
+
+/// Outputs of actions that report a project (`resources::with_project`).
+fn project_outputs() -> Vec<OutputSpec> {
+    vec![
+        output("projectId", "Project id", ValueKind::Text),
+        output("projectKey", "Project key", ValueKind::ProjectKey),
+        output("projectName", "Project name", ValueKind::Text),
+    ]
+}
+
+/// Outputs of the resource actions (`resources::resolve`).
+fn resource_outputs() -> Vec<OutputSpec> {
+    let mut outputs = project_outputs();
+    outputs.extend([
+        output("resource", "Resource name", ValueKind::Text),
+        output("resourceKey", "Resource key", ValueKind::Text),
+        output("kind", "Resource kind", ValueKind::Text),
+        output("value", "Value on this computer", ValueKind::Text),
+    ]);
+    outputs
+}
+
+/// Node behaviour of the project actions: which outputs they provide,
+/// whether they switch the project, and whether repeating them is safe.
+fn node(outputs: Vec<OutputSpec>, changes_context: bool, repeatable: bool) -> NodeSpec {
+    NodeSpec {
+        icon: Some("folder-kanban".into()),
+        outputs,
+        timeout_ms: 5_000,
+        retry_safe: repeatable,
+        idempotent: repeatable,
+        changes_context,
+        ..NodeSpec::default()
     }
 }
 
@@ -149,6 +195,11 @@ impl Step {
                 "Makes the previous project of the profile active.",
             ),
         };
+        // Cycling twice moves two projects on: neither idempotent nor safe to retry.
+        let definition = ActionType {
+            node: node(project_outputs(), true, false),
+            ..definition
+        };
         Self {
             definition,
             direction,
@@ -210,6 +261,7 @@ impl Select {
             "Makes a project of the profile active. Without a project it reports the current one.",
         );
         definition.parameters.push(project_parameter());
+        definition.node = node(project_outputs(), true, true);
         Self(definition)
     }
 }
@@ -272,11 +324,13 @@ pub struct Active(ActionType);
 
 impl Active {
     pub fn new() -> Self {
-        Self(action_type(
+        let mut definition = action_type(
             active_id(),
             "Get active project",
             "Reports the active project of the profile.",
-        ))
+        );
+        definition.node = node(project_outputs(), false, true);
+        Self(definition)
     }
 }
 
@@ -340,6 +394,7 @@ impl ProjectResource {
             "Resolves the repository of a project on this computer.",
         );
         definition.parameters.push(project_parameter());
+        definition.node = node(resource_outputs(), false, true);
         Self {
             definition,
             role: Role::Fixed(REPOSITORY_ROLE),
@@ -353,6 +408,7 @@ impl ProjectResource {
             "Resolves the documentation of a project on this computer.",
         );
         definition.parameters.push(project_parameter());
+        definition.node = node(resource_outputs(), false, true);
         Self {
             definition,
             role: Role::Fixed(DOCUMENTATION_ROLE),
@@ -379,6 +435,7 @@ impl ProjectResource {
             required: true,
             default: None,
         });
+        definition.node = node(resource_outputs(), false, true);
         Self {
             definition,
             role: Role::Configured,

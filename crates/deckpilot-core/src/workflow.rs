@@ -62,6 +62,10 @@ pub struct Workflow {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     pub steps: Vec<WorkflowStep>,
+    /// The visual form. When present it is what runs; `steps` is then only
+    /// kept for reference and for the editor's conversion notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<crate::graph::WorkflowGraph>,
 }
 
 impl Workflow {
@@ -71,6 +75,7 @@ impl Workflow {
             name: name.into(),
             description: String::new(),
             steps: Vec::new(),
+            graph: None,
         }
     }
 
@@ -85,6 +90,16 @@ impl Workflow {
         let mut issues = Vec::new();
         if self.name.trim().is_empty() {
             issues.push("workflow name must not be empty".to_owned());
+        }
+        if let Some(graph) = &self.graph {
+            for issue in graph.validate(self.id, profile, registry) {
+                if issue.severity == crate::graph::IssueSeverity::Error {
+                    issues.push(match issue.node {
+                        Some(node) => format!("{node}: {}", issue.message),
+                        None => issue.message,
+                    });
+                }
+            }
         }
         for (index, step) in self.steps.iter().enumerate() {
             let position = index + 1;

@@ -10,6 +10,7 @@ pub mod action;
 pub mod device_runtime;
 pub mod execution;
 pub mod face;
+pub mod graph;
 pub mod id;
 pub mod layout;
 pub mod module;
