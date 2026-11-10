@@ -108,3 +108,16 @@ desktop entry). Manual checks on real machines:
 | Linux | With GNOME Keyring or KWallet: the key is stored in the login collection; without a Secret Service, setup explains it and offers a password |
 | Linux | The agent starts at login (XDG autostart); the tray icon needs AppIndicator support |
 | Linux | AppImage updates in place; `.deb`/`.rpm` updates ask for administrator authorization |
+
+## Results for 0.5.0
+
+| Area | Result | How |
+| ---- | ------ | --- |
+| macOS signing | Verified | Test releases `v0.5.0-1` and `v0.5.0-2` (CI): app and agent Developer ID signed, hardened runtime, no entitlements, agent identifier `io.github.knittingcode.deckpilot.agent`, strict verification — for the app on disk, in the updater archive and in the disk image, on Apple silicon and Intel |
+| Notarization | Verified | Apple accepted the app and the disk image for both architectures (both test releases); tickets stapled; Gatekeeper accepts the disk image downloaded from the draft with a quarantine attribute (`source=Notarized Developer ID`) |
+| Release pipeline | Verified | `v0.5.0-2`: all four platform builds, every manifest entry verified against the updater key including the signed version, `SHA256SUMS` checked, a **draft pre-release**, nothing published. `v0.5.0-1` found two blockers (Windows OpenSSL/Perl, RPM and pre-release versions), both fixed |
+| Update between versions | Verified locally | `update-test.sh` 0.5.0 → 0.5.1: tampered update rejected, the installed version and agent kept running; signed update installed, app and agent restarted at 0.5.1, same encrypted configuration (3 profiles, active profile and project). Found and fixed: the app did not follow an agent unlocked elsewhere |
+| Keychain after an update | Unverified | Needs two consecutive Developer ID signed releases (section 2) |
+| Stream Deck MK.2 | Not tested | No device was connected; checklist in section 3 |
+| Windows, Linux | Installers built and verified in CI | Manual checks in section 4 not performed |
+
