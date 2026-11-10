@@ -9,6 +9,8 @@ members = [
     "crates/deckpilot-update",
     "crates/deckpilot-modules",
     "crates/deckpilot-portability",
+    "crates/deckpilot-keystore",
+    "crates/deckpilot-presence",
     "modules/general",
     "modules/projects",
     "apps/agent",
@@ -35,6 +37,8 @@ deckpilot-modules = { path = "crates/deckpilot-modules" }
 deckpilot-module-general = { path = "modules/general" }
 deckpilot-module-projects = { path = "modules/projects" }
 deckpilot-portability = { path = "crates/deckpilot-portability" }
+deckpilot-keystore = { path = "crates/deckpilot-keystore" }
+deckpilot-presence = { path = "crates/deckpilot-presence" }
 
 tauri = "2"
 tauri-build = "2"
