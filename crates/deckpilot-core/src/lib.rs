@@ -8,7 +8,9 @@
 
 pub mod action;
 pub mod builtin;
+pub mod device_runtime;
 pub mod execution;
+pub mod face;
 pub mod id;
 pub mod layout;
 pub mod platform;
@@ -23,7 +25,9 @@ pub use action::{
     ActionInstance, ActionParameters, ActionType, ActionTypeId, ParameterError, ParameterKind,
     ParameterSpec, ParameterValue,
 };
+pub use device_runtime::{LayoutStatus, Runtime, RuntimeOutcome};
 pub use execution::{ActionResult, ActionStatus, ContextEffect, ExecutionContext};
+pub use face::{FaceStyle, KeyFace};
 pub use id::{ActionInstanceId, LayoutId, PageId, ProfileId, ProjectId, WorkflowId};
 pub use layout::{BindingTarget, ControlBinding, DeviceLayout, LayoutIssue, LayoutPage, Trigger};
 pub use platform::Os;
@@ -33,7 +37,7 @@ pub use registry::{ActionHandler, ActionRegistry};
 pub use resource::{
     MachineConfig, MachineResourceBinding, ResolveError, ResourceKey, ResourceKind, ResourceRef,
 };
-pub use runtime::{Engine, EngineError, Runtime, StepReport, WorkflowReport};
+pub use runtime::{Engine, EngineError, StepReport, WorkflowReport};
 pub use workflow::{OnFailure, Workflow, WorkflowStep};
 
 /// Error returned when a textual identifier does not satisfy its format rules.
