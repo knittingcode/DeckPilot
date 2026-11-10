@@ -1,6 +1,8 @@
 import { createContext, useContext } from "react"
 
-import type { AgentConnection, ProfilesView, UpdateState } from "./types"
+import type { ModulePageId } from "@/modules"
+
+import type { AgentConnection, ModuleInfo, ProfilesView, UpdateState } from "./types"
 
 export interface AppContextValue {
   profiles: ProfilesView
@@ -16,18 +18,24 @@ export interface AppContextValue {
   updates: UpdateState | null
   setUpdates: (state: UpdateState) => void
   navigate: (page: PageId) => void
+  /** Registered feature modules and their state. */
+  modules: ModuleInfo[]
+  setModules: (modules: ModuleInfo[]) => void
 }
 
-export type PageId =
+/** Pages of the core application. */
+export type CorePageId =
   | "dashboard"
   | "actions"
   | "workflows"
   | "profiles"
-  | "projects"
   | "models"
   | "designer"
   | "devices"
   | "settings"
+
+/** A core page or a page contributed by a module (`module/page`). */
+export type PageId = CorePageId | ModulePageId
 
 export const AppContext = createContext<AppContextValue | null>(null)
 

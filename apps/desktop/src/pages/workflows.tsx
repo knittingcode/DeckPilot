@@ -63,7 +63,7 @@ import {
 
 export function WorkflowsPage() {
   return (
-    <Page title="Workflows" description="Run several actions in sequence">
+    <Page title="Workflows" description="Run several actions in sequence" profileScoped>
       <RequireProfile>{() => <Workflows />}</RequireProfile>
     </Page>
   )
@@ -571,6 +571,7 @@ function SortableStep({
                     <ParameterField
                       spec={spec}
                       value={override}
+                      projects={view.profile.projects}
                       onChange={(value) => {
                         onChange({ overrides: setOverride(step.overrides, spec.key, value) })
                       }}

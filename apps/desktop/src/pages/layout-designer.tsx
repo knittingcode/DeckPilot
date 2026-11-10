@@ -91,6 +91,7 @@ export function LayoutDesignerPage() {
     <Page
       title="Layout Designer"
       description="Assign configured actions to device controls, with or without hardware"
+      profileScoped
     >
       <RequireProfile>{(profileId) => <Designer initialProfileId={profileId} />}</RequireProfile>
     </Page>

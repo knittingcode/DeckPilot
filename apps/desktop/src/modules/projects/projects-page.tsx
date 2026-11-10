@@ -19,6 +19,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleDashed,
+  Copy,
   FolderOpen,
   GripVertical,
   Pencil,
@@ -31,7 +32,6 @@ import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { EmptyState, ErrorNotice, Loading, Page } from "@/components/page"
-import { ProjectSwitcher } from "@/components/project-switcher"
 import { RequireProfile } from "@/components/require-profile"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -62,9 +62,15 @@ import { RESOURCE_KIND_LABELS } from "@/lib/format"
 import type { Project, ProfileView, ResourceCheck, ResourceKind, ResourceStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+import { ProjectSwitcher } from "./project-switcher"
+
 export function ProjectsPage() {
   return (
-    <Page title="Projects" description="Project context and the resources on this machine">
+    <Page
+      title="Projects"
+      description="Projects of this profile and their resources on this machine"
+      profileScoped
+    >
       <RequireProfile>{() => <Projects />}</RequireProfile>
     </Page>
   )
@@ -121,7 +127,11 @@ function Projects() {
   )
 }
 
-type ProjectDialogState = { mode: "create" } | { mode: "edit"; project: Project } | null
+type ProjectDialogState =
+  | { mode: "create" }
+  | { mode: "edit"; project: Project }
+  | { mode: "copy"; project: Project }
+  | null
 
 function ProjectCycle({
   view,
@@ -134,8 +144,9 @@ function ProjectCycle({
   checks: ResourceCheck[]
   onChange: () => void
 }) {
-  const { refresh } = useAppContext()
+  const { refresh, profiles } = useAppContext()
   const [dialog, setDialog] = useState<ProjectDialogState>(null)
+  const otherProfiles = profiles.profiles.filter((p) => p.id !== profileId)
   const projects = view.profile.projects
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -164,12 +175,52 @@ function ProjectCycle({
             or launched.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <ProjectSwitcher
-            profileId={profileId}
-            projects={projects}
-            activeProjectId={view.activeProjectId}
-          />
+        <CardContent className="grid gap-4">
+          {projects.length === 0 ? null : profiles.activeProfileId === profileId ? (
+            <ProjectSwitcher
+              profileId={profileId}
+              projects={projects}
+              activeProjectId={view.activeProjectId}
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              {view.profile.name} is not active on the device. Its active project is{" "}
+              {projects.find((p) => p.id === view.activeProjectId)?.key ?? "not set"}; it is
+              restored when the profile is activated.
+            </p>
+          )}
+          {projects.length > 0 && (
+            <div className="grid max-w-sm gap-2">
+              <Label htmlFor="default-project">Default project</Label>
+              <Select
+                value={view.profile.defaultProject ?? "first"}
+                onValueChange={(value) => {
+                  api
+                    .setDefaultProject(profileId, value === "first" ? null : value)
+                    .then(() => {
+                      toast.success("Default project saved")
+                      changed()
+                    })
+                    .catch((e: unknown) => toast.error(errorMessage(e)))
+                }}
+              >
+                <SelectTrigger id="default-project" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="first">First project in the order</SelectItem>
+                  {projects.map((project) => (
+                    <SelectItem key={project.id} value={project.id}>
+                      {project.key} · {project.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Selected when the profile is activated and no project was chosen before.
+              </p>
+            </div>
+          )}
         </CardContent>
       </Card>
       <Card>
@@ -177,7 +228,7 @@ function ProjectCycle({
           <div className="grid flex-1 gap-1.5">
             <CardTitle>Cycle order</CardTitle>
             <CardDescription>
-              Drag to reorder. The last project wraps around to the first.
+              Drag to reorder. Next and previous project follow this order.
             </CardDescription>
           </div>
           <Button
@@ -191,7 +242,9 @@ function ProjectCycle({
         </CardHeader>
         <CardContent>
           {projects.length === 0 ? (
-            <EmptyState title="No projects in this profile" />
+            <EmptyState title="No projects in this profile">
+              Projects give actions a context, such as the repository of the active project.
+            </EmptyState>
           ) : (
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
               <SortableContext
@@ -210,6 +263,13 @@ function ProjectCycle({
                       onEdit={() => {
                         setDialog({ mode: "edit", project })
                       }}
+                      onCopy={
+                        otherProfiles.length > 0
+                          ? () => {
+                              setDialog({ mode: "copy", project })
+                            }
+                          : undefined
+                      }
                       onDelete={() => {
                         api
                           .deleteProject(profileId, project.id)
@@ -234,7 +294,18 @@ function ProjectCycle({
         }}
       >
         <DialogContent className="sm:max-w-xl">
-          {dialog && (
+          {dialog?.mode === "copy" && (
+            <CopyProjectForm
+              profileId={profileId}
+              project={dialog.project}
+              targets={otherProfiles}
+              onDone={() => {
+                setDialog(null)
+                changed()
+              }}
+            />
+          )}
+          {dialog && dialog.mode !== "copy" && (
             <ProjectForm
               key={dialog.mode === "edit" ? dialog.project.id : "new"}
               profileId={profileId}
@@ -258,6 +329,7 @@ function SortableProject({
   isDefault,
   statusOf,
   onEdit,
+  onCopy,
   onDelete,
 }: {
   project: Project
@@ -266,6 +338,7 @@ function SortableProject({
   isDefault: boolean
   statusOf: (key: string) => ResourceStatus
   onEdit: () => void
+  onCopy?: () => void
   onDelete: () => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
@@ -313,6 +386,17 @@ function SortableProject({
       <Button variant="ghost" size="icon" aria-label={`Edit ${project.key}`} onClick={onEdit}>
         <Pencil />
       </Button>
+      {onCopy && (
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={`Copy ${project.key} to another profile`}
+          title="Copy to another profile"
+          onClick={onCopy}
+        >
+          <Copy />
+        </Button>
+      )}
       <ConfirmDialog
         trigger={
           <Button variant="ghost" size="icon" aria-label={`Delete ${project.key}`}>
@@ -324,6 +408,67 @@ function SortableProject({
         onConfirm={onDelete}
       />
     </li>
+  )
+}
+
+/** Copies a project into another profile as an independent project. */
+function CopyProjectForm({
+  profileId,
+  project,
+  targets,
+  onDone,
+}: {
+  profileId: string
+  project: Project
+  targets: { id: string; name: string }[]
+  onDone: () => void
+}) {
+  const [target, setTarget] = useState(targets[0]?.id ?? "")
+  const [error, setError] = useState<string | null>(null)
+  const name = targets.find((t) => t.id === target)?.name ?? ""
+  const submit = (event: React.SyntheticEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    api
+      .copyProject(profileId, project.id, target)
+      .then(() => {
+        toast.success(`${project.key} copied to ${name}`)
+        onDone()
+      })
+      .catch((e: unknown) => {
+        setError(errorMessage(e))
+      })
+  }
+  return (
+    <form className="grid gap-4" onSubmit={submit}>
+      <DialogHeader>
+        <DialogTitle>Copy {project.key} to another profile</DialogTitle>
+        <DialogDescription>
+          The other profile gets its own copy with the same key, name and resource roles. Later
+          changes to either project do not affect the other.
+        </DialogDescription>
+      </DialogHeader>
+      {error && <ErrorNotice error={error} />}
+      <div className="grid gap-2">
+        <Label htmlFor="copy-target">Target profile</Label>
+        <Select value={target} onValueChange={setTarget}>
+          <SelectTrigger id="copy-target" className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {targets.map((t) => (
+              <SelectItem key={t.id} value={t.id}>
+                {t.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <DialogFooter>
+        <Button type="submit" disabled={!target}>
+          <Copy /> Copy project
+        </Button>
+      </DialogFooter>
+    </form>
   )
 }
 

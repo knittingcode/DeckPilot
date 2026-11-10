@@ -15,17 +15,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { useAsync } from "@/hooks/use-async"
 import { useEditingProfile } from "@/hooks/use-profile"
-import { api } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
+import { moduleOf } from "@/lib/modules"
 import { ActionIcon } from "@/components/action-icon"
 import type { ActionInstance, ActionType, ProfileView } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 export function ActionsPage() {
   return (
-    <Page title="Action Library" description="Configure actions before assigning them to keys">
+    <Page
+      title="Action Library"
+      description="Actions you configured, ready for workflows and keys"
+      profileScoped
+    >
       <RequireProfile>{() => <ActionLibrary />}</RequireProfile>
     </Page>
   )
@@ -33,31 +36,36 @@ export function ActionsPage() {
 
 function ActionLibrary() {
   const { state, reload, profileId } = useEditingProfile()
-  const types = useAsync(() => api.listActionTypes(), "types").state
-  if (state.status === "loading" || types.status === "loading") return <Loading />
+  if (state.status === "loading") return <Loading />
   if (state.status === "error") return <ErrorNotice error={state.error} />
-  if (types.status === "error") return <ErrorNotice error={types.error} />
   if (!profileId) return null
-  return <Library view={state.data} types={types.data} profileId={profileId} reload={reload} />
+  return <Library view={state.data} profileId={profileId} reload={reload} />
 }
 
+/**
+ * The actions the user configured in this profile. Modules provide action
+ * types; nothing appears here until the user creates an action.
+ */
 function Library({
   view,
-  types,
   profileId,
   reload,
 }: {
   view: ProfileView
-  types: ActionType[]
   profileId: string
   reload: () => void
 }) {
-  const { profiles, agent, refresh } = useAppContext()
+  const { profiles, agent, refresh, modules } = useAppContext()
   const [query, setQuery] = useState("")
   const [category, setCategory] = useState("all")
   const [selected, setSelected] = useState<string | null>(view.profile.actions[0]?.id ?? "new")
+  // Types of disabled modules are known too, so their actions keep a name.
+  const types: ActionType[] = useMemo(() => modules.flatMap((m) => m.actionTypes), [modules])
   const typeOf = (id: string) => types.find((t) => t.id === id)
-  const categories = [...new Set(types.map((t) => t.category))]
+  const isAvailable = (id: string) => Boolean(moduleOf(modules, id)?.enabled)
+  const categories = [
+    ...new Set(view.profile.actions.map((a) => typeOf(a.actionType)?.category ?? "Other")),
+  ].sort()
 
   const groups = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -130,13 +138,16 @@ function Library({
         </CardHeader>
         <CardContent className="grid gap-4 xl:overflow-y-auto">
           {view.profile.actions.length === 0 && (
-            <EmptyState title="No actions yet">Create your first action.</EmptyState>
+            <EmptyState title="No actions yet">
+              Click New, choose a module and an action type, and configure it. Saved actions can
+              then be used in workflows and on device keys.
+            </EmptyState>
           )}
           {view.profile.actions.length > 0 && groups.length === 0 && (
             <p className="text-sm text-muted-foreground">No actions match.</p>
           )}
           {groups.map(([group, actions]) => (
-            <section key={group} className="grid gap-1" aria-label={group}>
+            <section key={group} className="grid min-w-0 gap-1" aria-label={group}>
               <h3 className="px-2 text-xs font-medium text-muted-foreground uppercase">{group}</h3>
               {actions.map((action) => {
                 const used = view.actionUsages[action.id]?.length ?? 0
@@ -145,7 +156,7 @@ function Library({
                     key={action.id}
                     type="button"
                     className={cn(
-                      "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                      "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                       selected === action.id && "bg-accent",
                     )}
                     onClick={() => {
@@ -159,6 +170,11 @@ function Library({
                         {typeOf(action.actionType)?.name ?? action.actionType}
                       </span>
                     </span>
+                    {!isAvailable(action.actionType) && (
+                      <Badge variant="outline" title="Its module is disabled">
+                        Unavailable
+                      </Badge>
+                    )}
                     {used > 0 && (
                       <Badge variant="secondary" title={`Used ${used} time(s)`}>
                         {used}
@@ -178,14 +194,15 @@ function Library({
           <CardDescription>
             {current
               ? (typeOf(current.actionType)?.name ?? current.actionType)
-              : "Choose a type and configure its parameters"}
+              : "Choose a module and an action type, then configure it"}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <ActionEditor
             key={current?.id ?? "new"}
             profileId={profileId}
-            types={types}
+            modules={modules}
+            projects={view.profile.projects}
             action={current ?? null}
             usages={current ? (view.actionUsages[current.id] ?? []) : []}
             canRun={canRun}

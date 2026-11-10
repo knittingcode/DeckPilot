@@ -8,16 +8,18 @@ import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useAsync } from "@/hooks/use-async"
 import { AGENT_STATUS_EVENT, UPDATE_STATE_EVENT, api } from "@/lib/api"
-import { AppContext, type AppContextValue, type PageId } from "@/lib/app-context"
+import { AppContext, type AppContextValue, type CorePageId, type PageId } from "@/lib/app-context"
 import { ThemeProvider } from "@/components/theme-provider"
-import type { AgentConnection, UpdateState } from "@/lib/types"
-// Pages load on first use, which keeps the start-up bundle small.
-const PAGES: Record<PageId, React.LazyExoticComponent<() => React.JSX.Element>> = {
+import type { AgentConnection, ModuleInfo, UpdateState } from "@/lib/types"
+import { MODULE_VIEWS, isModulePageAvailable } from "@/modules"
+
+// Pages load on first use, which keeps the start-up bundle small. Pages of
+// feature modules come from the module registry.
+const PAGES: Record<CorePageId, React.LazyExoticComponent<() => React.JSX.Element>> = {
   dashboard: lazy(() => import("@/pages/dashboard").then((m) => ({ default: m.DashboardPage }))),
   actions: lazy(() => import("@/pages/actions").then((m) => ({ default: m.ActionsPage }))),
   workflows: lazy(() => import("@/pages/workflows").then((m) => ({ default: m.WorkflowsPage }))),
   profiles: lazy(() => import("@/pages/profiles").then((m) => ({ default: m.ProfilesPage }))),
-  projects: lazy(() => import("@/pages/projects").then((m) => ({ default: m.ProjectsPage }))),
   models: lazy(() => import("@/pages/models").then((m) => ({ default: m.ModelsPage }))),
   designer: lazy(() =>
     import("@/pages/layout-designer").then((m) => ({ default: m.LayoutDesignerPage })),
@@ -42,7 +44,14 @@ function Studio() {
   const [agent, setAgent] = useState<AgentConnection | null>(null)
   const [updates, setUpdates] = useState<UpdateState | null>(null)
   const [editing, setEditing] = useState<string | null>(storedEditingProfile)
+  const [modules, setModules] = useState<ModuleInfo[] | null>(null)
   const { state } = useAsync(() => api.listProfiles(), String(revision))
+
+  useEffect(() => {
+    api.listModules().then(setModules, () => {
+      setModules([])
+    })
+  }, [])
 
   const refresh = useCallback(() => {
     setRevision((value) => value + 1)
@@ -88,7 +97,7 @@ function Studio() {
   }, [refresh])
 
   const context = useMemo<AppContextValue | null>(() => {
-    if (state.status !== "ready") return null
+    if (state.status !== "ready" || modules === null) return null
     const profiles = state.data
     const valid = profiles.profiles.some((p) => p.id === editing)
     const editingProfileId = valid
@@ -105,8 +114,10 @@ function Studio() {
       updates,
       setUpdates,
       navigate: setPage,
+      modules,
+      setModules,
     }
-  }, [state, editing, setEditingProfileId, refresh, revision, agent, updates])
+  }, [state, modules, editing, setEditingProfileId, refresh, revision, agent, updates])
 
   if (!context) {
     return (
@@ -116,7 +127,14 @@ function Studio() {
     )
   }
 
-  const Current = PAGES[page]
+  // A module page disappears when its module is disabled.
+  const Current =
+    page in PAGES
+      ? PAGES[page as CorePageId]
+      : isModulePageAvailable(context.modules, page)
+        ? MODULE_VIEWS[page]
+        : undefined
+  const View = Current ?? PAGES.dashboard
   return (
     <AppContext value={context}>
       <SidebarProvider>
@@ -129,7 +147,8 @@ function Studio() {
               </div>
             }
           >
-            <Current />
+            {/* Remount on profile change: open editors never write to another profile. */}
+            <View key={context.editingProfileId ?? "none"} />
           </Suspense>
         </SidebarInset>
       </SidebarProvider>

@@ -13,6 +13,8 @@ export type ParameterKind =
   | { type: "boolean" }
   | { type: "choice"; options: string[] }
   | { type: "resource"; kind?: ResourceKind }
+  /** A project of the profile the action belongs to. */
+  | { type: "project" }
 
 export type ParameterValue =
   | { type: "text"; value: string }
@@ -20,6 +22,7 @@ export type ParameterValue =
   | { type: "boolean"; value: boolean }
   | { type: "choice"; value: string }
   | { type: "resource"; value: ResourceRef }
+  | { type: "project"; value: string }
 
 export type ActionParameters = Record<string, ParameterValue>
 
@@ -198,6 +201,41 @@ export interface ResourceCheck {
   value: string | null
   status: ResourceStatus
   usedBy: string[]
+}
+
+export type Capability = "profile-read" | "project-context" | "machine-resources"
+
+export interface ModulePage {
+  id: string
+  title: string
+  icon: string
+  order: number
+}
+
+/** A feature module with its state, as reported by the backend. */
+export interface ModuleInfo {
+  id: string
+  version: string
+  name: string
+  description: string
+  /** Supported operating systems; empty means all. */
+  platforms: Os[]
+  pages: ModulePage[]
+  capabilities: Capability[]
+  config: ParameterSpec[]
+  dependencies: string[]
+  enabledByDefault: boolean
+  enabled: boolean
+  supported: boolean
+  configValues: ActionParameters
+  actionTypes: ActionType[]
+}
+
+export interface MigrationNote {
+  schemaVersion: number
+  profile: string | null
+  message: string
+  createdAt: number
 }
 
 export interface Overview {

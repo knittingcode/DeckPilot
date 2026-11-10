@@ -3,7 +3,6 @@ import {
   Check,
   ChevronsUpDown,
   Cpu,
-  FolderKanban,
   LayoutDashboard,
   LayoutGrid,
   Library,
@@ -37,8 +36,15 @@ import {
 } from "@/components/ui/sidebar"
 import { type PageId, useAppContext } from "@/lib/app-context"
 import { cn } from "@/lib/utils"
+import { moduleNavigation } from "@/modules"
 
-const GROUPS: { label: string; items: { id: PageId; label: string; icon: LucideIcon }[] }[] = [
+interface NavGroup {
+  label: string
+  items: { id: PageId; label: string; icon: LucideIcon }[]
+}
+
+/** Navigation of the core application. Module pages are added to "Configure". */
+const GROUPS: NavGroup[] = [
   { label: "Overview", items: [{ id: "dashboard", label: "Dashboard", icon: LayoutDashboard }] },
   {
     label: "Configure",
@@ -46,7 +52,6 @@ const GROUPS: { label: string; items: { id: PageId; label: string; icon: LucideI
       { id: "actions", label: "Action Library", icon: Library },
       { id: "workflows", label: "Workflows", icon: ListOrdered },
       { id: "profiles", label: "Profiles", icon: UserRound },
-      { id: "projects", label: "Projects", icon: FolderKanban },
     ],
   },
   {
@@ -110,8 +115,12 @@ export function AppSidebar({
   current: PageId
   onNavigate: (page: PageId) => void
 }) {
-  const { agent, updates } = useAppContext()
+  const { agent, updates, modules } = useAppContext()
   const updateAvailable = Boolean(updates?.available)
+  const fromModules = moduleNavigation(modules)
+  const groups = GROUPS.map((group) =>
+    group.label === "Configure" ? { ...group, items: [...group.items, ...fromModules] } : group,
+  )
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
@@ -122,7 +131,7 @@ export function AppSidebar({
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        {GROUPS.map((group) => (
+        {groups.map((group) => (
           <SidebarGroup key={group.label}>
             <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
             <SidebarGroupContent>

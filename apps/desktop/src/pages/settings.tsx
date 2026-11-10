@@ -1,6 +1,8 @@
 import { Monitor, Moon, Sun } from "lucide-react"
 
 import { AgentSettings } from "@/components/agent-settings"
+import { MigrationNotesCard } from "@/components/migration-notes"
+import { ModulesCard } from "@/components/modules-card"
 import { ErrorNotice, Loading, Page } from "@/components/page"
 import { UpdatesCard } from "@/components/updates-card"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -19,7 +21,7 @@ export function SettingsPage() {
     String(revision),
   )
   return (
-    <Page title="Settings" description="Appearance, agent, updates and diagnostics">
+    <Page title="Settings" description="Appearance, modules, agent, updates and diagnostics">
       <Card>
         <CardHeader>
           <CardTitle>Appearance</CardTitle>
@@ -46,8 +48,10 @@ export function SettingsPage() {
           </ToggleGroup>
         </CardContent>
       </Card>
+      <ModulesCard />
       <AgentSettings />
       <UpdatesCard />
+      <MigrationNotesCard />
       <Card>
         <CardHeader>
           <CardTitle>About</CardTitle>

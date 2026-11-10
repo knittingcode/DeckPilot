@@ -1,9 +1,9 @@
 import { ArrowRight, Download, Info } from "lucide-react"
+import { Suspense } from "react"
 import { toast } from "sonner"
 
 import { AgentBadge, AgentCompatibilityNotice, AgentStopped, DeviceRow } from "@/components/agent"
 import { EmptyState, ErrorNotice, Loading, Page } from "@/components/page"
-import { ProjectSwitcher } from "@/components/project-switcher"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -17,9 +17,10 @@ import {
 import { useAsync } from "@/hooks/use-async"
 import { api, errorMessage } from "@/lib/api"
 import { type PageId, useAppContext } from "@/lib/app-context"
+import { dashboardCards } from "@/modules"
 
 export function DashboardPage() {
-  const { revision, profiles, refresh, agent, updates, navigate } = useAppContext()
+  const { revision, profiles, refresh, agent, updates, navigate, modules } = useAppContext()
   const { state } = useAsync(
     () => Promise.all([api.getOverview(), api.launchInfo()]),
     String(revision),
@@ -104,25 +105,11 @@ export function DashboardPage() {
                 )}
               </CardContent>
             </Card>
-            <Card>
-              <CardHeader>
-                <CardDescription>Active project</CardDescription>
-                <CardTitle className="text-xl">
-                  {state.data[0].activeProject
-                    ? `${state.data[0].activeProject.key} · ${state.data[0].activeProject.name}`
-                    : "None"}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {active.status === "ready" && active.data && activeId && (
-                  <ProjectSwitcher
-                    profileId={activeId}
-                    projects={active.data.profile.projects}
-                    activeProjectId={active.data.activeProjectId}
-                  />
-                )}
-              </CardContent>
-            </Card>
+            {dashboardCards(modules).map(({ key, card: ModuleCard }) => (
+              <Suspense key={key} fallback={<Loading />}>
+                <ModuleCard />
+              </Suspense>
+            ))}
           </div>
 
           <Card>
@@ -153,12 +140,11 @@ export function DashboardPage() {
           </Card>
 
           {active.status === "ready" && active.data && (
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-4 sm:grid-cols-3">
               {(
                 [
                   ["Actions", active.data.profile.actions.length, "actions"],
                   ["Workflows", active.data.profile.workflows.length, "workflows"],
-                  ["Projects", active.data.profile.projects.length, "projects"],
                   ["Layouts", active.data.profile.layouts.length, "designer"],
                 ] as [string, number, PageId][]
               ).map(([label, count, target]) => (

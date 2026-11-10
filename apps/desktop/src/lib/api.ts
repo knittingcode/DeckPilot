@@ -11,6 +11,8 @@ import type {
   DeviceModel,
   LaunchView,
   MachineConfig,
+  MigrationNote,
+  ModuleInfo,
   Overview,
   ProfileSummary,
   ProfilesView,
@@ -46,6 +48,13 @@ export const api = {
   launchInfo: () => invoke<LaunchView>("launch_info"),
   listActionTypes: () => invoke<ActionType[]>("list_action_types"),
   listDeviceModels: () => invoke<DeviceModel[]>("list_device_models"),
+  migrationNotes: () => invoke<MigrationNote[]>("migration_notes"),
+
+  listModules: () => invoke<ModuleInfo[]>("list_modules"),
+  setModuleEnabled: (moduleId: string, enabled: boolean) =>
+    invoke<ModuleInfo[]>("set_module_enabled", { moduleId, enabled }),
+  setModuleConfig: (moduleId: string, config: ActionParameters) =>
+    invoke<ModuleInfo[]>("set_module_config", { moduleId, config }),
 
   listProfiles: () => invoke<ProfilesView>("list_profiles"),
   getProfile: (profileId: string) => invoke<ProfileView>("get_profile", { profileId }),
@@ -88,6 +97,8 @@ export const api = {
     invoke<null>("move_project", { profileId, projectId, index }),
   deleteProject: (profileId: string, projectId: string) =>
     invoke<null>("delete_project", { profileId, projectId }),
+  copyProject: (profileId: string, projectId: string, targetProfileId: string) =>
+    invoke<Project>("copy_project", { profileId, projectId, targetProfileId }),
   cycleProject: (profileId: string, direction: "next" | "previous") =>
     invoke<string | null>("cycle_project", { profileId, direction }),
   selectProject: (profileId: string, projectId: string) =>

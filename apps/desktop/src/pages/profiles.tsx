@@ -18,13 +18,6 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
   Table,
   TableBody,
   TableCell,
@@ -207,37 +200,6 @@ export function ProfilesPage() {
               <span>{state.data.profile.workflows.length} workflows</span>
               <span>{state.data.profile.projects.length} projects</span>
               <span>{state.data.profile.layouts.length} layouts</span>
-            </div>
-            <div className="grid max-w-sm gap-2">
-              <Label htmlFor="default-project">Default project</Label>
-              <Select
-                value={state.data.profile.defaultProject ?? "first"}
-                onValueChange={(value) => {
-                  run(
-                    () =>
-                      api.setDefaultProject(
-                        state.data.profile.id,
-                        value === "first" ? null : value,
-                      ),
-                    "Default project saved",
-                  )
-                }}
-              >
-                <SelectTrigger id="default-project" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="first">First project in the cycle</SelectItem>
-                  {state.data.profile.projects.map((project) => (
-                    <SelectItem key={project.id} value={project.id}>
-                      {project.key} · {project.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                Selected when the profile is activated and no project was chosen before.
-              </p>
             </div>
             {state.data.issues.length > 0 && <ErrorNotice error={state.data.issues.join(" ")} />}
           </CardContent>

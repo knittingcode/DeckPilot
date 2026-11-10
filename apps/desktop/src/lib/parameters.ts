@@ -1,4 +1,4 @@
-import type { ActionParameters, ParameterSpec, ParameterValue } from "./types"
+import type { ActionParameters, ParameterSpec, ParameterValue, Project } from "./types"
 
 /** Initial form value for a parameter: its declared default, or an empty value of the right type. */
 export function initialValue(spec: ParameterSpec): ParameterValue {
@@ -14,6 +14,8 @@ export function initialValue(spec: ParameterSpec): ParameterValue {
       return { type: "choice", value: spec.kind.options[0] ?? "" }
     case "resource":
       return { type: "resource", value: { type: "projectRole", role: "" } }
+    case "project":
+      return { type: "project", value: "" }
   }
 }
 
@@ -21,6 +23,7 @@ function isEmpty(value: ParameterValue): boolean {
   switch (value.type) {
     case "text":
     case "choice":
+    case "project":
       return value.value.trim() === ""
     case "resource":
       return value.value.type === "fixed"
@@ -51,7 +54,7 @@ export function buildParameters(
 }
 
 /** Short human-readable representation of a parameter value. */
-export function describeValue(value: ParameterValue): string {
+export function describeValue(value: ParameterValue, projects: Project[] = []): string {
   switch (value.type) {
     case "text":
     case "choice":
@@ -62,6 +65,8 @@ export function describeValue(value: ParameterValue): string {
       return value.value ? "yes" : "no"
     case "resource":
       return value.value.type === "fixed" ? value.value.key : `active project › ${value.value.role}`
+    case "project":
+      return projects.find((p) => p.id === value.value)?.key ?? "a project of another profile"
   }
 }
 
