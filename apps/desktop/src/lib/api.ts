@@ -52,8 +52,8 @@ export interface ProjectInput {
 export const api = {
   openWindow: (id: string) => invoke<null>("open_window", { id }),
   currentWindow: () => invoke<WindowSpec | null>("current_window"),
-  fitWindow: (width: number, height: number) =>
-    invoke<[number, number]>("fit_window", { width, height }),
+  fitWindow: (width: number, height: number, viewportWidth: number, viewportHeight: number) =>
+    invoke<[number, number]>("fit_window", { width, height, viewportWidth, viewportHeight }),
   closeWindow: () => invoke<null>("close_window"),
   showMainWindow: () => invoke<boolean>("show_main_window"),
   finishSecurityPrompt: () => invoke<null>("finish_security_prompt"),

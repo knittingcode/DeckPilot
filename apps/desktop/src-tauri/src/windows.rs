@@ -182,6 +182,57 @@ pub fn fit_size(content: (f64, f64), limits: Limits, work: Rect) -> (f64, f64) {
     )
 }
 
+/// What the frontend measured and what the window currently is, in logical
+/// pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Measurement {
+    /// Natural size of the content (the window shell's border box).
+    pub content: (f64, f64),
+    /// The webview's viewport when the content was measured.
+    pub viewport: (f64, f64),
+    /// The window size the platform reports (what `set_size` sets).
+    pub window: (f64, f64),
+    /// Outer frame minus window size: decorations outside of it.
+    pub frame: (f64, f64),
+}
+
+/// Largest plausible decoration inside the window size (a title bar).
+const MAX_INNER_DECORATION: f64 = 120.0;
+
+/// The window size that shows `content` completely.
+///
+/// Platforms differ in what the window size includes. On macOS the title
+/// bar can be part of it, so the webview's viewport is smaller than the
+/// window; that difference is measured, not assumed, and added. Decorations
+/// outside the window size (frames on Windows and Linux) reduce the space
+/// available on the screen instead.
+pub fn window_size(measurement: Measurement, limits: Limits, work: Rect) -> (f64, f64) {
+    let inside = |window: f64, viewport: f64| {
+        if viewport > 0.0 {
+            (window - viewport).clamp(0.0, MAX_INNER_DECORATION)
+        } else {
+            0.0
+        }
+    };
+    let decoration = (
+        inside(measurement.window.0, measurement.viewport.0),
+        inside(measurement.window.1, measurement.viewport.1),
+    );
+    let available = Rect {
+        width: work.width - measurement.frame.0.max(0.0),
+        height: work.height - measurement.frame.1.max(0.0),
+        ..work
+    };
+    fit_size(
+        (
+            measurement.content.0 + decoration.0,
+            measurement.content.1 + decoration.1,
+        ),
+        limits,
+        available,
+    )
+}
+
 /// Where a window of `size` goes: where it is, if it still fits the work
 /// area there (no jumps while content changes), otherwise centred.
 pub fn place(size: (f64, f64), work: Rect, current: Option<(f64, f64)>) -> (f64, f64) {
@@ -285,15 +336,37 @@ pub fn open<R: Runtime>(app: &AppHandle<R>, spec: &WindowSpec) -> Result<(), Win
         app.state::<WindowRegistry>().remove(&label);
         return Err(WindowError::Platform(error.to_string()));
     }
+    // If the content never reports its size (a script error, a platform
+    // that does not render hidden windows), show the window anyway so the
+    // user is never left with an invisible prompt.
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(SHOW_UNSIZED_AFTER).await;
+        let not_sized = handle
+            .state::<WindowRegistry>()
+            .lock()
+            .get(&label)
+            .is_some_and(|(_, fitted)| !fitted);
+        if not_sized && let Some(window) = handle.get_webview_window(&label) {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    });
     Ok(())
 }
 
-/// Resizes `window` to `content` (logical pixels, measured by the
-/// frontend) and shows it the first time. Resizable windows are only sized
-/// once, so manual resizing is kept.
+/// How long a new window may stay hidden waiting for its content size.
+const SHOW_UNSIZED_AFTER: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Resizes `window` to show its content completely (`content` and
+/// `viewport` in logical pixels, measured by the frontend) and shows it the
+/// first time, centred. Later changes keep the window where it is unless it
+/// would leave the screen. Resizable windows are only sized once, so manual
+/// resizing is kept.
 pub fn fit<R: Runtime>(
     window: &WebviewWindow<R>,
     content: (f64, f64),
+    viewport: (f64, f64),
 ) -> Result<(f64, f64), WindowError> {
     let app = window.app_handle();
     let label = window.label().to_owned();
@@ -310,25 +383,42 @@ pub fn fit<R: Runtime>(
         .flatten()
         .map_or(FALLBACK_WORK_AREA, |m| logical_work_area(&m));
     let scale = window.scale_factor().unwrap_or(1.0);
+    let logical = |w: u32, h: u32| (f64::from(w) / scale, f64::from(h) / scale);
     let current = window
         .inner_size()
-        .map(|s| (f64::from(s.width) / scale, f64::from(s.height) / scale))
+        .map(|s| logical(s.width, s.height))
         .unwrap_or_default();
+    let outer = window
+        .outer_size()
+        .map_or(current, |s| logical(s.width, s.height));
     let target = if fitted && limits.resizable {
         current
     } else {
-        fit_size(content, limits, work)
+        window_size(
+            Measurement {
+                content,
+                viewport,
+                window: current,
+                frame: (outer.0 - current.0, outer.1 - current.1),
+            },
+            limits,
+            work,
+        )
     };
     // Changes below a pixel would only cause resize feedback loops.
-    if (target.0 - current.0).abs() >= 1.0 || (target.1 - current.1).abs() >= 1.0 {
+    let changed = (target.0 - current.0).abs() >= 1.0 || (target.1 - current.1).abs() >= 1.0;
+    if changed {
         window
             .set_size(LogicalSize::new(target.0, target.1))
             .map_err(|e| WindowError::Platform(e.to_string()))?;
+    }
+    if changed || !fitted {
         let position = window
             .outer_position()
             .ok()
             .map(|p| (f64::from(p.x) / scale, f64::from(p.y) / scale));
-        let (x, y) = place(target, work, position);
+        // Centred once the first real size is known, then left in place.
+        let (x, y) = place(target, work, if fitted { position } else { None });
         if position != Some((x, y)) {
             let _ = window.set_position(LogicalPosition::new(x, y));
         }
@@ -495,6 +585,66 @@ mod tests {
             ..small
         };
         assert!(fit_size((400.0, 200.0), compact, tiny).0 <= 300.0);
+    }
+
+    #[test]
+    fn decorations_are_measured_not_assumed() {
+        let compact = limits(WindowSize::Compact);
+        // macOS here: the window size includes a 28 pt title bar, so a
+        // 440 x 239 window has a 440 x 211 viewport. Content of 440 x 239
+        // needs a 440 x 267 window.
+        let mac = Measurement {
+            content: (440.0, 239.0),
+            viewport: (440.0, 211.0),
+            window: (440.0, 239.0),
+            frame: (0.0, 0.0),
+        };
+        assert_eq!(window_size(mac, compact, SCREEN), (440.0, 267.0));
+        // Once the window has that size, the same content needs no change:
+        // no resize loop.
+        let settled = Measurement {
+            viewport: (440.0, 239.0),
+            window: (440.0, 267.0),
+            ..mac
+        };
+        assert_eq!(window_size(settled, compact, SCREEN), (440.0, 267.0));
+        // Windows/Linux: the viewport is the whole window size; the frame
+        // lies outside and only reduces the room on the screen.
+        let framed = Measurement {
+            content: (400.0, 300.0),
+            viewport: (360.0, 120.0),
+            window: (360.0, 120.0),
+            frame: (16.0, 39.0),
+        };
+        assert_eq!(window_size(framed, compact, SCREEN), (400.0, 300.0));
+        let short = Rect {
+            height: 400.0,
+            ..SCREEN
+        };
+        let tall = Measurement {
+            content: (400.0, 600.0),
+            ..framed
+        };
+        assert_eq!(
+            window_size(tall, compact, short).1,
+            400.0 - 39.0 - 2.0 * MARGIN
+        );
+        // A hidden window may report no viewport yet: nothing is added.
+        let hidden = Measurement {
+            viewport: (0.0, 0.0),
+            ..mac
+        };
+        assert_eq!(window_size(hidden, compact, SCREEN), (440.0, 239.0));
+        // Implausible differences are capped.
+        let odd = Measurement {
+            viewport: (440.0, 10.0),
+            window: (440.0, 700.0),
+            ..mac
+        };
+        assert_eq!(
+            window_size(odd, compact, SCREEN).1,
+            239.0 + MAX_INNER_DECORATION
+        );
     }
 
     #[test]

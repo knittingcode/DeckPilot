@@ -5,16 +5,17 @@
  * the screen allowance scrolls inside the body instead of growing further.
  */
 
-/** The natural size of a window shell's content, for sizing its window. */
+/**
+ * The natural size of a window shell: its border box, which is laid out
+ * independently of the window's height (see `ModalShell`). Rounded up so
+ * that sub-pixel layout never clips the last line.
+ */
 export function naturalSize(root: HTMLElement): { width: number; height: number } {
-  const part = (name: string) => root.querySelector<HTMLElement>(`[data-modal-part="${name}"]`)
-  const header = part("header")
-  const body = part("body")
-  const footer = part("footer")
-  const spacer = footer ? 0 : 16
-  const height =
-    (header?.offsetHeight ?? 0) + (body?.scrollHeight ?? 0) + (footer?.offsetHeight ?? 0) + spacer
-  return { width: Math.ceil(root.getBoundingClientRect().width), height: Math.ceil(height) }
+  const box = root.getBoundingClientRect()
+  return {
+    width: Math.ceil(Math.max(box.width, root.scrollWidth)),
+    height: Math.ceil(Math.max(box.height, root.scrollHeight)),
+  }
 }
 
 export interface Size {
@@ -22,14 +23,22 @@ export interface Size {
   height: number
 }
 
+/** A measurement: the content's natural size and the webview's viewport. */
+export interface Measurement extends Size {
+  viewportWidth: number
+  viewportHeight: number
+}
+
 /**
- * Coalesces size reports: at most one per animation frame plus `delay` ms,
- * and only when the size changed by at least a pixel. Returns `schedule`
- * and `dispose`.
+ * Coalesces size reports: at most one per `delay` ms, and only when the
+ * size changed by at least a pixel. Returns `schedule` and `dispose`.
+ *
+ * Timers, not animation frames: windows stay hidden until they are sized,
+ * and WebKit does not run animation frames for hidden windows.
  */
-export function coalescedReporter(
-  measure: () => Size | null,
-  report: (size: Size) => void,
+export function coalescedReporter<M extends Size>(
+  measure: () => M | null,
+  report: (measurement: M) => void,
   delay = 40,
 ): { schedule: () => void; dispose: () => void } {
   let pending = false
@@ -44,16 +53,16 @@ export function coalescedReporter(
     if (last && Math.abs(last.width - size.width) < 1 && Math.abs(last.height - size.height) < 1) {
       return
     }
-    last = size
+    // Only the content size decides whether to report: the viewport changes
+    // as a result of the report, which must not trigger another one.
+    last = { width: size.width, height: size.height }
     report(size)
   }
   return {
     schedule: () => {
       if (pending || disposed) return
       pending = true
-      requestAnimationFrame(() => {
-        timer = setTimeout(flush, delay)
-      })
+      timer = setTimeout(flush, delay)
     },
     dispose: () => {
       disposed = true

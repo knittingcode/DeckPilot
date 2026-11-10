@@ -6,11 +6,10 @@ import { coalescedReporter, naturalSize } from "./window-fit"
 describe("coalescedReporter", () => {
   beforeEach(() => {
     vi.useFakeTimers()
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
-      setTimeout(() => {
-        callback(0)
-      }, 16),
-    )
+    // Hidden windows get no animation frames; sizing must not need them.
+    vi.stubGlobal("requestAnimationFrame", () => {
+      throw new Error("animation frames are not available in hidden windows")
+    })
   })
   afterEach(() => {
     vi.useRealTimers()
@@ -57,24 +56,12 @@ describe("coalescedReporter", () => {
 })
 
 describe("naturalSize", () => {
-  it("uses the full body height, not the visible part", () => {
-    document.body.innerHTML = `
-      <section data-modal-root>
-        <header data-modal-part="header"></header>
-        <div data-modal-part="body"></div>
-        <footer data-modal-part="footer"></footer>
-      </section>`
-    const root = document.querySelector<HTMLElement>("[data-modal-root]")
-    if (!root) throw new Error("fixture missing")
-    const set = (selector: string, property: string, value: number) => {
-      Object.defineProperty(root.querySelector(selector), property, { value, configurable: true })
-    }
-    set('[data-modal-part="header"]', "offsetHeight", 72)
-    // The body scrolls: 200 px visible, 900 px of content.
-    set('[data-modal-part="body"]', "offsetHeight", 200)
-    set('[data-modal-part="body"]', "scrollHeight", 900)
-    set('[data-modal-part="footer"]', "offsetHeight", 64)
-    root.getBoundingClientRect = () => ({ width: 380.2 }) as DOMRect
-    expect(naturalSize(root)).toEqual({ width: 381, height: 1036 })
+  it("is the shell's border box, rounded up", () => {
+    const root = document.createElement("section")
+    root.getBoundingClientRect = () => ({ width: 380.2, height: 238.4 }) as DOMRect
+    expect(naturalSize(root)).toEqual({ width: 381, height: 239 })
+    // Content wider or taller than the box (overflow) still counts.
+    Object.defineProperty(root, "scrollHeight", { value: 512 })
+    expect(naturalSize(root).height).toBe(512)
   })
 })

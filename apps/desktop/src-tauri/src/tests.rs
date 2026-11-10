@@ -1351,18 +1351,24 @@ fn native_windows_are_opened_by_identifier_and_reused() {
     );
 
     // Sizing: within the compact limits, shown after the first fit.
-    let size = windows::fit(&prompt, (390.0, 280.0)).unwrap();
+    let size = windows::fit(&prompt, (390.0, 280.0), (390.0, 280.0)).unwrap();
     assert_eq!(size, (390.0, 280.0));
-    let size = windows::fit(&prompt, (100.0, 2000.0)).unwrap();
+    let size = windows::fit(&prompt, (100.0, 2000.0), (390.0, 280.0)).unwrap();
     assert_eq!(size.0, 360.0);
     assert!(size.1 <= 760.0, "clamped: {size:?}");
     // The main window is not a sized prompt.
     assert!(
-        h.error("fit_window", json!({ "width": 300.0, "height": 200.0 }))
+        h.error(
+            "fit_window",
+            json!({ "width": 300.0, "height": 200.0, "viewportWidth": 300.0, "viewportHeight": 200.0 })
+        )
             .contains("no window")
     );
     assert!(
-        h.call("fit_window", json!({ "width": -1.0, "height": 200.0 }))
+        h.call(
+            "fit_window",
+            json!({ "width": -1.0, "height": 200.0, "viewportWidth": 300.0, "viewportHeight": 200.0 })
+        )
             .is_err()
     );
     assert_eq!(

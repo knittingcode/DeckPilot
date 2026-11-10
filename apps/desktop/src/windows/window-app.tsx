@@ -78,7 +78,12 @@ function Hosted({
   )
 }
 
-/** Reports the content's natural size whenever it changes. */
+/**
+ * Reports the shell's natural size together with the current viewport. The
+ * window manager derives the space taken by native decorations (title bar,
+ * borders) from the difference between the window size and the viewport,
+ * so no platform-specific title bar height is assumed here.
+ */
 function FitToContent({ wide, children }: { wide: boolean; children: React.ReactNode }) {
   const container = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -90,32 +95,36 @@ function FitToContent({ wide, children }: { wide: boolean; children: React.React
     const reporter = coalescedReporter(
       () => {
         const root = target()
-        return root ? naturalSize(root) : null
+        if (!root) return null
+        return {
+          ...naturalSize(root),
+          viewportWidth: document.documentElement.clientWidth,
+          viewportHeight: document.documentElement.clientHeight,
+        }
       },
-      (size) => {
-        api.fitWindow(size.width, size.height).catch(() => undefined)
+      (measurement) => {
+        api
+          .fitWindow(
+            measurement.width,
+            measurement.height,
+            measurement.viewportWidth,
+            measurement.viewportHeight,
+          )
+          .catch(() => undefined)
       },
     )
+    // The root's size depends only on its content, so observing it catches
+    // every change (errors appearing, lazily loaded views, wrapped text).
     const resize = new ResizeObserver(reporter.schedule)
-    const observeAll = () => {
+    const observeRoot = () => {
       resize.disconnect()
-      resize.observe(element)
       const root = target()
-      if (root) {
-        resize.observe(root)
-        root
-          .querySelectorAll<HTMLElement>("[data-modal-part], [data-modal-part=body] > *")
-          .forEach((part) => {
-            resize.observe(part)
-          })
-      }
+      if (root) resize.observe(root)
       reporter.schedule()
     }
-    // Content appears and changes (errors, lazily loaded views, wrapped
-    // translations): re-observe and measure.
-    const mutations = new MutationObserver(observeAll)
-    mutations.observe(element, { childList: true, subtree: true, characterData: true })
-    observeAll()
+    const mutations = new MutationObserver(observeRoot)
+    mutations.observe(element, { childList: true, subtree: true })
+    observeRoot()
     return () => {
       mutations.disconnect()
       resize.disconnect()
@@ -123,7 +132,7 @@ function FitToContent({ wide, children }: { wide: boolean; children: React.React
     }
   }, [])
   return (
-    <div ref={container} className={wide ? "h-svh w-full" : "w-max"}>
+    <div ref={container} className={wide ? "w-full" : "w-max"}>
       {children}
     </div>
   )

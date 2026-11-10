@@ -43,17 +43,29 @@ pub fn current_window<R: Runtime>(
     registry.spec(window.label())
 }
 
-/// Sizes the calling window to its content (logical pixels).
+/// Sizes the calling window to its content. `width`/`height`: the content's
+/// natural size; `viewport_*`: the webview's viewport when it was measured
+/// (logical pixels).
 #[tauri::command]
 pub fn fit_window<R: Runtime>(
     window: WebviewWindow<R>,
     width: f64,
     height: f64,
+    viewport_width: f64,
+    viewport_height: f64,
 ) -> CommandResult<(f64, f64)> {
-    if !(width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0) {
+    let valid = |v: f64| v.is_finite() && (0.0..100_000.0).contains(&v);
+    if !(valid(width) && valid(height) && valid(viewport_width) && valid(viewport_height))
+        || width <= 0.0
+        || height <= 0.0
+    {
         return Err(CommandError::Invalid("invalid content size".into()));
     }
-    Ok(windows::fit(&window, (width, height))?)
+    Ok(windows::fit(
+        &window,
+        (width, height),
+        (viewport_width, viewport_height),
+    )?)
 }
 
 #[tauri::command]

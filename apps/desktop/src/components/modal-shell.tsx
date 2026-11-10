@@ -60,8 +60,9 @@ const WIDTHS: Record<ModalSize, string> = {
   fit: "w-max min-w-[320px] max-w-[960px]",
   compact: "w-max min-w-[360px] max-w-[440px]",
   medium: "w-max min-w-[480px] max-w-[680px]",
-  large: "w-full",
-  fullscreen: "w-full",
+  // Resizable windows fill whatever size the user gives them.
+  large: "w-full min-h-svh",
+  fullscreen: "w-full min-h-svh",
 }
 
 /**
@@ -197,7 +198,10 @@ function WindowShell({
     }
   }, [blocking, onClose])
 
-  const wide = size === "large" || size === "fullscreen"
+  // The shell lays out at its natural size: nothing here depends on the
+  // window's height, so measuring it cannot feed back into itself. When the
+  // content is taller than the screen allows, the document scrolls and the
+  // footer stays visible (sticky).
   return (
     <section
       ref={root}
@@ -206,14 +210,9 @@ function WindowShell({
       aria-labelledby={titleId}
       aria-describedby={description ? descriptionId : undefined}
       data-modal-root=""
-      className={cn(
-        "flex max-h-svh flex-col bg-background text-foreground",
-        WIDTHS[size],
-        wide && "h-svh",
-        className,
-      )}
+      className={cn("flex flex-col bg-background text-foreground", WIDTHS[size], className)}
     >
-      <MaybeForm onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
+      <MaybeForm onSubmit={onSubmit} className="flex flex-1 flex-col">
         <header data-modal-part="header" className="flex items-start gap-3 px-6 pt-6 pb-4">
           {Icon && (
             <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
@@ -231,7 +230,7 @@ function WindowShell({
             )}
           </div>
         </header>
-        <div data-modal-part="body" className="grid min-h-0 flex-1 gap-4 overflow-y-auto px-6 pb-2">
+        <div data-modal-part="body" className="grid flex-1 content-start gap-4 px-6 pb-2">
           <Body loading={loading} error={error}>
             {children}
           </Body>
@@ -239,7 +238,7 @@ function WindowShell({
         {(footer ?? primary ?? secondary) && (
           <footer
             data-modal-part="footer"
-            className="flex flex-wrap items-center justify-end gap-2 border-t px-6 py-4"
+            className="sticky bottom-0 flex flex-wrap items-center justify-end gap-2 border-t bg-background px-6 py-4"
           >
             {footer ?? (
               <Actions primary={primary} secondary={secondary} submits={Boolean(onSubmit)} />

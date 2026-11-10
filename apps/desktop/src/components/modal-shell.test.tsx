@@ -59,15 +59,23 @@ describe("ModalShell in a native window", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Loading")
   })
 
-  it("lets long content scroll inside the body", () => {
+  it("lays out at its natural size and keeps the footer reachable", () => {
     render(
-      <ModalShell title="Logs">
+      <ModalShell title="Logs" primary={{ label: "Close" }}>
         <pre>{"line\n".repeat(500)}</pre>
       </ModalShell>,
     )
+    const root = document.querySelector<HTMLElement>("[data-modal-root]")
     const body = document.querySelector<HTMLElement>('[data-modal-part="body"]')
-    expect(body?.className).toContain("overflow-y-auto")
-    expect(document.querySelector("[data-modal-root]")?.className).toContain("max-h-svh")
+    const footer = document.querySelector<HTMLElement>('[data-modal-part="footer"]')
+    // Nothing depends on the window's height: no viewport-height limits and
+    // no inner scroll container, so the measured size is the natural one.
+    for (const element of [root, body]) {
+      expect(element?.className).not.toMatch(/max-h-|h-svh|overflow-/)
+    }
+    // When the document has to scroll, the actions stay visible.
+    expect(footer?.className).toContain("sticky")
+    expect(footer?.className).toContain("bottom-0")
   })
 })
 
