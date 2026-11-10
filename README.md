@@ -31,8 +31,11 @@ which control triggers it.
 - **Device models** describe capabilities (key grids, encoders, touch surfaces)
   independently of actions. Layouts are validated against them.
 
-All configuration is stored locally and encrypted with a password you choose
-(SQLCipher, Argon2id). Encrypted exports move it to another computer.
+All configuration is stored locally and always encrypted (SQLCipher). By
+default the key is kept in the operating system's credential store (macOS
+Keychain, Windows Credential Manager, Secret Service), so DeckPilot opens
+without a password; a password (Argon2id) can be chosen instead. Encrypted
+exports are the backup and move a configuration to another computer.
 DeckPilot has no cloud service, no synchronization and no telemetry. See
 [security](docs/security.md).
 
@@ -110,10 +113,12 @@ See [docs/development.md](docs/development.md) for all commands.
   project, resolve resource).
 - Workflow steps can only use the built-in actions; integrations such as
   launching applications or Docker are not available yet.
-- Database encryption is not enabled in the app; no password is requested.
-- Database encryption is available in the storage crate behind the `sqlcipher`
-  feature but is not enabled in the app; there is no password setup or
-  import/export yet.
+- Touch ID (macOS) is the only system authentication; on Windows and Linux a
+  system-key setup cannot lock automatically and confirms sensitive
+  operations with a dialog only (Windows Hello and polkit are not integrated).
+- Automatic locking reacts to sleep and inactivity, not to the screen lock.
+- macOS builds are not code-signed yet; after an update macOS may ask once
+  whether the agent may use its Keychain item.
 - CI builds and tests on Linux, macOS and Windows; the agent and app have been
   run manually on macOS only.
 

@@ -65,16 +65,18 @@ mismatching agent, so mismatched versions are not left running side by side.
 Only one check, download or installation runs at a time; a second attempt
 is refused while one is in progress. A failed installation is reported as a
 failure, the downloaded update stays ready to retry, and the agent is
-started again (and unlocked by the app). The agent processes requests one
+started again (it opens a system-managed configuration by itself, or is
+unlocked by the app). The agent processes requests one
 at a time, so a running workflow finishes before the agent stops for an
 update.
 
 ## First launch after an update
 
-Every start of the configuration app is recorded (`app_launches`). The app
-reports the first start after a version change and asks for the database
-password once (see [security.md](security.md#password-lifecycle)); later
-starts of the same version do not ask. The database is never re-encrypted
+Every start of the configuration app is recorded (`app_launches`). With the
+default system-managed key an update needs no prompt; with a password, the
+password is needed after the restart anyway. Users can additionally require
+an authentication once after each update in Settings → Security (see
+[security.md](security.md#locking-and-authentication)). The database is never re-encrypted
 by an update. Schema upgrades are preceded by a verified encrypted backup.
 
 A newer database is never opened by an older DeckPilot (see

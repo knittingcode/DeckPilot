@@ -81,9 +81,26 @@ newline-delimited JSON framing and an async client.
 
 The background agent: device sessions and I/O threads, layout rendering,
 request handling, IPC server, system tray, autostart and single-instance
-lock. It starts **locked**: the configuration app unlocks it with the
-database key after the user entered the password (see
+lock. It is the only process that reads the operating system's credential
+store: with the default system-managed key it opens the configuration at
+login by itself (and creates it on first start); with password protection it
+starts **locked** until the configuration app hands it the key derived from
+the password. It also enforces automatic locking (see
 [security.md](security.md#trust-boundary-between-the-app-and-the-agent)).
+
+### `deckpilot-keystore`
+
+Storage of database keys in the platform credential store (macOS Keychain,
+Windows Credential Manager, Secret Service) behind a small `KeyStore` trait,
+an in-memory store for tests, separate service names for development builds,
+and no file fallback.
+
+### `deckpilot-presence`
+
+Operating-system user verification for the configuration app: Touch ID or
+the login password through `LocalAuthentication` on macOS; reports no method
+elsewhere. Its Objective-C calls are the only `unsafe` code in the workspace,
+kept in one module.
 
 ### `deckpilot-core`
 
@@ -142,10 +159,11 @@ imports, the preview and the import plan. See [security.md](security.md).
   projects, default and active projects live in tables whose constraints keep
   each project inside its profile
 - Module states and migration notes are stored alongside
-- SQLCipher encryption by default, with a raw 256-bit key derived from the
-  user's password (`vault`: setup, unlock, password change, legacy
-  migration, crash recovery); DeckPilot does not implement cryptography
-  itself
+- SQLCipher encryption always, with a raw 256-bit key that is either random
+  and kept in the credential store or derived from the user's password
+  (`vault`: setup, unlock, switching between the two, password change,
+  legacy migration, crash recovery); security policies (`policy`);
+  DeckPilot does not implement cryptography itself
 - Verified encrypted backups before schema upgrades, migration history and
   module-owned schema versions
 
@@ -178,11 +196,9 @@ components; `src/lib/types.ts` mirrors the serialized Rust types.
 Portable data never contains absolute paths: `ResourceKey` rejects them by
 construction.
 
-## Security model (planned)
+## Security model
 
-- The database can be encrypted with SQLCipher. The key will be derived from a
-  user password requested during initial setup, imports, exports and on the
-  first launch after an update.
-- Exports will be encrypted with an established, audited format; no custom
-  cryptography.
-- Secrets will be stored separately from portable profiles.
+See [security.md](security.md): an always-encrypted database whose key is
+system-managed (default) or password-derived, sensitive operations behind a
+fresh authentication, encrypted exports (XChaCha20-Poly1305, Argon2id) as
+the portable backup, and no secrets in portable profiles.

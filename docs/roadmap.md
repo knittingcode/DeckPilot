@@ -64,9 +64,11 @@ Remaining before the milestone is complete:
 
 Implemented:
 
-- SQLCipher-encrypted database by default, key derived with Argon2id;
-  first-run setup, unlock, password change, lock, and a one-time password
-  confirmation after updates; the agent starts locked
+- An always SQLCipher-encrypted database; by default with a random key in
+  the OS credential store (opens at login without a password), optionally
+  password-protected (Argon2id); explicit switching in both directions,
+  password change, lock, automatic locking (sleep, inactivity), Touch ID on
+  macOS, and a fresh authentication for sensitive operations
 - Safe encryption of databases from earlier versions, keeping the original
   until the user removes it
 - Verified encrypted backups before schema upgrades, migration history and
@@ -79,7 +81,10 @@ Implemented:
 Remaining before the milestone is complete:
 
 - A first signed release and an end-to-end update between two releases
-- Platform code signing (Apple notarization, Windows Authenticode)
+- Platform code signing (Apple notarization, Windows Authenticode), which
+  also keeps macOS from asking for Keychain access after updates
+- Windows Hello and polkit as system authentication; locking with the
+  screen lock
 - Secret storage for future modules that need credentials (OS keychain)
 
 ## Milestone 4 – Platform actions

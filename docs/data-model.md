@@ -239,7 +239,7 @@ unchanged.
   app explains which version is needed.
 - Upgrades are one-way. To go back to an older DeckPilot, restore the
   encrypted backup that was made before the upgrade (`backups/
-  deckpilot-schema<N>-<time>.db`, same password) in place of `deckpilot.db`,
+  deckpilot-schema<N>-<time>.db`, encrypted with the key in use at the time) in place of `deckpilot.db`,
   then install the older version. A failed application update never restores
   an older binary automatically, because it might not read the migrated
   database.
