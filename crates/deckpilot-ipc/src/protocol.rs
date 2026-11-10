@@ -27,6 +27,18 @@ use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId};
 /// status reports the [`SecurityState`].
 pub const PROTOCOL_VERSION: u32 = 4;
 
+/// A window identifier: `<namespace>.<name>`, lowercase ASCII letters,
+/// digits, `-` and `.`, at most 64 characters.
+pub fn is_window_id(id: &str) -> bool {
+    id.len() <= 64
+        && id
+            .split_once('.')
+            .is_some_and(|(namespace, name)| !namespace.is_empty() && !name.is_empty())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.')
+}
+
 /// Whether the agent can read the configuration database.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -161,6 +173,14 @@ pub enum Request {
     /// The key of the open database, so that the configuration app can open
     /// it without asking for the password again. Since protocol 4.
     GetDatabaseKey,
+    /// Asks the agent to have a native window opened: through a connected
+    /// configuration app, or by starting the app for that window only.
+    /// Since protocol 4.
+    RequestWindow {
+        window: String,
+    },
+    /// The report of the last workflow the agent ran. Since protocol 4.
+    GetLastWorkflowReport,
 }
 
 impl Request {
@@ -174,6 +194,9 @@ impl Request {
                 Err("device serial must not be empty".into())
             }
             Self::Unlock { key } if !key.is_well_formed() => Err("malformed key".into()),
+            Self::RequestWindow { window } if !is_window_id(window) => {
+                Err(format!("invalid window identifier `{window}`"))
+            }
             _ => Ok(()),
         }
     }
@@ -254,6 +277,10 @@ pub enum Response {
     WorkflowReport {
         report: WorkflowReport,
     },
+    /// Answer to `getLastWorkflowReport`. Since protocol 4.
+    LastWorkflow {
+        report: Option<WorkflowReport>,
+    },
     /// Answer to `getDatabaseKey`. Since protocol 4.
     DatabaseKey {
         key: KeyMaterial,
@@ -280,6 +307,12 @@ pub enum AgentEvent {
     },
     ShowWindow,
     ShuttingDown,
+    /// Asks the configuration app to open a native window by its catalog
+    /// identifier (e.g. `security.unlock`). Only the identifier is sent; the
+    /// app decides whether the window exists and may open. Since protocol 4.
+    OpenWindow {
+        window: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -332,6 +365,28 @@ pub struct AgentStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_identifiers_are_restricted() {
+        assert!(is_window_id("security.unlock"));
+        assert!(is_window_id("workflows.execution-summary"));
+        for bad in [
+            "",
+            "security",
+            ".unlock",
+            "security.",
+            "Security.Unlock",
+            "a.b/../c",
+            "x.<script>",
+        ] {
+            assert!(!is_window_id(bad), "{bad}");
+        }
+        assert!(!is_window_id(&format!("a.{}", "b".repeat(64))));
+        let request = Request::RequestWindow {
+            window: "../../etc".into(),
+        };
+        assert!(request.validate().is_err());
+    }
 
     #[test]
     fn messages_use_tagged_json() {

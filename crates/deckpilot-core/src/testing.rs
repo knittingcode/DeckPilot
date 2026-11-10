@@ -200,6 +200,7 @@ impl TestModule {
             enabled_by_default: true,
             portability: crate::Portability::default(),
             migrations: Vec::new(),
+            windows: Vec::new(),
         }
     }
 
@@ -207,6 +208,12 @@ impl TestModule {
     pub(crate) fn base() -> Self {
         let mut manifest = Self::manifest("test", "Test", "Test page", 20);
         manifest.config = vec![text("prefix", false)];
+        manifest.windows = vec![crate::ModuleWindow {
+            id: "test.panel".into(),
+            title: "Test panel".into(),
+            size: crate::WindowSize::Medium,
+            blocking: false,
+        }];
         Self { manifest }
     }
 
@@ -223,6 +230,18 @@ impl TestModule {
         Self {
             manifest: Self::manifest("other", "Other", "Other", 30),
         }
+    }
+}
+
+impl TestModule {
+    /// Declares a window with `id`, which may be outside the namespace.
+    pub(crate) fn set_window(&mut self, id: &str) {
+        self.manifest.windows = vec![crate::ModuleWindow {
+            id: id.into(),
+            title: id.into(),
+            size: crate::WindowSize::Fit,
+            blocking: false,
+        }];
     }
 }
 

@@ -28,6 +28,17 @@ pub fn open_desktop() -> Result<(), String> {
     spawn_detached(Command::new(&path)).map_err(|e| format!("cannot start {}: {e}", path.display()))
 }
 
+/// Starts the configuration app showing only the window `id` (for example
+/// the unlock prompt) when no app is running. The process ends when the
+/// window closes. `id` was validated by the caller and is passed as a
+/// separate argument, never through a shell.
+pub fn open_window(id: &str) -> Result<(), String> {
+    let path = desktop_executable().ok_or("the DeckPilot configuration app was not found")?;
+    let mut command = Command::new(&path);
+    command.args(["--window", id]);
+    spawn_detached(command).map_err(|e| format!("cannot start {}: {e}", path.display()))
+}
+
 pub fn spawn_detached(mut command: Command) -> std::io::Result<()> {
     command
         .stdin(Stdio::null())

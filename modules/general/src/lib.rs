@@ -51,6 +51,7 @@ impl GeneralModule {
                     settings: BTreeMap::new(),
                 },
                 migrations: Vec::new(),
+                windows: Vec::new(),
             },
         }
     }

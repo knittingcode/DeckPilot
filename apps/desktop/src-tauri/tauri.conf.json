@@ -12,6 +12,9 @@
   "app": {
     "windows": [
       {
+        "label": "main",
+        "create": false,
+        "visible": false,
         "title": "DeckPilot",
         "width": 1120,
         "height": 740,

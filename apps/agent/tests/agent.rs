@@ -117,6 +117,17 @@ fn registry() -> ActionRegistry {
 }
 
 fn start_agent(paths: AgentPaths, mock: MockBackend) -> Result<Running, AgentError> {
+    start_agent_with(paths, mock, None)
+}
+
+/// Windows the agent asked to open by starting the app.
+type Opened = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+fn start_agent_with(
+    paths: AgentPaths,
+    mock: MockBackend,
+    opened: Option<Opened>,
+) -> Result<Running, AgentError> {
     let lock = InstanceLock::acquire(&paths.lock_file)?;
     let options = AgentOptions {
         paths,
@@ -125,6 +136,12 @@ fn start_agent(paths: AgentPaths, mock: MockBackend) -> Result<Running, AgentErr
         rescan_interval: Duration::from_millis(50),
         autostart: None,
         open_desktop: None,
+        open_window: opened.map(|opened| -> deckpilot_agent::WindowOpener {
+            Box::new(move |id: &str| {
+                opened.lock().unwrap().push(id.to_owned());
+                Ok(())
+            })
+        }),
     };
     let agent = Agent::start(options, lock)?;
     let (stop, stopped) = oneshot::channel::<()>();
@@ -1054,4 +1071,101 @@ async fn reports_missing_and_legacy_databases_without_opening_them() {
         // The agent created no database.
         assert_eq!(paths.database.exists(), legacy);
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn requests_windows_from_the_app_instead_of_drawing_them() {
+    let paths = temp_paths();
+    let (work, key) = seed(&paths);
+    let mock = MockBackend::new();
+    let device = mock.plug(&models::stream_deck_mk2(), "TEST-0001");
+    let opened = Opened::default();
+    let (task, stop) = start_agent_with(paths.clone(), mock.clone(), Some(opened.clone())).unwrap();
+    let mut client = AgentClient::connect(&paths, ClientKind::Other)
+        .await
+        .unwrap();
+    let press = Request::SimulateInput {
+        device: device.clone(),
+        control: ControlId::Key { index: 0 },
+        input: ControlInput::Press,
+    };
+
+    // Locked, no app running: a key press starts the app for the unlock
+    // window only; repeated presses do not open it again and again.
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    while client.request(press.clone()).await.is_err() {
+        assert!(tokio::time::Instant::now() < deadline, "device not ready");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    while opened.lock().unwrap().is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no unlock window requested"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    client.request(press.clone()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(*opened.lock().unwrap(), ["security.unlock"]);
+    // The report of the last workflow needs the configuration.
+    assert!(matches!(
+        client.request(Request::GetLastWorkflowReport).await,
+        Err(ClientError::Agent(e)) if e.code == ErrorCode::Locked
+    ));
+
+    // Identifiers are validated; nothing else can be sent.
+    let invalid = client
+        .request(Request::RequestWindow {
+            window: "../../etc/passwd".into(),
+        })
+        .await;
+    assert!(matches!(invalid, Err(ClientError::Agent(e)) if e.code == ErrorCode::InvalidRequest));
+
+    // With the app connected, the request becomes an event for it.
+    let mut app = AgentClient::connect(&paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    app.subscribe().await.unwrap();
+    client
+        .request(Request::RequestWindow {
+            window: "workflows.execution-summary".into(),
+        })
+        .await
+        .unwrap();
+    let event = tokio::time::timeout(TIMEOUT, async {
+        loop {
+            if let AgentEvent::OpenWindow { window } = app.next_event().await.unwrap() {
+                return window;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(event, "workflows.execution-summary");
+    assert_eq!(opened.lock().unwrap().len(), 1, "no second app was started");
+
+    // After unlocking, the last workflow report is available.
+    client
+        .request(Request::Unlock {
+            key: KeyMaterial::new(key.to_hex()),
+        })
+        .await
+        .unwrap();
+    let Response::LastWorkflow { report } = client
+        .request(Request::GetLastWorkflowReport)
+        .await
+        .unwrap()
+    else {
+        panic!("expected the last workflow")
+    };
+    assert_eq!(report, None);
+    let _ = work;
+    client.request(Request::Shutdown).await.unwrap();
+    tokio::time::timeout(TIMEOUT, task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    drop(stop);
 }

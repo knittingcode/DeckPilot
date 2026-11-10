@@ -265,6 +265,14 @@ async fn subscribe<R: Runtime>(app: &AppHandle<R>, paths: &AgentPaths) -> Result
                 let _ = app.emit(STATUS_EVENT, AgentConnection::running(*status));
             }
             AgentEvent::ShowWindow => show_window(app),
+            AgentEvent::OpenWindow { window } => {
+                // Only an identifier arrives; the catalog decides.
+                if let Some(state) = app.try_state::<crate::state::AppState>()
+                    && let Err(error) = crate::commands::windows::open_by_id(app, &state, &window)
+                {
+                    eprintln!("the agent asked for window `{window}`: {error}");
+                }
+            }
             AgentEvent::ShuttingDown => return Ok(()),
             AgentEvent::ActionCompleted { .. } => {}
         }
@@ -291,7 +299,18 @@ async fn unlock_if_needed<R: Runtime>(
     }
 }
 
+/// Brings the app to the front: the main window when unlocked, otherwise
+/// the password prompt.
 fn show_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(state) = app.try_state::<crate::state::AppState>()
+        && !state.is_unlocked()
+    {
+        let id = crate::commands::security::prompt_window(&state);
+        if let Err(error) = crate::commands::windows::open_by_id(app, &state, id) {
+            eprintln!("cannot open the password prompt: {error}");
+        }
+        return;
+    }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();

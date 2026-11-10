@@ -49,6 +49,16 @@ fn view(state: &AppState) -> CommandResult<SecurityView> {
     })
 }
 
+/// The prompt that unlocks the configuration in its current state.
+pub fn prompt_window(state: &AppState) -> &'static str {
+    match state.vault.state() {
+        Ok(DatabaseState::Missing) => "security.setup",
+        Ok(DatabaseState::Plaintext) => "security.migrate",
+        _ if state.confirmation_pending() => "security.confirm",
+        _ => "security.unlock",
+    }
+}
+
 /// A wrong password is a normal outcome, not a failure.
 fn unlock_error(error: StorageError) -> CommandError {
     match error {

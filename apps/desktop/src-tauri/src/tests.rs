@@ -55,6 +55,7 @@ impl Harness {
             .manage(AppState::open(paths.clone()).expect("open state"))
             .manage(crate::updates::UpdateManager::default())
             .manage(crate::commands::portability::PendingImport::default())
+            .manage(crate::windows::WindowRegistry::default())
             .invoke_handler(crate::commands::handler())
             .build(mock_context(noop_assets()))
             .expect("build app");
@@ -618,6 +619,7 @@ fn start_agent(paths: &AgentPaths) -> (tokio::runtime::Runtime, MockBackend) {
         rescan_interval: std::time::Duration::from_millis(50),
         autostart: None,
         open_desktop: None,
+        open_window: None,
     };
     let lock = InstanceLock::acquire(&paths.lock_file).unwrap();
     runtime.block_on(async {
@@ -1306,4 +1308,73 @@ fn configuration_round_trips_through_an_encrypted_export() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn native_windows_are_opened_by_identifier_and_reused() {
+    use crate::windows::{self, WindowRegistry};
+    let h = Harness::new();
+    let app = h.window.app_handle().clone();
+    let count = || app.webview_windows().len();
+    let before = count();
+
+    h.ok("open_window", json!({ "id": "security.unlock" }));
+    let label = windows::label_for("security.unlock");
+    let prompt = app.get_webview_window(&label).expect("window created");
+    assert_eq!(count(), before + 1);
+    // A second request focuses the same window instead of opening another.
+    h.ok("open_window", json!({ "id": "security.unlock" }));
+    assert_eq!(count(), before + 1);
+
+    // Unknown windows and windows that need the configuration while it is
+    // locked are refused; nothing but an identifier can be requested.
+    assert!(
+        h.error("open_window", json!({ "id": "logs.viewer" }))
+            .contains("no window")
+    );
+    assert!(
+        h.error("open_window", json!({ "id": "../index.html" }))
+            .contains("no window")
+    );
+    h.ok("lock", json!({}));
+    assert!(
+        h.error(
+            "open_window",
+            json!({ "id": "workflows.execution-summary" })
+        )
+        .contains("locked")
+    );
+    h.unlock();
+    h.ok(
+        "open_window",
+        json!({ "id": "workflows.execution-summary" }),
+    );
+
+    // Sizing: within the compact limits, shown after the first fit.
+    let size = windows::fit(&prompt, (390.0, 280.0)).unwrap();
+    assert_eq!(size, (390.0, 280.0));
+    let size = windows::fit(&prompt, (100.0, 2000.0)).unwrap();
+    assert_eq!(size.0, 360.0);
+    assert!(size.1 <= 760.0, "clamped: {size:?}");
+    // The main window is not a sized prompt.
+    assert!(
+        h.error("fit_window", json!({ "width": 300.0, "height": 200.0 }))
+            .contains("no window")
+    );
+    assert!(
+        h.call("fit_window", json!({ "width": -1.0, "height": 200.0 }))
+            .is_err()
+    );
+    assert_eq!(
+        h.ok("current_window", json!({})),
+        Value::Null,
+        "the main window has no window spec"
+    );
+
+    // Closing removes the window from the registry (cleanup).
+    let registry = app.state::<WindowRegistry>();
+    assert_eq!(registry.open_labels().len(), 2);
+    windows::closed(&app, &label, true);
+    assert!(registry.spec(&label).is_none());
+    assert_eq!(registry.open_labels().len(), 1);
 }

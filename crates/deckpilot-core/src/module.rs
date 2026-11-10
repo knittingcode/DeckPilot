@@ -165,6 +165,40 @@ impl Portability {
     }
 }
 
+/// Size behaviour of a native window. Windows size themselves to their
+/// content within the limits of the mode and the screen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WindowSize {
+    /// Width and height follow the content.
+    #[default]
+    Fit,
+    /// Small dialogs such as a password prompt.
+    Compact,
+    /// Regular dialogs.
+    Medium,
+    /// Logs and detailed information; resizable.
+    Large,
+    /// The whole screen; only when explicitly requested.
+    Fullscreen,
+}
+
+/// A native window a module can show, identified by `<module id>.<name>`.
+/// The view itself is part of the application bundle and registered under
+/// the same identifier; only the identifier travels between processes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModuleWindow {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub size: WindowSize,
+    /// The window must be completed before anything else can be done;
+    /// Escape and clicks outside do not close it.
+    #[serde(default)]
+    pub blocking: bool,
+}
+
 /// One step of a module's own database schema. The SQL is declared data:
 /// the core applies it, so no module code runs during migrations, and the
 /// schemas of disabled modules are kept up to date as well.
@@ -202,6 +236,9 @@ pub struct ModuleManifest {
     /// The module's own database schema steps.
     #[serde(skip)]
     pub migrations: Vec<ModuleMigration>,
+    /// Native windows the module can open.
+    #[serde(default)]
+    pub windows: Vec<ModuleWindow>,
 }
 
 impl ModuleManifest {
@@ -244,6 +281,8 @@ pub enum ModuleError {
     },
     #[error("module `{0}` is not supported on this operating system")]
     Unsupported(ModuleId),
+    #[error("window `{window}` is outside the namespace of module `{module}`")]
+    WindowNamespace { module: ModuleId, window: String },
     #[error("invalid module configuration: {}", .0.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))]
     InvalidConfig(Vec<ParameterError>),
     #[error(
@@ -345,6 +384,18 @@ impl ModuleRegistry {
             .iter()
             .map(|handler| handler.definition().clone())
             .collect();
+        for window in &manifest.windows {
+            let owner = window
+                .id
+                .split_once('.')
+                .and_then(|(namespace, name)| (!name.is_empty()).then_some(namespace));
+            if owner != Some(manifest.id.as_str()) {
+                return Err(ModuleError::WindowNamespace {
+                    module: manifest.id,
+                    window: window.id.clone(),
+                });
+            }
+        }
         let mut seen = BTreeSet::new();
         for action_type in &action_types {
             if ModuleId::owner_of(&action_type.id).as_ref() != Some(&manifest.id) {
@@ -576,6 +627,20 @@ impl ModuleRegistry {
         }
         let normalized = normalize_config(manifest, &kept)?;
         Ok((normalized, dropped))
+    }
+
+    /// The window `id` of an enabled module, if one is declared.
+    /// `Err(name)`: the module exists but is disabled.
+    pub fn window(&self, id: &str) -> Option<Result<&ModuleWindow, String>> {
+        let (namespace, _) = id.split_once('.')?;
+        let entry = self.modules.get(&ModuleId::new(namespace).ok()?)?;
+        let manifest = entry.module.manifest();
+        let window = manifest.windows.iter().find(|w| w.id == id)?;
+        Some(if entry.enabled {
+            Ok(window)
+        } else {
+            Err(manifest.name.clone())
+        })
     }
 
     /// Pages contributed by enabled modules, in navigation order.
@@ -823,6 +888,26 @@ mod tests {
         );
         let info = registry.modules();
         assert!(!info[1].supported);
+    }
+
+    #[test]
+    fn module_windows_are_namespaced_and_follow_the_enabled_state() {
+        let mut registry = registry();
+        let window = registry.window("test.panel").unwrap().unwrap();
+        assert_eq!(window.size, crate::WindowSize::Medium);
+        assert!(registry.window("test.unknown").is_none());
+        assert!(registry.window("missing.panel").is_none());
+        assert!(registry.window("no-namespace").is_none());
+        registry.set_enabled(&id("test-extra"), false).unwrap();
+        registry.set_enabled(&id("test"), false).unwrap();
+        assert_eq!(registry.window("test.panel"), Some(Err("Test".into())));
+
+        let mut module = TestModule::outside_namespace();
+        module.set_window("test.panel");
+        assert!(matches!(
+            ModuleRegistry::new(Os::Linux).register(Box::new(module)),
+            Err(ModuleError::WindowNamespace { .. })
+        ));
     }
 
     #[test]

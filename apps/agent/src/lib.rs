@@ -14,4 +14,7 @@ pub mod service;
 pub mod tray;
 
 pub use instance::{InstanceLock, LockError};
-pub use service::{Agent, AgentError, AgentHandle, AgentOptions, TrayCommand, default_options};
+pub use service::{
+    Agent, AgentError, AgentHandle, AgentOptions, TrayCommand, UNLOCK_WINDOW,
+    WORKFLOW_SUMMARY_WINDOW, WindowOpener, default_options,
+};

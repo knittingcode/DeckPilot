@@ -13,8 +13,8 @@ use deckpilot_core::{
     ModuleRegistry, Os, ProfileId, ProjectId, Runtime, RuntimeOutcome,
 };
 use deckpilot_device::{
-    CombinedBackend, ControlId, DeviceBackend, DeviceEvent, DeviceId, DeviceModel, ModelCatalog,
-    mock::MockBackend,
+    CombinedBackend, ControlId, ControlInput, DeviceBackend, DeviceEvent, DeviceId, DeviceModel,
+    ModelCatalog, mock::MockBackend,
 };
 use deckpilot_ipc::{
     AgentEvent, AgentPaths, AgentStatus, DeviceInfo, ErrorCode, IpcError, KeyMaterial,
@@ -35,6 +35,16 @@ const DEFAULT_BRIGHTNESS: u8 = 60;
 
 /// Opens the configuration application.
 pub type DesktopOpener = Box<dyn Fn() -> Result<(), String> + Send>;
+/// Starts the configuration application for one window (by identifier)
+/// when no configuration app is connected.
+pub type WindowOpener = Box<dyn Fn(&str) -> Result<(), String> + Send>;
+
+/// Window shown when a key is pressed while the configuration is locked.
+pub const UNLOCK_WINDOW: &str = "security.unlock";
+/// Window with the result of the last workflow.
+pub const WORKFLOW_SUMMARY_WINDOW: &str = "workflows.execution-summary";
+/// Repeated key presses while locked open the prompt at most this often.
+const UNLOCK_PROMPT_INTERVAL: Duration = Duration::from_secs(10);
 
 pub struct AgentOptions {
     pub paths: AgentPaths,
@@ -45,6 +55,7 @@ pub struct AgentOptions {
     pub rescan_interval: Duration,
     pub autostart: Option<Autostart>,
     pub open_desktop: Option<DesktopOpener>,
+    pub open_window: Option<WindowOpener>,
 }
 
 impl std::fmt::Debug for AgentOptions {
@@ -140,6 +151,9 @@ pub struct Agent {
     open_failures: BTreeMap<DeviceId, String>,
     persisted_project: Option<ProjectId>,
     last_input_at: Option<u64>,
+    /// Report of the last workflow, for the summary window.
+    last_workflow: Option<deckpilot_core::WorkflowReport>,
+    last_unlock_prompt: Option<std::time::Instant>,
     handle: AgentHandle,
     commands: mpsc::UnboundedReceiver<Command>,
     signals_tx: mpsc::UnboundedSender<DeviceSignal>,
@@ -212,6 +226,8 @@ impl Agent {
             open_failures: BTreeMap::new(),
             persisted_project,
             last_input_at: None,
+            last_workflow: None,
+            last_unlock_prompt: None,
             handle,
             commands,
             signals_tx,
@@ -279,7 +295,12 @@ impl Agent {
             }
             Command::Tray(TrayCommand::Quit) => Flow::Stop,
             Command::Tray(TrayCommand::OpenWindow) => {
-                if let Err(error) = self.show_window() {
+                let opened = if self.security == SecurityState::Locked {
+                    self.request_window(UNLOCK_WINDOW)
+                } else {
+                    self.show_window()
+                };
+                if let Err(error) = opened {
                     warn!(%error, "cannot open the configuration app");
                 }
                 Flow::Continue
@@ -385,6 +406,7 @@ impl Agent {
                 for step in &report.steps {
                     self.report_action(step.action, &step.result);
                 }
+                self.last_workflow = Some(report.clone());
                 self.after_change();
                 Ok(Response::WorkflowReport { report })
             }
@@ -405,6 +427,13 @@ impl Agent {
                 self.show_window().map_err(failed)?;
                 Ok(Response::Ok)
             }
+            Request::RequestWindow { window } => {
+                self.request_window(&window).map_err(failed)?;
+                Ok(Response::Ok)
+            }
+            Request::GetLastWorkflowReport => Ok(Response::LastWorkflow {
+                report: self.last_workflow.clone(),
+            }),
             Request::SimulateInput {
                 device,
                 control,
@@ -451,6 +480,7 @@ impl Agent {
             Request::RefreshDevices
             | Request::SetAutostart { .. }
             | Request::ShowWindow
+            | Request::RequestWindow { .. }
             | Request::SimulateInput { .. } => None,
             _ if self.security != SecurityState::Unlocked => Some(Err(locked())),
             _ => None,
@@ -588,6 +618,40 @@ impl Agent {
                 "autostart is not available for this agent",
             )
         })
+    }
+
+    /// Has the configuration app open the window `id`: through a connected
+    /// app, or by starting the app for that window only. The agent never
+    /// draws windows itself and sends nothing but the identifier.
+    fn request_window(&self, id: &str) -> Result<(), String> {
+        if !deckpilot_ipc::is_window_id(id) {
+            return Err(format!("invalid window identifier `{id}`"));
+        }
+        if self.handle.desktop_clients.load(Ordering::SeqCst) > 0 {
+            let _ = self.handle.events.send(AgentEvent::OpenWindow {
+                window: id.to_owned(),
+            });
+            return Ok(());
+        }
+        match &self.options.open_window {
+            Some(open) => open(id),
+            None => Err("opening windows is not supported".into()),
+        }
+    }
+
+    /// A key was pressed while locked: ask for the password, but not on
+    /// every press.
+    fn prompt_unlock(&mut self) {
+        let due = self
+            .last_unlock_prompt
+            .is_none_or(|last| last.elapsed() >= UNLOCK_PROMPT_INTERVAL);
+        if !due {
+            return;
+        }
+        self.last_unlock_prompt = Some(std::time::Instant::now());
+        if let Err(error) = self.request_window(UNLOCK_WINDOW) {
+            warn!(%error, "cannot show the unlock prompt");
+        }
     }
 
     fn show_window(&self) -> Result<(), String> {
@@ -728,6 +792,12 @@ impl Agent {
                     return;
                 }
                 self.last_input_at = Some(unix_now());
+                if self.security != SecurityState::Unlocked {
+                    if matches!(input, ControlInput::Press) {
+                        self.prompt_unlock();
+                    }
+                    return;
+                }
                 let event = DeviceEvent::Input {
                     device: device.clone(),
                     control,
@@ -740,6 +810,13 @@ impl Agent {
                     Ok(RuntimeOutcome::Workflow { report }) => {
                         for step in &report.steps {
                             self.report_action(step.action, &step.result);
+                        }
+                        // A workflow started from the deck has no window of
+                        // its own; show what failed.
+                        let failed = report.status == deckpilot_core::ActionStatus::Failed;
+                        self.last_workflow = Some(report);
+                        if failed && let Err(error) = self.request_window(WORKFLOW_SUMMARY_WINDOW) {
+                            warn!(%error, "cannot show the workflow summary");
                         }
                     }
                     Ok(RuntimeOutcome::Ignored { reason }) => {
@@ -1060,6 +1137,7 @@ pub fn default_options(paths: AgentPaths, mock_models: &[DeviceModel]) -> AgentO
         rescan_interval: Duration::from_secs(2),
         autostart,
         open_desktop: Some(Box::new(crate::launcher::open_desktop)),
+        open_window: Some(Box::new(crate::launcher::open_window)),
     }
 }
 

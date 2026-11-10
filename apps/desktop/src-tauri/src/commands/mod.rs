@@ -16,8 +16,9 @@ mod machine;
 mod modules;
 pub(crate) mod portability;
 mod profiles;
-mod security;
+pub(crate) mod security;
 mod system;
+pub(crate) mod windows;
 mod workflows;
 
 use crate::modules::projects;
@@ -39,6 +40,13 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         security::change_password,
         security::lock,
         security::remove_unencrypted_copies,
+        windows::open_window,
+        windows::current_window,
+        windows::fit_window,
+        windows::close_window,
+        windows::show_main_window,
+        windows::finish_security_prompt,
+        agent::last_workflow_report,
         portability::export_configuration,
         portability::preview_import,
         portability::apply_import,

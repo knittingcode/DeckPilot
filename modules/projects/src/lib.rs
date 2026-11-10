@@ -84,6 +84,7 @@ impl ProjectsModule {
                         .into(),
                     sql: String::new(),
                 }],
+                windows: Vec::new(),
             },
         }
     }

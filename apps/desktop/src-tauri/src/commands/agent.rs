@@ -152,3 +152,18 @@ pub async fn run_workflow(
         other => Err(unexpected(&other)),
     }
 }
+
+/// The report of the last workflow the agent ran, for the summary window.
+#[tauri::command]
+pub async fn last_workflow_report(
+    state: State<'_, AppState>,
+) -> CommandResult<Option<WorkflowReport>> {
+    state.store()?;
+    match agent::request(&state.paths, Request::GetLastWorkflowReport)
+        .await
+        .map_err(agent_required)?
+    {
+        Response::LastWorkflow { report } => Ok(report),
+        other => Err(unexpected(&other)),
+    }
+}
