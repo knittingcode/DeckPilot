@@ -13,16 +13,30 @@ use std::time::{Duration, SystemTime};
 use deckpilot_ipc::{
     ErrorCode, IpcError, KeyMaterial, LockReason, ProtectionMode, Request, Response, SecurityState,
 };
-use deckpilot_keystore::{KeyStore, Scope, SystemKeyStore};
+use deckpilot_keystore::{KeyStore, KeyStoreError, Scope, SystemKeyStore};
 use deckpilot_storage::policy::AutoLock;
 use deckpilot_storage::vault::{self, DatabaseState, Vault};
 use deckpilot_storage::{DatabaseKey, Encryption, SqliteStore, StorageError};
 use tracing::{info, warn};
 
-use super::{Agent, locked, security_state, storage_error};
+use tokio::sync::oneshot;
 
-/// How often auto-lock conditions are checked by default.
-pub const AUTO_LOCK_CHECK: Duration = Duration::from_secs(20);
+use super::{Agent, Command, locked, security_state, storage_error};
+
+/// How often auto-lock conditions (including the screen lock) are checked
+/// by default.
+pub const AUTO_LOCK_CHECK: Duration = Duration::from_secs(5);
+/// Automatic retries when the credential store is unreachable, after 2, 4,
+/// 8, 16, 32 and 64 seconds.
+const KEY_RETRIES: u32 = 6;
+const KEY_RETRY_DELAY: Duration = Duration::from_secs(2);
+
+/// Result of reading the system key (or setting up with one).
+#[derive(Debug)]
+pub(crate) struct KeyOutcome {
+    state: DatabaseState,
+    result: Result<DatabaseKey, StorageError>,
+}
 /// A wall-clock gap between two checks this much longer than the check
 /// interval means the computer was asleep (timers do not fire during sleep).
 const SLEEP_GAP: Duration = Duration::from_secs(90);
@@ -93,7 +107,6 @@ impl Agent {
             Request::Unlock { key } => DatabaseKey::from_hex(key.expose())
                 .map_err(|_| malformed())
                 .and_then(|key| self.open_with_key(key)),
-            Request::SystemUnlock => self.open_automatically(),
             Request::UseSystemKey { key } => self.use_system_key(key),
             Request::Lock => {
                 self.lock(LockReason::Requested);
@@ -122,54 +135,122 @@ impl Agent {
 
     /// Opens what can be opened without the user: a database with a system
     /// key, or — with a system key — a new database or a legacy unencrypted
-    /// one. Password-protected databases wait for the app.
-    pub(super) fn open_automatically(&mut self) -> Result<(), IpcError> {
+    /// one. Password-protected databases wait for the app. The credential
+    /// store is read on a blocking thread (it may show a prompt); `reply`
+    /// is answered when that finished.
+    pub(super) fn open_automatically(
+        &mut self,
+        reply: Option<oneshot::Sender<Result<Response, IpcError>>>,
+    ) {
         if self.security == SecurityState::Unlocked {
-            return Ok(());
+            if let Some(reply) = reply {
+                let _ = reply.send(Ok(Response::Ok));
+            }
+            return;
+        }
+        self.key_waiters.extend(reply);
+        if self.key_pending {
+            return;
         }
         let vault = self.vault();
-        let state = vault.state().map_err(|e| storage_error(&e))?;
+        let state = match vault.state() {
+            Ok(state) => state,
+            Err(error) => {
+                self.answer_key_waiters(&Err(storage_error(&error)));
+                return;
+            }
+        };
         let Some(keys) = self.options.key_store.clone() else {
-            if state == DatabaseState::Encrypted
+            let result = if state == DatabaseState::Encrypted
                 && self.protection == Some(ProtectionMode::Password)
             {
-                return Err(password_required());
-            }
-            let problem = format!(
-                "the {} is not available",
-                deckpilot_keystore::platform_store_name()
-            );
-            self.security_problem = Some(problem.clone());
-            self.note_key_unavailable(state);
-            return Err(IpcError::new(ErrorCode::Unsupported, problem));
+                Err(password_required())
+            } else {
+                let problem = format!(
+                    "the {} is not available",
+                    deckpilot_keystore::platform_store_name()
+                );
+                self.security_problem = Some(problem.clone());
+                self.note_key_unavailable(state);
+                Err(IpcError::new(ErrorCode::Unsupported, problem))
+            };
+            self.answer_key_waiters(&result);
+            self.publish();
+            return;
         };
-        let opened = match state {
-            DatabaseState::Missing => vault.initialize_system(keys.as_ref()).inspect(|_| {
-                info!(store = %keys.name(), "created an encrypted configuration with a system-managed key");
-            }),
-            DatabaseState::Plaintext => vault
-                .encrypt_plaintext_system(keys.as_ref())
-                .map(|(key, legacy)| {
-                    info!(kept = %legacy.display(), "encrypted the configuration of an earlier version with a system-managed key");
-                    key
+        self.key_pending = true;
+        self.publish();
+        let commands = self.handle.commands.clone();
+        tokio::task::spawn_blocking(move || {
+            let result = match state {
+                DatabaseState::Missing => vault.initialize_system(keys.as_ref()).inspect(|_| {
+                    info!(store = %keys.name(), "created an encrypted configuration with a system-managed key");
                 }),
-            DatabaseState::Encrypted => vault.unlock_system(keys.as_ref()),
-        };
+                DatabaseState::Plaintext => vault
+                    .encrypt_plaintext_system(keys.as_ref())
+                    .map(|(key, legacy)| {
+                        info!(kept = %legacy.display(), "encrypted the configuration of an earlier version with a system-managed key");
+                        key
+                    }),
+                DatabaseState::Encrypted => vault.unlock_system(keys.as_ref()),
+            };
+            let _ = commands.send(Command::SystemKey(KeyOutcome { state, result }));
+        });
+    }
+
+    /// Continues after the blocking read of the system key.
+    pub(super) fn finish_system_key(&mut self, outcome: KeyOutcome) {
+        self.key_pending = false;
         self.refresh_protection();
-        match opened {
+        let result = match outcome.result {
             Ok(key) => {
                 self.security_problem = None;
+                self.key_retries = 0;
                 self.security =
                     security_state(&self.options.paths.database).unwrap_or(SecurityState::Locked);
                 self.open_with_key(key)
             }
-            Err(StorageError::CredentialsRequired(_)) => Err(password_required()),
+            Err(StorageError::CredentialsRequired(_)) => {
+                self.security_problem = None;
+                Err(password_required())
+            }
             Err(error) => {
                 warn!(%error, "the configuration could not be opened with the system key");
                 self.security_problem = Some(error.to_string());
-                self.note_key_unavailable(state);
+                self.note_key_unavailable(outcome.state);
+                if matches!(
+                    error,
+                    StorageError::KeyStore(KeyStoreError::Unreachable { .. })
+                ) {
+                    self.schedule_key_retry();
+                }
                 Err(IpcError::new(ErrorCode::Failed, error.to_string()))
             }
+        };
+        self.answer_key_waiters(&result);
+        self.publish();
+    }
+
+    /// The credential store could not be reached (e.g. the keyring daemon
+    /// starts after the agent at login): try again a few times, waiting
+    /// longer each time. Only for unreachable stores — a refusal or a
+    /// cancelled prompt is never retried automatically.
+    fn schedule_key_retry(&mut self) {
+        if self.key_retries >= KEY_RETRIES {
+            return;
+        }
+        let delay = KEY_RETRY_DELAY * 2u32.pow(self.key_retries);
+        self.key_retries += 1;
+        let commands = self.handle.commands.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            let _ = commands.send(Command::RetrySystemKey);
+        });
+    }
+
+    fn answer_key_waiters(&mut self, result: &Result<(), IpcError>) {
+        for waiter in self.key_waiters.drain(..) {
+            let _ = waiter.send(result.clone().map(|()| Response::Ok));
         }
     }
 
@@ -283,21 +364,32 @@ impl Agent {
         }
     }
 
-    /// Locks after inactivity or sleep, as configured.
     pub(super) fn now_seconds(&self) -> u64 {
         seconds((self.options.clock)())
     }
 
+    /// Locks after inactivity, sleep or the screen lock, as configured.
     pub(super) fn check_auto_lock(&mut self) {
         let now = (self.options.clock)();
         let gap = now.duration_since(self.last_check).unwrap_or_default();
         self.last_check = now;
+        // Lock on the change to "locked", so that unlocking DeckPilot while
+        // the screen is still locked does not lock it again immediately.
+        let screen_locked = self
+            .options
+            .screen_lock
+            .as_ref()
+            .and_then(|monitor| monitor.is_locked())
+            .unwrap_or(false);
+        let screen_just_locked = screen_locked && !self.screen_was_locked;
+        self.screen_was_locked = screen_locked;
         if self.security != SecurityState::Unlocked {
             return;
         }
         let slept = gap > self.options.auto_lock_check + SLEEP_GAP;
         match self.auto_lock {
-            AutoLock::Sleep if slept => self.lock(LockReason::Sleep),
+            AutoLock::ScreenLock if screen_just_locked => self.lock(LockReason::ScreenLocked),
+            AutoLock::Sleep | AutoLock::ScreenLock if slept => self.lock(LockReason::Sleep),
             policy => {
                 if let Some(limit) = policy.idle_after()
                     && seconds(now).saturating_sub(self.last_activity) >= limit.as_secs()

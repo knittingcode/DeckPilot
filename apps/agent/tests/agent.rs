@@ -18,6 +18,7 @@ use deckpilot_ipc::{
 use deckpilot_keystore::MemoryKeyStore;
 use deckpilot_modules::projects::{ProjectCatalog, actions};
 use deckpilot_modules::{general, projects};
+use deckpilot_presence::{ScreenLockMonitor, ScriptedScreenLock};
 use deckpilot_storage::crypto::Password;
 use deckpilot_storage::vault::Vault;
 use deckpilot_storage::{ConfigStore, DatabaseKey, Encryption, SqliteStore};
@@ -128,6 +129,7 @@ struct Extras {
     opened: Option<Opened>,
     keys: Option<MemoryKeyStore>,
     clock: Option<Clock>,
+    screen: Option<std::sync::Arc<ScriptedScreenLock>>,
 }
 
 /// Windows the agent asked to open by starting the app.
@@ -142,6 +144,7 @@ fn start_agent_with(
         opened,
         keys,
         clock,
+        screen,
     } = extras;
     let lock = InstanceLock::acquire(&paths.lock_file)?;
     let options = AgentOptions {
@@ -162,6 +165,7 @@ fn start_agent_with(
         }),
         auto_lock_check: Duration::from_millis(50),
         clock: clock.unwrap_or_else(deckpilot_agent::system_clock),
+        screen_lock: screen.map(|screen| -> std::sync::Arc<dyn ScreenLockMonitor> { screen }),
     };
     let agent = Agent::start(options, lock)?;
     let (stop, stopped) = oneshot::channel::<()>();
@@ -1311,9 +1315,12 @@ async fn an_unavailable_credential_store_is_a_clear_locked_state() {
         }
         let running =
             start_agent_with(paths.clone(), MockBackend::new(), with_keys(&keys)).unwrap();
-        let status = wait_for(&paths, |s| s.security == SecurityState::Locked).await;
+        let status = wait_for(&paths, |s| {
+            !s.waiting_for_key_store && s.security_problem.is_some()
+        })
+        .await;
+        assert_eq!(status.security, SecurityState::Locked);
         assert_eq!(status.lock_reason, Some(LockReason::KeyUnavailable));
-        assert!(status.security_problem.is_some());
         assert_eq!(status.protection, Some(ProtectionMode::SystemManaged));
         assert!(matches!(
             request(&paths, Request::ListProfiles).await,
@@ -1512,5 +1519,171 @@ async fn a_legacy_database_is_encrypted_with_a_system_key() {
             .with_file_name("deckpilot.unencrypted-backup.db")
             .exists()
     );
+    stop_agent(&paths, running).await;
+}
+
+/// A system-key configuration with an active profile, project and layout,
+/// as the user left it.
+fn system_configuration(paths: &AgentPaths, keys: &MemoryKeyStore) -> (Profile, ProjectKey) {
+    let key = Vault::new(&paths.database).initialize_system(keys).unwrap();
+    let store = SqliteStore::open(&paths.database, &Encryption::Key(key)).unwrap();
+    let mut profile = Profile::new("Work");
+    for key in ["SHOP", "CMR"] {
+        profile
+            .add_project(Project::new(ProjectKey::new(key).unwrap(), key))
+            .unwrap();
+    }
+    let layout = DeviceLayout::generate("Main", &models::stream_deck_mk2(), &profile);
+    let layout_id = layout.id;
+    profile.layouts.push(layout);
+    profile.activate_layout(layout_id).unwrap();
+    store.save_profile(&profile).unwrap();
+    store.set_active_profile(Some(profile.id)).unwrap();
+    let cmr = profile.projects[1].id;
+    store.set_active_project(profile.id, Some(cmr)).unwrap();
+    (profile, ProjectKey::new("CMR").unwrap())
+}
+
+fn restored(status: &AgentStatus, profile: &Profile, project: &ProjectKey) -> bool {
+    status.security == SecurityState::Unlocked
+        && status.active_profile.as_ref().map(|p| p.id) == Some(profile.id)
+        && status.active_project.as_ref().map(|p| &p.key) == Some(project)
+        && status.devices.iter().any(|d| {
+            matches!(&d.layout, LayoutStatus::Compatible { layout, .. } if *layout == profile.layouts[0].id)
+        })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unlocking_restores_profile_project_and_layouts() {
+    let paths = temp_paths();
+    let keys = MemoryKeyStore::new();
+    let (profile, project) = system_configuration(&paths, &keys);
+    let mock = MockBackend::new();
+    mock.plug(&models::stream_deck_mk2(), "TEST-0001");
+    // Login: the agent opens the configuration by itself.
+    let running = start_agent_with(paths.clone(), mock.clone(), with_keys(&keys)).unwrap();
+    wait_for(&paths, |s| restored(s, &profile, &project)).await;
+    // After a lock and an unlock, everything is back as it was.
+    request(&paths, Request::Lock).await.unwrap();
+    let locked = wait_for(&paths, |s| s.security == SecurityState::Locked).await;
+    assert_eq!(locked.active_profile, None);
+    request(&paths, Request::SystemUnlock).await.unwrap();
+    wait_for(&paths, |s| restored(s, &profile, &project)).await;
+    stop_agent(&paths, running).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn locks_when_the_screen_locks_where_it_can_be_detected() {
+    use deckpilot_storage::policy::{AutoLock, SecurityPolicy, set_security_policy};
+
+    let paths = temp_paths();
+    let keys = MemoryKeyStore::new();
+    let screen = std::sync::Arc::new(ScriptedScreenLock::default());
+    let extras = || Extras {
+        keys: Some(keys.clone()),
+        screen: Some(screen.clone()),
+        ..Extras::default()
+    };
+    let running = start_agent_with(paths.clone(), MockBackend::new(), extras()).unwrap();
+    let status = wait_for(&paths, unlocked).await;
+    assert!(status.screen_lock_detection);
+    let store =
+        SqliteStore::open(&paths.database, &Encryption::Key(agent_key(&paths).await)).unwrap();
+
+    // Not configured: the screen lock is ignored.
+    screen.set_locked(true);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(unlocked(&agent_status(&paths).await.unwrap()));
+    screen.set_locked(false);
+
+    set_security_policy(
+        &store,
+        &SecurityPolicy {
+            auto_lock: AutoLock::ScreenLock,
+            ..SecurityPolicy::default()
+        },
+    )
+    .unwrap();
+    request(&paths, Request::ReloadConfiguration).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    screen.set_locked(true);
+    let status = wait_for(&paths, |s| s.security == SecurityState::Locked).await;
+    assert_eq!(status.lock_reason, Some(LockReason::ScreenLocked));
+
+    // Unlocking while the screen is still locked does not lock again; the
+    // next screen lock does.
+    request(&paths, Request::SystemUnlock).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(unlocked(&agent_status(&paths).await.unwrap()));
+    screen.set_locked(false);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    screen.set_locked(true);
+    wait_for(&paths, |s| s.lock_reason == Some(LockReason::ScreenLocked)).await;
+    drop(store);
+    stop_agent(&paths, running).await;
+
+    // Without a monitor, detection is reported as unavailable.
+    let running = start_agent_with(paths.clone(), MockBackend::new(), with_keys(&keys)).unwrap();
+    assert!(!wait_for(&paths, unlocked).await.screen_lock_detection);
+    stop_agent(&paths, running).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unreachable_store_is_retried_but_a_refusal_is_not() {
+    let paths = temp_paths();
+    let keys = MemoryKeyStore::new();
+    let running = start_agent_with(paths.clone(), MockBackend::new(), with_keys(&keys)).unwrap();
+    wait_for(&paths, unlocked).await;
+    stop_agent(&paths, running).await;
+
+    // The keyring daemon is not up yet at login: retried by itself.
+    keys.set_unreachable(true);
+    let running = start_agent_with(paths.clone(), MockBackend::new(), with_keys(&keys)).unwrap();
+    wait_for(&paths, |s| {
+        s.lock_reason == Some(LockReason::KeyUnavailable)
+    })
+    .await;
+    keys.set_unreachable(false);
+    let status = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(status) = agent_status(&paths).await
+                && unlocked(&status)
+            {
+                return status;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("unlocked after the store became reachable");
+    assert_eq!(status.security_problem, None);
+    stop_agent(&paths, running).await;
+
+    // Refused (locked keychain, cancelled prompt): asked once, not again.
+    keys.set_unavailable(true);
+    let running = start_agent_with(paths.clone(), MockBackend::new(), with_keys(&keys)).unwrap();
+    wait_for(&paths, |s| {
+        s.lock_reason == Some(LockReason::KeyUnavailable)
+    })
+    .await;
+    let attempts = keys.attempts();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(keys.attempts(), attempts, "a refusal is not retried");
+    stop_agent(&paths, running).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_missing_database_is_reported_not_replaced() {
+    let paths = temp_paths();
+    let keys = MemoryKeyStore::new();
+    system_configuration(&paths, &keys);
+    std::fs::remove_file(&paths.database).unwrap();
+    let running = start_agent_with(paths.clone(), MockBackend::new(), with_keys(&keys)).unwrap();
+    let status = wait_for(&paths, |s| s.security_problem.is_some()).await;
+    assert_eq!(status.security, SecurityState::Uninitialized);
+    assert!(status.security_problem.unwrap().contains("missing"));
+    assert!(request(&paths, Request::SystemUnlock).await.is_err());
+    assert!(!paths.database.exists());
+    assert_eq!(keys.ids().len(), 1);
     stop_agent(&paths, running).await;
 }

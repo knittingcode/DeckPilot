@@ -68,6 +68,8 @@ pub struct AgentOptions {
     /// How often auto-lock conditions are checked.
     pub auto_lock_check: Duration,
     pub clock: Clock,
+    /// Detects the screen lock, where the platform allows it.
+    pub screen_lock: Option<Arc<dyn deckpilot_presence::ScreenLockMonitor>>,
 }
 
 impl std::fmt::Debug for AgentOptions {
@@ -106,6 +108,11 @@ pub(crate) enum Command {
         reply: oneshot::Sender<Result<Response, IpcError>>,
     },
     Tray(TrayCommand),
+    /// The system key was read (or a configuration set up) on a blocking
+    /// thread.
+    SystemKey(security::KeyOutcome),
+    /// Try to read the system key again after the store was unreachable.
+    RetrySystemKey,
 }
 
 /// Cloneable access to a running agent.
@@ -161,6 +168,14 @@ pub struct Agent {
     last_activity: u64,
     /// Wall-clock time of the last auto-lock check, to notice sleep.
     last_check: SystemTime,
+    /// Whether the screen was locked at the last check.
+    screen_was_locked: bool,
+    /// A read of the system key is running on a blocking thread.
+    key_pending: bool,
+    /// Requests waiting for that read.
+    key_waiters: Vec<oneshot::Sender<Result<Response, IpcError>>>,
+    /// Automatic retries after the credential store was unreachable.
+    key_retries: u32,
     runtime: Runtime,
     /// Feature modules with their stored state; the runtime's engine
     /// executes the action types of the enabled ones.
@@ -248,6 +263,10 @@ impl Agent {
             auto_lock: AutoLock::Never,
             last_activity: 0,
             last_check,
+            screen_was_locked: false,
+            key_pending: false,
+            key_waiters: Vec::new(),
+            key_retries: 0,
             runtime,
             modules,
             brightness: DEFAULT_BRIGHTNESS,
@@ -276,10 +295,10 @@ impl Agent {
     pub async fn run(mut self, shutdown: impl Future<Output = ()>) -> Result<(), AgentError> {
         tokio::pin!(shutdown);
         // A database with a system-managed key opens without the user; a new
-        // one is set up the same way. Failures leave a clear locked state.
-        if let Err(error) = self.open_automatically() {
-            debug!(%error, "the configuration was not opened automatically");
-        }
+        // one is set up the same way. The key is read on a blocking thread,
+        // so a credential store prompt does not stop the agent. Failures
+        // leave a clear locked state.
+        self.open_automatically(None);
         // Initial discovery and state for subscribers (e.g. the tray menu).
         self.rescan();
         self.publish();
@@ -328,6 +347,22 @@ impl Agent {
 
     fn handle_command(&mut self, command: Command) -> Flow {
         match command {
+            Command::Request {
+                request: Request::SystemUnlock,
+                reply,
+            } => {
+                // Answered once the system key was read.
+                self.open_automatically(Some(reply));
+                Flow::Continue
+            }
+            Command::SystemKey(outcome) => {
+                self.finish_system_key(outcome);
+                Flow::Continue
+            }
+            Command::RetrySystemKey => {
+                self.open_automatically(None);
+                Flow::Continue
+            }
             Command::Request { request, reply } => {
                 let stop = matches!(request, Request::Shutdown | Request::PrepareForUpdate);
                 if matches!(request, Request::PrepareForUpdate) {
@@ -999,6 +1034,8 @@ impl Agent {
             protection: self.protection,
             lock_reason: self.lock_reason,
             security_problem: self.security_problem.clone(),
+            waiting_for_key_store: self.key_pending,
+            screen_lock_detection: self.options.screen_lock.is_some(),
         }
     }
 
@@ -1115,6 +1152,7 @@ pub fn default_options(paths: AgentPaths, mock_models: &[DeviceModel]) -> AgentO
         key_store: security::system_key_store(),
         auto_lock_check: AUTO_LOCK_CHECK,
         clock: system_clock(),
+        screen_lock: deckpilot_presence::screen_lock_monitor().map(Arc::from),
     }
 }
 

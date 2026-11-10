@@ -25,6 +25,7 @@ deckpilot-ipc.workspace = true
 deckpilot-modules.workspace = true
 deckpilot-storage.workspace = true
 deckpilot-keystore.workspace = true
+deckpilot-presence.workspace = true
 font8x8.workspace = true
 interprocess.workspace = true
 serde_json.workspace = true
