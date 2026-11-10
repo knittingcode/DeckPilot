@@ -23,6 +23,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(updates::UpdateManager::default())
+        .manage(commands::portability::PendingImport::default())
         .setup(|app| {
             // Same location as the agent; `DECKPILOT_DATA_DIR` overrides it.
             let paths = deckpilot_ipc::AgentPaths::resolve()?;

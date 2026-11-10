@@ -14,6 +14,7 @@ pub(crate) mod agent;
 mod layouts;
 mod machine;
 mod modules;
+pub(crate) mod portability;
 mod profiles;
 mod security;
 mod system;
@@ -38,6 +39,10 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         security::change_password,
         security::lock,
         security::remove_unencrypted_copies,
+        portability::export_configuration,
+        portability::preview_import,
+        portability::apply_import,
+        portability::cancel_import,
         system::get_overview,
         system::launch_info,
         system::list_action_types,

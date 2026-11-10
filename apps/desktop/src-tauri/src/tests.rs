@@ -54,6 +54,7 @@ impl Harness {
         let app = mock_builder()
             .manage(AppState::open(paths.clone()).expect("open state"))
             .manage(crate::updates::UpdateManager::default())
+            .manage(crate::commands::portability::PendingImport::default())
             .invoke_handler(crate::commands::handler())
             .build(mock_context(noop_assets()))
             .expect("build app");
@@ -1233,4 +1234,76 @@ fn legacy_databases_are_encrypted_on_request() {
     );
     let status = h.ok("remove_unencrypted_copies", json!({}));
     assert_eq!(status["legacyCopies"], json!([]));
+}
+
+#[test]
+fn configuration_round_trips_through_an_encrypted_export() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    h.ok(
+        "create_project",
+        json!({ "profileId": profile_id, "project": { "key": "SHOP", "name": "", "resources": { "repository": "shop.repository" } } }),
+    );
+    h.ok(
+        "set_resource_binding",
+        json!({ "key": "shop.repository", "kind": "directory", "value": "/private/machine/path" }),
+    );
+    let file = h.paths.data_dir.join("work.deckpilot");
+    let path = file.display().to_string();
+    let result = h.ok(
+        "export_configuration",
+        json!({ "request": { "path": path, "password": "export secret", "confirmation": "export secret", "profiles": null, "includeModuleSettings": true } }),
+    );
+    assert_eq!(result["profiles"], 1);
+    let bytes = std::fs::read(&file).unwrap();
+    for visible in [&b"Work"[..], b"SHOP", b"/private/machine/path"] {
+        assert!(!bytes.windows(visible.len()).any(|w| w == visible));
+    }
+
+    assert!(
+        h.error(
+            "preview_import",
+            json!({ "path": path, "password": "wrong" })
+        )
+        .contains("password is wrong")
+    );
+    // A modified file is rejected the same way.
+    let mut tampered = bytes.clone();
+    let middle = tampered.len() - 10;
+    tampered[middle] = if tampered[middle] == b'A' { b'B' } else { b'A' };
+    let tampered_path = h.paths.data_dir.join("tampered.deckpilot");
+    std::fs::write(&tampered_path, &tampered).unwrap();
+    assert!(
+        h.call(
+            "preview_import",
+            json!({ "path": tampered_path.display().to_string(), "password": "export secret" })
+        )
+        .is_err()
+    );
+
+    // Importing into the same installation: a conflict, kept as a copy.
+    let preview = h.ok(
+        "preview_import",
+        json!({ "path": path, "password": "export secret" }),
+    );
+    assert_eq!(
+        preview["preview"]["profiles"][0]["conflict"]["type"],
+        "sameId"
+    );
+    assert_eq!(preview["preview"]["missingResources"], json!([]));
+    let summary = h.ok(
+        "apply_import",
+        json!({ "token": preview["token"], "options": { "profiles": [profile_id], "conflicts": { profile_id.clone(): "keepBoth" } } }),
+    );
+    assert_eq!(summary["renamed"][0], "Work (imported)");
+    let profiles = h.ok("list_profiles", json!({}));
+    assert_eq!(profiles["profiles"].as_array().unwrap().len(), 2);
+    // The token is used up.
+    assert!(
+        h.call(
+            "apply_import",
+            json!({ "token": preview["token"], "options": { "profiles": [profile_id] } })
+        )
+        .is_err()
+    );
 }

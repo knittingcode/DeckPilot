@@ -705,6 +705,7 @@ dependencies = [
  "deckpilot-device",
  "deckpilot-ipc",
  "deckpilot-modules",
+ "deckpilot-portability",
  "deckpilot-storage",
  "deckpilot-update",
  "serde",
