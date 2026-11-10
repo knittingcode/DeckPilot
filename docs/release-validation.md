@@ -10,7 +10,9 @@ A test tag runs the real release workflow: the same build, signing and
 notarization as a final release, ending in a **draft** release.
 
 1. Set the version to the test version, e.g. `0.5.0-1` (Windows installers
-   accept only numeric pre-release identifiers), and push the commit.
+   accept only numeric pre-release identifiers), and push the commit. RPM
+   does not accept `-` in versions, so test releases build `.deb` and the
+   AppImage on Linux; final versions build all packages.
 2. Tag and push: `git tag v0.5.0-1 && git push origin v0.5.0-1`.
 3. The workflow refuses to continue if versions, release notes (a test
    version uses the notes of `0.5.0`), updater or Apple signing are not in
