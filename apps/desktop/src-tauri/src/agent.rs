@@ -7,7 +7,7 @@ use std::time::Duration;
 use deckpilot_ipc::client::request_once;
 use deckpilot_ipc::{
     AgentClient, AgentEvent, AgentPaths, AgentStatus, ClientError, ClientKind, ErrorCode,
-    KeyMaterial, LockReason, Request, Response, SecurityState,
+    KeyMaterial, Request, Response, SecurityState,
 };
 use deckpilot_storage::DatabaseKey;
 use deckpilot_update::compatibility::{self, AgentCompatibility};
@@ -296,18 +296,16 @@ async fn unlock_if_needed<R: Runtime>(
     if status.security != SecurityState::Locked || !state.is_unlocked() {
         return;
     }
-    match status.lock_reason {
-        Some(LockReason::Idle | LockReason::Sleep | LockReason::Requested) => {
-            state.detach();
-            let _ = app.emit(crate::commands::windows::SECURITY_CHANGED, ());
-        }
-        _ => {
-            if let Some(key) = state.key()
-                && let Err(error) = unlock(paths, &key).await
-            {
-                eprintln!("could not unlock the agent: {error}");
-            }
-        }
+    // Only an agent that (re)started gets the key back. A lock by the user
+    // or a policy — including reasons added later — locks this app too, so
+    // a lock is never undone silently.
+    if crate::commands::security::lock_needs_authentication(status.lock_reason) {
+        state.detach();
+        let _ = app.emit(crate::commands::windows::SECURITY_CHANGED, ());
+    } else if let Some(key) = state.key()
+        && let Err(error) = unlock(paths, &key).await
+    {
+        eprintln!("could not unlock the agent: {error}");
     }
 }
 

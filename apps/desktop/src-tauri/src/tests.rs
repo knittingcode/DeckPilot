@@ -1755,3 +1755,21 @@ fn the_screen_lock_option_needs_detection() {
         .contains("cannot detect the screen lock")
     );
 }
+
+#[test]
+fn every_deliberate_lock_needs_authentication_to_undo() {
+    use crate::commands::security::lock_needs_authentication;
+    use deckpilot_ipc::LockReason;
+    for reason in [
+        LockReason::Requested,
+        LockReason::Idle,
+        LockReason::Sleep,
+        LockReason::ScreenLocked,
+    ] {
+        assert!(lock_needs_authentication(Some(reason)), "{reason:?}");
+    }
+    for reason in [LockReason::Startup, LockReason::KeyUnavailable] {
+        assert!(!lock_needs_authentication(Some(reason)), "{reason:?}");
+    }
+    assert!(!lock_needs_authentication(None));
+}

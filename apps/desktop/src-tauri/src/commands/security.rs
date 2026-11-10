@@ -237,6 +237,18 @@ async fn verify_presence(state: &AppState, reason: &'static str) -> CommandResul
     })
 }
 
+/// Whether a lock was a decision (by the user or a security policy) that
+/// unlocking must respect: the user authenticates again, and an open app
+/// locks too. Only a lock without such a decision — the agent just started,
+/// or could not read its key — is not. Reasons added later count as
+/// decisions, so the safe behaviour is the default.
+pub fn lock_needs_authentication(reason: Option<LockReason>) -> bool {
+    !matches!(
+        reason,
+        None | Some(LockReason::Startup | LockReason::KeyUnavailable)
+    )
+}
+
 /// Opens a configuration with a system-managed key: after a lock (with the
 /// system check, where available), or to retry when the credential store
 /// was unavailable. Also sets up a new configuration, or encrypts a legacy
@@ -246,11 +258,7 @@ pub async fn system_unlock(state: State<'_, AppState>) -> CommandResult<Security
     ensure_agent(&state).await;
     let agent_state = refresh_agent(&state).await.map(|s| AgentSecurity::of(&s));
     let locked_by_user_or_policy = agent_state.is_some_and(|s| {
-        s.security == SecurityState::Locked
-            && matches!(
-                s.lock_reason,
-                Some(LockReason::Requested | LockReason::Idle | LockReason::Sleep)
-            )
+        s.security == SecurityState::Locked && lock_needs_authentication(s.lock_reason)
     });
     let verified = if locked_by_user_or_policy && state.presence.method().is_some() {
         verify_presence(&state, "unlock your DeckPilot configuration").await?;
