@@ -6,7 +6,7 @@
 //! menu selections go back to the agent as [`TrayCommand`]s.
 
 use deckpilot_device::ConnectionState;
-use deckpilot_ipc::{AgentEvent, AgentStatus};
+use deckpilot_ipc::{AgentEvent, AgentStatus, SecurityState};
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tracing::{error, warn};
@@ -169,10 +169,19 @@ fn build_menu(status: Option<&AgentStatus>) -> Menu {
         }
     };
 
-    append(menu.append(&MenuItem::with_id(OPEN, "Open DeckPilot", true, None)));
+    let security = status.map_or(SecurityState::Locked, |s| s.security);
+    let open_label = match security {
+        SecurityState::Unlocked => "Open DeckPilot",
+        _ => "Open DeckPilot to Unlock…",
+    };
+    append(menu.append(&MenuItem::with_id(OPEN, open_label, true, None)));
     append(menu.append(&PredefinedMenuItem::separator()));
+    if let Some(notice) = security_notice(security) {
+        append(menu.append(&MenuItem::new(notice, false, None)));
+        append(menu.append(&PredefinedMenuItem::separator()));
+    }
 
-    let profiles = Submenu::new("Active Profile", true);
+    let profiles = Submenu::new("Active Profile", security == SecurityState::Unlocked);
     match status.map(|s| s.profiles.as_slice()).unwrap_or_default() {
         [] => append(profiles.append(&MenuItem::new("No profiles", false, None))),
         list => {
@@ -230,6 +239,16 @@ fn build_menu(status: Option<&AgentStatus>) -> Menu {
     menu
 }
 
+/// What the tray says while the configuration cannot be read.
+fn security_notice(security: SecurityState) -> Option<&'static str> {
+    match security {
+        SecurityState::Unlocked => None,
+        SecurityState::Locked => Some("Locked – actions are paused"),
+        SecurityState::Uninitialized => Some("Set a password to start"),
+        SecurityState::LegacyPlaintext => Some("Encrypt your configuration to continue"),
+    }
+}
+
 /// A 32 x 32 tray icon drawn in code: a rounded key grid with one lit key.
 fn icon() -> Result<Icon, String> {
     const SIZE: u32 = 32;
@@ -266,6 +285,18 @@ fn icon() -> Result<Icon, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locked_states_are_explained() {
+        assert_eq!(security_notice(SecurityState::Unlocked), None);
+        for state in [
+            SecurityState::Locked,
+            SecurityState::Uninitialized,
+            SecurityState::LegacyPlaintext,
+        ] {
+            assert!(security_notice(state).is_some());
+        }
+    }
 
     #[test]
     fn menu_ids_map_to_commands() {

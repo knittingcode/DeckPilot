@@ -21,7 +21,54 @@ use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId};
 /// Version 3: action results only report `selectProject` effects (project
 /// switching is computed by the projects module), and action types use
 /// module namespaces such as `projects.next`.
-pub const PROTOCOL_VERSION: u32 = 3;
+///
+/// Version 4: the encrypted database. The agent starts locked and is
+/// unlocked with the database key (`unlock`, `lock`, `getDatabaseKey`); the
+/// status reports the [`SecurityState`].
+pub const PROTOCOL_VERSION: u32 = 4;
+
+/// Whether the agent can read the configuration database.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SecurityState {
+    /// The database is open. Agents before protocol 4 report nothing and
+    /// are always unlocked.
+    #[default]
+    Unlocked,
+    /// The database is encrypted and the agent has no key.
+    Locked,
+    /// There is no database yet; a password must be set up.
+    Uninitialized,
+    /// An unencrypted database from an earlier version must be migrated.
+    LegacyPlaintext,
+}
+
+/// A database key in transit (64 hex digits). Redacted from `Debug` output
+/// and zeroized when dropped. Only sent over the authenticated local socket;
+/// see `docs/security.md` for the trust boundary.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct KeyMaterial(zeroize::Zeroizing<String>);
+
+impl KeyMaterial {
+    pub fn new(hex: zeroize::Zeroizing<String>) -> Self {
+        Self(hex)
+    }
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    fn is_well_formed(&self) -> bool {
+        self.0.len() == 64 && self.0.bytes().all(|b| b.is_ascii_hexdigit())
+    }
+}
+
+impl std::fmt::Debug for KeyMaterial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("KeyMaterial(<redacted>)")
+    }
+}
 /// Oldest protocol the agent still accepts. Version 1 clients (DeckPilot
 /// 0.2) can still connect, e.g. so that a newer app can shut down an older
 /// agent during an update.
@@ -104,6 +151,16 @@ pub enum Request {
         control: ControlId,
         input: ControlInput,
     },
+    /// Opens the encrypted database with `key`, derived from the user's
+    /// password by the configuration app. Since protocol 4.
+    Unlock {
+        key: KeyMaterial,
+    },
+    /// Closes the database and forgets the key. Since protocol 4.
+    Lock,
+    /// The key of the open database, so that the configuration app can open
+    /// it without asking for the password again. Since protocol 4.
+    GetDatabaseKey,
 }
 
 impl Request {
@@ -116,6 +173,7 @@ impl Request {
             Self::SimulateInput { device, .. } if device.serial.is_empty() => {
                 Err("device serial must not be empty".into())
             }
+            Self::Unlock { key } if !key.is_well_formed() => Err("malformed key".into()),
             _ => Ok(()),
         }
     }
@@ -130,6 +188,8 @@ pub enum ErrorCode {
     NotFound,
     Unsupported,
     Failed,
+    /// The database is locked; unlock it first. Since protocol 4.
+    Locked,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
@@ -193,6 +253,10 @@ pub enum Response {
     },
     WorkflowReport {
         report: WorkflowReport,
+    },
+    /// Answer to `getDatabaseKey`. Since protocol 4.
+    DatabaseKey {
+        key: KeyMaterial,
     },
     Autostart {
         enabled: bool,
@@ -260,6 +324,9 @@ pub struct AgentStatus {
     /// Seconds since the Unix epoch of the last device input, if any. Used
     /// to install updates only while the device is idle.
     pub last_input_at: Option<u64>,
+    /// Since protocol 4; older agents are always unlocked.
+    #[serde(default)]
+    pub security: SecurityState,
 }
 
 #[cfg(test)]

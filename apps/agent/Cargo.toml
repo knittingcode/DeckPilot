@@ -36,6 +36,7 @@ tracing-subscriber.workspace = true
 tray-icon.workspace = true
 
 [dev-dependencies]
+zeroize.workspace = true
 deckpilot-modules.workspace = true
 serde_json.workspace = true
 

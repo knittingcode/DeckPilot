@@ -12,11 +12,13 @@ use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId, model
 use deckpilot_ipc::framing::{read_message, write_message};
 use deckpilot_ipc::{
     AgentClient, AgentEvent, AgentPaths, AgentStatus, ClientError, ClientKind, ErrorCode,
-    PROTOCOL_VERSION, Request, Response, ServerMessage, SharedStream,
+    KeyMaterial, PROTOCOL_VERSION, Request, Response, SecurityState, ServerMessage, SharedStream,
 };
 use deckpilot_modules::projects::{ProjectCatalog, actions};
 use deckpilot_modules::{general, projects};
-use deckpilot_storage::{ConfigStore, Encryption, SqliteStore};
+use deckpilot_storage::crypto::Password;
+use deckpilot_storage::vault::Vault;
+use deckpilot_storage::{ConfigStore, DatabaseKey, Encryption, SqliteStore};
 use serde_json::{Value, json};
 use tokio::io::BufReader;
 use tokio::sync::oneshot;
@@ -32,6 +34,7 @@ struct TestAgent {
     mock: MockBackend,
     device: DeviceId,
     work: Profile,
+    key: DatabaseKey,
     task: Option<JoinHandle<Result<(), AgentError>>>,
     stop: Option<oneshot::Sender<()>>,
 }
@@ -53,8 +56,31 @@ fn temp_paths() -> AgentPaths {
 
 /// A profile with SHOP, CMR and CMS, a project switcher on key 0, a log
 /// action on key 1 and a generated MK.2 layout.
-fn seed(paths: &AgentPaths) -> Profile {
-    let store = SqliteStore::open(&paths.database, &Encryption::None).unwrap();
+/// An encrypted database as the configuration app creates it on first run.
+fn create_database(paths: &AgentPaths) -> (SqliteStore, DatabaseKey) {
+    let key = Vault::new(&paths.database)
+        .with_test_cost()
+        .initialize(&Password::new("test password"))
+        .unwrap();
+    let store = SqliteStore::open(&paths.database, &Encryption::Key(key.clone())).unwrap();
+    (store, key)
+}
+
+/// Unlocks a running agent the way the configuration app does.
+async fn unlock_agent(paths: &AgentPaths, key: &DatabaseKey) {
+    let mut client = AgentClient::connect(paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    client
+        .request(Request::Unlock {
+            key: KeyMaterial::new(key.to_hex()),
+        })
+        .await
+        .unwrap();
+}
+
+fn seed(paths: &AgentPaths) -> (Profile, DatabaseKey) {
+    let (store, key) = create_database(paths);
     let registry = registry();
     let mut profile = Profile::new("Work");
     for key in ["SHOP", "CMR", "CMS"] {
@@ -83,7 +109,7 @@ fn seed(paths: &AgentPaths) -> Profile {
     profile.layouts.push(layout);
     store.save_profile(&profile).unwrap();
     store.set_active_profile(Some(profile.id)).unwrap();
-    profile
+    (profile, key)
 }
 
 fn registry() -> ActionRegistry {
@@ -110,15 +136,17 @@ fn start_agent(paths: AgentPaths, mock: MockBackend) -> Result<Running, AgentErr
 
 async fn setup() -> TestAgent {
     let paths = temp_paths();
-    let work = seed(&paths);
+    let (work, key) = seed(&paths);
     let mock = MockBackend::new();
     let device = mock.plug(&models::stream_deck_mk2(), "TEST-0001");
     let (task, stop) = start_agent(paths.clone(), mock.clone()).unwrap();
+    unlock_agent(&paths, &key).await;
     let agent = TestAgent {
         paths,
         mock,
         device,
         work,
+        key,
         task: Some(task),
         stop: Some(stop),
     };
@@ -170,12 +198,14 @@ impl TestAgent {
     }
 
     fn store(&self) -> SqliteStore {
-        SqliteStore::open(&self.paths.database, &Encryption::None).unwrap()
+        SqliteStore::open(&self.paths.database, &Encryption::Key(self.key.clone())).unwrap()
     }
 
+    /// The profile's layout is on the device (the "Locked" notice before the
+    /// unlock uses a single key).
     fn frames_shown(&self) -> bool {
         self.mock
-            .wait_for(&self.device, TIMEOUT, |frames, _| !frames.is_empty())
+            .wait_for(&self.device, TIMEOUT, |frames, _| frames.len() > 1)
     }
 
     async fn shutdown(mut self) {
@@ -627,10 +657,16 @@ async fn single_instance_shutdown_and_client_reconnect() {
     ));
 
     // A restarted agent accepts clients again and restores the selection.
+    // It starts locked, like after a reboot, until the app unlocks it.
     let (task, stop) = start_agent(paths.clone(), agent.mock.clone()).unwrap();
     agent.task = Some(task);
     agent.stop = Some(stop);
-    let status = agent.wait_for_status(|s| !s.devices.is_empty()).await;
+    let locked = agent.wait_for_status(|s| !s.devices.is_empty()).await;
+    assert_eq!(locked.security, SecurityState::Locked);
+    unlock_agent(&paths, &agent.key).await;
+    let status = agent
+        .wait_for_status(|s| s.security == SecurityState::Unlocked)
+        .await;
     assert_eq!(status.active_profile.unwrap().id, agent.work.id);
     agent.shutdown().await;
 }
@@ -706,7 +742,7 @@ async fn configuration_reload_updates_the_device_without_restart() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn renders_simulated_xl_and_plus_devices() {
     let paths = temp_paths();
-    let store = SqliteStore::open(&paths.database, &Encryption::None).unwrap();
+    let (store, key) = create_database(&paths);
     let registry = registry();
     let mut profile = Profile::new("Studio");
     for _ in 0..3 {
@@ -734,6 +770,7 @@ async fn renders_simulated_xl_and_plus_devices() {
     let xl = mock.plug(&models::stream_deck_xl(), "SIM-XL");
     let plus = mock.plug(&models::stream_deck_plus(), "SIM-PLUS");
     let (task, stop) = start_agent(paths.clone(), mock.clone()).unwrap();
+    unlock_agent(&paths, &key).await;
     assert!(mock.wait_for(&xl, TIMEOUT, |frames, _| frames.len() == 3));
     assert!(mock.wait_for(&plus, TIMEOUT, |frames, _| frames.len() == 3));
     assert_eq!(mock.frames(&xl)[&ControlId::Key { index: 0 }].width(), 96);
@@ -893,4 +930,128 @@ async fn profiles_keep_their_own_projects_and_selection() {
         .unwrap();
     assert_eq!(active_key(&agent.status().await), Some("CMS"));
     agent.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn starts_locked_and_unlocks_only_with_the_right_key() {
+    let paths = temp_paths();
+    let (work, key) = seed(&paths);
+    let mock = MockBackend::new();
+    let device = mock.plug(&models::stream_deck_mk2(), "TEST-0001");
+    let (task, stop) = start_agent(paths.clone(), mock.clone()).unwrap();
+    let mut client = AgentClient::connect(&paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    let status = |response: Response| match response {
+        Response::Status { status } => *status,
+        other => panic!("unexpected {other:?}"),
+    };
+
+    // Locked: no profile, no configuration requests, devices say so.
+    let locked = status(client.request(Request::GetStatus).await.unwrap());
+    assert_eq!(locked.security, SecurityState::Locked);
+    assert!(locked.profiles.is_empty() && locked.active_profile.is_none());
+    for request in [
+        Request::ListProfiles,
+        Request::RunAction {
+            action: work.actions[0].id,
+        },
+        Request::ReloadConfiguration,
+        Request::GetDatabaseKey,
+        Request::SetActiveProfile { profile: work.id },
+    ] {
+        let refused = client.request(request).await;
+        assert!(
+            matches!(refused, Err(ClientError::Agent(ref e)) if e.code == ErrorCode::Locked),
+            "{refused:?}"
+        );
+    }
+    assert!(mock.wait_for(&device, TIMEOUT, |frames, _| !frames.is_empty()));
+
+    // A wrong key changes nothing.
+    let wrong = DatabaseKey::random().unwrap();
+    let rejected = client
+        .request(Request::Unlock {
+            key: KeyMaterial::new(wrong.to_hex()),
+        })
+        .await;
+    assert!(matches!(rejected, Err(ClientError::Agent(e)) if e.code == ErrorCode::Unauthorized));
+    let malformed = client
+        .request(Request::Unlock {
+            key: KeyMaterial::new(zeroize::Zeroizing::new("xyz".into())),
+        })
+        .await;
+    assert!(matches!(malformed, Err(ClientError::Agent(e)) if e.code == ErrorCode::InvalidRequest));
+    assert_eq!(
+        status(client.request(Request::GetStatus).await.unwrap()).security,
+        SecurityState::Locked
+    );
+
+    // The right key unlocks; the app can then fetch it instead of asking
+    // for the password again.
+    client
+        .request(Request::Unlock {
+            key: KeyMaterial::new(key.to_hex()),
+        })
+        .await
+        .unwrap();
+    let unlocked = status(client.request(Request::GetStatus).await.unwrap());
+    assert_eq!(unlocked.security, SecurityState::Unlocked);
+    assert_eq!(unlocked.active_profile.unwrap().name, "Work");
+    let Response::DatabaseKey { key: fetched } =
+        client.request(Request::GetDatabaseKey).await.unwrap()
+    else {
+        panic!("expected the key")
+    };
+    assert_eq!(fetched.expose(), key.to_hex().as_str());
+    assert_eq!(format!("{fetched:?}"), "KeyMaterial(<redacted>)");
+
+    // Locking forgets the key again.
+    client.request(Request::Lock).await.unwrap();
+    let relocked = status(client.request(Request::GetStatus).await.unwrap());
+    assert_eq!(relocked.security, SecurityState::Locked);
+    assert!(relocked.active_profile.is_none());
+    assert!(client.request(Request::GetDatabaseKey).await.is_err());
+
+    client.request(Request::Shutdown).await.unwrap();
+    tokio::time::timeout(TIMEOUT, task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    drop(stop);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reports_missing_and_legacy_databases_without_opening_them() {
+    for legacy in [false, true] {
+        let paths = temp_paths();
+        if legacy {
+            // A database written by DeckPilot 0.3, unencrypted.
+            SqliteStore::open(&paths.database, &Encryption::None).unwrap();
+        }
+        let (task, stop) = start_agent(paths.clone(), MockBackend::new()).unwrap();
+        let mut client = AgentClient::connect(&paths, ClientKind::Desktop)
+            .await
+            .unwrap();
+        let Response::Status { status } = client.request(Request::GetStatus).await.unwrap() else {
+            panic!("expected status")
+        };
+        let expected = if legacy {
+            SecurityState::LegacyPlaintext
+        } else {
+            SecurityState::Uninitialized
+        };
+        assert_eq!(status.security, expected);
+        assert!(client.request(Request::ListProfiles).await.is_err());
+        client.request(Request::Shutdown).await.unwrap();
+        tokio::time::timeout(TIMEOUT, task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        drop(stop);
+        // The agent created no database.
+        assert_eq!(paths.database.exists(), legacy);
+    }
 }

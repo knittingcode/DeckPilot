@@ -17,10 +17,11 @@ use deckpilot_device::{
     mock::MockBackend,
 };
 use deckpilot_ipc::{
-    AgentEvent, AgentPaths, AgentStatus, DeviceInfo, ErrorCode, IpcError, PROTOCOL_VERSION,
-    ProfileInfo, Request, Response, token,
+    AgentEvent, AgentPaths, AgentStatus, DeviceInfo, ErrorCode, IpcError, KeyMaterial,
+    PROTOCOL_VERSION, ProfileInfo, Request, Response, SecurityState, token,
 };
-use deckpilot_storage::{ConfigStore, Encryption, SqliteStore, StorageError};
+use deckpilot_storage::vault::{DatabaseState, Vault};
+use deckpilot_storage::{ConfigStore, DatabaseKey, Encryption, SqliteStore, StorageError};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tracing::{debug, info, warn};
 
@@ -121,7 +122,11 @@ struct DeviceSession {
 pub struct Agent {
     options: AgentOptions,
     _lock: InstanceLock,
-    store: SqliteStore,
+    /// Open while unlocked.
+    store: Option<SqliteStore>,
+    /// Key of the open database, handed to the configuration app on request.
+    key: Option<DatabaseKey>,
+    security: SecurityState,
     runtime: Runtime,
     /// Feature modules with their stored state; the runtime's engine
     /// executes the action types of the enabled ones.
@@ -162,23 +167,17 @@ impl Agent {
     /// Tokio runtime.
     pub fn start(options: AgentOptions, lock: InstanceLock) -> Result<Self, AgentError> {
         let paths = &options.paths;
-        let store = SqliteStore::open(&paths.database, &Encryption::None)?;
-        let machine = if let Some(machine) = store.load_machine_config()? {
-            machine
-        } else {
-            let machine = MachineConfig::new(Os::current());
-            store.save_machine_config(&machine)?;
-            machine
-        };
-        let brightness = store.device_brightness()?.unwrap_or(DEFAULT_BRIGHTNESS);
-        let modules = load_modules(&store)?;
+        // The agent starts locked: the database is encrypted and the key is
+        // supplied over IPC by the configuration app after the user entered
+        // the password. Nothing is read before that.
+        let security = security_state(&paths.database)?;
+        let modules = deckpilot_modules::builtin(Os::current());
         let mut runtime = Runtime::new(
             Engine::new(modules.action_registry()),
             ModelCatalog::builtin(),
-            machine,
+            MachineConfig::new(Os::current()),
         );
-        let (profile, project) = load_active(&store)?;
-        runtime.set_profile(profile, project);
+        runtime.set_placeholder(Some("Locked"));
 
         let endpoint = paths.endpoint();
         let token = token::create(&paths.token_file)?;
@@ -194,17 +193,19 @@ impl Agent {
             desktop_clients: Arc::new(AtomicUsize::new(0)),
         };
         let server = crate::server::spawn(listener, handle.clone(), token, shutdown_rx);
-        info!(endpoint = %endpoint.display(), backend = options.backend.name(), "agent started");
+        info!(endpoint = %endpoint.display(), backend = options.backend.name(), ?security, "agent started");
 
         let persisted_project = runtime.active_project_id();
         Ok(Self {
             endpoint: endpoint.display(),
             options,
             _lock: lock,
-            store,
+            store: None,
+            key: None,
+            security,
             runtime,
             modules,
-            brightness,
+            brightness: DEFAULT_BRIGHTNESS,
             started_at: unix_now(),
             sessions: BTreeMap::new(),
             next_session: 0,
@@ -309,6 +310,14 @@ impl Agent {
         } else {
             debug!(?request, "request");
         }
+        if self.security != SecurityState::Unlocked
+            && matches!(
+                request,
+                Request::ListProfiles | Request::GetActiveProfile | Request::GetActiveProject
+            )
+        {
+            return Err(locked());
+        }
         match request {
             Request::GetStatus => Ok(Response::Status {
                 status: Box::new(self.status()),
@@ -337,6 +346,9 @@ impl Agent {
 
     /// Requests that change runtime state.
     fn handle_change(&mut self, request: Request) -> Result<Response, IpcError> {
+        if let Some(result) = self.handle_security(&request) {
+            return result;
+        }
         match request {
             Request::SetActiveProfile { profile } => {
                 self.set_active_profile(profile)?;
@@ -410,7 +422,114 @@ impl Agent {
             | Request::Subscribe
             | Request::Shutdown
             | Request::PrepareForUpdate => self.handle_request(request),
+            Request::Unlock { .. } | Request::Lock | Request::GetDatabaseKey => {
+                unreachable!("handled above")
+            }
         }
+    }
+
+    /// Unlock, lock and key requests, and the refusal of requests that need
+    /// the configuration while it is locked. `None`: not handled here.
+    fn handle_security(&mut self, request: &Request) -> Option<Result<Response, IpcError>> {
+        match request {
+            Request::Unlock { key } => Some(self.unlock(key).map(|()| Response::Ok)),
+            Request::Lock => {
+                self.lock();
+                Some(Ok(Response::Ok))
+            }
+            Request::GetDatabaseKey => {
+                Some(
+                    self.key
+                        .as_ref()
+                        .ok_or_else(locked)
+                        .map(|key| Response::DatabaseKey {
+                            key: KeyMaterial::new(key.to_hex()),
+                        }),
+                )
+            }
+            // Devices and autostart do not touch the database.
+            Request::RefreshDevices
+            | Request::SetAutostart { .. }
+            | Request::ShowWindow
+            | Request::SimulateInput { .. } => None,
+            _ if self.security != SecurityState::Unlocked => Some(Err(locked())),
+            _ => None,
+        }
+    }
+
+    fn store(&self) -> Result<&SqliteStore, IpcError> {
+        self.store.as_ref().ok_or_else(locked)
+    }
+
+    /// Opens the database with `key`. Fails without changing anything if the
+    /// key is wrong.
+    fn unlock(&mut self, key: &KeyMaterial) -> Result<(), IpcError> {
+        if self.security == SecurityState::Unlocked {
+            return Ok(());
+        }
+        let key = DatabaseKey::from_hex(key.expose())
+            .map_err(|_| IpcError::new(ErrorCode::InvalidRequest, "malformed key"))?;
+        let database = self.options.paths.database.clone();
+        // The app may have set up or migrated the database meanwhile.
+        if security_state(&database).map_err(|e| storage_error(&e))? != SecurityState::Locked {
+            return Err(IpcError::new(
+                ErrorCode::Failed,
+                "there is no encrypted database to unlock",
+            ));
+        }
+        let store = match SqliteStore::open(&database, &Encryption::Key(key.clone())) {
+            Ok(store) => store,
+            Err(StorageError::InvalidKey) => {
+                warn!("rejected an unlock attempt with a wrong key");
+                return Err(IpcError::new(ErrorCode::Unauthorized, "wrong key"));
+            }
+            Err(error) => return Err(storage_error(&error)),
+        };
+        self.store = Some(store);
+        self.key = Some(key);
+        self.security = SecurityState::Unlocked;
+        self.runtime.set_placeholder(None);
+        info!("configuration unlocked");
+        if let Err(error) = self.load_configuration() {
+            self.lock();
+            return Err(storage_error(&error));
+        }
+        Ok(())
+    }
+
+    /// Closes the database and forgets the key. Devices show "Locked".
+    fn lock(&mut self) {
+        self.store = None;
+        self.key = None;
+        self.security =
+            security_state(&self.options.paths.database).unwrap_or(SecurityState::Locked);
+        self.runtime.set_profile(None, None);
+        self.runtime.set_placeholder(Some("Locked"));
+        self.persisted_project = None;
+        info!("configuration locked");
+        self.after_change();
+    }
+
+    /// Reads machine bindings, brightness, modules and the active profile
+    /// after unlocking.
+    fn load_configuration(&mut self) -> Result<(), StorageError> {
+        let store = self.store.as_ref().ok_or(StorageError::InvalidKey)?;
+        let machine = if let Some(machine) = store.load_machine_config()? {
+            machine
+        } else {
+            let machine = MachineConfig::new(Os::current());
+            store.save_machine_config(&machine)?;
+            machine
+        };
+        let brightness = store.device_brightness()?.unwrap_or(DEFAULT_BRIGHTNESS);
+        self.runtime.set_machine(machine);
+        if brightness != self.brightness {
+            self.brightness = brightness;
+            for session in self.sessions.values() {
+                session.io.set_brightness(brightness);
+            }
+        }
+        self.reload_configuration()
     }
 
     fn active_project_response(&self) -> Response {
@@ -420,7 +539,7 @@ impl Agent {
     }
 
     fn set_brightness(&mut self, percent: u8) -> Result<(), IpcError> {
-        self.store
+        self.store()?
             .set_device_brightness(percent)
             .map_err(|e| storage_error(&e))?;
         self.brightness = percent;
@@ -483,18 +602,15 @@ impl Agent {
     }
 
     fn set_active_profile(&mut self, id: ProfileId) -> Result<(), IpcError> {
-        let profile = self
-            .store
+        let store = self.store()?;
+        let profile = store
             .load_profile(id)
             .map_err(|e| storage_error(&e))?
             .ok_or_else(|| IpcError::new(ErrorCode::NotFound, "profile does not exist"))?;
-        self.store
+        store
             .set_active_profile(Some(id))
             .map_err(|e| storage_error(&e))?;
-        let project = self
-            .store
-            .active_project(id)
-            .map_err(|e| storage_error(&e))?;
+        let project = store.active_project(id).map_err(|e| storage_error(&e))?;
         info!(profile = %profile.name, "profile activated");
         self.runtime.set_profile(Some(profile), project);
         self.persisted_project = self.runtime.active_project_id();
@@ -539,14 +655,17 @@ impl Agent {
     }
 
     fn reload_configuration(&mut self) -> Result<(), StorageError> {
-        if let Some(machine) = self.store.load_machine_config()? {
+        let Some(store) = self.store.as_ref() else {
+            return Ok(());
+        };
+        if let Some(machine) = store.load_machine_config()? {
             self.runtime.set_machine(machine);
         }
         // Module states may have changed in the configuration app.
-        self.modules = load_modules(&self.store)?;
+        self.modules = load_modules(store)?;
+        let (profile, project) = load_active(store)?;
         self.runtime
             .set_engine(Engine::new(self.modules.action_registry()));
-        let (profile, project) = load_active(&self.store)?;
         match profile {
             Some(profile) if self.runtime.profile().is_some_and(|p| p.id == profile.id) => {
                 self.runtime.reload_profile(profile);
@@ -565,7 +684,11 @@ impl Agent {
         if project != self.persisted_project
             && let Some(profile) = self.runtime.profile().map(|p| p.id)
         {
-            match self.store.set_active_project(profile, project) {
+            let saved = match self.store.as_ref() {
+                Some(store) => store.set_active_project(profile, project),
+                None => Ok(()),
+            };
+            match saved {
                 Ok(()) => self.persisted_project = project,
                 Err(error) => warn!(%error, "cannot persist the active project"),
             }
@@ -759,7 +882,10 @@ impl Agent {
     }
 
     fn profiles(&self) -> Vec<ProfileInfo> {
-        self.store
+        let Some(store) = self.store.as_ref() else {
+            return Vec::new();
+        };
+        store
             .list_profiles()
             .map(|list| {
                 list.into_iter()
@@ -821,6 +947,7 @@ impl Agent {
             devices: self.device_infos(),
             brightness: self.brightness,
             last_input_at: self.last_input_at,
+            security: self.security,
         }
     }
 
@@ -837,8 +964,23 @@ fn unix_now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
+fn locked() -> IpcError {
+    IpcError::new(ErrorCode::Locked, "the configuration is locked")
+}
+
+/// The agent's state for the database at `path`, without opening it.
+fn security_state(path: &std::path::Path) -> Result<SecurityState, StorageError> {
+    Ok(match Vault::new(path).state()? {
+        DatabaseState::Missing => SecurityState::Uninitialized,
+        DatabaseState::Plaintext => SecurityState::LegacyPlaintext,
+        DatabaseState::Encrypted => SecurityState::Locked,
+    })
+}
+
 fn load_modules(store: &SqliteStore) -> Result<ModuleRegistry, StorageError> {
     let (modules, problems) = deckpilot_modules::configured(&store.module_states()?);
+    // Schemas of all registered modules, enabled or not.
+    store.apply_module_schemas(&modules.schemas())?;
     for problem in problems {
         warn!(%problem, "stored module state was not applied");
     }
