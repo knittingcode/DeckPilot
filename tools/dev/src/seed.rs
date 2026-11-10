@@ -134,7 +134,7 @@ fn work_actions(b: &mut Builder<'_>) -> Result<WorkIds> {
         builtin::cycle_project_id(),
         &cycle("previous"),
         "chevron-left",
-        Some("Back"),
+        Some("Previous"),
     )?;
     let mut selectors = Vec::new();
     for project in ["SHOP", "CMR", "CMS"] {

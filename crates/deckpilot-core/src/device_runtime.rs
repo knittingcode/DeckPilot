@@ -443,7 +443,10 @@ fn face_for(
                 FaceStyle::Action,
                 render_label(template, &profile.name, project),
             );
-            if instance.action_type == builtin::cycle_project_id() {
+            // A switcher whose label already shows the project needs no second line.
+            if instance.action_type == builtin::cycle_project_id()
+                && !template.contains("{project.")
+            {
                 face.with_detail(project.map_or("-", |p| p.key.as_str()))
             } else if instance.action_type == builtin::select_project_id() {
                 let key = instance.parameters.text("project").unwrap_or_default();
