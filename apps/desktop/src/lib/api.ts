@@ -15,6 +15,7 @@ import type {
   ImportSummary,
   LaunchView,
   SecurityView,
+  WindowSpec,
   MachineConfig,
   MigrationNote,
   ModuleInfo,
@@ -49,6 +50,15 @@ export interface ProjectInput {
 
 /** Typed wrappers around the backend commands. */
 export const api = {
+  openWindow: (id: string) => invoke<null>("open_window", { id }),
+  currentWindow: () => invoke<WindowSpec | null>("current_window"),
+  fitWindow: (width: number, height: number) =>
+    invoke<[number, number]>("fit_window", { width, height }),
+  closeWindow: () => invoke<null>("close_window"),
+  showMainWindow: () => invoke<boolean>("show_main_window"),
+  finishSecurityPrompt: () => invoke<null>("finish_security_prompt"),
+  lastWorkflowReport: () => invoke<WorkflowReport | null>("last_workflow_report"),
+
   securityStatus: () => invoke<SecurityView>("security_status"),
   setupPassword: (password: string, confirmation: string) =>
     invoke<SecurityView>("setup_password", { input: { password, confirmation } }),
@@ -175,6 +185,8 @@ export const api = {
 }
 
 /** Backend event carrying the latest {@link AgentConnection}. */
+/** Sent to every window when the configuration was locked or unlocked. */
+export const SECURITY_CHANGED_EVENT = "deckpilot://security-changed"
 export const AGENT_STATUS_EVENT = "agent-status"
 /** Backend event carrying the latest {@link UpdateState}. */
 export const UPDATE_STATE_EVENT = "update-state"

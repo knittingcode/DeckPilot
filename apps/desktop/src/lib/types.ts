@@ -381,6 +381,16 @@ export interface LaunchView {
   encryption: { enabled: boolean; passwordRequired: boolean }
 }
 
+export type WindowSize = "fit" | "compact" | "medium" | "large" | "fullscreen"
+
+/** A native window as the window manager knows it. */
+export interface WindowSpec {
+  id: string
+  title: string
+  size: WindowSize
+  blocking: boolean
+}
+
 export type DatabaseState = "missing" | "plaintext" | "encrypted"
 
 /** Whether the configuration can be used; see `docs/security.md`. */

@@ -6,24 +6,26 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { SecurityGate } from "./security-gate"
+import { ConfirmWindow, MigrateWindow, SetupWindow, UnlockWindow } from "@/windows/security-windows"
 import type { SecurityView } from "@/lib/types"
 
-const securityStatus = vi.fn()
-const setupPassword = vi.fn()
-const unlock = vi.fn()
-const confirmPassword = vi.fn()
-const encryptLegacyDatabase = vi.fn()
+const api = {
+  securityStatus: vi.fn(),
+  setupPassword: vi.fn(),
+  unlock: vi.fn(),
+  confirmPassword: vi.fn(),
+  encryptLegacyDatabase: vi.fn(),
+  openWindow: vi.fn(),
+  showMainWindow: vi.fn(),
+  finishSecurityPrompt: vi.fn(),
+}
 
 vi.mock("@/lib/api", () => ({
-  api: {
-    securityStatus: () => securityStatus() as unknown,
-    setupPassword: (...args: unknown[]) => setupPassword(...args) as unknown,
-    unlock: (...args: unknown[]) => unlock(...args) as unknown,
-    confirmPassword: (...args: unknown[]) => confirmPassword(...args) as unknown,
-    encryptLegacyDatabase: (...args: unknown[]) => encryptLegacyDatabase(...args) as unknown,
-  },
+  api: new Proxy({}, { get: (_, name: string) => api[name as keyof typeof api] }),
   errorMessage: (error: unknown) => String(error),
+  SECURITY_CHANGED_EVENT: "deckpilot://security-changed",
 }))
+vi.mock("@tauri-apps/api/event", () => ({ listen: () => Promise.resolve(() => undefined) }))
 
 function view(overrides: Partial<SecurityView>): SecurityView {
   return {
@@ -37,90 +39,93 @@ function view(overrides: Partial<SecurityView>): SecurityView {
   }
 }
 
-const unlocked = view({ unlocked: true })
+beforeEach(() => {
+  for (const mock of Object.values(api)) {
+    mock.mockReset()
+    mock.mockResolvedValue(null)
+  }
+})
+afterEach(cleanup)
 
-function renderGate() {
-  render(
-    <SecurityGate>
-      <p>Configuration studio</p>
-    </SecurityGate>,
-  )
-}
-
-describe("SecurityGate", () => {
-  beforeEach(() => {
-    for (const mock of [
-      securityStatus,
-      setupPassword,
-      unlock,
-      confirmPassword,
-      encryptLegacyDatabase,
-    ]) {
-      mock.mockReset()
-    }
+describe("SecurityGate (main window)", () => {
+  it.each([
+    [view({ database: "missing" }), "security.setup"],
+    [view({ database: "plaintext" }), "security.migrate"],
+    [view({ confirmationRequired: true }), "security.confirm"],
+    [view({}), "security.unlock"],
+  ])("opens the matching prompt window and keeps the main window closed", async (state, id) => {
+    api.securityStatus.mockResolvedValue(state)
+    render(
+      <SecurityGate>
+        <p>Configuration studio</p>
+      </SecurityGate>,
+    )
+    await waitFor(() => {
+      expect(api.openWindow).toHaveBeenCalledWith(id)
+    })
+    expect(api.showMainWindow).not.toHaveBeenCalled()
+    expect(screen.queryByText("Configuration studio")).not.toBeInTheDocument()
   })
-  afterEach(cleanup)
 
-  it("asks for a confirmed password on first start", async () => {
+  it("shows the main window once unlocked", async () => {
+    api.securityStatus.mockResolvedValue(view({ unlocked: true }))
+    render(
+      <SecurityGate>
+        <p>Configuration studio</p>
+      </SecurityGate>,
+    )
+    expect(await screen.findByText("Configuration studio")).toBeInTheDocument()
+    expect(api.showMainWindow).toHaveBeenCalled()
+    expect(api.openWindow).not.toHaveBeenCalled()
+  })
+})
+
+describe("security prompt windows", () => {
+  it("validates a new password before setting it up", async () => {
     const user = userEvent.setup()
-    securityStatus.mockResolvedValue(view({ database: "missing" }))
-    setupPassword.mockResolvedValue(unlocked)
-    renderGate()
-    expect(await screen.findByText("Welcome to DeckPilot")).toBeInTheDocument()
+    render(<SetupWindow />)
     const create = screen.getByRole("button", { name: /create encrypted configuration/i })
-
+    expect(screen.getByLabelText("Password")).toHaveFocus()
     await user.type(screen.getByLabelText("Password"), "short")
     expect(screen.getByText("Use at least 8 characters.")).toBeInTheDocument()
     expect(create).toBeDisabled()
-
     await user.type(screen.getByLabelText("Password"), " but longer")
     await user.type(screen.getByLabelText("Repeat password"), "short but longeR")
     expect(screen.getByText("The passwords do not match.")).toBeInTheDocument()
-    expect(create).toBeDisabled()
-
     await user.clear(screen.getByLabelText("Repeat password"))
-    await user.type(screen.getByLabelText("Repeat password"), "short but longer")
-    await user.click(create)
-    expect(setupPassword).toHaveBeenCalledWith("short but longer", "short but longer")
-    expect(await screen.findByText("Configuration studio")).toBeInTheDocument()
-  })
-
-  it("shows a wrong password and lets the user try again", async () => {
-    const user = userEvent.setup()
-    securityStatus.mockResolvedValue(view({}))
-    unlock.mockRejectedValueOnce("the password is not correct").mockResolvedValueOnce(unlocked)
-    renderGate()
-    expect(await screen.findByText("DeckPilot is locked")).toBeInTheDocument()
-    await user.type(screen.getByLabelText("Password"), "wrong one")
-    await user.click(screen.getByRole("button", { name: "Unlock" }))
-    expect(await screen.findByRole("alert")).toHaveTextContent("the password is not correct")
-    // The field is cleared for the next attempt.
-    expect(screen.getByLabelText("Password")).toHaveValue("")
-    await user.type(screen.getByLabelText("Password"), "right one")
-    await user.click(screen.getByRole("button", { name: "Unlock" }))
-    expect(await screen.findByText("Configuration studio")).toBeInTheDocument()
-    expect(unlock).toHaveBeenLastCalledWith("right one")
-  })
-
-  it("asks once after an update", async () => {
-    const user = userEvent.setup()
-    securityStatus.mockResolvedValue(view({ confirmationRequired: true }))
-    confirmPassword.mockResolvedValue(unlocked)
-    renderGate()
-    expect(await screen.findByText("DeckPilot 0.4.0 is installed")).toBeInTheDocument()
-    await user.type(screen.getByLabelText("Password"), "my password")
-    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await user.type(screen.getByLabelText("Repeat password"), "short but longer{Enter}")
+    expect(api.setupPassword).toHaveBeenCalledWith("short but longer", "short but longer")
     await waitFor(() => {
-      expect(screen.getByText("Configuration studio")).toBeInTheDocument()
+      expect(api.finishSecurityPrompt).toHaveBeenCalled()
     })
-    expect(confirmPassword).toHaveBeenCalledWith("my password")
   })
 
-  it("explains that the unencrypted original is kept when migrating", async () => {
-    securityStatus.mockResolvedValue(view({ database: "plaintext" }))
-    renderGate()
-    expect(await screen.findByText("Encrypt your configuration")).toBeInTheDocument()
+  it("reports a wrong password, clears the field and allows another try", async () => {
+    const user = userEvent.setup()
+    api.unlock.mockRejectedValueOnce("the password is not correct").mockResolvedValueOnce(null)
+    render(<UnlockWindow />)
+    expect(screen.getByRole("alertdialog", { name: "DeckPilot is locked" })).toBeInTheDocument()
+    await user.type(screen.getByLabelText("Password"), "wrong one{Enter}")
+    expect(await screen.findByRole("alert")).toHaveTextContent("the password is not correct")
+    expect(screen.getByLabelText("Password")).toHaveValue("")
+    expect(api.finishSecurityPrompt).not.toHaveBeenCalled()
+    await user.type(screen.getByLabelText("Password"), "right one{Enter}")
+    await waitFor(() => {
+      expect(api.finishSecurityPrompt).toHaveBeenCalledTimes(1)
+    })
+    expect(api.unlock).toHaveBeenLastCalledWith("right one")
+  })
+
+  it("cannot be dismissed with Escape", async () => {
+    const user = userEvent.setup()
+    render(<ConfirmWindow />)
+    await user.keyboard("{Escape}")
+    expect(screen.getByRole("alertdialog", { name: "DeckPilot was updated" })).toBeInTheDocument()
+    expect(api.finishSecurityPrompt).not.toHaveBeenCalled()
+  })
+
+  it("explains that the unencrypted original is kept", () => {
+    render(<MigrateWindow />)
     expect(screen.getByText("The unencrypted original is kept")).toBeInTheDocument()
-    expect(screen.queryByText("Configuration studio")).not.toBeInTheDocument()
   })
 })
