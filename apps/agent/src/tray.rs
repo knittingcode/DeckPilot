@@ -6,7 +6,7 @@
 //! menu selections go back to the agent as [`TrayCommand`]s.
 
 use deckpilot_device::ConnectionState;
-use deckpilot_ipc::{AgentEvent, AgentStatus, SecurityState};
+use deckpilot_ipc::{AgentEvent, AgentStatus, LockReason, SecurityState};
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tracing::{error, warn};
@@ -176,7 +176,8 @@ fn build_menu(status: Option<&AgentStatus>) -> Menu {
     };
     append(menu.append(&MenuItem::with_id(OPEN, open_label, true, None)));
     append(menu.append(&PredefinedMenuItem::separator()));
-    if let Some(notice) = security_notice(security) {
+    let reason = status.and_then(|s| s.lock_reason);
+    if let Some(notice) = security_notice(security, reason) {
         append(menu.append(&MenuItem::new(notice, false, None)));
         append(menu.append(&PredefinedMenuItem::separator()));
     }
@@ -240,12 +241,15 @@ fn build_menu(status: Option<&AgentStatus>) -> Menu {
 }
 
 /// What the tray says while the configuration cannot be read.
-fn security_notice(security: SecurityState) -> Option<&'static str> {
-    match security {
-        SecurityState::Unlocked => None,
-        SecurityState::Locked => Some("Locked – actions are paused"),
-        SecurityState::Uninitialized => Some("Set a password to start"),
-        SecurityState::LegacyPlaintext => Some("Encrypt your configuration to continue"),
+fn security_notice(security: SecurityState, reason: Option<LockReason>) -> Option<&'static str> {
+    match (security, reason) {
+        (SecurityState::Unlocked, _) => None,
+        (SecurityState::Locked, Some(LockReason::KeyUnavailable)) => {
+            Some("Locked – the key could not be read from the credential store")
+        }
+        (SecurityState::Locked, _) => Some("Locked – actions are paused"),
+        (SecurityState::Uninitialized, _) => Some("Set up DeckPilot to start"),
+        (SecurityState::LegacyPlaintext, _) => Some("Encrypt your configuration to continue"),
     }
 }
 
@@ -288,13 +292,14 @@ mod tests {
 
     #[test]
     fn locked_states_are_explained() {
-        assert_eq!(security_notice(SecurityState::Unlocked), None);
+        assert_eq!(security_notice(SecurityState::Unlocked, None), None);
         for state in [
             SecurityState::Locked,
             SecurityState::Uninitialized,
             SecurityState::LegacyPlaintext,
         ] {
-            assert!(security_notice(state).is_some());
+            assert!(security_notice(state, None).is_some());
+            assert!(security_notice(state, Some(LockReason::KeyUnavailable)).is_some());
         }
     }
 

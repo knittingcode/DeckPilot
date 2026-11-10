@@ -21,6 +21,7 @@
 
 pub mod crypto;
 mod legacy;
+pub mod policy;
 mod project_actions;
 mod sqlite;
 pub mod vault;
@@ -100,6 +101,12 @@ pub enum StorageError {
     Crypto(#[from] crypto::CryptoError),
     #[error("{0}")]
     Vault(String),
+    #[error(transparent)]
+    KeyStore(#[from] deckpilot_keystore::KeyStoreError),
+    /// The database is protected by a password (or a system key) and none
+    /// was supplied.
+    #[error("the {0} is needed to open the database")]
+    CredentialsRequired(&'static str),
     #[error("project {0} belongs to another profile")]
     ProjectOfAnotherProfile(ProjectId),
     #[error("project key `{0}` is already used in this profile")]

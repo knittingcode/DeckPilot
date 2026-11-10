@@ -253,3 +253,203 @@ fn wrong_states_are_refused() {
     vault.initialize(&password("password one")).unwrap();
     assert!(vault.encrypt_plaintext(&password("whatever")).is_err());
 }
+
+// System-managed protection. The tests use an in-memory store and never
+// touch the real credential store.
+
+use deckpilot_keystore::MemoryKeyStore;
+
+#[test]
+fn a_system_managed_database_opens_without_a_password() {
+    let dir = Dir::new();
+    let vault = dir.vault();
+    let keys = MemoryKeyStore::new();
+    let key = vault.initialize_system(&keys).unwrap();
+    assert_eq!(vault.state().unwrap(), DatabaseState::Encrypted);
+    assert_eq!(
+        vault.protection().unwrap().map(|p| p.mode()),
+        Some(ProtectionMode::SystemManaged)
+    );
+    assert_eq!(keys.ids().len(), 1);
+    let profile = fill(&open(&vault, &key));
+    assert!(!file_contains(vault.database(), MARKER));
+
+    // A restart: the key comes from the store.
+    let unlocked = vault.unlock_system(&keys).unwrap();
+    assert!(unlocked.matches(&key));
+    assert_filled(&open(&vault, &unlocked), &profile);
+
+    // The vault file names the key but does not contain it.
+    let params = fs::read_to_string(vault.vault_file()).unwrap();
+    assert!(params.contains("systemManaged"));
+    assert!(!params.contains(key.to_hex().as_str()));
+
+    // A password does not apply.
+    assert!(matches!(
+        vault.unlock(&password("anything at all")),
+        Err(StorageError::CredentialsRequired(_))
+    ));
+    assert!(vault.initialize_system(&keys).is_err());
+}
+
+#[test]
+fn an_unavailable_or_missing_system_key_leaves_the_database_locked() {
+    let dir = Dir::new();
+    let vault = dir.vault();
+    let keys = MemoryKeyStore::new();
+    let key = vault.initialize_system(&keys).unwrap();
+    let profile = fill(&open(&vault, &key));
+
+    keys.set_unavailable(true);
+    assert!(matches!(
+        vault.unlock_system(&keys),
+        Err(StorageError::KeyStore(
+            deckpilot_keystore::KeyStoreError::Unavailable { .. }
+        ))
+    ));
+    keys.set_unavailable(false);
+
+    let other = MemoryKeyStore::new();
+    assert!(matches!(
+        vault.unlock_system(&other),
+        Err(StorageError::KeyStore(
+            deckpilot_keystore::KeyStoreError::NotFound { .. }
+        ))
+    ));
+    // Nothing was changed by the failed attempts.
+    assert_filled(
+        &open(&vault, &vault.unlock_system(&keys).unwrap()),
+        &profile,
+    );
+}
+
+#[test]
+fn setup_fails_cleanly_when_the_store_is_unavailable() {
+    let dir = Dir::new();
+    let vault = dir.vault();
+    let keys = MemoryKeyStore::new();
+    keys.set_unavailable(true);
+    assert!(vault.initialize_system(&keys).is_err());
+    assert_eq!(vault.state().unwrap(), DatabaseState::Missing);
+    assert!(!vault.vault_file().exists());
+    // The user can still choose a password.
+    vault.initialize(&password("a password")).unwrap();
+}
+
+#[test]
+fn switching_from_a_password_to_a_system_key_and_back() {
+    let dir = Dir::new();
+    let vault = dir.vault();
+    let keys = MemoryKeyStore::new();
+    let key = vault.initialize(&password("old password")).unwrap();
+    let profile = fill(&open(&vault, &key));
+
+    let system = vault.use_system_key(&key, &keys).unwrap();
+    assert!(!system.matches(&key));
+    assert_eq!(
+        vault.protection().unwrap().map(|p| p.mode()),
+        Some(ProtectionMode::SystemManaged)
+    );
+    assert!(vault.unlock(&password("old password")).is_err());
+    assert_filled(
+        &open(&vault, &vault.unlock_system(&keys).unwrap()),
+        &profile,
+    );
+
+    let back = vault
+        .use_password(&system, &password("new password"))
+        .unwrap();
+    assert_filled(&open(&vault, &back), &profile);
+    assert!(vault.unlock(&password("new password")).is_ok());
+    assert!(matches!(
+        vault.unlock_system(&keys),
+        Err(StorageError::CredentialsRequired(_))
+    ));
+    // The previous system key is kept, never deleted automatically.
+    assert_eq!(keys.ids().len(), 1);
+}
+
+#[test]
+fn a_failed_switch_keeps_the_password_protection() {
+    let dir = Dir::new();
+    let vault = dir.vault();
+    let keys = MemoryKeyStore::new();
+    let key = vault.initialize(&password("old password")).unwrap();
+    let profile = fill(&open(&vault, &key));
+
+    keys.set_unavailable(true);
+    assert!(vault.use_system_key(&key, &keys).is_err());
+    keys.set_unavailable(false);
+    // A wrong current key is refused before anything is written.
+    let wrong = SecretKey::random().unwrap();
+    assert!(matches!(
+        vault.use_system_key(&wrong, &keys),
+        Err(StorageError::InvalidKey)
+    ));
+    assert_eq!(keys.ids(), Vec::new());
+    assert_eq!(
+        vault.protection().unwrap().map(|p| p.mode()),
+        Some(ProtectionMode::Password)
+    );
+    assert_filled(
+        &open(&vault, &vault.unlock(&password("old password")).unwrap()),
+        &profile,
+    );
+}
+
+#[test]
+fn an_interrupted_switch_to_a_system_key_is_completed() {
+    let dir = Dir::new();
+    let vault = dir.vault();
+    let keys = MemoryKeyStore::new();
+    let key = vault.initialize(&password("old password")).unwrap();
+    let profile = fill(&open(&vault, &key));
+    let old_params = fs::read(vault.vault_file()).unwrap();
+    vault.use_system_key(&key, &keys).unwrap();
+    // Crash after the swap, before the new parameters were moved in place.
+    fs::rename(vault.vault_file(), vault.pending_vault_file()).unwrap();
+    fs::write(vault.vault_file(), &old_params).unwrap();
+
+    // The agent starts with the credential store only.
+    let key = vault.unlock_system(&keys).unwrap();
+    assert!(!vault.pending_vault_file().exists());
+    assert_eq!(
+        vault.protection().unwrap().map(|p| p.mode()),
+        Some(ProtectionMode::SystemManaged)
+    );
+    assert_filled(&open(&vault, &key), &profile);
+}
+
+#[test]
+fn key_files_of_development_builds_are_still_read() {
+    let dir = Dir::new();
+    let vault = dir.vault();
+    let key = vault.initialize(&password("old format")).unwrap();
+    let Some(Protection::Password { kdf }) = vault.protection().unwrap() else {
+        panic!("password protection expected");
+    };
+    let v1 = serde_json::json!({ "format": 1, "kdf": kdf });
+    fs::write(vault.vault_file(), serde_json::to_vec(&v1).unwrap()).unwrap();
+    assert!(vault.unlock(&password("old format")).unwrap().matches(&key));
+    fs::write(vault.vault_file(), br#"{"format": 9}"#).unwrap();
+    assert!(vault.unlock(&password("old format")).is_err());
+}
+
+#[test]
+fn legacy_databases_can_be_encrypted_with_a_system_key() {
+    let dir = Dir::new();
+    let vault = dir.vault();
+    let keys = MemoryKeyStore::new();
+    let profile = plaintext_database(&vault);
+    let (key, legacy) = vault.encrypt_plaintext_system(&keys).unwrap();
+    assert!(legacy.exists());
+    assert_eq!(vault.state().unwrap(), DatabaseState::Encrypted);
+    assert!(vault.unlock_system(&keys).unwrap().matches(&key));
+    assert_eq!(
+        open(&vault, &key)
+            .load_profile(profile.id)
+            .unwrap()
+            .as_ref(),
+        Some(&profile)
+    );
+}

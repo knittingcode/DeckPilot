@@ -17,11 +17,13 @@ use deckpilot_device::{
     ModelCatalog, mock::MockBackend,
 };
 use deckpilot_ipc::{
-    AgentEvent, AgentPaths, AgentStatus, DeviceInfo, ErrorCode, IpcError, KeyMaterial,
-    PROTOCOL_VERSION, ProfileInfo, Request, Response, SecurityState, token,
+    AgentEvent, AgentPaths, AgentStatus, DeviceInfo, ErrorCode, IpcError, LockReason,
+    PROTOCOL_VERSION, ProfileInfo, ProtectionMode, Request, Response, SecurityState, token,
 };
+use deckpilot_keystore::KeyStore;
+use deckpilot_storage::policy::AutoLock;
 use deckpilot_storage::vault::{DatabaseState, Vault};
-use deckpilot_storage::{ConfigStore, DatabaseKey, Encryption, SqliteStore, StorageError};
+use deckpilot_storage::{ConfigStore, DatabaseKey, SqliteStore, StorageError};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tracing::{debug, info, warn};
 
@@ -29,6 +31,10 @@ use crate::autostart::Autostart;
 use crate::devices::{DeviceIo, DeviceSignal};
 use crate::instance::{InstanceLock, LockError};
 use crate::render;
+
+mod security;
+
+pub use security::{AUTO_LOCK_CHECK, Clock, system_clock};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_BRIGHTNESS: u8 = 60;
@@ -56,6 +62,12 @@ pub struct AgentOptions {
     pub autostart: Option<Autostart>,
     pub open_desktop: Option<DesktopOpener>,
     pub open_window: Option<WindowOpener>,
+    /// The operating system's credential store for system-managed keys.
+    /// `None`: not available; such databases stay locked.
+    pub key_store: Option<Arc<dyn KeyStore>>,
+    /// How often auto-lock conditions are checked.
+    pub auto_lock_check: Duration,
+    pub clock: Clock,
 }
 
 impl std::fmt::Debug for AgentOptions {
@@ -138,6 +150,17 @@ pub struct Agent {
     /// Key of the open database, handed to the configuration app on request.
     key: Option<DatabaseKey>,
     security: SecurityState,
+    /// How the key is protected, once a database exists.
+    protection: Option<ProtectionMode>,
+    lock_reason: Option<LockReason>,
+    /// Why the database could not be opened automatically.
+    security_problem: Option<String>,
+    auto_lock: AutoLock,
+    /// Seconds since the Unix epoch of the last device input or request
+    /// that changed something; wall-clock time, so sleep counts as idle.
+    last_activity: u64,
+    /// Wall-clock time of the last auto-lock check, to notice sleep.
+    last_check: SystemTime,
     runtime: Runtime,
     /// Feature modules with their stored state; the runtime's engine
     /// executes the action types of the enabled ones.
@@ -181,9 +204,9 @@ impl Agent {
     /// Tokio runtime.
     pub fn start(options: AgentOptions, lock: InstanceLock) -> Result<Self, AgentError> {
         let paths = &options.paths;
-        // The agent starts locked: the database is encrypted and the key is
-        // supplied over IPC by the configuration app after the user entered
-        // the password. Nothing is read before that.
+        // The agent starts locked. `run` then opens a database with a
+        // system-managed key by itself; a password-protected one waits for
+        // the key from the configuration app. Nothing is read before that.
         let security = security_state(&paths.database)?;
         let modules = deckpilot_modules::builtin(Os::current());
         let mut runtime = Runtime::new(
@@ -210,13 +233,21 @@ impl Agent {
         info!(endpoint = %endpoint.display(), backend = options.backend.name(), ?security, "agent started");
 
         let persisted_project = runtime.active_project_id();
+        let protection = security::protection_mode(&paths.database);
+        let last_check = (options.clock)();
         Ok(Self {
             endpoint: endpoint.display(),
             options,
             _lock: lock,
             store: None,
             key: None,
+            lock_reason: (security == SecurityState::Locked).then_some(LockReason::Startup),
+            protection,
             security,
+            security_problem: None,
+            auto_lock: AutoLock::Never,
+            last_activity: 0,
+            last_check,
             runtime,
             modules,
             brightness: DEFAULT_BRIGHTNESS,
@@ -244,12 +275,20 @@ impl Agent {
     /// Runs until `shutdown` completes or a client or the tray requests it.
     pub async fn run(mut self, shutdown: impl Future<Output = ()>) -> Result<(), AgentError> {
         tokio::pin!(shutdown);
+        // A database with a system-managed key opens without the user; a new
+        // one is set up the same way. Failures leave a clear locked state.
+        if let Err(error) = self.open_automatically() {
+            debug!(%error, "the configuration was not opened automatically");
+        }
         // Initial discovery and state for subscribers (e.g. the tray menu).
         self.rescan();
         self.publish();
         let mut rescan = tokio::time::interval(self.options.rescan_interval);
         rescan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         rescan.reset();
+        let mut auto_lock = tokio::time::interval(self.options.auto_lock_check);
+        auto_lock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        auto_lock.reset();
         loop {
             let flow = tokio::select! {
                 () = &mut shutdown => Flow::Stop,
@@ -260,6 +299,10 @@ impl Agent {
                 }
                 _ = rescan.tick() => {
                     self.rescan();
+                    Flow::Continue
+                }
+                _ = auto_lock.tick() => {
+                    self.check_auto_lock();
                     Flow::Continue
                 }
             };
@@ -330,6 +373,7 @@ impl Agent {
             tracing::trace!(?request, "request");
         } else {
             debug!(?request, "request");
+            self.last_activity = self.now_seconds();
         }
         if self.security != SecurityState::Unlocked
             && matches!(
@@ -451,93 +495,18 @@ impl Agent {
             | Request::Subscribe
             | Request::Shutdown
             | Request::PrepareForUpdate => self.handle_request(request),
-            Request::Unlock { .. } | Request::Lock | Request::GetDatabaseKey => {
+            Request::Unlock { .. }
+            | Request::Lock
+            | Request::GetDatabaseKey
+            | Request::SystemUnlock
+            | Request::UseSystemKey { .. } => {
                 unreachable!("handled above")
             }
         }
     }
 
-    /// Unlock, lock and key requests, and the refusal of requests that need
-    /// the configuration while it is locked. `None`: not handled here.
-    fn handle_security(&mut self, request: &Request) -> Option<Result<Response, IpcError>> {
-        match request {
-            Request::Unlock { key } => Some(self.unlock(key).map(|()| Response::Ok)),
-            Request::Lock => {
-                self.lock();
-                Some(Ok(Response::Ok))
-            }
-            Request::GetDatabaseKey => {
-                Some(
-                    self.key
-                        .as_ref()
-                        .ok_or_else(locked)
-                        .map(|key| Response::DatabaseKey {
-                            key: KeyMaterial::new(key.to_hex()),
-                        }),
-                )
-            }
-            // Devices and autostart do not touch the database.
-            Request::RefreshDevices
-            | Request::SetAutostart { .. }
-            | Request::ShowWindow
-            | Request::RequestWindow { .. }
-            | Request::SimulateInput { .. } => None,
-            _ if self.security != SecurityState::Unlocked => Some(Err(locked())),
-            _ => None,
-        }
-    }
-
     fn store(&self) -> Result<&SqliteStore, IpcError> {
         self.store.as_ref().ok_or_else(locked)
-    }
-
-    /// Opens the database with `key`. Fails without changing anything if the
-    /// key is wrong.
-    fn unlock(&mut self, key: &KeyMaterial) -> Result<(), IpcError> {
-        if self.security == SecurityState::Unlocked {
-            return Ok(());
-        }
-        let key = DatabaseKey::from_hex(key.expose())
-            .map_err(|_| IpcError::new(ErrorCode::InvalidRequest, "malformed key"))?;
-        let database = self.options.paths.database.clone();
-        // The app may have set up or migrated the database meanwhile.
-        if security_state(&database).map_err(|e| storage_error(&e))? != SecurityState::Locked {
-            return Err(IpcError::new(
-                ErrorCode::Failed,
-                "there is no encrypted database to unlock",
-            ));
-        }
-        let store = match SqliteStore::open(&database, &Encryption::Key(key.clone())) {
-            Ok(store) => store,
-            Err(StorageError::InvalidKey) => {
-                warn!("rejected an unlock attempt with a wrong key");
-                return Err(IpcError::new(ErrorCode::Unauthorized, "wrong key"));
-            }
-            Err(error) => return Err(storage_error(&error)),
-        };
-        self.store = Some(store);
-        self.key = Some(key);
-        self.security = SecurityState::Unlocked;
-        self.runtime.set_placeholder(None);
-        info!("configuration unlocked");
-        if let Err(error) = self.load_configuration() {
-            self.lock();
-            return Err(storage_error(&error));
-        }
-        Ok(())
-    }
-
-    /// Closes the database and forgets the key. Devices show "Locked".
-    fn lock(&mut self) {
-        self.store = None;
-        self.key = None;
-        self.security =
-            security_state(&self.options.paths.database).unwrap_or(SecurityState::Locked);
-        self.runtime.set_profile(None, None);
-        self.runtime.set_placeholder(Some("Locked"));
-        self.persisted_project = None;
-        info!("configuration locked");
-        self.after_change();
     }
 
     /// Reads machine bindings, brightness, modules and the active profile
@@ -639,7 +608,7 @@ impl Agent {
         }
     }
 
-    /// A key was pressed while locked: ask for the password, but not on
+    /// A key was pressed while locked: ask to unlock, but not on
     /// every press.
     fn prompt_unlock(&mut self) {
         let due = self
@@ -727,6 +696,7 @@ impl Agent {
         }
         // Module states may have changed in the configuration app.
         self.modules = load_modules(store)?;
+        self.auto_lock = deckpilot_storage::policy::security_policy(store)?.auto_lock;
         let (profile, project) = load_active(store)?;
         self.runtime
             .set_engine(Engine::new(self.modules.action_registry()));
@@ -792,6 +762,7 @@ impl Agent {
                     return;
                 }
                 self.last_input_at = Some(unix_now());
+                self.last_activity = self.now_seconds();
                 if self.security != SecurityState::Unlocked {
                     if matches!(input, ControlInput::Press) {
                         self.prompt_unlock();
@@ -1025,6 +996,9 @@ impl Agent {
             brightness: self.brightness,
             last_input_at: self.last_input_at,
             security: self.security,
+            protection: self.protection,
+            lock_reason: self.lock_reason,
+            security_problem: self.security_problem.clone(),
         }
     }
 
@@ -1138,6 +1112,9 @@ pub fn default_options(paths: AgentPaths, mock_models: &[DeviceModel]) -> AgentO
         autostart,
         open_desktop: Some(Box::new(crate::launcher::open_desktop)),
         open_window: Some(Box::new(crate::launcher::open_window)),
+        key_store: security::system_key_store(),
+        auto_lock_check: AUTO_LOCK_CHECK,
+        clock: system_clock(),
     }
 }
 

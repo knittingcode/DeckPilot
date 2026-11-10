@@ -1,41 +1,112 @@
 //! Lifecycle of the encrypted configuration database.
 //!
-//! The database is encrypted with SQLCipher. Its 256-bit key is derived from
-//! the user's password with Argon2id; the parameters (algorithm, cost and a
-//! random salt — nothing secret) are stored next to the database in
-//! `deckpilot.vault.json`. The password is never stored. A wrong password
-//! yields a key that SQLCipher rejects, which is how passwords are verified;
-//! nothing is written in that case.
+//! The database is always encrypted with SQLCipher using a 256-bit key. How
+//! that key is protected is the database's [`Protection`]:
+//!
+//! - **System-managed** (default): a random key kept in the operating
+//!   system's credential store (`deckpilot_keystore`), unlocked by the
+//!   user's login. Nothing has to be typed.
+//! - **Password**: the key is derived from the user's password with
+//!   Argon2id. The password is never stored; a wrong password yields a key
+//!   that SQLCipher rejects, which is how it is verified.
+//!
+//! `deckpilot.vault.json` next to the database records the protection: the
+//! Argon2id parameters (algorithm, cost, random salt) or the identifier of
+//! the system key. It contains nothing secret.
 //!
 //! Operations that replace the database file (changing the password,
-//! encrypting a legacy database) write a complete encrypted copy with
-//! `sqlcipher_export`, verify it, and then swap files with renames. They need
-//! exclusive access: the caller makes sure no other connection is open.
-//! Interrupted swaps are completed or rolled back on the next unlock; at no
-//! point is an unencrypted copy written.
+//! switching the protection, encrypting a legacy database) write a complete
+//! encrypted copy with `sqlcipher_export`, verify it, and then swap files
+//! with renames. They need exclusive access: the caller makes sure no other
+//! connection is open. Interrupted swaps are completed or rolled back on the
+//! next unlock; at no point is an unencrypted copy written. A key in the
+//! credential store is never replaced or deleted automatically.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use deckpilot_keystore::{KeyId, KeyStore, Secret};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-use crate::crypto::{KdfParams, Password};
+use crate::crypto::{KEY_LEN, KdfParams, Password, SecretKey, random_bytes};
 use crate::sqlite::{apply_key, check_integrity, export_database, verify_copy};
 use crate::{DatabaseKey, Encryption, Result, SqliteStore, StorageError};
 
-/// File with the key derivation parameters.
+/// File with the key protection parameters.
 pub const VAULT_FILE: &str = "deckpilot.vault.json";
-/// Format version of [`VAULT_FILE`].
-const VAULT_FORMAT: u32 = 1;
+/// Format version of [`VAULT_FILE`]. Format 1 (0.4 development builds)
+/// only knew password protection and is still read.
+const VAULT_FORMAT: u32 = 2;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
+
+/// How the database key is protected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "mode",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum Protection {
+    /// A random key in the operating system's credential store.
+    SystemManaged { key_id: String },
+    /// A key derived from the user's password.
+    Password { kdf: KdfParams },
+}
+
+impl Protection {
+    pub fn mode(&self) -> ProtectionMode {
+        match self {
+            Self::SystemManaged { .. } => ProtectionMode::SystemManaged,
+            Self::Password { .. } => ProtectionMode::Password,
+        }
+    }
+}
+
+/// [`Protection`] without its parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProtectionMode {
+    SystemManaged,
+    Password,
+}
 
 /// Contents of [`VAULT_FILE`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VaultFile {
     format: u32,
+    protection: Protection,
+}
+
+/// Format 1: password protection only.
+#[derive(Deserialize)]
+struct VaultFileV1 {
     kdf: KdfParams,
+}
+
+/// What can open the database: a password the user typed, the credential
+/// store, or both.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Credentials<'a> {
+    pub password: Option<&'a Password>,
+    pub keys: Option<&'a dyn KeyStore>,
+}
+
+impl<'a> Credentials<'a> {
+    pub fn password(password: &'a Password) -> Self {
+        Self {
+            password: Some(password),
+            keys: None,
+        }
+    }
+
+    pub fn keys(keys: &'a dyn KeyStore) -> Self {
+        Self {
+            password: None,
+            keys: Some(keys),
+        }
+    }
 }
 
 /// What is on disk.
@@ -164,28 +235,39 @@ impl Vault {
     }
 
     fn read_vault(path: &Path) -> Result<Option<VaultFile>> {
-        match fs::read(path) {
-            Ok(bytes) => {
-                let file: VaultFile = serde_json::from_slice(&bytes)?;
-                if file.format != VAULT_FORMAT {
-                    return Err(StorageError::Vault(format!(
-                        "unsupported key file format {}",
-                        file.format
-                    )));
-                }
-                Ok(Some(file))
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(io(error)),
+        };
+        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        match value.get("format").and_then(serde_json::Value::as_u64) {
+            Some(1) => {
+                let file: VaultFileV1 = serde_json::from_value(value)?;
+                Ok(Some(VaultFile {
+                    format: 1,
+                    protection: Protection::Password { kdf: file.kdf },
+                }))
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(io(error)),
+            Some(2) => Ok(Some(serde_json::from_value(value)?)),
+            other => Err(StorageError::Vault(format!(
+                "unsupported key file format {}",
+                other.map_or_else(|| "(none)".to_owned(), |v| v.to_string())
+            ))),
         }
     }
 
-    fn write_vault(path: &Path, kdf: &KdfParams) -> Result<()> {
+    fn write_vault(path: &Path, protection: &Protection) -> Result<()> {
         let file = VaultFile {
             format: VAULT_FORMAT,
-            kdf: kdf.clone(),
+            protection: protection.clone(),
         };
         write_atomically(path, &serde_json::to_vec_pretty(&file)?)
+    }
+
+    /// The current protection, if the database has been set up.
+    pub fn protection(&self) -> Result<Option<Protection>> {
+        Ok(Self::read_vault(&self.vault_file())?.map(|file| file.protection))
     }
 
     /// Completes a swap that was interrupted after the replacement had been
@@ -222,18 +304,44 @@ impl Vault {
 
     /// Creates a new encrypted database protected by `password`.
     pub fn initialize(&self, password: &Password) -> Result<DatabaseKey> {
+        self.require_missing()?;
+        let kdf = self.new_kdf()?;
+        let key = kdf.derive(password)?;
+        // Parameters first: a crash before the database exists leaves the
+        // state `Missing`, and the next setup simply overwrites them.
+        Self::write_vault(&self.vault_file(), &Protection::Password { kdf })?;
+        SqliteStore::open(&self.database, &Encryption::Key(key.clone()))?;
+        Ok(key)
+    }
+
+    /// Creates a new encrypted database with a random key kept in `keys`.
+    /// Fails without writing anything if the store cannot hold the key; the
+    /// caller must not fall back to anything weaker on its own.
+    pub fn initialize_system(&self, keys: &dyn KeyStore) -> Result<DatabaseKey> {
+        self.require_missing()?;
+        let (key_id, key) = new_system_key(keys)?;
+        let protection = Protection::SystemManaged {
+            key_id: key_id.to_string(),
+        };
+        let created = Self::write_vault(&self.vault_file(), &protection)
+            .and_then(|()| SqliteStore::open(&self.database, &Encryption::Key(key.clone())));
+        if let Err(error) = created {
+            // The key was never used for anything; removing it is safe.
+            let _ = keys.delete(&key_id);
+            let _ = fs::remove_file(self.vault_file());
+            remove_database(&self.database);
+            return Err(error);
+        }
+        Ok(key)
+    }
+
+    fn require_missing(&self) -> Result<()> {
         if self.state()? != DatabaseState::Missing {
             return Err(StorageError::Vault("a database already exists".into()));
         }
         // An empty file left by an aborted start is not a database.
         remove_database(&self.database);
-        let kdf = self.new_kdf()?;
-        let key = kdf.derive(password)?;
-        // Parameters first: a crash before the database exists leaves the
-        // state `Missing`, and the next setup simply overwrites them.
-        Self::write_vault(&self.vault_file(), &kdf)?;
-        SqliteStore::open(&self.database, &Encryption::Key(key.clone()))?;
-        Ok(key)
+        Ok(())
     }
 
     /// Opens a raw connection with `key` and checks that the key is right.
@@ -242,63 +350,139 @@ impl Vault {
         apply_key(&connection, &Encryption::Key(key.clone()))
     }
 
+    /// The key for `protection` from `credentials`, or
+    /// [`StorageError::CredentialsRequired`] if they do not apply.
+    fn key_for(protection: &Protection, credentials: Credentials<'_>) -> Result<DatabaseKey> {
+        match protection {
+            Protection::Password { kdf } => {
+                let password = credentials
+                    .password
+                    .ok_or(StorageError::CredentialsRequired("password"))?;
+                Ok(kdf.derive(password)?)
+            }
+            Protection::SystemManaged { key_id } => {
+                let keys = credentials
+                    .keys
+                    .ok_or(StorageError::CredentialsRequired("system key"))?;
+                let secret = keys.load(&KeyId::parse(key_id)?)?;
+                key_from_secret(&secret)
+            }
+        }
+    }
+
     /// Derives the key from `password` and verifies it against the database.
-    /// Completes or rolls back an interrupted password change.
     pub fn unlock(&self, password: &Password) -> Result<DatabaseKey> {
+        self.unlock_with(Credentials::password(password))
+    }
+
+    /// Loads the key from the credential store and verifies it.
+    pub fn unlock_system(&self, keys: &dyn KeyStore) -> Result<DatabaseKey> {
+        self.unlock_with(Credentials::keys(keys))
+    }
+
+    /// Opens the database with whatever `credentials` apply to its
+    /// protection. Completes or rolls back an interrupted change of the
+    /// password or protection.
+    pub fn unlock_with(&self, credentials: Credentials<'_>) -> Result<DatabaseKey> {
         if self.state()? != DatabaseState::Encrypted {
             return Err(StorageError::Vault("there is no encrypted database".into()));
         }
         let current = Self::read_vault(&self.vault_file())?
             .ok_or_else(|| StorageError::Vault(format!("{VAULT_FILE} is missing")))?;
-        let key = current.kdf.derive(password)?;
-        match self.try_key(&key) {
-            Ok(()) => {
-                // A password change that did not reach the swap: discard it.
-                let _ = fs::remove_file(self.pending_vault_file());
-                remove_database(&self.replacement());
-                remove_database(&self.previous());
-                Ok(key)
-            }
-            Err(StorageError::InvalidKey) => {
-                // The swap of a password change happened, but the new
-                // parameters were not moved into place yet.
-                let Some(pending) = Self::read_vault(&self.pending_vault_file())? else {
-                    return Err(StorageError::InvalidKey);
-                };
-                let key = pending.kdf.derive(password)?;
-                self.try_key(&key)?;
-                fs::rename(self.pending_vault_file(), self.vault_file()).map_err(io)?;
-                remove_database(&self.previous());
-                Ok(key)
-            }
-            Err(error) => Err(error),
+        let failure = match Self::key_for(&current.protection, credentials) {
+            Ok(key) => match self.try_key(&key) {
+                Ok(()) => {
+                    // A change that did not reach the swap: discard it.
+                    // A key it may have put into the credential store is
+                    // left there (never delete keys automatically).
+                    let _ = fs::remove_file(self.pending_vault_file());
+                    remove_database(&self.replacement());
+                    remove_database(&self.previous());
+                    return Ok(key);
+                }
+                Err(error @ StorageError::InvalidKey) => error,
+                Err(error) => return Err(error),
+            },
+            Err(error) => error,
+        };
+        // The swap of a change happened, but the new parameters were not
+        // moved into place yet.
+        if let Some(pending) = Self::read_vault(&self.pending_vault_file())?
+            && let Ok(key) = Self::key_for(&pending.protection, credentials)
+            && self.try_key(&key).is_ok()
+        {
+            fs::rename(self.pending_vault_file(), self.vault_file()).map_err(io)?;
+            remove_database(&self.previous());
+            return Ok(key);
         }
+        Err(failure)
     }
 
     /// Changes the password: writes a copy encrypted with the new key,
     /// verifies it and swaps it in. Requires exclusive access.
     pub fn change_password(&self, current: &Password, new: &Password) -> Result<DatabaseKey> {
         let old_key = self.unlock(current)?;
+        self.use_password(&old_key, new)
+    }
+
+    /// Switches to (or renews) password protection. `current` is the key
+    /// that opens the database now. A system key that protected the
+    /// database before stays in the credential store: encrypted backups
+    /// made before the switch still need it. Requires exclusive access.
+    pub fn use_password(&self, current: &DatabaseKey, password: &Password) -> Result<DatabaseKey> {
+        self.try_key(current)?;
         let kdf = self.new_kdf()?;
-        let new_key = kdf.derive(new)?;
+        let new_key = kdf.derive(password)?;
+        self.rekey(current, &new_key, &Protection::Password { kdf })?;
+        Ok(new_key)
+    }
+
+    /// Switches to system-managed protection with a new random key. The key
+    /// is stored and read back before the database is re-encrypted; if any
+    /// step fails, the database and its previous protection are unchanged.
+    /// Requires exclusive access.
+    pub fn use_system_key(
+        &self,
+        current: &DatabaseKey,
+        keys: &dyn KeyStore,
+    ) -> Result<DatabaseKey> {
+        self.try_key(current)?;
+        let (key_id, new_key) = new_system_key(keys)?;
+        let protection = Protection::SystemManaged {
+            key_id: key_id.to_string(),
+        };
+        if let Err(error) = self.rekey(current, &new_key, &protection) {
+            // Only remove the new key if the swap certainly did not happen.
+            if !self.pending_vault_file().exists() {
+                let _ = keys.delete(&key_id);
+            }
+            return Err(error);
+        }
+        Ok(new_key)
+    }
+
+    /// Re-encrypts the database from `old` to `new` and records
+    /// `protection`.
+    fn rekey(&self, old: &DatabaseKey, new: &DatabaseKey, protection: &Protection) -> Result<()> {
         let source = Connection::open(&self.database)?;
-        apply_key(&source, &Encryption::Key(old_key))?;
+        apply_key(&source, &Encryption::Key(old.clone()))?;
         let version: u32 = source.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        export_database(&source, &self.replacement(), Some(&new_key))?;
+        export_database(&source, &self.replacement(), Some(new))?;
         drop(source);
-        if let Err(error) = verify_copy(
-            &self.replacement(),
-            &Encryption::Key(new_key.clone()),
-            version,
-        ) {
+        if let Err(error) = verify_copy(&self.replacement(), &Encryption::Key(new.clone()), version)
+        {
             remove_database(&self.replacement());
             return Err(error);
         }
-        Self::write_vault(&self.pending_vault_file(), &kdf)?;
-        self.swap_in_replacement()?;
+        Self::write_vault(&self.pending_vault_file(), protection)?;
+        if let Err(error) = self.swap_in_replacement() {
+            let _ = fs::remove_file(self.pending_vault_file());
+            remove_database(&self.replacement());
+            return Err(error);
+        }
         fs::rename(self.pending_vault_file(), self.vault_file()).map_err(io)?;
         remove_database(&self.previous());
-        Ok(new_key)
+        Ok(())
     }
 
     /// Moves the verified replacement into place, keeping the current
@@ -312,19 +496,54 @@ impl Vault {
         fs::rename(self.replacement(), &self.database).map_err(io)
     }
 
-    /// Encrypts a database written by an earlier, unencrypted DeckPilot.
-    ///
+    /// Encrypts a database written by an earlier, unencrypted DeckPilot with
+    /// a key derived from `password`. See [`Vault::encrypt_plaintext_with`].
+    pub fn encrypt_plaintext(&self, password: &Password) -> Result<(DatabaseKey, PathBuf)> {
+        self.require_plaintext()?;
+        let kdf = self.new_kdf()?;
+        let key = kdf.derive(password)?;
+        self.encrypt_plaintext_with(&key, &Protection::Password { kdf })
+            .map(|legacy| (key, legacy))
+    }
+
+    /// Encrypts a legacy database with a new system-managed key.
+    pub fn encrypt_plaintext_system(&self, keys: &dyn KeyStore) -> Result<(DatabaseKey, PathBuf)> {
+        self.require_plaintext()?;
+        let (key_id, key) = new_system_key(keys)?;
+        let protection = Protection::SystemManaged {
+            key_id: key_id.to_string(),
+        };
+        match self.encrypt_plaintext_with(&key, &protection) {
+            Ok(legacy) => Ok((key, legacy)),
+            Err(error) => {
+                if self.state().ok() == Some(DatabaseState::Plaintext) {
+                    let _ = keys.delete(&key_id);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn require_plaintext(&self) -> Result<()> {
+        if self.state()? == DatabaseState::Plaintext {
+            Ok(())
+        } else {
+            Err(StorageError::Vault(
+                "there is no unencrypted database to migrate".into(),
+            ))
+        }
+    }
+
     /// The encrypted copy is written and verified (integrity, schema version
     /// and the number of rows in every table) before anything is switched.
     /// The original is kept at [`Vault::legacy_copy_path`] and is never
     /// deleted here; the user decides when to remove it. Requires exclusive
     /// access.
-    pub fn encrypt_plaintext(&self, password: &Password) -> Result<(DatabaseKey, PathBuf)> {
-        if self.state()? != DatabaseState::Plaintext {
-            return Err(StorageError::Vault(
-                "there is no unencrypted database to migrate".into(),
-            ));
-        }
+    fn encrypt_plaintext_with(
+        &self,
+        key: &DatabaseKey,
+        protection: &Protection,
+    ) -> Result<PathBuf> {
         let source = Connection::open(&self.database)?;
         check_integrity(&source)?;
         // Fold the write-ahead log into the main file so that nothing is left
@@ -332,9 +551,7 @@ impl Vault {
         source.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         let version: u32 = source.pragma_query_value(None, "user_version", |row| row.get(0))?;
         let counts = row_counts(&source)?;
-        let kdf = self.new_kdf()?;
-        let key = kdf.derive(password)?;
-        export_database(&source, &self.replacement(), Some(&key))?;
+        export_database(&source, &self.replacement(), Some(key))?;
         drop(source);
 
         let verified = verify_copy(&self.replacement(), &Encryption::Key(key.clone()), version)
@@ -356,7 +573,7 @@ impl Vault {
 
         // The parameters can be written now: the state is decided by the
         // database header, which is still plain until the swap.
-        Self::write_vault(&self.vault_file(), &kdf)?;
+        Self::write_vault(&self.vault_file(), protection)?;
         let legacy = self.legacy_copy_path();
         if legacy.exists() {
             let older =
@@ -366,7 +583,7 @@ impl Vault {
         fs::rename(&self.database, &legacy).map_err(io)?;
         move_side_files(&self.database, &legacy)?;
         fs::rename(self.replacement(), &self.database).map_err(io)?;
-        Ok((key, legacy))
+        Ok(legacy)
     }
 
     /// Unencrypted copies left by [`Vault::encrypt_plaintext`].
@@ -406,6 +623,51 @@ impl Vault {
         }
         Ok(copies.len())
     }
+}
+
+/// Creates a random key, stores it under a new random identifier and reads
+/// it back, so that a store that silently drops writes is noticed before
+/// anything depends on the key.
+fn new_system_key(keys: &dyn KeyStore) -> Result<(KeyId, DatabaseKey)> {
+    let mut id = [0u8; 16];
+    random_bytes(&mut id)?;
+    let key_id = KeyId::parse(&hex(&id))?;
+    let key = SecretKey::random()?;
+    keys.store(&key_id, &Secret::new(key.as_bytes().to_vec()))?;
+    let stored = keys.load(&key_id).and_then(|secret| {
+        key_from_secret(&secret)
+            .map_err(|error| deckpilot_keystore::KeyStoreError::Failed(error.to_string()))
+    });
+    match stored {
+        Ok(stored) if stored.matches(&key) => Ok((key_id, key)),
+        Ok(_) => {
+            let _ = keys.delete(&key_id);
+            Err(StorageError::Vault(format!(
+                "the {} returned a different key than was stored",
+                keys.name()
+            )))
+        }
+        Err(error) => {
+            let _ = keys.delete(&key_id);
+            Err(error.into())
+        }
+    }
+}
+
+fn key_from_secret(secret: &Secret) -> Result<DatabaseKey> {
+    let bytes: [u8; KEY_LEN] = secret
+        .expose()
+        .try_into()
+        .map_err(|_| StorageError::Vault("the stored key has the wrong length".into()))?;
+    Ok(SecretKey::from_bytes(bytes))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
 }
 
 /// Rows per table, to compare a copy with its source.
