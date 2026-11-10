@@ -1,0 +1,64 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node / frontend
+node_modules/
+dist/
+*.tsbuildinfo
+.vite/
+coverage/
+.eslintcache
+
+# Tauri generated files
+apps/desktop/src-tauri/gen/schemas/
+
+# Local databases and runtime data
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editors and operating systems
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# AI coding assistant local files (kept out of the repository)
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
+AGENT.md
+GEMINI.md
+.claude/
+.Claude/
+.codex/
+.cursor/
+.cursorrules
+.windsurfrules
+.aider*
+.continue/
+.copilot/
+.github/copilot-instructions.md
+.gemini/
+.roo/
+.clinerules
+.junie/
