@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "pnpm --filter @deckpilot/desktop tauri dev",
+    "dev": "cargo run --quiet -p deckpilot-dev -- up --foreground",
     "build": "pnpm --recursive build",
     "lint": "eslint .",
     "format": "prettier --write .",

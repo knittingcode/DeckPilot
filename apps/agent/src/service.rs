@@ -292,7 +292,18 @@ impl Agent {
     }
 
     fn handle_request(&mut self, request: Request) -> Result<Response, IpcError> {
-        debug!(?request, "request");
+        // Status queries are frequent; log them only at trace level.
+        if matches!(
+            request,
+            Request::GetStatus
+                | Request::ListDevices
+                | Request::ListProfiles
+                | Request::GetAutostart
+        ) {
+            tracing::trace!(?request, "request");
+        } else {
+            debug!(?request, "request");
+        }
         match request {
             Request::GetStatus => Ok(Response::Status {
                 status: Box::new(self.status()),

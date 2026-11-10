@@ -146,7 +146,11 @@ fn init_logging(
     };
     tracing_subscriber::registry()
         .with(level)
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+                .with_writer(std::io::stderr),
+        )
         .with(file_layer)
         .init();
     guard

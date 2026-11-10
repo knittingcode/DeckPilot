@@ -38,6 +38,14 @@ impl AgentPaths {
         Ok(Self::in_dir(base.join(APP_IDENTIFIER)))
     }
 
+    /// The platform data directory, ignoring `DECKPILOT_DATA_DIR`.
+    pub fn resolve_default() -> io::Result<Self> {
+        let base = dirs::data_dir().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "no data directory for this user")
+        })?;
+        Ok(Self::in_dir(base.join(APP_IDENTIFIER)))
+    }
+
     pub fn in_dir(data_dir: impl Into<PathBuf>) -> Self {
         let data_dir = data_dir.into();
         Self {

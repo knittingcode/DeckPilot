@@ -25,8 +25,11 @@ fn main() {
             app.manage(state);
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                // Start the agent on first launch if it is not running yet.
-                if let Ok(connection) = agent::connection(&paths).await
+                // Start the agent on first launch if it is not running yet,
+                // unless a development session manages it.
+                let managed = std::env::var_os("DECKPILOT_NO_AGENT_AUTOSTART").is_some();
+                if !managed
+                    && let Ok(connection) = agent::connection(&paths).await
                     && !connection.running
                     && connection.can_start
                     && let Err(error) = agent::start_agent()
