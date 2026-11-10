@@ -16,6 +16,7 @@ import {
 import { CSS } from "@dnd-kit/utilities"
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
 import {
+  ArrowLeftRight,
   CircleAlert,
   CircleCheck,
   CircleDashed,
@@ -57,6 +58,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAsync } from "@/hooks/use-async"
 import { useEditingProfile } from "@/hooks/use-profile"
 import { api, errorMessage } from "@/lib/api"
+import { useTitlebar } from "@/hooks/use-titlebar"
 import { useAppContext } from "@/lib/app-context"
 import { RESOURCE_KIND_LABELS } from "@/lib/format"
 import type { Project, ProfileView, ResourceCheck, ResourceKind, ResourceStatus } from "@/lib/types"
@@ -164,6 +166,41 @@ function ProjectCycle({
       .then(changed, (e: unknown) => toast.error(errorMessage(e)))
   }
   const statusOf = (key: string) => checks.find((c) => c.key === key)?.status ?? "unbound"
+  const isActiveProfile = profiles.activeProfileId === profileId
+  useTitlebar({
+    actions: [
+      {
+        id: "projects.new",
+        label: "New project",
+        icon: Plus,
+        placement: "primary",
+        onSelect: () => {
+          setDialog({ mode: "create" })
+        },
+      },
+      // Quick access from anywhere on the page; the switcher card also
+      // offers previous/next and explains the context.
+      ...(isActiveProfile && projects.length > 1
+        ? [
+            {
+              id: "projects.switch",
+              label: "Switch project",
+              icon: ArrowLeftRight,
+              items: projects.map((project) => ({
+                id: project.id,
+                label: `${project.key} · ${project.name}`,
+                checked: project.id === view.activeProjectId,
+                onSelect: () => {
+                  api.selectProject(profileId, project.id).then(changed, (e: unknown) => {
+                    toast.error(errorMessage(e))
+                  })
+                },
+              })),
+            },
+          ]
+        : []),
+    ],
+  })
 
   return (
     <>
@@ -231,14 +268,6 @@ function ProjectCycle({
               Drag to reorder. Next and previous project follow this order.
             </CardDescription>
           </div>
-          <Button
-            size="sm"
-            onClick={() => {
-              setDialog({ mode: "create" })
-            }}
-          >
-            <Plus /> New project
-          </Button>
         </CardHeader>
         <CardContent>
           {projects.length === 0 ? (

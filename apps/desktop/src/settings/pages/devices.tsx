@@ -1,22 +1,44 @@
-import { LayoutGrid } from "lucide-react"
+import { LayoutGrid, RefreshCw } from "lucide-react"
 import { useState } from "react"
+import { toast } from "sonner"
 
-import {
-  AgentBadge,
-  AgentCompatibilityNotice,
-  AgentStopped,
-  DeviceRow,
-  RefreshDevicesButton,
-} from "@/components/agent"
+import { AgentBadge, AgentCompatibilityNotice, AgentStopped, DeviceRow } from "@/components/agent"
 import { EmptyState, ErrorNotice } from "@/components/page"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
+import { useTitlebar } from "@/hooks/use-titlebar"
 import { api, errorMessage } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
 
 export function DevicesSettings() {
   const { agent, navigate } = useAppContext()
+  const [refreshing, setRefreshing] = useState(false)
+  useTitlebar({
+    actions: [
+      {
+        id: "devices.refresh",
+        label: "Refresh devices",
+        icon: RefreshCw,
+        placement: "primary",
+        busy: refreshing,
+        disabled: !agent?.running || refreshing,
+        hint: agent?.running ? "Look for connected devices again" : "The agent is not running",
+        onSelect: () => {
+          setRefreshing(true)
+          api
+            .refreshDevices()
+            .then(
+              () => toast.success("Devices refreshed"),
+              (e: unknown) => toast.error(errorMessage(e)),
+            )
+            .finally(() => {
+              setRefreshing(false)
+            })
+        },
+      },
+    ],
+  })
   return (
     <>
       <AgentCompatibilityNotice />
@@ -32,7 +54,6 @@ export function DevicesSettings() {
               a udev rule is required for access.
             </CardDescription>
           </div>
-          {agent?.running && <RefreshDevicesButton />}
         </CardHeader>
         <CardContent className="grid gap-2">
           {agent && !agent.running && <AgentStopped />}

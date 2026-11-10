@@ -39,6 +39,7 @@ import {
 import { useAsync } from "@/hooks/use-async"
 import { useEditingProfile } from "@/hooks/use-profile"
 import { api, errorMessage } from "@/lib/api"
+import { useTitlebar } from "@/hooks/use-titlebar"
 import { useAppContext } from "@/lib/app-context"
 import { ActionIcon } from "@/components/action-icon"
 import { initialValue } from "@/lib/parameters"
@@ -102,20 +103,25 @@ function WorkflowList({
     reload()
     refresh()
   }
+  useTitlebar({
+    actions: [
+      {
+        id: "workflows.new",
+        label: "New workflow",
+        icon: Plus,
+        placement: "secondary",
+        onSelect: () => {
+          setSelected("new")
+        },
+      },
+    ],
+  })
 
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(16rem,20rem)_1fr]">
       <Card className="h-fit">
         <CardHeader className="flex flex-row items-center gap-2">
           <CardTitle className="flex-1">Workflows</CardTitle>
-          <Button
-            size="sm"
-            onClick={() => {
-              setSelected("new")
-            }}
-          >
-            <Plus /> New
-          </Button>
         </CardHeader>
         <CardContent className="grid gap-1">
           {view.profile.workflows.length === 0 && (
@@ -195,6 +201,35 @@ function WorkflowEditor({
   const canRun =
     !isNew && !dirty && Boolean(agent?.running) && profiles.activeProfileId === profileId
   const usages = view.workflowUsages[workflow.id] ?? []
+  const [running, setRunning] = useState(false)
+  // Runs the saved workflow of the editor; shown in the titlebar.
+  useTitlebar({
+    actions: isNew
+      ? []
+      : [
+          {
+            id: "workflows.run",
+            label: "Run workflow",
+            icon: Play,
+            placement: "primary",
+            disabled: !canRun || running,
+            busy: running,
+            hint: canRun
+              ? `Run “${initial.name}”`
+              : "Save first; runs in the agent for the active profile",
+            onSelect: () => {
+              setRunning(true)
+              api
+                .runWorkflow(profileId, workflow.id)
+                .then(setReport)
+                .catch((e: unknown) => toast.error(errorMessage(e)))
+                .finally(() => {
+                  setRunning(false)
+                })
+            },
+          },
+        ],
+  })
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -336,19 +371,6 @@ function WorkflowEditor({
                 }}
               >
                 <Copy /> Duplicate
-              </Button>
-              <Button
-                variant="outline"
-                disabled={!canRun}
-                title={canRun ? undefined : "Save first; runs in the agent for the active profile"}
-                onClick={() => {
-                  api
-                    .runWorkflow(profileId, workflow.id)
-                    .then(setReport)
-                    .catch((e: unknown) => toast.error(errorMessage(e)))
-                }}
-              >
-                <Play /> Run
               </Button>
               <ConfirmDialog
                 trigger={
