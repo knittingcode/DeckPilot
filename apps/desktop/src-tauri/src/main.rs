@@ -13,11 +13,15 @@ mod error;
 mod state;
 #[cfg(test)]
 mod tests;
+mod updates;
 
 use tauri::Manager;
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updates::UpdateManager::default())
         .setup(|app| {
             // Same location as the agent; `DECKPILOT_DATA_DIR` overrides it.
             let paths = deckpilot_ipc::AgentPaths::resolve()?;
@@ -38,6 +42,7 @@ fn main() {
                 }
                 agent::spawn_bridge(handle, paths);
             });
+            updates::spawn_background(app.handle().clone());
             Ok(())
         })
         .invoke_handler(commands::handler())

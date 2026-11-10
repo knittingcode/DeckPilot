@@ -17,6 +17,8 @@ pub enum CommandError {
     Identifier(#[from] deckpilot_core::IdentifierError),
     #[error(transparent)]
     Agent(#[from] deckpilot_ipc::ClientError),
+    #[error(transparent)]
+    Updater(#[from] tauri_plugin_updater::Error),
     #[error("{0}")]
     Invalid(String),
     #[error("{0} not found")]

@@ -6,8 +6,10 @@ use std::time::Duration;
 
 use deckpilot_ipc::client::request_once;
 use deckpilot_ipc::{
-    AgentClient, AgentEvent, AgentPaths, AgentStatus, ClientError, ClientKind, Request, Response,
+    AgentClient, AgentEvent, AgentPaths, AgentStatus, ClientError, ClientKind, ErrorCode, Request,
+    Response,
 };
+use deckpilot_update::compatibility::{self, AgentCompatibility};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
@@ -25,6 +27,10 @@ pub struct AgentConnection {
     pub status: Option<AgentStatus>,
     /// Whether an agent executable was found to start.
     pub can_start: bool,
+    /// Whether the running agent belongs to this application version.
+    pub compatibility: Option<AgentCompatibility>,
+    /// Version of this application.
+    pub app_version: &'static str,
 }
 
 impl AgentConnection {
@@ -33,15 +39,66 @@ impl AgentConnection {
             running: false,
             status: None,
             can_start: agent_executable().is_some(),
+            compatibility: None,
+            app_version: APP_VERSION,
         }
     }
 
     fn running(status: AgentStatus) -> Self {
         Self {
             running: true,
+            compatibility: Some(compatibility::check(APP_VERSION, &status.version)),
             status: Some(status),
             can_start: agent_executable().is_some(),
+            app_version: APP_VERSION,
         }
+    }
+
+    /// An agent that only speaks an older protocol (from a previous release).
+    fn outdated() -> Self {
+        Self {
+            running: true,
+            status: None,
+            can_start: agent_executable().is_some(),
+            compatibility: Some(AgentCompatibility::AgentOutdated {
+                agent: "unknown (older protocol)".into(),
+                app: APP_VERSION.into(),
+            }),
+            app_version: APP_VERSION,
+        }
+    }
+}
+
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Stops a running agent of this or an older release. Older agents reject
+/// the current protocol, so the request is repeated with protocol 1.
+pub async fn stop_any_version(paths: &AgentPaths, request: Request) -> Result<(), ClientError> {
+    let outcome = match self::request(paths, request.clone()).await {
+        Err(ClientError::Agent(error)) if error.code == ErrorCode::UnsupportedProtocol => {
+            let mut client =
+                AgentClient::connect_with_protocol(paths, ClientKind::Desktop, 1).await?;
+            // Protocol 1 has no PrepareForUpdate; Shutdown has the same effect there.
+            client.request(Request::Shutdown).await.map(|_| ())
+        }
+        other => other.map(|_| ()),
+    };
+    match outcome {
+        Ok(()) | Err(ClientError::NotRunning | ClientError::Closed) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+pub async fn wait_until_stopped(paths: &AgentPaths, timeout: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if matches!(connection(paths).await, Ok(c) if !c.running) {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -55,6 +112,9 @@ pub async fn connection(paths: &AgentPaths) -> Result<AgentConnection, ClientErr
         Ok(other) => Err(ClientError::Protocol(format!("{other:?}"))),
         // A connection closed during the handshake means the agent is stopping.
         Err(ClientError::NotRunning | ClientError::Closed) => Ok(AgentConnection::stopped()),
+        Err(ClientError::Agent(error)) if error.code == ErrorCode::UnsupportedProtocol => {
+            Ok(AgentConnection::outdated())
+        }
         Err(error) => Err(error),
     }
 }

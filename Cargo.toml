@@ -40,7 +40,7 @@ font8x8 = { version = "0.3", default-features = false }
 getrandom = "0.3"
 hidapi = "2.6"
 image = { version = "0.25", default-features = false }
-minisign-verify = "0.2"
+minisign-verify = "0.3"
 semver = { version = "1", features = ["serde"] }
 interprocess = { version = "2.4", features = ["tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "signal"] }

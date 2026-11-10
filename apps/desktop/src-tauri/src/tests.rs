@@ -35,6 +35,7 @@ impl Harness {
         let paths = AgentPaths::in_dir(data_dir);
         let app = mock_builder()
             .manage(AppState::open(paths.clone()).expect("open state"))
+            .manage(crate::updates::UpdateManager::default())
             .invoke_handler(crate::commands::handler())
             .build(mock_context(noop_assets()))
             .expect("build app");
@@ -206,6 +207,369 @@ fn lists_static_catalogs() {
     let models = h.ok("list_device_models", json!({}));
     assert_eq!(models[0]["id"], "elgato.streamdeck.mk2");
     assert_eq!(models[0]["support"], "unverified");
+    assert_eq!(models.as_array().unwrap().len(), 3);
+}
+
+fn new_profile(h: &Harness, name: &str) -> String {
+    let profile = h.ok("create_profile", json!({ "name": name, "description": "" }));
+    profile["id"].as_str().unwrap().to_owned()
+}
+
+fn log_action(h: &Harness, profile_id: &str, name: &str, message: &str) -> Value {
+    h.ok(
+        "create_action",
+        json!({
+            "profileId": profile_id,
+            "action": {
+                "name": name,
+                "actionType": "deckpilot.core.log",
+                "parameters": { "message": { "type": "text", "value": message } },
+                "description": "Says hello",
+                "icon": "megaphone",
+                "label": "{project.key}"
+            }
+        }),
+    )
+}
+
+#[test]
+fn actions_can_be_edited_duplicated_and_are_protected_while_used() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    let action = log_action(&h, &profile_id, "Hello", "hi");
+    assert_eq!(action["icon"], "megaphone");
+    assert_eq!(action["label"], "{project.key}");
+
+    // Edit: same id, new parameters; invalid edits are rejected.
+    let mut edited = action.clone();
+    edited["name"] = json!("Hello again");
+    edited["parameters"]["message"]["value"] = json!("hi again");
+    let saved = h.ok(
+        "update_action",
+        json!({ "profileId": profile_id, "action": edited }),
+    );
+    assert_eq!(saved["id"], action["id"]);
+    let mut invalid = saved.clone();
+    invalid["parameters"] = json!({});
+    assert!(
+        h.call(
+            "update_action",
+            json!({ "profileId": profile_id, "action": invalid })
+        )
+        .is_err()
+    );
+    let mut bad_icon = saved.clone();
+    bad_icon["icon"] = json!("Not An Icon!");
+    assert!(
+        h.call(
+            "update_action",
+            json!({ "profileId": profile_id, "action": bad_icon })
+        )
+        .is_err()
+    );
+
+    // The same type instantiated twice with different parameters.
+    let copy = h.ok(
+        "duplicate_action",
+        json!({ "profileId": profile_id, "actionId": action["id"], "name": "Hello — copy" }),
+    );
+    assert_ne!(copy["id"], action["id"]);
+
+    // A workflow uses the copy, so it cannot be deleted.
+    let workflow = h.ok(
+        "save_workflow",
+        json!({
+            "profileId": profile_id,
+            "workflow": {
+                "id": "00000000-0000-4000-8000-000000000001",
+                "name": "Start Work",
+                "steps": [{ "action": copy["id"], "onFailure": "continue" }]
+            }
+        }),
+    );
+    let view = h.ok("get_profile", json!({ "profileId": profile_id }));
+    let usages = &view["actionUsages"][copy["id"].as_str().unwrap()];
+    assert_eq!(usages[0]["type"], "workflowStep");
+    let refused = h.call(
+        "delete_action",
+        json!({ "profileId": profile_id, "actionId": copy["id"] }),
+    );
+    assert!(
+        refused
+            .unwrap_err()
+            .as_str()
+            .unwrap()
+            .contains("still used")
+    );
+
+    h.ok(
+        "delete_workflow",
+        json!({ "profileId": profile_id, "workflowId": workflow["id"] }),
+    );
+    h.ok(
+        "delete_action",
+        json!({ "profileId": profile_id, "actionId": copy["id"] }),
+    );
+}
+
+#[test]
+fn workflows_are_validated_and_keep_their_step_order() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    let first = log_action(&h, &profile_id, "First", "1");
+    let second = log_action(&h, &profile_id, "Second", "2");
+    let id = "00000000-0000-4000-8000-000000000002";
+    let save = |steps: Value, name: &str| {
+        h.call(
+            "save_workflow",
+            json!({ "profileId": profile_id, "workflow": { "id": id, "name": name, "steps": steps } }),
+        )
+    };
+
+    // Unknown action, empty name and a bad override are all reported.
+    let errors = save(
+        json!([
+            { "action": "00000000-0000-4000-8000-0000000000ff" },
+            { "action": first["id"], "overrides": { "message": { "type": "integer", "value": 1 } } }
+        ]),
+        " ",
+    )
+    .unwrap_err();
+    let message = errors.as_str().unwrap();
+    assert!(
+        message.contains("name") && message.contains("step 1") && message.contains("step 2"),
+        "{message}"
+    );
+
+    // Reordering is saved as given.
+    save(
+        json!([{ "action": first["id"] }, { "action": second["id"] }]),
+        "Start Work",
+    )
+    .unwrap();
+    save(
+        json!([
+            { "action": second["id"], "condition": { "type": "always" } },
+            { "action": first["id"], "condition": { "type": "previousSucceeded" }, "onFailure": "continue" }
+        ]),
+        "Start Work",
+    )
+    .unwrap();
+    let view = h.ok("get_profile", json!({ "profileId": profile_id }));
+    let steps = &view["profile"]["workflows"][0]["steps"];
+    assert_eq!(view["profile"]["workflows"].as_array().unwrap().len(), 1);
+    assert_eq!(steps[0]["action"], second["id"]);
+    assert_eq!(steps[1]["condition"]["type"], "previousSucceeded");
+}
+
+#[test]
+fn duplicated_profiles_are_isolated() {
+    let h = Harness::new();
+    let work = new_profile(&h, "Work");
+    let action = log_action(&h, &work, "Hello", "work");
+    let copy = h.ok(
+        "duplicate_profile",
+        json!({ "profileId": work, "name": "Home" }),
+    );
+    let home = copy["id"].as_str().unwrap().to_owned();
+
+    let home_view = h.ok("get_profile", json!({ "profileId": home }));
+    let mut home_action = home_view["profile"]["actions"][0].clone();
+    assert_ne!(home_action["id"], action["id"]);
+    home_action["parameters"]["message"]["value"] = json!("home");
+    h.ok(
+        "update_action",
+        json!({ "profileId": home, "action": home_action }),
+    );
+
+    let work_view = h.ok("get_profile", json!({ "profileId": work }));
+    assert_eq!(
+        work_view["profile"]["actions"][0]["parameters"]["message"]["value"],
+        "work"
+    );
+    h.ok(
+        "update_profile_details",
+        json!({ "profileId": home, "name": "Personal", "description": "x" }),
+    );
+    let profiles = h.ok("list_profiles", json!({}));
+    assert!(
+        profiles["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["name"] == "Personal")
+    );
+}
+
+#[test]
+fn projects_reorder_and_resources_are_checked() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    let mut ids = Vec::new();
+    for key in ["SHOP", "CMR", "CMS"] {
+        let project = h.ok(
+            "create_project",
+            json!({
+                "profileId": profile_id,
+                "project": { "key": key, "name": "", "resources": { "repository": format!("{}.repository", key.to_lowercase()) } }
+            }),
+        );
+        ids.push(project["id"].as_str().unwrap().to_owned());
+    }
+    h.ok(
+        "move_project",
+        json!({ "profileId": profile_id, "projectId": ids[2], "index": 0 }),
+    );
+    h.ok(
+        "set_default_project",
+        json!({ "profileId": profile_id, "projectId": ids[1] }),
+    );
+    let view = h.ok("get_profile", json!({ "profileId": profile_id }));
+    let keys: Vec<_> = view["profile"]["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["key"].clone())
+        .collect();
+    assert_eq!(keys, [json!("CMS"), json!("SHOP"), json!("CMR")]);
+    assert_eq!(view["profile"]["defaultProject"], json!(ids[1]));
+
+    let updated = h.ok(
+        "update_project",
+        json!({ "profileId": profile_id, "projectId": ids[0], "project": { "key": "SHOP2", "name": "Shop", "resources": {} } }),
+    );
+    assert_eq!(updated["id"], json!(ids[0]));
+
+    let existing = h.paths.data_dir.display().to_string();
+    h.ok(
+        "set_resource_binding",
+        json!({ "key": "cmr.repository", "kind": "directory", "value": existing }),
+    );
+    h.ok("set_resource_binding", json!({ "key": "cms.repository", "kind": "directory", "value": "/definitely/missing/path" }));
+    let checks = h.ok("check_resources", json!({ "profileId": profile_id }));
+    let status = |key: &str| {
+        checks
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["key"] == key)
+            .map(|c| c["status"].clone())
+    };
+    assert_eq!(status("cmr.repository"), Some(json!("ok")));
+    assert_eq!(status("cms.repository"), Some(json!("missing")));
+    // shop.repository was removed from SHOP2, so nothing refers to it any more.
+    assert_eq!(status("shop.repository"), None);
+}
+
+#[test]
+fn layouts_are_designed_offline_and_validated() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    let action = log_action(&h, &profile_id, "Hello", "hi");
+    for model in [
+        "elgato.streamdeck.mk2",
+        "elgato.streamdeck.xl",
+        "elgato.streamdeck.plus",
+    ] {
+        let mut layout = h.ok(
+            "create_layout",
+            json!({ "profileId": profile_id, "modelId": model, "name": "Main", "generate": false }),
+        );
+        let page = layout["homePage"].clone();
+        layout["pages"][0]["bindings"] = json!([{
+            "control": { "kind": "key", "index": 0 },
+            "trigger": { "type": "press" },
+            "target": { "type": "action", "action": action["id"] },
+            "label": "{project.key}"
+        }]);
+        h.ok(
+            "save_layout",
+            json!({ "profileId": profile_id, "layout": layout }),
+        );
+        let preview = h.ok(
+            "preview_layout",
+            json!({ "profileId": profile_id, "layout": layout, "pageId": page, "projectId": null }),
+        );
+        let first = &preview[0];
+        assert_eq!(first["control"]["index"], 0);
+        assert_eq!(first["face"]["style"], "action");
+        assert_eq!(first["face"]["title"], "-", "no project is active");
+    }
+
+    let view = h.ok("get_profile", json!({ "profileId": profile_id }));
+    let mut mk2 = view["profile"]["layouts"][0].clone();
+    // Key 15 does not exist on an MK.2, and keys cannot rotate.
+    mk2["pages"][0]["bindings"] = json!([
+        { "control": { "kind": "key", "index": 15 }, "trigger": { "type": "press" }, "target": { "type": "back" } },
+        { "control": { "kind": "key", "index": 1 }, "trigger": { "type": "rotateClockwise" }, "target": { "type": "back" } }
+    ]);
+    let error = h
+        .call(
+            "save_layout",
+            json!({ "profileId": profile_id, "layout": mk2 }),
+        )
+        .unwrap_err();
+    let message = error.as_str().unwrap();
+    assert!(
+        message.contains("key 15") && message.contains("RotateClockwise"),
+        "{message}"
+    );
+
+    // The rejected edit did not change the stored layout.
+    let stored = h.ok("get_profile", json!({ "profileId": profile_id }));
+    assert_eq!(
+        stored["profile"]["layouts"][0]["pages"][0]["bindings"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let copy = h.ok(
+        "duplicate_layout",
+        json!({ "profileId": profile_id, "layoutId": mk2["id"], "name": "Copy" }),
+    );
+    h.ok(
+        "activate_layout",
+        json!({ "profileId": profile_id, "layoutId": copy }),
+    );
+    h.ok(
+        "delete_layout",
+        json!({ "profileId": profile_id, "layoutId": copy }),
+    );
+    let after = h.ok("get_profile", json!({ "profileId": profile_id }));
+    assert_eq!(after["profile"]["layouts"].as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn updates_report_their_configuration_and_store_preferences() {
+    let h = Harness::new();
+    let state = h.ok("update_state", json!({}));
+    assert_eq!(state["currentVersion"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(state["preferences"]["mode"], "notifyOnly");
+    assert_eq!(state["phase"], "idle");
+    if option_env!("DECKPILOT_UPDATER_PUBKEY").is_none() {
+        assert_eq!(state["configured"], false);
+        let refused = h.call("check_for_updates", json!({})).unwrap_err();
+        assert!(refused.as_str().unwrap().contains("not configured"));
+    }
+    let saved = h.ok(
+        "set_update_preferences",
+        json!({ "preferences": { "mode": "downloadAndAsk", "automaticChecks": true, "checkIntervalHours": 0, "lastCheck": null } }),
+    );
+    assert_eq!(saved["preferences"]["mode"], "downloadAndAsk");
+    assert_eq!(
+        saved["preferences"]["checkIntervalHours"], 1,
+        "intervals are clamped"
+    );
+    assert!(
+        h.call("download_update", json!({})).is_err(),
+        "nothing to download"
+    );
+
+    let launch = h.ok("launch_info", json!({}));
+    assert_eq!(launch["launch"]["firstAfterUpdate"], false);
+    assert_eq!(launch["encryption"]["passwordRequired"], false);
 }
 
 /// Starts a real agent with a simulated MK.2 on its own runtime.
@@ -284,8 +648,8 @@ fn runtime_state_and_actions_go_through_the_agent() {
 
     // Generating a layout is picked up by the agent without a restart.
     h.ok(
-        "create_default_layout",
-        json!({ "profileId": profile_id, "modelId": "elgato.streamdeck.mk2" }),
+        "create_layout",
+        json!({ "profileId": profile_id, "modelId": "elgato.streamdeck.mk2", "name": "", "generate": true }),
     );
     wait_for(&h, |s| {
         s["status"]["devices"][0]["layout"]["type"] == "compatible"

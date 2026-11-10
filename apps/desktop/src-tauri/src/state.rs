@@ -3,7 +3,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use deckpilot_core::{ActionRegistry, MachineConfig, Os, Profile, ProfileId};
 use deckpilot_device::ModelCatalog;
 use deckpilot_ipc::AgentPaths;
-use deckpilot_storage::{ConfigStore, Encryption, SqliteStore, StorageError};
+use deckpilot_storage::{ConfigStore, Encryption, LaunchInfo, SqliteStore, StorageError};
 
 use crate::error::{CommandError, CommandResult};
 
@@ -19,17 +19,23 @@ pub struct AppState {
     pub registry: ActionRegistry,
     pub catalog: ModelCatalog,
     pub paths: AgentPaths,
+    /// This start compared with the previous one.
+    pub launch: Option<LaunchInfo>,
 }
 
 impl AppState {
     pub fn open(paths: AgentPaths) -> Result<Self, Box<dyn std::error::Error>> {
         paths.create_dirs()?;
         let store = SqliteStore::open(&paths.database, &Encryption::None)?;
+        let launch = store
+            .record_launch("desktop", env!("CARGO_PKG_VERSION"))
+            .ok();
         Ok(Self {
             store: Mutex::new(store),
             registry: ActionRegistry::with_builtins(),
             catalog: ModelCatalog::builtin(),
             paths,
+            launch,
         })
     }
 
