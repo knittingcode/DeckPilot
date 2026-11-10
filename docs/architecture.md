@@ -195,6 +195,35 @@ per-window dimensions); the catalog decides whether a window may open while
 the configuration is locked. Only the export and import windows may use file
 dialogs.
 
+### Main window shell
+
+The main window has one shared titlebar (`AppTitlebar`), the workspace or
+settings sidebar, and the page. Pages render only their content; their title,
+subtitle, breadcrumbs, status and commands go to the titlebar through
+`useTitlebar` (`lib/titlebar.ts`). Any component of a page may contribute —
+including module pages — and the titlebar imports no page or module. Actions
+have a placement: *primary* (always visible), *secondary* (visible while
+there is room, otherwise in the overflow menu) or *overflow*.
+
+Platform differences live in `use-window-chrome.ts`:
+
+- **macOS:** the window uses the overlay titlebar (`titleBarStyle: Overlay`,
+  `hiddenTitle`, `trafficLightPosition` in `tauri.conf.json`). The native
+  traffic lights stay, with a safe area that disappears in fullscreen.
+  Dragging empty titlebar space moves the window (`startDragging`, the only
+  added window permission). A double-click follows the system setting "Double-click a
+  window's title bar to" (zoom, minimize or nothing) via
+  `titlebar_double_click`.
+- **Windows and Linux:** the native titlebar and window manager decorations
+  stay unchanged; the app titlebar is a toolbar below them.
+
+Sizes are tokens in `index.css` (`--titlebar-height`, `--titlebar-control`,
+`--titlebar-icon`, …). The navigation region (traffic-light safe area,
+sidebar toggle, back, forward) has a fixed width, so it never moves when the
+sidebar collapses; a separate element continues the expanded sidebar's
+background and divider. Native dialog windows (`ModalShell`) have no app
+titlebar.
+
 ## Configuration separation
 
 | Area                   | Contents                                       | Portable |

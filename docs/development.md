@@ -70,6 +70,9 @@ While the session runs:
   rebuild and restart the window. The agent keeps running.
 - **Changes to the agent** need `make restart`, which rebuilds it. Frontend
   edits never restart the agent.
+- **Window configuration** (`tauri.conf.json`: titlebar style, traffic-light
+  position, window sizes) and **capabilities** are read when the window is
+  created. Change them, then `make restart`; HMR cannot apply them.
 
 | Command        | Purpose                                                        |
 | -------------- | -------------------------------------------------------------- |
