@@ -17,7 +17,8 @@ mod registry;
 pub mod mock;
 
 pub use backend::{
-    DeviceBackend, DeviceError, DeviceHandle, DiscoveredDevice, Frame, KeyStateTracker,
+    CombinedBackend, DeviceBackend, DeviceError, DeviceHandle, DiscoveredDevice, Frame,
+    KeyStateTracker,
 };
 pub use capabilities::{
     DeviceCapabilities, EncoderSpec, ImageFormat, ImageSpec, ImageTransform, KeyGrid, TouchGesture,

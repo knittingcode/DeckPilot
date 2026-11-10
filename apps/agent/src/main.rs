@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 use deckpilot_agent::autostart::Autostart;
 use deckpilot_agent::{Agent, InstanceLock, LockError, default_options};
+use deckpilot_device::{DeviceModel, models};
 use deckpilot_ipc::AgentPaths;
 use tracing::{error, info};
 use tracing_subscriber::filter::LevelFilter;
@@ -14,12 +15,14 @@ const USAGE: &str = "\
 DeckPilot background agent
 
 Usage:
-  deckpilot-agent [--headless] [--mock-devices] [--log-level <level>]
+  deckpilot-agent [--headless] [--mock-devices [<models>]] [--log-level <level>]
   deckpilot-agent autostart <enable|disable|status>
 
 Options:
   --headless          Run without a tray icon (servers, CI, debugging)
-  --mock-devices      Use a simulated Stream Deck MK.2 instead of USB devices
+  --mock-devices [<models>]
+                      Add simulated devices next to USB devices. <models> is a
+                      comma-separated list of mk2, xl and plus (default: mk2)
   --log-level <level> error, warn, info (default), debug or trace
   --version           Print the version
   --help              Print this help
@@ -30,21 +33,43 @@ Environment:
 
 struct Args {
     headless: bool,
-    mock: bool,
+    mock_models: Vec<DeviceModel>,
     level: LevelFilter,
 }
 
+fn mock_models(list: &str) -> Result<Vec<DeviceModel>, String> {
+    list.split(',')
+        .map(|name| match name.trim() {
+            "mk2" => Ok(models::stream_deck_mk2()),
+            "xl" => Ok(models::stream_deck_xl()),
+            "plus" => Ok(models::stream_deck_plus()),
+            other => Err(format!(
+                "unknown mock device model `{other}` (use mk2, xl or plus)"
+            )),
+        })
+        .collect()
+}
+
 fn parse_args() -> Result<Result<Args, String>, ExitCode> {
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args().skip(1).peekable();
     let mut parsed = Args {
         headless: false,
-        mock: false,
+        mock_models: Vec::new(),
         level: LevelFilter::INFO,
     };
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--headless" => parsed.headless = true,
-            "--mock-devices" => parsed.mock = true,
+            "--mock-devices" => {
+                let list = match args.peek() {
+                    Some(next) if !next.starts_with("--") => args.next().unwrap_or_default(),
+                    _ => "mk2".to_owned(),
+                };
+                match mock_models(&list) {
+                    Ok(models) => parsed.mock_models = models,
+                    Err(message) => return Ok(Err(message)),
+                }
+            }
             "--log-level" => {
                 let value = args.next().unwrap_or_default();
                 match value.parse() {
@@ -156,7 +181,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let options = default_options(paths, args.mock);
+    let options = default_options(paths, &args.mock_models);
 
     if args.headless {
         let runtime = match tokio::runtime::Builder::new_multi_thread()

@@ -632,3 +632,167 @@ async fn single_instance_shutdown_and_client_reconnect() {
     assert_eq!(status.active_profile.unwrap().id, agent.work.id);
     agent.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runs_workflows_over_ipc() {
+    let agent = setup().await;
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let workflow = deckpilot_core::Workflow::new("Switch and announce")
+        .step(profile.actions[0].id, deckpilot_core::OnFailure::Stop)
+        .step(profile.actions[1].id, deckpilot_core::OnFailure::Stop);
+    let workflow_id = workflow.id;
+    profile.workflows.push(workflow);
+    agent.store().save_profile(&profile).unwrap();
+
+    let mut client = agent.client().await;
+    client.request(Request::ReloadConfiguration).await.unwrap();
+    let Response::WorkflowReport { report } = client
+        .request(Request::RunWorkflow {
+            workflow: workflow_id,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected a workflow report")
+    };
+    assert_eq!(report.status, ActionStatus::Succeeded);
+    assert_eq!(report.steps[1].result.message, "CMR");
+    agent
+        .wait_for_status(|s| active_key(s) == Some("CMR"))
+        .await;
+    agent.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configuration_reload_updates_the_device_without_restart() {
+    let agent = setup().await;
+    assert!(agent.frames_shown());
+    let before = agent.mock.frames(&agent.device);
+
+    // Rebind key 5 to the log action, as the layout designer would.
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let action = profile.actions[1].id;
+    profile.layouts[0].pages[0]
+        .bindings
+        .push(deckpilot_core::ControlBinding {
+            control: ControlId::Key { index: 5 },
+            trigger: deckpilot_core::Trigger::Press,
+            target: deckpilot_core::BindingTarget::Action { action },
+            label: Some("{project.name}".into()),
+        });
+    agent.store().save_profile(&profile).unwrap();
+    agent
+        .client()
+        .await
+        .request(Request::ReloadConfiguration)
+        .await
+        .unwrap();
+
+    let key = ControlId::Key { index: 5 };
+    assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
+        frames.contains_key(&key)
+    }));
+    let after = agent.mock.frames(&agent.device);
+    // Keys 0 and 1 are unchanged and were not redrawn.
+    assert_eq!(
+        after[&ControlId::Key { index: 0 }],
+        before[&ControlId::Key { index: 0 }]
+    );
+    agent.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn renders_simulated_xl_and_plus_devices() {
+    let paths = temp_paths();
+    let store = SqliteStore::open(&paths.database, &Encryption::None).unwrap();
+    let registry = ActionRegistry::with_builtins();
+    let mut profile = Profile::new("Studio");
+    for _ in 0..3 {
+        profile.actions.push(
+            registry
+                .create_instance(
+                    "Next",
+                    builtin::cycle_project_id(),
+                    &ActionParameters::new(),
+                )
+                .unwrap(),
+        );
+    }
+    profile.layouts.push(DeviceLayout::generate(
+        "XL",
+        &models::stream_deck_xl(),
+        &profile,
+    ));
+    profile.layouts.push(DeviceLayout::generate(
+        "Plus",
+        &models::stream_deck_plus(),
+        &profile,
+    ));
+    store.save_profile(&profile).unwrap();
+    store.set_active_profile(Some(profile.id)).unwrap();
+    drop(store);
+
+    let mock = MockBackend::new();
+    let xl = mock.plug(&models::stream_deck_xl(), "SIM-XL");
+    let plus = mock.plug(&models::stream_deck_plus(), "SIM-PLUS");
+    let (task, stop) = start_agent(paths.clone(), mock.clone()).unwrap();
+    assert!(mock.wait_for(&xl, TIMEOUT, |frames, _| frames.len() == 3));
+    assert!(mock.wait_for(&plus, TIMEOUT, |frames, _| frames.len() == 3));
+    assert_eq!(mock.frames(&xl)[&ControlId::Key { index: 0 }].width(), 96);
+    assert_eq!(
+        mock.frames(&plus)[&ControlId::Key { index: 0 }].width(),
+        120
+    );
+
+    let mut client = AgentClient::connect(&paths, ClientKind::Other)
+        .await
+        .unwrap();
+    let Response::Devices { devices } = client.request(Request::ListDevices).await.unwrap() else {
+        panic!("expected devices")
+    };
+    assert!(devices.iter().all(|d| d.source == "mock"));
+    assert!(
+        devices
+            .iter()
+            .all(|d| matches!(d.layout, LayoutStatus::Compatible { .. }))
+    );
+    client.request(Request::Shutdown).await.unwrap();
+    tokio::time::timeout(TIMEOUT, task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    drop(stop);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn previous_protocol_clients_can_stop_the_agent_for_an_update() {
+    let mut agent = setup().await;
+    assert!(agent.frames_shown());
+    // A client from the previous release speaks protocol 1.
+    let mut old = AgentClient::connect_with_protocol(&agent.paths, ClientKind::Desktop, 1)
+        .await
+        .unwrap();
+    assert!(matches!(
+        old.request(Request::GetStatus).await.unwrap(),
+        Response::Status { .. }
+    ));
+
+    let mut client = agent.client().await;
+    client.request(Request::PrepareForUpdate).await.unwrap();
+    let task = agent.task.take().unwrap();
+    tokio::time::timeout(TIMEOUT, task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        agent
+            .mock
+            .wait_for(&agent.device, TIMEOUT, |frames, _| frames.is_empty())
+    );
+    assert!(matches!(
+        AgentClient::connect(&agent.paths, ClientKind::Other).await,
+        Err(ClientError::NotRunning)
+    ));
+}

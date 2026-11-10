@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use deckpilot_ipc::framing::{FrameError, read_message, write_message};
 use deckpilot_ipc::{
-    AgentEvent, ClientKind, ClientMessage, ErrorCode, IpcError, PROTOCOL_VERSION, Request,
-    Response, ServerMessage, SharedStream, token,
+    AgentEvent, ClientKind, ClientMessage, ErrorCode, IpcError, MIN_PROTOCOL_VERSION,
+    PROTOCOL_VERSION, Request, Response, ServerMessage, SharedStream, token,
 };
 use interprocess::local_socket::tokio::{Listener, Stream, prelude::*};
 use tokio::io::BufReader;
@@ -86,6 +86,49 @@ async fn next_event(
     }
 }
 
+/// Reads and checks the `hello` message and answers with `welcome`.
+/// Returns `None` (after sending an error where useful) if the client may not
+/// continue.
+async fn authenticate(
+    reader: &mut BufReader<SharedStream>,
+    writer: &mut SharedStream,
+    token: &str,
+) -> Option<ClientKind> {
+    let hello = tokio::time::timeout(HELLO_TIMEOUT, read_message::<_, ClientMessage>(reader));
+    let rejection = match hello.await {
+        Ok(Ok(Some(ClientMessage::Hello {
+            protocol,
+            token: provided,
+            client,
+        }))) => {
+            if !(MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&protocol) {
+                let message = format!(
+                    "protocol {protocol} is not supported; expected {MIN_PROTOCOL_VERSION} to {PROTOCOL_VERSION}"
+                );
+                error(None, ErrorCode::UnsupportedProtocol, message)
+            } else if !token::matches(token, &provided) {
+                warn!("rejected an IPC client with an invalid token");
+                error(None, ErrorCode::Unauthorized, "invalid token")
+            } else {
+                let welcome = ServerMessage::Welcome {
+                    protocol: PROTOCOL_VERSION,
+                    agent_version: VERSION.into(),
+                };
+                return send(writer, &welcome).await.then_some(client);
+            }
+        }
+        Ok(Ok(Some(ClientMessage::Request { id, .. }))) => {
+            error(Some(id), ErrorCode::Unauthorized, "hello expected")
+        }
+        Ok(Err(FrameError::Malformed(_))) => {
+            error(None, ErrorCode::InvalidRequest, "malformed hello")
+        }
+        _ => return None,
+    };
+    send(writer, &rejection).await;
+    None
+}
+
 async fn serve(
     stream: Stream,
     handle: AgentHandle,
@@ -96,59 +139,9 @@ async fn serve(
     let mut reader = BufReader::new(stream.clone());
     let mut writer = stream;
 
-    let hello = tokio::time::timeout(HELLO_TIMEOUT, read_message::<_, ClientMessage>(&mut reader));
-    let client = match hello.await {
-        Ok(Ok(Some(ClientMessage::Hello {
-            protocol,
-            token: provided,
-            client,
-        }))) => {
-            if protocol != PROTOCOL_VERSION {
-                let message =
-                    format!("protocol {protocol} is not supported; expected {PROTOCOL_VERSION}");
-                send(
-                    &mut writer,
-                    &error(None, ErrorCode::UnsupportedProtocol, message),
-                )
-                .await;
-                return;
-            }
-            if !token::matches(&token, &provided) {
-                warn!("rejected an IPC client with an invalid token");
-                send(
-                    &mut writer,
-                    &error(None, ErrorCode::Unauthorized, "invalid token"),
-                )
-                .await;
-                return;
-            }
-            client
-        }
-        Ok(Ok(Some(ClientMessage::Request { id, .. }))) => {
-            send(
-                &mut writer,
-                &error(Some(id), ErrorCode::Unauthorized, "hello expected"),
-            )
-            .await;
-            return;
-        }
-        Ok(Err(FrameError::Malformed(_))) => {
-            send(
-                &mut writer,
-                &error(None, ErrorCode::InvalidRequest, "malformed hello"),
-            )
-            .await;
-            return;
-        }
-        _ => return,
-    };
-    let welcome = ServerMessage::Welcome {
-        protocol: PROTOCOL_VERSION,
-        agent_version: VERSION.into(),
-    };
-    if !send(&mut writer, &welcome).await {
+    let Some(client) = authenticate(&mut reader, &mut writer, &token).await else {
         return;
-    }
+    };
 
     let mut events: Option<broadcast::Receiver<AgentEvent>> = None;
     let mut desktop: Option<DesktopGuard> = None;

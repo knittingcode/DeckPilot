@@ -13,7 +13,8 @@ use deckpilot_core::{
     MachineConfig, Os, ProfileId, ProjectId, Runtime, RuntimeOutcome,
 };
 use deckpilot_device::{
-    ControlId, DeviceBackend, DeviceEvent, DeviceId, ModelCatalog, mock::MockBackend,
+    CombinedBackend, ControlId, DeviceBackend, DeviceEvent, DeviceId, DeviceModel, ModelCatalog,
+    mock::MockBackend,
 };
 use deckpilot_ipc::{
     AgentEvent, AgentPaths, AgentStatus, DeviceInfo, ErrorCode, IpcError, PROTOCOL_VERSION,
@@ -130,6 +131,7 @@ pub struct Agent {
     /// Last open error per device, to avoid repeating the same warning.
     open_failures: BTreeMap<DeviceId, String>,
     persisted_project: Option<ProjectId>,
+    last_input_at: Option<u64>,
     handle: AgentHandle,
     commands: mpsc::UnboundedReceiver<Command>,
     signals_tx: mpsc::UnboundedSender<DeviceSignal>,
@@ -198,13 +200,12 @@ impl Agent {
             store,
             runtime,
             brightness,
-            started_at: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs()),
+            started_at: unix_now(),
             sessions: BTreeMap::new(),
             next_session: 0,
             open_failures: BTreeMap::new(),
             persisted_project,
+            last_input_at: None,
             handle,
             commands,
             signals_tx,
@@ -263,7 +264,10 @@ impl Agent {
     fn handle_command(&mut self, command: Command) -> Flow {
         match command {
             Command::Request { request, reply } => {
-                let stop = matches!(request, Request::Shutdown);
+                let stop = matches!(request, Request::Shutdown | Request::PrepareForUpdate);
+                if matches!(request, Request::PrepareForUpdate) {
+                    info!("stopping so that an update can be installed");
+                }
                 let _ = reply.send(self.handle_request(request));
                 if stop { Flow::Stop } else { Flow::Continue }
             }
@@ -310,7 +314,7 @@ impl Agent {
             }
             // Subscriptions are handled per connection by the server; the
             // run loop stops after replying to a shutdown request.
-            Request::Subscribe | Request::Shutdown => Ok(Response::Ok),
+            Request::Subscribe | Request::Shutdown | Request::PrepareForUpdate => Ok(Response::Ok),
             other => self.handle_change(other),
         }
     }
@@ -344,6 +348,17 @@ impl Agent {
                 self.after_change();
                 Ok(Response::ActionResult { result })
             }
+            Request::RunWorkflow { workflow } => {
+                let report = self
+                    .runtime
+                    .run_workflow(workflow)
+                    .map_err(|e| engine_error(&e))?;
+                for step in &report.steps {
+                    self.report_action(step.action, &step.result);
+                }
+                self.after_change();
+                Ok(Response::WorkflowReport { report })
+            }
             Request::RefreshDevices => {
                 self.refresh_devices();
                 Ok(Response::Ok)
@@ -376,7 +391,8 @@ impl Agent {
             | Request::GetActiveProject
             | Request::GetAutostart
             | Request::Subscribe
-            | Request::Shutdown => self.handle_request(request),
+            | Request::Shutdown
+            | Request::PrepareForUpdate => self.handle_request(request),
         }
     }
 
@@ -539,6 +555,7 @@ impl Agent {
                 if self.sessions.get(&device).map(|s| s.id) != Some(session) {
                     return;
                 }
+                self.last_input_at = Some(unix_now());
                 let event = DeviceEvent::Input {
                     device: device.clone(),
                     control,
@@ -732,6 +749,7 @@ impl Agent {
                     layout: self.runtime.layout_status(&status.device.model),
                     state: status.state,
                     page,
+                    source: self.options.backend.source(&status.device).into(),
                     id: status.device,
                 }
             })
@@ -753,6 +771,7 @@ impl Agent {
             active_project: self.runtime.active_project().cloned(),
             devices: self.device_infos(),
             brightness: self.brightness,
+            last_input_at: self.last_input_at,
         }
     }
 
@@ -761,6 +780,12 @@ impl Agent {
             status: Box::new(self.status()),
         });
     }
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 fn load_active(
@@ -793,19 +818,35 @@ fn failed(message: String) -> IpcError {
     IpcError::new(ErrorCode::Failed, message)
 }
 
-/// Used by `main` to build options with the real HID backend or simulated
-/// devices. A simulated MK.2 is attached when `mock` is set.
-pub fn default_options(paths: AgentPaths, mock: bool) -> AgentOptions {
-    let (backend, mock_backend): (Box<dyn DeviceBackend>, Option<MockBackend>) = if mock {
-        let backend = MockBackend::new();
-        backend.plug(
-            &deckpilot_device::models::stream_deck_mk2(),
-            "MOCK-MK2-0001",
-        );
-        (Box::new(backend.clone()), Some(backend))
-    } else {
-        (Box::new(deckpilot_hid::ElgatoBackend::new()), None)
-    };
+/// Options used by `main`: USB devices through the HID driver, plus one
+/// simulated device per model in `mock_models` (development without
+/// hardware).
+pub fn default_options(paths: AgentPaths, mock_models: &[DeviceModel]) -> AgentOptions {
+    let mut backend =
+        CombinedBackend::default().with(Box::new(deckpilot_hid::ElgatoBackend::new()));
+    let mock = (!mock_models.is_empty()).then(|| {
+        let mock = MockBackend::new();
+        for (index, model) in mock_models.iter().enumerate() {
+            mock.plug(
+                model,
+                &format!(
+                    "SIM-{}-{:02}",
+                    model
+                        .id
+                        .as_str()
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or("dev")
+                        .to_uppercase(),
+                    index + 1
+                ),
+            );
+        }
+        mock
+    });
+    if let Some(mock) = &mock {
+        backend = backend.with(Box::new(mock.clone()));
+    }
     let autostart = match Autostart::for_current_exe() {
         Ok(autostart) => Some(autostart),
         Err(error) => {
@@ -815,8 +856,8 @@ pub fn default_options(paths: AgentPaths, mock: bool) -> AgentOptions {
     };
     AgentOptions {
         paths,
-        backend,
-        mock: mock_backend,
+        backend: Box::new(backend),
+        mock,
         rescan_interval: Duration::from_secs(2),
         autostart,
         open_desktop: Some(Box::new(crate::launcher::open_desktop)),
