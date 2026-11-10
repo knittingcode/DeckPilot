@@ -2,6 +2,8 @@ import { createContext, useContext } from "react"
 
 import type { ModulePageId } from "@/modules"
 
+import type { SettingsPageId } from "./navigation"
+
 import type { AgentConnection, ModuleInfo, ProfilesView, UpdateState } from "./types"
 
 export interface AppContextValue {
@@ -17,22 +19,26 @@ export interface AppContextValue {
   setAgent: (agent: AgentConnection) => void
   updates: UpdateState | null
   setUpdates: (state: UpdateState) => void
+  /** Opens a workspace page; leaves the settings if they are open. */
   navigate: (page: PageId) => void
+  /** Opens the settings, at `page` or where they were left. */
+  openSettings: (page?: SettingsPageId) => void
+  /** Returns from the settings to the workspace page open before. */
+  closeSettings: () => void
+  /** Browser-style history of the main window. */
+  history: {
+    canGoBack: boolean
+    canGoForward: boolean
+    back: () => void
+    forward: () => void
+  }
   /** Registered feature modules and their state. */
   modules: ModuleInfo[]
   setModules: (modules: ModuleInfo[]) => void
 }
 
 /** Pages of the core application. */
-export type CorePageId =
-  | "dashboard"
-  | "actions"
-  | "workflows"
-  | "profiles"
-  | "models"
-  | "designer"
-  | "devices"
-  | "settings"
+export type CorePageId = "dashboard" | "actions" | "workflows" | "profiles" | "models" | "designer"
 
 /** A core page or a page contributed by a module (`module/page`). */
 export type PageId = CorePageId | ModulePageId

@@ -6,6 +6,7 @@ import type { FrontendModule } from "../types"
 /** User interface of the `projects` module. */
 export const projectsModule: FrontendModule = {
   id: "projects",
+  icon: FolderKanban,
   pages: {
     projects: {
       view: lazy(() => import("./projects-page").then((m) => ({ default: m.ProjectsPage }))),

@@ -1,4 +1,4 @@
-import { Box, type LucideIcon } from "lucide-react"
+import { Box, Puzzle, type LucideIcon } from "lucide-react"
 
 import type { ModuleInfo } from "@/lib/types"
 
@@ -70,4 +70,38 @@ export function dashboardCards(modules: ModuleInfo[]) {
     .flatMap((m) =>
       (frontend(m.id)?.dashboardCards ?? []).map((card, i) => ({ key: `${m.id}:${i}`, card })),
     )
+}
+
+/** Identifier of a module's settings page: `module:<module id>`. */
+export function moduleSettingsId(module: string) {
+  return `module:${module}`
+}
+
+/** The icon of a module in the settings. */
+export function moduleIcon(module: string): LucideIcon {
+  return frontend(module)?.icon ?? Puzzle
+}
+
+export interface ModuleSettingsPage {
+  id: string
+  module: ModuleInfo
+  icon: LucideIcon
+  /** The module's own view; `null`: generated from its manifest settings. */
+  view: FrontendModule["settings"] | null
+}
+
+/**
+ * Settings pages of enabled modules: their own view, or one generated from
+ * the settings their manifest declares. Modules without either have none.
+ */
+export function moduleSettingsPages(modules: ModuleInfo[]): ModuleSettingsPage[] {
+  return modules
+    .filter((m) => m.enabled && m.supported && (m.config.length > 0 || frontend(m.id)?.settings))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((module) => ({
+      id: moduleSettingsId(module.id),
+      module,
+      icon: moduleIcon(module.id),
+      view: frontend(module.id)?.settings ?? null,
+    }))
 }

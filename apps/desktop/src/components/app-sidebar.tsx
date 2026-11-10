@@ -7,7 +7,6 @@ import {
   LayoutGrid,
   Library,
   ListOrdered,
-  MonitorSmartphone,
   Settings,
   UserRound,
   type LucideIcon,
@@ -34,6 +33,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
+import { SHORTCUTS } from "@/hooks/use-navigation"
 import { type PageId, useAppContext } from "@/lib/app-context"
 import { cn } from "@/lib/utils"
 import { moduleNavigation } from "@/modules"
@@ -59,7 +59,6 @@ const GROUPS: NavGroup[] = [
     items: [
       { id: "models", label: "Device Models", icon: Cpu },
       { id: "designer", label: "Layout Designer", icon: LayoutGrid },
-      { id: "devices", label: "Connected Devices", icon: MonitorSmartphone },
     ],
   },
 ]
@@ -115,7 +114,7 @@ export function AppSidebar({
   current: PageId
   onNavigate: (page: PageId) => void
 }) {
-  const { agent, updates, modules } = useAppContext()
+  const { agent, updates, modules, openSettings } = useAppContext()
   const updateAvailable = Boolean(updates?.available)
   const fromModules = moduleNavigation(modules)
   const groups = GROUPS.map((group) =>
@@ -159,10 +158,9 @@ export function AppSidebar({
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
-              isActive={current === "settings"}
-              tooltip="Settings"
+              tooltip={`Settings (${SHORTCUTS.settings})`}
               onClick={() => {
-                onNavigate("settings")
+                openSettings(updateAvailable ? "updates" : undefined)
               }}
             >
               <Settings />
@@ -171,7 +169,14 @@ export function AppSidebar({
             {updateAvailable && <SidebarMenuBadge>Update</SidebarMenuBadge>}
           </SidebarMenuItem>
         </SidebarMenu>
-        <div className="flex items-center gap-2 px-2 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
+        <button
+          type="button"
+          className="flex items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-muted-foreground group-data-[collapsible=icon]:hidden hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          title="Background agent settings"
+          onClick={() => {
+            openSettings("agent")
+          }}
+        >
           <span
             className={cn(
               "size-2 rounded-full",
@@ -180,7 +185,9 @@ export function AppSidebar({
             aria-hidden
           />
           {agent?.running ? "Agent running" : "Agent stopped"}
-        </div>
+          {agent?.status &&
+            ` · ${agent.status.devices.length} device${agent.status.devices.length === 1 ? "" : "s"}`}
+        </button>
       </SidebarFooter>
     </Sidebar>
   )

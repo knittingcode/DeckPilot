@@ -1,8 +1,11 @@
+import { ChevronLeft, ChevronRight } from "lucide-react"
 import type { ReactNode } from "react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { SHORTCUTS } from "@/hooks/use-navigation"
 import { useAppContext } from "@/lib/app-context"
 
 /** The profile a profile-scoped page edits, shown in its header. */
@@ -30,6 +33,37 @@ function ProfileScope() {
   )
 }
 
+/** Browser-style back and forward through visited pages. */
+function HistoryButtons() {
+  const { history } = useAppContext()
+  return (
+    <div className="flex items-center">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-7"
+        aria-label="Back"
+        title={`Back (${SHORTCUTS.back})`}
+        disabled={!history.canGoBack}
+        onClick={history.back}
+      >
+        <ChevronLeft />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-7"
+        aria-label="Forward"
+        title={`Forward (${SHORTCUTS.forward})`}
+        disabled={!history.canGoForward}
+        onClick={history.forward}
+      >
+        <ChevronRight />
+      </Button>
+    </div>
+  )
+}
+
 export function Page({
   title,
   description,
@@ -48,6 +82,7 @@ export function Page({
     <div className="flex min-h-full flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
         <SidebarTrigger className="-ml-1" />
+        <HistoryButtons />
         <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-sm font-semibold">{title}</h1>

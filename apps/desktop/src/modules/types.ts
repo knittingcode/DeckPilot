@@ -10,6 +10,8 @@ type View = LazyExoticComponent<() => React.JSX.Element>
  */
 export interface FrontendModule {
   id: string
+  /** Shown in Settings → Modules. */
+  icon?: LucideIcon
   /** Views for the page ids declared in the module's manifest. */
   pages: Record<string, { view: View; icon: LucideIcon }>
   /** Cards shown on the dashboard while the module is enabled. */
@@ -20,4 +22,10 @@ export interface FrontendModule {
    * window may open.
    */
   windows?: Record<string, View>
+  /**
+   * A settings page of the module's own, shown under Settings → Extensions
+   * while the module is enabled. Without one, a module that declares
+   * settings in its manifest gets a page generated from them.
+   */
+  settings?: View
 }
