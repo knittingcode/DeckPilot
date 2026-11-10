@@ -156,6 +156,17 @@ impl SqliteStore {
         Ok(store)
     }
 
+    /// A transaction that takes the write lock at once (`IMMEDIATE`). The
+    /// agent and the configuration app write to the same database; a
+    /// deferred transaction that reads before it writes cannot wait for the
+    /// other's lock and fails with "database is locked" instead.
+    fn write_transaction(&self) -> Result<rusqlite::Transaction<'_>> {
+        Ok(rusqlite::Transaction::new_unchecked(
+            &self.connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )?)
+    }
+
     /// The raw connection, for tests that need to hold locks or inspect the
     /// file. Not part of the API.
     #[doc(hidden)]
@@ -759,14 +770,14 @@ impl ConfigStore for SqliteStore {
     }
 
     fn save_profile(&self, profile: &Profile) -> Result<()> {
-        let tx = self.connection.unchecked_transaction()?;
+        let tx = self.write_transaction()?;
         write_profile(&tx, profile)?;
         tx.commit()?;
         Ok(())
     }
 
     fn delete_profile(&self, id: ProfileId) -> Result<bool> {
-        let tx = self.connection.unchecked_transaction()?;
+        let tx = self.write_transaction()?;
         let deleted = tx.execute("DELETE FROM profiles WHERE id = ?1", [id.to_string()])? > 0;
         tx.execute(
             "DELETE FROM settings WHERE key = ?1 AND value = ?2",
@@ -880,7 +891,7 @@ impl ConfigStore for SqliteStore {
     }
 
     fn record_launch(&self, component: &str, version: &str) -> Result<LaunchInfo> {
-        let tx = self.connection.unchecked_transaction()?;
+        let tx = self.write_transaction()?;
         let previous: Option<String> = tx
             .query_row(
                 "SELECT app_version FROM app_launches WHERE component = ?1 ORDER BY id DESC LIMIT 1",
@@ -1908,6 +1919,38 @@ mod tests {
                 .is_err()
         );
         assert_eq!(store.module_schema_version(&module).unwrap(), 2);
+    }
+
+    #[test]
+    fn concurrent_writers_wait_for_each_other() {
+        // The agent and the app each have a connection to the same file.
+        let dir = std::env::temp_dir().join(format!("deckpilot-concurrent-{}", ProfileId::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("deckpilot.db");
+        SqliteStore::open(&path, &Encryption::None).unwrap();
+        let writers: Vec<_> = (0..4)
+            .map(|n| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let store = SqliteStore::open(&path, &Encryption::None).unwrap();
+                    for i in 0..25 {
+                        store
+                            .record_launch(&format!("component-{n}"), "0.4.0")
+                            .unwrap();
+                        store
+                            .save_profile(&Profile::new(format!("P{n}-{i}")))
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let store = SqliteStore::open(&path, &Encryption::None).unwrap();
+        assert_eq!(store.list_profiles().unwrap().len(), 100);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

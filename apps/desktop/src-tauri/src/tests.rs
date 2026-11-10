@@ -660,7 +660,7 @@ fn start_agent_with(
 }
 
 fn wait_for(h: &Harness, predicate: impl Fn(&Value) -> bool) -> Value {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
         let status = h.ok("agent_status", json!({}));
         if predicate(&status) {

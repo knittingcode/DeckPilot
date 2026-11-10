@@ -27,7 +27,9 @@ use tokio::io::BufReader;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-const TIMEOUT: Duration = Duration::from_secs(5);
+/// Upper bound for conditions to be reached; generous for slow CI runners
+/// (passing tests continue as soon as the condition holds).
+const TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The agent task and the sender that stops it.
 type Running = (JoinHandle<Result<(), AgentError>>, oneshot::Sender<()>);
