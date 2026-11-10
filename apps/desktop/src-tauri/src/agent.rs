@@ -6,9 +6,10 @@ use std::time::Duration;
 
 use deckpilot_ipc::client::request_once;
 use deckpilot_ipc::{
-    AgentClient, AgentEvent, AgentPaths, AgentStatus, ClientError, ClientKind, ErrorCode, Request,
-    Response,
+    AgentClient, AgentEvent, AgentPaths, AgentStatus, ClientError, ClientKind, ErrorCode,
+    KeyMaterial, Request, Response, SecurityState,
 };
+use deckpilot_storage::DatabaseKey;
 use deckpilot_update::compatibility::{self, AgentCompatibility};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -104,6 +105,41 @@ pub async fn wait_until_stopped(paths: &AgentPaths, timeout: Duration) -> bool {
 
 pub async fn request(paths: &AgentPaths, request: Request) -> Result<Response, ClientError> {
     request_once(paths, ClientKind::Desktop, request).await
+}
+
+/// Unlocks a running agent with `key`. No agent is fine: the bridge unlocks
+/// it when it starts, as long as this app is unlocked.
+pub async fn unlock(paths: &AgentPaths, key: &DatabaseKey) -> Result<(), ClientError> {
+    match request(
+        paths,
+        Request::Unlock {
+            key: KeyMaterial::new(key.to_hex()),
+        },
+    )
+    .await
+    {
+        Ok(_) | Err(ClientError::NotRunning) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Locks a running agent, e.g. before the database file is replaced.
+pub async fn lock(paths: &AgentPaths) -> Result<(), ClientError> {
+    match request(paths, Request::Lock).await {
+        Ok(_) | Err(ClientError::NotRunning) => Ok(()),
+        // Agents before protocol 4 hold no key.
+        Err(ClientError::Agent(error)) if error.code == ErrorCode::InvalidRequest => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// The database key of an unlocked agent, so that restarting the app does
+/// not ask for the password again.
+pub async fn fetch_key(paths: &AgentPaths) -> Option<DatabaseKey> {
+    match request(paths, Request::GetDatabaseKey).await {
+        Ok(Response::DatabaseKey { key }) => DatabaseKey::from_hex(key.expose()).ok(),
+        _ => None,
+    }
 }
 
 pub async fn connection(paths: &AgentPaths) -> Result<AgentConnection, ClientError> {
@@ -218,18 +254,40 @@ pub fn spawn_bridge<R: Runtime>(app: AppHandle<R>, paths: AgentPaths) {
 async fn subscribe<R: Runtime>(app: &AppHandle<R>, paths: &AgentPaths) -> Result<(), ClientError> {
     let mut client = AgentClient::connect(paths, ClientKind::Desktop).await?;
     if let Response::Status { status } = client.request(Request::GetStatus).await? {
+        unlock_if_needed(app, paths, &status).await;
         let _ = app.emit(STATUS_EVENT, AgentConnection::running(*status));
     }
     client.subscribe().await?;
     loop {
         match client.next_event().await? {
             AgentEvent::State { status } => {
+                unlock_if_needed(app, paths, &status).await;
                 let _ = app.emit(STATUS_EVENT, AgentConnection::running(*status));
             }
             AgentEvent::ShowWindow => show_window(app),
             AgentEvent::ShuttingDown => return Ok(()),
             AgentEvent::ActionCompleted { .. } => {}
         }
+    }
+}
+
+/// An agent that (re)started locked while this app is unlocked gets the
+/// key, e.g. after the agent was restarted from the tray.
+async fn unlock_if_needed<R: Runtime>(
+    app: &AppHandle<R>,
+    paths: &AgentPaths,
+    status: &AgentStatus,
+) {
+    if status.security != SecurityState::Locked {
+        return;
+    }
+    let Some(state) = app.try_state::<crate::state::AppState>() else {
+        return;
+    };
+    if let Some(key) = state.key()
+        && let Err(error) = unlock(paths, &key).await
+    {
+        eprintln!("could not unlock the agent: {error}");
     }
 }
 

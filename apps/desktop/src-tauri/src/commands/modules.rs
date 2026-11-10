@@ -27,7 +27,7 @@ async fn persist(
     previous: ModuleSettings,
 ) -> CommandResult<Vec<ModuleInfo>> {
     let settings = state.modules().states().remove(id).unwrap_or_default();
-    let saved = state.store().set_module_state(id, &settings);
+    let saved = state.store()?.set_module_state(id, &settings);
     if let Err(error) = saved {
         let mut modules = state.modules();
         // Restoring a state that was valid before cannot fail.

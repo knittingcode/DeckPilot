@@ -15,6 +15,7 @@ mod layouts;
 mod machine;
 mod modules;
 mod profiles;
+mod security;
 mod system;
 mod workflows;
 
@@ -29,6 +30,14 @@ use crate::state::{AppState, load_profile};
 pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static
 {
     tauri::generate_handler![
+        security::security_status,
+        security::setup_password,
+        security::unlock,
+        security::confirm_password,
+        security::encrypt_legacy_database,
+        security::change_password,
+        security::lock,
+        security::remove_unencrypted_copies,
         system::get_overview,
         system::launch_info,
         system::list_action_types,
@@ -101,7 +110,7 @@ pub(crate) fn modify_profile<T>(
     id: ProfileId,
     change: impl FnOnce(&mut Profile) -> CommandResult<T>,
 ) -> CommandResult<T> {
-    let store = state.store();
+    let store = state.store()?;
     let mut profile = load_profile(&store, id)?;
     let result = change(&mut profile)?;
     deckpilot_storage::ConfigStore::save_profile(&*store, &profile)?;

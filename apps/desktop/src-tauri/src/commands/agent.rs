@@ -91,7 +91,7 @@ pub async fn set_active_profile(
     .await
     {
         Ok(_) => Ok(()),
-        Err(ClientError::NotRunning) => Ok(state.store().set_active_profile(Some(profile_id))?),
+        Err(ClientError::NotRunning) => Ok(state.store()?.set_active_profile(Some(profile_id))?),
         Err(error) => Err(error.into()),
     }
 }
@@ -99,7 +99,7 @@ pub async fn set_active_profile(
 /// Actions and workflows run in the active profile, which is what the agent
 /// runs.
 fn ensure_active(state: &AppState, profile_id: ProfileId) -> CommandResult<()> {
-    if state.store().active_profile()? == Some(profile_id) {
+    if state.store()?.active_profile()? == Some(profile_id) {
         Ok(())
     } else {
         Err(CommandError::Invalid("the profile is not active".into()))

@@ -25,7 +25,7 @@ pub struct Overview {
 
 #[tauri::command]
 pub fn get_overview(state: State<'_, AppState>) -> CommandResult<Overview> {
-    let store = state.store();
+    let store = state.store()?;
     let profiles = store.list_profiles()?;
     let active_id = store.active_profile()?;
     let active_profile = profiles.iter().find(|p| Some(p.id) == active_id).cloned();
@@ -73,7 +73,7 @@ pub struct LaunchView {
 #[tauri::command]
 pub fn launch_info(state: State<'_, AppState>) -> LaunchView {
     LaunchView {
-        launch: state.launch.clone(),
+        launch: state.launch(),
         encryption: EncryptionState {
             enabled: false,
             password_required: false,
@@ -90,7 +90,7 @@ pub fn list_action_types(state: State<'_, AppState>) -> Vec<ActionType> {
 /// Changes schema migrations made to stored data, for review.
 #[tauri::command]
 pub fn migration_notes(state: State<'_, AppState>) -> CommandResult<Vec<MigrationNote>> {
-    Ok(state.store().migration_notes()?)
+    Ok(state.store()?.migration_notes()?)
 }
 
 #[tauri::command]

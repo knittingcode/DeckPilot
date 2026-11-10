@@ -11,7 +11,7 @@ use crate::state::{AppState, machine_config};
 
 #[tauri::command]
 pub fn get_machine_config(state: State<'_, AppState>) -> CommandResult<MachineConfig> {
-    Ok(machine_config(&state.store())?)
+    Ok(machine_config(&*state.store()?)?)
 }
 
 #[tauri::command]
@@ -27,7 +27,7 @@ pub fn set_resource_binding(
             "resource value must not be empty".into(),
         ));
     }
-    let store = state.store();
+    let store = state.store()?;
     let mut config = machine_config(&store)?;
     config.set_binding(MachineResourceBinding {
         key: ResourceKey::new(key.trim())?,
@@ -44,7 +44,7 @@ pub fn remove_resource_binding(
     state: State<'_, AppState>,
     key: ResourceKey,
 ) -> CommandResult<MachineConfig> {
-    let store = state.store();
+    let store = state.store()?;
     let mut config = machine_config(&store)?;
     config
         .remove_binding(&key)

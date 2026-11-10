@@ -23,6 +23,10 @@ pub enum CommandError {
     Agent(#[from] deckpilot_ipc::ClientError),
     #[error(transparent)]
     Updater(#[from] tauri_plugin_updater::Error),
+    #[error("the configuration is locked")]
+    Locked,
+    #[error("enter your password once to confirm it after the update")]
+    ConfirmationRequired,
     #[error("{0}")]
     Invalid(String),
     #[error("{0} not found")]

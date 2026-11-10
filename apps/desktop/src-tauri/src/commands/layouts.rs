@@ -145,7 +145,7 @@ pub fn preview_layout(
     page_id: PageId,
     project_id: Option<ProjectId>,
 ) -> CommandResult<Vec<ControlFace>> {
-    let store = state.store();
+    let store = state.store()?;
     let profile = load_profile(&store, profile_id)?;
     let model = state
         .catalog

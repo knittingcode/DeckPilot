@@ -116,12 +116,12 @@ impl UpdateManager {
     }
 }
 
+/// Stored preferences; the defaults while the configuration is locked.
 fn preferences(state: &AppState) -> UpdatePreferences {
     state
         .store()
-        .setting(PREFERENCES_KEY)
         .ok()
-        .flatten()
+        .and_then(|store| store.setting(PREFERENCES_KEY).ok().flatten())
         .and_then(|text| serde_json::from_str::<UpdatePreferences>(&text).ok())
         .unwrap_or_default()
         .sanitized()
@@ -130,7 +130,7 @@ fn preferences(state: &AppState) -> UpdatePreferences {
 fn save_preferences(state: &AppState, preferences: &UpdatePreferences) -> CommandResult<()> {
     let text =
         serde_json::to_string(preferences).map_err(|e| CommandError::Invalid(e.to_string()))?;
-    state.store().set_setting(PREFERENCES_KEY, &text)?;
+    state.store()?.set_setting(PREFERENCES_KEY, &text)?;
     Ok(())
 }
 
@@ -185,7 +185,10 @@ async fn check<R: Runtime>(app: &AppHandle<R>) -> CommandResult<Option<UpdateInf
     let state = app.state::<AppState>();
     let mut prefs = preferences(&state);
     prefs.last_check = Some(now());
-    save_preferences(&state, &prefs)?;
+    // While locked, checks still work; the time is not stored.
+    if state.is_unlocked() {
+        save_preferences(&state, &prefs)?;
+    }
     match result {
         Ok(found) => {
             let info = found.as_ref().map(|update| UpdateInfo {

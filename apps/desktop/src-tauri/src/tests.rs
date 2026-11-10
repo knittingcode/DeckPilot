@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
 use tauri::webview::InvokeRequest;
-use tauri::{WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use deckpilot_agent::{Agent, AgentOptions, InstanceLock};
 use deckpilot_device::{mock::MockBackend, models};
@@ -21,6 +21,9 @@ const APP_ORIGIN: &str = if cfg!(windows) {
     "tauri://localhost"
 };
 
+/// Password of the test databases. Not used anywhere else.
+const PASSWORD: &str = "test password 1";
+
 struct Harness {
     window: WebviewWindow<tauri::test::MockRuntime>,
     paths: AgentPaths,
@@ -28,11 +31,26 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        let harness = Self::without_setup(Self::temp_paths());
+        // First start: the user sets a password, which creates the
+        // encrypted database.
+        harness.ok(
+            "setup_password",
+            json!({ "input": { "password": PASSWORD, "confirmation": PASSWORD } }),
+        );
+        harness
+    }
+
+    fn temp_paths() -> AgentPaths {
         let data_dir = std::env::temp_dir().join(format!(
             "deckpilot-desktop-test-{}",
             deckpilot_core::ProfileId::new()
         ));
-        let paths = AgentPaths::in_dir(data_dir);
+        AgentPaths::in_dir(data_dir)
+    }
+
+    /// The app started on `paths` without any user interaction.
+    fn without_setup(paths: AgentPaths) -> Self {
         let app = mock_builder()
             .manage(AppState::open(paths.clone()).expect("open state"))
             .manage(crate::updates::UpdateManager::default())
@@ -43,6 +61,19 @@ impl Harness {
             .build()
             .expect("build window");
         Self { window, paths }
+    }
+
+    fn error(&self, cmd: &str, args: Value) -> String {
+        self.call(cmd, args)
+            .expect_err(cmd)
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    /// Unlocks the app (and a running agent) as the unlock screen does.
+    fn unlock(&self) {
+        self.ok("unlock", json!({ "password": PASSWORD }));
     }
 
     fn call(&self, cmd: &str, args: Value) -> Result<Value, Value> {
@@ -637,6 +668,7 @@ fn runtime_state_and_actions_go_through_the_agent() {
     );
 
     let (_runtime, mock) = start_agent(&h.paths);
+    h.unlock();
     let status = wait_for(&h, |s| {
         s["running"] == true && s["status"]["devices"][0]["state"] == "connected"
     });
@@ -769,6 +801,8 @@ fn disabled_modules_hide_types_but_keep_saved_actions() {
     let view = h.ok("get_profile", json!({ "profileId": profile_id }));
     assert_eq!(view["profile"]["actions"][0]["id"], next["id"]);
     let reopened = AppState::open(h.paths.clone()).unwrap();
+    let key = h.window.state::<AppState>().key().unwrap();
+    reopened.attach(key, false).unwrap();
     assert!(
         !reopened
             .modules()
@@ -913,6 +947,7 @@ fn modules_and_project_copies_work_with_the_running_agent() {
     let current = action("Current", "projects.select", json!({ "project_id": null }));
 
     let (_runtime, _mock) = start_agent(&h.paths);
+    h.unlock();
     wait_for(&h, |s| s["running"] == true);
     let run = |id: &str| h.ok("run_action", json!({ "profileId": work, "actionId": id }));
 
@@ -1011,4 +1046,191 @@ fn modules_and_project_copies_work_with_the_running_agent() {
 
     h.ok("stop_agent", json!({}));
     wait_for(&h, |s| s["running"] == false);
+}
+
+#[test]
+fn the_configuration_is_locked_without_the_password() {
+    let h = Harness::new();
+    let status = h.ok("security_status", json!({}));
+    assert_eq!(status["database"], "encrypted");
+    assert_eq!(status["unlocked"], true);
+    let profile = new_profile(&h, "Work");
+
+    h.ok("lock", json!({}));
+    assert_eq!(h.ok("security_status", json!({}))["unlocked"], false);
+    assert_eq!(
+        h.error("list_profiles", json!({})),
+        "the configuration is locked"
+    );
+    assert_eq!(
+        h.error("unlock", json!({ "password": "not the password" })),
+        "the password is not correct"
+    );
+    h.unlock();
+    assert_eq!(
+        h.ok("list_profiles", json!({}))["profiles"][0]["id"],
+        json!(profile)
+    );
+    // The database file holds no readable configuration.
+    let bytes = std::fs::read(&h.paths.database).unwrap();
+    assert!(!bytes.windows(15).any(|w| w == b"SQLite format 3"));
+    // Short passwords and mismatched confirmations are refused.
+    let other = Harness::without_setup(Harness::temp_paths());
+    assert!(
+        other
+            .error(
+                "setup_password",
+                json!({ "input": { "password": "short", "confirmation": "short" } })
+            )
+            .contains("at least 8")
+    );
+    assert!(
+        other
+            .error(
+                "setup_password",
+                json!({ "input": { "password": "long enough", "confirmation": "long enougH" } })
+            )
+            .contains("do not match")
+    );
+}
+
+#[test]
+fn changing_the_password_keeps_the_agent_and_data() {
+    let h = Harness::new();
+    let profile = new_profile(&h, "Work");
+    let (_runtime, _mock) = start_agent(&h.paths);
+    h.unlock();
+    wait_for(&h, |s| s["status"]["security"] == "unlocked");
+
+    assert_eq!(
+        h.error(
+            "change_password",
+            json!({ "input": { "current": "wrong", "password": "brand new pw", "confirmation": "brand new pw" } }),
+        ),
+        "the password is not correct"
+    );
+    h.ok(
+        "change_password",
+        json!({ "input": { "current": PASSWORD, "password": "brand new pw", "confirmation": "brand new pw" } }),
+    );
+    // The agent was locked during the swap and is unlocked again.
+    let status = wait_for(&h, |s| s["status"]["security"] == "unlocked");
+    assert_eq!(status["status"]["activeProfile"]["id"], json!(profile));
+    h.ok("lock", json!({}));
+    wait_for(&h, |s| s["status"]["security"] == "locked");
+    assert!(h.call("unlock", json!({ "password": PASSWORD })).is_err());
+    h.ok("unlock", json!({ "password": "brand new pw" }));
+    wait_for(&h, |s| s["status"]["security"] == "unlocked");
+    assert_eq!(
+        h.ok("list_profiles", json!({}))["profiles"][0]["id"],
+        json!(profile)
+    );
+    h.ok("stop_agent", json!({}));
+    wait_for(&h, |s| s["running"] == false);
+}
+
+#[test]
+fn a_restarted_app_reuses_the_unlocked_agent_without_asking() {
+    let h = Harness::new();
+    new_profile(&h, "Work");
+    let (_runtime, _mock) = start_agent(&h.paths);
+    h.unlock();
+    wait_for(&h, |s| s["status"]["security"] == "unlocked");
+
+    // The window is closed and opened again: a new app process.
+    let restarted = Harness::without_setup(h.paths.clone());
+    let status = restarted.ok("security_status", json!({}));
+    assert_eq!(status["unlocked"], true, "{status}");
+    assert_eq!(
+        restarted.ok("list_profiles", json!({}))["profiles"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    h.ok("stop_agent", json!({}));
+    wait_for(&h, |s| s["running"] == false);
+
+    // With the agent stopped, a new app process must ask.
+    let cold = Harness::without_setup(h.paths.clone());
+    assert_eq!(cold.ok("security_status", json!({}))["unlocked"], false);
+}
+
+#[test]
+fn the_password_is_confirmed_once_after_an_update() {
+    let h = Harness::new();
+    new_profile(&h, "Work");
+    // The previous version confirmed the password; this is the first start
+    // of the new version, unlocked with the key of the running agent.
+    {
+        use deckpilot_storage::ConfigStore as _;
+        let state = h.window.state::<AppState>();
+        let store = state.store().unwrap();
+        store
+            .set_setting("security.confirmedVersion", "0.0.1")
+            .unwrap();
+    }
+    let state = h.window.state::<AppState>();
+    let key = state.key().unwrap();
+    state.detach();
+    state.attach(key.clone(), false).unwrap();
+
+    let status = h.ok("security_status", json!({}));
+    assert_eq!(status["confirmationRequired"], true);
+    assert_eq!(status["unlocked"], false);
+    assert!(h.error("list_profiles", json!({})).contains("confirm"));
+    assert!(
+        h.call("confirm_password", json!({ "password": "wrong" }))
+            .is_err()
+    );
+    h.ok("confirm_password", json!({ "password": PASSWORD }));
+    assert_eq!(
+        h.ok("list_profiles", json!({}))["profiles"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Later starts of the same version do not ask again.
+    state.detach();
+    state.attach(key, false).unwrap();
+    assert_eq!(
+        h.ok("security_status", json!({}))["confirmationRequired"],
+        false
+    );
+}
+
+#[test]
+fn legacy_databases_are_encrypted_on_request() {
+    let paths = Harness::temp_paths();
+    paths.create_dirs().unwrap();
+    let profile = {
+        use deckpilot_storage::{ConfigStore, Encryption, SqliteStore};
+        let store = SqliteStore::open(&paths.database, &Encryption::None).unwrap();
+        let profile = deckpilot_core::Profile::new("From 0.3");
+        store.save_profile(&profile).unwrap();
+        profile
+    };
+    let h = Harness::without_setup(paths);
+    let status = h.ok("security_status", json!({}));
+    assert_eq!(status["database"], "plaintext");
+    assert_eq!(
+        h.error("list_profiles", json!({})),
+        "the configuration is locked"
+    );
+
+    let status = h.ok(
+        "encrypt_legacy_database",
+        json!({ "input": { "password": PASSWORD, "confirmation": PASSWORD } }),
+    );
+    assert_eq!(status["database"], "encrypted");
+    assert_eq!(status["unlocked"], true);
+    assert_eq!(status["legacyCopies"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        h.ok("list_profiles", json!({}))["profiles"][0]["id"],
+        json!(profile.id)
+    );
+    let status = h.ok("remove_unencrypted_copies", json!({}));
+    assert_eq!(status["legacyCopies"], json!([]));
 }
