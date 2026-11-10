@@ -71,6 +71,17 @@ function renderWith(value: AppContextValue, ui: React.ReactNode) {
 }
 
 beforeAll(() => {
+  // Tooltips and menus measure themselves; jsdom has no ResizeObserver.
+  if (!("ResizeObserver" in globalThis)) {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
+  }
   window.matchMedia = vi.fn().mockReturnValue({
     matches: false,
     addEventListener: vi.fn(),
