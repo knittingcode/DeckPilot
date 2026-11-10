@@ -77,6 +77,8 @@ pub enum LockReason {
     Idle,
     /// Locked automatically because the computer slept.
     Sleep,
+    /// Locked automatically because the screen was locked.
+    ScreenLocked,
     /// The system key could not be read from the credential store.
     KeyUnavailable,
 }
@@ -409,6 +411,14 @@ pub struct AgentStatus {
     /// unavailable credential store. Never contains key material.
     #[serde(default)]
     pub security_problem: Option<String>,
+    /// The agent is reading or creating the system key; the credential
+    /// store may be showing a prompt.
+    #[serde(default)]
+    pub waiting_for_key_store: bool,
+    /// Whether this computer's screen lock can be detected (for automatic
+    /// locking).
+    #[serde(default)]
+    pub screen_lock_detection: bool,
 }
 
 #[cfg(test)]

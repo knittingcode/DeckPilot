@@ -929,6 +929,7 @@ dependencies = [
  "deckpilot-ipc",
  "deckpilot-keystore",
  "deckpilot-modules",
+ "deckpilot-presence",
  "deckpilot-storage",
  "font8x8",
  "interprocess",
@@ -1094,9 +1095,12 @@ version = "0.4.0"
 dependencies = [
  "block2",
  "objc2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-foundation",
  "objc2-local-authentication",
  "thiserror 2.0.21",
+ "zbus",
 ]
 
 [[package]]

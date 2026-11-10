@@ -12,6 +12,10 @@
 
 use std::fmt;
 
+mod screen;
+
+pub use screen::{ScreenLockMonitor, ScriptedScreenLock, screen_lock_monitor};
+
 /// How the platform verifies the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
@@ -212,10 +216,16 @@ mod tests {
 }
 
 /// Manual check on a real computer: `cargo test -p deckpilot-presence --
-/// --ignored --nocapture`. Only queries availability; shows no prompt.
+/// --ignored --nocapture`. Only queries availability and the screen lock
+/// state; shows no prompt.
 #[cfg(test)]
 #[test]
 #[ignore = "queries the real platform"]
-fn reports_the_platform_method() {
+fn reports_the_platform_capabilities() {
     println!("method: {:?}", platform().method());
+    let monitor = screen_lock_monitor();
+    println!(
+        "screen lock monitor: {monitor:?}, locked now: {:?}",
+        monitor.as_ref().and_then(|m| m.is_locked())
+    );
 }

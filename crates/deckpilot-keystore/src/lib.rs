@@ -93,8 +93,14 @@ pub enum KeyStoreError {
     /// Refused: an entry with this identifier exists already.
     #[error("a key with this identifier already exists in the {store}")]
     AlreadyExists { store: String },
-    /// The store cannot be used right now (not installed, locked, access
-    /// denied, no D-Bus session).
+    /// The store could not be reached at all (no D-Bus session, the
+    /// keyring daemon not running yet). Retrying later can succeed without
+    /// involving the user.
+    #[error("the {store} cannot be reached: {reason}")]
+    Unreachable { store: String, reason: String },
+    /// The store refused or failed the operation (locked, access denied, a
+    /// prompt was cancelled). Never retried automatically: that could
+    /// prompt the user again and again.
     #[error("the {store} is not available: {reason}")]
     Unavailable { store: String, reason: String },
     #[error("{0}")]
@@ -143,9 +149,12 @@ pub fn platform_store_name() -> &'static str {
     }
 }
 
-/// The operating system's credential store.
+/// The operating system's credential store. The connection is made on
+/// first use and again after a failed attempt, so a store that becomes
+/// available after the agent started (e.g. a keyring daemon that starts
+/// late at login) is picked up.
 pub struct SystemKeyStore {
-    store: Arc<keyring_core::CredentialStore>,
+    store: Mutex<Option<Arc<keyring_core::CredentialStore>>>,
     scope: Scope,
 }
 
@@ -159,27 +168,62 @@ impl fmt::Debug for SystemKeyStore {
 }
 
 impl SystemKeyStore {
-    /// Connects to the platform store. Fails on platforms without one.
+    /// The store of this platform. Fails only on platforms without one;
+    /// whether the store can be reached is found out on first use.
     pub fn open(scope: Scope) -> Result<Self, KeyStoreError> {
-        let store = platform_store().map_err(|error| unavailable(&error))?;
-        Ok(Self { store, scope })
+        if !SUPPORTED {
+            return Err(KeyStoreError::Unavailable {
+                store: platform_store_name().into(),
+                reason: "this platform has no supported credential store".into(),
+            });
+        }
+        Ok(Self {
+            store: Mutex::new(None),
+            scope,
+        })
+    }
+
+    fn connection(&self) -> Result<Arc<keyring_core::CredentialStore>, KeyStoreError> {
+        let mut store = self.store.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(store) = store.as_ref() {
+            return Ok(store.clone());
+        }
+        let connected = platform_store().map_err(|error| KeyStoreError::Unreachable {
+            store: platform_store_name().into(),
+            reason: error.to_string(),
+        })?;
+        *store = Some(connected.clone());
+        Ok(connected)
     }
 
     fn entry(&self, id: &KeyId) -> Result<keyring_core::Entry, KeyStoreError> {
         let account = id.account();
+        let store = self.connection()?;
         #[cfg(target_os = "windows")]
         let entry = {
             // Local persistence: the key stays on this computer and is not
             // copied to other machines with a roaming profile.
             let modifiers = std::collections::HashMap::from([("persistence", "Local")]);
-            self.store
-                .build(self.scope.service(), &account, Some(&modifiers))
+            store.build(self.scope.service(), &account, Some(&modifiers))
         };
-        #[cfg(not(target_os = "windows"))]
-        let entry = self.store.build(self.scope.service(), &account, None);
+        #[cfg(target_os = "linux")]
+        let entry = {
+            // The label shown in Seahorse or KWallet.
+            let label = format!("{} database key", self.scope.service());
+            let modifiers = std::collections::HashMap::from([("label", label.as_str())]);
+            store.build(self.scope.service(), &account, Some(&modifiers))
+        };
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        let entry = store.build(self.scope.service(), &account, None);
         entry.map_err(|error| failure(&error))
     }
 }
+
+const SUPPORTED: bool = cfg!(any(
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "linux"
+));
 
 #[cfg(target_os = "macos")]
 fn platform_store() -> keyring_core::Result<Arc<keyring_core::CredentialStore>> {
@@ -277,6 +321,9 @@ pub struct MemoryKeyStore {
 struct MemoryState {
     entries: BTreeMap<KeyId, Secret>,
     unavailable: bool,
+    unreachable: bool,
+    /// Operations attempted, to check that nothing retries in a loop.
+    attempts: usize,
 }
 
 impl MemoryKeyStore {
@@ -293,6 +340,17 @@ impl MemoryKeyStore {
         self.state().unavailable = unavailable;
     }
 
+    /// Makes every operation fail as if the store could not be connected
+    /// to yet (e.g. a keyring daemon that starts late).
+    pub fn set_unreachable(&self, unreachable: bool) {
+        self.state().unreachable = unreachable;
+    }
+
+    /// Number of operations attempted so far.
+    pub fn attempts(&self) -> usize {
+        self.state().attempts
+    }
+
     /// Identifiers of the stored keys.
     pub fn ids(&self) -> Vec<KeyId> {
         self.state().entries.keys().cloned().collect()
@@ -303,7 +361,14 @@ impl MemoryKeyStore {
         self.state().entries.clear();
     }
 
-    fn check(state: &MemoryState) -> Result<(), KeyStoreError> {
+    fn check(state: &mut MemoryState) -> Result<(), KeyStoreError> {
+        state.attempts += 1;
+        if state.unreachable {
+            return Err(KeyStoreError::Unreachable {
+                store: "test key store".into(),
+                reason: "simulated".into(),
+            });
+        }
         if state.unavailable {
             Err(KeyStoreError::Unavailable {
                 store: "test key store".into(),
@@ -321,8 +386,8 @@ impl KeyStore for MemoryKeyStore {
     }
 
     fn load(&self, id: &KeyId) -> Result<Secret, KeyStoreError> {
-        let state = self.state();
-        Self::check(&state)?;
+        let mut state = self.state();
+        Self::check(&mut state)?;
         state
             .entries
             .get(id)
@@ -332,7 +397,7 @@ impl KeyStore for MemoryKeyStore {
 
     fn store(&self, id: &KeyId, secret: &Secret) -> Result<(), KeyStoreError> {
         let mut state = self.state();
-        Self::check(&state)?;
+        Self::check(&mut state)?;
         if state.entries.contains_key(id) {
             return Err(KeyStoreError::AlreadyExists { store: self.name() });
         }
@@ -342,7 +407,7 @@ impl KeyStore for MemoryKeyStore {
 
     fn delete(&self, id: &KeyId) -> Result<(), KeyStoreError> {
         let mut state = self.state();
-        Self::check(&state)?;
+        Self::check(&mut state)?;
         state.entries.remove(id);
         Ok(())
     }
