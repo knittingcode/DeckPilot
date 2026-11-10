@@ -1,11 +1,13 @@
 //! DeckPilot configuration application.
 //!
-//! This process only edits configuration. Device handling belongs to the
-//! background agent, which must keep running when this window is closed.
+//! This process edits configuration and shows the agent's state. Device
+//! handling and action execution belong to the background agent
+//! (`deckpilot-agent`), which keeps running when this window is closed.
 
 // Prevents an additional console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agent;
 mod commands;
 mod error;
 mod state;
@@ -17,13 +19,22 @@ use tauri::Manager;
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            // `DECKPILOT_DATA_DIR` allows isolated data directories during development.
-            let data_dir = match std::env::var_os("DECKPILOT_DATA_DIR") {
-                Some(dir) => dir.into(),
-                None => app.path().app_data_dir()?,
-            };
-            let state = state::AppState::open(&data_dir)?;
+            // Same location as the agent; `DECKPILOT_DATA_DIR` overrides it.
+            let paths = deckpilot_ipc::AgentPaths::resolve()?;
+            let state = state::AppState::open(paths.clone())?;
             app.manage(state);
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                // Start the agent on first launch if it is not running yet.
+                if let Ok(connection) = agent::connection(&paths).await
+                    && !connection.running
+                    && connection.can_start
+                    && let Err(error) = agent::start_agent()
+                {
+                    eprintln!("{error}");
+                }
+                agent::spawn_bridge(handle, paths);
+            });
             Ok(())
         })
         .invoke_handler(commands::handler())

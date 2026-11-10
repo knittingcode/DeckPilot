@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core"
 
 import type {
   ActionInstance,
+  AgentConnection,
+  DeviceLayout,
   ActionParameters,
   ActionResult,
   ActionType,
@@ -52,7 +54,20 @@ export const api = {
   setResourceBinding: (key: string, kind: ResourceKind, value: string) =>
     invoke<MachineConfig>("set_resource_binding", { key, kind, value }),
   removeResourceBinding: (key: string) => invoke<MachineConfig>("remove_resource_binding", { key }),
+  createDefaultLayout: (profileId: string, modelId: string) =>
+    invoke<DeviceLayout>("create_default_layout", { profileId, modelId }),
+
+  agentStatus: () => invoke<AgentConnection>("agent_status"),
+  startAgent: () => invoke<AgentConnection>("start_agent"),
+  stopAgent: () => invoke<null>("stop_agent"),
+  refreshDevices: () => invoke<null>("refresh_devices"),
+  setBrightness: (percent: number) => invoke<null>("set_brightness", { percent }),
+  getAutostart: () => invoke<boolean>("get_autostart"),
+  setAutostart: (enabled: boolean) => invoke<boolean>("set_autostart", { enabled }),
 }
+
+/** Backend event carrying the latest {@link AgentConnection}. */
+export const AGENT_STATUS_EVENT = "agent-status"
 
 /** Normalizes errors thrown by `invoke` (plain strings) and other sources. */
 export function errorMessage(error: unknown): string {

@@ -1,0 +1,18 @@
+[package]
+name = "deckpilot-hid"
+description = "USB HID drivers for DeckPilot (Elgato Stream Deck MK.2)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+deckpilot-device.workspace = true
+elgato-streamdeck.workspace = true
+hidapi.workspace = true
+image.workspace = true
+
+[lints]
+workspace = true

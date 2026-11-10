@@ -13,9 +13,10 @@ pub mod models {
 
     /// Elgato Stream Deck MK.2: 15 keys (5 x 3) with 72 x 72 px JPEG images.
     ///
-    /// The values are taken from publicly available protocol documentation.
-    /// No driver has been tested against a physical device yet, so the support
-    /// level is [`HardwareSupport::DescriptorOnly`].
+    /// The values match the `elgato-streamdeck` protocol implementation used
+    /// by the driver (checked by a test in `deckpilot-hid`). The driver has
+    /// not been tested on a physical device yet, so the support level is
+    /// [`HardwareSupport::Unverified`].
     pub fn stream_deck_mk2() -> DeviceModel {
         DeviceModel {
             id: DeviceModelId::new(STREAM_DECK_MK2_ID),
@@ -43,7 +44,7 @@ pub mod models {
                 encoders: None,
                 touch: None,
             },
-            support: HardwareSupport::DescriptorOnly,
+            support: HardwareSupport::Unverified,
         }
     }
 }
@@ -97,7 +98,7 @@ mod tests {
             caps.validate_input(ControlId::Encoder { index: 0 }, ControlInput::Press)
                 .is_err()
         );
-        assert_eq!(model.support, HardwareSupport::DescriptorOnly);
+        assert_eq!(model.support, HardwareSupport::Unverified);
     }
 
     #[test]

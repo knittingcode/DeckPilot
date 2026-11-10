@@ -40,8 +40,10 @@ pub struct UsbIdentity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum HardwareSupport {
-    /// The descriptor exists, but no driver has been tested against real hardware.
+    /// The descriptor exists, but there is no driver.
     DescriptorOnly,
+    /// A driver exists, but it has not been tested on a physical device.
+    Unverified,
     /// A driver exists and has been tested on a physical device.
     Verified,
 }

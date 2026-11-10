@@ -1,6 +1,7 @@
 import { Trash2 } from "lucide-react"
 import { useState } from "react"
 
+import { AgentSettings } from "@/components/agent-settings"
 import { EmptyState, ErrorNotice, Loading, Page } from "@/components/page"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -59,6 +60,7 @@ export function SettingsPage() {
 
   return (
     <Page title="Settings" description="Settings that apply to this computer only">
+      <AgentSettings />
       {error && <ErrorNotice error={error} />}
       <Card>
         <CardHeader>

@@ -1,23 +1,16 @@
-//! Execution engine and device-event runtime.
+//! Execution engine for actions and workflows.
 //!
-//! [`Engine`] executes action instances and workflows against a profile.
-//! [`Runtime`] adds device handling on top: it tracks connected devices and
-//! the page each one shows, and dispatches control input to bindings. Both are
-//! hardware-independent; a device backend only has to produce
-//! [`DeviceEvent`]s.
-
-use std::collections::BTreeMap;
+//! [`Engine`] executes action instances and workflows against a profile. The
+//! device-facing [`Runtime`](crate::device_runtime::Runtime) builds on it.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use deckpilot_device::{DeviceEvent, DeviceId, DeviceRegistry, ModelCatalog};
-
 use crate::project::ProjectContextError;
 use crate::{
     ActionInstance, ActionInstanceId, ActionRegistry, ActionResult, ActionStatus,
-    ActiveProjectContext, BindingTarget, ContextEffect, DeviceLayout, ExecutionContext,
-    MachineConfig, OnFailure, PageId, Profile, WorkflowId,
+    ActiveProjectContext, ContextEffect, ExecutionContext, MachineConfig, OnFailure, Profile,
+    WorkflowId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -26,6 +19,10 @@ pub enum EngineError {
     UnknownAction(ActionInstanceId),
     #[error("workflow does not exist in this profile")]
     UnknownWorkflow(WorkflowId),
+    #[error("project does not exist in this profile")]
+    UnknownProject(crate::ProjectId),
+    #[error("no profile is active")]
+    NoActiveProfile,
     #[error(transparent)]
     Context(#[from] ProjectContextError),
 }
@@ -165,199 +162,10 @@ impl Engine {
     }
 }
 
-/// Outcome of handling one device event.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum RuntimeOutcome {
-    /// The event did not trigger anything.
-    Ignored {
-        reason: String,
-    },
-    DeviceConnected {
-        device: DeviceId,
-    },
-    DeviceDisconnected {
-        device: DeviceId,
-    },
-    Navigated {
-        device: DeviceId,
-        page: PageId,
-    },
-    Action {
-        result: ActionResult,
-    },
-    Workflow {
-        report: WorkflowReport,
-    },
-}
-
-/// Hardware-independent runtime for one active profile.
-#[derive(Debug)]
-pub struct Runtime {
-    engine: Engine,
-    catalog: ModelCatalog,
-    profile: Profile,
-    machine: MachineConfig,
-    projects: ActiveProjectContext,
-    devices: DeviceRegistry,
-    /// Page stack per connected device; the last entry is the visible page.
-    navigation: BTreeMap<DeviceId, Vec<PageId>>,
-}
-
-impl Runtime {
-    pub fn new(
-        engine: Engine,
-        catalog: ModelCatalog,
-        profile: Profile,
-        machine: MachineConfig,
-    ) -> Self {
-        let projects = ActiveProjectContext::new(&profile);
-        Self {
-            engine,
-            catalog,
-            profile,
-            machine,
-            projects,
-            devices: DeviceRegistry::default(),
-            navigation: BTreeMap::new(),
-        }
-    }
-
-    pub fn profile(&self) -> &Profile {
-        &self.profile
-    }
-
-    pub fn project_context(&self) -> &ActiveProjectContext {
-        &self.projects
-    }
-
-    pub fn devices(&self) -> &DeviceRegistry {
-        &self.devices
-    }
-
-    /// The page currently shown on `device`, if it is connected and has a layout.
-    pub fn current_page(&self, device: &DeviceId) -> Option<PageId> {
-        self.navigation
-            .get(device)
-            .and_then(|stack| stack.last().copied())
-    }
-
-    fn layout_for(&self, device: &DeviceId) -> Option<&DeviceLayout> {
-        self.profile
-            .layouts
-            .iter()
-            .find(|layout| layout.model == device.model)
-    }
-
-    pub fn handle_event(&mut self, event: &DeviceEvent) -> Result<RuntimeOutcome, EngineError> {
-        let ignored = |reason: &str| {
-            Ok(RuntimeOutcome::Ignored {
-                reason: reason.into(),
-            })
-        };
-        match event {
-            DeviceEvent::Connected { device } => {
-                self.devices.apply(event);
-                let home = self.layout_for(device).map(|layout| layout.home_page);
-                self.navigation
-                    .insert(device.clone(), home.into_iter().collect());
-                Ok(RuntimeOutcome::DeviceConnected {
-                    device: device.clone(),
-                })
-            }
-            DeviceEvent::Disconnected { device } => {
-                self.devices.apply(event);
-                self.navigation.remove(device);
-                Ok(RuntimeOutcome::DeviceDisconnected {
-                    device: device.clone(),
-                })
-            }
-            DeviceEvent::Input {
-                device,
-                control,
-                input,
-            } => {
-                if !self.devices.is_connected(device) {
-                    return ignored("device is not connected");
-                }
-                let Some(model) = self.catalog.get(&device.model) else {
-                    return ignored("unknown device model");
-                };
-                if model.capabilities.validate_input(*control, *input).is_err() {
-                    return ignored("input is not supported by the device model");
-                }
-                let (Some(layout), Some(page_id)) =
-                    (self.layout_for(device), self.current_page(device))
-                else {
-                    return ignored("no layout for this device model");
-                };
-                let binding = layout
-                    .page(page_id)
-                    .and_then(|page| page.binding_for(*control, *input))
-                    .map(|binding| binding.target);
-                match binding {
-                    None => ignored("control is not bound"),
-                    Some(target) => self.dispatch(device, target),
-                }
-            }
-        }
-    }
-
-    fn dispatch(
-        &mut self,
-        device: &DeviceId,
-        target: BindingTarget,
-    ) -> Result<RuntimeOutcome, EngineError> {
-        match target {
-            BindingTarget::Action { action } => {
-                let result = self.engine.run_action(
-                    &self.profile,
-                    &self.machine,
-                    &mut self.projects,
-                    action,
-                )?;
-                Ok(RuntimeOutcome::Action { result })
-            }
-            BindingTarget::Workflow { workflow } => {
-                let report = self.engine.run_workflow(
-                    &self.profile,
-                    &self.machine,
-                    &mut self.projects,
-                    workflow,
-                )?;
-                Ok(RuntimeOutcome::Workflow { report })
-            }
-            BindingTarget::OpenPage { page } => {
-                let stack = self.navigation.entry(device.clone()).or_default();
-                stack.push(page);
-                Ok(RuntimeOutcome::Navigated {
-                    device: device.clone(),
-                    page,
-                })
-            }
-            BindingTarget::Back => {
-                let stack = self.navigation.entry(device.clone()).or_default();
-                if stack.len() > 1 {
-                    stack.pop();
-                }
-                let page = *stack.last().expect("stack holds at least the home page");
-                Ok(RuntimeOutcome::Navigated {
-                    device: device.clone(),
-                    page,
-                })
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        ActionParameters, ControlBinding, LayoutPage, Os, ParameterValue, Project, ProjectKey,
-        Trigger, Workflow, builtin,
-    };
-    use deckpilot_device::{ControlId, ControlInput, DeviceModelId, models};
+    use crate::{ActionParameters, Os, ParameterValue, Project, ProjectKey, Workflow, builtin};
 
     struct Fixture {
         profile: Profile,
@@ -488,78 +296,5 @@ mod tests {
                 .run_action(&f.profile, &machine(), &mut context, f.log),
             Err(EngineError::Context(_))
         ));
-    }
-
-    #[test]
-    fn runtime_dispatches_device_input_and_navigates_folders() {
-        let mut f = fixture();
-        let model = DeviceModelId::new(models::STREAM_DECK_MK2_ID);
-        let mut layout = DeviceLayout::new("Main", model.clone());
-        let folder = LayoutPage::new("Folder");
-        let folder_id = folder.id;
-        layout.pages.push(folder);
-        let home = layout.home_page;
-        let bind = |index, target| ControlBinding {
-            control: ControlId::Key { index },
-            trigger: Trigger::Press,
-            target,
-            label: None,
-        };
-        layout.page_mut(home).unwrap().bindings.extend([
-            bind(0, BindingTarget::Action { action: f.next }),
-            bind(1, BindingTarget::OpenPage { page: folder_id }),
-        ]);
-        layout
-            .page_mut(folder_id)
-            .unwrap()
-            .bindings
-            .push(bind(1, BindingTarget::Back));
-        f.profile.layouts.push(layout);
-
-        let mut runtime = Runtime::new(f.engine, ModelCatalog::builtin(), f.profile, machine());
-        let device = DeviceId {
-            model,
-            serial: "TEST".into(),
-        };
-        let press = |index| DeviceEvent::Input {
-            device: device.clone(),
-            control: ControlId::Key { index },
-            input: ControlInput::Press,
-        };
-
-        assert!(matches!(
-            runtime.handle_event(&press(0)).unwrap(),
-            RuntimeOutcome::Ignored { .. }
-        ));
-        runtime
-            .handle_event(&DeviceEvent::Connected {
-                device: device.clone(),
-            })
-            .unwrap();
-        assert_eq!(runtime.current_page(&device), Some(home));
-
-        let outcome = runtime.handle_event(&press(0)).unwrap();
-        assert!(matches!(outcome, RuntimeOutcome::Action { ref result } if result.is_success()));
-        let active = runtime
-            .project_context()
-            .project(runtime.profile())
-            .unwrap()
-            .unwrap();
-        assert_eq!(active.key.as_str(), "CMR");
-
-        runtime.handle_event(&press(1)).unwrap();
-        assert_eq!(runtime.current_page(&device), Some(folder_id));
-        runtime.handle_event(&press(1)).unwrap();
-        assert_eq!(runtime.current_page(&device), Some(home));
-
-        let unbound = runtime.handle_event(&press(9)).unwrap();
-        assert!(matches!(unbound, RuntimeOutcome::Ignored { .. }));
-
-        runtime
-            .handle_event(&DeviceEvent::Disconnected {
-                device: device.clone(),
-            })
-            .unwrap();
-        assert_eq!(runtime.current_page(&device), None);
     }
 }

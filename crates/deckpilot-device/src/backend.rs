@@ -1,0 +1,211 @@
+//! Interfaces implemented by device drivers.
+//!
+//! A [`DeviceBackend`] discovers devices and opens them; a [`DeviceHandle`]
+//! performs I/O on one opened device. Drivers translate their native protocol
+//! into [`ControlId`]/[`ControlInput`] pairs and accept device-independent
+//! [`Frame`]s, converting them to the device's image format themselves.
+
+use std::fmt;
+use std::time::Duration;
+
+use thiserror::Error;
+
+use crate::{ControlId, ControlInput, DeviceId, DeviceModelId};
+
+/// An RGB image (8 bits per channel, row-major, no padding).
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Frame {
+    width: u32,
+    height: u32,
+    rgb: Vec<u8>,
+}
+
+impl Frame {
+    /// A frame filled with one colour.
+    pub fn filled(width: u32, height: u32, color: [u8; 3]) -> Self {
+        let pixels = width as usize * height as usize;
+        Self {
+            width,
+            height,
+            rgb: color.repeat(pixels),
+        }
+    }
+
+    /// Wraps raw RGB data, checking that its length matches the dimensions.
+    pub fn from_rgb(width: u32, height: u32, rgb: Vec<u8>) -> Result<Self, DeviceError> {
+        if rgb.len() == width as usize * height as usize * 3 {
+            Ok(Self { width, height, rgb })
+        } else {
+            Err(DeviceError::InvalidFrame(format!(
+                "{} bytes do not match {width} x {height} RGB",
+                rgb.len()
+            )))
+        }
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn rgb(&self) -> &[u8] {
+        &self.rgb
+    }
+
+    pub fn into_rgb(self) -> Vec<u8> {
+        self.rgb
+    }
+
+    /// Sets one pixel; coordinates outside the frame are ignored.
+    pub fn put(&mut self, x: u32, y: u32, color: [u8; 3]) {
+        if x < self.width && y < self.height {
+            let offset = (y as usize * self.width as usize + x as usize) * 3;
+            self.rgb[offset..offset + 3].copy_from_slice(&color);
+        }
+    }
+
+    pub fn pixel(&self, x: u32, y: u32) -> Option<[u8; 3]> {
+        (x < self.width && y < self.height).then(|| {
+            let offset = (y as usize * self.width as usize + x as usize) * 3;
+            [self.rgb[offset], self.rgb[offset + 1], self.rgb[offset + 2]]
+        })
+    }
+}
+
+impl fmt::Debug for Frame {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Frame({} x {})", self.width, self.height)
+    }
+}
+
+/// A device found during discovery but not necessarily opened yet.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DiscoveredDevice {
+    pub id: DeviceId,
+    pub model: DeviceModelId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum DeviceError {
+    #[error("device is disconnected")]
+    Disconnected,
+    #[error("device does not have {0}")]
+    InvalidControl(ControlId),
+    #[error("invalid frame: {0}")]
+    InvalidFrame(String),
+    #[error("operation not supported: {0}")]
+    Unsupported(String),
+    #[error("device I/O failed: {0}")]
+    Io(String),
+}
+
+/// Discovers and opens devices of one driver.
+pub trait DeviceBackend: Send {
+    /// Short driver name used in logs.
+    fn name(&self) -> &'static str;
+
+    /// Lists currently attached devices that this backend can drive.
+    fn discover(&mut self) -> Result<Vec<DiscoveredDevice>, DeviceError>;
+
+    /// Opens a previously discovered device.
+    fn open(&mut self, device: &DeviceId) -> Result<Box<dyn DeviceHandle>, DeviceError>;
+}
+
+/// An opened device. Implementations are used from one dedicated I/O thread.
+pub trait DeviceHandle: Send {
+    fn id(&self) -> &DeviceId;
+
+    /// Waits up to `timeout` for input. Returns an empty list when nothing
+    /// happened and [`DeviceError::Disconnected`] once the device is gone.
+    fn read_input(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Vec<(ControlId, ControlInput)>, DeviceError>;
+
+    /// Queues an image for a control. Takes effect after [`DeviceHandle::flush`].
+    fn set_image(&mut self, control: ControlId, frame: &Frame) -> Result<(), DeviceError>;
+
+    /// Queues a blank image for a control. Takes effect after [`DeviceHandle::flush`].
+    fn clear_image(&mut self, control: ControlId) -> Result<(), DeviceError>;
+
+    /// Sets display brightness in percent (0-100).
+    fn set_brightness(&mut self, percent: u8) -> Result<(), DeviceError>;
+
+    /// Sends all queued images to the device.
+    fn flush(&mut self) -> Result<(), DeviceError>;
+}
+
+/// Turns full key-state snapshots, as reported by many HID devices, into
+/// press and release transitions. Repeated reports of an unchanged state
+/// produce no events, which prevents duplicate action execution.
+#[derive(Debug, Clone, Default)]
+pub struct KeyStateTracker {
+    pressed: Vec<bool>,
+}
+
+impl KeyStateTracker {
+    pub fn update(&mut self, states: &[bool]) -> Vec<(ControlId, ControlInput)> {
+        if self.pressed.len() < states.len() {
+            self.pressed.resize(states.len(), false);
+        }
+        let mut events = Vec::new();
+        for (index, (&now, before)) in states.iter().zip(self.pressed.iter_mut()).enumerate() {
+            if now != *before {
+                *before = now;
+                let Ok(index) = u16::try_from(index) else {
+                    break;
+                };
+                let input = if now {
+                    ControlInput::Press
+                } else {
+                    ControlInput::Release
+                };
+                events.push((ControlId::Key { index }, input));
+            }
+        }
+        events
+    }
+
+    /// Forgets all pressed keys, e.g. after a reconnect.
+    pub fn reset(&mut self) {
+        self.pressed.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frames_validate_size_and_pixels() {
+        let mut frame = Frame::filled(2, 2, [1, 2, 3]);
+        assert_eq!(frame.rgb().len(), 12);
+        frame.put(1, 1, [9, 9, 9]);
+        frame.put(5, 5, [9, 9, 9]);
+        assert_eq!(frame.pixel(1, 1), Some([9, 9, 9]));
+        assert_eq!(frame.pixel(0, 0), Some([1, 2, 3]));
+        assert_eq!(frame.pixel(2, 0), None);
+        assert!(Frame::from_rgb(2, 2, vec![0; 11]).is_err());
+        assert!(Frame::from_rgb(2, 2, vec![0; 12]).is_ok());
+    }
+
+    #[test]
+    fn key_tracker_emits_transitions_only() {
+        let mut tracker = KeyStateTracker::default();
+        let press = |index| (ControlId::Key { index }, ControlInput::Press);
+        let release = |index| (ControlId::Key { index }, ControlInput::Release);
+
+        assert_eq!(tracker.update(&[false, true, false]), vec![press(1)]);
+        // A repeated report of the same state must not trigger again.
+        assert_eq!(tracker.update(&[false, true, false]), vec![]);
+        assert_eq!(
+            tracker.update(&[true, false, false]),
+            vec![press(0), release(1)]
+        );
+        tracker.reset();
+        assert_eq!(tracker.update(&[true, false, false]), vec![press(0)]);
+    }
+}

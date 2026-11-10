@@ -146,5 +146,54 @@ export interface DeviceModel {
     encoders: { count: number; pressable: boolean } | null
     touch: { zones: number; image: ImageSpec | null; gestures: string[] } | null
   }
-  support: "descriptorOnly" | "verified"
+  support: "descriptorOnly" | "unverified" | "verified"
+}
+
+export type ConnectionState = "connected" | "disconnected"
+
+export type LayoutStatus =
+  | { type: "noProfile" }
+  | { type: "unknownModel" }
+  | { type: "missing" }
+  | { type: "compatible"; layout: string; name: string }
+  | { type: "invalid"; layout: string; name: string; issues: string[] }
+
+export interface DeviceId {
+  model: string
+  serial: string
+}
+
+export interface DeviceInfo {
+  id: DeviceId
+  modelName: string
+  state: ConnectionState
+  layout: LayoutStatus
+  page: string | null
+}
+
+export interface ProfileInfo {
+  id: string
+  name: string
+}
+
+export interface AgentStatus {
+  version: string
+  protocol: number
+  pid: number
+  startedAt: number
+  dataDir: string
+  logDir: string
+  endpoint: string
+  backend: string
+  profiles: ProfileInfo[]
+  activeProfile: ProfileInfo | null
+  activeProject: Project | null
+  devices: DeviceInfo[]
+  brightness: number
+}
+
+export interface AgentConnection {
+  running: boolean
+  status: AgentStatus | null
+  canStart: boolean
 }

@@ -1,0 +1,41 @@
+[package]
+name = "deckpilot-agent"
+description = "DeckPilot background agent: device handling, actions, tray and IPC"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "deckpilot_agent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "deckpilot-agent"
+path = "src/main.rs"
+
+[dependencies]
+auto-launch.workspace = true
+deckpilot-core.workspace = true
+deckpilot-device = { workspace = true, features = ["mock"] }
+deckpilot-hid.workspace = true
+deckpilot-ipc.workspace = true
+deckpilot-storage.workspace = true
+font8x8.workspace = true
+interprocess.workspace = true
+serde_json.workspace = true
+tao.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+tray-icon.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

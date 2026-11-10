@@ -20,10 +20,14 @@ pnpm install
 ## Running
 
 ```sh
+cargo build -p deckpilot-agent   # the app starts the agent from target/debug
 pnpm dev
 ```
 
-This starts Vite on port 1420 and the Tauri app in development mode. To keep
+This starts Vite on port 1420 and the Tauri app in development mode. The app
+starts `target/debug/deckpilot-agent` if no agent is running. To run the agent
+on its own, with simulated devices or without a tray icon, see
+[background-agent.md](background-agent.md#running-locally). To keep
 development data separate from your regular configuration, set
 `DECKPILOT_DATA_DIR`:
 
@@ -32,7 +36,15 @@ DECKPILOT_DATA_DIR=/tmp/deckpilot-dev pnpm dev
 ```
 
 Without it, the database is stored in the platform's application data
-directory (`io.github.knittingcode.deckpilot`).
+directory (`io.github.knittingcode.deckpilot`). The agent and the app must use
+the same data directory to find each other.
+
+To try the app without hardware:
+
+```sh
+DECKPILOT_DATA_DIR=/tmp/deckpilot-dev cargo run -p deckpilot-agent -- --mock-devices &
+DECKPILOT_DATA_DIR=/tmp/deckpilot-dev pnpm dev
+```
 
 ## Building
 
@@ -40,6 +52,9 @@ directory (`io.github.knittingcode.deckpilot`).
 pnpm --filter @deckpilot/desktop tauri build              # release bundle
 pnpm --filter @deckpilot/desktop tauri build --debug --no-bundle
 ```
+
+The bundle does not include the agent yet; ship `deckpilot-agent` next to the
+application executable (see Known limitations in the README).
 
 The desktop crate embeds `apps/desktop/dist` at compile time, so run
 `pnpm --filter @deckpilot/desktop build` before running Cargo commands that
@@ -59,7 +74,9 @@ include the desktop crate on a fresh checkout.
 | Frontend tests        | `pnpm test`                                                 |
 
 CI (`.github/workflows/ci.yml`) runs the frontend checks on Linux and the Rust
-checks on Linux, macOS and Windows.
+checks on Linux, macOS and Windows. Agent tests use simulated devices and real
+local IPC; no hardware is needed. On Linux, building requires `libudev-dev`
+in addition to the Tauri prerequisites.
 
 ## Conventions
 

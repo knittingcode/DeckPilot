@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use deckpilot_device::{
-    ControlId, ControlInput, DeviceCapabilities, DeviceModelId, ModelCatalog, TouchGesture,
+    ControlId, ControlInput, ControlKind, DeviceCapabilities, DeviceModel, DeviceModelId,
+    ModelCatalog, TouchGesture,
 };
 
 use crate::{ActionInstanceId, LayoutId, PageId, Profile, WorkflowId};
@@ -147,6 +148,89 @@ impl DeviceLayout {
         }
     }
 
+    /// Generates a layout that places the profile's actions and then its
+    /// workflows on the model's keys, in order. When they do not fit, the last
+    /// key of a page opens the next page and the first key of every following
+    /// page goes back. Only the model's capabilities are used, so the result
+    /// fits any key grid.
+    pub fn generate(name: impl Into<String>, model: &DeviceModel, profile: &Profile) -> Self {
+        let mut layout = Self::new(name, model.id.clone());
+        let keys: Vec<ControlId> = model
+            .capabilities
+            .controls()
+            .into_iter()
+            .filter(|control| control.kind() == ControlKind::Key)
+            .collect();
+        let items: Vec<(BindingTarget, String)> = profile
+            .actions
+            .iter()
+            .map(|a| (BindingTarget::Action { action: a.id }, a.name.clone()))
+            .chain(
+                profile
+                    .workflows
+                    .iter()
+                    .map(|w| (BindingTarget::Workflow { workflow: w.id }, w.name.clone())),
+            )
+            .collect();
+
+        let press = |control, target, label: Option<String>| ControlBinding {
+            control,
+            trigger: Trigger::Press,
+            target,
+            label,
+        };
+
+        let mut next = 0;
+        let mut page_index = 0;
+        let mut page_id = layout.home_page;
+        loop {
+            let mut slots = keys.clone();
+            let mut bindings = Vec::new();
+            if page_index > 0 && !slots.is_empty() {
+                bindings.push(press(slots.remove(0), BindingTarget::Back, None));
+            }
+            let remaining = items.len() - next;
+            let overflow = remaining > slots.len();
+            let capacity = if overflow {
+                slots.len().saturating_sub(1)
+            } else {
+                slots.len()
+            };
+            if overflow && capacity == 0 {
+                // Too few keys to paginate; stop rather than loop forever.
+                break;
+            }
+            for (slot, (target, _)) in slots
+                .iter()
+                .zip(&items[next..next + capacity.min(remaining)])
+            {
+                bindings.push(press(*slot, *target, None));
+            }
+            next += capacity.min(remaining);
+
+            let next_page = overflow.then(|| LayoutPage::new(format!("Page {}", page_index + 2)));
+            if let (Some(page), Some(slot)) = (&next_page, slots.last()) {
+                bindings.push(press(
+                    *slot,
+                    BindingTarget::OpenPage { page: page.id },
+                    Some("More".into()),
+                ));
+            }
+            if let Some(page) = layout.page_mut(page_id) {
+                page.bindings = bindings;
+            }
+            match next_page {
+                Some(page) => {
+                    page_id = page.id;
+                    layout.pages.push(page);
+                    page_index += 1;
+                }
+                None => break,
+            }
+        }
+        layout
+    }
+
     pub fn page(&self, id: PageId) -> Option<&LayoutPage> {
         self.pages.iter().find(|page| page.id == id)
     }
@@ -266,6 +350,82 @@ mod tests {
             target,
             label: None,
         }
+    }
+
+    fn profile_with_actions(count: usize) -> Profile {
+        let mut profile = Profile::new("Work");
+        for index in 0..count {
+            profile.actions.push(crate::ActionInstance {
+                id: ActionInstanceId::new(),
+                name: format!("A{index}"),
+                action_type: crate::builtin::log_message_id(),
+                parameters: crate::ActionParameters::new(),
+            });
+        }
+        profile
+    }
+
+    #[test]
+    fn generated_layout_fits_on_one_page_when_possible() {
+        let profile = profile_with_actions(15);
+        let layout = DeviceLayout::generate("Auto", &models::stream_deck_mk2(), &profile);
+        assert_eq!(layout.pages.len(), 1);
+        assert_eq!(layout.pages[0].bindings.len(), 15);
+        assert_eq!(
+            layout.validate(&catalog(), &profile),
+            Vec::<LayoutIssue>::new()
+        );
+    }
+
+    #[test]
+    fn generated_layout_paginates_by_capabilities() {
+        // 15 keys: 14 on home + More, 13 + Back + More, then the rest + Back.
+        let profile = profile_with_actions(30);
+        let layout = DeviceLayout::generate("Auto", &models::stream_deck_mk2(), &profile);
+        assert_eq!(layout.pages.len(), 3);
+        let actions = |page: &LayoutPage| {
+            page.bindings
+                .iter()
+                .filter(|b| matches!(b.target, BindingTarget::Action { .. }))
+                .count()
+        };
+        assert_eq!(actions(&layout.pages[0]), 14);
+        assert_eq!(actions(&layout.pages[1]), 13);
+        assert_eq!(actions(&layout.pages[2]), 3);
+        assert_eq!(layout.pages[1].bindings[0].target, BindingTarget::Back);
+        assert_eq!(
+            layout.pages[0].bindings[14].target,
+            BindingTarget::OpenPage {
+                page: layout.pages[1].id
+            }
+        );
+        assert_eq!(
+            layout.validate(&catalog(), &profile),
+            Vec::<LayoutIssue>::new()
+        );
+
+        // A smaller grid from the test catalog gets more pages.
+        let small = catalog()
+            .get(&DeviceModelId::new("test.encoders"))
+            .unwrap()
+            .clone();
+        let layout = DeviceLayout::generate("Auto", &small, &profile);
+        assert!(layout.pages.len() > 3);
+        assert_eq!(
+            layout.validate(&catalog(), &profile),
+            Vec::<LayoutIssue>::new()
+        );
+    }
+
+    #[test]
+    fn generated_layout_handles_models_without_keys() {
+        let model = DeviceModel {
+            capabilities: DeviceCapabilities::default(),
+            ..models::stream_deck_mk2()
+        };
+        let layout = DeviceLayout::generate("Auto", &model, &profile_with_actions(3));
+        assert_eq!(layout.pages.len(), 1);
+        assert_eq!(layout.pages[0].bindings, Vec::<ControlBinding>::new());
     }
 
     #[test]

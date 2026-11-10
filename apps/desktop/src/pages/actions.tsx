@@ -74,6 +74,8 @@ function ActionList({
   types: ActionType[]
   onChange: () => void
 }) {
+  const { agent } = useAppContext()
+  const agentRunning = agent?.running ?? false
   const [results, setResults] = useState<Record<string, ActionResult>>({})
   const [error, setError] = useState<string | null>(null)
   const typeName = (id: string) => types.find((t) => t.id === id)?.name ?? id
@@ -104,8 +106,8 @@ function ActionList({
       <CardHeader>
         <CardTitle>Configured actions</CardTitle>
         <CardDescription>
-          Actions are defined independently of device controls. Use “Run” to test an action without
-          hardware.
+          Actions are defined independently of device controls. “Run” executes an action in the
+          background agent without pressing a key{agentRunning ? "" : " (start the agent first)"}.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-2">
@@ -121,7 +123,12 @@ function ActionList({
                   <span className="font-medium">{action.name}</span>
                   <Badge variant="secondary">{typeName(action.actionType)}</Badge>
                   <div className="flex-1" />
-                  <Button variant="outline" size="sm" onClick={() => void runAction(action.id)}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!agentRunning}
+                    onClick={() => void runAction(action.id)}
+                  >
                     <Play /> Run
                   </Button>
                   <Button

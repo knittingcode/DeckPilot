@@ -7,6 +7,10 @@ use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop
 use tauri::webview::InvokeRequest;
 use tauri::{WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
+use deckpilot_agent::{Agent, AgentOptions, InstanceLock};
+use deckpilot_device::{mock::MockBackend, models};
+use deckpilot_ipc::AgentPaths;
+
 use crate::state::AppState;
 
 /// Origin the bundled frontend is served from. Requests from any other origin
@@ -19,7 +23,7 @@ const APP_ORIGIN: &str = if cfg!(windows) {
 
 struct Harness {
     window: WebviewWindow<tauri::test::MockRuntime>,
-    data_dir: std::path::PathBuf,
+    paths: AgentPaths,
 }
 
 impl Harness {
@@ -28,15 +32,16 @@ impl Harness {
             "deckpilot-desktop-test-{}",
             deckpilot_core::ProfileId::new()
         ));
+        let paths = AgentPaths::in_dir(data_dir);
         let app = mock_builder()
-            .manage(AppState::open(&data_dir).expect("open state"))
+            .manage(AppState::open(paths.clone()).expect("open state"))
             .invoke_handler(crate::commands::handler())
             .build(mock_context(noop_assets()))
             .expect("build app");
         let window = WebviewWindowBuilder::new(&app, "main", WebviewUrl::default())
             .build()
             .expect("build window");
-        Self { window, data_dir }
+        Self { window, paths }
     }
 
     fn call(&self, cmd: &str, args: Value) -> Result<Value, Value> {
@@ -60,7 +65,7 @@ impl Harness {
 
 impl Drop for Harness {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.data_dir);
+        let _ = std::fs::remove_dir_all(&self.paths.data_dir);
     }
 }
 
@@ -141,27 +146,18 @@ fn configuration_flow_through_ipc() {
     );
     let action_id = action["id"].as_str().unwrap().to_owned();
 
-    h.ok(
-        "select_project",
-        json!({ "profileId": profile_id, "projectId": project_ids[0] }),
-    );
-    let result = h.ok(
-        "run_action",
-        json!({ "profileId": profile_id, "actionId": action_id }),
-    );
-    assert_eq!(result["status"], "succeeded", "{result}");
-    assert!(result["message"].as_str().unwrap().ends_with("/src/shop"));
-
-    // CMR has no binding on this machine: the action fails without side effects.
+    // Without a running agent, runtime state is written to storage and
+    // actions cannot run.
     h.ok(
         "select_project",
         json!({ "profileId": profile_id, "projectId": project_ids[1] }),
     );
-    let result = h.ok(
+    let refused = h.call(
         "run_action",
         json!({ "profileId": profile_id, "actionId": action_id }),
     );
-    assert_eq!(result["status"], "failed");
+    assert!(refused.unwrap_err().as_str().unwrap().contains("agent"));
+    assert_eq!(h.ok("agent_status", json!({}))["running"], false);
 
     let invalid = h.call(
         "create_action",
@@ -209,5 +205,114 @@ fn lists_static_catalogs() {
     );
     let models = h.ok("list_device_models", json!({}));
     assert_eq!(models[0]["id"], "elgato.streamdeck.mk2");
-    assert_eq!(models[0]["support"], "descriptorOnly");
+    assert_eq!(models[0]["support"], "unverified");
+}
+
+/// Starts a real agent with a simulated MK.2 on its own runtime.
+fn start_agent(paths: &AgentPaths) -> (tokio::runtime::Runtime, MockBackend) {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let mock = MockBackend::new();
+    mock.plug(&models::stream_deck_mk2(), "TEST-0001");
+    let options = AgentOptions {
+        paths: paths.clone(),
+        backend: Box::new(mock.clone()),
+        mock: Some(mock.clone()),
+        rescan_interval: std::time::Duration::from_millis(50),
+        autostart: None,
+        open_desktop: None,
+    };
+    let lock = InstanceLock::acquire(&paths.lock_file).unwrap();
+    runtime.block_on(async {
+        let agent = Agent::start(options, lock).unwrap();
+        tokio::spawn(agent.run(std::future::pending()));
+    });
+    (runtime, mock)
+}
+
+fn wait_for(h: &Harness, predicate: impl Fn(&Value) -> bool) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let status = h.ok("agent_status", json!({}));
+        if predicate(&status) {
+            return status;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "agent state not reached: {status}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn runtime_state_and_actions_go_through_the_agent() {
+    let h = Harness::new();
+    let profile = h.ok(
+        "create_profile",
+        json!({ "name": "Work", "description": "" }),
+    );
+    let profile_id = profile["id"].as_str().unwrap().to_owned();
+    for key in ["SHOP", "CMR"] {
+        h.ok(
+            "create_project",
+            json!({ "profileId": profile_id, "project": { "key": key, "name": "" } }),
+        );
+    }
+    let action = h.ok(
+        "create_action",
+        json!({
+            "profileId": profile_id,
+            "action": {
+                "name": "Announce",
+                "actionType": "deckpilot.core.log",
+                "parameters": { "message": { "type": "text", "value": "on {project.key}" } }
+            }
+        }),
+    );
+
+    let (_runtime, mock) = start_agent(&h.paths);
+    let status = wait_for(&h, |s| {
+        s["running"] == true && s["status"]["devices"][0]["state"] == "connected"
+    });
+    assert_eq!(status["status"]["backend"], "mock");
+    assert_eq!(status["status"]["activeProfile"]["name"], "Work");
+    assert_eq!(status["status"]["devices"][0]["layout"]["type"], "missing");
+
+    // Generating a layout is picked up by the agent without a restart.
+    h.ok(
+        "create_default_layout",
+        json!({ "profileId": profile_id, "modelId": "elgato.streamdeck.mk2" }),
+    );
+    wait_for(&h, |s| {
+        s["status"]["devices"][0]["layout"]["type"] == "compatible"
+    });
+
+    let next = h.ok(
+        "cycle_project",
+        json!({ "profileId": profile_id, "direction": "next" }),
+    );
+    let result = h.ok(
+        "run_action",
+        json!({ "profileId": profile_id, "actionId": action["id"] }),
+    );
+    assert_eq!(result["status"], "succeeded");
+    assert_eq!(result["message"], "on CMR");
+    // The agent persisted the selection; the overview reads it from storage.
+    let overview = h.ok("get_overview", json!({}));
+    assert_eq!(overview["activeProject"]["id"], next);
+
+    h.ok("set_brightness", json!({ "percent": 40 }));
+    let device = deckpilot_device::DeviceId {
+        model: deckpilot_device::DeviceModelId::new(models::STREAM_DECK_MK2_ID),
+        serial: "TEST-0001".into(),
+    };
+    wait_for(&h, |_| mock.brightness(&device) == Some(40));
+    assert!(h.call("set_brightness", json!({ "percent": 200 })).is_err());
+
+    h.ok("stop_agent", json!({}));
+    wait_for(&h, |s| s["running"] == false);
 }

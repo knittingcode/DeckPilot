@@ -83,7 +83,8 @@ bound on this machine, kind mismatch.
 ## Devices and layouts
 
 - **DeviceModel** – `id`, `vendor`, `name`, `usb`, `capabilities`, `support`
-  (`descriptorOnly` / `verified`).
+  (`descriptorOnly`: no driver; `unverified`: driver not tested on hardware;
+  `verified`).
 - **DeviceCapabilities** – optional `keys` (rows, columns, image spec),
   `encoders` (count, pressable), `touch` (zones, image spec, gestures).
 - **ControlId** – `{ "kind": "key", "index": 0 }`, `encoder`, `touchZone`.
@@ -97,6 +98,19 @@ Folders are pages opened with `openPage` and left with `back`. Layout
 validation checks that controls and triggers exist on the model, that each
 control/trigger pair is bound at most once per page, and that targets exist.
 
+A profile uses its first layout for a model. `DeviceLayout::generate` creates
+one from the profile's actions and workflows using only the model's
+capabilities: items fill the keys in order; when they do not fit, the last key
+opens a next page (“More”) and the first key of following pages goes back.
+
+- **LayoutStatus** – per device model: `noProfile`, `unknownModel`, `missing`,
+  `compatible { layout, name }`, `invalid { layout, name, issues }`.
+- **KeyFace** – what a key shows: `style` (`empty`, `action`, `workflow`,
+  `folder`, `back`, `notice`), `title`, optional `detail`, `highlighted`. A
+  project switcher shows the active project as detail; a *Select project*
+  key is highlighted while its project is active. Without a profile or layout
+  the first key shows a notice and the others stay blank.
+
 ## Storage schema (version 1)
 
 | Table            | Purpose                                              |
@@ -104,4 +118,4 @@ control/trigger pair is bound at most once per page, and that targets exist.
 | `profiles`       | One row per profile; JSON document + document version |
 | `machine_config` | Single row; JSON document + document version          |
 | `profile_state`  | Active project per profile (cascade-deleted)          |
-| `settings`       | Key/value; currently the active profile               |
+| `settings`       | Key/value: active profile, device brightness          |

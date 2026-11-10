@@ -1,8 +1,8 @@
-import { ChevronLeft, ChevronRight, Info } from "lucide-react"
+import { ChevronLeft, ChevronRight } from "lucide-react"
 import { useState } from "react"
 
-import { ErrorNotice, Loading, Page } from "@/components/page"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { AgentBadge, AgentStopped, DeviceRow } from "@/components/agent"
+import { EmptyState, ErrorNotice, Loading, Page } from "@/components/page"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { useAsync } from "@/hooks/use-async"
@@ -11,7 +11,7 @@ import { useAppContext } from "@/lib/app-context"
 import { osLabel } from "@/lib/format"
 
 export function DashboardPage() {
-  const { revision, refresh } = useAppContext()
+  const { revision, refresh, agent } = useAppContext()
   const { state, reload } = useAsync(() => api.getOverview(), String(revision))
   const [error, setError] = useState<string | null>(null)
 
@@ -72,14 +72,31 @@ export function DashboardPage() {
             <Stat label="Resource bindings" value={state.data.resourceBindingCount} />
           </div>
 
-          <Alert>
-            <Info />
-            <AlertTitle>Device handling is not available yet</AlertTitle>
-            <AlertDescription>
-              This version manages configuration only. The background agent that talks to Stream
-              Deck hardware is planned for the next milestone.
-            </AlertDescription>
-          </Alert>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                Background agent <AgentBadge />
+              </CardTitle>
+              {agent?.status && (
+                <CardDescription>
+                  Version {agent.status.version} · {agent.status.backend} devices
+                </CardDescription>
+              )}
+            </CardHeader>
+            <CardContent className="grid gap-2">
+              {agent && !agent.running && <AgentStopped />}
+              {agent?.status &&
+                (agent.status.devices.length === 0 ? (
+                  <EmptyState title="No Stream Deck detected">
+                    Connect a supported device; it is picked up automatically.
+                  </EmptyState>
+                ) : (
+                  agent.status.devices.map((device) => (
+                    <DeviceRow key={device.id.serial} device={device} />
+                  ))
+                ))}
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader>

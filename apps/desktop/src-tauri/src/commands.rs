@@ -1,7 +1,10 @@
 //! Commands invoked by the frontend.
 //!
-//! Every command loads the current state from storage, applies one change,
-//! and writes it back, so the database remains the single source of truth.
+//! Configuration commands load a document from storage, apply one change,
+//! write it back and ask the agent to reload. Runtime state (active profile
+//! and project) and action execution go through the agent when it is
+//! running; when it is not, runtime state is written to storage directly and
+//! the agent picks it up on its next start.
 
 // Tauri injects `State` and deserialized arguments by value.
 #![allow(clippy::needless_pass_by_value)]
@@ -13,12 +16,14 @@ use tauri::State;
 
 use deckpilot_core::{
     ActionInstance, ActionInstanceId, ActionParameters, ActionResult, ActionType, ActionTypeId,
-    ActiveProjectContext, CycleDirection, MachineConfig, MachineResourceBinding, Os, Profile,
-    ProfileId, Project, ProjectId, ProjectKey, ResourceKey, ResourceKind,
+    ActiveProjectContext, CycleDirection, DeviceLayout, MachineConfig, MachineResourceBinding, Os,
+    Profile, ProfileId, Project, ProjectId, ProjectKey, ResourceKey, ResourceKind,
 };
-use deckpilot_device::DeviceModel;
+use deckpilot_device::{DeviceModel, DeviceModelId};
+use deckpilot_ipc::{ClientError, Request, Response};
 use deckpilot_storage::{ConfigStore, ProfileSummary};
 
+use crate::agent::{self, AgentConnection};
 use crate::error::{CommandError, CommandResult};
 use crate::state::{AppState, load_profile, machine_config};
 
@@ -44,6 +49,14 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         get_machine_config,
         set_resource_binding,
         remove_resource_binding,
+        create_default_layout,
+        agent_status,
+        start_agent,
+        stop_agent,
+        refresh_devices,
+        set_brightness,
+        get_autostart,
+        set_autostart,
     ]
 }
 
@@ -78,11 +91,11 @@ pub fn get_overview(state: State<'_, AppState>) -> CommandResult<Overview> {
     Ok(Overview {
         app_version: env!("CARGO_PKG_VERSION"),
         os: Os::current(),
-        database_path: state.database_path.display().to_string(),
+        database_path: state.paths.database.display().to_string(),
         profile_count: profiles.len(),
         active_profile,
         active_project,
-        action_type_count: state.engine.registry().action_types().count(),
+        action_type_count: state.registry.action_types().count(),
         device_model_count: state.catalog.iter().count(),
         resource_binding_count: machine_config(&store)?.bindings.len(),
     })
@@ -90,7 +103,7 @@ pub fn get_overview(state: State<'_, AppState>) -> CommandResult<Overview> {
 
 #[tauri::command]
 pub fn list_action_types(state: State<'_, AppState>) -> Vec<ActionType> {
-    state.engine.registry().action_types().cloned().collect()
+    state.registry.action_types().cloned().collect()
 }
 
 #[tauri::command]
@@ -164,6 +177,7 @@ pub fn create_profile(
     if store.active_profile()?.is_none() {
         store.set_active_profile(Some(profile.id))?;
     }
+    agent::notify_reload(&state.paths);
     store
         .list_profiles()?
         .into_iter()
@@ -174,6 +188,7 @@ pub fn create_profile(
 #[tauri::command]
 pub fn delete_profile(state: State<'_, AppState>, profile_id: ProfileId) -> CommandResult<()> {
     if state.store().delete_profile(profile_id)? {
+        agent::notify_reload(&state.paths);
         Ok(())
     } else {
         Err(CommandError::NotFound("profile"))
@@ -181,8 +196,22 @@ pub fn delete_profile(state: State<'_, AppState>, profile_id: ProfileId) -> Comm
 }
 
 #[tauri::command]
-pub fn set_active_profile(state: State<'_, AppState>, profile_id: ProfileId) -> CommandResult<()> {
-    Ok(state.store().set_active_profile(Some(profile_id))?)
+pub async fn set_active_profile(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+) -> CommandResult<()> {
+    match agent::request(
+        &state.paths,
+        Request::SetActiveProfile {
+            profile: profile_id,
+        },
+    )
+    .await
+    {
+        Ok(_) => Ok(()),
+        Err(ClientError::NotRunning) => Ok(state.store().set_active_profile(Some(profile_id))?),
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -199,15 +228,15 @@ pub fn create_action(
     profile_id: ProfileId,
     action: NewAction,
 ) -> CommandResult<ActionInstance> {
-    let instance = state.engine.registry().create_instance(
-        &action.name,
-        action.action_type,
-        &action.parameters,
-    )?;
+    let instance =
+        state
+            .registry
+            .create_instance(&action.name, action.action_type, &action.parameters)?;
     let store = state.store();
     let mut profile = load_profile(&store, profile_id)?;
     profile.actions.push(instance.clone());
     store.save_profile(&profile)?;
+    agent::notify_reload(&state.paths);
     Ok(instance)
 }
 
@@ -222,26 +251,35 @@ pub fn delete_action(
     profile
         .remove_action(action_id)
         .ok_or(CommandError::NotFound("action"))?;
-    Ok(store.save_profile(&profile)?)
+    store.save_profile(&profile)?;
+    agent::notify_reload(&state.paths);
+    Ok(())
 }
 
-/// Runs an action in this process. Only hardware-independent built-in actions
-/// exist at the moment, so this is safe to do from the configuration UI.
+/// Runs an action of the active profile in the agent, which owns action
+/// execution.
 #[tauri::command]
-pub fn run_action(
+pub async fn run_action(
     state: State<'_, AppState>,
     profile_id: ProfileId,
     action_id: ActionInstanceId,
 ) -> CommandResult<ActionResult> {
-    let store = state.store();
-    let profile = load_profile(&store, profile_id)?;
-    let machine = machine_config(&store)?;
-    let mut context = ActiveProjectContext::restore(&profile, store.active_project(profile_id)?);
-    let result = state
-        .engine
-        .run_action(&profile, &machine, &mut context, action_id)?;
-    store.set_active_project(profile_id, context.project_id())?;
-    Ok(result)
+    let active = state.store().active_profile()?;
+    if active != Some(profile_id) {
+        return Err(CommandError::Invalid(
+            "only actions of the active profile can run".into(),
+        ));
+    }
+    match agent::request(&state.paths, Request::RunAction { action: action_id }).await {
+        Ok(Response::ActionResult { result }) => Ok(result),
+        Ok(other) => Err(CommandError::Invalid(format!(
+            "unexpected agent response: {other:?}"
+        ))),
+        Err(ClientError::NotRunning) => Err(CommandError::Invalid(
+            "start the DeckPilot agent to run actions".into(),
+        )),
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -281,6 +319,7 @@ pub fn create_project(
     let mut profile = load_profile(&store, profile_id)?;
     profile.add_project(new_project.clone())?;
     store.save_profile(&profile)?;
+    agent::notify_reload(&state.paths);
     Ok(new_project)
 }
 
@@ -298,13 +337,31 @@ pub fn delete_project(
         return Err(CommandError::NotFound("project"));
     }
     store.save_profile(&profile)?;
-    let context = ActiveProjectContext::restore(&profile, store.active_project(profile_id)?);
-    Ok(store.set_active_project(profile_id, context.project_id())?)
+    // A selection that pointed at the removed project falls back to the first
+    // project wherever it is restored.
+    agent::notify_reload(&state.paths);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn cycle_project(
+pub async fn cycle_project(
     state: State<'_, AppState>,
+    profile_id: ProfileId,
+    direction: CycleDirection,
+) -> CommandResult<Option<ProjectId>> {
+    ensure_active(&state, profile_id)?;
+    match agent::request(&state.paths, Request::CycleProject { direction }).await {
+        Ok(Response::ActiveProject { project }) => Ok(project.map(|p| p.id)),
+        Ok(other) => Err(CommandError::Invalid(format!(
+            "unexpected agent response: {other:?}"
+        ))),
+        Err(ClientError::NotRunning) => cycle_in_storage(&state, profile_id, direction),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn cycle_in_storage(
+    state: &AppState,
     profile_id: ProfileId,
     direction: CycleDirection,
 ) -> CommandResult<Option<ProjectId>> {
@@ -317,16 +374,40 @@ pub fn cycle_project(
 }
 
 #[tauri::command]
-pub fn select_project(
+pub async fn select_project(
     state: State<'_, AppState>,
     profile_id: ProfileId,
     project_id: ProjectId,
 ) -> CommandResult<()> {
-    let store = state.store();
-    let profile = load_profile(&store, profile_id)?;
-    let mut context = ActiveProjectContext::new(&profile);
-    context.select(&profile, project_id)?;
-    Ok(store.set_active_project(profile_id, Some(project_id))?)
+    ensure_active(&state, profile_id)?;
+    match agent::request(
+        &state.paths,
+        Request::SelectProject {
+            project: project_id,
+        },
+    )
+    .await
+    {
+        Ok(_) => Ok(()),
+        Err(ClientError::NotRunning) => {
+            let store = state.store();
+            let profile = load_profile(&store, profile_id)?;
+            let mut context = ActiveProjectContext::new(&profile);
+            context.select(&profile, project_id)?;
+            Ok(store.set_active_project(profile_id, Some(project_id))?)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Project commands act on the active profile, which is what the agent runs.
+fn ensure_active(state: &AppState, profile_id: ProfileId) -> CommandResult<()> {
+    let active = state.store().active_profile()?;
+    if active == Some(profile_id) {
+        Ok(())
+    } else {
+        Err(CommandError::Invalid("the profile is not active".into()))
+    }
 }
 
 #[tauri::command]
@@ -355,6 +436,7 @@ pub fn set_resource_binding(
         value: value.to_owned(),
     });
     store.save_machine_config(&config)?;
+    agent::notify_reload(&state.paths);
     Ok(config)
 }
 
@@ -369,5 +451,86 @@ pub fn remove_resource_binding(
         .remove_binding(&key)
         .ok_or(CommandError::NotFound("resource binding"))?;
     store.save_machine_config(&config)?;
+    agent::notify_reload(&state.paths);
     Ok(config)
+}
+
+/// Generates a layout for `model` from the profile's actions and workflows,
+/// replacing an existing layout for that model. This is a starting point
+/// until a layout editor exists.
+#[tauri::command]
+pub fn create_default_layout(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+    model_id: DeviceModelId,
+) -> CommandResult<DeviceLayout> {
+    let model = state
+        .catalog
+        .get(&model_id)
+        .ok_or(CommandError::NotFound("device model"))?;
+    let store = state.store();
+    let mut profile = load_profile(&store, profile_id)?;
+    let layout = DeviceLayout::generate(format!("{} layout", model.name), model, &profile);
+    profile
+        .layouts
+        .retain(|existing| existing.model != model_id);
+    profile.layouts.push(layout.clone());
+    store.save_profile(&profile)?;
+    agent::notify_reload(&state.paths);
+    Ok(layout)
+}
+
+#[tauri::command]
+pub async fn agent_status(state: State<'_, AppState>) -> CommandResult<AgentConnection> {
+    Ok(agent::connection(&state.paths).await?)
+}
+
+#[tauri::command]
+pub async fn start_agent(state: State<'_, AppState>) -> CommandResult<AgentConnection> {
+    let connection = agent::connection(&state.paths).await?;
+    if connection.running {
+        return Ok(connection);
+    }
+    agent::start_agent().map_err(CommandError::Invalid)?;
+    Ok(agent::wait_until_running(&state.paths, std::time::Duration::from_secs(5)).await)
+}
+
+#[tauri::command]
+pub async fn stop_agent(state: State<'_, AppState>) -> CommandResult<()> {
+    match agent::request(&state.paths, Request::Shutdown).await {
+        Ok(_) | Err(ClientError::NotRunning | ClientError::Closed) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[tauri::command]
+pub async fn refresh_devices(state: State<'_, AppState>) -> CommandResult<()> {
+    agent::request(&state.paths, Request::RefreshDevices).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_brightness(state: State<'_, AppState>, percent: u8) -> CommandResult<()> {
+    agent::request(&state.paths, Request::SetBrightness { percent }).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_autostart(state: State<'_, AppState>) -> CommandResult<bool> {
+    match agent::request(&state.paths, Request::GetAutostart).await? {
+        Response::Autostart { enabled } => Ok(enabled),
+        other => Err(CommandError::Invalid(format!(
+            "unexpected agent response: {other:?}"
+        ))),
+    }
+}
+
+#[tauri::command]
+pub async fn set_autostart(state: State<'_, AppState>, enabled: bool) -> CommandResult<bool> {
+    match agent::request(&state.paths, Request::SetAutostart { enabled }).await? {
+        Response::Autostart { enabled } => Ok(enabled),
+        other => Err(CommandError::Invalid(format!(
+            "unexpected agent response: {other:?}"
+        ))),
+    }
 }

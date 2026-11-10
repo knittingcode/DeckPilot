@@ -35,6 +35,9 @@ const MIGRATIONS: &[&str] = &[r"
 "];
 
 const ACTIVE_PROFILE: &str = "active_profile";
+const DEVICE_BRIGHTNESS: &str = "device_brightness";
+/// How long a writer waits for another process holding the database lock.
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Key used to unlock an encrypted database.
 ///
@@ -82,6 +85,7 @@ impl SqliteStore {
 
     fn init(connection: Connection, encryption: &Encryption) -> Result<Self> {
         apply_key(&connection, encryption)?;
+        connection.busy_timeout(BUSY_TIMEOUT)?;
         connection.pragma_update(None, "foreign_keys", true)?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         let store = Self { connection };
@@ -286,6 +290,30 @@ impl ConfigStore for SqliteStore {
         Ok(())
     }
 
+    fn device_brightness(&self) -> Result<Option<u8>> {
+        let value: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [DEVICE_BRIGHTNESS],
+                |row| row.get(0),
+            )
+            .optional()?;
+        // Ignore malformed values instead of failing; the default applies.
+        Ok(value
+            .and_then(|value| value.parse::<u8>().ok())
+            .map(|value| value.min(100)))
+    }
+
+    fn set_device_brightness(&self, percent: u8) -> Result<()> {
+        self.connection.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            params![DEVICE_BRIGHTNESS, percent.min(100).to_string()],
+        )?;
+        Ok(())
+    }
+
     fn active_project(&self, profile: ProfileId) -> Result<Option<ProjectId>> {
         let value: Option<Option<String>> = self
             .connection
@@ -457,6 +485,31 @@ mod tests {
         let store = SqliteStore::open(&path, &Encryption::None).unwrap();
         assert_eq!(store.load_profile(profile.id).unwrap(), Some(profile));
         drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn brightness_is_clamped_and_persisted() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        assert_eq!(store.device_brightness().unwrap(), None);
+        store.set_device_brightness(40).unwrap();
+        assert_eq!(store.device_brightness().unwrap(), Some(40));
+        store.set_device_brightness(250).unwrap();
+        assert_eq!(store.device_brightness().unwrap(), Some(100));
+    }
+
+    #[test]
+    fn concurrent_connections_share_the_database() {
+        let dir = std::env::temp_dir().join(format!("deckpilot-test-{}", ProfileId::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shared.db");
+        let first = SqliteStore::open(&path, &Encryption::None).unwrap();
+        let second = SqliteStore::open(&path, &Encryption::None).unwrap();
+        let profile = sample_profile("Work");
+        first.save_profile(&profile).unwrap();
+        second.set_active_profile(Some(profile.id)).unwrap();
+        assert_eq!(first.active_profile().unwrap(), Some(profile.id));
+        drop((first, second));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -3,9 +3,10 @@
 DeckPilot is an open-source, lightweight, cross-platform application for managing
 Stream Deck devices on Linux, macOS and Windows.
 
-> **Status: early development.** This repository contains the foundation: the
-> domain model, local storage and a configuration application. DeckPilot does
-> **not** communicate with Stream Deck hardware yet. See [Known limitations](#known-limitations).
+> **Status: early development.** DeckPilot consists of a background agent
+> (devices, actions, system tray) and a configuration app. Support for the
+> Elgato Stream Deck MK.2 is implemented but **has not yet been tested on a
+> physical device**. See [Known limitations](#known-limitations).
 
 ## Concepts
 
@@ -32,13 +33,17 @@ synchronization and no telemetry.
 
 ```
 crates/
-  deckpilot-device/    Device models, capabilities, controls, events
-  deckpilot-core/      Actions, workflows, profiles, projects, resources, engine
+  deckpilot-device/    Device models, capabilities, driver interface, mock devices
+  deckpilot-core/      Actions, workflows, profiles, projects, resources, runtime
   deckpilot-storage/   ConfigStore trait and SQLite implementation
+  deckpilot-hid/       USB HID driver (Stream Deck MK.2)
+  deckpilot-ipc/       Agent IPC protocol, endpoint and client
 apps/
+  agent/               Background agent with system tray
   desktop/             Tauri 2 configuration app (React, TypeScript, shadcn/ui)
     src-tauri/         Rust side of the configuration app
-docs/                  Architecture, data model, development guide, roadmap
+packaging/linux/       udev rule for non-root device access
+docs/                  Architecture, agent, data model, development, roadmap
 ```
 
 ## Getting started
@@ -49,34 +54,51 @@ operating system.
 
 ```sh
 pnpm install
-pnpm dev            # start the configuration app in development mode
+cargo build -p deckpilot-agent   # the app starts the agent next to it
+pnpm dev                         # configuration app in development mode
 cargo test --workspace
 ```
+
+Run the agent with a simulated Stream Deck instead of hardware:
+
+```sh
+cargo run -p deckpilot-agent -- --mock-devices
+```
+
+On Linux, install `packaging/linux/70-deckpilot-streamdeck.rules` to access
+the device without root.
 
 See [docs/development.md](docs/development.md) for all commands.
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Background agent and IPC](docs/background-agent.md)
 - [Data model](docs/data-model.md)
 - [Development](docs/development.md)
 - [Roadmap](docs/roadmap.md)
 
 ## Known limitations
 
-- No device communication: discovery, key images and input handling are not
-  implemented. The Elgato Stream Deck MK.2 descriptor is based on public
-  protocol documentation and has **not** been tested on a physical device.
-- The background agent does not exist yet; the configuration app is the only
-  executable.
+- The Stream Deck MK.2 driver has **not** been tested on a physical device.
+  Only the MK.2 is supported; other models are not exposed.
+- Installers do not bundle the agent yet; it must be placed next to the
+  configuration app executable (as in development builds).
+- Keys show text labels only; icons are not supported yet.
+- Device discovery rescans every 2 seconds instead of using OS hotplug
+  notifications.
+- On Linux desktops without AppIndicator support, the tray icon is not shown
+  (the agent keeps working).
 - Only hardware-independent built-in actions exist (log message, cycle/select
   project, resolve resource).
-- Workflows and device layouts exist in the domain model but have no editor.
+- Workflows and layouts have no editor; layouts can be generated from a
+  profile's actions.
+- There is no update mechanism; the tray has no “Check for Updates” entry.
 - Database encryption is available in the storage crate behind the `sqlcipher`
   feature but is not enabled in the app; there is no password setup or
   import/export yet.
-- CI runs on Linux, macOS and Windows; local verification so far has been on
-  macOS only.
+- CI builds and tests on Linux, macOS and Windows; the agent and app have been
+  run manually on macOS only.
 
 ## License
 
