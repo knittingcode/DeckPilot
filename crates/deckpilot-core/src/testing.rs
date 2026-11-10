@@ -198,6 +198,8 @@ impl TestModule {
             config: Vec::new(),
             dependencies: Vec::new(),
             enabled_by_default: true,
+            portability: crate::Portability::default(),
+            migrations: Vec::new(),
         }
     }
 

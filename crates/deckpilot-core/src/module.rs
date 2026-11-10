@@ -122,6 +122,62 @@ pub struct ModulePage {
     pub order: i32,
 }
 
+/// How a module setting may travel in a configuration export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SettingScope {
+    /// Exported and imported.
+    Portable,
+    /// Only meaningful on this computer; never exported.
+    MachineSpecific,
+    /// Credentials or similar; never exported.
+    Sensitive,
+}
+
+/// What a module contributes to a configuration export, versioned
+/// independently of the module. Settings not listed are treated as
+/// machine-specific and stay on this computer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Portability {
+    /// Format version of the module's exported data. `0`: nothing exported.
+    pub version: u32,
+    pub settings: BTreeMap<String, SettingScope>,
+}
+
+impl Portability {
+    pub fn scope(&self, key: &str) -> SettingScope {
+        self.settings
+            .get(key)
+            .copied()
+            .unwrap_or(SettingScope::MachineSpecific)
+    }
+
+    /// The portable subset of `config`.
+    pub fn portable(&self, config: &ActionParameters) -> ActionParameters {
+        let mut out = ActionParameters::new();
+        for (key, value) in config.iter() {
+            if self.scope(key) == SettingScope::Portable {
+                out = out.with(key.clone(), value.clone());
+            }
+        }
+        out
+    }
+}
+
+/// One step of a module's own database schema. The SQL is declared data:
+/// the core applies it, so no module code runs during migrations, and the
+/// schemas of disabled modules are kept up to date as well.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleMigration {
+    /// 1-based, consecutive.
+    pub version: u32,
+    pub description: String,
+    /// May be empty, e.g. to adopt tables created by an older core
+    /// migration.
+    pub sql: String,
+}
+
 /// Static description of a feature module.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -140,6 +196,12 @@ pub struct ModuleManifest {
     pub dependencies: Vec<ModuleId>,
     /// Whether a fresh installation enables the module.
     pub enabled_by_default: bool,
+    /// What the module exports and imports.
+    #[serde(default)]
+    pub portability: Portability,
+    /// The module's own database schema steps.
+    #[serde(skip)]
+    pub migrations: Vec<ModuleMigration>,
 }
 
 impl ModuleManifest {
@@ -184,6 +246,14 @@ pub enum ModuleError {
     Unsupported(ModuleId),
     #[error("invalid module configuration: {}", .0.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))]
     InvalidConfig(Vec<ParameterError>),
+    #[error(
+        "module `{module}` cannot read exported data of version {found} (supports up to {supported})"
+    )]
+    IncompatibleExport {
+        module: ModuleId,
+        found: u32,
+        supported: u32,
+    },
 }
 
 /// Persisted user choices for one module.
@@ -451,6 +521,61 @@ impl ModuleRegistry {
                 }
             })
             .collect()
+    }
+
+    /// Declared schema migrations of every registered module, enabled or
+    /// not, for [`deckpilot-storage`].
+    pub fn schemas(&self) -> Vec<(ModuleId, Vec<ModuleMigration>)> {
+        self.modules
+            .iter()
+            .map(|(id, entry)| (id.clone(), entry.module.manifest().migrations.clone()))
+            .collect()
+    }
+
+    /// The portable settings of a module, for export.
+    pub fn export_settings(&self, id: &ModuleId) -> Option<(u32, bool, ActionParameters)> {
+        let entry = self.modules.get(id)?;
+        let portability = &entry.module.manifest().portability;
+        (portability.version > 0).then(|| {
+            (
+                portability.version,
+                entry.enabled,
+                portability.portable(&entry.config),
+            )
+        })
+    }
+
+    /// Validates exported settings of a module without running module code:
+    /// the format version must be supported, non-portable keys are dropped
+    /// (and reported), and the rest must satisfy the configuration schema.
+    /// Returns the settings to apply and the dropped keys.
+    pub fn validate_import(
+        &self,
+        id: &ModuleId,
+        version: u32,
+        settings: &ActionParameters,
+    ) -> Result<(ActionParameters, Vec<String>), ModuleError> {
+        let entry = self.entry(id)?;
+        let manifest = entry.module.manifest();
+        let supported = manifest.portability.version;
+        if version == 0 || version > supported {
+            return Err(ModuleError::IncompatibleExport {
+                module: id.clone(),
+                found: version,
+                supported,
+            });
+        }
+        let mut dropped = Vec::new();
+        let mut kept = entry.config.clone();
+        for (key, value) in settings.iter() {
+            if manifest.portability.scope(key) == SettingScope::Portable {
+                kept = kept.with(key.clone(), value.clone());
+            } else {
+                dropped.push(key.clone());
+            }
+        }
+        let normalized = normalize_config(manifest, &kept)?;
+        Ok((normalized, dropped))
     }
 
     /// Pages contributed by enabled modules, in navigation order.

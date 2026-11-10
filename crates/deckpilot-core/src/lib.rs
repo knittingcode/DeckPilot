@@ -37,7 +37,8 @@ pub use id::{ActionInstanceId, LayoutId, PageId, ProfileId, ProjectId, WorkflowI
 pub use layout::{BindingTarget, ControlBinding, DeviceLayout, LayoutIssue, LayoutPage, Trigger};
 pub use module::{
     Availability, Capability, FeatureModule, ModuleError, ModuleId, ModuleInfo, ModuleManifest,
-    ModulePage, ModuleRegistry, ModuleSettings, ModuleStates,
+    ModuleMigration, ModulePage, ModuleRegistry, ModuleSettings, ModuleStates, Portability,
+    SettingScope,
 };
 pub use platform::Os;
 pub use profile::{Profile, ProfileIssue, Usage};

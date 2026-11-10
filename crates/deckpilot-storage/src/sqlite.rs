@@ -1,5 +1,4 @@
-use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -7,8 +6,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use deckpilot_core::{
-    MachineConfig, ModuleId, ModuleSettings, ModuleStates, Profile, ProfileId, Project, ProjectId,
-    ProjectKey,
+    MachineConfig, ModuleId, ModuleMigration, ModuleSettings, ModuleStates, Profile, ProfileId,
+    Project, ProjectId, ProjectKey,
 };
 
 use crate::{
@@ -51,37 +50,43 @@ const MIGRATIONS: &[&str] = &[
     crate::legacy::SCHEMA,
     // Migration 4 only rewrites documents.
     "",
+    r"
+    CREATE TABLE migration_history (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_version INTEGER NOT NULL,
+        to_version   INTEGER NOT NULL,
+        backup       TEXT,
+        result       TEXT NOT NULL,
+        applied_at   INTEGER NOT NULL
+    );
+    CREATE TABLE module_schemas (
+        module_id  TEXT PRIMARY KEY NOT NULL,
+        version    INTEGER NOT NULL CHECK (version >= 0),
+        updated_at INTEGER NOT NULL
+    );
+",
 ];
+
+/// Backups kept per database; older ones are removed after a new one is
+/// verified.
+const KEPT_BACKUPS: usize = 5;
 
 const ACTIVE_PROFILE: &str = "active_profile";
 const DEVICE_BRIGHTNESS: &str = "device_brightness";
 /// How long a writer waits for another process holding the database lock.
 const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Key used to unlock an encrypted database.
-///
-/// The key is derived by SQLCipher (PBKDF2); DeckPilot does not implement any
-/// cryptography itself. The value is redacted from `Debug` output.
-#[derive(Clone)]
-pub struct DatabaseKey(#[cfg_attr(not(feature = "sqlcipher"), allow(dead_code))] String);
-
-impl DatabaseKey {
-    pub fn new(passphrase: impl Into<String>) -> Self {
-        Self(passphrase.into())
-    }
-}
-
-impl fmt::Debug for DatabaseKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("DatabaseKey(<redacted>)")
-    }
-}
+/// Raw 256-bit key of an encrypted database, derived from the user's
+/// password by [`crate::vault`]. SQLCipher receives it as a raw key, so its
+/// own passphrase derivation is skipped.
+pub type DatabaseKey = crate::crypto::SecretKey;
 
 /// Encryption mode for opening a database.
 #[derive(Debug, Clone)]
 pub enum Encryption {
+    /// Plain SQLite. Only for tests and for reading legacy databases.
     None,
-    /// Requires the `sqlcipher` feature.
+    /// Requires the `sqlcipher` feature (enabled by default).
     Key(DatabaseKey),
 }
 
@@ -89,27 +94,69 @@ pub enum Encryption {
 #[derive(Debug)]
 pub struct SqliteStore {
     connection: Connection,
+    /// File and key, for encrypted backups before migrations.
+    path: Option<PathBuf>,
+    encryption: Encryption,
+}
+
+/// One schema upgrade, as recorded in `migration_history`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationRecord {
+    pub from_version: u32,
+    pub to_version: u32,
+    pub backup: Option<String>,
+    pub result: String,
+    pub applied_at: i64,
+}
+
+/// Changes applied together in one transaction, e.g. by an import.
+#[derive(Debug, Default)]
+pub struct ConfigChanges {
+    pub delete_profiles: Vec<ProfileId>,
+    pub save_profiles: Vec<Profile>,
+    pub module_states: Vec<(ModuleId, ModuleSettings)>,
 }
 
 impl SqliteStore {
     /// Opens (or creates) the database at `path` and applies migrations.
+    ///
+    /// Before an existing database is upgraded, its integrity is checked and
+    /// an encrypted backup is written and verified next to it (in
+    /// `backups/`). All migrations run in one transaction; the result is
+    /// verified and recorded in `migration_history`.
     pub fn open(path: impl AsRef<Path>, encryption: &Encryption) -> Result<Self> {
-        Self::init(Connection::open(path)?, encryption)
+        let path = path.as_ref().to_path_buf();
+        let connection = Connection::open(&path)?;
+        Self::init(connection, Some(path), encryption)
     }
 
     /// Opens a private in-memory database. Useful for tests.
     pub fn open_in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?, &Encryption::None)
+        Self::init(Connection::open_in_memory()?, None, &Encryption::None)
     }
 
-    fn init(connection: Connection, encryption: &Encryption) -> Result<Self> {
+    fn init(
+        connection: Connection,
+        path: Option<PathBuf>,
+        encryption: &Encryption,
+    ) -> Result<Self> {
         apply_key(&connection, encryption)?;
         connection.busy_timeout(BUSY_TIMEOUT)?;
         connection.pragma_update(None, "foreign_keys", true)?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
-        let store = Self { connection };
+        let store = Self {
+            connection,
+            path,
+            encryption: encryption.clone(),
+        };
         store.migrate()?;
         Ok(store)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn connection_for_tests(&self) -> &Connection {
+        &self.connection
     }
 
     /// Current schema version of the open database.
@@ -119,9 +166,47 @@ impl SqliteStore {
             .pragma_query_value(None, "user_version", |row| row.get(0))?)
     }
 
+    /// Schema version this build creates and understands.
+    ///
+    /// # Panics
+    ///
+    /// Never: there are far fewer migrations than `u32::MAX`.
+    pub fn supported_schema_version() -> u32 {
+        u32::try_from(MIGRATIONS.len()).expect("migration count fits in u32")
+    }
+
+    /// `PRAGMA quick_check` must report `ok`.
+    pub fn check_integrity(&self) -> Result<()> {
+        check_integrity(&self.connection)
+    }
+
     fn migrate(&self) -> Result<()> {
-        let supported = u32::try_from(MIGRATIONS.len()).expect("migration count fits in u32");
+        let supported = Self::supported_schema_version();
         let current = self.schema_version()?;
+        if current > supported {
+            // Never touch a database written by a newer DeckPilot.
+            return Err(StorageError::UnsupportedSchema {
+                found: current,
+                supported,
+            });
+        }
+        if current == supported {
+            return Ok(());
+        }
+        let backup = if current > 0 {
+            self.check_integrity()?;
+            self.backup_before_migration(current)?
+        } else {
+            None
+        };
+        let backup_name = backup.as_ref().map(|path| path.display().to_string());
+        // IMMEDIATE takes the write lock now, so a second process that opened
+        // the same database concurrently waits and then sees the new version.
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let current: u32 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if current > supported {
             return Err(StorageError::UnsupportedSchema {
                 found: current,
@@ -129,8 +214,6 @@ impl SqliteStore {
             });
         }
         for version in current..supported {
-            // Schema change and document upgrade commit together or not at all.
-            let tx = self.connection.unchecked_transaction()?;
             tx.execute_batch(MIGRATIONS[version as usize])?;
             match version + 1 {
                 2 => upgrade_documents(&tx)?,
@@ -138,10 +221,285 @@ impl SqliteStore {
                 4 => crate::project_actions::migrate(&tx)?,
                 _ => {}
             }
-            tx.pragma_update(None, "user_version", version + 1)?;
+        }
+        tx.pragma_update(None, "user_version", supported)?;
+        if current < supported {
+            tx.execute(
+                "INSERT INTO migration_history (from_version, to_version, backup, result, applied_at)
+                 VALUES (?1, ?2, ?3, 'ok', ?4)",
+                params![current, supported, backup_name, now()],
+            )?;
+        }
+        tx.commit()?;
+        // A failed check after commit is reported with the verified backup,
+        // which still holds the previous consistent state.
+        if let Err(error) = self.check_integrity() {
+            return Err(StorageError::MigrationFailed {
+                reason: error.to_string(),
+                backup: backup_name,
+            });
+        }
+        Ok(())
+    }
+
+    /// Writes an encrypted backup of the current state before an upgrade
+    /// from `version`. Plain (test) databases and in-memory databases are not
+    /// backed up, so no unencrypted copy is ever written.
+    fn backup_before_migration(&self, version: u32) -> Result<Option<PathBuf>> {
+        let (Some(path), Encryption::Key(key)) = (&self.path, &self.encryption) else {
+            return Ok(None);
+        };
+        let dir = backup_dir(path);
+        std::fs::create_dir_all(&dir).map_err(StorageError::Io)?;
+        let target = dir.join(format!("deckpilot-schema{version}-{}.db", now_millis()));
+        export_database(&self.connection, &target, Some(key))?;
+        verify_copy(&target, &Encryption::Key(key.clone()), version)?;
+        prune_backups(&dir);
+        Ok(Some(target))
+    }
+
+    /// Writes an encrypted, verified copy of the database to `target`.
+    pub fn backup_to(&self, target: &Path) -> Result<()> {
+        let Encryption::Key(key) = &self.encryption else {
+            return Err(StorageError::EncryptionUnavailable);
+        };
+        let version = self.schema_version()?;
+        export_database(&self.connection, target, Some(key))?;
+        verify_copy(target, &self.encryption, version)
+    }
+
+    /// Recorded schema upgrades, oldest first.
+    pub fn migration_history(&self) -> Result<Vec<MigrationRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT from_version, to_version, backup, result, applied_at
+             FROM migration_history ORDER BY id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(MigrationRecord {
+                from_version: row.get(0)?,
+                to_version: row.get(1)?,
+                backup: row.get(2)?,
+                result: row.get(3)?,
+                applied_at: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Applies the declared schema migrations of feature modules, each module
+    /// in its own transaction. Versions are tracked in `module_schemas`.
+    /// Migrations are SQL declared by the module; no module code runs.
+    pub fn apply_module_schemas(&self, modules: &[(ModuleId, Vec<ModuleMigration>)]) -> Result<()> {
+        for (module, migrations) in modules {
+            let tx = rusqlite::Transaction::new_unchecked(
+                &self.connection,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            let current: u32 = tx
+                .query_row(
+                    "SELECT version FROM module_schemas WHERE module_id = ?1",
+                    [module.as_str()],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .unwrap_or(0);
+            let supported = u32::try_from(migrations.len()).unwrap_or(u32::MAX);
+            if current > supported {
+                return Err(StorageError::UnsupportedModuleSchema {
+                    module: module.to_string(),
+                    found: current,
+                    supported,
+                });
+            }
+            for migration in migrations.iter().skip(current as usize) {
+                if !migration.sql.trim().is_empty() {
+                    tx.execute_batch(&migration.sql)?;
+                }
+            }
+            tx.execute(
+                "INSERT INTO module_schemas (module_id, version, updated_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (module_id) DO UPDATE SET version = excluded.version,
+                    updated_at = excluded.updated_at",
+                params![module.as_str(), supported, now()],
+            )?;
             tx.commit()?;
         }
         Ok(())
+    }
+
+    /// Schema version of a module's own tables, `0` if none were created.
+    pub fn module_schema_version(&self, module: &ModuleId) -> Result<u32> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT version FROM module_schemas WHERE module_id = ?1",
+                [module.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0))
+    }
+
+    /// Applies `changes` in one transaction: everything or nothing.
+    pub fn apply_changes(&self, changes: &ConfigChanges) -> Result<()> {
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        for id in &changes.delete_profiles {
+            tx.execute("DELETE FROM profiles WHERE id = ?1", [id.to_string()])?;
+            tx.execute(
+                "DELETE FROM settings WHERE key = ?1 AND value = ?2",
+                params![ACTIVE_PROFILE, id.to_string()],
+            )?;
+        }
+        for profile in &changes.save_profiles {
+            write_profile(&tx, profile)?;
+        }
+        for (id, settings) in &changes.module_states {
+            tx.execute(
+                "INSERT INTO modules (id, enabled, config) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (id) DO UPDATE SET enabled = excluded.enabled, config = excluded.config",
+                params![id.as_str(), settings.enabled, encode(&settings.config)?],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+
+/// `backups/` next to the database file.
+pub fn backup_dir(database: &Path) -> PathBuf {
+    database
+        .parent()
+        .map_or_else(|| PathBuf::from("backups"), |dir| dir.join("backups"))
+}
+
+fn now_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default()
+}
+
+/// Removes the oldest backups beyond [`KEPT_BACKUPS`]. Best effort.
+fn prune_backups(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut backups: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("deckpilot-schema")
+        })
+        .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
+        .collect();
+    backups.sort();
+    let excess = backups.len().saturating_sub(KEPT_BACKUPS);
+    for (_, path) in backups.into_iter().take(excess) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Writes a profile and its projects inside the caller's transaction.
+fn write_profile(tx: &Connection, profile: &Profile) -> Result<()> {
+    // Projects and the default project live in their own tables.
+    let mut document = serde_json::to_value(profile)?;
+    if let Some(fields) = document.as_object_mut() {
+        fields.remove("projects");
+        fields.remove("defaultProject");
+    }
+    tx.execute(
+        "INSERT INTO profiles (id, name, document_version, document, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT (id) DO UPDATE SET
+            name = excluded.name,
+            document_version = excluded.document_version,
+            document = excluded.document,
+            updated_at = excluded.updated_at",
+        params![
+            profile.id.to_string(),
+            profile.name,
+            DOCUMENT_VERSION,
+            document.to_string(),
+            now()
+        ],
+    )?;
+    SqliteStore::save_projects(tx, profile)?;
+    Ok(())
+}
+
+pub(crate) fn check_integrity(connection: &Connection) -> Result<()> {
+    let result: String = connection.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    if result == "ok" {
+        Ok(())
+    } else {
+        Err(StorageError::Corrupt(result))
+    }
+}
+
+/// SQLCipher's raw-key literal for `key` (`x'…'`), in a zeroizing buffer.
+pub(crate) fn raw_key_literal(key: &DatabaseKey) -> zeroize::Zeroizing<String> {
+    let hex = key.to_hex();
+    let mut literal = zeroize::Zeroizing::new(String::with_capacity(hex.len() + 3));
+    literal.push_str("x'");
+    literal.push_str(&hex);
+    literal.push('\'');
+    literal
+}
+
+/// Copies the database behind `connection` into a new file at `target`,
+/// encrypted with `key` (or plain when `None`), with the same schema version.
+/// Uses `sqlcipher_export`, which writes straight into the target, so no
+/// intermediate copy is created.
+pub(crate) fn export_database(
+    connection: &Connection,
+    target: &Path,
+    key: Option<&DatabaseKey>,
+) -> Result<()> {
+    if target.exists() {
+        std::fs::remove_file(target).map_err(StorageError::Io)?;
+    }
+    let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let target_name = target.to_string_lossy().into_owned();
+    let literal = key.map(raw_key_literal);
+    let empty = zeroize::Zeroizing::new(String::new());
+    connection.execute(
+        "ATTACH DATABASE ?1 AS deckpilot_export KEY ?2",
+        params![target_name, literal.as_ref().unwrap_or(&empty).as_str()],
+    )?;
+    let exported = connection
+        .query_row(
+            "SELECT sqlcipher_export('deckpilot_export')",
+            [],
+            |_| Ok(()),
+        )
+        .and_then(|()| {
+            connection.execute_batch(&format!(
+                "PRAGMA deckpilot_export.user_version = {version};"
+            ))
+        });
+    let detached = connection.execute_batch("DETACH DATABASE deckpilot_export;");
+    exported?;
+    detached?;
+    Ok(())
+}
+
+/// Opens `path` with `encryption` and checks integrity and schema version.
+pub(crate) fn verify_copy(path: &Path, encryption: &Encryption, version: u32) -> Result<()> {
+    let connection = Connection::open(path)?;
+    apply_key(&connection, encryption)?;
+    check_integrity(&connection)?;
+    let found: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if found == version {
+        Ok(())
+    } else {
+        Err(StorageError::Corrupt(format!(
+            "copy has schema version {found}, expected {version}"
+        )))
     }
 }
 
@@ -178,9 +536,11 @@ fn upgrade_documents(connection: &Connection) -> Result<()> {
 }
 
 #[cfg(feature = "sqlcipher")]
-fn apply_key(connection: &Connection, encryption: &Encryption) -> Result<()> {
+pub(crate) fn apply_key(connection: &Connection, encryption: &Encryption) -> Result<()> {
     if let Encryption::Key(key) = encryption {
-        connection.pragma_update(None, "key", &key.0)?;
+        // A raw key: SQLCipher skips its own passphrase derivation.
+        let literal = raw_key_literal(key);
+        connection.pragma_update(None, "key", literal.as_str())?;
         // Reading the schema fails if the key is wrong.
         connection
             .query_row("SELECT count(*) FROM sqlite_master", [], |row| {
@@ -192,7 +552,7 @@ fn apply_key(connection: &Connection, encryption: &Encryption) -> Result<()> {
 }
 
 #[cfg(not(feature = "sqlcipher"))]
-fn apply_key(_connection: &Connection, encryption: &Encryption) -> Result<()> {
+pub(crate) fn apply_key(_connection: &Connection, encryption: &Encryption) -> Result<()> {
     match encryption {
         Encryption::None => Ok(()),
         Encryption::Key(_) => Err(StorageError::EncryptionUnavailable),
@@ -259,7 +619,7 @@ impl SqliteStore {
     /// Writes the projects of `profile` to the `projects` table inside the
     /// caller's transaction. The table, not the document, is the source of
     /// truth; its constraints keep every project in exactly one profile.
-    fn save_projects(tx: &rusqlite::Transaction<'_>, profile: &Profile) -> Result<()> {
+    fn save_projects(tx: &Connection, profile: &Profile) -> Result<()> {
         let profile_id = profile.id.to_string();
         let stored: Vec<String> = tx
             .prepare("SELECT id FROM projects WHERE profile_id = ?1")?
@@ -388,30 +748,8 @@ impl ConfigStore for SqliteStore {
     }
 
     fn save_profile(&self, profile: &Profile) -> Result<()> {
-        // Projects and the default project live in their own tables.
-        let mut document = serde_json::to_value(profile)?;
-        if let Some(fields) = document.as_object_mut() {
-            fields.remove("projects");
-            fields.remove("defaultProject");
-        }
         let tx = self.connection.unchecked_transaction()?;
-        tx.execute(
-            "INSERT INTO profiles (id, name, document_version, document, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT (id) DO UPDATE SET
-                name = excluded.name,
-                document_version = excluded.document_version,
-                document = excluded.document,
-                updated_at = excluded.updated_at",
-            params![
-                profile.id.to_string(),
-                profile.name,
-                DOCUMENT_VERSION,
-                document.to_string(),
-                now()
-            ],
-        )?;
-        Self::save_projects(&tx, profile)?;
+        write_profile(&tx, profile)?;
         tx.commit()?;
         Ok(())
     }
@@ -1297,7 +1635,10 @@ mod tests {
         }
         document["layouts"] = serde_json::to_value([&layout]).unwrap();
         let (store, dir) = migrate_v2(&[(work, document)], &[]);
-        assert_eq!(store.schema_version().unwrap(), 4);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            SqliteStore::supported_schema_version()
+        );
 
         let profile = store.load_profile(work).unwrap().unwrap();
         // Same actions, same ids, same order; layouts untouched.
@@ -1427,36 +1768,171 @@ mod tests {
     #[test]
     fn database_key_is_redacted() {
         assert_eq!(
-            format!("{:?}", DatabaseKey::new("secret")),
-            "DatabaseKey(<redacted>)"
+            format!("{:?}", DatabaseKey::random().unwrap()),
+            "SecretKey(<redacted>)"
         );
     }
 
     #[cfg(not(feature = "sqlcipher"))]
     #[test]
     fn encryption_requires_sqlcipher_build() {
-        let result = SqliteStore::open(":memory:", &Encryption::Key(DatabaseKey::new("secret")));
+        let result =
+            SqliteStore::open(":memory:", &Encryption::Key(DatabaseKey::random().unwrap()));
         assert!(matches!(result, Err(StorageError::EncryptionUnavailable)));
     }
 
     #[cfg(feature = "sqlcipher")]
     #[test]
     fn encrypted_database_requires_correct_key() {
-        let dir = std::env::temp_dir().join(format!("deckpilot-test-{}", ProfileId::new()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = temp_dir();
         let path = dir.join("encrypted.db");
-        let key = Encryption::Key(DatabaseKey::new("correct horse"));
+        let key = Encryption::Key(DatabaseKey::random().unwrap());
         {
             let store = SqliteStore::open(&path, &key).unwrap();
             store.save_profile(&sample_profile("Work")).unwrap();
         }
         assert!(SqliteStore::open(&path, &key).is_ok());
-        let wrong = Encryption::Key(DatabaseKey::new("wrong"));
+        let wrong = Encryption::Key(DatabaseKey::random().unwrap());
         assert!(matches!(
             SqliteStore::open(&path, &wrong),
             Err(StorageError::InvalidKey)
         ));
         assert!(SqliteStore::open(&path, &Encryption::None).is_err());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(feature = "sqlcipher")]
+    #[test]
+    fn upgrades_are_preceded_by_a_verified_encrypted_backup() {
+        let dir = temp_dir();
+        let path = dir.join("deckpilot.db");
+        let key = DatabaseKey::random().unwrap();
+        let encryption = Encryption::Key(key.clone());
+        let profile = sample_profile("Work");
+        {
+            // A database as the previous release left it: schema 4.
+            let store = SqliteStore::open(&path, &encryption).unwrap();
+            store.save_profile(&profile).unwrap();
+            store
+                .connection
+                .execute_batch(
+                    "DROP TABLE migration_history; DROP TABLE module_schemas;
+                     PRAGMA user_version = 4;",
+                )
+                .unwrap();
+        }
+        let store = SqliteStore::open(&path, &encryption).unwrap();
+        assert_eq!(
+            store.schema_version().unwrap(),
+            SqliteStore::supported_schema_version()
+        );
+        assert_eq!(store.load_profile(profile.id).unwrap(), Some(profile));
+
+        let history = store.migration_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!((history[0].from_version, history[0].to_version), (4, 5));
+        assert_eq!(history[0].result, "ok");
+        let backup = std::path::PathBuf::from(history[0].backup.clone().unwrap());
+        assert!(backup.starts_with(backup_dir(&path)));
+
+        // The backup is encrypted with the same key and holds schema 4.
+        let header = std::fs::read(&backup).unwrap();
+        assert_ne!(&header[..15], b"SQLite format 3");
+        verify_copy(&backup, &encryption, 4).unwrap();
+        assert!(matches!(
+            verify_copy(&backup, &Encryption::Key(DatabaseKey::random().unwrap()), 4),
+            Err(StorageError::InvalidKey)
+        ));
+
+        // Opening again does nothing further.
+        drop(store);
+        let store = SqliteStore::open(&path, &encryption).unwrap();
+        assert_eq!(store.migration_history().unwrap().len(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn module_schemas_are_versioned() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let module = ModuleId::new("notes").unwrap();
+        let step = |version: u32, sql: &str| ModuleMigration {
+            version,
+            description: String::new(),
+            sql: sql.into(),
+        };
+        let schema = vec![
+            step(
+                1,
+                "CREATE TABLE notes_items (id INTEGER PRIMARY KEY, text TEXT NOT NULL);",
+            ),
+            step(
+                2,
+                "ALTER TABLE notes_items ADD COLUMN done INTEGER NOT NULL DEFAULT 0;",
+            ),
+        ];
+        store
+            .apply_module_schemas(&[(module.clone(), schema[..1].to_vec())])
+            .unwrap();
+        assert_eq!(store.module_schema_version(&module).unwrap(), 1);
+        store
+            .apply_module_schemas(&[(module.clone(), schema.clone())])
+            .unwrap();
+        assert_eq!(store.module_schema_version(&module).unwrap(), 2);
+        store
+            .connection
+            .execute("INSERT INTO notes_items (text, done) VALUES ('x', 1)", [])
+            .unwrap();
+        // A newer module schema than this build knows is refused.
+        assert!(matches!(
+            store.apply_module_schemas(&[(module.clone(), schema[..1].to_vec())]),
+            Err(StorageError::UnsupportedModuleSchema { found: 2, .. })
+        ));
+        // A failing step leaves the previous version in place.
+        let broken = vec![schema[0].clone(), schema[1].clone(), step(3, "NOT SQL")];
+        assert!(
+            store
+                .apply_module_schemas(&[(module.clone(), broken)])
+                .is_err()
+        );
+        assert_eq!(store.module_schema_version(&module).unwrap(), 2);
+    }
+
+    #[test]
+    fn changes_are_applied_atomically() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let existing = sample_profile("Existing");
+        store.save_profile(&existing).unwrap();
+        let fresh = sample_profile("Fresh");
+        // The second profile claims a project of the existing one: the whole
+        // change set must be rejected, including the deletion.
+        let mut thief = Profile::new("Thief");
+        thief.projects.push(existing.projects[0].clone());
+        let changes = ConfigChanges {
+            delete_profiles: vec![existing.id],
+            save_profiles: vec![fresh.clone(), thief],
+            module_states: Vec::new(),
+        };
+        // The deletion makes the project free again, so this succeeds…
+        store.apply_changes(&changes).unwrap();
+        assert_eq!(store.load_profile(existing.id).unwrap(), None);
+        // …while a real conflict rolls everything back.
+        let mut thief = Profile::new("Thief 2");
+        thief.projects.push(fresh.projects[0].clone());
+        let other = sample_profile("Other");
+        let failing = ConfigChanges {
+            delete_profiles: Vec::new(),
+            save_profiles: vec![other.clone(), thief],
+            module_states: vec![(
+                ModuleId::new("projects").unwrap(),
+                ModuleSettings {
+                    enabled: false,
+                    config: ActionParameters::new(),
+                },
+            )],
+        };
+        assert!(store.apply_changes(&failing).is_err());
+        assert_eq!(store.load_profile(other.id).unwrap(), None);
+        assert_eq!(store.module_states().unwrap(), ModuleStates::new());
+        assert_eq!(store.load_profile(fresh.id).unwrap(), Some(fresh));
     }
 }

@@ -15,7 +15,8 @@ pub mod switching;
 
 use deckpilot_core::{
     ActionHandler, ActionParameters, Capability, FeatureModule, ModuleId, ModuleManifest,
-    ModulePage, ParameterKind, ParameterSpec, ParameterValue,
+    ModuleMigration, ModulePage, ParameterKind, ParameterSpec, ParameterValue, Portability,
+    SettingScope,
 };
 
 pub use catalog::{CatalogError, ProjectCatalog};
@@ -70,6 +71,19 @@ impl ProjectsModule {
                 }],
                 dependencies: Vec::new(),
                 enabled_by_default: true,
+                portability: Portability {
+                    version: 1,
+                    settings: [(WRAP_AROUND.to_owned(), SettingScope::Portable)].into(),
+                },
+                // The projects tables were created by core schema 3, before
+                // modules could own tables. Version 1 records that this
+                // module owns them; later changes go here.
+                migrations: vec![ModuleMigration {
+                    version: 1,
+                    description: "Adopt the projects, default_projects and active_projects tables"
+                        .into(),
+                    sql: String::new(),
+                }],
             },
         }
     }
