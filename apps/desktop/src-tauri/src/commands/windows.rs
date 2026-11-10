@@ -98,6 +98,8 @@ pub fn finish_security_prompt<R: Runtime>(app: AppHandle<R>, window: WebviewWind
 }
 
 /// What double-clicking the titlebar does, from the system preference.
+/// Only macOS has an overlay titlebar; elsewhere this is used by tests.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DoubleClick {
     /// Zoom: maximize, or restore the previous size.
@@ -109,6 +111,7 @@ pub enum DoubleClick {
 /// Interprets macOS's "Double-click a window's title bar to" setting
 /// (`AppleActionOnDoubleClick`, and the older `AppleMiniaturizeOnDoubleClick`).
 /// "Fill" has no public equivalent for other apps' windows; it zooms.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn double_click_action(action: Option<&str>, legacy_minimize: Option<&str>) -> DoubleClick {
     match action.map(str::trim) {
         Some("Minimize") => DoubleClick::Minimize,
