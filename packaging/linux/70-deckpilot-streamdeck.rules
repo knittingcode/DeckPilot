@@ -1,0 +1,11 @@
+# DeckPilot: give the logged-in user access to supported Elgato Stream Deck
+# devices without root privileges.
+#
+# Install:
+#   sudo cp 70-deckpilot-streamdeck.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+# Then unplug and replug the device.
+
+# Elgato Stream Deck MK.2 (USB 0fd9:0080)
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="0080", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="0080", TAG+="uaccess"
