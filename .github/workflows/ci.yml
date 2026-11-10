@@ -117,8 +117,8 @@ jobs:
           deb=$(find target/release/bundle/deb -name '*.deb' | head -n 1)
           contents=$(dpkg-deb --contents "$deb")
           echo "$contents"
-          for path in ./usr/bin/deckpilot-agent ./usr/lib/udev/rules.d/70-deckpilot-streamdeck.rules; do
-            echo "$contents" | grep -q -F " $path" || { echo "::error::$deb lacks $path"; exit 1; }
+          # dpkg-deb lists paths with or without a leading "./".
+          for path in usr/bin/deckpilot-agent usr/lib/udev/rules.d/70-deckpilot-streamdeck.rules 'usr/share/applications/.*\.desktop'; do
+            echo "$contents" | grep -q -E " (\./)?$path\$" || { echo "::error::$deb lacks $path"; exit 1; }
           done
-          echo "$contents" | grep -q -E " \./usr/share/applications/.*\.desktop$" || { echo "::error::$deb lacks a desktop entry"; exit 1; }
           echo "$deb contains the app, the agent and the udev rule"
