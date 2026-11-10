@@ -9,6 +9,14 @@ use tauri::{WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::state::AppState;
 
+/// Origin the bundled frontend is served from. Requests from any other origin
+/// are treated as remote and rejected by Tauri's access control.
+const APP_ORIGIN: &str = if cfg!(windows) {
+    "http://tauri.localhost"
+} else {
+    "tauri://localhost"
+};
+
 struct Harness {
     window: WebviewWindow<tauri::test::MockRuntime>,
     data_dir: std::path::PathBuf,
@@ -36,7 +44,7 @@ impl Harness {
             cmd: cmd.into(),
             callback: CallbackFn(0),
             error: CallbackFn(1),
-            url: "tauri://localhost".parse().unwrap(),
+            url: APP_ORIGIN.parse().unwrap(),
             body: InvokeBody::Json(args),
             headers: tauri::http::HeaderMap::default(),
             invoke_key: INVOKE_KEY.to_string(),
