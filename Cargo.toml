@@ -6,6 +6,7 @@ members = [
     "crates/deckpilot-storage",
     "crates/deckpilot-hid",
     "crates/deckpilot-ipc",
+    "crates/deckpilot-update",
     "apps/agent",
     "apps/desktop/src-tauri",
 
@@ -25,16 +26,20 @@ deckpilot-core = { path = "crates/deckpilot-core" }
 deckpilot-storage = { path = "crates/deckpilot-storage" }
 deckpilot-hid = { path = "crates/deckpilot-hid" }
 deckpilot-ipc = { path = "crates/deckpilot-ipc" }
+deckpilot-update = { path = "crates/deckpilot-update" }
 
 tauri = "2"
 tauri-build = "2"
 auto-launch = "0.6"
+base64 = "0.22"
 dirs = "7"
 elgato-streamdeck = { version = "0.14", default-features = false }
 font8x8 = { version = "0.3", default-features = false }
 getrandom = "0.3"
 hidapi = "2.6"
 image = { version = "0.25", default-features = false }
+minisign-verify = "0.2"
+semver = { version = "1", features = ["serde"] }
 interprocess = { version = "2.4", features = ["tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "signal"] }
 tracing = "0.1"
