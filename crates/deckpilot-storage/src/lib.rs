@@ -5,7 +5,11 @@
 //! * **Portable configuration** – profiles (actions, workflows, projects,
 //!   layouts). Safe to export and move to another machine.
 //! * **Machine configuration** – resource bindings for this computer.
-//! * **Runtime state** – which profile and project are active.
+//! * **Runtime state** – which profile and project are active, device
+//!   brightness. Written by the background agent while it is running.
+//!
+//! The database may be opened by the agent and the configuration app at the
+//! same time; SQLite's WAL mode and a busy timeout serialize their writes.
 //!
 //! Secrets are not stored here yet. When they are introduced they will live in
 //! the operating system's credential store or an encrypted database, never in
@@ -69,4 +73,8 @@ pub trait ConfigStore {
     fn set_active_profile(&self, id: Option<ProfileId>) -> Result<()>;
     fn active_project(&self, profile: ProfileId) -> Result<Option<ProjectId>>;
     fn set_active_project(&self, profile: ProfileId, project: Option<ProjectId>) -> Result<()>;
+
+    /// Display brightness for connected devices in percent, if configured.
+    fn device_brightness(&self) -> Result<Option<u8>>;
+    fn set_device_brightness(&self, percent: u8) -> Result<()>;
 }
