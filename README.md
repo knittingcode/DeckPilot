@@ -17,6 +17,10 @@ which control triggers it.
 - **Profiles** are independent sets of actions, workflows, projects and device
   layouts. `Start Work` in one profile can do something entirely different from
   `Start Work` in another.
+- **Modules** provide features. The built-in *Projects* module adds projects
+  and the actions that switch between them; modules can be disabled without
+  losing configuration. A new installation starts with an empty Action
+  Library: modules provide action *types*, and you create the actions.
 - **Projects** live inside a profile and are selected cyclically
   (`SHOP → CMR → CMS → SHOP`). Project-dependent actions resolve their target
   from the active project. Switching projects never changes Git branches,
@@ -40,6 +44,10 @@ crates/
   deckpilot-hid/       USB HID driver (Stream Deck MK.2)
   deckpilot-ipc/       Agent IPC protocol, endpoint and client
   deckpilot-update/    Update manifest, signature and policy logic
+  deckpilot-modules/   The list of built-in feature modules
+modules/
+  general/             General actions (log message)
+  projects/            Projects module: project actions and management
 apps/
   agent/               Background agent with system tray
   desktop/             Tauri 2 configuration app (React, TypeScript, shadcn/ui)
@@ -76,6 +84,7 @@ See [docs/development.md](docs/development.md) for all commands.
 - [Architecture](docs/architecture.md)
 - [Background agent and IPC](docs/background-agent.md)
 - [Updates](docs/updates.md) and [releasing](docs/releasing.md)
+- [Feature modules](docs/modules.md)
 - [Data model](docs/data-model.md)
 - [Development](docs/development.md)
 - [Roadmap](docs/roadmap.md)

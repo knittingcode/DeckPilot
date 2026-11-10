@@ -48,6 +48,11 @@ Implemented:
   simulated devices and isolated data
 - Signed updates from GitHub Releases with coordinated agent restart, and a
   release pipeline that builds draft releases
+- Modular feature architecture: built-in modules (`general`, `projects`) with
+  namespaced action types, module-driven navigation, enable/disable without
+  losing configuration; projects stored per profile with database constraints
+- An empty Action Library on new installations; demonstration data only in
+  the development seed
 
 Remaining before the milestone is complete:
 

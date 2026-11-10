@@ -26,9 +26,12 @@ make up        # or: pnpm dev (same session, in the foreground; Ctrl+C stops it)
 
 1. checks the toolchain;
 2. creates `.dev/` (ignored by Git) with an **isolated data directory**
-   `.dev/data` and seeds it with demonstration data (two profiles, the SHOP
-   → CMR → CMS project cycle, actions, workflows and layouts for the
-   MK.2, XL and Stream Deck +) on first use;
+   `.dev/data` and seeds it with demonstration data on first use: a *Work*
+   profile (SHOP → CMR → CMS, actions, a workflow and layouts for the MK.2,
+   XL and Stream Deck +), a *Personal* profile with its own projects, and an
+   *Empty* profile to check empty states. Demonstration data exists only in
+   this seed; a production database starts with no profiles and an empty
+   Action Library;
 3. builds and starts the background agent with simulated MK.2, XL and
    Stream Deck + devices next to any connected hardware;
 4. starts the configuration app with `tauri dev` and Vite HMR.
@@ -149,11 +152,13 @@ real local IPC; no hardware is needed.
 
 ## Adding an action type
 
-1. Implement `ActionHandler` (definition + `execute`) in `deckpilot-core`, or in
-   a separate crate if it needs platform-specific dependencies.
-2. Register it in `builtin::handlers()` or on the `ActionRegistry` used by the
-   agent.
-3. Return `ContextEffect`s instead of mutating runtime state.
+Action types belong to a feature module (see [Feature modules](modules.md)).
+
+1. Implement `ActionHandler` (definition + `execute`) in the module's crate
+   under `modules/`, with an id of the form `<module id>.<name>`.
+2. Return it from the module's `FeatureModule::action_handlers`.
+3. Return `ContextEffect`s instead of mutating runtime state, and declare the
+   capability the effect needs in the module manifest.
 4. Add unit tests that run the handler with an `ExecutionContext`.
 
 The Action Library and Workflow editor generate their forms from the type's

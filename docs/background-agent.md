@@ -165,7 +165,10 @@ Requests (`crates/deckpilot-ipc/src/protocol.rs`):
 | `shutdown`              | Stop the agent gracefully                            |
 | `simulateInput`         | Inject input into a simulated device (`--mock-devices` only) |
 
-The current protocol is 2. The agent also accepts protocol 1 clients
+The current protocol is 3: action results only carry `selectProject`
+effects, and action types use module namespaces (`projects.next`). Project
+switching requests are refused while the projects module is disabled. The
+agent also accepts protocol 1 and 2 clients
 (DeckPilot 0.2), so a newer configuration app can always stop an older agent
 during an update. The agent status includes the time of the last device input,
 which automatic updates use to wait until the deck is idle.

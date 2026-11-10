@@ -90,8 +90,10 @@ The domain model and execution engine.
 - `action`: `ActionType` (schema), `ParameterSpec`/`ParameterKind`,
   `ActionParameters`, `ActionInstance`; parameters are validated and normalized
   against the schema
-- `registry`: `ActionHandler` trait and `ActionRegistry`
-- `builtin`: hardware-independent built-in actions
+- `registry`: `ActionHandler` trait and `ActionRegistry` (dispatch,
+  capability checks)
+- `module`: `ModuleManifest`, `FeatureModule`, `ModuleRegistry` (see
+  [Feature modules](modules.md))
 - `workflow`: `Workflow`, `WorkflowStep`, `OnFailure`
 - `execution`: `ExecutionContext`, `ActionResult`, `ContextEffect`
 - `project`: `Project`, `ProjectKey`, `ProjectSwitcher`, `ActiveProjectContext`
@@ -108,19 +110,30 @@ The domain model and execution engine.
 - `face`: `KeyFace`, the device-independent description of what a key shows
 
 Action handlers are pure with respect to the runtime context: they receive a
-read-only `ExecutionContext` and return `ContextEffect`s (for example "switch to
-the next project"), which the engine applies. This keeps handlers testable and
+read-only `ExecutionContext` and return `ContextEffect`s (for example "select
+project CMR"), which the engine applies after checking the module's
+capabilities and that the project belongs to the active profile. This keeps handlers testable and
 makes workflow steps observe the effects of earlier steps.
 
 Platform-specific behaviour (launching applications, opening terminals,
 controlling Docker) will be added behind explicit interfaces that handlers
 receive through the execution context. No such handler exists yet.
 
+### Feature modules (`modules/*`, `deckpilot-modules`)
+
+Action types and feature pages come from modules: `modules/general` and
+`modules/projects`. `deckpilot-modules` is the only crate that lists them; the
+agent and the app build their registries from it. See
+[Feature modules](modules.md).
+
 ### `deckpilot-storage`
 
 - `ConfigStore` trait used by the application
 - `SqliteStore` implementation with versioned migrations (`PRAGMA user_version`)
-- Profiles and machine configuration are stored as versioned JSON documents
+- Profiles and machine configuration are stored as versioned JSON documents;
+  projects, default and active projects live in tables whose constraints keep
+  each project inside its profile
+- Module states and migration notes are stored alongside
 - Optional SQLCipher encryption (`sqlcipher` feature) using `PRAGMA key`;
   DeckPilot does not implement cryptography itself
 
@@ -130,10 +143,13 @@ Tauri 2 application. The Rust side (`src-tauri`) exposes commands that load
 configuration from storage, apply one change through the domain model,
 persist it and notify the agent. Runtime changes and action execution are
 forwarded to the agent; a background task subscribes to agent events and
-forwards them to the window. The sections are Dashboard, Action Library,
-Workflows, Profiles, Projects (including this machine's resource mappings),
-Device Models, Layout Designer, Connected Devices and Settings (appearance,
-agent, updates). Every editor saves through the backend; layouts are
+forwards them to the window. The core sections are Dashboard, Action
+Library, Workflows, Profiles, Device Models, Layout Designer, Connected
+Devices and Settings (appearance, modules, agent, updates); further pages come
+from enabled modules (Projects, including this machine's resource mappings).
+Profile-scoped pages show the profile they edit and are re-created when
+another profile is chosen, so an open editor never writes to a different
+profile. Every editor saves through the backend; layouts are
 validated against the device model and previewed with the same face logic the
 agent uses. The frontend is React + TypeScript with Tailwind CSS and shadcn/ui
 components; `src/lib/types.ts` mirrors the serialized Rust types.
