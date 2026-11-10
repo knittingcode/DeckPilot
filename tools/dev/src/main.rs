@@ -33,7 +33,7 @@ Commands:
   doctor                 Check development dependencies
   up [--foreground] [--locked]
                          Start the agent and the app with live reload
-                         (--locked: do not unlock with the dev password)
+                         (--locked: lock the configuration after start)
      [--devices <list>]  Simulated devices: mk2,xl,plus (default) or none
   down                   Stop the session started by `up`
   restart                down + up
@@ -42,10 +42,13 @@ Commands:
                          Show session logs (follow with -f)
   agent                  Run the agent in the foreground (dev data)
   ui                     Run the app with HMR in the foreground (dev data)
-  seed [--reset] [--encrypt-legacy]
-                         Fill the dev database with demonstration data
-                         (--encrypt-legacy: encrypt an unencrypted database
-                         from an earlier version with the dev password)
+  seed [--reset] [--password] [--encrypt-legacy]
+                         Fill the dev database with demonstration data. A new
+                         database gets a system-managed key from the agent
+                         (Keychain service \"DeckPilot Development\");
+                         --password: protect it with the dev password instead
+                         --encrypt-legacy: encrypt an unencrypted database
+                         from an earlier version with the dev password
   window <id>            Ask the dev agent to open a native window, e.g.
                          security.unlock or workflows.execution-summary
   press <serial> <key>   Press a key of a simulated device
@@ -213,8 +216,13 @@ fn wait_for_agent(paths: &DevPaths, agent: &mut Child, timeout: Duration) -> Res
     Err("the agent did not become ready in time".into())
 }
 
-/// `seed [--reset] [--encrypt-legacy]`.
-fn seed_command(paths: &DevPaths, reset: bool, encrypt_legacy: bool) -> Result<(), String> {
+/// `seed [--reset] [--password] [--encrypt-legacy]`.
+fn seed_command(
+    paths: &DevPaths,
+    reset: bool,
+    password: bool,
+    encrypt_legacy: bool,
+) -> Result<(), String> {
     if reset {
         if Session::load(paths).is_some_and(|s| s.supervisor_alive()) {
             return Err("stop the session before resetting its data".into());
@@ -228,16 +236,42 @@ fn seed_command(paths: &DevPaths, reset: bool, encrypt_legacy: bool) -> Result<(
         seed::encrypt_legacy(paths).map_err(|e| e.to_string())?;
         println!("encrypted the development database with the development password");
     }
-    let seeded = seed::seed(paths).map_err(|e| e.to_string())?;
+    let mut seeded = seed::seed(paths, password).map_err(|e| e.to_string())?;
+    // A system-managed database is seeded with the key of the running agent.
+    if !seeded {
+        seeded = seed_through_agent(paths)?;
+    }
+    let missing = !paths.data.join("deckpilot.db").exists();
     println!(
         "{}",
         if seeded {
             "seeded demonstration data"
+        } else if missing {
+            "no database yet: `make up` creates one with a system-managed key and seeds it"
         } else {
-            "already seeded"
+            "already seeded (or the agent is not running)"
         }
     );
     Ok(())
+}
+
+/// Seeds a system-managed development database with the key of the running
+/// development agent and lets it reload. Nothing happens if the agent is
+/// not running or locked.
+fn seed_through_agent(paths: &DevPaths) -> Result<bool, String> {
+    let key = runtime().block_on(async {
+        let mut client = AgentClient::connect(&paths.agent_paths(), ClientKind::Other).await?;
+        client.request(Request::GetDatabaseKey).await
+    });
+    let Ok(Response::DatabaseKey { key }) = key else {
+        return Ok(false);
+    };
+    let key = deckpilot_storage::DatabaseKey::from_hex(key.expose()).map_err(|e| e.to_string())?;
+    let seeded = seed::seed_with_key(paths, key).map_err(|e| e.to_string())?;
+    if seeded {
+        let _ = dev_request(paths, Request::ReloadConfiguration);
+    }
+    Ok(seeded)
 }
 
 /// `window` and `press`: requests to the running development agent.
@@ -286,10 +320,32 @@ fn dev_request(paths: &DevPaths, request: Request) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Unlocks the development agent with the development password, so that
-/// `make up` behaves like an unlocked session. `--locked` (`make up
-/// LOCKED=1`) leaves it locked to try the unlock screens.
+/// Prepares the started development agent. A system-managed configuration
+/// is open already (and is seeded on the first start); a password-protected
+/// one is unlocked with the development password, so that `make up` behaves
+/// like an unlocked session. `--locked` (`make up LOCKED=1`) locks it to try
+/// the unlock screens.
 fn unlock_dev_agent(paths: &DevPaths, locked: bool) {
+    let status = runtime().block_on(agent_status(paths)).ok();
+    if status
+        .as_ref()
+        .is_some_and(|s| s.protection == Some(deckpilot_ipc::ProtectionMode::SystemManaged))
+    {
+        match seed_through_agent(paths) {
+            Ok(true) => println!("seeded the development database with demonstration data"),
+            Ok(false) => {}
+            Err(error) => println!("could not seed the development database: {error}"),
+        }
+        if let Some(problem) = status.and_then(|s| s.security_problem) {
+            println!("agent locked: {problem}");
+        } else if locked {
+            let _ = dev_request(paths, Request::Lock);
+            println!("agent locked; unlock it in the app (system authentication)");
+        } else {
+            println!("configuration opened with the system-managed development key");
+        }
+        return;
+    }
     if locked {
         println!(
             "agent left locked; the development password is `{}`",
@@ -450,7 +506,7 @@ fn up(paths: &DevPaths, devices: &str, foreground: bool, locked: bool) -> Result
         clean_stale(paths, &session);
     }
     doctor()?;
-    if seed::seed(paths).map_err(|e| e.to_string())? {
+    if seed::seed(paths, false).map_err(|e| e.to_string())? {
         println!("seeded the development database with demonstration data");
     }
     build_agent(paths)?;
@@ -593,7 +649,7 @@ fn status(paths: &DevPaths) {
 fn foreground_agent(paths: &DevPaths, devices: &str) -> Result<(), String> {
     paths.ensure_isolated()?;
     paths.create().map_err(|e| e.to_string())?;
-    seed::seed(paths).map_err(|e| e.to_string())?;
+    seed::seed(paths, false).map_err(|e| e.to_string())?;
     let mut command = Command::new("cargo");
     command
         .args(["run", "-p", "deckpilot-agent", "--"])
@@ -698,7 +754,12 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         Some("agent") => foreground_agent(&paths, &devices),
         Some("ui") => foreground_ui(&paths),
-        Some("seed") => seed_command(&paths, flag("--reset"), flag("--encrypt-legacy")),
+        Some("seed") => seed_command(
+            &paths,
+            flag("--reset"),
+            flag("--password"),
+            flag("--encrypt-legacy"),
+        ),
         Some("clean") => clean(&paths, flag("--data")),
         Some(command @ ("window" | "press")) => agent_command(command, &args[1..], &paths),
         Some("check-versions") => {

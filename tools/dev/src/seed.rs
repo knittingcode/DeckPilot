@@ -467,23 +467,34 @@ pub fn encrypt_legacy(paths: &DevPaths) -> Result<()> {
     Ok(())
 }
 
-/// Seeds the development database once per data directory. A new database
-/// is encrypted with [`DEV_PASSWORD`]. An unencrypted database from an
-/// earlier version is left alone so that the app's migration can be tried.
+/// Seeds a password-protected development database once per data
+/// directory. A missing database is left to the agent, which creates it
+/// with a system-managed key like a fresh installation; it is seeded through
+/// the agent then ([`seed_with_key`]). `password`: create a missing database
+/// protected by [`DEV_PASSWORD`] instead. An unencrypted database from an
+/// earlier version is left alone so that the migration can be tried.
 /// Returns whether data was written.
-pub fn seed(paths: &DevPaths) -> Result<bool> {
+pub fn seed(paths: &DevPaths, password: bool) -> Result<bool> {
     paths.create()?;
     let vault = vault(paths);
     let key = match vault.state()? {
-        DatabaseState::Missing => vault.initialize(&Password::new(DEV_PASSWORD))?,
+        DatabaseState::Missing if password => vault.initialize(&Password::new(DEV_PASSWORD))?,
+        DatabaseState::Missing => return Ok(false),
         DatabaseState::Plaintext => {
             println!(
                 "the development database is unencrypted (created by an earlier version); \
-                 the app offers to encrypt it (the development password is `{DEV_PASSWORD}`)"
+                 the agent encrypts it with a system-managed key when it starts"
             );
             return Ok(false);
         }
         DatabaseState::Encrypted => {
+            if !matches!(
+                vault.protection()?,
+                Some(deckpilot_storage::vault::Protection::Password { .. })
+            ) {
+                // System-managed: only the agent reads the key.
+                return Ok(false);
+            }
             let Ok(key) = vault.unlock(&Password::new(DEV_PASSWORD)) else {
                 println!("the development database uses a different password; not seeding");
                 return Ok(false);
@@ -491,7 +502,13 @@ pub fn seed(paths: &DevPaths) -> Result<bool> {
             key
         }
     };
-    let store = SqliteStore::open(vault.database(), &Encryption::Key(key))?;
+    seed_with_key(paths, key)
+}
+
+/// Seeds the development database opened with `key` (from the agent for a
+/// system-managed key), once per data directory.
+pub fn seed_with_key(paths: &DevPaths, key: DatabaseKey) -> Result<bool> {
+    let store = SqliteStore::open(vault(paths).database(), &Encryption::Key(key))?;
     // Seed once per data directory: deleting the demo data must not bring
     // it back on the next `make up`. `seed --reset` starts a new directory.
     if store.setting(SEEDED)?.is_some() {
