@@ -169,6 +169,8 @@ export type ActionStatus = "succeeded" | "failed" | "skipped"
 export interface ActionResult {
   status: ActionStatus
   message: string
+  /** Structured details, e.g. `projectKey`, `resource`, `value`. */
+  data?: Record<string, string>
 }
 
 export interface StepReport {

@@ -189,7 +189,7 @@ mod tests {
             id: ActionInstanceId::new(),
             name: "Select".into(),
             action_type: crate::actions::select_id(),
-            parameters: ActionParameters::new().with("project", ParameterValue::Project(shop)),
+            parameters: ActionParameters::new().with("project_id", ParameterValue::Project(shop)),
             description: String::new(),
             icon: None,
             label: None,

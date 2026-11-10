@@ -20,6 +20,7 @@
 //! portable documents.
 
 mod legacy;
+mod project_actions;
 mod sqlite;
 
 use deckpilot_core::{
@@ -34,8 +35,9 @@ pub use sqlite::{DatabaseKey, Encryption, SqliteStore};
 /// configuration. Bumped when the serialized shape changes incompatibly.
 ///
 /// Version 3 no longer contains projects and the default project; they are
-/// stored in their own tables.
-pub const DOCUMENT_VERSION: u32 = 3;
+/// stored in their own tables. Version 4 uses the generic projects action
+/// parameters (`project_id`, a resource name for `projects.resolve-resource`).
+pub const DOCUMENT_VERSION: u32 = 4;
 
 /// A change a schema migration made to user data beyond a plain format
 /// upgrade, for example a project that needed a new id.

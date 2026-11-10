@@ -47,10 +47,17 @@ const logType: ActionType = {
 const selectType: ActionType = {
   id: "projects.select",
   name: "Select project",
-  description: "Makes a specific project of the profile active.",
+  description: "Makes a project of the profile active.",
   category: "Projects",
   requiresProject: false,
-  parameters: [{ key: "project", label: "Project", kind: { type: "project" }, required: true }],
+  parameters: [{ key: "project_id", label: "Project", kind: { type: "project" }, required: false }],
+}
+
+const repositoryType: ActionType = {
+  ...selectType,
+  id: "projects.repository",
+  name: "Project repository",
+  description: "Resolves the repository of a project on this computer.",
 }
 
 function module(id: string, name: string, actionTypes: ActionType[], enabled = true): ModuleInfo {
@@ -192,8 +199,32 @@ describe("ActionEditor", () => {
       "profile",
       expect.objectContaining({
         actionType: "projects.select",
-        parameters: { project: { type: "project", value: "p-cmr" } },
+        parameters: { project_id: { type: "project", value: "p-cmr" } },
       }),
+    )
+  })
+
+  it("stores the current project as no project, not as the active one", async () => {
+    const user = userEvent.setup()
+    createAction.mockResolvedValue({
+      id: "a5",
+      name: "Repo",
+      actionType: repositoryType.id,
+      parameters: {},
+    })
+    renderEditor(null, 0, [module("projects", "Projects", [selectType, repositoryType])])
+    await user.click(screen.getByLabelText("Action type"))
+    await user.click(screen.getByRole("option", { name: "Project repository" }))
+    // The default needs no choice; the dropdown lists this profile's projects.
+    await user.click(screen.getByLabelText(/^Project/))
+    expect(screen.getByRole("option", { name: "Current project (default)" })).toBeInTheDocument()
+    expect(screen.getByRole("option", { name: "SHOP · Shop" })).toBeInTheDocument()
+    await user.click(screen.getByRole("option", { name: "Current project (default)" }))
+    await user.type(screen.getByLabelText("Name"), "Repo")
+    await user.click(screen.getByRole("button", { name: /create action/i }))
+    expect(createAction).toHaveBeenCalledWith(
+      "profile",
+      expect.objectContaining({ actionType: "projects.repository", parameters: {} }),
     )
   })
 
@@ -202,7 +233,7 @@ describe("ActionEditor", () => {
       id: "a3",
       name: "Next project",
       actionType: selectType.id,
-      parameters: { project: { type: "project", value: "p-shop" } },
+      parameters: { project_id: { type: "project", value: "p-shop" } },
     }
     renderEditor(action, 0, [
       module("general", "General", [logType]),
@@ -220,7 +251,7 @@ describe("ActionEditor", () => {
       id: "a4",
       name: "Foreign",
       actionType: selectType.id,
-      parameters: { project: { type: "project", value: "p-elsewhere" } },
+      parameters: { project_id: { type: "project", value: "p-elsewhere" } },
     }
     renderEditor(action, 0, [module("projects", "Projects", [selectType])])
     expect(screen.getByText(/not part of this profile/)).toBeInTheDocument()

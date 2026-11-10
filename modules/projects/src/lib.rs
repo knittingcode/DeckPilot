@@ -10,6 +10,8 @@
 
 pub mod actions;
 pub mod catalog;
+pub mod resources;
+pub mod switching;
 
 use deckpilot_core::{
     ActionHandler, ActionParameters, Capability, FeatureModule, ModuleId, ModuleManifest,

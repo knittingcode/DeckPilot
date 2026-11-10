@@ -34,7 +34,10 @@ use rusqlite::{Connection, params};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-use crate::{DOCUMENT_VERSION, Result, StorageError};
+use crate::{Result, StorageError};
+
+/// Document format written by this migration.
+const DOCUMENT_VERSION: u32 = 3;
 
 /// Namespace for project ids derived during the migration.
 const PROJECT_NAMESPACE: Uuid = Uuid::from_u128(0x8f0e_3b5c_2d41_4c7e_9a63_51f2_d7b8_0c19);

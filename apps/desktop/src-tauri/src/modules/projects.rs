@@ -12,11 +12,11 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use deckpilot_core::{
-    ActiveProjectContext, CycleDirection, MachineConfig, MachineResourceBinding, ProfileId,
-    Project, ProjectId, ProjectKey, ResourceKey, ResourceKind,
+    ActiveProjectContext, CycleDirection, MachineResourceBinding, ProfileId, Project, ProjectId,
+    ProjectKey, ResourceKey, ResourceKind,
 };
 use deckpilot_ipc::{ClientError, Request, Response};
-use deckpilot_modules::projects::{ProjectCatalog, module_id};
+use deckpilot_modules::projects::{ProjectCatalog, module_id, switching};
 use deckpilot_storage::ConfigStore;
 
 use crate::agent;
@@ -174,13 +174,15 @@ pub async fn cycle_project(
         Ok(Response::ActiveProject { project }) => Ok(project.map(|p| p.id)),
         Ok(other) => Err(unexpected(&other)),
         Err(ClientError::NotRunning) => {
+            let wrap = switching::wrap_around(&state.modules());
             let store = state.store();
             let profile = load_profile(&store, profile_id)?;
-            let mut context =
+            let context =
                 ActiveProjectContext::restore(&profile, store.active_project(profile_id)?);
-            let active = context.cycle(&profile, direction)?;
-            store.set_active_project(profile_id, active)?;
-            Ok(active)
+            let active = switching::step(&profile, context.project_id(), direction, wrap)
+                .map_err(|e| CommandError::Invalid(e.to_string()))?;
+            store.set_active_project(profile_id, Some(active))?;
+            Ok(Some(active))
         }
         Err(error) => Err(error.into()),
     }
@@ -212,51 +214,6 @@ pub async fn select_project(
             .set_active_project(profile_id, Some(project_id))?),
         Err(error) => Err(error.into()),
     }
-}
-
-#[tauri::command]
-pub fn get_machine_config(state: State<'_, AppState>) -> CommandResult<MachineConfig> {
-    Ok(machine_config(&state.store())?)
-}
-
-#[tauri::command]
-pub fn set_resource_binding(
-    state: State<'_, AppState>,
-    key: String,
-    kind: ResourceKind,
-    value: String,
-) -> CommandResult<MachineConfig> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Err(CommandError::Invalid(
-            "resource value must not be empty".into(),
-        ));
-    }
-    let store = state.store();
-    let mut config = machine_config(&store)?;
-    config.set_binding(MachineResourceBinding {
-        key: ResourceKey::new(key.trim())?,
-        kind,
-        value: value.to_owned(),
-    });
-    store.save_machine_config(&config)?;
-    crate::agent::notify_reload(&state.paths);
-    Ok(config)
-}
-
-#[tauri::command]
-pub fn remove_resource_binding(
-    state: State<'_, AppState>,
-    key: ResourceKey,
-) -> CommandResult<MachineConfig> {
-    let store = state.store();
-    let mut config = machine_config(&store)?;
-    config
-        .remove_binding(&key)
-        .ok_or(CommandError::NotFound("resource binding"))?;
-    store.save_machine_config(&config)?;
-    crate::agent::notify_reload(&state.paths);
-    Ok(config)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -310,6 +267,7 @@ pub fn check_resources(
     state: State<'_, AppState>,
     profile_id: ProfileId,
 ) -> CommandResult<Vec<ResourceCheck>> {
+    state.require_module(&module_id())?;
     let store = state.store();
     let profile = load_profile(&store, profile_id)?;
     let config = machine_config(&store)?;

@@ -7,8 +7,8 @@
 use deckpilot_core::{
     ActionInstance, ActionInstanceId, ActionParameters, ActionRegistry, BindingTarget,
     ControlBinding, DeviceLayout, LayoutPage, MachineConfig, MachineResourceBinding, OnFailure, Os,
-    ParameterValue, Profile, Project, ProjectKey, ResourceKey, ResourceKind, ResourceRef,
-    StepCondition, Trigger, Workflow, WorkflowId,
+    ParameterValue, Profile, Project, ProjectKey, ResourceKey, ResourceKind, StepCondition,
+    Trigger, Workflow, WorkflowId,
 };
 use deckpilot_device::{ControlId, TouchGesture, models};
 use deckpilot_modules::general;
@@ -116,13 +116,6 @@ struct WorkIds {
     start: WorkflowId,
 }
 
-fn project_role(role: &str) -> ActionParameters {
-    ActionParameters::new().with(
-        "resource",
-        ParameterValue::Resource(ResourceRef::ProjectRole { role: role.into() }),
-    )
-}
-
 /// Actions and the "Start Work" workflow of the Work profile.
 fn work_actions(b: &mut Builder<'_>) -> Result<WorkIds> {
     let next = b.action(
@@ -139,49 +132,46 @@ fn work_actions(b: &mut Builder<'_>) -> Result<WorkIds> {
         "chevron-left",
         Some("Previous"),
     )?;
-    let mut selectors = Vec::new();
-    let projects: Vec<_> = b
-        .profile
-        .projects
-        .iter()
-        .map(|p| (p.id, p.key.to_string()))
-        .collect();
-    for (id, key) in projects {
-        let parameters = ActionParameters::new().with("project", ParameterValue::Project(id));
-        let name = format!("Select {key}");
+    // Instances the user could have created: one Select action without a
+    // project (the current one) and two that pick a project explicitly.
+    let mut selectors = vec![b.action(
+        "Current project",
+        actions::select_id(),
+        &ActionParameters::new(),
+        "folder",
+        Some("Now"),
+    )?];
+    for index in [1, 2] {
+        let project = &b.profile.projects[index];
+        let (id, key) = (project.id, project.key.to_string());
         selectors.push(b.action(
-            &name,
+            &format!("Select {key}"),
             actions::select_id(),
-            &parameters,
+            &ActionParameters::new().with("project_id", ParameterValue::Project(id)),
             "folder",
             Some(&key),
         )?);
     }
-    let resolve = actions::resolve_resource_id;
+    // Generic types: the current project unless a project is chosen.
     let repository = b.action(
-        "Repository — active project",
-        resolve(),
-        &project_role("repository"),
+        "Repository — current project",
+        actions::repository_id(),
+        &ActionParameters::new(),
         "git-branch",
         Some("Repo {project.key}"),
     )?;
-    let fixed = ActionParameters::new().with(
-        "resource",
-        ParameterValue::Resource(ResourceRef::Fixed {
-            key: ResourceKey::new("shop.repository")?,
-        }),
-    );
+    let shop = b.profile.projects[0].id;
     let shop_repository = b.action(
         "Repository — SHOP",
-        resolve(),
-        &fixed,
+        actions::repository_id(),
+        &ActionParameters::new().with("project_id", ParameterValue::Project(shop)),
         "git-branch",
         Some("Repo SHOP"),
     )?;
     let docs = b.action(
-        "Documentation — active project",
-        resolve(),
-        &project_role("docs"),
+        "Documentation — current project",
+        actions::documentation_id(),
+        &ActionParameters::new(),
         "book-open",
         Some("Docs"),
     )?;
@@ -381,14 +371,9 @@ fn personal_profile(registry: &ActionRegistry) -> Result<Profile> {
         None,
     )?;
     let repository = b.action(
-        "Repository — active project",
-        actions::resolve_resource_id(),
-        &ActionParameters::new().with(
-            "resource",
-            ParameterValue::Resource(ResourceRef::ProjectRole {
-                role: "repository".into(),
-            }),
-        ),
+        "Repository — current project",
+        actions::repository_id(),
+        &ActionParameters::new(),
         "git-branch",
         None,
     )?;
@@ -446,12 +431,21 @@ fn machine(paths: &DevPaths) -> Result<MachineConfig> {
     Ok(config)
 }
 
+/// Development-only setting that records that the seed ran.
+const SEEDED: &str = "dev.seeded";
+
 /// Seeds the development database if it has no profiles. Returns whether
 /// data was written.
 pub fn seed(paths: &DevPaths) -> Result<bool> {
     paths.create()?;
     let store = SqliteStore::open(paths.data.join("deckpilot.db"), &Encryption::None)?;
+    // Seed once per data directory: deleting the demo data must not bring
+    // it back on the next `make up`. `seed --reset` starts a new directory.
+    if store.setting(SEEDED)?.is_some() {
+        return Ok(false);
+    }
     if !store.list_profiles()?.is_empty() {
+        store.set_setting(SEEDED, "existing data")?;
         return Ok(false);
     }
     let registry = deckpilot_modules::builtin(Os::current()).action_registry();
@@ -468,6 +462,7 @@ pub fn seed(paths: &DevPaths) -> Result<bool> {
         store.save_profile(profile)?;
     }
     store.set_active_profile(Some(work.id))?;
+    store.set_setting(SEEDED, "demo")?;
     store.save_machine_config(&machine(paths)?)?;
     Ok(true)
 }

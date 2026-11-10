@@ -138,10 +138,8 @@ fn configuration_flow_through_ipc() {
             "profileId": profile_id,
             "action": {
                 "name": "Where am I",
-                "actionType": "projects.resolve-resource",
-                "parameters": {
-                    "resource": { "type": "resource", "value": { "type": "projectRole", "role": "repository" } }
-                }
+                "actionType": "projects.repository",
+                "parameters": { "project_id": null }
             }
         }),
     );
@@ -700,7 +698,24 @@ fn fresh_installation_has_an_empty_action_library() {
         .collect();
     assert_eq!(ids, ["general", "projects"]);
     assert_eq!(modules[1]["pages"][0]["id"], "projects");
-    assert_eq!(modules[1]["actionTypes"].as_array().unwrap().len(), 5);
+    let types: Vec<_> = modules[1]["actionTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        types,
+        [
+            "projects.next",
+            "projects.previous",
+            "projects.select",
+            "projects.active",
+            "projects.repository",
+            "projects.documentation",
+            "projects.resolve-resource"
+        ]
+    );
     assert_eq!(h.ok("migration_notes", json!({})), json!([]));
 }
 
@@ -814,7 +829,7 @@ fn projects_stay_in_their_profile() {
             "action": {
                 "name": "Shop",
                 "actionType": "projects.select",
-                "parameters": { "project": { "type": "project", "value": shop_id } }
+                "parameters": { "project_id": { "type": "project", "value": shop_id } }
             }
         }),
     );
@@ -852,4 +867,148 @@ fn projects_stay_in_their_profile() {
         home_view["profile"]["projects"].as_array().unwrap().len(),
         1
     );
+}
+
+/// The real commands against a running agent: generic project actions with
+/// structured results, explicit project copies and module enable/disable.
+#[allow(clippy::too_many_lines)]
+#[test]
+fn modules_and_project_copies_work_with_the_running_agent() {
+    let h = Harness::new();
+    let work = new_profile(&h, "Work");
+    let home = new_profile(&h, "Home");
+    let mut projects = Vec::new();
+    for key in ["SHOP", "CMR"] {
+        let project = h.ok(
+            "create_project",
+            json!({
+                "profileId": work,
+                "project": { "key": key, "name": "", "resources": { "repository": format!("{}.repository", key.to_lowercase()) } }
+            }),
+        );
+        projects.push(project["id"].as_str().unwrap().to_owned());
+    }
+    h.ok(
+        "set_resource_binding",
+        json!({ "key": "shop.repository", "kind": "directory", "value": "/src/shop" }),
+    );
+    let action = |name: &str, action_type: &str, parameters: Value| {
+        h.ok(
+            "create_action",
+            json!({
+                "profileId": work,
+                "action": { "name": name, "actionType": action_type, "parameters": parameters }
+            }),
+        )["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let repository = action("Repository", "projects.repository", json!({}));
+    let select_cmr = action(
+        "CMR",
+        "projects.select",
+        json!({ "project_id": { "type": "project", "value": projects[1] } }),
+    );
+    let current = action("Current", "projects.select", json!({ "project_id": null }));
+
+    let (_runtime, _mock) = start_agent(&h.paths);
+    wait_for(&h, |s| s["running"] == true);
+    let run = |id: &str| h.ok("run_action", json!({ "profileId": work, "actionId": id }));
+
+    // Generic types with structured results; the current project is the default.
+    let resolved = run(&repository);
+    assert_eq!(resolved["status"], "succeeded", "{resolved}");
+    assert_eq!(resolved["data"]["value"], "/src/shop");
+    assert_eq!(resolved["data"]["projectKey"], "SHOP");
+    assert_eq!(resolved["data"]["kind"], "directory");
+    let reported = run(&current);
+    assert_eq!(reported["data"]["projectKey"], "SHOP");
+    assert!(reported.get("effects").is_none(), "{reported}");
+    run(&select_cmr);
+    wait_for(&h, |s| s["status"]["activeProject"]["key"] == "CMR");
+    // CMR's repository is not bound on this machine.
+    let missing = run(&repository);
+    assert_eq!(missing["status"], "failed");
+    assert!(missing["message"].as_str().unwrap().contains("not bound"));
+
+    // An explicit copy is an independent project of the other profile.
+    let copy = h.ok(
+        "copy_project",
+        json!({ "profileId": work, "projectId": projects[0], "targetProfileId": home }),
+    );
+    h.ok("set_active_profile", json!({ "profileId": home }));
+    let status = wait_for(&h, |s| s["status"]["activeProfile"]["name"] == "Home");
+    assert_eq!(status["status"]["activeProject"]["id"], copy["id"]);
+    // Projects of the inactive profile cannot be selected.
+    assert!(
+        h.call(
+            "select_project",
+            json!({ "profileId": home, "projectId": projects[1] }),
+        )
+        .is_err()
+    );
+    h.ok("set_active_profile", json!({ "profileId": work }));
+    wait_for(&h, |s| s["status"]["activeProject"]["key"] == "CMR");
+
+    // Disabling the module stops its actions and project switching in the
+    // agent, through every path, without touching the configuration.
+    h.ok(
+        "set_module_enabled",
+        json!({ "moduleId": "projects", "enabled": false }),
+    );
+    let refused = run(&repository);
+    assert_eq!(refused["status"], "failed");
+    assert!(
+        refused["message"].as_str().unwrap().contains("disabled"),
+        "{refused}"
+    );
+    assert!(
+        h.call(
+            "cycle_project",
+            json!({ "profileId": work, "direction": "next" })
+        )
+        .is_err()
+    );
+    assert!(
+        h.call(
+            "select_project",
+            json!({ "profileId": work, "projectId": projects[0] })
+        )
+        .is_err()
+    );
+    assert!(
+        h.call("check_resources", json!({ "profileId": work }))
+            .is_err()
+    );
+    let view = h.ok("get_profile", json!({ "profileId": work }));
+    assert_eq!(view["profile"]["actions"].as_array().unwrap().len(), 3);
+    wait_for(&h, |s| s["status"]["activeProject"]["key"] == "CMR");
+
+    // Enabled again with wrap-around off: the agent's switching follows the
+    // module setting, just like the actions.
+    h.ok(
+        "set_module_enabled",
+        json!({ "moduleId": "projects", "enabled": true }),
+    );
+    h.ok(
+        "set_module_config",
+        json!({ "moduleId": "projects", "config": { "wrapAround": { "type": "boolean", "value": false } } }),
+    );
+    let at_end = h.call(
+        "cycle_project",
+        json!({ "profileId": work, "direction": "next" }),
+    );
+    assert!(
+        at_end
+            .unwrap_err()
+            .as_str()
+            .unwrap()
+            .contains("last project"),
+        "the agent applies wrapAround"
+    );
+    assert_eq!(run(&select_cmr)["status"], "succeeded");
+
+    h.ok("stop_agent", json!({}));
+    wait_for(&h, |s| s["running"] == false);
 }

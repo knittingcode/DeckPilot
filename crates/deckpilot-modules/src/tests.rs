@@ -58,6 +58,8 @@ fn builtin_modules_register_with_namespaced_action_types() {
             "projects.previous",
             "projects.select",
             "projects.active",
+            "projects.repository",
+            "projects.documentation",
             "projects.resolve-resource"
         ]
     );
@@ -170,7 +172,7 @@ fn selection_is_limited_to_the_actions_profile() {
         &registry,
         "Foreign",
         actions::select_id(),
-        &ActionParameters::new().with("project", ParameterValue::Project(home.projects[0].id)),
+        &ActionParameters::new().with("project_id", ParameterValue::Project(home.projects[0].id)),
     );
     assert_eq!(
         registry.check_in_profile(work.action(foreign).unwrap(), &work),
@@ -222,7 +224,7 @@ fn deck_profile(
         registry,
         "Last",
         actions::select_id(),
-        &ActionParameters::new().with("project", ParameterValue::Project(last)),
+        &ActionParameters::new().with("project_id", ParameterValue::Project(last)),
     );
     let mut layout = DeviceLayout::new("Main", DeviceModelId::new(models::STREAM_DECK_MK2_ID));
     let bind = |index, action, label: Option<&str>| ControlBinding {
@@ -277,4 +279,90 @@ fn dynamic_labels_follow_project_and_profile_changes() {
     // Switching back restores the stored selection of the first profile.
     runtime.set_profile(Some(work), work_project);
     assert_eq!(title(&runtime), "CMR");
+}
+
+#[test]
+fn workflows_combine_generic_project_actions() {
+    use deckpilot_core::{
+        MachineResourceBinding, ResourceKey, ResourceKind, StepCondition, WorkflowReport,
+    };
+    let modules = builtin(Os::Linux);
+    let registry = modules.action_registry();
+    let mut work = profile("Work", &["SHOP", "CMR"]);
+    for (index, key) in ["shop", "cmr"].iter().enumerate() {
+        work.projects[index].resources.insert(
+            "repository".into(),
+            ResourceKey::new(format!("{key}.repository")).unwrap(),
+        );
+    }
+    let mut machine = MachineConfig::new(Os::Linux);
+    for key in ["shop", "cmr"] {
+        machine.set_binding(MachineResourceBinding {
+            key: ResourceKey::new(format!("{key}.repository")).unwrap(),
+            kind: ResourceKind::Directory,
+            value: format!("/src/{key}"),
+        });
+    }
+    let none = ActionParameters::new();
+    let current = add_action(&mut work, &registry, "Current", actions::select_id(), &none);
+    let repository = add_action(
+        &mut work,
+        &registry,
+        "Repo",
+        actions::repository_id(),
+        &none,
+    );
+    let next = add_action(&mut work, &registry, "Next", actions::next_id(), &none);
+    let shop = work.projects[0].id;
+    let shop_repository = add_action(
+        &mut work,
+        &registry,
+        "Repo SHOP",
+        actions::repository_id(),
+        &ActionParameters::new().with(projects::actions::PROJECT_ID, ParameterValue::Project(shop)),
+    );
+    let mut workflow = Workflow::new("Start")
+        .step(current, OnFailure::Stop)
+        .step(repository, OnFailure::Stop)
+        .step(next, OnFailure::Stop)
+        .step(repository, OnFailure::Stop)
+        .step(shop_repository, OnFailure::Stop)
+        .step(repository, OnFailure::Stop);
+    // Only while CMR is active (after the switch in step 3).
+    workflow.steps[5].condition = StepCondition::ActiveProject {
+        project: work.projects[1].id,
+    };
+    let workflow_id = workflow.id;
+    assert_eq!(workflow.validate(&work, &registry), Vec::<String>::new());
+    work.workflows.push(workflow);
+
+    let engine = Engine::new(registry);
+    let mut context = ActiveProjectContext::new(&work);
+    let report: WorkflowReport = engine
+        .run_workflow(&work, &machine, &mut context, workflow_id)
+        .unwrap();
+    let values: Vec<_> = report
+        .steps
+        .iter()
+        .map(|s| {
+            s.result
+                .data
+                .get("value")
+                .or(s.result.data.get("projectKey"))
+                .cloned()
+        })
+        .collect();
+    assert_eq!(
+        values,
+        [
+            Some("SHOP".into()),
+            Some("/src/shop".into()),
+            Some("CMR".into()),
+            Some("/src/cmr".into()),
+            // A fixed project, independent of the active one.
+            Some("/src/shop".into()),
+            Some("/src/cmr".into()),
+        ]
+    );
+    assert_eq!(context.project_id(), Some(work.projects[1].id));
 }

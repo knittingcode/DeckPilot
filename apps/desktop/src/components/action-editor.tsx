@@ -348,6 +348,16 @@ export function ActionEditor({
           role="status"
         >
           {result.status === "succeeded" ? "✓" : "✗"} {result.message}
+          {result.data && Object.keys(result.data).length > 0 && (
+            <span className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 text-muted-foreground">
+              {Object.entries(result.data).map(([key, value]) => (
+                <span key={key} className="contents">
+                  <span>{key}</span>
+                  <span className="break-all text-foreground">{value}</span>
+                </span>
+              ))}
+            </span>
+          )}
         </p>
       )}
 

@@ -49,6 +49,8 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX app_launches_component ON app_launches (component, id);
 ",
     crate::legacy::SCHEMA,
+    // Migration 4 only rewrites documents.
+    "",
 ];
 
 const ACTIVE_PROFILE: &str = "active_profile";
@@ -133,6 +135,7 @@ impl SqliteStore {
             match version + 1 {
                 2 => upgrade_documents(&tx)?,
                 3 => crate::legacy::migrate(&tx)?,
+                4 => crate::project_actions::migrate(&tx)?,
                 _ => {}
             }
             tx.pragma_update(None, "user_version", version + 1)?;
@@ -611,16 +614,13 @@ impl ConfigStore for SqliteStore {
         let mut states = ModuleStates::new();
         for row in rows {
             let (id, enabled, config) = row?;
-            // Rows of modules with an id this build cannot parse are kept in
-            // the table but ignored here.
+            // Rows this build cannot read (an unknown id format, a damaged
+            // configuration) are kept in the table but ignored here, so they
+            // can never prevent DeckPilot from starting. The module then uses
+            // its defaults, keeping the stored enabled flag.
             let Ok(id) = ModuleId::new(id) else { continue };
-            states.insert(
-                id,
-                ModuleSettings {
-                    enabled,
-                    config: serde_json::from_str(&config)?,
-                },
-            );
+            let config = serde_json::from_str(&config).unwrap_or_default();
+            states.insert(id, ModuleSettings { enabled, config });
         }
         Ok(states)
     }
@@ -1069,6 +1069,23 @@ mod tests {
     }
 
     #[test]
+    fn damaged_module_rows_do_not_fail_loading() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store
+            .connection
+            .execute_batch(
+                "INSERT INTO modules VALUES ('projects', 0, 'not json');
+                 INSERT INTO modules VALUES ('Bad Id', 1, '{}');",
+            )
+            .unwrap();
+        let states = store.module_states().unwrap();
+        assert_eq!(states.len(), 1);
+        let projects = &states[&ModuleId::new("projects").unwrap()];
+        assert!(!projects.enabled);
+        assert_eq!(projects.config, ActionParameters::new());
+    }
+
+    #[test]
     fn module_states_round_trip() {
         let store = SqliteStore::open_in_memory().unwrap();
         let id = ModuleId::new("projects").unwrap();
@@ -1210,14 +1227,17 @@ mod tests {
             ]
         );
         assert_eq!(profile.actions[0].parameters, ActionParameters::new());
-        assert_eq!(profile.actions[2].parameters.project("project"), Some(cmr));
+        assert_eq!(
+            profile.actions[2].parameters.project("project_id"),
+            Some(cmr)
+        );
         assert!(
             profile.actions[3].parameters.is_empty(),
             "unknown keys are not guessed"
         );
         let steps = &profile.workflows[0].steps;
         assert_eq!(steps[0].overrides, ActionParameters::new());
-        assert_eq!(steps[1].overrides.project("project"), Some(shop));
+        assert_eq!(steps[1].overrides.project("project_id"), Some(shop));
 
         let notes: Vec<_> = store
             .migration_notes()
@@ -1225,9 +1245,102 @@ mod tests {
             .into_iter()
             .map(|n| n.message)
             .collect();
-        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert_eq!(notes.len(), 3, "{notes:?}");
+        assert!(notes[2].contains("reports the current project"));
         assert!(notes[0].contains("\"Gone\""));
         assert!(notes[1].contains("direction override"));
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn migration_4_converts_resource_actions_and_keeps_bindings() {
+        use deckpilot_core::{BindingTarget, ControlBinding, DeviceLayout, Trigger};
+        use deckpilot_device::{ControlId, DeviceModelId, models};
+
+        let work = ProfileId::new();
+        let (shop, cmr) = (ProjectId::new(), ProjectId::new());
+        let ids: Vec<ActionInstanceId> = (0..4).map(|_| ActionInstanceId::new()).collect();
+        let resource = |reference: serde_json::Value| serde_json::json!({"resource": {"type": "resource", "value": reference}});
+        let actions = serde_json::json!([
+            {"id": ids[0], "name": "Repo (active)", "actionType": "deckpilot.resource.resolve",
+             "parameters": resource(serde_json::json!({"type": "projectRole", "role": "repository"}))},
+            {"id": ids[1], "name": "Repo SHOP", "actionType": "deckpilot.resource.resolve",
+             "parameters": resource(serde_json::json!({"type": "fixed", "key": "shop.repo"}))},
+            {"id": ids[2], "name": "Elsewhere", "actionType": "deckpilot.resource.resolve",
+             "parameters": resource(serde_json::json!({"type": "fixed", "key": "other.thing"}))},
+            {"id": ids[3], "name": "Pick SHOP", "actionType": "deckpilot.project.select",
+             "parameters": {"project": {"type": "text", "value": "SHOP"}}},
+        ]);
+        let workflows = serde_json::json!([{
+            "id": deckpilot_core::WorkflowId::new(), "name": "Flow",
+            "steps": [{"action": ids[0], "onFailure": "stop",
+                       "overrides": resource(serde_json::json!({"type": "fixed", "key": "cmr.repo"}))}]
+        }]);
+        let mut document = legacy_document(
+            work,
+            "Work",
+            &[(shop, "SHOP"), (cmr, "CMR")],
+            &actions,
+            &workflows,
+        );
+        let mut layout = DeviceLayout::new("Main", DeviceModelId::new(models::STREAM_DECK_MK2_ID));
+        for (index, action) in ids.iter().enumerate() {
+            layout.pages[0].bindings.push(ControlBinding {
+                control: ControlId::Key {
+                    index: u16::try_from(index).unwrap(),
+                },
+                trigger: Trigger::Press,
+                target: BindingTarget::Action { action: *action },
+                label: None,
+            });
+        }
+        document["layouts"] = serde_json::to_value([&layout]).unwrap();
+        let (store, dir) = migrate_v2(&[(work, document)], &[]);
+        assert_eq!(store.schema_version().unwrap(), 4);
+
+        let profile = store.load_profile(work).unwrap().unwrap();
+        // Same actions, same ids, same order; layouts untouched.
+        let stored: Vec<_> = profile.actions.iter().map(|a| a.id).collect();
+        assert_eq!(stored, ids);
+        assert_eq!(profile.layouts, vec![layout]);
+        let text = |value: &str| ParameterValue::Text(value.into());
+        let p = |index: usize| &profile.actions[index].parameters;
+        assert_eq!(
+            p(0),
+            &ActionParameters::new().with("resource", text("repository"))
+        );
+        assert_eq!(
+            p(1),
+            &ActionParameters::new()
+                .with("project_id", ParameterValue::Project(shop))
+                .with("resource", text("repository"))
+        );
+        // Unresolvable: kept, but without a resource to pick.
+        assert_eq!(p(2), &ActionParameters::new());
+        assert_eq!(
+            profile.actions[2].action_type.as_str(),
+            "projects.resolve-resource"
+        );
+        assert_eq!(
+            p(3),
+            &ActionParameters::new().with("project_id", ParameterValue::Project(shop))
+        );
+        assert_eq!(
+            profile.workflows[0].steps[0].overrides,
+            ActionParameters::new()
+                .with("project_id", ParameterValue::Project(cmr))
+                .with("resource", text("repository"))
+        );
+        let notes: Vec<_> = store
+            .migration_notes()
+            .unwrap()
+            .into_iter()
+            .map(|n| (n.schema_version, n.message))
+            .collect();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert_eq!(notes[0].0, 4);
+        assert!(notes[0].1.contains("\"other.thing\""), "{notes:?}");
         drop(store);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1281,7 +1394,7 @@ mod tests {
         assert_ne!(b.projects[0].id, shared);
         assert_eq!(b.default_project, Some(b.projects[0].id));
         assert_eq!(
-            b.actions[0].parameters.project("project"),
+            b.actions[0].parameters.project("project_id"),
             Some(b.projects[0].id)
         );
         assert_eq!(
