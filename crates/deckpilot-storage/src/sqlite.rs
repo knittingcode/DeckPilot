@@ -116,6 +116,8 @@ pub struct ConfigChanges {
     pub delete_profiles: Vec<ProfileId>,
     pub save_profiles: Vec<Profile>,
     pub module_states: Vec<(ModuleId, ModuleSettings)>,
+    /// Application settings (`key`, `value`) written with the rest.
+    pub settings: Vec<(String, String)>,
 }
 
 impl SqliteStore {
@@ -154,8 +156,10 @@ impl SqliteStore {
         Ok(store)
     }
 
-    #[cfg(test)]
-    pub(crate) fn connection_for_tests(&self) -> &Connection {
+    /// The raw connection, for tests that need to hold locks or inspect the
+    /// file. Not part of the API.
+    #[doc(hidden)]
+    pub fn connection_for_tests(&self) -> &Connection {
         &self.connection
     }
 
@@ -361,6 +365,13 @@ impl SqliteStore {
                 "INSERT INTO modules (id, enabled, config) VALUES (?1, ?2, ?3)
                  ON CONFLICT (id) DO UPDATE SET enabled = excluded.enabled, config = excluded.config",
                 params![id.as_str(), settings.enabled, encode(&settings.config)?],
+            )?;
+        }
+        for (key, value) in &changes.settings {
+            tx.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                params![key, value],
             )?;
         }
         tx.commit()?;
@@ -1913,6 +1924,7 @@ mod tests {
             delete_profiles: vec![existing.id],
             save_profiles: vec![fresh.clone(), thief],
             module_states: Vec::new(),
+            settings: Vec::new(),
         };
         // The deletion makes the project free again, so this succeeds…
         store.apply_changes(&changes).unwrap();
@@ -1931,10 +1943,12 @@ mod tests {
                     config: ActionParameters::new(),
                 },
             )],
+            settings: vec![("update.preferences".into(), "{}".into())],
         };
         assert!(store.apply_changes(&failing).is_err());
         assert_eq!(store.load_profile(other.id).unwrap(), None);
         assert_eq!(store.module_states().unwrap(), ModuleStates::new());
+        assert_eq!(store.setting("update.preferences").unwrap(), None);
         assert_eq!(store.load_profile(fresh.id).unwrap(), Some(fresh));
     }
 }

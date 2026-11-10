@@ -10,6 +10,7 @@ use deckpilot_core::{
 };
 use deckpilot_storage::crypto::{KdfParams, Password};
 use deckpilot_storage::{ConfigStore, SqliteStore};
+use deckpilot_update::policy::{PREFERENCES_SETTING, UpdateMode, UpdatePreferences};
 
 use crate::{PortabilityError, archive};
 
@@ -25,6 +26,33 @@ pub struct ModuleExport {
     pub enabled: bool,
     #[serde(default)]
     pub settings: ActionParameters,
+}
+
+/// Application settings that mean the same on every computer. Settings of
+/// this computer (resource bindings, security policy, brightness) and
+/// runtime state (time of the last update check, confirmations) are never
+/// exported: importing a security policy could silently weaken another
+/// computer's protection.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updates: Option<UpdateSettings>,
+}
+
+impl AppSettings {
+    pub fn is_empty(&self) -> bool {
+        self.updates.is_none()
+    }
+}
+
+/// How updates are checked for and applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSettings {
+    pub mode: UpdateMode,
+    pub automatic_checks: bool,
+    pub check_interval_hours: u32,
 }
 
 /// Everything an export carries.
@@ -44,6 +72,9 @@ pub struct Payload {
     /// Machine-specific values are never exported.
     #[serde(default)]
     pub resources: BTreeMap<ResourceKey, Option<ResourceKind>>,
+    /// Portable application settings; absent in exports of earlier builds.
+    #[serde(default)]
+    pub settings: AppSettings,
 }
 
 /// Resource keys a profile refers to: project resources and fixed resource
@@ -74,14 +105,38 @@ pub fn resource_keys(profile: &Profile) -> BTreeSet<ResourceKey> {
 
 /// Collects the portable configuration. `profiles`: the profiles to export,
 /// all when `None`. `include_modules`: export module settings.
+/// What an export contains besides the selected profiles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExportOptions {
+    pub module_settings: bool,
+    pub app_settings: bool,
+}
+
+/// The portable application settings stored in `store`.
+pub fn app_settings(store: &SqliteStore) -> Result<AppSettings, PortabilityError> {
+    let updates = store
+        .setting(PREFERENCES_SETTING)?
+        .and_then(|text| serde_json::from_str::<UpdatePreferences>(&text).ok())
+        .map(|preferences| {
+            let preferences = preferences.sanitized();
+            UpdateSettings {
+                mode: preferences.mode,
+                automatic_checks: preferences.automatic_checks,
+                check_interval_hours: preferences.check_interval_hours,
+            }
+        });
+    Ok(AppSettings { updates })
+}
+
 pub fn export(
     store: &SqliteStore,
     modules: &ModuleRegistry,
     profiles: Option<&[ProfileId]>,
-    include_modules: bool,
+    options: ExportOptions,
     exported_at: i64,
     app_version: &str,
 ) -> Result<Payload, PortabilityError> {
+    let include_modules = options.module_settings;
     let mut selected = Vec::new();
     for summary in store.list_profiles()? {
         if profiles.is_some_and(|wanted| !wanted.contains(&summary.id)) {
@@ -129,6 +184,11 @@ pub fn export(
         profiles: selected,
         modules: exported_modules,
         resources,
+        settings: if options.app_settings {
+            app_settings(store)?
+        } else {
+            AppSettings::default()
+        },
     })
 }
 

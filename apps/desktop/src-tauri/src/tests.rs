@@ -1773,3 +1773,297 @@ fn every_deliberate_lock_needs_authentication_to_undo() {
     }
     assert!(!lock_needs_authentication(None));
 }
+
+// Export and import through the real commands, between two installations.
+
+/// A profile with projects, an action, a workflow and a layout with
+/// bindings, written as the configuration studio would.
+fn rich_profile(h: &Harness, name: &str) -> deckpilot_core::Profile {
+    use deckpilot_core::{DeviceLayout, Profile};
+    use deckpilot_storage::ConfigStore as _;
+    let id = new_profile(h, name);
+    h.ok(
+        "create_project",
+        json!({ "profileId": id, "project": { "key": "SHOP", "name": "Shop", "resources": { "repository": "shop.repository" } } }),
+    );
+    log_action(h, &id, "Announce", "{project.key}");
+    let state = h.window.state::<AppState>();
+    let store = state.store().unwrap();
+    let mut profile: Profile = store.load_profile(id.parse().unwrap()).unwrap().unwrap();
+    let action = profile.actions[0].id;
+    profile
+        .workflows
+        .push(deckpilot_core::Workflow::new("Start").step(action, deckpilot_core::OnFailure::Stop));
+    let layout = DeviceLayout::generate("Main", &models::stream_deck_mk2(), &profile);
+    let layout_id = layout.id;
+    assert!(
+        !layout.pages[0].bindings.is_empty(),
+        "the layout has bindings"
+    );
+    profile.layouts.push(layout);
+    profile.activate_layout(layout_id).unwrap();
+    store.save_profile(&profile).unwrap();
+    profile
+}
+
+fn export_to(h: &Harness, file: &std::path::Path, password: Option<&str>) -> Value {
+    h.ok("authenticate", json!({ "password": password }));
+    h.ok(
+        "export_configuration",
+        json!({ "request": { "path": file.display().to_string(), "password": "export secret", "confirmation": "export secret", "profiles": null, "includeModuleSettings": true, "includeAppSettings": true } }),
+    )
+}
+
+fn database_is_encrypted(paths: &AgentPaths) -> bool {
+    let header = std::fs::read(&paths.database).unwrap();
+    !header.starts_with(b"SQLite format 3")
+}
+
+#[test]
+fn a_system_key_installation_moves_to_a_password_installation() {
+    use deckpilot_storage::ConfigStore as _;
+
+    // Source: system-managed key, Touch ID.
+    let source_paths = Harness::temp_paths();
+    let source_keys = MemoryKeyStore::new();
+    let (_source_runtime, _mock) = start_agent_with(&source_paths, Some(source_keys.clone()));
+    let source = Harness::with_presence(
+        source_paths,
+        Arc::new(Scripted::new(Some(Method::TouchId), true)),
+    );
+    wait_unlocked(&source);
+    let profile = rich_profile(&source, "Work");
+    source.ok(
+        "set_resource_binding",
+        json!({ "key": "shop.repository", "kind": "directory", "value": "/source/machine/shop" }),
+    );
+    source.ok(
+        "set_update_preferences",
+        json!({ "preferences": { "mode": "downloadAndAsk", "automaticChecks": false, "checkIntervalHours": 48, "lastCheck": null } }),
+    );
+    let file = source.paths.data_dir.join("work.deckpilot");
+    let result = export_to(&source, &file, None);
+    assert_eq!(result["profiles"], 1);
+    let bytes = std::fs::read(&file).unwrap();
+    for secret in [
+        &b"Work"[..],
+        b"SHOP",
+        b"/source/machine/shop",
+        b"downloadAndAsk",
+    ] {
+        assert!(!bytes.windows(secret.len()).any(|w| w == secret));
+    }
+    assert_eq!(source_keys.ids().len(), 1);
+
+    // Target: password protection, its own binding for the same resource.
+    let target = Harness::new();
+    target.ok(
+        "set_resource_binding",
+        json!({ "key": "shop.repository", "kind": "directory", "value": "/target/machine/shop" }),
+    );
+    assert!(
+        target
+            .error(
+                "preview_import",
+                json!({ "path": file.display().to_string(), "password": "wrong" })
+            )
+            .contains("password is wrong")
+    );
+    let preview = target.ok(
+        "preview_import",
+        json!({ "path": file.display().to_string(), "password": "export secret" }),
+    );
+    assert_eq!(
+        preview["preview"]["settings"]["updates"]["mode"],
+        "downloadAndAsk"
+    );
+    assert_eq!(preview["preview"]["missingResources"], json!([]));
+    let summary = target.ok(
+        "apply_import",
+        json!({ "token": preview["token"], "options": { "profiles": [profile.id.to_string()], "moduleSettings": true, "appSettings": true } }),
+    );
+    assert_eq!(summary["settings"], json!(["updates"]));
+
+    // Everything arrived as it was: projects, actions, workflows, layouts
+    // and their bindings, with the same identifiers.
+    let state = target.window.state::<AppState>();
+    let imported = state
+        .store()
+        .unwrap()
+        .load_profile(profile.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(imported.projects, profile.projects);
+    assert_eq!(imported.actions, profile.actions);
+    assert_eq!(imported.workflows, profile.workflows);
+    assert_eq!(imported.layouts, profile.layouts);
+    assert_eq!(imported.active_layouts, profile.active_layouts);
+    // This computer's binding is kept; the import is not activated.
+    let machine = target.ok("get_machine_config", json!({}));
+    assert_eq!(machine["bindings"][0]["value"], "/target/machine/shop");
+    assert_eq!(
+        target.ok("list_profiles", json!({}))["activeProfileId"],
+        Value::Null
+    );
+    let updates = target.ok("update_state", json!({}));
+    assert_eq!(updates["preferences"]["mode"], "downloadAndAsk");
+    assert_eq!(updates["preferences"]["checkIntervalHours"], 48);
+    // Still encrypted with the target's own protection; no plaintext or
+    // temporary files were left.
+    assert!(database_is_encrypted(&target.paths));
+    assert_eq!(status(&target)["protection"], "password");
+    let leftovers: Vec<_> = std::fs::read_dir(&target.paths.data_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains(".tmp") || name.contains("unencrypted"))
+        .collect();
+    assert_eq!(leftovers, Vec::<String>::new());
+
+    // And back: a password installation exports as well.
+    let back = target.paths.data_dir.join("back.deckpilot");
+    export_to(&target, &back, Some(PASSWORD));
+    assert!(back.exists());
+    assert_eq!(source_keys.ids().len(), 1, "no credential was touched");
+}
+
+#[test]
+fn replacing_with_selected_profiles() {
+    let source = Harness::new();
+    let home = rich_profile(&source, "Home");
+    let work = rich_profile(&source, "Work 2");
+    let file = source.paths.data_dir.join("both.deckpilot");
+    export_to(&source, &file, Some(PASSWORD));
+
+    let target = Harness::new();
+    let local = new_profile(&target, "Local");
+    target.ok(
+        "set_resource_binding",
+        json!({ "key": "shop.repository", "kind": "directory", "value": "/target/shop" }),
+    );
+    let preview = target.ok(
+        "preview_import",
+        json!({ "path": file.display().to_string(), "password": "export secret" }),
+    );
+    assert_eq!(preview["preview"]["localProfiles"][0][0], json!(local));
+    let summary = target.ok(
+        "apply_import",
+        json!({ "token": preview["token"], "options": { "mode": "replace", "profiles": [work.id.to_string()] } }),
+    );
+    assert_eq!(summary["removed"][0][1], "Local");
+    let names: Vec<String> = target.ok("list_profiles", json!({}))["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, ["Work 2"]);
+    assert!(!names.contains(&home.name));
+    assert_eq!(
+        target.ok("get_machine_config", json!({}))["bindings"][0]["value"],
+        "/target/shop"
+    );
+}
+
+#[test]
+fn hostile_archives_are_rejected_without_changes() {
+    let h = Harness::new();
+    new_profile(&h, "Mine");
+    let dir = &h.paths.data_dir;
+    let oversized = dir.join("huge.deckpilot");
+    std::fs::write(&oversized, vec![b' '; 33 * 1024 * 1024]).unwrap();
+    assert!(
+        h.error(
+            "preview_import",
+            json!({ "path": oversized.display().to_string(), "password": "x" })
+        )
+        .contains("too large")
+    );
+    let garbage = dir.join("garbage.deckpilot");
+    std::fs::write(
+        &garbage,
+        br#"{"header":"{\"format\":\"deckpilot-configuration\"}","ciphertext":"AAAA"}"#,
+    )
+    .unwrap();
+    assert!(
+        h.call(
+            "preview_import",
+            json!({ "path": garbage.display().to_string(), "password": "x" })
+        )
+        .is_err()
+    );
+    // Applying without a preview, or with a made-up token, does nothing.
+    assert!(
+        h.call(
+            "apply_import",
+            json!({ "token": 12345, "options": { "profiles": [] } })
+        )
+        .is_err()
+    );
+    assert_eq!(
+        h.ok("list_profiles", json!({}))["profiles"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_failed_import_changes_nothing_and_can_be_retried() {
+    let source = Harness::new();
+    rich_profile(&source, "Imported");
+    let file = source.paths.data_dir.join("one.deckpilot");
+    export_to(&source, &file, Some(PASSWORD));
+
+    let target = Harness::new();
+    new_profile(&target, "Existing");
+    let preview = |h: &Harness| {
+        h.ok(
+            "preview_import",
+            json!({ "path": file.display().to_string(), "password": "export secret" }),
+        )
+    };
+    let first = preview(&target);
+    // Another connection holds the write lock: the import transaction cannot
+    // be written and is rolled back as a whole.
+    let key = target.window.state::<AppState>().key().unwrap();
+    let blocker = deckpilot_storage::SqliteStore::open(
+        &target.paths.database,
+        &deckpilot_storage::Encryption::Key(key),
+    )
+    .unwrap();
+    blocker
+        .connection_for_tests()
+        .execute_batch("BEGIN EXCLUSIVE;")
+        .unwrap();
+    assert!(
+        target
+            .call(
+                "apply_import",
+                json!({ "token": first["token"], "options": { "profiles": [first["preview"]["profiles"][0]["id"]], "moduleSettings": true } }),
+            )
+            .is_err()
+    );
+    blocker
+        .connection_for_tests()
+        .execute_batch("ROLLBACK;")
+        .unwrap();
+    drop(blocker);
+    let names = |h: &Harness| -> Vec<String> {
+        h.ok("list_profiles", json!({}))["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(names(&target), ["Existing"]);
+    // The file is unchanged and the import can simply be repeated.
+    let second = preview(&target);
+    target.ok(
+        "apply_import",
+        json!({ "token": second["token"], "options": { "profiles": [second["preview"]["profiles"][0]["id"]] } }),
+    );
+    assert_eq!(names(&target), ["Existing", "Imported"]);
+}

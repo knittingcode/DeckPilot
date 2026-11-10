@@ -1,4 +1,14 @@
 use super::*;
+use crate::payload::ExportOptions;
+
+const ALL: ExportOptions = ExportOptions {
+    module_settings: true,
+    app_settings: true,
+};
+const NONE: ExportOptions = ExportOptions {
+    module_settings: false,
+    app_settings: false,
+};
 use crate::payload::{self, ModuleExport};
 use deckpilot_core::{
     ActionInstance, ActionInstanceId, ActionParameters, ActionTypeId, MachineConfig,
@@ -56,7 +66,7 @@ fn store_with(names: &[&str]) -> (SqliteStore, Vec<Profile>) {
 }
 
 fn exported(store: &SqliteStore) -> Payload {
-    payload::export(store, &modules(), None, true, 1, "0.4.0").unwrap()
+    payload::export(store, &modules(), None, ALL, 1, "0.4.0").unwrap()
 }
 
 fn round_trip(payload: &Payload) -> Payload {
@@ -109,7 +119,7 @@ fn exports_portable_data_without_machine_values() {
         &store,
         &modules(),
         Some(&[profiles[1].id]),
-        false,
+        NONE,
         1,
         "0.4.0",
     )
@@ -117,7 +127,7 @@ fn exports_portable_data_without_machine_values() {
     assert_eq!(only_home.profiles.len(), 1);
     assert_eq!(only_home.profiles[0].name, "Home");
     assert!(only_home.modules.is_empty());
-    assert!(payload::export(&store, &modules(), Some(&[ProfileId::new()]), false, 1, "x").is_err());
+    assert!(payload::export(&store, &modules(), Some(&[ProfileId::new()]), NONE, 1, "x").is_err());
 }
 
 #[test]
@@ -414,4 +424,75 @@ fn a_failing_import_changes_nothing() {
     assert!(store.apply_changes(&changes).is_err());
     assert_eq!(names(&store), ["Work"]);
     assert_eq!(store.module_states().unwrap().len(), 0);
+}
+
+#[test]
+fn portable_application_settings_travel_without_local_state() {
+    use deckpilot_update::policy::{PREFERENCES_SETTING, UpdateMode, UpdatePreferences};
+
+    let (source, _) = store_with(&["Work"]);
+    let preferences = UpdatePreferences {
+        mode: UpdateMode::DownloadAndAsk,
+        automatic_checks: false,
+        check_interval_hours: 72,
+        last_check: Some(1_000),
+    };
+    source
+        .set_setting(
+            PREFERENCES_SETTING,
+            &serde_json::to_string(&preferences).unwrap(),
+        )
+        .unwrap();
+    // Security settings never leave the computer.
+    source
+        .set_setting("security.autoLock", "idle15Minutes")
+        .unwrap();
+    let payload = round_trip(&exported(&source));
+    let updates = payload.settings.updates.unwrap();
+    assert_eq!(updates.mode, UpdateMode::DownloadAndAsk);
+    assert_eq!(updates.check_interval_hours, 72);
+    let text = serde_json::to_string(&payload).unwrap();
+    assert!(!text.contains("lastCheck") && !text.contains("autoLock"));
+    let without = payload::export(&source, &modules(), None, NONE, 1, "x").unwrap();
+    assert!(without.settings.is_empty());
+
+    let target = SqliteStore::open_in_memory().unwrap();
+    let local = UpdatePreferences {
+        last_check: Some(5_000),
+        ..UpdatePreferences::default()
+    };
+    target
+        .set_setting(PREFERENCES_SETTING, &serde_json::to_string(&local).unwrap())
+        .unwrap();
+    // Not applied unless chosen.
+    apply(
+        &target,
+        &payload,
+        &ImportOptions {
+            profiles: vec![payload.profiles[0].id],
+            ..ImportOptions::default()
+        },
+    );
+    let stored = |store: &SqliteStore| -> UpdatePreferences {
+        serde_json::from_str(&store.setting(PREFERENCES_SETTING).unwrap().unwrap()).unwrap()
+    };
+    assert_eq!(stored(&target), local);
+    let summary = apply(
+        &target,
+        &payload,
+        &ImportOptions {
+            app_settings: true,
+            ..ImportOptions::default()
+        },
+    );
+    assert_eq!(summary.settings, ["updates"]);
+    let applied = stored(&target);
+    assert_eq!(applied.mode, UpdateMode::DownloadAndAsk);
+    assert!(!applied.automatic_checks);
+    assert_eq!(
+        applied.last_check,
+        Some(5_000),
+        "this computer's state is kept"
+    );
+    assert_eq!(target.setting("security.autoLock").unwrap(), None);
 }

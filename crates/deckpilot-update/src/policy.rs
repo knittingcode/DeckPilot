@@ -2,6 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Setting under which [`UpdatePreferences`] are stored (JSON).
+pub const PREFERENCES_SETTING: &str = "update.preferences";
+
 /// How updates are applied. The default only notifies.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -13,7 +13,9 @@ use tauri::State;
 use deckpilot_core::ProfileId;
 use deckpilot_portability::archive::MAX_ARCHIVE_BYTES;
 use deckpilot_portability::import::{self, ImportPreview};
-use deckpilot_portability::{ImportOptions, ImportSummary, Payload, PortabilityError, payload};
+use deckpilot_portability::{
+    ExportOptions, ImportOptions, ImportSummary, Payload, PortabilityError, payload,
+};
 use deckpilot_storage::crypto::{KdfParams, Password};
 use deckpilot_storage::{ConfigStore as _, StorageError};
 
@@ -77,6 +79,9 @@ pub struct ExportRequest {
     /// `None`: all profiles.
     profiles: Option<Vec<ProfileId>>,
     include_module_settings: bool,
+    /// Portable application settings (update preferences).
+    #[serde(default)]
+    include_app_settings: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -108,7 +113,10 @@ pub fn export_configuration(
             &store,
             &modules,
             request.profiles.as_deref(),
-            request.include_module_settings,
+            ExportOptions {
+                module_settings: request.include_module_settings,
+                app_settings: request.include_app_settings,
+            },
             now(),
             APP_VERSION,
         )?
@@ -116,9 +124,15 @@ pub fn export_configuration(
     let kdf = KdfParams::generate().map_err(StorageError::from)?;
     let bytes = payload::seal(&content, &request.password, kdf)?;
     let path = std::path::PathBuf::from(&request.path);
+    // Written next to the target and renamed, so that a failure never leaves
+    // a truncated export behind. Only encrypted bytes reach the disk.
     let temporary = path.with_extension("deckpilot.tmp");
-    std::fs::write(&temporary, &bytes).map_err(|e| CommandError::Invalid(e.to_string()))?;
-    std::fs::rename(&temporary, &path).map_err(|e| CommandError::Invalid(e.to_string()))?;
+    let written =
+        std::fs::write(&temporary, &bytes).and_then(|()| std::fs::rename(&temporary, &path));
+    if let Err(error) = written {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(CommandError::Invalid(error.to_string()));
+    }
     Ok(ExportResult {
         path: request.path,
         profiles: content.profiles.len(),
@@ -161,9 +175,13 @@ pub fn preview_import(
     Ok(PreviewResult { token, preview })
 }
 
+/// Sent to every window after imported data was written.
+pub const CONFIGURATION_CHANGED: &str = "deckpilot://configuration-changed";
+
 /// Applies a previewed import in one transaction.
 #[tauri::command]
-pub fn apply_import(
+pub fn apply_import<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: State<'_, AppState>,
     pending: State<'_, PendingImport>,
     token: u32,
@@ -187,6 +205,7 @@ pub fn apply_import(
         summary
     };
     crate::agent::notify_reload(&state.paths);
+    let _ = tauri::Emitter::emit(&app, CONFIGURATION_CHANGED, ());
     Ok(summary)
 }
 

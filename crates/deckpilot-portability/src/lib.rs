@@ -22,7 +22,9 @@ use thiserror::Error;
 pub use import::{
     ConflictResolution, ImportMode, ImportOptions, ImportPreview, ImportSummary, plan, preview,
 };
-pub use payload::{ModuleExport, PAYLOAD_VERSION, Payload, export};
+pub use payload::{
+    AppSettings, ExportOptions, ModuleExport, PAYLOAD_VERSION, Payload, UpdateSettings, export,
+};
 
 #[derive(Debug, Error)]
 pub enum PortabilityError {

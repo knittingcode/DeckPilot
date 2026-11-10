@@ -32,7 +32,7 @@ use crate::state::AppState;
 /// Base64 minisign public key of the release signing key, set at build time.
 pub const PUBLIC_KEY: Option<&str> = option_env!("DECKPILOT_UPDATER_PUBKEY");
 pub const STATE_EVENT: &str = "update-state";
-const PREFERENCES_KEY: &str = "update.preferences";
+const PREFERENCES_KEY: &str = deckpilot_update::policy::PREFERENCES_SETTING;
 /// How often the background task wakes up to see whether a check is due.
 const TICK: Duration = Duration::from_secs(30 * 60);
 

@@ -18,7 +18,8 @@ use deckpilot_device::ModelCatalog;
 use deckpilot_storage::{ConfigChanges, ConfigStore, SqliteStore};
 
 use crate::PortabilityError;
-use crate::payload::{Payload, resource_keys};
+use crate::payload::{AppSettings, Payload, resource_keys};
+use deckpilot_update::policy::{PREFERENCES_SETTING, UpdatePreferences};
 
 // Limits for untrusted archives; far above any real configuration.
 const MAX_PROFILES: usize = 200;
@@ -167,6 +168,8 @@ pub struct ImportPreview {
     pub warnings: Vec<String>,
     /// Local profiles that a replacing import would remove.
     pub local_profiles: Vec<(ProfileId, String)>,
+    /// Portable application settings in the export.
+    pub settings: AppSettings,
 }
 
 /// Describes `payload` relative to the local configuration.
@@ -243,6 +246,7 @@ pub fn preview(
         missing_resources: missing.into_values().collect(),
         warnings,
         local_profiles: local.into_iter().map(|p| (p.id, p.name)).collect(),
+        settings: payload.settings.clone(),
     })
 }
 
@@ -323,6 +327,9 @@ pub struct ImportOptions {
     /// settings).
     #[serde(default)]
     pub module_settings: bool,
+    /// Apply the exported application settings.
+    #[serde(default)]
+    pub app_settings: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -335,6 +342,8 @@ pub struct ImportSummary {
     /// Profiles imported with new identifiers to avoid a clash.
     pub renamed: Vec<String>,
     pub modules: Vec<String>,
+    /// Application settings that were applied.
+    pub settings: Vec<String>,
 }
 
 fn unique_name(name: &str, taken: &BTreeSet<String>) -> String {
@@ -405,7 +414,8 @@ pub fn plan(
                 })
         })
         .collect::<Result<_, _>>()?;
-    if selected.is_empty() && !options.module_settings {
+    let apply_settings = options.app_settings && !payload.settings.is_empty();
+    if selected.is_empty() && !options.module_settings && !apply_settings {
         return Err(PortabilityError::Invalid(
             "nothing selected to import".into(),
         ));
@@ -480,7 +490,33 @@ pub fn plan(
     if options.module_settings {
         changes.module_states = plan_modules(payload, modules, &mut summary);
     }
+    if apply_settings && let Some(updates) = payload.settings.updates {
+        changes.settings.push(plan_update_settings(updates, store)?);
+        summary.settings.push("updates".into());
+    }
     Ok((changes, summary))
+}
+
+/// The update preferences to store: the exported ones, with this
+/// computer's time of the last check.
+fn plan_update_settings(
+    updates: crate::payload::UpdateSettings,
+    store: &SqliteStore,
+) -> Result<(String, String), PortabilityError> {
+    let local: UpdatePreferences = store
+        .setting(PREFERENCES_SETTING)?
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    let preferences = UpdatePreferences {
+        mode: updates.mode,
+        automatic_checks: updates.automatic_checks,
+        check_interval_hours: updates.check_interval_hours,
+        last_check: local.last_check,
+    }
+    .sanitized();
+    let text = serde_json::to_string(&preferences)
+        .map_err(|e| PortabilityError::Invalid(e.to_string()))?;
+    Ok((PREFERENCES_SETTING.to_owned(), text))
 }
 
 #[cfg(test)]
