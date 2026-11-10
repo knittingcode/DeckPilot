@@ -12,6 +12,10 @@ publish.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 
+[features]
+# In-memory device backend for tests and hardware-free development.
+mock = []
+
 [dev-dependencies]
 serde_json.workspace = true
 

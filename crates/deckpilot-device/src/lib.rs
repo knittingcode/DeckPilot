@@ -5,6 +5,7 @@
 //! HID backend translates raw reports into [`DeviceEvent`]s, and the rest of
 //! DeckPilot only depends on the types defined here.
 
+mod backend;
 mod capabilities;
 mod catalog;
 mod control;
@@ -12,6 +13,12 @@ mod event;
 mod model;
 mod registry;
 
+#[cfg(feature = "mock")]
+pub mod mock;
+
+pub use backend::{
+    DeviceBackend, DeviceError, DeviceHandle, DiscoveredDevice, Frame, KeyStateTracker,
+};
 pub use capabilities::{
     DeviceCapabilities, EncoderSpec, ImageFormat, ImageSpec, ImageTransform, KeyGrid, TouchGesture,
     TouchSurface,

@@ -209,5 +209,5 @@ fn lists_static_catalogs() {
     );
     let models = h.ok("list_device_models", json!({}));
     assert_eq!(models[0]["id"], "elgato.streamdeck.mk2");
-    assert_eq!(models[0]["support"], "descriptorOnly");
+    assert_eq!(models[0]["support"], "unverified");
 }
