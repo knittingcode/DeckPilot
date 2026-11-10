@@ -67,6 +67,11 @@ jobs:
         run: cargo run --locked -p deckpilot-dev -- check-versions
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # The guided hardware test, run against a simulated MK.2 with the real
+      # agent: checks the procedure (not hardware).
+      - name: Hardware test procedure (simulated device)
+        if: runner.os == 'Linux'
+        run: cargo run --locked -p deckpilot-dev -- hardware-test --mock --dir "$RUNNER_TEMP/hardware-test"
       # The agent embeds an Info.plist so that code signing uses a fixed
       # identifier; its Keychain access across updates depends on it.
       - name: The agent keeps a fixed code signing identifier
