@@ -224,6 +224,34 @@ sidebar collapses; a separate element continues the expanded sidebar's
 background and divider. Native dialog windows (`ModalShell`) have no app
 titlebar.
 
+### Status bar
+
+A compact bar at the bottom of the main window (`AppStatusBar`), in workspace
+and settings mode, never in dialog windows. It renders three shared stores
+(`lib/status.ts`) and imports no module:
+
+- **Status items**, registered with `useStatusItem` by core services
+  (agent, devices, active profile, updates) and by enabled modules through
+  `FrontendModule.statusItems` (Projects: the active project). Module
+  components mount only while the module is enabled, so disabling it removes
+  its items without touching its configuration. Each item has a namespaced
+  id, owner, placement (left, center, right), priority and an optional
+  click action or popover. Items below priority 80 move into the overflow
+  menu as the window narrows. Items are data rendered by the app's own
+  components; nothing from IPC is rendered as HTML.
+- **Background operations**: workflow runs and update download and
+  installation, with real progress only. Cancellation appears only for
+  operations that declare a safe `cancel`. Finished operations stay visible
+  briefly.
+- **Notifications** from existing events: agent stopped, version mismatch,
+  device disconnected, update available or failed, workflow failed, security
+  problems. Repeats of an unread event are combined, the list is bounded,
+  and messages are one-line summaries.
+
+The agent indicator reports only states the app knows: connecting, running,
+stopped and version mismatch. Uptime is derived from the agent's start time.
+Simulated devices are counted separately from physical ones.
+
 ## Configuration separation
 
 | Area                   | Contents                                       | Portable |

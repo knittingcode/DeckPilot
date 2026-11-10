@@ -39,6 +39,7 @@ import {
 import { useAsync } from "@/hooks/use-async"
 import { useEditingProfile } from "@/hooks/use-profile"
 import { api, errorMessage } from "@/lib/api"
+import { useStatus } from "@/hooks/use-status"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { useAppContext } from "@/lib/app-context"
 import { ActionIcon } from "@/components/action-icon"
@@ -202,6 +203,7 @@ function WorkflowEditor({
     !isNew && !dirty && Boolean(agent?.running) && profiles.activeProfileId === profileId
   const usages = view.workflowUsages[workflow.id] ?? []
   const [running, setRunning] = useState(false)
+  const status = useStatus()
   // Runs the saved workflow of the editor; shown in the titlebar.
   useTitlebar({
     actions: isNew
@@ -219,10 +221,34 @@ function WorkflowEditor({
               : "Save first; runs in the agent for the active profile",
             onSelect: () => {
               setRunning(true)
+              const operation = `workflow:${workflow.id}`
+              status?.operations.start({
+                id: operation,
+                kind: "workflow",
+                title: `Running “${initial.name}”`,
+              })
               api
                 .runWorkflow(profileId, workflow.id)
-                .then(setReport)
-                .catch((e: unknown) => toast.error(errorMessage(e)))
+                .then((result) => {
+                  setReport(result)
+                  const failed = result.status === "failed"
+                  status?.operations.finish(
+                    operation,
+                    failed ? { error: "A step failed; see the report" } : {},
+                  )
+                  if (failed) {
+                    status?.notifications.notify({
+                      key: `workflow.${workflow.id}.failed`,
+                      severity: "error",
+                      title: `Workflow “${initial.name}” failed`,
+                      message: "Open Workflows to see which step failed.",
+                    })
+                  }
+                })
+                .catch((e: unknown) => {
+                  status?.operations.finish(operation, { error: "Could not run the workflow" })
+                  toast.error(errorMessage(e))
+                })
                 .finally(() => {
                   setRunning(false)
                 })

@@ -28,4 +28,10 @@ export interface FrontendModule {
    * settings in its manifest gets a page generated from them.
    */
   settings?: View
+  /**
+   * Components that register status bar items with `useStatusItem`. They
+   * are mounted only while the module is enabled, so disabling the module
+   * removes its items; its configuration is untouched.
+   */
+  statusItems?: React.ComponentType[]
 }
