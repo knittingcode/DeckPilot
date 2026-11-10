@@ -156,8 +156,58 @@ impl ActionRegistry {
         }
     }
 
-    pub fn handler(&self, id: &ActionTypeId) -> Option<&dyn ActionHandler> {
+    /// Handlers are only reachable inside the core, so that every call goes
+    /// through the capability checks of [`ActionRegistry::dispatch`],
+    /// [`ActionRegistry::check_parameters`] and
+    /// [`ActionRegistry::decorate_face`].
+    pub(crate) fn handler(&self, id: &ActionTypeId) -> Option<&dyn ActionHandler> {
         self.handlers.get(id).map(|entry| entry.handler.as_ref())
+    }
+
+    /// The definition of an executable action type.
+    pub fn definition(&self, id: &ActionTypeId) -> Option<&ActionType> {
+        self.handler(id).map(ActionHandler::definition)
+    }
+
+    fn allows(&self, id: &ActionTypeId, capability: Capability) -> bool {
+        self.handlers.get(id).is_some_and(|entry| {
+            entry
+                .capabilities
+                .as_ref()
+                .is_none_or(|granted| granted.contains(&capability))
+        })
+    }
+
+    /// Checks normalized parameters against `profile`. Handlers without
+    /// [`Capability::ProfileRead`] do not see the profile and report nothing.
+    pub fn check_parameters(
+        &self,
+        action_type: &ActionTypeId,
+        parameters: &ActionParameters,
+        profile: &Profile,
+    ) -> Vec<String> {
+        match self.handler(action_type) {
+            Some(handler) if self.allows(action_type, Capability::ProfileRead) => {
+                handler.check(parameters, profile)
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// The key face for a binding that runs `action_type`, decorated by its
+    /// module. Modules without [`Capability::ProfileRead`] do not see the
+    /// active project. Returns `None` if the type cannot run.
+    pub fn decorate_face(
+        &self,
+        action_type: &ActionTypeId,
+        face: KeyFace,
+        parameters: &ActionParameters,
+        template: &str,
+        project: Option<&Project>,
+    ) -> Option<KeyFace> {
+        let handler = self.handler(action_type)?;
+        let project = project.filter(|_| self.allows(action_type, Capability::ProfileRead));
+        Some(handler.decorate_face(face, parameters, template, project))
     }
 
     /// The module that provides `id`, if it was registered by a module.
@@ -192,6 +242,14 @@ impl ActionRegistry {
                 Some(reason) => format!("this action is unavailable: {reason}"),
                 None => format!("action type `{action_type}` is not available"),
             });
+        };
+        let restricted;
+        let context = match &entry.capabilities {
+            Some(granted) => {
+                restricted = context.restricted(granted);
+                &restricted
+            }
+            None => context,
         };
         let result = entry.handler.execute(parameters, context);
         if let Some(allowed) = &entry.capabilities
@@ -273,9 +331,7 @@ impl ActionRegistry {
 
     /// Problems of an instance that only show in the context of its profile.
     pub fn check_in_profile(&self, instance: &ActionInstance, profile: &Profile) -> Vec<String> {
-        self.handler(&instance.action_type)
-            .map(|handler| handler.check(&instance.parameters, profile))
-            .unwrap_or_default()
+        self.check_parameters(&instance.action_type, &instance.parameters, profile)
     }
 }
 
@@ -335,11 +391,7 @@ mod tests {
         ));
         let profile = Profile::new("Work");
         let machine = MachineConfig::new(Os::Linux);
-        let context = ExecutionContext {
-            profile: &profile,
-            project: None,
-            machine: &machine,
-        };
+        let context = ExecutionContext::new(&profile, None, &machine);
         let result = registry.dispatch(&select_type(), &ActionParameters::new(), &context);
         assert_eq!(
             result.message,
@@ -354,34 +406,35 @@ mod tests {
             .projects
             .push(Project::new(ProjectKey::new("A").unwrap(), "A"));
         let machine = MachineConfig::new(Os::Linux);
-        let context = ExecutionContext {
-            profile: &profile,
-            project: None,
-            machine: &machine,
-        };
+        let context = ExecutionContext::new(&profile, None, &machine);
         let module = ModuleId::new("test").unwrap();
 
-        let mut limited = ActionRegistry::default();
-        limited
-            .register_for_module(module.clone(), &[], Box::new(Select::new()))
-            .unwrap();
-        let denied = limited.dispatch(&select_type(), &ActionParameters::new(), &context);
+        let register = |capabilities: &[Capability]| {
+            let mut registry = ActionRegistry::default();
+            registry
+                .register_for_module(module.clone(), capabilities, Box::new(Select::new()))
+                .unwrap();
+            registry
+        };
+        let run = |registry: &ActionRegistry| {
+            registry.dispatch(&select_type(), &ActionParameters::new(), &context)
+        };
+
+        // Reading the profile is a capability too.
+        let blind = run(&register(&[]));
+        assert_eq!(
+            blind.message,
+            "the module is not allowed to read the active profile"
+        );
+
+        // Reading is not enough to switch projects.
+        let denied = run(&register(&[Capability::ProfileRead]));
         assert!(!denied.is_success());
         assert!(denied.message.contains("may not change the active project"));
+        assert_eq!(denied.effects, Vec::new());
 
-        let mut allowed = ActionRegistry::default();
-        allowed
-            .register_for_module(
-                module.clone(),
-                &[Capability::ProjectContext],
-                Box::new(Select::new()),
-            )
-            .unwrap();
-        assert!(
-            allowed
-                .dispatch(&select_type(), &ActionParameters::new(), &context)
-                .is_success()
-        );
+        let allowed = register(&[Capability::ProfileRead, Capability::ProjectContext]);
+        assert!(run(&allowed).is_success());
         assert_eq!(allowed.module_of(&select_type()), Some(&module));
     }
 }

@@ -374,7 +374,18 @@ impl ModuleRegistry {
             let Some(entry) = self.modules.get_mut(id) else {
                 continue;
             };
-            match normalize_config(entry.module.manifest(), &settings.config) {
+            // Settings removed in a newer version of a module are ignored
+            // instead of invalidating the settings that still exist.
+            let manifest = entry.module.manifest();
+            let mut known = ActionParameters::new();
+            for (key, value) in settings.config.iter() {
+                if manifest.config.iter().any(|spec| &spec.key == key) {
+                    known = known.with(key.clone(), value.clone());
+                } else {
+                    problems.push(format!("{id}: ignoring unknown setting `{key}`"));
+                }
+            }
+            match normalize_config(manifest, &known) {
                 Ok(config) => entry.config = config,
                 Err(error) => problems.push(format!("{id}: {error}")),
             }
@@ -652,6 +663,24 @@ mod tests {
         assert!(!registry.is_enabled(&id("test-extra")));
         assert_eq!(problems.len(), 1);
         assert_eq!(registry.states().len(), 2);
+
+        // Unknown settings are dropped, known ones survive.
+        let mut states = ModuleStates::new();
+        states.insert(
+            id("test"),
+            ModuleSettings {
+                enabled: true,
+                config: ActionParameters::new()
+                    .with("prefix", ParameterValue::Text(">".into()))
+                    .with("removed", ParameterValue::Boolean(true)),
+            },
+        );
+        let problems = registry.apply_states(&states);
+        assert_eq!(problems, ["test: ignoring unknown setting `removed`"]);
+        assert_eq!(
+            registry.states()[&id("test")].config.text("prefix"),
+            Some(">")
+        );
     }
 
     #[test]

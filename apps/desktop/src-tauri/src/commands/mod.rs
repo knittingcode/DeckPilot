@@ -12,6 +12,7 @@
 mod actions;
 pub(crate) mod agent;
 mod layouts;
+mod machine;
 mod modules;
 mod profiles;
 mod system;
@@ -57,9 +58,9 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         projects::copy_project,
         projects::cycle_project,
         projects::select_project,
-        projects::get_machine_config,
-        projects::set_resource_binding,
-        projects::remove_resource_binding,
+        machine::get_machine_config,
+        machine::set_resource_binding,
+        machine::remove_resource_binding,
         projects::check_resources,
         layouts::create_layout,
         layouts::save_layout,

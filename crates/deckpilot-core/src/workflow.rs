@@ -105,7 +105,8 @@ impl Workflow {
                 .definition()
                 .normalize(&action.parameters.overlay(&step.overrides))
             {
-                for problem in handler.check(&parameters, profile) {
+                for problem in registry.check_parameters(&action.action_type, &parameters, profile)
+                {
                     issues.push(format!("step {position} ({}): {problem}", action.name));
                 }
             }

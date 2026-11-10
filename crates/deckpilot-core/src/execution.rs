@@ -1,10 +1,12 @@
 //! Execution context handed to action handlers and the results they return.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    MachineConfig, MachineResourceBinding, Profile, Project, ProjectId, ResolveError, ResourceKind,
-    ResourceRef,
+    Capability, MachineConfig, MachineResourceBinding, Profile, Project, ProjectId, ResolveError,
+    ResourceKind, ResourceRef,
 };
 
 /// Read-only view of everything an action may depend on at execution time.
@@ -12,21 +14,107 @@ use crate::{
 /// Handlers never mutate state directly. Changes to the runtime context are
 /// requested through [`ContextEffect`]s in the returned [`ActionResult`], which
 /// keeps handlers deterministic and easy to test.
+///
+/// Access is limited by the [`Capability`]s of the module that provides the
+/// handler: [`ExecutionContext::profile`] and [`ExecutionContext::project`]
+/// require [`Capability::ProfileRead`], and [`ExecutionContext::resolve`]
+/// requires [`Capability::MachineResources`]. The
+/// [`ActionRegistry`](crate::ActionRegistry) applies the limits before it calls
+/// a module's handler.
 #[derive(Debug, Clone, Copy)]
 pub struct ExecutionContext<'a> {
-    pub profile: &'a Profile,
-    pub project: Option<&'a Project>,
-    pub machine: &'a MachineConfig,
+    profile: &'a Profile,
+    project: Option<&'a Project>,
+    machine: &'a MachineConfig,
+    /// `None` means unrestricted (the core itself and trusted handlers).
+    capabilities: Option<&'a BTreeSet<Capability>>,
 }
 
 impl<'a> ExecutionContext<'a> {
+    /// An unrestricted context. Restrictions are added when dispatching.
+    pub fn new(
+        profile: &'a Profile,
+        project: Option<&'a Project>,
+        machine: &'a MachineConfig,
+    ) -> Self {
+        Self {
+            profile,
+            project,
+            machine,
+            capabilities: None,
+        }
+    }
+
+    /// The same context, limited to `capabilities`.
+    #[must_use]
+    pub fn restricted(self, capabilities: &'a BTreeSet<Capability>) -> Self {
+        Self {
+            capabilities: Some(capabilities),
+            ..self
+        }
+    }
+
+    pub fn allows(&self, capability: Capability) -> bool {
+        self.capabilities
+            .is_none_or(|granted| granted.contains(&capability))
+    }
+
+    fn require(&self, capability: Capability) -> Result<(), CapabilityDenied> {
+        if self.allows(capability) {
+            Ok(())
+        } else {
+            Err(CapabilityDenied(capability))
+        }
+    }
+
+    /// The profile the action belongs to.
+    pub fn profile(&self) -> Result<&'a Profile, CapabilityDenied> {
+        self.require(Capability::ProfileRead)?;
+        Ok(self.profile)
+    }
+
+    /// The active project of the profile, if any.
+    pub fn project(&self) -> Result<Option<&'a Project>, CapabilityDenied> {
+        self.require(Capability::ProfileRead)?;
+        Ok(self.project)
+    }
+
     /// Resolves a resource reference for the active project on this machine.
     pub fn resolve(
         &self,
         reference: &ResourceRef,
         expected: Option<ResourceKind>,
     ) -> Result<&'a MachineResourceBinding, ResolveError> {
+        self.require(Capability::MachineResources)
+            .map_err(|_| ResolveError::NotPermitted)?;
         self.machine.resolve(reference, self.project, expected)
+    }
+
+    /// Resolves the resource that `project` maps to `role`, on this machine.
+    /// `project` need not be the active one; callers check that it belongs
+    /// to the profile.
+    pub fn resolve_project_resource(
+        &self,
+        project: &Project,
+        role: &str,
+    ) -> Result<&'a MachineResourceBinding, ResolveError> {
+        self.require(Capability::MachineResources)
+            .map_err(|_| ResolveError::NotPermitted)?;
+        let reference = ResourceRef::ProjectRole {
+            role: role.to_owned(),
+        };
+        self.machine.resolve(&reference, Some(project), None)
+    }
+}
+
+/// A module tried to use something its manifest does not declare.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the module is not allowed to {}", .0.description().to_lowercase())]
+pub struct CapabilityDenied(pub Capability);
+
+impl From<CapabilityDenied> for ActionResult {
+    fn from(denied: CapabilityDenied) -> Self {
+        ActionResult::failure(denied.to_string())
     }
 }
 
@@ -57,6 +145,10 @@ pub struct ActionResult {
     pub message: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<ContextEffect>,
+    /// Structured details of the outcome, e.g. the resolved project and
+    /// resource. Keys are camelCase; values are plain text.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub data: BTreeMap<String, String>,
 }
 
 impl ActionResult {
@@ -65,6 +157,7 @@ impl ActionResult {
             status: ActionStatus::Succeeded,
             message: message.into(),
             effects: Vec::new(),
+            data: BTreeMap::new(),
         }
     }
 
@@ -73,6 +166,7 @@ impl ActionResult {
             status: ActionStatus::Skipped,
             message: message.into(),
             effects: Vec::new(),
+            data: BTreeMap::new(),
         }
     }
 
@@ -81,7 +175,14 @@ impl ActionResult {
             status: ActionStatus::Failed,
             message: message.into(),
             effects: Vec::new(),
+            data: BTreeMap::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_data(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.data.insert(key.into(), value.into());
+        self
     }
 
     #[must_use]

@@ -141,11 +141,7 @@ impl Engine {
             return Ok(self.registry.dispatch(
                 &instance.action_type,
                 &instance.parameters,
-                &ExecutionContext {
-                    profile,
-                    project,
-                    machine,
-                },
+                &ExecutionContext::new(profile, project, machine),
             ));
         };
         if handler.definition().requires_project && project.is_none() {
@@ -167,18 +163,16 @@ impl Engine {
                 )));
             }
         };
-        let problems = handler.check(&parameters, profile);
+        let problems = self
+            .registry
+            .check_parameters(&instance.action_type, &parameters, profile);
         if !problems.is_empty() {
             return Ok(ActionResult::failure(format!(
                 "invalid configuration: {}",
                 problems.join("; ")
             )));
         }
-        let execution = ExecutionContext {
-            profile,
-            project,
-            machine,
-        };
+        let execution = ExecutionContext::new(profile, project, machine);
         let mut result = self
             .registry
             .dispatch(&instance.action_type, &parameters, &execution);

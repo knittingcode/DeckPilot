@@ -518,8 +518,21 @@ impl Agent {
 
     fn cycle_project(&mut self, direction: CycleDirection) -> Result<(), IpcError> {
         self.require_projects()?;
+        let profile = self
+            .runtime
+            .profile()
+            .ok_or_else(|| engine_error(&EngineError::NoActiveProfile))?;
+        // Same order and wrap-around setting as the projects actions.
+        let wrap = deckpilot_modules::projects::switching::wrap_around(&self.modules);
+        let target = deckpilot_modules::projects::switching::step(
+            profile,
+            self.runtime.active_project_id(),
+            direction,
+            wrap,
+        )
+        .map_err(|e| IpcError::new(ErrorCode::Failed, e.to_string()))?;
         self.runtime
-            .cycle_project(direction)
+            .select_project(target)
             .map_err(|e| engine_error(&e))?;
         self.after_change();
         Ok(())

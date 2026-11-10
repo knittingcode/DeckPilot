@@ -79,11 +79,11 @@ impl ActionHandler for Echo {
         if message == "fail" {
             return ActionResult::failure("failed on purpose");
         }
-        ActionResult::success(render_label(
-            message,
-            &context.profile.name,
-            context.project,
-        ))
+        let (profile, project) = match (context.profile(), context.project()) {
+            (Ok(profile), Ok(project)) => (profile, project),
+            (Err(denied), _) | (_, Err(denied)) => return denied.into(),
+        };
+        ActionResult::success(render_label(message, &profile.name, project))
     }
 }
 
@@ -126,9 +126,13 @@ impl ActionHandler for Select {
             return ActionResult::success("selected")
                 .with_effect(ContextEffect::SelectProject { project });
         }
+        let (profile, project) = match (context.profile(), context.project()) {
+            (Ok(profile), Ok(project)) => (profile, project),
+            (Err(denied), _) | (_, Err(denied)) => return denied.into(),
+        };
         match ProjectSwitcher::cycle(
-            &context.profile.projects,
-            context.project.map(|p| p.id),
+            &profile.projects,
+            project.map(|p| p.id),
             crate::CycleDirection::Next,
         ) {
             Some(project) => ActionResult::success("switched")

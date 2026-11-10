@@ -102,9 +102,25 @@ pub enum ParameterValue {
 }
 
 /// Parameter values of an action instance, keyed by [`ParameterSpec::key`].
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// A parameter that is not set is absent; `null` in JSON input means the
+/// same, so optional parameters such as `project_id` can be cleared with
+/// `null`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct ActionParameters(BTreeMap<String, ParameterValue>);
+
+impl<'de> Deserialize<'de> for ActionParameters {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let values = BTreeMap::<String, Option<ParameterValue>>::deserialize(deserializer)?;
+        Ok(Self(
+            values
+                .into_iter()
+                .filter_map(|(key, value)| value.map(|value| (key, value)))
+                .collect(),
+        ))
+    }
+}
 
 impl ActionParameters {
     pub fn new() -> Self {
@@ -349,6 +365,17 @@ pub fn validate_presentation(icon: Option<&str>, label: Option<&str>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn null_parameters_are_not_set() {
+        let parameters: ActionParameters =
+            serde_json::from_str(r#"{"project_id": null, "a": {"type": "integer", "value": 1}}"#)
+                .unwrap();
+        assert_eq!(
+            parameters,
+            ActionParameters::new().with("a", ParameterValue::Integer(1))
+        );
+    }
     use crate::ResourceKey;
 
     fn action_type() -> ActionType {

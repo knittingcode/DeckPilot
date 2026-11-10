@@ -110,9 +110,13 @@ impl ActionHandler for LogMessage {
         context: &ExecutionContext<'_>,
     ) -> ActionResult {
         let template = parameters.text("message").unwrap_or_default();
-        let mut output = template.replace("{profile}", &context.profile.name);
+        let (profile, project) = match (context.profile(), context.project()) {
+            (Ok(profile), Ok(project)) => (profile, project),
+            (Err(denied), _) | (_, Err(denied)) => return denied.into(),
+        };
+        let mut output = template.replace("{profile}", &profile.name);
         if output.contains("{project.") {
-            let Some(project) = context.project else {
+            let Some(project) = project else {
                 return ActionResult::failure(
                     "message refers to the active project, but none is active",
                 );
@@ -145,15 +149,11 @@ mod tests {
                 ParameterValue::Text("{profile}: {project.key} / {project.name}".into()),
             ))
             .unwrap();
-        let mut context = ExecutionContext {
-            profile: &profile,
-            project: Some(&profile.projects[0]),
-            machine: &machine,
-        };
+        let mut context = ExecutionContext::new(&profile, Some(&profile.projects[0]), &machine);
         let result = handler.execute(&params, &context);
         assert_eq!(result.message, "Work: SHOP / Shop");
 
-        context.project = None;
+        context = ExecutionContext::new(&profile, None, &machine);
         assert!(!handler.execute(&params, &context).is_success());
     }
 

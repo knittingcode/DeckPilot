@@ -455,16 +455,18 @@ fn face_for(
                 .or(instance.label.as_deref())
                 .unwrap_or(&instance.name);
             let label = render_label(template, &profile.name, project);
-            match registry.handler(&instance.action_type) {
-                // The owning module may add context such as the active project.
-                Some(handler) => handler.decorate_face(
-                    KeyFace::new(FaceStyle::Action, label),
+            // The owning module may add context such as the active project.
+            registry
+                .decorate_face(
+                    &instance.action_type,
+                    KeyFace::new(FaceStyle::Action, label.clone()),
                     &instance.parameters,
                     template,
                     project,
-                ),
-                None => KeyFace::new(FaceStyle::Notice, label).with_detail("Unavailable"),
-            }
+                )
+                .unwrap_or_else(|| {
+                    KeyFace::new(FaceStyle::Notice, label).with_detail("Unavailable")
+                })
         }
         BindingTarget::Workflow { workflow } => match profile.workflow(workflow) {
             Some(definition) => KeyFace::new(

@@ -121,6 +121,15 @@ pub async fn connection(paths: &AgentPaths) -> Result<AgentConnection, ClientErr
 
 /// Asks a running agent to re-read configuration. Best effort: when the agent
 /// is not running it reads the configuration on its next start.
+/// Asks a running agent to reload and waits until it has. Used where acting
+/// on stale configuration would be wrong, e.g. after disabling a module.
+pub async fn reload(paths: &AgentPaths) -> Result<(), ClientError> {
+    match request(paths, Request::ReloadConfiguration).await {
+        Ok(_) | Err(ClientError::NotRunning) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 pub fn notify_reload(paths: &AgentPaths) {
     let paths = paths.clone();
     tauri::async_runtime::spawn(async move {
