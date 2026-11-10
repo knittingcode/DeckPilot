@@ -14,17 +14,10 @@
 name: Signing check
 
 on:
+  # Every pull request: "Updater signing keys match" is a required check of
+  # main, so it must report on every pull request, not only on changes to
+  # release code.
   pull_request:
-    paths:
-      - .github/workflows/signing-check.yml
-      - .github/workflows/release.yml
-      - apps/desktop/src-tauri/tauri*.json
-      - apps/desktop/src-tauri/src/updates.rs
-      - crates/deckpilot-update/**
-      - tools/dev/**
-      - .github/scripts/**
-      - apps/agent/build.rs
-      - apps/agent/Info.plist
   workflow_dispatch:
     inputs:
       notarize:
