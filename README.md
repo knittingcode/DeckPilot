@@ -4,9 +4,10 @@ DeckPilot is an open-source, lightweight, cross-platform application for managin
 Stream Deck devices on Linux, macOS and Windows.
 
 > **Status: early development.** DeckPilot consists of a background agent
-> (devices, actions, system tray) and a configuration app. Support for the
+> (devices, actions, system tray) and a configuration studio. Support for the
 > Elgato Stream Deck MK.2 is implemented but **has not yet been tested on a
-> physical device**. See [Known limitations](#known-limitations).
+> physical device**; the XL and Stream Deck + can be designed for but have no
+> driver. See [Known limitations](#known-limitations).
 
 ## Concepts
 
@@ -38,10 +39,12 @@ crates/
   deckpilot-storage/   ConfigStore trait and SQLite implementation
   deckpilot-hid/       USB HID driver (Stream Deck MK.2)
   deckpilot-ipc/       Agent IPC protocol, endpoint and client
+  deckpilot-update/    Update manifest, signature and policy logic
 apps/
   agent/               Background agent with system tray
   desktop/             Tauri 2 configuration app (React, TypeScript, shadcn/ui)
     src-tauri/         Rust side of the configuration app
+tools/dev/             Development supervisor (make up), seed data, release checks
 packaging/linux/       udev rule for non-root device access
 docs/                  Architecture, agent, data model, development, roadmap
 ```
@@ -53,17 +56,15 @@ Requirements: Rust via rustup (the version is pinned in `rust-toolchain.toml`), 
 operating system.
 
 ```sh
-pnpm install
-cargo build -p deckpilot-agent   # the app starts the agent next to it
-pnpm dev                         # configuration app in development mode
-cargo test --workspace
+make setup    # dependencies and toolchain check
+make up       # agent with simulated devices + configuration app with live reload
+make status   # what is running
+make down     # stop; development data in .dev/ is kept
 ```
 
-Run the agent with a simulated Stream Deck instead of hardware:
-
-```sh
-cargo run -p deckpilot-agent -- --mock-devices
-```
+`pnpm dev` runs the same session in the foreground. Development uses an
+isolated database in `.dev/data` with demonstration data and never touches
+your real configuration. Without Make: `cargo run -p deckpilot-dev -- up`.
 
 On Linux, install `packaging/linux/70-deckpilot-streamdeck.rules` to access
 the device without root.
@@ -74,6 +75,7 @@ See [docs/development.md](docs/development.md) for all commands.
 
 - [Architecture](docs/architecture.md)
 - [Background agent and IPC](docs/background-agent.md)
+- [Updates](docs/updates.md) and [releasing](docs/releasing.md)
 - [Data model](docs/data-model.md)
 - [Development](docs/development.md)
 - [Roadmap](docs/roadmap.md)
@@ -82,8 +84,10 @@ See [docs/development.md](docs/development.md) for all commands.
 
 - The Stream Deck MK.2 driver has **not** been tested on a physical device.
   Only the MK.2 is supported; other models are not exposed.
-- Installers do not bundle the agent yet; it must be placed next to the
-  configuration app executable (as in development builds).
+- No release has been published yet. The release pipeline and signed updates
+  are implemented, but an update between two real releases has not been
+  installed end to end; automatic installation stays opt-in until it has.
+- Installers are not signed for macOS Gatekeeper or Windows SmartScreen.
 - Keys show text labels only; icons are not supported yet.
 - Device discovery rescans every 2 seconds instead of using OS hotplug
   notifications.
@@ -91,9 +95,9 @@ See [docs/development.md](docs/development.md) for all commands.
   (the agent keeps working).
 - Only hardware-independent built-in actions exist (log message, cycle/select
   project, resolve resource).
-- Workflows and layouts have no editor; layouts can be generated from a
-  profile's actions.
-- There is no update mechanism; the tray has no “Check for Updates” entry.
+- Workflow steps can only use the built-in actions; integrations such as
+  launching applications or Docker are not available yet.
+- Database encryption is not enabled in the app; no password is requested.
 - Database encryption is available in the storage crate behind the `sqlcipher`
   feature but is not enabled in the app; there is no password setup or
   import/export yet.

@@ -24,10 +24,12 @@ writes runtime state (active profile, active project, brightness).
 ```
 deckpilot-device ◄── deckpilot-core ◄── deckpilot-storage
    ▲      ▲               ▲   ▲                ▲
-   │  deckpilot-hid       │  deckpilot-ipc     │
-   │      ▲               │   ▲                │
-   └──────┴── deckpilot-agent (binary) ────────┤
-                          └─── deckpilot-desktop (Tauri app)
+   │  deckpilot-hid       │  deckpilot-ipc     │      deckpilot-update
+   │      ▲               │   ▲                │             ▲
+   └──────┴── deckpilot-agent (binary) ────────┤             │
+                          └─── deckpilot-desktop (Tauri app) ┘
+
+tools/dev (deckpilot-dev): development supervisor, seed data, release checks
 ```
 
 ### `deckpilot-device`
@@ -56,6 +58,18 @@ Nothing outside a driver assumes a fixed number of keys.
 
 USB HID driver for the Stream Deck MK.2 using `elgato-streamdeck` and
 `hidapi`. Only models with a descriptor are exposed.
+
+### `deckpilot-update`
+
+Update manifest validation, minisign signature verification, update policy
+(modes, check scheduling, idle detection) and agent/app version
+compatibility. See [updates.md](updates.md).
+
+### `tools/dev`
+
+`deckpilot-dev`, the development supervisor behind `make up` and `pnpm dev`,
+plus demonstration data, version checks, packaging and release verification.
+Not shipped. See [development.md](development.md).
 
 ### `deckpilot-ipc`
 
@@ -110,13 +124,18 @@ receive through the execution context. No such handler exists yet.
 - Optional SQLCipher encryption (`sqlcipher` feature) using `PRAGMA key`;
   DeckPilot does not implement cryptography itself
 
-### `apps/desktop`
+### `apps/desktop` (configuration studio)
 
 Tauri 2 application. The Rust side (`src-tauri`) exposes commands that load
 configuration from storage, apply one change through the domain model,
 persist it and notify the agent. Runtime changes and action execution are
 forwarded to the agent; a background task subscribes to agent events and
-forwards them to the window. The frontend is React + TypeScript with Tailwind CSS and shadcn/ui
+forwards them to the window. The sections are Dashboard, Action Library,
+Workflows, Profiles, Projects (including this machine's resource mappings),
+Device Models, Layout Designer, Connected Devices and Settings (appearance,
+agent, updates). Every editor saves through the backend; layouts are
+validated against the device model and previewed with the same face logic the
+agent uses. The frontend is React + TypeScript with Tailwind CSS and shadcn/ui
 components; `src/lib/types.ts` mirrors the serialized Rust types.
 
 ## Configuration separation

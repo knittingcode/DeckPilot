@@ -18,11 +18,15 @@ Profile
 ├── actions:   ActionInstance[]
 ├── workflows: Workflow[]
 ├── projects:  Project[]        (order defines the project cycle)
-└── layouts:   DeviceLayout[]
+├── defaultProject             (selected when the profile is first activated)
+├── layouts:   DeviceLayout[]   (any number per device model)
+└── activeLayouts              (the layout used for each model)
 ```
 
 `Profile::validate` reports duplicate project keys, workflow steps that
-reference missing actions, and layout problems.
+reference missing actions, and layout problems. `Profile::duplicate` copies a
+profile with new identifiers for everything in it and remaps all internal
+references, so the copy is fully independent.
 
 ## Actions
 
@@ -36,9 +40,20 @@ reference missing actions, and layout problems.
   - `{ "type": "fixed", "key": "shop.repository" }`
   - `{ "type": "projectRole", "role": "repository" }` – resolved from the
     active project
-- **ActionInstance** – `id`, `name`, `actionType`, `parameters`. Created only
-  through `ActionRegistry::create_instance`, which validates parameters and
-  fills defaults.
+- **ActionInstance** – `id`, `name`, `actionType`, `parameters`, optional
+  `description`, `icon` (icon name) and `label` (key text). Created and edited
+  through `ActionRegistry::validate_instance`, which validates parameters and
+  fills defaults. The same action type can be configured many times with
+  different parameters, each with its own stable identifier.
+- **Usage** – where an action or workflow is referenced (workflow step or
+  layout binding). Referenced actions and workflows cannot be deleted.
+
+### Key labels
+
+Action labels and binding labels may contain `{profile}`, `{project.key}` and
+`{project.name}`. They are resolved against the active project whenever a key
+is drawn, so a project switcher labelled `{project.key}` shows SHOP, CMR,
+CMS, SHOP as it is pressed.
 
 ### Built-in action types
 
@@ -51,10 +66,19 @@ reference missing actions, and layout problems.
 
 ## Workflows
 
-`Workflow { id, name, steps: WorkflowStep[] }` with
-`WorkflowStep { action: ActionInstanceId, onFailure: "stop" | "continue" }`.
-Steps run in order; context effects of a step are applied before the next
-step. The result is a `WorkflowReport` with a `StepReport` per executed step.
+`Workflow { id, name, description, steps: WorkflowStep[] }` with
+`WorkflowStep { action, onFailure: "stop" | "continue", condition, overrides }`.
+
+- `condition`: `always`, `previousSucceeded`, `previousFailed` or
+  `activeProject { project }`. Steps whose condition is not met are reported
+  as `skipped` and do not count as failures.
+- `overrides`: parameter values that replace the action's own values for this
+  step only.
+
+Steps run in order in the agent; context effects of a step (such as a project
+switch) apply before the next step. Requests from elsewhere are processed only
+after the workflow finishes, so a workflow always sees a consistent context.
+The result is a `WorkflowReport` with a `StepReport` per step.
 
 ## Execution
 
@@ -111,11 +135,18 @@ opens a next page (“More”) and the first key of following pages goes back.
   key is highlighted while its project is active. Without a profile or layout
   the first key shows a notice and the others stay blank.
 
-## Storage schema (version 1)
+## Storage schema (version 2)
+
+Migration 2 adds `app_launches` (start history per component, used to detect
+the first start after an update) and rewrites stored documents in document
+format 2 within the same transaction. Format 2 only adds optional fields, so
+data written by earlier versions is preserved; a test migrates a database
+created by the previous release.
 
 | Table            | Purpose                                              |
 | ---------------- | ---------------------------------------------------- |
 | `profiles`       | One row per profile; JSON document + document version |
 | `machine_config` | Single row; JSON document + document version          |
 | `profile_state`  | Active project per profile (cascade-deleted)          |
-| `settings`       | Key/value: active profile, device brightness          |
+| `settings`       | Key/value: active profile, device brightness, update preferences |
+| `app_launches`   | Recent start versions per component                   |
