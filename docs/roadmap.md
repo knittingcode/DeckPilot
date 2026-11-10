@@ -60,19 +60,34 @@ Remaining before the milestone is complete:
   between two releases end to end
 - Profile switching from the device
 
-## Milestone 3 – Platform actions
+## Milestone 3 – Security and portability (v0.4, current)
+
+Implemented:
+
+- SQLCipher-encrypted database by default, key derived with Argon2id;
+  first-run setup, unlock, password change, lock, and a one-time password
+  confirmation after updates; the agent starts locked
+- Safe encryption of databases from earlier versions, keeping the original
+  until the user removes it
+- Verified encrypted backups before schema upgrades, migration history and
+  a compatibility policy between versions
+- Encrypted configuration export and import with preview, merge/replace,
+  conflict resolution and resource mapping
+- Module portability contracts and module-owned schema versions
+- A signing check for the updater keys and build provenance for releases
+
+Remaining before the milestone is complete:
+
+- A first signed release and an end-to-end update between two releases
+- Platform code signing (Apple notarization, Windows Authenticode)
+- Secret storage for future modules that need credentials (OS keychain)
+
+## Milestone 4 – Platform actions
 
 - Platform services behind explicit interfaces: open application, open
   directory, open terminal at a resource, open URL
 - Docker/Compose environment actions
 - Clear confirmation for any action with side effects
-
-## Milestone 4 – Security and portability
-
-- Password setup, SQLCipher-encrypted database by default
-- Password prompts on import, export and first launch after an update
-- Encrypted manual import/export of profiles and layouts
-- Secret storage separated from portable configuration
 
 ## Later
 

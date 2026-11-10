@@ -81,7 +81,9 @@ newline-delimited JSON framing and an async client.
 
 The background agent: device sessions and I/O threads, layout rendering,
 request handling, IPC server, system tray, autostart and single-instance
-lock.
+lock. It starts **locked**: the configuration app unlocks it with the
+database key after the user entered the password (see
+[security.md](security.md#trust-boundary-between-the-app-and-the-agent)).
 
 ### `deckpilot-core`
 
@@ -126,6 +128,12 @@ Action types and feature pages come from modules: `modules/general` and
 agent and the app build their registries from it. See
 [Feature modules](modules.md).
 
+### `deckpilot-portability`
+
+Encrypted configuration export and import: the archive format
+(XChaCha20-Poly1305, Argon2id), the payload, validation of untrusted
+imports, the preview and the import plan. See [security.md](security.md).
+
 ### `deckpilot-storage`
 
 - `ConfigStore` trait used by the application
@@ -134,8 +142,12 @@ agent and the app build their registries from it. See
   projects, default and active projects live in tables whose constraints keep
   each project inside its profile
 - Module states and migration notes are stored alongside
-- Optional SQLCipher encryption (`sqlcipher` feature) using `PRAGMA key`;
-  DeckPilot does not implement cryptography itself
+- SQLCipher encryption by default, with a raw 256-bit key derived from the
+  user's password (`vault`: setup, unlock, password change, legacy
+  migration, crash recovery); DeckPilot does not implement cryptography
+  itself
+- Verified encrypted backups before schema upgrades, migration history and
+  module-owned schema versions
 
 ### `apps/desktop` (configuration studio)
 

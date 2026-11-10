@@ -62,13 +62,24 @@ A running executable is never overwritten. After any restart the app compares
 its version with the agent's (`AgentCompatibility`) and offers to restart a
 mismatching agent, so mismatched versions are not left running side by side.
 
+Only one check, download or installation runs at a time; a second attempt
+is refused while one is in progress. A failed installation is reported as a
+failure, the downloaded update stays ready to retry, and the agent is
+started again (and unlocked by the app). The agent processes requests one
+at a time, so a running workflow finishes before the agent stops for an
+update.
+
 ## First launch after an update
 
-Every start of the configuration app is recorded (`app_launches`, schema
-version 2). The app reports the first start after a version change and shows a
-notice. Database encryption is not enabled yet; once it is, this is where the
-password will be requested. Until then no password prompt is shown and none is
-stored.
+Every start of the configuration app is recorded (`app_launches`). The app
+reports the first start after a version change and asks for the database
+password once (see [security.md](security.md#password-lifecycle)); later
+starts of the same version do not ask. The database is never re-encrypted
+by an update. Schema upgrades are preceded by a verified encrypted backup.
+
+A newer database is never opened by an older DeckPilot (see
+[data-model.md](data-model.md#compatibility-between-versions)); the updater
+never installs an older version than the running one.
 
 ## Verification status
 

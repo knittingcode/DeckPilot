@@ -137,7 +137,7 @@ opens a next page (“More”) and the first key of following pages goes back.
   key is highlighted while its project is active. Without a profile or layout
   the first key shows a notice and the others stay blank.
 
-## Storage schema (version 4)
+## Storage schema (version 5)
 
 Migrations run in a transaction each; a failed migration leaves the database
 unchanged.
@@ -150,6 +150,15 @@ unchanged.
   See [Migration 3](#migration-3) below.
 - **Migration 4** converts the projects actions to the generic catalog. See
   [Migration 4](#migration-4).
+- **Migration 5** adds `migration_history` (every upgrade with its backup)
+  and `module_schemas` (the schema version of each module's own tables).
+
+Since version 0.4 the database is encrypted with SQLCipher; see
+[security.md](security.md). Every upgrade of an existing database is
+preceded by an integrity check and a verified, encrypted backup in
+`backups/`, runs in one `IMMEDIATE` transaction that re-reads the version
+(two processes opening an old database at once cannot both migrate it), and
+is verified afterwards.
 
 | Table              | Purpose                                              |
 | ------------------ | ---------------------------------------------------- |
@@ -162,6 +171,8 @@ unchanged.
 | `settings`         | Key/value: active profile, device brightness, update preferences |
 | `app_launches`     | Recent start versions per component                   |
 | `migration_notes`  | Changes a migration made to user data, shown in Settings |
+| `migration_history`| Schema upgrades: from, to, backup file, result, time  |
+| `module_schemas`   | Schema version of each module's own tables            |
 
 Constraints keep projects inside their profile:
 
@@ -220,3 +231,17 @@ layout bindings stay as they are.
 
 A test migrates every case and checks that ids, order and layout bindings are
 unchanged.
+
+## Compatibility between versions
+
+- A DeckPilot build reads every older schema and upgrades it; it **refuses to
+  open a newer schema** (`UnsupportedSchema`) instead of guessing, and the
+  app explains which version is needed.
+- Upgrades are one-way. To go back to an older DeckPilot, restore the
+  encrypted backup that was made before the upgrade (`backups/
+  deckpilot-schema<N>-<time>.db`, same password) in place of `deckpilot.db`,
+  then install the older version. A failed application update never restores
+  an older binary automatically, because it might not read the migrated
+  database.
+- Module tables are versioned separately (`module_schemas`); a module schema
+  newer than the installed module is refused the same way.

@@ -31,8 +31,10 @@ which control triggers it.
 - **Device models** describe capabilities (key grids, encoders, touch surfaces)
   independently of actions. Layouts are validated against them.
 
-All configuration is stored locally. DeckPilot has no cloud service, no
-synchronization and no telemetry.
+All configuration is stored locally and encrypted with a password you choose
+(SQLCipher, Argon2id). Encrypted exports move it to another computer.
+DeckPilot has no cloud service, no synchronization and no telemetry. See
+[security](docs/security.md).
 
 ## Repository layout
 
@@ -45,6 +47,7 @@ crates/
   deckpilot-ipc/       Agent IPC protocol, endpoint and client
   deckpilot-update/    Update manifest, signature and policy logic
   deckpilot-modules/   The list of built-in feature modules
+  deckpilot-portability/ Encrypted configuration export and import
 modules/
   general/             General actions (log message)
   projects/            Projects module: project actions and management
@@ -84,6 +87,7 @@ See [docs/development.md](docs/development.md) for all commands.
 - [Architecture](docs/architecture.md)
 - [Background agent and IPC](docs/background-agent.md)
 - [Updates](docs/updates.md) and [releasing](docs/releasing.md)
+- [Security and encryption](docs/security.md)
 - [Feature modules](docs/modules.md)
 - [Data model](docs/data-model.md)
 - [Development](docs/development.md)

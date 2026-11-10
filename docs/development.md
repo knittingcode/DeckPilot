@@ -32,7 +32,14 @@ make up        # or: pnpm dev (same session, in the foreground; Ctrl+C stops it)
    *Empty* profile to check empty states. Demonstration data exists only in
    this seed; a production database starts with no profiles and an empty
    Action Library. The seed runs once per data directory, so demo data you
-   delete does not come back (`make seed` with `--reset` starts over);
+   delete does not come back (`make seed` with `--reset` starts over).
+   The development database is encrypted like a real one, with the
+   development-only password `deckpilot-dev`. The supervisor unlocks the
+   agent with it, so the app opens without a prompt; `make up LOCKED=1`
+   leaves it locked to try the unlock screens. The fixture lives only in
+   `tools/dev` and is never used by the application. An unencrypted
+   development database from an earlier version is left alone so that the
+   app's migration can be tried;
 3. builds and starts the background agent with simulated MK.2, XL and
    Stream Deck + devices next to any connected hardware;
 4. starts the configuration app with `tauri dev` and Vite HMR.
