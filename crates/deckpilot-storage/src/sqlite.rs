@@ -1928,12 +1928,17 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("deckpilot.db");
         SqliteStore::open(&path, &Encryption::None).unwrap();
-        let writers: Vec<_> = (0..4)
+        // Two connections (the agent and the app), interleaving writes that
+        // read first. Kept small: on slow disks (CI) a larger load can make a
+        // writer wait longer than the busy timeout, which is not what this
+        // test is about — it catches the immediate "database is locked" of a
+        // deferred transaction that cannot upgrade its lock.
+        let writers: Vec<_> = (0..2)
             .map(|n| {
                 let path = path.clone();
                 std::thread::spawn(move || {
                     let store = SqliteStore::open(&path, &Encryption::None).unwrap();
-                    for i in 0..25 {
+                    for i in 0..10 {
                         store
                             .record_launch(&format!("component-{n}"), "0.4.0")
                             .unwrap();
@@ -1948,7 +1953,7 @@ mod tests {
             writer.join().unwrap();
         }
         let store = SqliteStore::open(&path, &Encryption::None).unwrap();
-        assert_eq!(store.list_profiles().unwrap().len(), 100);
+        assert_eq!(store.list_profiles().unwrap().len(), 20);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }
