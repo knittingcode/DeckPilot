@@ -1,0 +1,6 @@
+[toolchain]
+# Pinned so local builds and CI use the same compiler and Clippy lints.
+# Update deliberately and fix any new lints in the same change.
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
