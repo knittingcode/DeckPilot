@@ -25,7 +25,17 @@ pub use sqlite::{DatabaseKey, Encryption, SqliteStore};
 
 /// Version of the JSON document format written for profiles and machine
 /// configuration. Bumped when the serialized shape changes incompatibly.
-pub const DOCUMENT_VERSION: u32 = 1;
+pub const DOCUMENT_VERSION: u32 = 2;
+
+/// Result of recording an application start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchInfo {
+    pub previous_version: Option<String>,
+    pub current_version: String,
+    /// The component started with a different version than last time.
+    pub first_after_update: bool,
+}
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -77,4 +87,12 @@ pub trait ConfigStore {
     /// Display brightness for connected devices in percent, if configured.
     fn device_brightness(&self) -> Result<Option<u8>>;
     fn set_device_brightness(&self, percent: u8) -> Result<()>;
+
+    /// Free-form, machine-local preferences (for example update settings).
+    fn setting(&self, key: &str) -> Result<Option<String>>;
+    fn set_setting(&self, key: &str, value: &str) -> Result<()>;
+
+    /// Records that `component` started with `version` and reports whether
+    /// this is the first start after a version change.
+    fn record_launch(&self, component: &str, version: &str) -> Result<LaunchInfo>;
 }

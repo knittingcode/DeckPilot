@@ -8,10 +8,11 @@ use serde::de::DeserializeOwned;
 
 use deckpilot_core::{MachineConfig, Profile, ProfileId, ProjectId};
 
-use crate::{ConfigStore, DOCUMENT_VERSION, ProfileSummary, Result, StorageError};
+use crate::{ConfigStore, DOCUMENT_VERSION, LaunchInfo, ProfileSummary, Result, StorageError};
 
 /// Ordered schema migrations. Index `n` upgrades from version `n` to `n + 1`.
-const MIGRATIONS: &[&str] = &[r"
+const MIGRATIONS: &[&str] = &[
+    r"
     CREATE TABLE profiles (
         id               TEXT PRIMARY KEY NOT NULL,
         name             TEXT NOT NULL,
@@ -32,7 +33,17 @@ const MIGRATIONS: &[&str] = &[r"
         key   TEXT PRIMARY KEY NOT NULL,
         value TEXT NOT NULL
     );
-"];
+",
+    r"
+    CREATE TABLE app_launches (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        component   TEXT NOT NULL,
+        app_version TEXT NOT NULL,
+        launched_at INTEGER NOT NULL
+    );
+    CREATE INDEX app_launches_component ON app_launches (component, id);
+",
+];
 
 const ACTIVE_PROFILE: &str = "active_profile";
 const DEVICE_BRIGHTNESS: &str = "device_brightness";
@@ -110,13 +121,49 @@ impl SqliteStore {
             });
         }
         for version in current..supported {
+            // Schema change and document upgrade commit together or not at all.
             let tx = self.connection.unchecked_transaction()?;
             tx.execute_batch(MIGRATIONS[version as usize])?;
+            if version + 1 == 2 {
+                upgrade_documents(&tx)?;
+            }
             tx.pragma_update(None, "user_version", version + 1)?;
             tx.commit()?;
         }
         Ok(())
     }
+}
+
+/// Rewrites stored documents in the current [`DOCUMENT_VERSION`]. Document
+/// version 2 only adds optional fields, so older documents deserialize with
+/// defaults and are written back unchanged otherwise.
+fn upgrade_documents(connection: &Connection) -> Result<()> {
+    let profiles: Vec<(String, u32, String)> = connection
+        .prepare("SELECT id, document_version, document FROM profiles")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (id, version, document) in profiles {
+        let profile: Profile = decode(version, &document)?;
+        connection.execute(
+            "UPDATE profiles SET document_version = ?1, document = ?2 WHERE id = ?3",
+            params![DOCUMENT_VERSION, encode(&profile)?, id],
+        )?;
+    }
+    let machine: Option<(u32, String)> = connection
+        .query_row(
+            "SELECT document_version, document FROM machine_config WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if let Some((version, document)) = machine {
+        let config: MachineConfig = decode(version, &document)?;
+        connection.execute(
+            "UPDATE machine_config SET document_version = ?1, document = ?2 WHERE id = 1",
+            params![DOCUMENT_VERSION, encode(&config)?],
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "sqlcipher")]
@@ -153,8 +200,11 @@ fn encode<T: Serialize>(value: &T) -> Result<String> {
     Ok(serde_json::to_string(value)?)
 }
 
+/// Oldest document version that can still be read (and upgraded).
+const MIN_DOCUMENT_VERSION: u32 = 1;
+
 fn decode<T: DeserializeOwned>(version: u32, document: &str) -> Result<T> {
-    if version != DOCUMENT_VERSION {
+    if !(MIN_DOCUMENT_VERSION..=DOCUMENT_VERSION).contains(&version) {
         return Err(StorageError::UnsupportedDocument(version));
     }
     Ok(serde_json::from_str(document)?)
@@ -314,6 +364,54 @@ impl ConfigStore for SqliteStore {
         Ok(())
     }
 
+    fn setting(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .connection
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()?)
+    }
+
+    fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.connection.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    fn record_launch(&self, component: &str, version: &str) -> Result<LaunchInfo> {
+        let tx = self.connection.unchecked_transaction()?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT app_version FROM app_launches WHERE component = ?1 ORDER BY id DESC LIMIT 1",
+                [component],
+                |row| row.get(0),
+            )
+            .optional()?;
+        tx.execute(
+            "INSERT INTO app_launches (component, app_version, launched_at) VALUES (?1, ?2, ?3)",
+            params![component, version, now()],
+        )?;
+        // Keep a short history only.
+        tx.execute(
+            "DELETE FROM app_launches WHERE component = ?1 AND id NOT IN
+               (SELECT id FROM app_launches WHERE component = ?1 ORDER BY id DESC LIMIT 20)",
+            [component],
+        )?;
+        tx.commit()?;
+        let first_after_update = previous
+            .as_deref()
+            .is_some_and(|previous| previous != version);
+        Ok(LaunchInfo {
+            previous_version: previous,
+            current_version: version.to_owned(),
+            first_after_update,
+        })
+    }
+
     fn active_project(&self, profile: ProfileId) -> Result<Option<ProjectId>> {
         let value: Option<Option<String>> = self
             .connection
@@ -348,8 +446,8 @@ impl ConfigStore for SqliteStore {
 mod tests {
     use super::*;
     use deckpilot_core::{
-        ActionParameters, ActionRegistry, MachineResourceBinding, Os, ParameterValue, Project,
-        ProjectKey, ResourceKey, ResourceKind, builtin,
+        ActionInstanceId, ActionParameters, ActionRegistry, MachineResourceBinding, Os,
+        ParameterValue, Project, ProjectKey, ResourceKey, ResourceKind, builtin,
     };
 
     fn sample_profile(name: &str) -> Profile {
@@ -511,6 +609,119 @@ mod tests {
         assert_eq!(first.active_profile().unwrap(), Some(profile.id));
         drop((first, second));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn migrates_a_version_one_database_without_losing_data() {
+        let dir = std::env::temp_dir().join(format!("deckpilot-test-{}", ProfileId::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("v1.db");
+        let profile_id = ProfileId::new();
+        let project_id = ProjectId::new();
+        {
+            // A database as written by the first release: schema 1, documents
+            // version 1, without the fields added later.
+            let connection = Connection::open(&path).unwrap();
+            connection.execute_batch(MIGRATIONS[0]).unwrap();
+            connection.pragma_update(None, "user_version", 1).unwrap();
+            let document = serde_json::json!({
+                "id": profile_id, "name": "Legacy", "description": "",
+                "actions": [{
+                    "id": ActionInstanceId::new(), "name": "Hello",
+                    "actionType": "deckpilot.core.log",
+                    "parameters": {"message": {"type": "text", "value": "hi"}}
+                }],
+                "workflows": [], "layouts": [],
+                "projects": [{"id": project_id, "key": "SHOP", "name": "Shop", "resources": {}}]
+            });
+            connection
+                .execute(
+                    "INSERT INTO profiles VALUES (?1, 'Legacy', 1, ?2, 0)",
+                    params![profile_id.to_string(), document.to_string()],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO machine_config VALUES (1, 1, ?1)",
+                    [r#"{"os":"linux","bindings":[]}"#],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO settings VALUES ('active_profile', ?1)",
+                    [profile_id.to_string()],
+                )
+                .unwrap();
+        }
+
+        let store = SqliteStore::open(&path, &Encryption::None).unwrap();
+        assert_eq!(store.schema_version().unwrap() as usize, MIGRATIONS.len());
+        let profile = store.load_profile(profile_id).unwrap().unwrap();
+        assert_eq!(profile.name, "Legacy");
+        assert_eq!(profile.actions[0].label, None);
+        assert_eq!(profile.projects[0].id, project_id);
+        assert_eq!(profile.default_project, None);
+        assert_eq!(store.active_profile().unwrap(), Some(profile_id));
+        assert!(store.load_machine_config().unwrap().is_some());
+        let versions: Vec<u32> = store
+            .connection
+            .prepare("SELECT document_version FROM profiles UNION ALL SELECT document_version FROM machine_config")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(versions.iter().all(|v| *v == DOCUMENT_VERSION));
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn records_launches_and_detects_updates() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let first = store.record_launch("desktop", "0.2.0").unwrap();
+        assert_eq!(first.previous_version, None);
+        assert!(!first.first_after_update);
+        assert!(
+            !store
+                .record_launch("desktop", "0.2.0")
+                .unwrap()
+                .first_after_update
+        );
+        let updated = store.record_launch("desktop", "0.3.0").unwrap();
+        assert!(updated.first_after_update);
+        assert_eq!(updated.previous_version.as_deref(), Some("0.2.0"));
+        // Components are tracked separately.
+        assert!(
+            !store
+                .record_launch("agent", "0.3.0")
+                .unwrap()
+                .first_after_update
+        );
+        for _ in 0..30 {
+            store.record_launch("desktop", "0.3.0").unwrap();
+        }
+        let rows: i64 = store
+            .connection
+            .query_row(
+                "SELECT count(*) FROM app_launches WHERE component = 'desktop'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 20);
+    }
+
+    #[test]
+    fn settings_round_trip() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        assert_eq!(store.setting("update.mode").unwrap(), None);
+        store.set_setting("update.mode", "notify").unwrap();
+        store.set_setting("update.mode", "download").unwrap();
+        assert_eq!(
+            store.setting("update.mode").unwrap().as_deref(),
+            Some("download")
+        );
     }
 
     #[test]
