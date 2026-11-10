@@ -248,9 +248,7 @@ pub fn delete_action(
 ) -> CommandResult<()> {
     let store = state.store();
     let mut profile = load_profile(&store, profile_id)?;
-    profile
-        .remove_action(action_id)
-        .ok_or(CommandError::NotFound("action"))?;
+    profile.delete_action(action_id)?;
     store.save_profile(&profile)?;
     agent::notify_reload(&state.paths);
     Ok(())

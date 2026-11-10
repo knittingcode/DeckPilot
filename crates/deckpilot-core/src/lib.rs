@@ -22,23 +22,23 @@ pub mod runtime;
 pub mod workflow;
 
 pub use action::{
-    ActionInstance, ActionParameters, ActionType, ActionTypeId, ParameterError, ParameterKind,
-    ParameterSpec, ParameterValue,
+    ActionInstance, ActionParameters, ActionType, ActionTypeId, MAX_LABEL_CHARS, ParameterError,
+    ParameterKind, ParameterSpec, ParameterValue, validate_presentation,
 };
-pub use device_runtime::{LayoutStatus, Runtime, RuntimeOutcome};
+pub use device_runtime::{LayoutStatus, Runtime, RuntimeOutcome, page_faces};
 pub use execution::{ActionResult, ActionStatus, ContextEffect, ExecutionContext};
-pub use face::{FaceStyle, KeyFace};
+pub use face::{FaceStyle, KeyFace, render_label};
 pub use id::{ActionInstanceId, LayoutId, PageId, ProfileId, ProjectId, WorkflowId};
 pub use layout::{BindingTarget, ControlBinding, DeviceLayout, LayoutIssue, LayoutPage, Trigger};
 pub use platform::Os;
-pub use profile::{Profile, ProfileIssue};
+pub use profile::{Profile, ProfileIssue, Usage};
 pub use project::{ActiveProjectContext, CycleDirection, Project, ProjectKey, ProjectSwitcher};
 pub use registry::{ActionHandler, ActionRegistry};
 pub use resource::{
     MachineConfig, MachineResourceBinding, ResolveError, ResourceKey, ResourceKind, ResourceRef,
 };
 pub use runtime::{Engine, EngineError, StepReport, WorkflowReport};
-pub use workflow::{OnFailure, Workflow, WorkflowStep};
+pub use workflow::{OnFailure, StepCondition, Workflow, WorkflowStep};
 
 /// Error returned when a textual identifier does not satisfy its format rules.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

@@ -18,6 +18,7 @@ use crate::{
     ActionInstanceId, ActionResult, ActiveProjectContext, BindingTarget, ControlBinding,
     CycleDirection, DeviceLayout, Engine, EngineError, FaceStyle, KeyFace, LayoutId, MachineConfig,
     PageId, Profile, Project, ProjectId, Trigger, WorkflowId, WorkflowReport, builtin,
+    render_label,
 };
 
 /// Whether a profile provides a usable layout for a device model.
@@ -208,12 +209,9 @@ impl Runtime {
         )
     }
 
-    /// The layout used for devices of `model`: the first one in the profile.
+    /// The layout used for devices of `model` (see [`Profile::layout_for`]).
     pub fn layout_for(&self, model: &DeviceModelId) -> Option<&DeviceLayout> {
-        self.profile()?
-            .layouts
-            .iter()
-            .find(|layout| &layout.model == model)
+        self.profile()?.layout_for(model)
     }
 
     pub fn layout_status(&self, model: &DeviceModelId) -> LayoutStatus {
@@ -295,21 +293,7 @@ impl Runtime {
         let Some(page) = layout.page(page) else {
             return notice("No layout");
         };
-        let project = self.active_project();
-        controls
-            .into_iter()
-            .map(|control| {
-                let binding = page
-                    .bindings
-                    .iter()
-                    .filter(|binding| binding.control == control)
-                    .min_by_key(|binding| binding.trigger != Trigger::Press);
-                let face = binding.map_or_else(KeyFace::empty, |binding| {
-                    face_for(binding, layout, profile, project)
-                });
-                (control, face)
-            })
-            .collect()
+        page_faces(layout, page.id, profile, self.active_project(), &controls)
     }
 
     pub fn handle_event(&mut self, event: &DeviceEvent) -> Result<RuntimeOutcome, EngineError> {
@@ -408,6 +392,37 @@ impl Runtime {
     }
 }
 
+/// Faces for `controls` on one page of a layout. Unbound controls are empty.
+/// Used for devices and for previews in the layout designer.
+pub fn page_faces(
+    layout: &DeviceLayout,
+    page: PageId,
+    profile: &Profile,
+    project: Option<&Project>,
+    controls: &[ControlId],
+) -> Vec<(ControlId, KeyFace)> {
+    let Some(page) = layout.page(page) else {
+        return controls
+            .iter()
+            .map(|control| (*control, KeyFace::empty()))
+            .collect();
+    };
+    controls
+        .iter()
+        .map(|control| {
+            let binding = page
+                .bindings
+                .iter()
+                .filter(|binding| binding.control == *control)
+                .min_by_key(|binding| binding.trigger != Trigger::Press);
+            let face = binding.map_or_else(KeyFace::empty, |binding| {
+                face_for(binding, layout, profile, project)
+            });
+            (*control, face)
+        })
+        .collect()
+}
+
 fn face_for(
     binding: &ControlBinding,
     layout: &DeviceLayout,
@@ -419,11 +434,15 @@ fn face_for(
             let Some(instance) = profile.action(action) else {
                 return KeyFace::new(FaceStyle::Notice, "Missing");
             };
-            let title = binding
+            let template = binding
                 .label
-                .clone()
-                .unwrap_or_else(|| instance.name.clone());
-            let face = KeyFace::new(FaceStyle::Action, title);
+                .as_deref()
+                .or(instance.label.as_deref())
+                .unwrap_or(&instance.name);
+            let face = KeyFace::new(
+                FaceStyle::Action,
+                render_label(template, &profile.name, project),
+            );
             if instance.action_type == builtin::cycle_project_id() {
                 face.with_detail(project.map_or("-", |p| p.key.as_str()))
             } else if instance.action_type == builtin::select_project_id() {
@@ -436,10 +455,11 @@ fn face_for(
         BindingTarget::Workflow { workflow } => match profile.workflow(workflow) {
             Some(definition) => KeyFace::new(
                 FaceStyle::Workflow,
-                binding
-                    .label
-                    .clone()
-                    .unwrap_or_else(|| definition.name.clone()),
+                render_label(
+                    binding.label.as_deref().unwrap_or(&definition.name),
+                    &profile.name,
+                    project,
+                ),
             ),
             None => KeyFace::new(FaceStyle::Notice, "Missing"),
         },
@@ -657,6 +677,43 @@ mod tests {
         let faces = runtime.faces(&device());
         assert_eq!(faces[0].1.detail.as_deref(), Some("CMS"));
         assert!(faces[2].1.highlighted);
+    }
+
+    #[test]
+    fn label_templates_follow_the_project_cycle() {
+        let mut f = fixture();
+        // A project switcher whose label is the active project's key.
+        f.profile.layouts[0].pages[0].bindings[0].label = Some("{project.key}".into());
+        let mut runtime = runtime();
+        runtime.set_profile(Some(f.profile), None);
+        runtime
+            .handle_event(&DeviceEvent::Connected { device: device() })
+            .unwrap();
+
+        let mut titles = vec![runtime.faces(&device())[0].1.title.clone()];
+        for _ in 0..3 {
+            runtime.handle_event(&press(0)).unwrap();
+            titles.push(runtime.faces(&device())[0].1.title.clone());
+        }
+        assert_eq!(titles, ["SHOP", "CMR", "CMS", "SHOP"]);
+    }
+
+    #[test]
+    fn page_faces_preview_any_project_without_a_device() {
+        let f = fixture();
+        let layout = &f.profile.layouts[0];
+        let model = deckpilot_device::models::stream_deck_mk2();
+        let controls = model.capabilities.controls();
+        let cms = &f.profile.projects[2];
+        let faces = page_faces(layout, layout.home_page, &f.profile, Some(cms), &controls);
+        assert_eq!(faces.len(), 15);
+        assert_eq!(faces[0].1.detail.as_deref(), Some("CMS"));
+        assert!(
+            faces[2].1.highlighted,
+            "the CMS selector is highlighted for CMS"
+        );
+        let missing = page_faces(layout, PageId::new(), &f.profile, None, &controls);
+        assert!(missing.iter().all(|(_, face)| face.is_empty()));
     }
 
     #[test]

@@ -34,6 +34,8 @@ pub enum RegistryError {
     EmptyName,
     #[error("invalid parameters: {}", join(.0))]
     InvalidParameters(Vec<ParameterError>),
+    #[error("{0}")]
+    InvalidPresentation(String),
 }
 
 fn join(errors: &[ParameterError]) -> String {
@@ -113,17 +115,41 @@ impl ActionRegistry {
         action_type: ActionTypeId,
         parameters: &ActionParameters,
     ) -> Result<ActionInstance, RegistryError> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(RegistryError::EmptyName);
-        }
-        let parameters = self.normalize(&action_type, parameters)?;
-        Ok(ActionInstance {
+        let mut instance = ActionInstance {
             id: ActionInstanceId::new(),
             name: name.to_owned(),
             action_type,
-            parameters,
-        })
+            parameters: parameters.clone(),
+            description: String::new(),
+            icon: None,
+            label: None,
+        };
+        self.validate_instance(&mut instance)?;
+        Ok(instance)
+    }
+
+    /// Validates a complete instance (e.g. after editing) and normalizes its
+    /// name, parameters and presentation fields in place.
+    pub fn validate_instance(&self, instance: &mut ActionInstance) -> Result<(), RegistryError> {
+        instance.name = instance.name.trim().to_owned();
+        if instance.name.is_empty() {
+            return Err(RegistryError::EmptyName);
+        }
+        instance.description = instance.description.trim().to_owned();
+        instance.icon = instance
+            .icon
+            .take()
+            .map(|i| i.trim().to_owned())
+            .filter(|i| !i.is_empty());
+        instance.label = instance
+            .label
+            .take()
+            .map(|l| l.trim().to_owned())
+            .filter(|l| !l.is_empty());
+        crate::action::validate_presentation(instance.icon.as_deref(), instance.label.as_deref())
+            .map_err(RegistryError::InvalidPresentation)?;
+        instance.parameters = self.normalize(&instance.action_type, &instance.parameters)?;
+        Ok(())
     }
 }
 

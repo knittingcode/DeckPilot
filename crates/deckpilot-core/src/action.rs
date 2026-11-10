@@ -148,6 +148,20 @@ impl ActionParameters {
     pub fn iter(&self) -> impl Iterator<Item = (&String, &ParameterValue)> {
         self.0.iter()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Values from `overrides` replace values with the same key.
+    #[must_use]
+    pub fn overlay(&self, overrides: &ActionParameters) -> ActionParameters {
+        let mut merged = self.clone();
+        for (key, value) in &overrides.0 {
+            merged.0.insert(key.clone(), value.clone());
+        }
+        merged
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -271,6 +285,40 @@ pub struct ActionInstance {
     pub name: String,
     pub action_type: ActionTypeId,
     pub parameters: ActionParameters,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// Icon name from the UI icon set (lowercase, digits and `-`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// Short text shown on a key instead of the name. Supports `{profile}`,
+    /// `{project.key}` and `{project.name}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// Longest accepted key label.
+pub const MAX_LABEL_CHARS: usize = 32;
+
+/// Checks presentation fields shared by actions and bindings.
+pub fn validate_presentation(icon: Option<&str>, label: Option<&str>) -> Result<(), String> {
+    if let Some(icon) = icon {
+        let valid = !icon.is_empty()
+            && icon.len() <= 64
+            && icon
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if !valid {
+            return Err(format!("invalid icon name `{icon}`"));
+        }
+    }
+    if let Some(label) = label
+        && label.chars().count() > MAX_LABEL_CHARS
+    {
+        return Err(format!(
+            "label must be at most {MAX_LABEL_CHARS} characters"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

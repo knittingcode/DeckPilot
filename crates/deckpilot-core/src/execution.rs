@@ -43,6 +43,8 @@ pub enum ContextEffect {
 pub enum ActionStatus {
     Succeeded,
     Failed,
+    /// Not executed because a workflow step condition was not met.
+    Skipped,
 }
 
 /// Outcome of executing a single action.
@@ -59,6 +61,14 @@ impl ActionResult {
     pub fn success(message: impl Into<String>) -> Self {
         Self {
             status: ActionStatus::Succeeded,
+            message: message.into(),
+            effects: Vec::new(),
+        }
+    }
+
+    pub fn skipped(message: impl Into<String>) -> Self {
+        Self {
+            status: ActionStatus::Skipped,
             message: message.into(),
             effects: Vec::new(),
         }

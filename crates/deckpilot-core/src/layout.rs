@@ -360,6 +360,9 @@ mod tests {
                 name: format!("A{index}"),
                 action_type: crate::builtin::log_message_id(),
                 parameters: crate::ActionParameters::new(),
+                description: String::new(),
+                icon: None,
+                label: None,
             });
         }
         profile
