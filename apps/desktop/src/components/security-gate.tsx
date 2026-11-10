@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event"
 import { LockKeyhole, TriangleAlert } from "lucide-react"
 import { type ReactNode, useCallback, useEffect, useState } from "react"
 
+import { SensitiveOperations } from "@/components/authentication"
 import { ErrorNotice, Loading } from "@/components/page"
 import { Button } from "@/components/ui/button"
 import { SECURITY_CHANGED_EVENT, api, errorMessage } from "@/lib/api"
@@ -10,11 +11,13 @@ import { promptWindow } from "@/lib/security-prompts"
 import type { SecurityView } from "@/lib/types"
 
 /**
- * Keeps the main window closed until the configuration is unlocked. The
- * password prompts (first-run setup, unlock, encryption of an earlier
- * configuration, confirmation after an update) are compact native windows
- * of their own; this gate opens the right one and shows the main window
- * once a prompt reports success.
+ * Keeps the main window closed until the configuration is open. With the
+ * default system-managed key that happens without any prompt. Otherwise
+ * the prompts (unlock, a credential store problem, the confirmation the
+ * security policy asks for, encryption of an earlier configuration) are
+ * compact native windows of their own; this gate opens the right one and
+ * shows the main window once a prompt reports success. It also provides
+ * the authentication of sensitive operations.
  */
 export function SecurityGate({ children }: { children: ReactNode }) {
   const [view, setView] = useState<SecurityView | null>(null)
@@ -70,7 +73,11 @@ export function SecurityGate({ children }: { children: ReactNode }) {
     )
   }
   if (view.unlocked) {
-    return <SecurityContext value={{ view, setView, refresh }}>{children}</SecurityContext>
+    return (
+      <SecurityContext value={{ view, setView, refresh }}>
+        <SensitiveOperations verification={view.verification}>{children}</SensitiveOperations>
+      </SecurityContext>
+    )
   }
   // Only visible if the main window is shown while locked, e.g. after
   // "Lock now"; the prompt window is open as well.

@@ -25,8 +25,12 @@ pub enum CommandError {
     Updater(#[from] tauri_plugin_updater::Error),
     #[error("the configuration is locked")]
     Locked,
-    #[error("enter your password once to confirm it after the update")]
+    #[error("confirm that it is you to continue")]
     ConfirmationRequired,
+    /// The operation is sensitive; the frontend asks the user to
+    /// authenticate and retries. The message is matched in `src/lib/api.ts`.
+    #[error("authentication required")]
+    AuthenticationRequired,
     #[error("{0}")]
     Invalid(String),
     #[error("{0} not found")]

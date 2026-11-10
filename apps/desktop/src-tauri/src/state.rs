@@ -1,21 +1,27 @@
 use std::ops::Deref;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use deckpilot_core::{
     ActionRegistry, MachineConfig, ModuleId, ModuleRegistry, Os, Profile, ProfileId,
 };
 use deckpilot_device::ModelCatalog;
-use deckpilot_ipc::AgentPaths;
-use deckpilot_storage::vault::Vault;
+use deckpilot_ipc::{AgentPaths, AgentStatus, LockReason, ProtectionMode, SecurityState};
+use deckpilot_presence::PresenceCheck;
+use deckpilot_storage::policy::{Reauthentication, security_policy};
+use deckpilot_storage::vault::{self, Vault};
 use deckpilot_storage::{
     ConfigStore, DatabaseKey, Encryption, LaunchInfo, SqliteStore, StorageError,
 };
 
 use crate::error::{CommandError, CommandResult};
 
-/// Setting with the app version for which the password was last entered.
-/// After an update the password is asked for once, then not again.
+/// Setting with the app version for which the user last authenticated.
+/// With the "after updates" policy, authentication is asked for once after
+/// an update, then not again.
 const CONFIRMED_VERSION: &str = "security.confirmedVersion";
+/// How long an authentication allows one sensitive operation.
+const AUTHORIZATION_WINDOW: Duration = Duration::from_secs(120);
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The open database while the configuration is unlocked.
@@ -23,8 +29,8 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 struct Session {
     store: SqliteStore,
     key: DatabaseKey,
-    /// The password must be confirmed once after an update before the
-    /// configuration can be used.
+    /// The user must authenticate (after an update or at launch, as the
+    /// security policy says) before the configuration can be used.
     confirmation_pending: bool,
 }
 
@@ -46,6 +52,28 @@ pub struct AppState {
     pub vault: Vault,
     /// This start compared with the previous one, once unlocked.
     launch: Mutex<Option<LaunchInfo>>,
+    /// Operating-system user verification (Touch ID, login password).
+    pub presence: Arc<dyn PresenceCheck>,
+    /// When the user last authenticated for a sensitive operation.
+    authorized_at: Mutex<Option<Instant>>,
+}
+
+/// What the agent reported about the database's protection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentSecurity {
+    pub security: SecurityState,
+    pub protection: Option<ProtectionMode>,
+    pub lock_reason: Option<LockReason>,
+}
+
+impl AgentSecurity {
+    pub fn of(status: &AgentStatus) -> Self {
+        Self {
+            security: status.security,
+            protection: status.protection,
+            lock_reason: status.lock_reason,
+        }
+    }
 }
 
 /// Access to the open store; derefs to [`SqliteStore`].
@@ -67,6 +95,13 @@ impl Deref for StoreGuard<'_> {
 impl AppState {
     /// Prepares the state without opening the database: that needs the key.
     pub fn open(paths: AgentPaths) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::with_presence(paths, Arc::from(deckpilot_presence::platform()))
+    }
+
+    pub fn with_presence(
+        paths: AgentPaths,
+        presence: Arc<dyn PresenceCheck>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         paths.create_dirs()?;
         Ok(Self {
             session: Mutex::new(None),
@@ -75,7 +110,46 @@ impl AppState {
             vault: Vault::new(&paths.database),
             paths,
             launch: Mutex::new(None),
+            presence,
+            authorized_at: Mutex::new(None),
         })
+    }
+
+    /// How the database key is protected, from the vault file.
+    pub fn protection(&self) -> Option<vault::ProtectionMode> {
+        self.vault
+            .protection()
+            .ok()
+            .flatten()
+            .map(|protection| protection.mode())
+    }
+
+    /// Whether the user can be asked to prove they are present: with their
+    /// DeckPilot password, or with the operating system's verification.
+    pub fn can_verify_user(&self) -> bool {
+        self.protection() == Some(vault::ProtectionMode::Password)
+            || self.presence.method().is_some()
+    }
+
+    /// Records a successful authentication for the next sensitive operation.
+    pub fn authorize(&self) {
+        *self
+            .authorized_at
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
+    }
+
+    /// Uses up a recent authentication, or fails with
+    /// [`CommandError::AuthenticationRequired`].
+    pub fn take_authorization(&self) -> CommandResult<()> {
+        let mut authorized = self
+            .authorized_at
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match authorized.take() {
+            Some(at) if at.elapsed() <= AUTHORIZATION_WINDOW => Ok(()),
+            _ => Err(CommandError::AuthenticationRequired),
+        }
     }
 
     fn session(&self) -> MutexGuard<'_, Option<Session>> {
@@ -109,9 +183,10 @@ impl AppState {
         self.session().as_ref().map(|session| session.key.clone())
     }
 
-    /// Opens the database with `key`. `password_entered`: the user just
-    /// typed the password, which counts as the confirmation after an update.
-    pub fn attach(&self, key: DatabaseKey, password_entered: bool) -> CommandResult<()> {
+    /// Opens the database with `key`. `authenticated`: the user just
+    /// authenticated (typed the password, or passed the system check), which
+    /// counts as the confirmation the security policy may ask for.
+    pub fn attach(&self, key: DatabaseKey, authenticated: bool) -> CommandResult<()> {
         let store = SqliteStore::open(&self.paths.database, &Encryption::Key(key.clone()))?;
         let (modules, problems) = deckpilot_modules::configured(&store.module_states()?);
         for problem in problems {
@@ -120,11 +195,18 @@ impl AppState {
         store.apply_module_schemas(&modules.schemas())?;
         let launch = store.record_launch("desktop", APP_VERSION).ok();
         let confirmed = store.setting(CONFIRMED_VERSION)?;
-        let confirmation_pending = if password_entered {
+        let confirmation_pending = if authenticated {
             store.set_setting(CONFIRMED_VERSION, APP_VERSION)?;
             false
+        } else if !self.can_verify_user() {
+            // Nothing to verify against (system key, no system check).
+            false
         } else {
-            confirmed.as_deref() != Some(APP_VERSION)
+            match security_policy(&store)?.reauthentication {
+                Reauthentication::SensitiveOnly => false,
+                Reauthentication::AfterUpdate => confirmed.as_deref() != Some(APP_VERSION),
+                Reauthentication::EveryLaunch => true,
+            }
         };
         *self.modules() = modules;
         *self.launch.lock().unwrap_or_else(PoisonError::into_inner) = launch;
@@ -136,7 +218,7 @@ impl AppState {
         Ok(())
     }
 
-    /// Records that the password was confirmed for this version.
+    /// Records that the user authenticated for this version.
     pub fn confirm(&self) -> CommandResult<()> {
         let mut session = self.session();
         let open = session.as_mut().ok_or(CommandError::Locked)?;

@@ -3,6 +3,7 @@ import { ArrowRightLeft, Download, TriangleAlert, Upload } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
+import { isCancelled, useSensitive } from "@/lib/sensitive"
 import { ErrorNotice } from "@/components/page"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -97,6 +98,7 @@ export function PortabilityCard() {
 
 function ExportDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { profiles } = useAppContext()
+  const sensitive = useSensitive()
   const [selected, setSelected] = useState<string[] | null>(null)
   const [includeModules, setIncludeModules] = useState(true)
   const [password, setPassword] = useState("")
@@ -117,19 +119,24 @@ function ExportDialog({ open, onClose }: { open: boolean; onClose: () => void })
     if (!path) return
     setBusy(true)
     try {
-      const result = await api.exportConfiguration({
-        path,
-        password,
-        confirmation,
-        profiles: chosen.length === profiles.profiles.length ? null : chosen,
-        includeModuleSettings: includeModules,
-      })
+      // Exports are sensitive: the user authenticates first.
+      const result = await sensitive(
+        () =>
+          api.exportConfiguration({
+            path,
+            password,
+            confirmation,
+            profiles: chosen.length === profiles.profiles.length ? null : chosen,
+            includeModuleSettings: includeModules,
+          }),
+        "export your configuration",
+      )
       toast.success(`Exported ${result.profiles} profile(s)`, { description: result.path })
       setPassword("")
       setConfirmation("")
       onClose()
     } catch (e) {
-      setError(errorMessage(e))
+      if (!isCancelled(e)) setError(errorMessage(e))
     } finally {
       setBusy(false)
     }

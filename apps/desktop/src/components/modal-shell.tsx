@@ -175,14 +175,18 @@ function WindowShell({
   const descriptionId = useId()
   const root = useRef<HTMLElement>(null)
 
-  // Focus the field marked autofocus, else the first control, once.
+  // Focus the field marked autofocus, else the first text field, else the
+  // dialog itself — never a button: a window that appears while the user
+  // is typing elsewhere must not let a stray Return trigger an action such
+  // as a Touch ID prompt.
   useEffect(() => {
     const element = root.current
     if (!element || element.contains(document.activeElement)) return
     const target =
       element.querySelector<HTMLElement>("[autofocus], [data-autofocus]") ??
-      element.querySelector<HTMLElement>("input, textarea, select, button:not([disabled])")
-    target?.focus()
+      element.querySelector<HTMLElement>("input, textarea, select") ??
+      element
+    target.focus()
   }, [])
 
   // Escape closes non-blocking windows. The native window is the only
@@ -210,7 +214,12 @@ function WindowShell({
       aria-labelledby={titleId}
       aria-describedby={description ? descriptionId : undefined}
       data-modal-root=""
-      className={cn("flex flex-col bg-background text-foreground", WIDTHS[size], className)}
+      tabIndex={-1}
+      className={cn(
+        "flex flex-col bg-background text-foreground outline-none",
+        WIDTHS[size],
+        className,
+      )}
     >
       <MaybeForm onSubmit={onSubmit} className="flex flex-1 flex-col">
         <header data-modal-part="header" className="flex items-start gap-3 px-6 pt-6 pb-4">

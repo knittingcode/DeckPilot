@@ -98,6 +98,9 @@ pub fn export_configuration(
         .password
         .validate_new(&request.confirmation)
         .map_err(StorageError::from)?;
+    state.store()?;
+    // Exports contain the whole configuration: a sensitive operation.
+    state.take_authorization()?;
     let content = {
         let store = state.store()?;
         let modules = state.modules();

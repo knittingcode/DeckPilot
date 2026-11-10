@@ -1,55 +1,22 @@
-import { KeyRound, LockKeyhole, ShieldCheck } from "lucide-react"
+import { Fingerprint, KeyRound, LockKeyhole, ShieldCheck, TriangleAlert } from "lucide-react"
 import { useState } from "react"
 
 import { ModalShell } from "@/components/modal-shell"
+import { NewPasswordFields, PasswordField } from "@/components/password-field"
+import { newPasswordReady } from "@/lib/passwords"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
+import { useAsync } from "@/hooks/use-async"
 import { api, errorMessage } from "@/lib/api"
+import type { SecurityView } from "@/lib/types"
 
 /**
- * The password prompts. Each runs in its own compact, blocking native
- * window (`security.*`); when it succeeds, the prompt closes and the main
- * window opens. Passwords stay in component state only and are sent to the
- * backend command, never logged.
+ * The prompts that open the configuration. Each runs in its own compact,
+ * blocking native window (`security.*`); when it succeeds, the prompt
+ * closes and the main window opens. They adapt to the protection mode: a
+ * password field with password protection, the system check (Touch ID) or
+ * a retry with a system-managed key. Passwords stay in component state
+ * only and are sent to the backend command, never logged.
  */
-
-const MIN_PASSWORD = 8
-
-function PasswordField({
-  id,
-  label,
-  value,
-  onChange,
-  autoComplete,
-  autoFocus = false,
-  invalid = false,
-}: {
-  id: string
-  label: string
-  value: string
-  onChange: (value: string) => void
-  autoComplete: "current-password" | "new-password"
-  autoFocus?: boolean
-  invalid?: boolean
-}) {
-  return (
-    <div className="grid gap-2">
-      <Label htmlFor={id}>{label}</Label>
-      <Input
-        id={id}
-        type="password"
-        autoComplete={autoComplete}
-        autoFocus={autoFocus}
-        aria-invalid={invalid || undefined}
-        value={value}
-        onChange={(e) => {
-          onChange(e.target.value)
-        }}
-      />
-    </div>
-  )
-}
 
 async function finish() {
   await api.finishSecurityPrompt()
@@ -75,12 +42,32 @@ function useSubmit() {
   return { busy, error, run }
 }
 
-function NewPasswordWindow({
+/** Loads the security state once; prompts render nothing until then. */
+function useSecurityView() {
+  const { state } = useAsync(() => api.securityStatus(), "security")
+  return state
+}
+
+function Loading({ title, error }: { title: string; error?: string }) {
+  return (
+    <ModalShell
+      size="compact"
+      blocking
+      icon={LockKeyhole}
+      title={title}
+      loading={!error}
+      error={error ?? null}
+    />
+  )
+}
+
+function NewPasswordForm({
   icon,
   title,
   description,
   submitLabel,
   notice,
+  secondary,
   submit,
 }: {
   icon: typeof ShieldCheck
@@ -88,14 +75,13 @@ function NewPasswordWindow({
   description: string
   submitLabel: string
   notice?: React.ReactNode
+  secondary?: { label: string; onClick: () => void }
   submit: (password: string, confirmation: string) => Promise<unknown>
 }) {
   const [password, setPassword] = useState("")
   const [confirmation, setConfirmation] = useState("")
   const { busy, error, run } = useSubmit()
-  const tooShort = password.length > 0 && password.length < MIN_PASSWORD
-  const mismatch = confirmation.length > 0 && confirmation !== password
-  const ready = password.length >= MIN_PASSWORD && password === confirmation
+  const ready = newPasswordReady(password, confirmation)
   return (
     <ModalShell
       size="compact"
@@ -107,6 +93,7 @@ function NewPasswordWindow({
       onSubmit={() => {
         if (ready) run(() => submit(password, confirmation))
       }}
+      secondary={secondary}
       primary={{
         label: submitLabel,
         loadingLabel: "Encrypting…",
@@ -115,27 +102,13 @@ function NewPasswordWindow({
       }}
     >
       {notice}
-      <PasswordField
-        id="new-password"
-        label="Password"
-        value={password}
-        onChange={setPassword}
-        autoComplete="new-password"
+      <NewPasswordFields
+        password={password}
+        confirmation={confirmation}
+        onPassword={setPassword}
+        onConfirmation={setConfirmation}
         autoFocus
-        invalid={tooShort}
       />
-      <PasswordField
-        id="new-password-confirmation"
-        label="Repeat password"
-        value={confirmation}
-        onChange={setConfirmation}
-        autoComplete="new-password"
-        invalid={mismatch}
-      />
-      {tooShort && (
-        <p className="text-sm text-destructive">Use at least {MIN_PASSWORD} characters.</p>
-      )}
-      {mismatch && <p className="text-sm text-destructive">The passwords do not match.</p>}
       <p className="text-xs text-muted-foreground">
         The password cannot be recovered. Keep an encrypted export as a backup.
       </p>
@@ -143,39 +116,155 @@ function NewPasswordWindow({
   )
 }
 
-export function SetupWindow() {
+/**
+ * Shown when the system key could not be stored or read, with the reason,
+ * a retry and (where it makes sense) the choice of a password instead.
+ */
+function SystemKeyProblem({
+  view,
+  title,
+  description,
+  retryLabel,
+  hint,
+  onPassword,
+}: {
+  view: SecurityView
+  title: string
+  description: string
+  retryLabel: string
+  hint?: string
+  onPassword?: () => void
+}) {
+  const { busy, error, run } = useSubmit()
   return (
-    <NewPasswordWindow
-      icon={ShieldCheck}
-      title="Welcome to DeckPilot"
-      description="Choose a password to encrypt your configuration on this computer."
-      submitLabel="Create encrypted configuration"
-      submit={(password, confirmation) => api.setupPassword(password, confirmation)}
-    />
-  )
-}
-
-export function MigrateWindow() {
-  return (
-    <NewPasswordWindow
-      icon={KeyRound}
-      title="Encrypt your configuration"
-      description="It was saved by an earlier DeckPilot without encryption. Choose a password; everything is kept."
-      submitLabel="Encrypt configuration"
-      notice={
+    <ModalShell
+      size="compact"
+      blocking
+      icon={TriangleAlert}
+      title={title}
+      description={description}
+      error={error}
+      onSubmit={() => {
+        run(() => api.systemUnlock())
+      }}
+      secondary={onPassword ? { label: "Use a password instead", onClick: onPassword } : undefined}
+      primary={{ label: retryLabel, loadingLabel: "Trying…", loading: busy }}
+    >
+      {view.problem && (
         <Alert>
-          <AlertTitle>The unencrypted original is kept</AlertTitle>
-          <AlertDescription>
-            Until you delete it in Settings, anyone with access to your files can read it.
-          </AlertDescription>
+          <AlertTitle>{view.keyStore}</AlertTitle>
+          <AlertDescription className="break-words">{view.problem}</AlertDescription>
         </Alert>
-      }
-      submit={(password, confirmation) => api.encryptLegacyDatabase(password, confirmation)}
+      )}
+      {!view.agentRunning && (
+        <p className="text-sm text-muted-foreground">
+          The DeckPilot background agent is not running. It keeps the key and starts with your
+          login; start it from the Dashboard or try again.
+        </p>
+      )}
+      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+    </ModalShell>
+  )
+}
+
+/**
+ * First start when the key could not be created in the credential store
+ * (normally the agent sets everything up without asking).
+ */
+export function SetupWindow() {
+  const state = useSecurityView()
+  const [password, setPassword] = useState(false)
+  if (state.status !== "ready")
+    return (
+      <Loading
+        title="Welcome to DeckPilot"
+        error={state.status === "error" ? state.error : undefined}
+      />
+    )
+  if (password) {
+    return (
+      <NewPasswordForm
+        icon={ShieldCheck}
+        title="Protect DeckPilot with a password"
+        description="The configuration is encrypted with a key derived from this password. You enter it after each restart."
+        submitLabel="Create encrypted configuration"
+        secondary={{
+          label: "Back",
+          onClick: () => {
+            setPassword(false)
+          },
+        }}
+        submit={(value, confirmation) => api.setupPassword(value, confirmation)}
+      />
+    )
+  }
+  return (
+    <SystemKeyProblem
+      view={state.data}
+      title="Welcome to DeckPilot"
+      description={`DeckPilot encrypts your configuration with a key kept in the ${state.data.keyStore}, but could not store it there.`}
+      retryLabel="Try again"
+      onPassword={() => {
+        setPassword(true)
+      }}
     />
   )
 }
 
-function PasswordWindow({
+/**
+ * A configuration from DeckPilot 0.3, which was not encrypted, that the
+ * agent could not encrypt with a system key by itself.
+ */
+export function MigrateWindow() {
+  const state = useSecurityView()
+  const [password, setPassword] = useState(false)
+  const notice = (
+    <Alert>
+      <AlertTitle>The unencrypted original is kept</AlertTitle>
+      <AlertDescription>
+        Until you delete it in Settings, anyone with access to your files can read it.
+      </AlertDescription>
+    </Alert>
+  )
+  if (state.status !== "ready")
+    return (
+      <Loading
+        title="Encrypt your configuration"
+        error={state.status === "error" ? state.error : undefined}
+      />
+    )
+  if (password) {
+    return (
+      <NewPasswordForm
+        icon={KeyRound}
+        title="Encrypt your configuration"
+        description="It was saved by an earlier DeckPilot without encryption. Choose a password; everything is kept."
+        submitLabel="Encrypt configuration"
+        notice={notice}
+        secondary={{
+          label: "Back",
+          onClick: () => {
+            setPassword(false)
+          },
+        }}
+        submit={(value, confirmation) => api.encryptLegacyDatabase(value, confirmation)}
+      />
+    )
+  }
+  return (
+    <SystemKeyProblem
+      view={state.data}
+      title="Encrypt your configuration"
+      description={`It was saved by an earlier DeckPilot without encryption. DeckPilot encrypts it with a key kept in the ${state.data.keyStore}, but could not store the key.`}
+      retryLabel="Try again"
+      onPassword={() => {
+        setPassword(true)
+      }}
+    />
+  )
+}
+
+function PasswordPrompt({
   icon,
   title,
   description,
@@ -227,26 +316,122 @@ function PasswordWindow({
   )
 }
 
-export function UnlockWindow() {
+/** One button that runs the system check (or simply continues). */
+function SystemPrompt({
+  view,
+  title,
+  description,
+  submit,
+}: {
+  view: SecurityView
+  title: string
+  description: string
+  submit: () => Promise<unknown>
+}) {
+  const { busy, error, run } = useSubmit()
+  const touchId = view.verification === "touchId"
   return (
-    <PasswordWindow
-      icon={LockKeyhole}
+    <ModalShell
+      size="compact"
+      blocking
+      icon={touchId ? Fingerprint : LockKeyhole}
+      title={title}
+      description={description}
+      error={error}
+      onSubmit={() => {
+        run(submit)
+      }}
+      primary={{
+        label: touchId ? "Unlock with Touch ID" : "Unlock",
+        loadingLabel: "Waiting…",
+        loading: busy,
+      }}
+    >
+      {touchId && (
+        <p className="text-sm text-muted-foreground">
+          You can also use your Mac&apos;s login password in the system prompt.
+        </p>
+      )}
+    </ModalShell>
+  )
+}
+
+export function UnlockWindow() {
+  const state = useSecurityView()
+  if (state.status !== "ready")
+    return (
+      <Loading
+        title="DeckPilot is locked"
+        error={state.status === "error" ? state.error : undefined}
+      />
+    )
+  const view = state.data
+  if (view.protection === "password") {
+    return (
+      <PasswordPrompt
+        icon={LockKeyhole}
+        title="DeckPilot is locked"
+        description="Enter your password. Your Stream Deck resumes as soon as it is unlocked."
+        submitLabel="Unlock"
+        submit={(password) => api.unlock(password)}
+      />
+    )
+  }
+  if (view.lockReason === "keyUnavailable" || view.problem || !view.agentRunning) {
+    return (
+      <SystemKeyProblem
+        view={view}
+        title="DeckPilot cannot open its configuration"
+        description={`Its key is kept in the ${view.keyStore}, which did not provide it. Unlock the ${view.keyStore} or sign in again, then try again. Nothing was changed.`}
+        retryLabel="Try again"
+        hint="If the key was deleted (for example when the keychain was reset), this configuration cannot be opened anymore. Restore your encrypted export on a new configuration; see the security documentation."
+      />
+    )
+  }
+  const reason =
+    view.lockReason === "idle"
+      ? "It was locked after a period without activity."
+      : view.lockReason === "sleep"
+        ? "It was locked when the computer went to sleep."
+        : "It was locked."
+  return (
+    <SystemPrompt
+      view={view}
       title="DeckPilot is locked"
-      description="Enter your password. Your Stream Deck resumes as soon as it is unlocked."
-      submitLabel="Unlock"
-      submit={(password) => api.unlock(password)}
+      description={`${reason} Your Stream Deck resumes as soon as it is unlocked.`}
+      submit={() => api.systemUnlock()}
     />
   )
 }
 
+/** The authentication the security policy asks for after an update or at launch. */
 export function ConfirmWindow() {
+  const state = useSecurityView()
+  if (state.status !== "ready")
+    return (
+      <Loading
+        title="Confirm it's you"
+        error={state.status === "error" ? state.error : undefined}
+      />
+    )
+  const view = state.data
+  if (view.protection === "password") {
+    return (
+      <PasswordPrompt
+        icon={ShieldCheck}
+        title="Confirm it's you"
+        description="Your security settings ask for your password when DeckPilot starts or after an update."
+        submitLabel="Continue"
+        submit={(password) => api.confirmIdentity(password)}
+      />
+    )
+  }
   return (
-    <PasswordWindow
-      icon={ShieldCheck}
-      title="DeckPilot was updated"
-      description="Confirm your password once to continue. It is not asked again until the next update."
-      submitLabel="Continue"
-      submit={(password) => api.confirmPassword(password)}
+    <SystemPrompt
+      view={view}
+      title="Confirm it's you"
+      description="Your security settings ask for authentication when DeckPilot starts or after an update."
+      submit={() => api.confirmIdentity(null)}
     />
   )
 }

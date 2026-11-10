@@ -393,12 +393,43 @@ export interface WindowSpec {
 
 export type DatabaseState = "missing" | "plaintext" | "encrypted"
 
+/** How the database key is protected; see `docs/security.md`. */
+export type ProtectionMode = "systemManaged" | "password"
+
+export type LockReason = "startup" | "requested" | "idle" | "sleep" | "keyUnavailable"
+
+/**
+ * How the user is verified for sensitive operations and after a lock:
+ * the DeckPilot password, the operating system (Touch ID / login
+ * password), or — with a system key and no system check — only an
+ * explicit confirmation.
+ */
+export type Verification = "password" | "touchId" | "devicePassword" | "confirmationOnly"
+
+export type AutoLock = "never" | "sleep" | "idle15Minutes" | "idle1Hour"
+export type Reauthentication = "sensitiveOnly" | "afterUpdate" | "everyLaunch"
+
+export interface SecurityPolicy {
+  autoLock: AutoLock
+  reauthentication: Reauthentication
+}
+
 /** Whether the configuration can be used; see `docs/security.md`. */
 export interface SecurityView {
   database: DatabaseState
+  protection: ProtectionMode | null
   unlocked: boolean
-  /** The password must be entered once after an update. */
+  /** The user must authenticate before continuing (security policy). */
   confirmationRequired: boolean
+  lockReason: LockReason | null
+  /** Why the configuration could not be opened automatically. */
+  problem: string | null
+  /** Name of the credential store, e.g. "macOS Keychain". */
+  keyStore: string
+  verification: Verification
+  /** Stored policy; present while unlocked. */
+  policy: SecurityPolicy | null
+  agentRunning: boolean
   appVersion: string
   /** Unencrypted copies kept after encrypting a legacy database. */
   legacyCopies: string[]

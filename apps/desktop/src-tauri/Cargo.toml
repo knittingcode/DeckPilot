@@ -17,6 +17,7 @@ deckpilot-device.workspace = true
 deckpilot-ipc.workspace = true
 deckpilot-modules.workspace = true
 deckpilot-portability.workspace = true
+deckpilot-presence.workspace = true
 deckpilot-storage.workspace = true
 deckpilot-update.workspace = true
 serde.workspace = true
@@ -28,6 +29,7 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+deckpilot-keystore.workspace = true
 deckpilot-agent = { path = "../../agent" }
 tauri = { workspace = true, features = ["test"] }
 

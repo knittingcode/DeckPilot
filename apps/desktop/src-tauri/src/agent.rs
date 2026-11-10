@@ -7,7 +7,7 @@ use std::time::Duration;
 use deckpilot_ipc::client::request_once;
 use deckpilot_ipc::{
     AgentClient, AgentEvent, AgentPaths, AgentStatus, ClientError, ClientKind, ErrorCode,
-    KeyMaterial, Request, Response, SecurityState,
+    KeyMaterial, LockReason, Request, Response, SecurityState,
 };
 use deckpilot_storage::DatabaseKey;
 use deckpilot_update::compatibility::{self, AgentCompatibility};
@@ -279,23 +279,35 @@ async fn subscribe<R: Runtime>(app: &AppHandle<R>, paths: &AgentPaths) -> Result
     }
 }
 
-/// An agent that (re)started locked while this app is unlocked gets the
-/// key, e.g. after the agent was restarted from the tray.
+/// Keeps this app's lock state in line with the agent's:
+///
+/// - An agent that (re)started locked while this app is unlocked gets the
+///   key (password protection), e.g. after a restart from the tray.
+/// - An agent that locked itself (auto-lock) or was locked elsewhere locks
+///   this app too; the windows then show the prompt.
 async fn unlock_if_needed<R: Runtime>(
     app: &AppHandle<R>,
     paths: &AgentPaths,
     status: &AgentStatus,
 ) {
-    if status.security != SecurityState::Locked {
-        return;
-    }
     let Some(state) = app.try_state::<crate::state::AppState>() else {
         return;
     };
-    if let Some(key) = state.key()
-        && let Err(error) = unlock(paths, &key).await
-    {
-        eprintln!("could not unlock the agent: {error}");
+    if status.security != SecurityState::Locked || !state.is_unlocked() {
+        return;
+    }
+    match status.lock_reason {
+        Some(LockReason::Idle | LockReason::Sleep | LockReason::Requested) => {
+            state.detach();
+            let _ = app.emit(crate::commands::windows::SECURITY_CHANGED, ());
+        }
+        _ => {
+            if let Some(key) = state.key()
+                && let Err(error) = unlock(paths, &key).await
+            {
+                eprintln!("could not unlock the agent: {error}");
+            }
+        }
     }
 }
 

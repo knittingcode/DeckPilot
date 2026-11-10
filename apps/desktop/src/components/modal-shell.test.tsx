@@ -23,6 +23,17 @@ describe("ModalShell in a native window", () => {
     expect(dialog).toHaveAccessibleDescription("Enter your password")
   })
 
+  it("never focuses an action button, so a stray Return cannot trigger it", async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn()
+    render(<ModalShell title="Locked" blocking onSubmit={onSubmit} primary={{ label: "Unlock" }} />)
+    const dialog = screen.getByRole("alertdialog", { name: "Locked" })
+    expect(dialog).toHaveFocus()
+    expect(screen.getByRole("button", { name: "Unlock" })).not.toHaveFocus()
+    await user.keyboard("{Enter}")
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
   it("closes on Escape unless it is blocking", () => {
     const onClose = vi.fn()
     const { rerender } = render(<ModalShell title="Summary" onClose={onClose} />)

@@ -12,6 +12,9 @@ use deckpilot_device::{mock::MockBackend, models};
 use deckpilot_ipc::AgentPaths;
 
 use crate::state::AppState;
+use deckpilot_keystore::MemoryKeyStore;
+use deckpilot_presence::{Method, PresenceCheck, Scripted, Unavailable};
+use std::sync::Arc;
 
 /// Origin the bundled frontend is served from. Requests from any other origin
 /// are treated as remote and rejected by Tauri's access control.
@@ -31,7 +34,12 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
-        let harness = Self::without_setup(Self::temp_paths());
+        Self::new_on(Self::temp_paths())
+    }
+
+    /// A password-protected configuration in `paths`.
+    fn new_on(paths: AgentPaths) -> Self {
+        let harness = Self::without_setup(paths);
         // First start: the user sets a password, which creates the
         // encrypted database.
         harness.ok(
@@ -49,10 +57,16 @@ impl Harness {
         AgentPaths::in_dir(data_dir)
     }
 
-    /// The app started on `paths` without any user interaction.
+    /// The app started on `paths` without any user interaction. The
+    /// computer offers no system authentication.
     fn without_setup(paths: AgentPaths) -> Self {
+        Self::with_presence(paths, Arc::new(Unavailable))
+    }
+
+    /// As `without_setup`, with a scripted Touch ID (never the real one).
+    fn with_presence(paths: AgentPaths, presence: Arc<dyn PresenceCheck>) -> Self {
         let app = mock_builder()
-            .manage(AppState::open(paths.clone()).expect("open state"))
+            .manage(AppState::with_presence(paths.clone(), presence).expect("open state"))
             .manage(crate::updates::UpdateManager::default())
             .manage(crate::commands::portability::PendingImport::default())
             .manage(crate::windows::WindowRegistry::default())
@@ -600,11 +614,22 @@ fn updates_report_their_configuration_and_store_preferences() {
 
     let launch = h.ok("launch_info", json!({}));
     assert_eq!(launch["launch"]["firstAfterUpdate"], false);
-    assert_eq!(launch["encryption"]["passwordRequired"], false);
+    assert_eq!(launch["encryption"]["enabled"], true);
+    assert_eq!(launch["encryption"]["passwordRequired"], true);
 }
 
-/// Starts a real agent with a simulated MK.2 on its own runtime.
+/// Starts a real agent with a simulated MK.2 on its own runtime, without a
+/// credential store.
 fn start_agent(paths: &AgentPaths) -> (tokio::runtime::Runtime, MockBackend) {
+    start_agent_with(paths, None)
+}
+
+/// As `start_agent`, with an in-memory credential store standing in for
+/// the Keychain (no real credentials are touched).
+fn start_agent_with(
+    paths: &AgentPaths,
+    keys: Option<MemoryKeyStore>,
+) -> (tokio::runtime::Runtime, MockBackend) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -620,7 +645,11 @@ fn start_agent(paths: &AgentPaths) -> (tokio::runtime::Runtime, MockBackend) {
         autostart: None,
         open_desktop: None,
         open_window: None,
+        key_store: keys.map(|keys| -> Arc<dyn deckpilot_keystore::KeyStore> { Arc::new(keys) }),
+        auto_lock_check: std::time::Duration::from_millis(50),
+        clock: deckpilot_agent::system_clock(),
     };
+    paths.create_dirs().unwrap();
     let lock = InstanceLock::acquire(&paths.lock_file).unwrap();
     runtime.block_on(async {
         let agent = Agent::start(options, lock).unwrap();
@@ -1172,6 +1201,10 @@ fn the_password_is_confirmed_once_after_an_update() {
         store
             .set_setting("security.confirmedVersion", "0.0.1")
             .unwrap();
+        // The default asks only for sensitive operations.
+        store
+            .set_setting("security.reauthentication", "afterUpdate")
+            .unwrap();
     }
     let state = h.window.state::<AppState>();
     let key = state.key().unwrap();
@@ -1183,10 +1216,10 @@ fn the_password_is_confirmed_once_after_an_update() {
     assert_eq!(status["unlocked"], false);
     assert!(h.error("list_profiles", json!({})).contains("confirm"));
     assert!(
-        h.call("confirm_password", json!({ "password": "wrong" }))
+        h.call("confirm_identity", json!({ "password": "wrong" }))
             .is_err()
     );
-    h.ok("confirm_password", json!({ "password": PASSWORD }));
+    h.ok("confirm_identity", json!({ "password": PASSWORD }));
     assert_eq!(
         h.ok("list_profiles", json!({}))["profiles"]
             .as_array()
@@ -1234,6 +1267,12 @@ fn legacy_databases_are_encrypted_on_request() {
         h.ok("list_profiles", json!({}))["profiles"][0]["id"],
         json!(profile.id)
     );
+    // Sensitive: needs a fresh authentication.
+    assert_eq!(
+        h.error("remove_unencrypted_copies", json!({})),
+        "authentication required"
+    );
+    h.ok("authenticate", json!({ "password": PASSWORD }));
     let status = h.ok("remove_unencrypted_copies", json!({}));
     assert_eq!(status["legacyCopies"], json!([]));
 }
@@ -1252,6 +1291,7 @@ fn configuration_round_trips_through_an_encrypted_export() {
     );
     let file = h.paths.data_dir.join("work.deckpilot");
     let path = file.display().to_string();
+    h.ok("authenticate", json!({ "password": PASSWORD }));
     let result = h.ok(
         "export_configuration",
         json!({ "request": { "path": path, "password": "export secret", "confirmation": "export secret", "profiles": null, "includeModuleSettings": true } }),
@@ -1383,4 +1423,242 @@ fn native_windows_are_opened_by_identifier_and_reused() {
     windows::closed(&app, &label, true);
     assert!(registry.spec(&label).is_none());
     assert_eq!(registry.open_labels().len(), 1);
+}
+
+// System-managed keys and sensitive operations. The agent's credential store
+// is in memory and Touch ID is scripted; nothing real is touched.
+
+fn status(h: &Harness) -> Value {
+    h.ok("security_status", json!({}))
+}
+
+fn agent_security(h: &Harness) -> Value {
+    h.ok("agent_status", json!({}))["status"].clone()
+}
+
+#[test]
+fn a_fresh_install_opens_without_a_password() {
+    let paths = Harness::temp_paths();
+    let keys = MemoryKeyStore::new();
+    let (_runtime, _mock) = start_agent_with(&paths, Some(keys.clone()));
+    let h = Harness::without_setup(paths);
+    // The agent created the database with a key in the credential store;
+    // the app opens it with the key from the agent.
+    let mut view = status(&h);
+    for _ in 0..100 {
+        if view["unlocked"] == true {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        view = status(&h);
+    }
+    assert_eq!(view["unlocked"], true, "{view}");
+    assert_eq!(view["protection"], "systemManaged");
+    assert_eq!(view["database"], "encrypted");
+    assert_eq!(view["verification"], "confirmationOnly");
+    assert_eq!(view["policy"]["autoLock"], "never");
+    assert_eq!(keys.ids().len(), 1);
+    new_profile(&h, "Work");
+    let launch = h.ok("launch_info", json!({}));
+    assert_eq!(launch["encryption"]["passwordRequired"], false);
+
+    // A second start of the app (the agent keeps running): no prompt.
+    let again = Harness::without_setup(h.paths.clone());
+    let view = status(&again);
+    assert_eq!(view["unlocked"], true);
+    assert_eq!(view["confirmationRequired"], false);
+    assert_eq!(
+        again.ok("list_profiles", json!({}))["profiles"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn sensitive_operations_need_a_fresh_authentication() {
+    let paths = Harness::temp_paths();
+    let keys = MemoryKeyStore::new();
+    let (_runtime, _mock) = start_agent_with(&paths, Some(keys));
+    let touch_id = Arc::new(Scripted::new(Some(Method::TouchId), false));
+    let h = Harness::with_presence(paths, touch_id.clone());
+    while status(&h)["unlocked"] != true {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(status(&h)["verification"], "touchId");
+    let export = || {
+        let path = h.paths.data_dir.join("all.deckpilot").display().to_string();
+        h.call(
+            "export_configuration",
+            json!({ "request": { "path": path, "password": "export secret", "confirmation": "export secret", "profiles": null, "includeModuleSettings": true } }),
+        )
+    };
+    assert_eq!(export().unwrap_err(), "authentication required");
+    // A failed system check grants nothing.
+    assert!(h.call("authenticate", json!({})).is_err());
+    assert_eq!(export().unwrap_err(), "authentication required");
+    touch_id
+        .succeed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    h.ok("authenticate", json!({}));
+    export().unwrap();
+    // One authentication allows one operation.
+    assert_eq!(export().unwrap_err(), "authentication required");
+    assert_eq!(
+        touch_id.prompts.load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+
+    // Ordinary work never asks.
+    let profile = new_profile(&h, "Work");
+    h.ok("set_active_profile", json!({ "profileId": profile }));
+    assert_eq!(
+        touch_id.prompts.load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+}
+
+#[test]
+fn switching_between_password_and_system_key() {
+    let paths = Harness::temp_paths();
+    let keys = MemoryKeyStore::new();
+    let h = Harness::new_on(paths);
+    let (_runtime, _mock) = start_agent_with(&h.paths, Some(keys.clone()));
+    h.unlock();
+    let profile = new_profile(&h, "Work");
+    assert_eq!(status(&h)["protection"], "password");
+    assert_eq!(status(&h)["verification"], "password");
+
+    // Sensitive: the current password is required first.
+    assert_eq!(
+        h.error("use_system_key", json!({})),
+        "authentication required"
+    );
+    assert!(
+        h.call("authenticate", json!({ "password": "wrong password" }))
+            .is_err()
+    );
+    h.ok("authenticate", json!({ "password": PASSWORD }));
+    let view = h.ok("use_system_key", json!({}));
+    assert_eq!(view["protection"], "systemManaged");
+    assert_eq!(view["unlocked"], true);
+    assert_eq!(keys.ids().len(), 1);
+    assert_eq!(agent_security(&h)["protection"], "systemManaged");
+    assert!(
+        h.error("unlock", json!({ "password": PASSWORD }))
+            .contains("system key")
+    );
+    assert_eq!(
+        h.ok("list_profiles", json!({}))["profiles"][0]["id"],
+        json!(profile)
+    );
+
+    // Back to a password. Without system authentication on this computer,
+    // the explicit confirmation is the authentication.
+    assert_eq!(
+        h.error(
+            "use_password",
+            json!({ "input": { "password": "another password", "confirmation": "another password" } })
+        ),
+        "authentication required"
+    );
+    h.ok("authenticate", json!({}));
+    let view = h.ok(
+        "use_password",
+        json!({ "input": { "password": "another password", "confirmation": "another password" } }),
+    );
+    assert_eq!(view["protection"], "password");
+    h.ok("lock", json!({}));
+    assert!(h.call("unlock", json!({ "password": PASSWORD })).is_err());
+    h.ok("unlock", json!({ "password": "another password" }));
+    assert_eq!(
+        h.ok("list_profiles", json!({}))["profiles"][0]["id"],
+        json!(profile)
+    );
+    // The earlier system key is kept, not deleted.
+    assert_eq!(keys.ids().len(), 1);
+}
+
+#[test]
+fn a_locked_system_key_configuration_unlocks_with_the_system_check() {
+    let paths = Harness::temp_paths();
+    let keys = MemoryKeyStore::new();
+    let (_runtime, _mock) = start_agent_with(&paths, Some(keys));
+    let touch_id = Arc::new(Scripted::new(Some(Method::TouchId), true));
+    let h = Harness::with_presence(paths, touch_id.clone());
+    while status(&h)["unlocked"] != true {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let view = h.ok("lock", json!({}));
+    assert_eq!(view["unlocked"], false);
+    assert_eq!(view["lockReason"], "requested");
+    // The app restarting meanwhile does not get the key.
+    assert_eq!(status(&h)["unlocked"], false);
+
+    touch_id
+        .succeed
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    assert!(h.call("system_unlock", json!({})).is_err());
+    assert_eq!(agent_security(&h)["security"], "locked");
+    touch_id
+        .succeed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let view = h.ok("system_unlock", json!({}));
+    assert_eq!(view["unlocked"], true);
+    assert_eq!(
+        touch_id.prompts.load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+}
+
+#[test]
+fn policies_need_a_way_to_verify_the_user() {
+    let paths = Harness::temp_paths();
+    let (_runtime, _mock) = start_agent_with(&paths, Some(MemoryKeyStore::new()));
+    let h = Harness::without_setup(paths);
+    while status(&h)["unlocked"] != true {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    // System key, no system authentication: locking would be pointless.
+    let idle =
+        json!({ "policy": { "autoLock": "idle15Minutes", "reauthentication": "sensitiveOnly" } });
+    assert!(
+        h.error("set_security_policy", idle.clone())
+            .contains("does not offer")
+    );
+
+    // With a password, the user can be verified.
+    let h = Harness::new();
+    let (_runtime, _mock) = start_agent(&h.paths);
+    h.unlock();
+    assert_eq!(
+        h.error("set_security_policy", idle.clone()),
+        "authentication required"
+    );
+    h.ok("authenticate", json!({ "password": PASSWORD }));
+    let view = h.ok("set_security_policy", idle);
+    assert_eq!(view["policy"]["autoLock"], "idle15Minutes");
+
+    // Every launch: the next start asks again.
+    h.ok("authenticate", json!({ "password": PASSWORD }));
+    h.ok(
+        "set_security_policy",
+        json!({ "policy": { "autoLock": "idle15Minutes", "reauthentication": "everyLaunch" } }),
+    );
+    let state = h.window.state::<AppState>();
+    let key = state.key().unwrap();
+    state.detach();
+    state.attach(key, false).unwrap();
+    assert_eq!(status(&h)["confirmationRequired"], true);
+    h.ok("confirm_identity", json!({ "password": PASSWORD }));
+    assert_eq!(status(&h)["unlocked"], true);
+}
+
+#[test]
+fn key_store_names_match_the_credential_store() {
+    assert_eq!(
+        crate::commands::security::key_store_name(),
+        deckpilot_keystore::platform_store_name()
+    );
 }
