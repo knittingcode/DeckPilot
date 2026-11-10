@@ -42,6 +42,8 @@ export interface ActionType {
   category: string
   parameters: ParameterSpec[]
   requiresProject: boolean
+  /** Always sent by the backend; optional for fixtures. */
+  node?: NodeSpec
 }
 
 export interface ActionInstance {
@@ -72,6 +74,78 @@ export interface Workflow {
   name: string
   description?: string
   steps: WorkflowStep[]
+  /** The visual form; when present it is what runs (crates/deckpilot-core/src/graph). */
+  graph?: WorkflowGraph
+}
+
+export type GraphPort = "out" | "error" | "true" | "false"
+
+export interface GraphReference {
+  node: string
+  output: string
+}
+
+export type GraphPredicate =
+  | { type: "equals"; reference: GraphReference; value: string }
+  | { type: "notEmpty"; reference: GraphReference }
+  | { type: "succeeded"; node: string }
+  | { type: "activeProject"; key: string }
+
+export type GraphMapping =
+  | { type: "output"; reference: GraphReference; default?: string }
+  | { type: "template"; template: string }
+
+export interface ErrorPolicy {
+  onError: "stop" | "continue"
+  retry: { attempts: number; backoffMs: number }
+  timeoutMs?: number
+}
+
+export type GraphNodeKind =
+  | { type: "trigger" }
+  | {
+      type: "action"
+      action: string
+      overrides?: ActionParameters
+      mappings?: Record<string, GraphMapping>
+      policy: ErrorPolicy
+    }
+  | { type: "condition"; predicate: GraphPredicate }
+  | { type: "parallel" }
+  | { type: "join" }
+  | { type: "loop"; workflow: string; times: number }
+  | { type: "delay"; ms: number }
+  | { type: "stop" }
+
+export type GraphNode = GraphNodeKind & {
+  id: string
+  label?: string
+  position: { x: number; y: number }
+}
+
+export interface GraphEdge {
+  from: string
+  port: GraphPort
+  to: string
+}
+
+export interface WorkflowGraph {
+  version: number
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+}
+
+export type ValueKind = "text" | "integer" | "boolean" | "path" | "url" | "projectKey"
+
+/** How an action type behaves as a workflow node (module SDK contract). */
+export interface NodeSpec {
+  version: number
+  icon: string | null
+  outputs: { key: string; label: string; kind: ValueKind; always: boolean }[]
+  timeoutMs: number
+  retrySafe: boolean
+  idempotent: boolean
+  changesContext: boolean
 }
 
 export interface Project {

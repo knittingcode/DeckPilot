@@ -6,6 +6,11 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::graph::executor::{Executor, RunStatus};
+use crate::graph::{
+    CancellationToken, ExecutionEvent, ExecutionLimits, GraphReport, IssueSeverity, MAX_NESTING,
+    WorkflowGraph,
+};
 use crate::{
     ActionInstance, ActionInstanceId, ActionParameters, ActionRegistry, ActionResult, ActionStatus,
     ActiveProjectContext, ContextEffect, ExecutionContext, MachineConfig, OnFailure, Profile,
@@ -24,6 +29,8 @@ pub enum EngineError {
     NoActiveProfile,
     #[error(transparent)]
     Context(#[from] ProjectContextError),
+    #[error("the workflow cannot run: {0}")]
+    InvalidWorkflow(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +91,17 @@ impl Engine {
         let definition = profile
             .workflow(workflow)
             .ok_or(EngineError::UnknownWorkflow(workflow))?;
+        if definition.graph.is_some() {
+            let report = self.run_graph(
+                profile,
+                machine,
+                context,
+                workflow,
+                &CancellationToken::new(),
+                &|_| {},
+            )?;
+            return Ok(report.into_steps());
+        }
         let mut report = WorkflowReport {
             workflow,
             status: ActionStatus::Succeeded,
@@ -128,7 +146,94 @@ impl Engine {
         Ok(report)
     }
 
-    fn execute(
+    /// Runs the graph of `workflow`. The graph is validated first; a graph
+    /// with errors does not run. See [`crate::graph`] for the semantics.
+    pub fn run_graph(
+        &self,
+        profile: &Profile,
+        machine: &MachineConfig,
+        context: &mut ActiveProjectContext,
+        workflow: WorkflowId,
+        cancel: &CancellationToken,
+        on_event: &(dyn Fn(ExecutionEvent) + Sync),
+    ) -> Result<GraphReport, EngineError> {
+        self.run_graph_nested(profile, machine, context, workflow, cancel, on_event, 0)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_graph_nested(
+        &self,
+        profile: &Profile,
+        machine: &MachineConfig,
+        context: &mut ActiveProjectContext,
+        workflow: WorkflowId,
+        cancel: &CancellationToken,
+        on_event: &(dyn Fn(ExecutionEvent) + Sync),
+        depth: usize,
+    ) -> Result<GraphReport, EngineError> {
+        let definition = profile
+            .workflow(workflow)
+            .ok_or(EngineError::UnknownWorkflow(workflow))?;
+        let graph = definition
+            .graph
+            .as_ref()
+            .ok_or_else(|| EngineError::InvalidWorkflow("the workflow has no graph".into()))?;
+        let issues = graph.validate(workflow, profile, &self.registry);
+        if !WorkflowGraph::is_runnable(&issues) {
+            let first = issues
+                .iter()
+                .find(|i| i.severity == IssueSeverity::Error)
+                .map(|i| i.message.clone())
+                .unwrap_or_default();
+            return Err(EngineError::InvalidWorkflow(first));
+        }
+        if depth > MAX_NESTING {
+            return Err(EngineError::InvalidWorkflow(
+                "workflows are nested too deeply".into(),
+            ));
+        }
+        let run_action = |instance: &ActionInstance,
+                          overrides: &ActionParameters,
+                          context: &mut ActiveProjectContext| {
+            let overrides = (!overrides.is_empty()).then_some(overrides);
+            self.execute(profile, machine, context, instance, overrides)
+        };
+        // Nested workflows report their progress as part of the Loop node.
+        let run_nested = |nested: WorkflowId, context: &mut ActiveProjectContext| {
+            let inner = profile
+                .workflow(nested)
+                .ok_or(EngineError::UnknownWorkflow(nested))?;
+            if inner.graph.is_some() {
+                let report = self.run_graph_nested(
+                    profile,
+                    machine,
+                    context,
+                    nested,
+                    cancel,
+                    &|_| {},
+                    depth + 1,
+                )?;
+                Ok(report.status == RunStatus::Succeeded)
+            } else {
+                let report = self.run_workflow(profile, machine, context, nested)?;
+                Ok(report.status == ActionStatus::Succeeded)
+            }
+        };
+        Executor {
+            workflow,
+            graph,
+            profile,
+            registry: &self.registry,
+            run_action: &run_action,
+            run_nested: &run_nested,
+            on_event,
+            cancel,
+            limits: ExecutionLimits::default(),
+        }
+        .run(context)
+    }
+
+    pub(crate) fn execute(
         &self,
         profile: &Profile,
         machine: &MachineConfig,
@@ -190,6 +295,43 @@ impl Engine {
             }
         }
         Ok(result)
+    }
+}
+
+impl GraphReport {
+    /// The action nodes as a step report, for callers of the sequential
+    /// interface (device bindings, the agent's last-run summary).
+    pub fn into_steps(self) -> WorkflowReport {
+        let status = match self.status {
+            RunStatus::Succeeded => ActionStatus::Succeeded,
+            RunStatus::Failed | RunStatus::Cancelled => ActionStatus::Failed,
+        };
+        let steps = self
+            .nodes
+            .into_iter()
+            .filter_map(|node| {
+                let action = node.action?;
+                let result = match node.status {
+                    crate::graph::NodeStatus::Succeeded => {
+                        let mut result = ActionResult::success(node.message);
+                        result.data = node.output;
+                        result
+                    }
+                    crate::graph::NodeStatus::Failed => {
+                        ActionResult::failure(node.error.map(|e| e.message).unwrap_or(node.message))
+                    }
+                    crate::graph::NodeStatus::Skipped | crate::graph::NodeStatus::Cancelled => {
+                        ActionResult::skipped("not run")
+                    }
+                };
+                Some(StepReport { action, result })
+            })
+            .collect();
+        WorkflowReport {
+            workflow: self.workflow,
+            status,
+            steps,
+        }
     }
 }
 

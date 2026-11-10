@@ -61,6 +61,7 @@ impl Echo {
             category: "Test".into(),
             parameters: vec![text("message", true)],
             requires_project: false,
+            node: crate::graph::NodeSpec::default(),
         })
     }
 }
@@ -108,6 +109,10 @@ impl Select {
                 default: None,
             }],
             requires_project: false,
+            node: crate::graph::NodeSpec {
+                changes_context: true,
+                ..crate::graph::NodeSpec::default()
+            },
         })
     }
 }
@@ -259,6 +264,7 @@ impl FeatureModule for TestModule {
                 category: "Test".into(),
                 parameters: Vec::new(),
                 requires_project: false,
+                node: crate::graph::NodeSpec::default(),
             }))],
             "other" => vec![Box::new(Echo::new())],
             _ => vec![Box::new(Echo::new()), Box::new(Select::new())],

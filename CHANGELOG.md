@@ -7,6 +7,24 @@ as the notes of its GitHub release and of the in-app update.
 
 ## [0.5.0] - Unreleased
 
+### Added
+
+- Settings have their own navigation, grouped into General, Hardware,
+  Security & Data, Extensions and Advanced, with one page per area. Back and
+  forward work like in a browser and the place is remembered.
+- Modules are managed like plugins: search, filters, and an explanation when
+  a dependency prevents enabling or disabling one. Modules with settings get
+  their own settings page.
+- On macOS the toolbar is part of the window's titlebar. Page commands such
+  as New workflow, Run workflow or Refresh devices are in the toolbar.
+- A status bar shows the agent, connected devices (simulated ones
+  separately), the active profile and project, background activity such as
+  update downloads and workflow runs, and notifications.
+- Workflow graphs (engine): conditions, parallel branches with joins,
+  bounded loops, delays, retries, timeouts, cancellation and data passed
+  between steps. Existing workflows keep running unchanged. The visual
+  editor follows.
+
 ### Changed
 
 - Release validation: test releases (e.g. `v0.5.0-1`) are verified like
