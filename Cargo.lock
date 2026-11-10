@@ -663,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-agent"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "auto-launch",
  "deckpilot-core",
@@ -687,7 +687,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-core"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "deckpilot-device",
  "serde",
@@ -698,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-desktop"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "deckpilot-agent",
  "deckpilot-core",
@@ -720,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-dev"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "ctrlc",
  "deckpilot-core",
@@ -739,7 +739,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-device"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -748,7 +748,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-hid"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "deckpilot-device",
  "elgato-streamdeck",
@@ -758,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-ipc"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "deckpilot-core",
  "deckpilot-device",
@@ -776,14 +776,14 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-module-general"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "deckpilot-core",
 ]
 
 [[package]]
 name = "deckpilot-module-projects"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "deckpilot-core",
  "deckpilot-device",
@@ -792,7 +792,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-modules"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "deckpilot-core",
  "deckpilot-device",
@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-portability"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
@@ -818,7 +818,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-storage"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -835,7 +835,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-update"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "minisign-verify",
