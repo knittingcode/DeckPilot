@@ -453,3 +453,147 @@ fn legacy_databases_can_be_encrypted_with_a_system_key() {
         Some(&profile)
     );
 }
+
+#[test]
+fn a_missing_database_is_never_recreated_silently() {
+    let dir = Dir::new();
+    let vault = dir.vault();
+    let keys = MemoryKeyStore::new();
+    let key = vault.initialize_system(&keys).unwrap();
+    fill(&open(&vault, &key));
+    // The database disappears (moved, deleted, a drive not mounted).
+    remove_database(vault.database());
+    assert_eq!(vault.state().unwrap(), DatabaseState::Missing);
+    assert!(matches!(
+        vault.initialize_system(&keys),
+        Err(StorageError::DatabaseMissing)
+    ));
+    assert!(matches!(
+        vault.initialize(&password("a new password")),
+        Err(StorageError::DatabaseMissing)
+    ));
+    assert!(!vault.database().exists());
+    assert_eq!(keys.ids().len(), 1, "no new key was created");
+
+    // Only an explicit decision sets up a new configuration; the old key
+    // file and key are kept.
+    let aside = vault.discard_orphaned_key_file().unwrap();
+    assert!(aside.exists());
+    vault.initialize_system(&keys).unwrap();
+    assert_eq!(keys.ids().len(), 2);
+    assert!(vault.discard_orphaned_key_file().is_err());
+}
+
+#[test]
+fn an_interrupted_first_setup_is_completed_or_discarded() {
+    let dir = Dir::new();
+    let vault = dir.vault();
+    // Interrupted before the database existed: nothing was set up.
+    fs::write(vault.setup_file(), b"{}").unwrap();
+    assert_eq!(vault.state().unwrap(), DatabaseState::Missing);
+    assert!(!vault.setup_file().exists());
+    let key = vault.initialize(&password("first password")).unwrap();
+
+    // Interrupted after the database was created: the setup is completed.
+    let params = fs::read(vault.vault_file()).unwrap();
+    fs::remove_file(vault.vault_file()).unwrap();
+    fs::write(vault.setup_file(), &params).unwrap();
+    assert_eq!(vault.state().unwrap(), DatabaseState::Encrypted);
+    assert!(vault.has_key_file());
+    assert!(
+        vault
+            .unlock(&password("first password"))
+            .unwrap()
+            .matches(&key)
+    );
+}
+
+#[test]
+fn an_interrupted_switch_to_a_password_is_completed_by_the_password() {
+    let dir = Dir::new();
+    let vault = dir.vault();
+    let keys = MemoryKeyStore::new();
+    let key = vault.initialize_system(&keys).unwrap();
+    let profile = fill(&open(&vault, &key));
+    let old_params = fs::read(vault.vault_file()).unwrap();
+    vault.use_password(&key, &password("new password")).unwrap();
+    // Crash after the swap, before the new parameters were moved in place.
+    fs::rename(vault.vault_file(), vault.pending_vault_file()).unwrap();
+    fs::write(vault.vault_file(), &old_params).unwrap();
+
+    // The system key no longer opens the database and nothing is replaced.
+    assert!(matches!(
+        vault.unlock_system(&keys),
+        Err(StorageError::InvalidKey)
+    ));
+    let key = vault.unlock(&password("new password")).unwrap();
+    assert!(!vault.pending_vault_file().exists());
+    assert_eq!(
+        vault.protection().unwrap().map(|p| p.mode()),
+        Some(ProtectionMode::Password)
+    );
+    assert_filled(&open(&vault, &key), &profile);
+}
+
+#[test]
+fn an_interrupted_switch_before_the_swap_keeps_the_password() {
+    let dir = Dir::new();
+    let vault = dir.vault();
+    let keys = MemoryKeyStore::new();
+    let key = vault.initialize(&password("old password")).unwrap();
+    let profile = fill(&open(&vault, &key));
+    // A switch to a system key stored its key and the pending parameters,
+    // then stopped before the database was replaced.
+    let new_key = SecretKey::random().unwrap();
+    let id = KeyId::parse("0123456789abcdef").unwrap();
+    keys.store(&id, &Secret::new(new_key.as_bytes().to_vec()))
+        .unwrap();
+    Vault::write_vault(
+        &vault.pending_vault_file(),
+        &Protection::SystemManaged {
+            key_id: id.to_string(),
+        },
+    )
+    .unwrap();
+    fs::write(vault.replacement(), b"partial").unwrap();
+
+    // The agent alone cannot open it: still password protected.
+    assert!(matches!(
+        vault.unlock_system(&keys),
+        Err(StorageError::CredentialsRequired(_))
+    ));
+    let key = vault.unlock(&password("old password")).unwrap();
+    assert!(!vault.pending_vault_file().exists());
+    assert!(!vault.replacement().exists());
+    assert_filled(&open(&vault, &key), &profile);
+    // The stored key is left alone.
+    assert_eq!(keys.ids(), vec![id]);
+}
+
+#[test]
+fn polling_the_state_never_disturbs_a_setup_in_progress() {
+    // The app polls the state while the agent sets up the configuration;
+    // the repair of interrupted setups must not mistake a running one for
+    // an interrupted one.
+    for _ in 0..20 {
+        let dir = Dir::new();
+        let vault = dir.vault();
+        let keys = MemoryKeyStore::new();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let poller = {
+            let vault = vault.clone();
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    vault.state().unwrap();
+                }
+            })
+        };
+        let key = vault.initialize_system(&keys).unwrap();
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        poller.join().unwrap();
+        assert_eq!(vault.state().unwrap(), DatabaseState::Encrypted);
+        assert!(vault.has_key_file());
+        assert!(vault.unlock_system(&keys).unwrap().matches(&key));
+    }
+}

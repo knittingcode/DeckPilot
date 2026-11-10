@@ -211,6 +211,32 @@ impl Vault {
         sibling(&self.vault_file(), ".next")
     }
 
+    /// Serializes changes to the files between processes (the agent and the
+    /// configuration app both use the vault).
+    fn lock_file(&self) -> PathBuf {
+        self.database.with_file_name("deckpilot.vault.lock")
+    }
+
+    /// Takes the exclusive cross-process lock for changing the files. Held
+    /// only while files are written, renamed or repaired — never while a key
+    /// is derived or the credential store is asked, which may take long or
+    /// show a prompt. Released when the returned file is dropped.
+    fn lock(&self) -> Result<fs::File> {
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.lock_file())
+            .map_err(io)?;
+        file.lock().map_err(io)?;
+        Ok(file)
+    }
+
+    /// Parameters of a first setup until its database exists.
+    fn setup_file(&self) -> PathBuf {
+        sibling(&self.vault_file(), ".init")
+    }
+
     /// Encrypted replacement being prepared.
     fn replacement(&self) -> PathBuf {
         sibling(&self.database, ".new")
@@ -279,9 +305,38 @@ impl Vault {
         Ok(())
     }
 
-    /// Detects what is on disk, finishing an interrupted file swap first.
+    /// Completes or discards a first setup that was interrupted: with the
+    /// database created, its parameters are moved into place; without it,
+    /// nothing was set up and the staged parameters are removed.
+    fn recover_setup(&self) -> Result<()> {
+        let staged = self.setup_file();
+        if !staged.exists() {
+            return Ok(());
+        }
+        let created = fs::metadata(&self.database).is_ok_and(|m| m.len() > 0);
+        if created && !self.vault_file().exists() {
+            fs::rename(&staged, self.vault_file()).map_err(io)
+        } else {
+            fs::remove_file(&staged).map_err(io)
+        }
+    }
+
+    /// Whether the key file exists, i.e. a configuration was set up here.
+    pub fn has_key_file(&self) -> bool {
+        self.vault_file().exists()
+    }
+
+    /// Detects what is on disk, finishing an interrupted file swap or setup
+    /// first. Waits while another process changes the files.
     pub fn state(&self) -> Result<DatabaseState> {
+        let _lock = self.lock()?;
+        self.detect()
+    }
+
+    /// [`Vault::state`] for callers that hold the lock.
+    fn detect(&self) -> Result<DatabaseState> {
         self.recover_swap()?;
+        self.recover_setup()?;
         let mut header = [0u8; 16];
         match fs::File::open(&self.database) {
             Ok(mut file) => {
@@ -307,11 +362,33 @@ impl Vault {
         self.require_missing()?;
         let kdf = self.new_kdf()?;
         let key = kdf.derive(password)?;
-        // Parameters first: a crash before the database exists leaves the
-        // state `Missing`, and the next setup simply overwrites them.
-        Self::write_vault(&self.vault_file(), &Protection::Password { kdf })?;
-        SqliteStore::open(&self.database, &Encryption::Key(key.clone()))?;
+        self.create(&key, &Protection::Password { kdf })?;
         Ok(key)
+    }
+
+    /// Creates the database with `key`. The parameters are staged first and
+    /// moved into place once the database exists, so an interruption never
+    /// leaves a key file without a database (see [`Vault::recover_setup`]).
+    fn create(&self, key: &DatabaseKey, protection: &Protection) -> Result<()> {
+        let _lock = self.lock()?;
+        // Checked again under the lock: another process may have set up
+        // meanwhile.
+        if self.detect()? != DatabaseState::Missing {
+            return Err(StorageError::Vault("a database already exists".into()));
+        }
+        if self.has_key_file() {
+            return Err(StorageError::DatabaseMissing);
+        }
+        Self::write_vault(&self.setup_file(), protection)?;
+        let created = SqliteStore::open(&self.database, &Encryption::Key(key.clone()))
+            .map(drop)
+            .and_then(|()| fs::rename(self.setup_file(), self.vault_file()).map_err(io));
+        if let Err(error) = created {
+            let _ = fs::remove_file(self.setup_file());
+            remove_database(&self.database);
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Creates a new encrypted database with a random key kept in `keys`.
@@ -323,25 +400,46 @@ impl Vault {
         let protection = Protection::SystemManaged {
             key_id: key_id.to_string(),
         };
-        let created = Self::write_vault(&self.vault_file(), &protection)
-            .and_then(|()| SqliteStore::open(&self.database, &Encryption::Key(key.clone())));
-        if let Err(error) = created {
+        if let Err(error) = self.create(&key, &protection) {
             // The key was never used for anything; removing it is safe.
             let _ = keys.delete(&key_id);
-            let _ = fs::remove_file(self.vault_file());
-            remove_database(&self.database);
             return Err(error);
         }
         Ok(key)
     }
 
+    /// Setting up is only allowed where nothing was set up before: a key
+    /// file without its database means the database went missing (moved,
+    /// deleted, an unmounted drive), and silently creating a new, empty
+    /// configuration would hide that. The user decides with
+    /// [`Vault::discard_orphaned_key_file`].
     fn require_missing(&self) -> Result<()> {
         if self.state()? != DatabaseState::Missing {
             return Err(StorageError::Vault("a database already exists".into()));
         }
+        if self.has_key_file() {
+            return Err(StorageError::DatabaseMissing);
+        }
         // An empty file left by an aborted start is not a database.
         remove_database(&self.database);
         Ok(())
+    }
+
+    /// Moves the key file of a missing database aside (never deletes it), so
+    /// that a new configuration can be set up. Only on the user's explicit
+    /// request. Returns where the file was moved.
+    pub fn discard_orphaned_key_file(&self) -> Result<PathBuf> {
+        let _lock = self.lock()?;
+        if self.detect()? != DatabaseState::Missing || !self.has_key_file() {
+            return Err(StorageError::Vault(
+                "there is no key file without a database".into(),
+            ));
+        }
+        let aside = self
+            .vault_file()
+            .with_file_name(format!("deckpilot.vault.orphaned-{}.json", timestamp()));
+        fs::rename(self.vault_file(), &aside).map_err(io)?;
+        Ok(aside)
     }
 
     /// Opens a raw connection with `key` and checks that the key is right.
@@ -394,7 +492,10 @@ impl Vault {
                 Ok(()) => {
                     // A change that did not reach the swap: discard it.
                     // A key it may have put into the credential store is
-                    // left there (never delete keys automatically).
+                    // left there (never delete keys automatically). A change
+                    // running right now holds the lock; afterwards there is
+                    // nothing left to discard.
+                    let _lock = self.lock()?;
                     let _ = fs::remove_file(self.pending_vault_file());
                     remove_database(&self.replacement());
                     remove_database(&self.previous());
@@ -411,6 +512,7 @@ impl Vault {
             && let Ok(key) = Self::key_for(&pending.protection, credentials)
             && self.try_key(&key).is_ok()
         {
+            let _lock = self.lock()?;
             fs::rename(self.pending_vault_file(), self.vault_file()).map_err(io)?;
             remove_database(&self.previous());
             return Ok(key);
@@ -464,6 +566,7 @@ impl Vault {
     /// Re-encrypts the database from `old` to `new` and records
     /// `protection`.
     fn rekey(&self, old: &DatabaseKey, new: &DatabaseKey, protection: &Protection) -> Result<()> {
+        let _lock = self.lock()?;
         let source = Connection::open(&self.database)?;
         apply_key(&source, &Encryption::Key(old.clone()))?;
         let version: u32 = source.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -544,6 +647,12 @@ impl Vault {
         key: &DatabaseKey,
         protection: &Protection,
     ) -> Result<PathBuf> {
+        let _lock = self.lock()?;
+        if self.detect()? != DatabaseState::Plaintext {
+            return Err(StorageError::Vault(
+                "there is no unencrypted database to migrate".into(),
+            ));
+        }
         let source = Connection::open(&self.database)?;
         check_integrity(&source)?;
         // Fold the write-ahead log into the main file so that nothing is left

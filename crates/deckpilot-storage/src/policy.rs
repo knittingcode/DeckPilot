@@ -18,6 +18,10 @@ pub enum AutoLock {
     Never,
     /// When the computer goes to sleep.
     Sleep,
+    /// When the screen locks, and when the computer goes to sleep. Only
+    /// offered where the agent can detect the screen lock; elsewhere it acts
+    /// like [`AutoLock::Sleep`].
+    ScreenLock,
     /// After 15 minutes without activity.
     Idle15Minutes,
     /// After one hour without activity.
@@ -29,7 +33,7 @@ impl AutoLock {
         match self {
             Self::Idle15Minutes => Some(Duration::from_secs(15 * 60)),
             Self::Idle1Hour => Some(Duration::from_secs(60 * 60)),
-            Self::Never | Self::Sleep => None,
+            Self::Never | Self::Sleep | Self::ScreenLock => None,
         }
     }
 }

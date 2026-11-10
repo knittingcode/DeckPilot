@@ -103,6 +103,12 @@ pub enum StorageError {
     Vault(String),
     #[error(transparent)]
     KeyStore(#[from] deckpilot_keystore::KeyStoreError),
+    /// The key file shows that a configuration was set up here, but its
+    /// database is missing. Nothing is created until the user decides.
+    #[error(
+        "the configuration database is missing, although DeckPilot was set up in this folder; nothing was created"
+    )]
+    DatabaseMissing,
     /// The database is protected by a password (or a system key) and none
     /// was supplied.
     #[error("the {0} is needed to open the database")]
