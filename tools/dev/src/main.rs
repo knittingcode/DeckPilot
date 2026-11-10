@@ -6,6 +6,7 @@
 //! development mode with Vite HMR. Both use an isolated data directory in
 //! `.dev/data`, so the user's real configuration is never touched.
 
+mod hardware;
 mod logs;
 mod package;
 mod process;
@@ -62,7 +63,10 @@ Commands:
                          (public key from DECKPILOT_UPDATER_PUBKEY)
   check-updater-key      Check that DECKPILOT_UPDATER_PUBKEY is a valid public key
   release-notes          Print the CHANGELOG.md section of the current version
-  validation seed|unlock|status <data-dir>
+  hardware-test [--mock] [--dir <data-dir>] [--force]
+                         Guided test of a physical Stream Deck with the real
+                         agent; --mock checks the procedure on a simulated MK.2
+  validation seed|populate|unlock|status|inventory <data-dir>
                          Update-test helpers on an isolated data directory
                          (see docs/release-validation.md)
   verify-signature <file> <file.sig>
@@ -788,6 +792,7 @@ fn run(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         Some("validation") => validation::command(&args[1..]),
+        Some("hardware-test") => hardware::command(&paths.root, &args[1..]),
         Some("package") => {
             let extra: Vec<String> = args
                 .iter()
