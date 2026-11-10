@@ -171,6 +171,16 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The vendored OpenSSL (SQLCipher) is configured with Perl. Bash steps
+      # on Windows would find Git's minimal Perl, which lacks modules the
+      # configure script needs; use the runner's Strawberry Perl.
+      - name: Use Strawberry Perl for OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $perl = "C:\Strawberry\perl\bin\perl.exe"
+          if (-not (Test-Path $perl)) { Write-Error "Strawberry Perl not found at $perl"; exit 1 }
+          "OPENSSL_SRC_PERL=$perl" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       # The agent ships inside the bundle as a Tauri external binary.
       - name: Build and stage the agent
         shell: bash
