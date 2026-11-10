@@ -43,5 +43,14 @@ security list-keychains -d user -s "${keychains[@]}"
 identities=$(security find-identity -v -p codesigning "$keychain")
 echo "$identities" | grep -q -F "\"$APPLE_SIGNING_IDENTITY\"" \
   || { echo "::error::the certificate does not provide the identity in APPLE_SIGNING_IDENTITY"; exit 1; }
+# Expiry: signing fails after it; warn well before.
+certificate_pem=$(security find-certificate -c "$APPLE_SIGNING_IDENTITY" -p "$keychain")
+echo "the Developer ID certificate expires: $(echo "$certificate_pem" | openssl x509 -noout -enddate | cut -d= -f2)"
+if ! echo "$certificate_pem" | openssl x509 -noout -checkend 0 >/dev/null; then
+  echo "::error::the Developer ID certificate has expired; renew it in the Apple Developer account and update APPLE_CERTIFICATE"
+  exit 1
+elif ! echo "$certificate_pem" | openssl x509 -noout -checkend $((60 * 86400)) >/dev/null; then
+  echo "::warning::the Developer ID certificate expires within 60 days; renew it and update APPLE_CERTIFICATE"
+fi
 echo "DECKPILOT_KEYCHAIN=$keychain" >> "${GITHUB_ENV:?}"
 echo "signing identity available: $APPLE_SIGNING_IDENTITY"

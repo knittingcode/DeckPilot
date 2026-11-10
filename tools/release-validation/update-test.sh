@@ -16,8 +16,19 @@
 #      agent and open the same encrypted configuration (profiles, active
 #      profile and project).
 #
-# Everything stays in <work-dir>; the real configuration, the Keychain and the
-# release keys are not touched. Windows of the test app appear on screen.
+# KEY_MODE=system (default: password) tests the default protection instead:
+# the agent of the old version creates the configuration with a random key in
+# the Keychain (service "DeckPilot Development"), a restart of app and agent
+# must open it from the Keychain, and after the update the new agent must
+# open it from the Keychain without any prompt. Keychain access depends on a
+# stable code identity, so this needs both builds signed with the same
+# Developer ID: provide APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD and
+# APPLE_SIGNING_IDENTITY (the builds are signed, never notarized).
+# TEST_KEYCHAIN, if set, becomes the default keychain while the apps run.
+#
+# Everything stays in <work-dir>; the real configuration, production Keychain
+# items and the release keys are not touched. Windows of the test app appear
+# on screen.
 set -euo pipefail
 
 mkdir -p "${1:?usage: update-test.sh <work-dir>}"
@@ -25,12 +36,19 @@ work="$(cd "$1" && pwd)"
 from="${FROM_VERSION:-0.5.0}"
 to="${TO_VERSION:-0.5.1}"
 port="${PORT:-8765}"
+key_mode="${KEY_MODE:-password}"
+signed=""
+[ -n "${APPLE_CERTIFICATE:-}" ] && signed=1
+# Never notarize test builds: no Apple submission.
+unset APPLE_ID APPLE_PASSWORD APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH
 root="$(git rev-parse --show-toplevel)"
 dev() { cargo run --quiet --manifest-path "$root/Cargo.toml" -p deckpilot-dev -- "$@"; }
 log() { printf '\n== %s\n' "$*"; }
 fail() { echo "FAILED: $*" >&2; exit 1; }
 
 case "$work" in "$root"/*) fail "use a work directory outside the repository" ;; esac
+[ "$key_mode" = system ] && [ -z "$signed" ] \
+  && fail "KEY_MODE=system needs Developer ID signed builds (APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY)"
 mkdir -p "$work"
 target="$(rustc -vV | sed -n 's/^host: //p')"
 case "$target" in
@@ -74,6 +92,23 @@ build() {
 [ -d "$work/out-$from" ] && [ -z "${REBUILD:-}" ] || build "$from"
 [ -d "$work/out-$to" ] && [ -z "${REBUILD:-}" ] || build "$to"
 
+if [ -n "$signed" ]; then
+  log "both builds carry the same code identity"
+  for version in "$from" "$to"; do
+    for binary in deckpilot-agent deckpilot-desktop; do
+      codesign --verify --strict "$work/out-$version/DeckPilot.app/Contents/MacOS/$binary"
+      details=$(codesign --display --verbose=2 "$work/out-$version/DeckPilot.app/Contents/MacOS/$binary" 2>&1)
+      echo "$version $binary: $(echo "$details" | sed -n 's/^Identifier=//p') team=$(echo "$details" | sed -n 's/^TeamIdentifier=//p')"
+    done
+  done
+  for binary in deckpilot-agent deckpilot-desktop; do
+    a=$(codesign --display -r- "$work/out-$from/DeckPilot.app/Contents/MacOS/$binary" 2>&1 | grep designated)
+    b=$(codesign --display -r- "$work/out-$to/DeckPilot.app/Contents/MacOS/$binary" 2>&1 | grep designated)
+    [ "$a" = "$b" ] || fail "$binary has different designated requirements: $a / $b"
+    echo "$binary: $a"
+  done
+fi
+
 serve="$work/serve"
 manifest() {
   local artifact="$1"
@@ -101,6 +136,9 @@ trap cleanup EXIT
 app="$work/Applications/DeckPilot.app"
 data="$work/data"
 export DECKPILOT_DATA_DIR="$data"
+if [ -n "${TEST_KEYCHAIN:-}" ]; then
+  security default-keychain -d user -s "$TEST_KEYCHAIN"
+fi
 installed_version() { /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist"; }
 wait_for() { # <seconds> <description> <command...>
   local deadline=$((SECONDS + $1)) what="$2"; shift 2
@@ -109,44 +147,89 @@ wait_for() { # <seconds> <description> <command...>
     sleep 2
   done
 }
-agent_version_is() { dev validation status "$data" | grep -q "^version=$1 .*security=Unlocked"; }
-agent_running() { dev validation status "$data"; }
-unlock_when_running() { wait_for 120 "agent of $1 is running" agent_running; dev validation unlock "$data"; wait_for 60 "agent $1 unlocked" agent_version_is "$1"; }
-
-install_from() {
-  pkill -f "$app/Contents/MacOS/" 2>/dev/null || true
-  rm -rf "$work/Applications" "$data" && mkdir -p "$work/Applications"
-  cp -R "$work/out-$from/DeckPilot.app" "$app"
-  dev validation seed "$data"
+status() { dev validation status "$data"; }
+agent_version_is() { status | grep -q "^version=$1 .*security=Unlocked"; }
+agent_running() { status; }
+comparable() { status | sed -E 's/ pid=[0-9]+//; s/version=[^ ]+ //'; }
+stop_apps() {
+  pkill -f "$app/Contents/MacOS/deckpilot-desktop" 2>/dev/null || true
+  pkill -f "$app/Contents/MacOS/deckpilot-agent" 2>/dev/null || true
+  local deadline=$((SECONDS + 20))
+  while pgrep -f "$app/Contents/MacOS/" >/dev/null && [ "$SECONDS" -lt "$deadline" ]; do sleep 1; done
+}
+forget_keys() { # Development keys created by this test, nothing else.
+  [ -f "$data/deckpilot.vault.json" ] || return 0
+  local id
+  id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("protection",{}).get("keyId",""))' "$data/deckpilot.vault.json")
+  [ -n "$id" ] && security delete-generic-password -s "DeckPilot Development" -a "database-key-$id" >/dev/null 2>&1 || true
+}
+start_app() {
   "$app/Contents/MacOS/deckpilot-desktop" >> "$work/app.log" 2>&1 &
   app_pid=$!
-  unlock_when_running "$from"
+}
+# The configuration opens: with a system key by itself (from the Keychain),
+# with a password when the user enters it (here: `validation unlock`).
+opened() { # <version>
+  wait_for 120 "agent of $1 is running" agent_running
+  if [ "$key_mode" = password ]; then dev validation unlock "$data"; fi
+  wait_for 60 "agent $1 opened the configuration" agent_version_is "$1"
+  status | grep -q "waiting_for_key_store=false" || fail "the agent is waiting for the Keychain"
 }
 
-log "1. a tampered update is rejected"
+install_from() {
+  stop_apps
+  forget_keys
+  rm -rf "$work/Applications" "$data" && mkdir -p "$work/Applications"
+  cp -R "$work/out-$from/DeckPilot.app" "$app"
+  if [ "$key_mode" = password ]; then
+    dev validation seed "$data"
+    start_app
+    opened "$from"
+  else
+    # First start: the agent creates the configuration with a system key.
+    start_app
+    opened "$from"
+    status | grep -q "protection=Some(SystemManaged)" || fail "not protected by a system key"
+    dev validation populate "$data"
+    # A restart of app and agent opens it from the Keychain by itself.
+    stop_apps
+    start_app
+    opened "$from"
+    echo "restart: opened from the Keychain without a password"
+  fi
+}
+
+trap 'cleanup; forget_keys' EXIT
+
+log "1. a tampered update is rejected ($key_mode)"
 manifest tampered.app.tar.gz
 install_from
-before=$(dev validation status "$data")
-echo "before: $before"
+echo "before: $(status)"
 wait_for 180 "the app fetched the tampered update" grep -q "GET /tampered.app.tar.gz" "$work/server.log"
 sleep 20
 [ "$(installed_version)" = "$from" ] || fail "the tampered update was installed"
 agent_version_is "$from" || fail "the agent stopped after a rejected update"
-echo "rejected: installed $(installed_version), agent: $(dev validation status "$data")"
+echo "rejected: installed $(installed_version), agent: $(status)"
 
-log "2. the signed update is installed"
+log "2. the signed update is installed ($key_mode)"
 manifest DeckPilot.app.tar.gz
+: > "$work/server.log"
 install_from
-before=$(dev validation status "$data" | sed -E 's/ pid=[0-9]+//; s/version=[^ ]+ //')
-echo "before: $(dev validation status "$data")"
+before=$(comparable)
+contents_before=$(dev validation inventory "$data")
+echo "before: $(status)"
+echo "contents: $contents_before"
 wait_for 300 "the app replaced itself with $to" sh -c "[ \"\$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' '$app/Contents/Info.plist')\" = '$to' ]"
 echo "installed: $(installed_version)"
-# The restarted app starts the new agent; the user enters the password.
-unlock_when_running "$to"
-after=$(dev validation status "$data" | sed -E 's/ pid=[0-9]+//; s/version=[^ ]+ //')
-echo "after: $(dev validation status "$data")"
-[ "$before" = "$after" ] || fail "configuration differs after the update: $before vs $after"
+# The restarted app starts the new agent, which opens the configuration:
+# from the Keychain (system key) or with the user's password.
+opened "$to"
+after=$(comparable)
+contents_after=$(dev validation inventory "$data")
+echo "after: $(status)"
+echo "contents: $contents_after"
+[ "$before" = "$after" ] || fail "the state differs after the update: $before vs $after"
+[ "$contents_before" = "$contents_after" ] || fail "the contents differ after the update"
 head -c 16 "$data/deckpilot.db" | grep -q "SQLite format 3" && fail "the database is not encrypted"
-codesign --verify --deep "$app" 2>/dev/null || echo "note: local builds are ad-hoc signed (expected)"
 pgrep -fl "$app/Contents/MacOS/deckpilot-agent" | head -1
-log "update test passed: $from -> $to, configuration preserved and encrypted"
+log "update test passed ($key_mode): $from -> $to, configuration preserved and encrypted"

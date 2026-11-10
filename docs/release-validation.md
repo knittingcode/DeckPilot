@@ -57,23 +57,31 @@ and isolated in `<work-dir>`; the script unlocks the agent as a user would by
 typing the password (`deckpilot-dev validation unlock`). The two builds take
 a while (release profile). Windows of the test app appear on screen.
 
-What this test cannot show: **Keychain access after an update**. Local
-builds are not Developer ID signed, so with a system-managed key macOS would
-ask for the login keychain password after the update (expected; see
-[security.md](security.md)). Showing that a Developer ID signed update keeps
-the Keychain access needs two consecutive Developer ID signed builds where
-the older one can reach the newer one's manifest. The app only reads
-`releases/latest`, so this happens at the latest with the first update
-between two published releases: install release N, let it create its
-configuration with the system key, publish N+1, and confirm that DeckPilot
-opens after the update without any Keychain prompt. Until then it is
-**unverified**; the stable agent identity it depends on is checked in CI and
-in every release build.
+`KEY_MODE=system` tests the default protection: the old version's agent
+creates the configuration with a random key in the Keychain, a restart of app
+and agent must open it from the Keychain, and after the update the new agent
+must open it from the Keychain without any prompt. Keychain access is bound
+to the code identity, so this mode needs both builds signed with the same
+Developer ID (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
+`APPLE_SIGNING_IDENTITY`); the builds are never notarized. The *Update
+continuity* workflow (`.github/workflows/update-continuity.yml`) runs it on a
+macOS runner with a temporary keychain: no Apple submission, no release,
+nothing public.
 
 ## 3. Stream Deck MK.2 (physical device)
 
-Needs a person and a device. With DeckPilot installed (or `make up` with
-`--devices none`), in order:
+`deckpilot-dev hardware-test` is the reproducible procedure: it starts its own
+agent on an isolated data directory (`.dev/hardware-test`) with test profiles
+whose keys are labelled `A1`…`A15` and `B1`…`B15` and log every press and
+release, then checks discovery, the model, every key, images, brightness,
+profile and project switching, unplugging, an agent restart and multiple
+devices, asking where only a person can judge. It refuses to start while
+other programs may hold the device (quit `make up` and the Elgato app first)
+and writes `report.md`. `--mock` runs it against a simulated MK.2 to check
+the procedure itself (CI does this on Linux); that is not a hardware test.
+
+The same steps by hand, with DeckPilot installed (or `make up` with
+`--devices none`):
 
 | # | Step | Expected |
 | - | ---- | -------- |
@@ -94,9 +102,11 @@ result of each step. Hardware has **not** been tested by the project yet.
 
 ## 4. Windows and Linux
 
-Automated today: CI builds and tests on Windows and Linux, and builds the
-Linux `.deb` with the release configuration (bundled agent, udev rule,
-desktop entry). Manual checks on real machines:
+Automated: CI builds and tests on Windows and Linux; it builds the Linux
+`.deb` and `.rpm` and the Windows NSIS and MSI installers with the release
+configuration and checks their contents (bundled agent, udev rule, desktop
+entry); test releases build every package and verify every updater
+signature. Manual checks on real machines:
 
 | Platform | Check |
 | -------- | ----- |
@@ -120,4 +130,20 @@ desktop entry). Manual checks on real machines:
 | Keychain after an update | Unverified | Needs two consecutive Developer ID signed releases (section 2) |
 | Stream Deck MK.2 | Not tested | No device was connected; checklist in section 3 |
 | Windows, Linux | Installers built and verified in CI | Manual checks in section 4 not performed |
+
+## 5. Release security audit
+
+| Topic | Status | Evidence |
+| ----- | ------ | -------- |
+| Updater signatures | Verified | Every artifact is minisign-signed; the app verifies with the compiled-in key before installing; `verify-release` checks every manifest entry in CI (test release `v0.5.0-2`) |
+| Signed version (downgrade by replay) | Verified | `requireSignedVersion`: the signature's signed comment must name the announced version; checked in `verify-release`; the Tauri CLI writes it (checked on real builds) |
+| Version comparison, downgrades | By design | The updater installs only newer versions (`allowDowngrades` is off); the stable channel offers no pre-releases (`releases/latest`) |
+| Manifest validation | Verified | Download URLs must be DeckPilot release downloads; manifest version must equal the sources' |
+| Download integrity | Verified | Signature over the downloaded artifact (a tampered artifact is rejected: update test); HTTPS from GitHub; `SHA256SUMS` and build provenance attestations on releases |
+| App/agent compatibility | By design, tested | Same version required: the app detects a mismatching agent and offers to restart it with the bundled one; the update stops the agent before replacing files and starts the new one (update test) |
+| SQLCipher migrations | Tested | A newer schema is refused; upgrades run after a verified encrypted backup, in one transaction (storage tests) |
+| Failed updates | Tested | A rejected or failed update leaves the installed version and its agent running (update test); the downloaded update stays ready to retry |
+| Release artifact integrity | Verified | Draft-only releases; checksums verified in the release workflow; attestations (`gh attestation verify`) |
+| Certificate expiry | Checked | The signing check fails on an expired Developer ID certificate and warns 60 days ahead. Shipped apps keep working after expiry: signatures carry a secure timestamp and the notarization ticket is stapled |
+| Updater key | Not rotated | The minisign key has no expiry; losing it means installations cannot verify updates (keep the offline backup, see [releasing.md](releasing.md)) |
 
