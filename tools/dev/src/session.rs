@@ -35,6 +35,20 @@ impl DevPaths {
         }
     }
 
+    /// Paths for an isolated data directory outside `.dev`, e.g. for the
+    /// release validation (`deckpilot-dev validation`).
+    pub fn isolated(dir: &Path) -> Self {
+        let dev = Self::new();
+        Self {
+            data: dir.to_path_buf(),
+            logs: dir.join("logs"),
+            workspace: dir.join("workspace"),
+            session: dir.join("session.json"),
+            stop_request: dir.join("stop-requested"),
+            root: dev.root,
+        }
+    }
+
     pub fn create(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.data)?;
         std::fs::create_dir_all(&self.logs)?;
