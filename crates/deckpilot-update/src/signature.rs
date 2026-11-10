@@ -26,6 +26,15 @@ pub(crate) fn decode_signature(signature: &str) -> Result<Signature, SignatureEr
     Signature::decode(&text).map_err(|_| SignatureError::InvalidSignature)
 }
 
+/// Checks that `public_key` is a well-formed base64-encoded minisign public
+/// key, as `DECKPILOT_UPDATER_PUBKEY` must be.
+pub fn check_public_key(public_key: &str) -> Result<(), SignatureError> {
+    let text = decode_text(public_key).ok_or(SignatureError::InvalidPublicKey)?;
+    PublicKey::decode(&text)
+        .map(|_| ())
+        .map_err(|_| SignatureError::InvalidPublicKey)
+}
+
 /// Verifies `data` against a base64-encoded minisign `signature` made with
 /// the key whose base64-encoded public key is `public_key`.
 pub fn verify(public_key: &str, signature: &str, data: &[u8]) -> Result<(), SignatureError> {
@@ -49,6 +58,19 @@ mod tests {
     #[test]
     fn accepts_a_valid_signature() {
         assert_eq!(verify(PUBLIC_KEY, SIGNATURE, ARTIFACT), Ok(()));
+    }
+
+    #[test]
+    fn checks_public_key_format() {
+        assert_eq!(check_public_key(PUBLIC_KEY), Ok(()));
+        assert_eq!(
+            check_public_key("not a key"),
+            Err(SignatureError::InvalidPublicKey)
+        );
+        assert_eq!(
+            check_public_key(SIGNATURE),
+            Err(SignatureError::InvalidPublicKey)
+        );
     }
 
     #[test]

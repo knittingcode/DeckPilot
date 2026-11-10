@@ -39,6 +39,54 @@ pub fn verify(dir: &Path, public_key: &str, expected_version: &str) -> Result<Ve
     Ok(verified)
 }
 
+/// `verify-release`, `check-updater-key` and `verify-signature`.
+pub fn command(name: &str, args: &[String], root: &Path) -> Result<(), String> {
+    match name {
+        "verify-release" => {
+            let dir = args
+                .first()
+                .ok_or("expected the directory with the release files")?;
+            let key = updater_key()?;
+            let version = crate::versions::check(root, None)?;
+            let verified = verify(Path::new(dir), &key, &version)?;
+            for line in verified {
+                println!("verified {line}");
+            }
+            Ok(())
+        }
+        "check-updater-key" => {
+            let key = updater_key()?;
+            deckpilot_update::signature::check_public_key(&key)
+                .map_err(|e| format!("DECKPILOT_UPDATER_PUBKEY: {e}"))?;
+            println!("DECKPILOT_UPDATER_PUBKEY is a valid updater public key");
+            Ok(())
+        }
+        "verify-signature" => {
+            let (Some(file), Some(signature)) = (args.first(), args.get(1)) else {
+                return Err("expected the file and its .sig file".into());
+            };
+            let key = updater_key()?;
+            let data = std::fs::read(file).map_err(|e| format!("{file}: {e}"))?;
+            let signature =
+                std::fs::read_to_string(signature).map_err(|e| format!("{signature}: {e}"))?;
+            deckpilot_update::signature::verify(&key, &signature, &data)
+                .map_err(|e| format!("{file}: {e}"))?;
+            println!("{file}: signature verified with DECKPILOT_UPDATER_PUBKEY");
+            Ok(())
+        }
+        other => Err(format!("unknown release command `{other}`")),
+    }
+}
+
+/// The updater public key from the environment. Public, but still never
+/// printed: log output should not need it.
+fn updater_key() -> Result<String, String> {
+    std::env::var("DECKPILOT_UPDATER_PUBKEY")
+        .ok()
+        .filter(|key| !key.trim().is_empty())
+        .ok_or_else(|| "DECKPILOT_UPDATER_PUBKEY is not set".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

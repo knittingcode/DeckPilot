@@ -47,7 +47,11 @@ Commands:
   package [-- <tauri build args>]
                          Build installers including the agent
   verify-release <dir>   Check a release's latest.json and artifact signatures
-                         (public key from DECKPILOT_UPDATER_PUBKEY)";
+                         (public key from DECKPILOT_UPDATER_PUBKEY)
+  check-updater-key      Check that DECKPILOT_UPDATER_PUBKEY is a valid public key
+  verify-signature <file> <file.sig>
+                         Verify one updater signature against
+                         DECKPILOT_UPDATER_PUBKEY";
 
 /// The configuration app in development mode.
 const UI_ARGS: &[&str] = &["--filter", "@deckpilot/desktop", "tauri", "dev"];
@@ -596,18 +600,8 @@ fn run(args: &[String]) -> Result<(), String> {
                 .collect();
             package::package(&paths.root, &extra)
         }
-        Some("verify-release") => {
-            let dir = args
-                .get(1)
-                .ok_or("expected the directory with the release files")?;
-            let key = std::env::var("DECKPILOT_UPDATER_PUBKEY")
-                .map_err(|_| "DECKPILOT_UPDATER_PUBKEY is not set".to_owned())?;
-            let version = versions::check(&paths.root, None)?;
-            let verified = release::verify(std::path::Path::new(dir), &key, &version)?;
-            for line in verified {
-                println!("verified {line}");
-            }
-            Ok(())
+        Some(command @ ("verify-release" | "check-updater-key" | "verify-signature")) => {
+            release::command(command, &args[1..], &paths.root)
         }
         Some("help" | "--help" | "-h") | None => {
             println!("{USAGE}");
