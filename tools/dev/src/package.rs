@@ -56,15 +56,19 @@ pub fn package(root: &Path, extra: &[String]) -> Result<(), String> {
         .join(format!("deckpilot-agent{}", std::env::consts::EXE_SUFFIX));
     let staged = stage_agent(root, &agent, &target)?;
     println!("staged agent: {}", staged.display());
-    run(Command::new(program("pnpm"))
-        .current_dir(root)
-        .args([
-            "--filter",
-            "@deckpilot/desktop",
-            "tauri",
-            "build",
-            "--config",
-            "src-tauri/tauri.release.conf.json",
-        ])
-        .args(extra))
+    let mut build = Command::new(program("pnpm"));
+    build.current_dir(root).args([
+        "--filter",
+        "@deckpilot/desktop",
+        "tauri",
+        "build",
+        "--config",
+        "src-tauri/tauri.release.conf.json",
+    ]);
+    if std::env::var_os("TAURI_SIGNING_PRIVATE_KEY").is_none_or(|key| key.is_empty()) {
+        // Signed updater artifacts need the release key; local packages skip them.
+        println!("TAURI_SIGNING_PRIVATE_KEY is not set: building without updater artifacts");
+        build.args(["--config", r#"{"bundle":{"createUpdaterArtifacts":false}}"#]);
+    }
+    run(build.args(extra))
 }

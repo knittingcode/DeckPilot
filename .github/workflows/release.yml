@@ -1,0 +1,143 @@
+# Builds signed installers and updater artifacts for a version tag and
+# attaches them to a *draft* GitHub release. Nothing becomes visible to users
+# or to the in-app updater until a maintainer publishes the draft.
+#
+# Required repository configuration (see docs/releasing.md):
+#   secrets.TAURI_SIGNING_PRIVATE_KEY          updater signing key (minisign)
+#   secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD its password
+#   vars.DECKPILOT_UPDATER_PUBKEY              matching public key, compiled
+#                                              into the app to verify updates
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build, e.g. v0.3.0
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  prepare:
+    name: Check versions and configuration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Version of the tag, the app and the agent must match
+        run: cargo run --locked -p deckpilot-dev -- check-versions --tag "$TAG"
+      - name: Signing configuration is present
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
+        run: |
+          test -n "$KEY" || { echo "::error::secret TAURI_SIGNING_PRIVATE_KEY is not configured"; exit 1; }
+          test -n "$PUBKEY" || { echo "::error::variable DECKPILOT_UPDATER_PUBKEY is not configured"; exit 1; }
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libudev-dev
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The agent ships inside the bundle as a Tauri external binary.
+      - name: Build and stage the agent
+        shell: bash
+        run: |
+          cargo build --release --locked -p deckpilot-agent --target ${{ matrix.target }}
+          suffix=""; [ "${{ runner.os }}" = "Windows" ] && suffix=".exe"
+          mkdir -p apps/desktop/src-tauri/binaries
+          cp "target/${{ matrix.target }}/release/deckpilot-agent${suffix}" \
+             "apps/desktop/src-tauri/binaries/deckpilot-agent-${{ matrix.target }}${suffix}"
+      - name: Build and upload the application
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ env.TAG }}
+          releaseName: DeckPilot ${{ env.TAG }}
+          releaseBody: See CHANGELOG and the release notes below.
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: true
+          args: --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
+
+  verify:
+    name: Verify artifacts and publish checksums
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Download the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir release-files
+      - name: Verify manifest and signatures
+        env:
+          DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
+        run: cargo run --locked -p deckpilot-dev -- verify-release release-files
+      - name: Attach checksums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd release-files
+          rm -f SHA256SUMS
+          sha256sum -- * > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          gh release upload "$TAG" SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber

@@ -651,6 +651,8 @@ dependencies = [
  "deckpilot-device",
  "deckpilot-ipc",
  "deckpilot-storage",
+ "deckpilot-update",
+ "semver",
  "serde",
  "serde_json",
  "sysinfo",

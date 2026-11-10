@@ -9,6 +9,7 @@
 mod logs;
 mod package;
 mod process;
+mod release;
 mod seed;
 mod session;
 mod versions;
@@ -44,7 +45,9 @@ Commands:
   check-versions [--tag <tag>]
                          Verify that all version numbers match
   package [-- <tauri build args>]
-                         Build installers including the agent";
+                         Build installers including the agent
+  verify-release <dir>   Check a release's latest.json and artifact signatures
+                         (public key from DECKPILOT_UPDATER_PUBKEY)";
 
 /// The configuration app in development mode.
 const UI_ARGS: &[&str] = &["--filter", "@deckpilot/desktop", "tauri", "dev"];
@@ -592,6 +595,19 @@ fn run(args: &[String]) -> Result<(), String> {
                 .cloned()
                 .collect();
             package::package(&paths.root, &extra)
+        }
+        Some("verify-release") => {
+            let dir = args
+                .get(1)
+                .ok_or("expected the directory with the release files")?;
+            let key = std::env::var("DECKPILOT_UPDATER_PUBKEY")
+                .map_err(|_| "DECKPILOT_UPDATER_PUBKEY is not set".to_owned())?;
+            let version = versions::check(&paths.root, None)?;
+            let verified = release::verify(std::path::Path::new(dir), &key, &version)?;
+            for line in verified {
+                println!("verified {line}");
+            }
+            Ok(())
         }
         Some("help" | "--help" | "-h") | None => {
             println!("{USAGE}");
