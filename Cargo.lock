@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-agent"
-version = "0.4.0"
+version = "0.5.0-1"
 dependencies = [
  "auto-launch",
  "deckpilot-core",
@@ -952,7 +952,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-core"
-version = "0.4.0"
+version = "0.5.0-1"
 dependencies = [
  "deckpilot-device",
  "serde",
@@ -963,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-desktop"
-version = "0.4.0"
+version = "0.5.0-1"
 dependencies = [
  "deckpilot-agent",
  "deckpilot-core",
@@ -987,7 +987,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-dev"
-version = "0.4.0"
+version = "0.5.0-1"
 dependencies = [
  "base64 0.22.1",
  "ctrlc",
@@ -1008,7 +1008,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-device"
-version = "0.4.0"
+version = "0.5.0-1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1017,7 +1017,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-hid"
-version = "0.4.0"
+version = "0.5.0-1"
 dependencies = [
  "deckpilot-device",
  "elgato-streamdeck",
@@ -1027,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-ipc"
-version = "0.4.0"
+version = "0.5.0-1"
 dependencies = [
  "deckpilot-core",
  "deckpilot-device",
@@ -1045,7 +1045,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-keystore"
-version = "0.4.0"
+version = "0.5.0-1"
 dependencies = [
  "apple-native-keyring-store",
  "keyring-core",
@@ -1057,14 +1057,14 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-module-general"
-version = "0.4.0"
+version = "0.5.0-1"
 dependencies = [
  "deckpilot-core",
 ]
 
 [[package]]
 name = "deckpilot-module-projects"
-version = "0.4.0"
+version = "0.5.0-1"
 dependencies = [
  "deckpilot-core",
  "deckpilot-device",
@@ -1073,7 +1073,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-modules"
-version = "0.4.0"
+version = "0.5.0-1"
 dependencies = [
  "deckpilot-core",
  "deckpilot-device",
@@ -1083,7 +1083,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-portability"
-version = "0.4.0"
+version = "0.5.0-1"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
@@ -1100,7 +1100,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-presence"
-version = "0.4.0"
+version = "0.5.0-1"
 dependencies = [
  "block2",
  "objc2",
@@ -1114,7 +1114,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-storage"
-version = "0.4.0"
+version = "0.5.0-1"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -1132,7 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-update"
-version = "0.4.0"
+version = "0.5.0-1"
 dependencies = [
  "base64 0.22.1",
  "minisign",
