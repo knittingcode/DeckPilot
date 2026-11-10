@@ -58,6 +58,7 @@ export const api = {
     invoke<[number, number]>("fit_window", { width, height, viewportWidth, viewportHeight }),
   closeWindow: () => invoke<null>("close_window"),
   showMainWindow: () => invoke<boolean>("show_main_window"),
+  titlebarDoubleClick: () => invoke<null>("titlebar_double_click"),
   finishSecurityPrompt: () => invoke<null>("finish_security_prompt"),
   lastWorkflowReport: () => invoke<WorkflowReport | null>("last_workflow_report"),
 

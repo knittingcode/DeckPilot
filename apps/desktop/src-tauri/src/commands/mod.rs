@@ -52,6 +52,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         windows::fit_window,
         windows::close_window,
         windows::show_main_window,
+        windows::titlebar_double_click,
         windows::finish_security_prompt,
         agent::last_workflow_report,
         portability::export_configuration,

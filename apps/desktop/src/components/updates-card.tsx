@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { api, errorMessage } from "@/lib/api"
+import { useTitlebar } from "@/hooks/use-titlebar"
 import { useAppContext } from "@/lib/app-context"
 import { formatTimestamp } from "@/lib/format"
 import type { UpdateMode, UpdatePreferences } from "@/lib/types"
@@ -41,6 +42,30 @@ const INTERVALS = [6, 12, 24, 72, 168]
 export function UpdatesCard() {
   const { updates, setUpdates } = useAppContext()
   const [busy, setBusy] = useState(false)
+  const checkNow = () => {
+    void run(() => api.checkForUpdates())
+  }
+  const downloading = updates?.phase === "downloading" ? updates.progress : null
+  useTitlebar({
+    actions: [
+      {
+        id: "updates.check",
+        label: "Check for updates",
+        icon: RefreshCw,
+        placement: "primary",
+        busy: updates?.phase === "checking",
+        disabled: !updates?.configured || busy || updates.phase !== "idle",
+        hint: updates?.configured ? undefined : "Updates are not available in this build",
+        onSelect: checkNow,
+      },
+    ],
+    progress:
+      downloading === null
+        ? undefined
+        : downloading.total
+          ? Math.round((downloading.downloaded / downloading.total) * 100)
+          : true,
+  })
   if (!updates) return null
   const { preferences, available, progress, phase } = updates
 
@@ -86,20 +111,13 @@ export function UpdatesCard() {
         )}
         {updates.error && <ErrorNotice error={updates.error} />}
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="outline"
-            disabled={!updates.configured || busy || phase !== "idle"}
-            onClick={() => void run(() => api.checkForUpdates())}
-          >
-            <RefreshCw className={phase === "checking" ? "animate-spin" : undefined} /> Check now
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            {preferences.lastCheck
+        <p className="text-xs text-muted-foreground">
+          {phase === "checking"
+            ? "Checking for updates…"
+            : preferences.lastCheck
               ? `Last checked ${formatTimestamp(preferences.lastCheck)}`
               : "Not checked yet"}
-          </span>
-        </div>
+        </p>
 
         {available ? (
           <div className="grid gap-3 rounded-lg border p-3">

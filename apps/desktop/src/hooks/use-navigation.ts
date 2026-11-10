@@ -22,8 +22,8 @@ export const IS_MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.
 
 /** Keyboard shortcuts of the history, as shown in tooltips. */
 export const SHORTCUTS = IS_MAC
-  ? { back: "⌘[", forward: "⌘]", settings: "⌘," }
-  : { back: "Alt+←", forward: "Alt+→", settings: "Ctrl+," }
+  ? { back: "⌘[", forward: "⌘]", settings: "⌘,", sidebar: "⌘B" }
+  : { back: "Alt+←", forward: "Alt+→", settings: "Ctrl+,", sidebar: "Ctrl+B" }
 
 /**
  * The navigation of the main window: history, persistence across launches,

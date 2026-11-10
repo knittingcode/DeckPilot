@@ -96,3 +96,94 @@ pub fn finish_security_prompt<R: Runtime>(app: AppHandle<R>, window: WebviewWind
         let _ = window.close();
     }
 }
+
+/// What double-clicking the titlebar does, from the system preference.
+/// Only macOS has an overlay titlebar; elsewhere this is used by tests.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DoubleClick {
+    /// Zoom: maximize, or restore the previous size.
+    Zoom,
+    Minimize,
+    Nothing,
+}
+
+/// Interprets macOS's "Double-click a window's title bar to" setting
+/// (`AppleActionOnDoubleClick`, and the older `AppleMiniaturizeOnDoubleClick`).
+/// "Fill" has no public equivalent for other apps' windows; it zooms.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn double_click_action(action: Option<&str>, legacy_minimize: Option<&str>) -> DoubleClick {
+    match action.map(str::trim) {
+        Some("Minimize") => DoubleClick::Minimize,
+        Some("None") => DoubleClick::Nothing,
+        None if legacy_minimize.map(str::trim) == Some("1") => DoubleClick::Minimize,
+        // "Maximize", "Fill", or nothing set: the default is to zoom.
+        _ => DoubleClick::Zoom,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn global_default(key: &str) -> Option<String> {
+    let output = std::process::Command::new("/usr/bin/defaults")
+        .args(["read", "-g", key])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Double-click on empty titlebar space of a window whose content extends
+/// into the titlebar (macOS overlay titlebar). Other platforms keep their
+/// native titlebar, which handles double-clicks itself.
+#[tauri::command]
+pub fn titlebar_double_click<R: Runtime>(window: WebviewWindow<R>) -> CommandResult<()> {
+    #[cfg(target_os = "macos")]
+    let action = double_click_action(
+        global_default("AppleActionOnDoubleClick").as_deref(),
+        global_default("AppleMiniaturizeOnDoubleClick").as_deref(),
+    );
+    #[cfg(not(target_os = "macos"))]
+    let action = DoubleClick::Nothing;
+    let result = match action {
+        DoubleClick::Zoom if window.is_resizable().unwrap_or(false) => {
+            if window.is_maximized().unwrap_or(false) {
+                window.unmaximize()
+            } else {
+                window.maximize()
+            }
+        }
+        DoubleClick::Minimize => window.minimize(),
+        DoubleClick::Zoom | DoubleClick::Nothing => Ok(()),
+    };
+    result.map_err(|error| CommandError::Invalid(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DoubleClick, double_click_action};
+
+    #[test]
+    fn titlebar_double_click_follows_the_system_setting() {
+        assert_eq!(double_click_action(None, None), DoubleClick::Zoom);
+        assert_eq!(
+            double_click_action(Some("Maximize\n"), None),
+            DoubleClick::Zoom
+        );
+        assert_eq!(double_click_action(Some("Fill"), None), DoubleClick::Zoom);
+        assert_eq!(
+            double_click_action(Some("Minimize\n"), None),
+            DoubleClick::Minimize
+        );
+        assert_eq!(
+            double_click_action(Some("None"), Some("1")),
+            DoubleClick::Nothing
+        );
+        assert_eq!(
+            double_click_action(None, Some("1\n")),
+            DoubleClick::Minimize
+        );
+        assert_eq!(double_click_action(None, Some("0")), DoubleClick::Zoom);
+    }
+}

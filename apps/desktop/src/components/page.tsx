@@ -1,99 +1,48 @@
-import { ChevronLeft, ChevronRight } from "lucide-react"
 import type { ReactNode } from "react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Button } from "@/components/ui/button"
-import { Separator } from "@/components/ui/separator"
-import { SidebarTrigger } from "@/components/ui/sidebar"
-import { SHORTCUTS } from "@/hooks/use-navigation"
+import { useTitlebar } from "@/hooks/use-titlebar"
 import { useAppContext } from "@/lib/app-context"
+import type { TitlebarAction, TitlebarBreadcrumb } from "@/lib/titlebar"
 
-/** The profile a profile-scoped page edits, shown in its header. */
-function ProfileScope() {
+/** The profile a profile-scoped page edits, shown in the titlebar. */
+function useProfileScope(enabled: boolean) {
   const { profiles, editingProfileId } = useAppContext()
-  const profile = profiles.profiles.find((p) => p.id === editingProfileId)
-  if (!profile) return null
+  const profile = enabled ? profiles.profiles.find((p) => p.id === editingProfileId) : undefined
+  if (!profile) return undefined
   const onDevice = profile.id === profiles.activeProfileId
-  return (
-    <span
-      className="flex max-w-48 shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs"
-      title={onDevice ? "Active on the device" : "Not active on the device"}
-    >
-      <span
-        className={
-          onDevice
-            ? "size-1.5 rounded-full bg-emerald-500"
-            : "size-1.5 rounded-full bg-muted-foreground/50"
-        }
-        aria-hidden
-      />
-      <span className="text-muted-foreground">Profile</span>
-      <span className="truncate font-medium">{profile.name}</span>
-    </span>
-  )
+  return {
+    caption: "Profile",
+    label: profile.name,
+    tone: onDevice ? ("positive" as const) : ("neutral" as const),
+    hint: onDevice ? "Active on the device" : "Not active on the device",
+  }
 }
 
-/** Browser-style back and forward through visited pages. */
-function HistoryButtons() {
-  const { history } = useAppContext()
-  return (
-    <div className="flex items-center">
-      <Button
-        variant="ghost"
-        size="icon"
-        className="size-7"
-        aria-label="Back"
-        title={`Back (${SHORTCUTS.back})`}
-        disabled={!history.canGoBack}
-        onClick={history.back}
-      >
-        <ChevronLeft />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="size-7"
-        aria-label="Forward"
-        title={`Forward (${SHORTCUTS.forward})`}
-        disabled={!history.canGoForward}
-        onClick={history.forward}
-      >
-        <ChevronRight />
-      </Button>
-    </div>
-  )
-}
-
+/**
+ * A page of the main window. Its title, description and actions appear in
+ * the shared titlebar; the page renders only its content.
+ */
 export function Page({
   title,
   description,
+  breadcrumbs,
   actions,
   profileScoped = false,
   children,
 }: {
   title: string
   description?: string
-  actions?: ReactNode
+  breadcrumbs?: TitlebarBreadcrumb[]
+  /** Commands of the page in the titlebar. Components inside may add more (`useTitlebar`). */
+  actions?: TitlebarAction[]
   /** The page edits the profile chosen in the sidebar. */
   profileScoped?: boolean
   children: ReactNode
 }) {
-  return (
-    <div className="flex min-h-full flex-col">
-      <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
-        <SidebarTrigger className="-ml-1" />
-        <HistoryButtons />
-        <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-sm font-semibold">{title}</h1>
-          {description && <p className="truncate text-xs text-muted-foreground">{description}</p>}
-        </div>
-        {profileScoped && <ProfileScope />}
-        {actions}
-      </header>
-      <div className="flex flex-1 flex-col gap-6 p-6">{children}</div>
-    </div>
-  )
+  const status = useProfileScope(profileScoped)
+  useTitlebar({ title, subtitle: description, breadcrumbs, actions, status })
+  return <div className="flex flex-1 flex-col gap-6 p-6">{children}</div>
 }
 
 export function ErrorNotice({ error }: { error: string }) {

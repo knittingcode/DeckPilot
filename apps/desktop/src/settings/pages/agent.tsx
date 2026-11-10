@@ -1,4 +1,4 @@
-import { Square } from "lucide-react"
+import { RefreshCw, Square } from "lucide-react"
 import { useEffect, useState } from "react"
 
 import { AgentBadge, AgentCompatibilityNotice, AgentStopped } from "@/components/agent"
@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import { useTitlebar } from "@/hooks/use-titlebar"
 import { api, errorMessage } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
 import { formatTimestamp } from "@/lib/format"
@@ -32,6 +33,31 @@ export function AgentSettings() {
     })
   }
   const status = agent?.status
+  const [refreshing, setRefreshing] = useState(false)
+  useTitlebar({
+    actions: [
+      {
+        id: "agent.refresh",
+        label: "Refresh status",
+        icon: RefreshCw,
+        placement: "primary",
+        busy: refreshing,
+        disabled: refreshing,
+        onSelect: () => {
+          setRefreshing(true)
+          setError(null)
+          api
+            .agentStatus()
+            .then(setAgent, (e: unknown) => {
+              setError(errorMessage(e))
+            })
+            .finally(() => {
+              setRefreshing(false)
+            })
+        },
+      },
+    ],
+  })
   const autostart = running ? loadedAutostart : null
 
   return (

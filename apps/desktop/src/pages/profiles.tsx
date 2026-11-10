@@ -57,16 +57,17 @@ export function ProfilesPage() {
     <Page
       title="Profiles"
       description="Independent sets of actions, workflows, projects and layouts"
-      actions={
-        <Button
-          size="sm"
-          onClick={() => {
+      actions={[
+        {
+          id: "profiles.new",
+          label: "New profile",
+          icon: Plus,
+          placement: "primary",
+          onSelect: () => {
             setDialog({ mode: "create" })
-          }}
-        >
-          <Plus /> New profile
-        </Button>
-      }
+          },
+        },
+      ]}
     >
       <Card>
         <CardHeader>

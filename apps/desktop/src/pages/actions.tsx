@@ -1,11 +1,10 @@
 import { Plus, Search } from "lucide-react"
-import { useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 
 import { ActionEditor } from "@/components/action-editor"
 import { EmptyState, ErrorNotice, Loading, Page } from "@/components/page"
 import { RequireProfile } from "@/components/require-profile"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import {
@@ -16,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useEditingProfile } from "@/hooks/use-profile"
+import { useTitlebar } from "@/hooks/use-titlebar"
 import { useAppContext } from "@/lib/app-context"
 import { moduleOf } from "@/lib/modules"
 import { ActionIcon } from "@/components/action-icon"
@@ -59,6 +59,28 @@ function Library({
   const [query, setQuery] = useState("")
   const [category, setCategory] = useState("all")
   const [selected, setSelected] = useState<string | null>(view.profile.actions[0]?.id ?? "new")
+  const searchRef = useRef<HTMLInputElement>(null)
+  useTitlebar({
+    actions: [
+      {
+        id: "actions.new",
+        label: "New action",
+        icon: Plus,
+        placement: "primary",
+        onSelect: () => {
+          setSelected("new")
+        },
+      },
+      {
+        id: "actions.search",
+        label: "Search",
+        icon: Search,
+        onSelect: () => {
+          searchRef.current?.focus()
+        },
+      },
+    ],
+  })
   // Types of disabled modules are known too, so their actions keep a name.
   const types: ActionType[] = useMemo(() => modules.flatMap((m) => m.actionTypes), [modules])
   const typeOf = (id: string) => types.find((t) => t.id === id)
@@ -99,21 +121,12 @@ function Library({
     <div className="grid gap-4 xl:grid-cols-[minmax(18rem,24rem)_1fr]">
       <Card className="xl:max-h-[calc(100vh-7rem)] xl:overflow-hidden">
         <CardHeader className="gap-3">
-          <div className="flex items-center gap-2">
-            <CardTitle className="flex-1">Actions</CardTitle>
-            <Button
-              size="sm"
-              onClick={() => {
-                setSelected("new")
-              }}
-            >
-              <Plus /> New
-            </Button>
-          </div>
+          <CardTitle>Actions</CardTitle>
           <div className="relative">
             <Search className="absolute top-2.5 left-2 size-4 text-muted-foreground" />
             <Input
               className="pl-8"
+              ref={searchRef}
               placeholder="Search actions"
               aria-label="Search actions"
               value={query}

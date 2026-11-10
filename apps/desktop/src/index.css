@@ -5,6 +5,18 @@
 
 :root {
   --radius: 0.625rem;
+  /* Main window titlebar (components/app-titlebar.tsx). Every control in it
+     shares one height and is centered on the same axis; the macOS traffic
+     lights are positioned on that axis in tauri.conf.json
+     (trafficLightPosition) — keep both in sync. */
+  --titlebar-height: 3rem;
+  --titlebar-control: 1.75rem;
+  --titlebar-icon: 1rem;
+  --titlebar-gap: 0.25rem;
+  --titlebar-padding-x: 0.75rem;
+
+  /* Height of the main window's status bar; 0 where there is none. */
+  --statusbar-height: 0px;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -119,4 +131,25 @@
   textarea {
     @apply select-text;
   }
+}
+
+/* Indeterminate progress in the titlebar. */
+@keyframes titlebar-progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+/* The titlebar's fixed navigation region: room for the native window
+   controls (--titlebar-controls-inset, set per platform and fullscreen
+   state by the titlebar), then sidebar toggle, back and forward. Defined on
+   the titlebar so that it follows the inset set there. */
+[data-slot="titlebar"] {
+  --titlebar-navigation-width: calc(
+    var(--titlebar-controls-inset, 0px) + 2 * var(--titlebar-padding-x) + 3 *
+      var(--titlebar-control) + 2 * var(--titlebar-gap)
+  );
 }
