@@ -17,7 +17,11 @@ use deckpilot_core::{
 use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId};
 
 /// Protocol spoken by this build.
-pub const PROTOCOL_VERSION: u32 = 2;
+///
+/// Version 3: action results only report `selectProject` effects (project
+/// switching is computed by the projects module), and action types use
+/// module namespaces such as `projects.next`.
+pub const PROTOCOL_VERSION: u32 = 3;
 /// Oldest protocol the agent still accepts. Version 1 clients (DeckPilot
 /// 0.2) can still connect, e.g. so that a newer app can shut down an older
 /// agent during an update.

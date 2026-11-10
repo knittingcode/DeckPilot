@@ -15,10 +15,10 @@ use deckpilot_device::{
 };
 
 use crate::{
-    ActionInstanceId, ActionResult, ActiveProjectContext, BindingTarget, ControlBinding,
-    CycleDirection, DeviceLayout, Engine, EngineError, FaceStyle, KeyFace, LayoutId, MachineConfig,
-    PageId, Profile, Project, ProjectId, Trigger, WorkflowId, WorkflowReport, builtin,
-    render_label,
+    ActionInstanceId, ActionRegistry, ActionResult, ActiveProjectContext, BindingTarget,
+    ControlBinding, CycleDirection, DeviceLayout, Engine, EngineError, FaceStyle, KeyFace,
+    LayoutId, MachineConfig, PageId, Profile, Project, ProjectId, Trigger, WorkflowId,
+    WorkflowReport, render_label,
 };
 
 /// Whether a profile provides a usable layout for a device model.
@@ -97,6 +97,12 @@ impl Runtime {
 
     pub fn engine(&self) -> &Engine {
         &self.engine
+    }
+
+    /// Replaces the engine, e.g. after feature modules were enabled or
+    /// disabled. The profile, project context and pages are kept.
+    pub fn set_engine(&mut self, engine: Engine) {
+        self.engine = engine;
     }
 
     pub fn catalog(&self) -> &ModelCatalog {
@@ -293,7 +299,14 @@ impl Runtime {
         let Some(page) = layout.page(page) else {
             return notice("No layout");
         };
-        page_faces(layout, page.id, profile, self.active_project(), &controls)
+        page_faces(
+            self.engine.registry(),
+            layout,
+            page.id,
+            profile,
+            self.active_project(),
+            &controls,
+        )
     }
 
     pub fn handle_event(&mut self, event: &DeviceEvent) -> Result<RuntimeOutcome, EngineError> {
@@ -395,6 +408,7 @@ impl Runtime {
 /// Faces for `controls` on one page of a layout. Unbound controls are empty.
 /// Used for devices and for previews in the layout designer.
 pub fn page_faces(
+    registry: &ActionRegistry,
     layout: &DeviceLayout,
     page: PageId,
     profile: &Profile,
@@ -416,7 +430,7 @@ pub fn page_faces(
                 .filter(|binding| binding.control == *control)
                 .min_by_key(|binding| binding.trigger != Trigger::Press);
             let face = binding.map_or_else(KeyFace::empty, |binding| {
-                face_for(binding, layout, profile, project)
+                face_for(registry, binding, layout, profile, project)
             });
             (*control, face)
         })
@@ -424,6 +438,7 @@ pub fn page_faces(
 }
 
 fn face_for(
+    registry: &ActionRegistry,
     binding: &ControlBinding,
     layout: &DeviceLayout,
     profile: &Profile,
@@ -439,20 +454,16 @@ fn face_for(
                 .as_deref()
                 .or(instance.label.as_deref())
                 .unwrap_or(&instance.name);
-            let face = KeyFace::new(
-                FaceStyle::Action,
-                render_label(template, &profile.name, project),
-            );
-            // A switcher whose label already shows the project needs no second line.
-            if instance.action_type == builtin::cycle_project_id()
-                && !template.contains("{project.")
-            {
-                face.with_detail(project.map_or("-", |p| p.key.as_str()))
-            } else if instance.action_type == builtin::select_project_id() {
-                let key = instance.parameters.text("project").unwrap_or_default();
-                face.highlighted(project.is_some_and(|p| p.key.matches(key)))
-            } else {
-                face
+            let label = render_label(template, &profile.name, project);
+            match registry.handler(&instance.action_type) {
+                // The owning module may add context such as the active project.
+                Some(handler) => handler.decorate_face(
+                    KeyFace::new(FaceStyle::Action, label),
+                    &instance.parameters,
+                    template,
+                    project,
+                ),
+                None => KeyFace::new(FaceStyle::Notice, label).with_detail("Unavailable"),
             }
         }
         BindingTarget::Workflow { workflow } => match profile.workflow(workflow) {
@@ -484,7 +495,8 @@ fn face_for(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ActionParameters, ActionRegistry, LayoutPage, Os, ParameterValue, ProjectKey};
+    use crate::testing::{registry, select_type, with_projects};
+    use crate::{ActionParameters, LayoutPage, Os, ParameterValue};
     use deckpilot_device::{ControlInput, models};
 
     struct Fixture {
@@ -494,25 +506,17 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
-        let registry = ActionRegistry::with_builtins();
-        let mut profile = Profile::new("Work");
-        for key in ["SHOP", "CMR", "CMS"] {
-            profile
-                .add_project(Project::new(ProjectKey::new(key).unwrap(), key))
-                .unwrap();
-        }
+        let registry = registry();
+        let mut profile = with_projects("Work", &["SHOP", "CMR", "CMS"]);
         let next = registry
-            .create_instance(
-                "Next project",
-                builtin::cycle_project_id(),
-                &ActionParameters::new(),
-            )
+            .create_instance("Next project", select_type(), &ActionParameters::new())
             .unwrap();
+        let cms = profile.projects[2].id;
         let select = registry
             .create_instance(
                 "CMS",
-                builtin::select_project_id(),
-                &ActionParameters::new().with("project", ParameterValue::Text("CMS".into())),
+                select_type(),
+                &ActionParameters::new().with("project", ParameterValue::Project(cms)),
             )
             .unwrap();
         let (next_id, select_id) = (next.id, select.id);
@@ -549,7 +553,7 @@ mod tests {
 
     fn runtime() -> Runtime {
         Runtime::new(
-            Engine::new(ActionRegistry::with_builtins()),
+            Engine::new(registry()),
             ModelCatalog::builtin(),
             MachineConfig::new(Os::current()),
         )
@@ -708,14 +712,29 @@ mod tests {
         let model = deckpilot_device::models::stream_deck_mk2();
         let controls = model.capabilities.controls();
         let cms = &f.profile.projects[2];
-        let faces = page_faces(layout, layout.home_page, &f.profile, Some(cms), &controls);
+        let registry = registry();
+        let faces = page_faces(
+            &registry,
+            layout,
+            layout.home_page,
+            &f.profile,
+            Some(cms),
+            &controls,
+        );
         assert_eq!(faces.len(), 15);
         assert_eq!(faces[0].1.detail.as_deref(), Some("CMS"));
         assert!(
             faces[2].1.highlighted,
             "the CMS selector is highlighted for CMS"
         );
-        let missing = page_faces(layout, PageId::new(), &f.profile, None, &controls);
+        let missing = page_faces(
+            &registry,
+            layout,
+            PageId::new(),
+            &f.profile,
+            None,
+            &controls,
+        );
         assert!(missing.iter().all(|(_, face)| face.is_empty()));
     }
 

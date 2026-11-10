@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use deckpilot_core::{
-    ActionInstanceId, ActionRegistry, ActionResult, CycleDirection, Engine, EngineError, KeyFace,
-    MachineConfig, Os, ProfileId, ProjectId, Runtime, RuntimeOutcome,
+    ActionInstanceId, ActionResult, CycleDirection, Engine, EngineError, KeyFace, MachineConfig,
+    ModuleRegistry, Os, ProfileId, ProjectId, Runtime, RuntimeOutcome,
 };
 use deckpilot_device::{
     CombinedBackend, ControlId, DeviceBackend, DeviceEvent, DeviceId, DeviceModel, ModelCatalog,
@@ -123,6 +123,9 @@ pub struct Agent {
     _lock: InstanceLock,
     store: SqliteStore,
     runtime: Runtime,
+    /// Feature modules with their stored state; the runtime's engine
+    /// executes the action types of the enabled ones.
+    modules: ModuleRegistry,
     brightness: u8,
     started_at: u64,
     endpoint: String,
@@ -168,8 +171,9 @@ impl Agent {
             machine
         };
         let brightness = store.device_brightness()?.unwrap_or(DEFAULT_BRIGHTNESS);
+        let modules = load_modules(&store)?;
         let mut runtime = Runtime::new(
-            Engine::new(ActionRegistry::with_builtins()),
+            Engine::new(modules.action_registry()),
             ModelCatalog::builtin(),
             machine,
         );
@@ -199,6 +203,7 @@ impl Agent {
             _lock: lock,
             store,
             runtime,
+            modules,
             brightness,
             started_at: unix_now(),
             sessions: BTreeMap::new(),
@@ -340,6 +345,7 @@ impl Agent {
                 })
             }
             Request::SelectProject { project } => {
+                self.require_projects()?;
                 self.runtime
                     .select_project(project)
                     .map_err(|e| engine_error(&e))?;
@@ -496,7 +502,22 @@ impl Agent {
         Ok(())
     }
 
+    /// Project switching belongs to the projects module and is refused while
+    /// that module is disabled.
+    fn require_projects(&self) -> Result<(), IpcError> {
+        let id = deckpilot_modules::projects::module_id();
+        if self.modules.is_enabled(&id) {
+            Ok(())
+        } else {
+            Err(IpcError::new(
+                ErrorCode::Failed,
+                "the Projects module is disabled",
+            ))
+        }
+    }
+
     fn cycle_project(&mut self, direction: CycleDirection) -> Result<(), IpcError> {
+        self.require_projects()?;
         self.runtime
             .cycle_project(direction)
             .map_err(|e| engine_error(&e))?;
@@ -508,6 +529,10 @@ impl Agent {
         if let Some(machine) = self.store.load_machine_config()? {
             self.runtime.set_machine(machine);
         }
+        // Module states may have changed in the configuration app.
+        self.modules = load_modules(&self.store)?;
+        self.runtime
+            .set_engine(Engine::new(self.modules.action_registry()));
         let (profile, project) = load_active(&self.store)?;
         match profile {
             Some(profile) if self.runtime.profile().is_some_and(|p| p.id == profile.id) => {
@@ -797,6 +822,14 @@ fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+fn load_modules(store: &SqliteStore) -> Result<ModuleRegistry, StorageError> {
+    let (modules, problems) = deckpilot_modules::configured(&store.module_states()?);
+    for problem in problems {
+        warn!(%problem, "stored module state was not applied");
+    }
+    Ok(modules)
 }
 
 fn load_active(

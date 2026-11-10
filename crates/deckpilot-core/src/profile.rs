@@ -43,7 +43,11 @@ pub struct Profile {
 
 /// Where an action or workflow is referenced.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Usage {
     WorkflowStep {
         workflow: WorkflowId,
@@ -78,6 +82,10 @@ pub enum ProfileIssue {
     NotFound(&'static str),
     #[error("the layout is for a different device model")]
     ModelMismatch,
+    #[error("`{0}` refers to a project of another profile")]
+    ForeignProject(String),
+    #[error("the default project does not belong to this profile")]
+    ForeignDefaultProject,
 }
 
 impl Profile {
@@ -117,66 +125,29 @@ impl Profile {
             .find(|project| project.key.matches(key))
     }
 
-    /// Adds a project unless its key is already taken.
-    pub fn add_project(&mut self, project: Project) -> Result<(), ProfileIssue> {
-        if self.project_by_key(project.key.as_str()).is_some() {
-            return Err(ProfileIssue::DuplicateProjectKey(project.key.to_string()));
-        }
-        self.projects.push(project);
-        Ok(())
-    }
-
-    /// Replaces a project, keeping its position in the cycle.
-    pub fn update_project(&mut self, project: Project) -> Result<(), ProfileIssue> {
-        let clash = self
-            .projects
-            .iter()
-            .any(|p| p.id != project.id && p.key.matches(project.key.as_str()));
-        if clash {
-            return Err(ProfileIssue::DuplicateProjectKey(project.key.to_string()));
-        }
-        let slot = self
-            .projects
-            .iter_mut()
-            .find(|p| p.id == project.id)
-            .ok_or(ProfileIssue::NotFound("project"))?;
-        *slot = project;
-        Ok(())
-    }
-
-    /// Moves a project to `index` in the cycle order (clamped to the end).
-    pub fn move_project(&mut self, id: ProjectId, index: usize) -> Result<(), ProfileIssue> {
-        let from = self
-            .projects
-            .iter()
-            .position(|p| p.id == id)
-            .ok_or(ProfileIssue::NotFound("project"))?;
-        let project = self.projects.remove(from);
-        let to = index.min(self.projects.len());
-        self.projects.insert(to, project);
-        Ok(())
-    }
-
-    /// Removes a project unless a workflow condition refers to it.
-    pub fn delete_project(&mut self, id: ProjectId) -> Result<Project, ProfileIssue> {
-        let referenced = self
+    /// Places that refer to a project: workflow step conditions and
+    /// project parameters of actions and step overrides.
+    pub fn project_references(&self, id: ProjectId) -> usize {
+        let conditions = self
             .workflows
             .iter()
             .flat_map(|w| &w.steps)
             .filter(|step| step.condition == StepCondition::ActiveProject { project: id })
             .count();
-        if referenced > 0 {
-            return Err(ProfileIssue::InUse(referenced));
-        }
-        let index = self
-            .projects
+        let overrides = self
+            .workflows
             .iter()
-            .position(|p| p.id == id)
-            .ok_or(ProfileIssue::NotFound("project"))?;
-        if self.default_project == Some(id) {
-            self.default_project = None;
-        }
-        Ok(self.projects.remove(index))
+            .flat_map(|w| &w.steps)
+            .flat_map(|step| step.overrides.projects())
+            .filter(|project| *project == id)
+            .count();
+        let parameters = self
+            .actions
+            .iter()
+            .flat_map(|action| action.parameters.projects())
+            .filter(|project| *project == id)
+            .count();
+        conditions + overrides + parameters
     }
 
     fn target_usages(&self, matches: impl Fn(&BindingTarget) -> bool) -> Vec<Usage> {
@@ -340,8 +311,18 @@ impl Profile {
         copy.default_project = copy
             .default_project
             .and_then(|id| projects.get(&id).copied());
+        let remap_projects = |parameters: &mut crate::ActionParameters| {
+            for value in parameters.values_mut() {
+                if let crate::ParameterValue::Project(project) = value
+                    && let Some(id) = projects.get(project)
+                {
+                    *project = *id;
+                }
+            }
+        };
         for action in &mut copy.actions {
             action.id = actions[&action.id];
+            remap_projects(&mut action.parameters);
         }
         for workflow in &mut copy.workflows {
             workflow.id = workflows[&workflow.id];
@@ -349,6 +330,7 @@ impl Profile {
                 if let Some(id) = actions.get(&step.action) {
                     step.action = *id;
                 }
+                remap_projects(&mut step.overrides);
                 if let StepCondition::ActiveProject { project } = &mut step.condition
                     && let Some(id) = projects.get(project)
                 {
@@ -387,8 +369,30 @@ impl Profile {
                 issues.push(ProfileIssue::DuplicateProjectKey(project.key.to_string()));
             }
         }
+        if self
+            .default_project
+            .is_some_and(|id| self.project(id).is_none())
+        {
+            issues.push(ProfileIssue::ForeignDefaultProject);
+        }
+        for action in &self.actions {
+            if action
+                .parameters
+                .projects()
+                .any(|id| self.project(id).is_none())
+            {
+                issues.push(ProfileIssue::ForeignProject(action.name.clone()));
+            }
+        }
         for workflow in &self.workflows {
             for step in &workflow.steps {
+                if step
+                    .overrides
+                    .projects()
+                    .any(|id| self.project(id).is_none())
+                {
+                    issues.push(ProfileIssue::ForeignProject(workflow.name.clone()));
+                }
                 if self.action(step.action).is_none() {
                     issues.push(ProfileIssue::MissingWorkflowAction {
                         workflow: workflow.name.clone(),
@@ -449,13 +453,14 @@ fn remap_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ActionParameters, OnFailure, ProjectKey, builtin};
+    use crate::testing::{echo_type, select_type};
+    use crate::{ActionParameters, OnFailure, ParameterValue, ProjectKey};
 
     fn action(name: &str) -> ActionInstance {
         ActionInstance {
             id: ActionInstanceId::new(),
             name: name.into(),
-            action_type: builtin::log_message_id(),
+            action_type: echo_type(),
             parameters: ActionParameters::new(),
             description: String::new(),
             icon: None,
@@ -491,12 +496,11 @@ mod tests {
     fn rejects_duplicate_project_keys() {
         let mut profile = Profile::new("Work");
         profile
-            .add_project(Project::new(ProjectKey::new("SHOP").unwrap(), "Shop"))
-            .unwrap();
-        let duplicate = Project::new(ProjectKey::new("shop").unwrap(), "Shop 2");
-        assert!(profile.add_project(duplicate.clone()).is_err());
-
-        profile.projects.push(duplicate);
+            .projects
+            .push(Project::new(ProjectKey::new("SHOP").unwrap(), "Shop"));
+        profile
+            .projects
+            .push(Project::new(ProjectKey::new("shop").unwrap(), "Shop 2"));
         let issues = profile.validate(&ModelCatalog::builtin());
         assert_eq!(
             issues,
@@ -536,12 +540,13 @@ mod tests {
         let a_id = a.id;
         profile.actions.push(a);
         profile
-            .add_project(Project::new(
-                crate::ProjectKey::new("SHOP").unwrap(),
-                "Shop",
-            ))
-            .unwrap();
+            .projects
+            .push(Project::new(ProjectKey::new("SHOP").unwrap(), "Shop"));
         let shop = profile.projects[0].id;
+        let mut select = action("Select SHOP");
+        select.action_type = select_type();
+        select.parameters = ActionParameters::new().with("project", ParameterValue::Project(shop));
+        profile.actions.push(select);
         profile.default_project = Some(shop);
         let mut workflow = Workflow::new("Start Work").step(a_id, OnFailure::Stop);
         workflow.steps[0].condition = StepCondition::ActiveProject { project: shop };
@@ -576,6 +581,10 @@ mod tests {
         );
         assert_eq!(copy.default_project, Some(copy.projects[0].id));
         assert_eq!(
+            copy.actions[1].parameters.project("project"),
+            Some(copy.projects[0].id)
+        );
+        assert_eq!(
             copy.layouts[0].pages[0].bindings[0].target,
             BindingTarget::Workflow {
                 workflow: copy.workflows[0].id
@@ -593,29 +602,33 @@ mod tests {
     }
 
     #[test]
-    fn projects_can_be_reordered_updated_and_deleted() {
+    fn project_references_and_foreign_projects_are_detected() {
         let mut profile = Profile::new("Work");
-        for key in ["SHOP", "CMR", "CMS"] {
-            profile
-                .add_project(Project::new(crate::ProjectKey::new(key).unwrap(), key))
-                .unwrap();
-        }
-        let cms = profile.projects[2].id;
-        profile.move_project(cms, 0).unwrap();
-        let keys: Vec<_> = profile.projects.iter().map(|p| p.key.to_string()).collect();
-        assert_eq!(keys, ["CMS", "SHOP", "CMR"]);
+        profile
+            .projects
+            .push(Project::new(ProjectKey::new("SHOP").unwrap(), "Shop"));
+        let shop = profile.projects[0].id;
+        let mut select = action("Select");
+        select.parameters = ActionParameters::new().with("project", ParameterValue::Project(shop));
+        let select_id = select.id;
+        profile.actions.push(select);
+        let mut workflow = Workflow::new("W").step(select_id, OnFailure::Stop);
+        workflow.steps[0].condition = StepCondition::ActiveProject { project: shop };
+        profile.workflows.push(workflow);
+        assert_eq!(profile.project_references(shop), 2);
+        assert_eq!(profile.validate(&ModelCatalog::builtin()), Vec::new());
 
-        let mut renamed = profile.projects[0].clone();
-        renamed.key = crate::ProjectKey::new("shop").unwrap();
-        assert!(matches!(
-            profile.update_project(renamed),
-            Err(ProfileIssue::DuplicateProjectKey(_))
-        ));
-
-        profile.default_project = Some(cms);
-        profile.delete_project(cms).unwrap();
-        assert_eq!(profile.default_project, None);
-        assert_eq!(profile.projects.len(), 2);
+        let foreign = ProjectId::new();
+        profile.actions[0].parameters =
+            ActionParameters::new().with("project", ParameterValue::Project(foreign));
+        profile.default_project = Some(foreign);
+        assert_eq!(
+            profile.validate(&ModelCatalog::builtin()),
+            vec![
+                ProfileIssue::ForeignDefaultProject,
+                ProfileIssue::ForeignProject("Select".into())
+            ]
+        );
     }
 
     #[test]
@@ -650,6 +663,18 @@ mod tests {
             issues[0],
             ProfileIssue::MissingWorkflowAction { .. }
         ));
+    }
+
+    #[test]
+    fn usages_serialize_in_camel_case() {
+        let usage = Usage::WorkflowStep {
+            workflow: WorkflowId::new(),
+            workflow_name: "Start Work".into(),
+            position: 1,
+        };
+        let json = serde_json::to_value(&usage).unwrap();
+        assert_eq!(json["type"], "workflowStep");
+        assert_eq!(json["workflowName"], "Start Work");
     }
 
     #[test]

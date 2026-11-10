@@ -1,17 +1,39 @@
+//! Commands of the projects module: managing the projects of a profile,
+//! switching the active project and checking project resources.
+//!
+//! Every command names the profile it works on, and every project id is
+//! looked up inside that profile, so a command can never change a project of
+//! another profile. Copying a project to another profile is an explicit
+//! command that creates an independent copy.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use deckpilot_core::{
-    MachineConfig, MachineResourceBinding, ProfileId, Project, ProjectId, ProjectKey, ResourceKey,
-    ResourceKind,
+    ActiveProjectContext, CycleDirection, MachineConfig, MachineResourceBinding, ProfileId,
+    Project, ProjectId, ProjectKey, ResourceKey, ResourceKind,
 };
+use deckpilot_ipc::{ClientError, Request, Response};
+use deckpilot_modules::projects::{ProjectCatalog, module_id};
 use deckpilot_storage::ConfigStore;
 
-use super::modify_profile;
+use crate::agent;
+use crate::commands::agent::unexpected;
+use crate::commands::modify_profile;
 use crate::error::{CommandError, CommandResult};
 use crate::state::{AppState, load_profile, machine_config};
+
+/// Changes a profile's projects after checking that the module is enabled.
+fn modify_projects<T>(
+    state: &AppState,
+    profile_id: ProfileId,
+    change: impl FnOnce(&mut deckpilot_core::Profile) -> CommandResult<T>,
+) -> CommandResult<T> {
+    state.require_module(&module_id())?;
+    modify_profile(state, profile_id, change)
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,7 +77,7 @@ pub fn create_project(
     project: ProjectInput,
 ) -> CommandResult<Project> {
     let project = build_project(ProjectId::new(), project)?;
-    modify_profile(&state, profile_id, |profile| {
+    modify_projects(&state, profile_id, |profile| {
         profile.add_project(project.clone())?;
         Ok(project)
     })
@@ -69,7 +91,7 @@ pub fn update_project(
     project: ProjectInput,
 ) -> CommandResult<Project> {
     let project = build_project(project_id, project)?;
-    modify_profile(&state, profile_id, |profile| {
+    modify_projects(&state, profile_id, |profile| {
         profile.update_project(project.clone())?;
         Ok(project)
     })
@@ -83,7 +105,7 @@ pub fn move_project(
     project_id: ProjectId,
     index: usize,
 ) -> CommandResult<()> {
-    modify_profile(&state, profile_id, |profile| {
+    modify_projects(&state, profile_id, |profile| {
         Ok(profile.move_project(project_id, index)?)
     })
 }
@@ -94,10 +116,102 @@ pub fn delete_project(
     profile_id: ProfileId,
     project_id: ProjectId,
 ) -> CommandResult<()> {
-    modify_profile(&state, profile_id, |profile| {
+    modify_projects(&state, profile_id, |profile| {
         profile.delete_project(project_id)?;
         Ok(())
     })
+}
+
+#[tauri::command]
+pub fn set_default_project(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+    project_id: Option<ProjectId>,
+) -> CommandResult<()> {
+    modify_projects(&state, profile_id, |profile| {
+        Ok(profile.set_default_project(project_id)?)
+    })
+}
+
+/// Copies a project into another profile. The copy gets a new id and keeps
+/// key, name and resource roles; nothing is shared afterwards.
+#[tauri::command]
+pub fn copy_project(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+    project_id: ProjectId,
+    target_profile_id: ProfileId,
+) -> CommandResult<Project> {
+    state.require_module(&module_id())?;
+    let source = load_profile(&state.store(), profile_id)?;
+    modify_profile(&state, target_profile_id, |target| {
+        let id = source.copy_project_to(project_id, target)?;
+        target
+            .project(id)
+            .cloned()
+            .ok_or(CommandError::NotFound("project"))
+    })
+}
+
+/// Switching acts on the active profile, which is what the agent runs.
+fn ensure_active(state: &AppState, profile_id: ProfileId) -> CommandResult<()> {
+    state.require_module(&module_id())?;
+    if state.store().active_profile()? == Some(profile_id) {
+        Ok(())
+    } else {
+        Err(CommandError::Invalid("the profile is not active".into()))
+    }
+}
+
+#[tauri::command]
+pub async fn cycle_project(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+    direction: CycleDirection,
+) -> CommandResult<Option<ProjectId>> {
+    ensure_active(&state, profile_id)?;
+    match agent::request(&state.paths, Request::CycleProject { direction }).await {
+        Ok(Response::ActiveProject { project }) => Ok(project.map(|p| p.id)),
+        Ok(other) => Err(unexpected(&other)),
+        Err(ClientError::NotRunning) => {
+            let store = state.store();
+            let profile = load_profile(&store, profile_id)?;
+            let mut context =
+                ActiveProjectContext::restore(&profile, store.active_project(profile_id)?);
+            let active = context.cycle(&profile, direction)?;
+            store.set_active_project(profile_id, active)?;
+            Ok(active)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[tauri::command]
+pub async fn select_project(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+    project_id: ProjectId,
+) -> CommandResult<()> {
+    ensure_active(&state, profile_id)?;
+    // Ownership is checked here as well as in the agent.
+    let profile = load_profile(&state.store(), profile_id)?;
+    if profile.project(project_id).is_none() {
+        return Err(CommandError::NotFound("project"));
+    }
+    match agent::request(
+        &state.paths,
+        Request::SelectProject {
+            project: project_id,
+        },
+    )
+    .await
+    {
+        Ok(_) => Ok(()),
+        Err(ClientError::NotRunning) => Ok(state
+            .store()
+            .set_active_project(profile_id, Some(project_id))?),
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[tauri::command]

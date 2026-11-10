@@ -94,6 +94,21 @@ impl Workflow {
                 ));
                 continue;
             };
+            let Some(handler) = registry.handler(&action.action_type) else {
+                let reason = registry
+                    .unavailable_reason(&action.action_type)
+                    .unwrap_or("its action type is not available");
+                issues.push(format!("step {position} ({}): {reason}", action.name));
+                continue;
+            };
+            if let Ok(parameters) = handler
+                .definition()
+                .normalize(&action.parameters.overlay(&step.overrides))
+            {
+                for problem in handler.check(&parameters, profile) {
+                    issues.push(format!("step {position} ({}): {problem}", action.name));
+                }
+            }
             if !step.overrides.is_empty()
                 && let Err(error) = registry.normalize(
                     &action.action_type,

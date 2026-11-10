@@ -155,8 +155,11 @@ pub fn preview_layout(
         ActiveProjectContext::restore(&profile, project_id.or(store.active_project(profile_id)?));
     let project = context.project(&profile)?;
     let controls = model.capabilities.controls();
-    Ok(page_faces(&layout, page_id, &profile, project, &controls)
-        .into_iter()
-        .map(|(control, face)| ControlFace { control, face })
-        .collect())
+    let actions = state.actions();
+    Ok(
+        page_faces(&actions, &layout, page_id, &profile, project, &controls)
+            .into_iter()
+            .map(|(control, face)| ControlFace { control, face })
+            .collect(),
+    )
 }

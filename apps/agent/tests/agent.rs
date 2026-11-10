@@ -5,7 +5,7 @@ use std::time::Duration;
 use deckpilot_agent::{Agent, AgentError, AgentOptions, InstanceLock, LockError};
 use deckpilot_core::{
     ActionParameters, ActionRegistry, ActionStatus, CycleDirection, DeviceLayout, LayoutStatus,
-    Profile, ProfileId, Project, ProjectKey, builtin,
+    ModuleSettings, Os, Profile, ProfileId, Project, ProjectKey,
 };
 use deckpilot_device::mock::MockBackend;
 use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId, models};
@@ -14,6 +14,8 @@ use deckpilot_ipc::{
     AgentClient, AgentEvent, AgentPaths, AgentStatus, ClientError, ClientKind, ErrorCode,
     PROTOCOL_VERSION, Request, Response, ServerMessage, SharedStream,
 };
+use deckpilot_modules::projects::{ProjectCatalog, actions};
+use deckpilot_modules::{general, projects};
 use deckpilot_storage::{ConfigStore, Encryption, SqliteStore};
 use serde_json::{Value, json};
 use tokio::io::BufReader;
@@ -53,7 +55,7 @@ fn temp_paths() -> AgentPaths {
 /// action on key 1 and a generated MK.2 layout.
 fn seed(paths: &AgentPaths) -> Profile {
     let store = SqliteStore::open(&paths.database, &Encryption::None).unwrap();
-    let registry = ActionRegistry::with_builtins();
+    let registry = registry();
     let mut profile = Profile::new("Work");
     for key in ["SHOP", "CMR", "CMS"] {
         profile
@@ -62,18 +64,14 @@ fn seed(paths: &AgentPaths) -> Profile {
     }
     profile.actions.push(
         registry
-            .create_instance(
-                "Next project",
-                builtin::cycle_project_id(),
-                &ActionParameters::new(),
-            )
+            .create_instance("Next project", actions::next_id(), &ActionParameters::new())
             .unwrap(),
     );
     profile.actions.push(
         registry
             .create_instance(
                 "Announce",
-                builtin::log_message_id(),
+                general::log_id(),
                 &ActionParameters::new().with(
                     "message",
                     deckpilot_core::ParameterValue::Text("{project.key}".into()),
@@ -86,6 +84,10 @@ fn seed(paths: &AgentPaths) -> Profile {
     store.save_profile(&profile).unwrap();
     store.set_active_profile(Some(profile.id)).unwrap();
     profile
+}
+
+fn registry() -> ActionRegistry {
+    deckpilot_modules::builtin(Os::current()).action_registry()
 }
 
 fn start_agent(paths: AgentPaths, mock: MockBackend) -> Result<Running, AgentError> {
@@ -705,16 +707,12 @@ async fn configuration_reload_updates_the_device_without_restart() {
 async fn renders_simulated_xl_and_plus_devices() {
     let paths = temp_paths();
     let store = SqliteStore::open(&paths.database, &Encryption::None).unwrap();
-    let registry = ActionRegistry::with_builtins();
+    let registry = registry();
     let mut profile = Profile::new("Studio");
     for _ in 0..3 {
         profile.actions.push(
             registry
-                .create_instance(
-                    "Next",
-                    builtin::cycle_project_id(),
-                    &ActionParameters::new(),
-                )
+                .create_instance("Next", actions::next_id(), &ActionParameters::new())
                 .unwrap(),
         );
     }
@@ -795,4 +793,104 @@ async fn previous_protocol_clients_can_stop_the_agent_for_an_update() {
         AgentClient::connect(&agent.paths, ClientKind::Other).await,
         Err(ClientError::NotRunning)
     ));
+}
+
+async fn run_action(
+    client: &mut AgentClient,
+    action: deckpilot_core::ActionInstanceId,
+) -> deckpilot_core::ActionResult {
+    match client.request(Request::RunAction { action }).await.unwrap() {
+        Response::ActionResult { result } => result,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn disabled_modules_stop_their_actions_without_losing_them() {
+    let agent = setup().await;
+    let mut client = agent.client().await;
+    let next = agent.work.actions[0].id;
+    assert!(run_action(&mut client, next).await.is_success());
+
+    // The configuration app disables the module and asks for a reload.
+    agent
+        .store()
+        .set_module_state(
+            &projects::module_id(),
+            &ModuleSettings {
+                enabled: false,
+                config: ActionParameters::new(),
+            },
+        )
+        .unwrap();
+    client.request(Request::ReloadConfiguration).await.unwrap();
+    let result = run_action(&mut client, next).await;
+    assert_eq!(result.status, ActionStatus::Failed);
+    assert_eq!(
+        result.message,
+        "this action is unavailable: the Projects module is disabled"
+    );
+    let cycle = client
+        .request(Request::CycleProject {
+            direction: CycleDirection::Next,
+        })
+        .await;
+    assert!(matches!(cycle, Err(ClientError::Agent(e)) if e.message.contains("disabled")));
+    // The stored action is untouched.
+    let stored = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    assert_eq!(stored.actions, agent.work.actions);
+    assert_eq!(active_key(&agent.status().await), Some("CMR"));
+
+    agent
+        .store()
+        .set_module_state(
+            &projects::module_id(),
+            &ModuleSettings {
+                enabled: true,
+                config: ActionParameters::new(),
+            },
+        )
+        .unwrap();
+    client.request(Request::ReloadConfiguration).await.unwrap();
+    assert!(run_action(&mut client, next).await.is_success());
+    assert_eq!(active_key(&agent.status().await), Some("CMS"));
+    agent.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn profiles_keep_their_own_projects_and_selection() {
+    let agent = setup().await;
+    let mut home = Profile::new("Home");
+    for key in ["BLOG", "GARDEN"] {
+        home.add_project(Project::new(ProjectKey::new(key).unwrap(), key))
+            .unwrap();
+    }
+    agent.store().save_profile(&home).unwrap();
+    let mut client = agent.client().await;
+    let cms = agent.work.projects[2].id;
+    client
+        .request(Request::SelectProject { project: cms })
+        .await
+        .unwrap();
+
+    client
+        .request(Request::SetActiveProfile { profile: home.id })
+        .await
+        .unwrap();
+    assert_eq!(active_key(&agent.status().await), Some("BLOG"));
+    // A project of the inactive profile cannot be selected.
+    let foreign = client
+        .request(Request::SelectProject { project: cms })
+        .await;
+    assert!(matches!(foreign, Err(ClientError::Agent(e)) if e.code == ErrorCode::NotFound));
+    assert_eq!(active_key(&agent.status().await), Some("BLOG"));
+
+    client
+        .request(Request::SetActiveProfile {
+            profile: agent.work.id,
+        })
+        .await
+        .unwrap();
+    assert_eq!(active_key(&agent.status().await), Some("CMS"));
+    agent.shutdown().await;
 }

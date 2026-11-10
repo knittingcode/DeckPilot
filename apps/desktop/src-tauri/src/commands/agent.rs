@@ -2,18 +2,15 @@ use std::time::Duration;
 
 use tauri::State;
 
-use deckpilot_core::{
-    ActionInstanceId, ActionResult, ActiveProjectContext, CycleDirection, ProfileId, ProjectId,
-    WorkflowId, WorkflowReport,
-};
+use deckpilot_core::{ActionInstanceId, ActionResult, ProfileId, WorkflowId, WorkflowReport};
 use deckpilot_ipc::{ClientError, Request, Response};
 use deckpilot_storage::ConfigStore;
 
 use crate::agent::{self, AgentConnection};
 use crate::error::{CommandError, CommandResult};
-use crate::state::{AppState, load_profile};
+use crate::state::AppState;
 
-fn unexpected(response: &Response) -> CommandError {
+pub(crate) fn unexpected(response: &Response) -> CommandError {
     CommandError::Invalid(format!("unexpected agent response: {response:?}"))
 }
 
@@ -99,62 +96,13 @@ pub async fn set_active_profile(
     }
 }
 
-/// Project commands act on the active profile, which is what the agent runs.
+/// Actions and workflows run in the active profile, which is what the agent
+/// runs.
 fn ensure_active(state: &AppState, profile_id: ProfileId) -> CommandResult<()> {
     if state.store().active_profile()? == Some(profile_id) {
         Ok(())
     } else {
         Err(CommandError::Invalid("the profile is not active".into()))
-    }
-}
-
-#[tauri::command]
-pub async fn cycle_project(
-    state: State<'_, AppState>,
-    profile_id: ProfileId,
-    direction: CycleDirection,
-) -> CommandResult<Option<ProjectId>> {
-    ensure_active(&state, profile_id)?;
-    match agent::request(&state.paths, Request::CycleProject { direction }).await {
-        Ok(Response::ActiveProject { project }) => Ok(project.map(|p| p.id)),
-        Ok(other) => Err(unexpected(&other)),
-        Err(ClientError::NotRunning) => {
-            let store = state.store();
-            let profile = load_profile(&store, profile_id)?;
-            let mut context =
-                ActiveProjectContext::restore(&profile, store.active_project(profile_id)?);
-            let active = context.cycle(&profile, direction)?;
-            store.set_active_project(profile_id, active)?;
-            Ok(active)
-        }
-        Err(error) => Err(error.into()),
-    }
-}
-
-#[tauri::command]
-pub async fn select_project(
-    state: State<'_, AppState>,
-    profile_id: ProfileId,
-    project_id: ProjectId,
-) -> CommandResult<()> {
-    ensure_active(&state, profile_id)?;
-    match agent::request(
-        &state.paths,
-        Request::SelectProject {
-            project: project_id,
-        },
-    )
-    .await
-    {
-        Ok(_) => Ok(()),
-        Err(ClientError::NotRunning) => {
-            let store = state.store();
-            let profile = load_profile(&store, profile_id)?;
-            let mut context = ActiveProjectContext::new(&profile);
-            context.select(&profile, project_id)?;
-            Ok(store.set_active_project(profile_id, Some(project_id))?)
-        }
-        Err(error) => Err(error.into()),
     }
 }
 

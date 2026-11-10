@@ -6,9 +6,14 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use deckpilot_core::{MachineConfig, Profile, ProfileId, ProjectId};
+use deckpilot_core::{
+    MachineConfig, ModuleId, ModuleSettings, ModuleStates, Profile, ProfileId, Project, ProjectId,
+    ProjectKey,
+};
 
-use crate::{ConfigStore, DOCUMENT_VERSION, LaunchInfo, ProfileSummary, Result, StorageError};
+use crate::{
+    ConfigStore, DOCUMENT_VERSION, LaunchInfo, MigrationNote, ProfileSummary, Result, StorageError,
+};
 
 /// Ordered schema migrations. Index `n` upgrades from version `n` to `n + 1`.
 const MIGRATIONS: &[&str] = &[
@@ -43,6 +48,7 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX app_launches_component ON app_launches (component, id);
 ",
+    crate::legacy::SCHEMA,
 ];
 
 const ACTIVE_PROFILE: &str = "active_profile";
@@ -124,8 +130,10 @@ impl SqliteStore {
             // Schema change and document upgrade commit together or not at all.
             let tx = self.connection.unchecked_transaction()?;
             tx.execute_batch(MIGRATIONS[version as usize])?;
-            if version + 1 == 2 {
-                upgrade_documents(&tx)?;
+            match version + 1 {
+                2 => upgrade_documents(&tx)?,
+                3 => crate::legacy::migrate(&tx)?,
+                _ => {}
             }
             tx.pragma_update(None, "user_version", version + 1)?;
             tx.commit()?;
@@ -134,9 +142,9 @@ impl SqliteStore {
     }
 }
 
-/// Rewrites stored documents in the current [`DOCUMENT_VERSION`]. Document
-/// version 2 only adds optional fields, so older documents deserialize with
-/// defaults and are written back unchanged otherwise.
+/// Rewrites stored documents in document version 2, which only adds optional
+/// fields, so older documents deserialize with defaults and are written back
+/// unchanged otherwise.
 fn upgrade_documents(connection: &Connection) -> Result<()> {
     let profiles: Vec<(String, u32, String)> = connection
         .prepare("SELECT id, document_version, document FROM profiles")?
@@ -145,8 +153,8 @@ fn upgrade_documents(connection: &Connection) -> Result<()> {
     for (id, version, document) in profiles {
         let profile: Profile = decode(version, &document)?;
         connection.execute(
-            "UPDATE profiles SET document_version = ?1, document = ?2 WHERE id = ?3",
-            params![DOCUMENT_VERSION, encode(&profile)?, id],
+            "UPDATE profiles SET document_version = 2, document = ?1 WHERE id = ?2",
+            params![encode(&profile)?, id],
         )?;
     }
     let machine: Option<(u32, String)> = connection
@@ -159,8 +167,8 @@ fn upgrade_documents(connection: &Connection) -> Result<()> {
     if let Some((version, document)) = machine {
         let config: MachineConfig = decode(version, &document)?;
         connection.execute(
-            "UPDATE machine_config SET document_version = ?1, document = ?2 WHERE id = 1",
-            params![DOCUMENT_VERSION, encode(&config)?],
+            "UPDATE machine_config SET document_version = 2, document = ?1 WHERE id = 1",
+            params![encode(&config)?],
         )?;
     }
     Ok(())
@@ -188,7 +196,7 @@ fn apply_key(_connection: &Connection, encryption: &Encryption) -> Result<()> {
     }
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
@@ -202,6 +210,120 @@ fn encode<T: Serialize>(value: &T) -> Result<String> {
 
 /// Oldest document version that can still be read (and upgraded).
 const MIN_DOCUMENT_VERSION: u32 = 1;
+
+fn constraint_violation(error: &rusqlite::Error) -> bool {
+    matches!(error, rusqlite::Error::SqliteFailure(failure, _)
+        if failure.code == rusqlite::ErrorCode::ConstraintViolation)
+}
+
+impl SqliteStore {
+    fn profile_exists(&self, id: ProfileId) -> Result<bool> {
+        Ok(self.connection.query_row(
+            "SELECT EXISTS (SELECT 1 FROM profiles WHERE id = ?1)",
+            [id.to_string()],
+            |row| row.get(0),
+        )?)
+    }
+
+    fn load_projects(&self, profile: ProfileId) -> Result<Vec<Project>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, key, name, resources FROM projects WHERE profile_id = ?1
+             ORDER BY position, id",
+        )?;
+        let rows = statement.query_map([profile.to_string()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        let mut projects = Vec::new();
+        for row in rows {
+            let (id, key, name, resources) = row?;
+            projects.push(Project {
+                id: parse_id(&id)?,
+                key: ProjectKey::new(key).map_err(|error| {
+                    StorageError::Document(serde::de::Error::custom(error.to_string()))
+                })?,
+                name,
+                resources: serde_json::from_str(&resources)?,
+            });
+        }
+        Ok(projects)
+    }
+
+    /// Writes the projects of `profile` to the `projects` table inside the
+    /// caller's transaction. The table, not the document, is the source of
+    /// truth; its constraints keep every project in exactly one profile.
+    fn save_projects(tx: &rusqlite::Transaction<'_>, profile: &Profile) -> Result<()> {
+        let profile_id = profile.id.to_string();
+        let stored: Vec<String> = tx
+            .prepare("SELECT id FROM projects WHERE profile_id = ?1")?
+            .query_map([&profile_id], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for id in stored {
+            if !profile.projects.iter().any(|p| p.id.to_string() == id) {
+                // Also removes default and active selections of the project.
+                tx.execute("DELETE FROM projects WHERE id = ?1", [&id])?;
+            }
+        }
+        // Park existing keys on unique values so that keys can be swapped.
+        tx.execute(
+            "UPDATE projects SET key = id WHERE profile_id = ?1",
+            [&profile_id],
+        )?;
+        for (position, project) in profile.projects.iter().enumerate() {
+            let changed = tx
+                .execute(
+                    "INSERT INTO projects (id, profile_id, key, name, position, resources)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                     ON CONFLICT (id) DO UPDATE SET
+                        key = excluded.key,
+                        name = excluded.name,
+                        position = excluded.position,
+                        resources = excluded.resources
+                     WHERE projects.profile_id = excluded.profile_id",
+                    params![
+                        project.id.to_string(),
+                        profile_id,
+                        project.key.as_str(),
+                        project.name,
+                        i64::try_from(position).unwrap_or(i64::MAX),
+                        encode(&project.resources)?
+                    ],
+                )
+                .map_err(|error| {
+                    if constraint_violation(&error) {
+                        StorageError::DuplicateProjectKey(project.key.to_string())
+                    } else {
+                        error.into()
+                    }
+                })?;
+            if changed == 0 {
+                return Err(StorageError::ProjectOfAnotherProfile(project.id));
+            }
+        }
+        tx.execute(
+            "DELETE FROM default_projects WHERE profile_id = ?1",
+            [&profile_id],
+        )?;
+        if let Some(default) = profile.default_project {
+            tx.execute(
+                "INSERT INTO default_projects (profile_id, project_id) VALUES (?1, ?2)",
+                params![profile_id, default.to_string()],
+            )
+            .map_err(|error| {
+                if constraint_violation(&error) {
+                    StorageError::ProjectOfAnotherProfile(default)
+                } else {
+                    error.into()
+                }
+            })?;
+        }
+        Ok(())
+    }
+}
 
 fn decode<T: DeserializeOwned>(version: u32, document: &str) -> Result<T> {
     if !(MIN_DOCUMENT_VERSION..=DOCUMENT_VERSION).contains(&version) {
@@ -244,12 +366,33 @@ impl ConfigStore for SqliteStore {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        row.map(|(version, document)| decode(version, &document))
-            .transpose()
+        let Some((version, document)) = row else {
+            return Ok(None);
+        };
+        let mut profile: Profile = decode(version, &document)?;
+        profile.projects = self.load_projects(id)?;
+        profile.default_project = self
+            .connection
+            .query_row(
+                "SELECT project_id FROM default_projects WHERE profile_id = ?1",
+                [id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|value| parse_id(&value))
+            .transpose()?;
+        Ok(Some(profile))
     }
 
     fn save_profile(&self, profile: &Profile) -> Result<()> {
-        self.connection.execute(
+        // Projects and the default project live in their own tables.
+        let mut document = serde_json::to_value(profile)?;
+        if let Some(fields) = document.as_object_mut() {
+            fields.remove("projects");
+            fields.remove("defaultProject");
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        tx.execute(
             "INSERT INTO profiles (id, name, document_version, document, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT (id) DO UPDATE SET
@@ -261,10 +404,12 @@ impl ConfigStore for SqliteStore {
                 profile.id.to_string(),
                 profile.name,
                 DOCUMENT_VERSION,
-                encode(profile)?,
+                document.to_string(),
                 now()
             ],
         )?;
+        Self::save_projects(&tx, profile)?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -413,32 +558,105 @@ impl ConfigStore for SqliteStore {
     }
 
     fn active_project(&self, profile: ProfileId) -> Result<Option<ProjectId>> {
-        let value: Option<Option<String>> = self
+        let value: Option<String> = self
             .connection
             .query_row(
-                "SELECT active_project FROM profile_state WHERE profile_id = ?1",
+                "SELECT project_id FROM active_projects WHERE profile_id = ?1",
                 [profile.to_string()],
                 |row| row.get(0),
             )
             .optional()?;
-        Ok(value.flatten().map(|value| parse_id(&value)).transpose()?)
+        Ok(value.map(|value| parse_id(&value)).transpose()?)
     }
 
     fn set_active_project(&self, profile: ProfileId, project: Option<ProjectId>) -> Result<()> {
-        let result = self.connection.execute(
-            "INSERT INTO profile_state (profile_id, active_project) VALUES (?1, ?2)
-             ON CONFLICT (profile_id) DO UPDATE SET active_project = excluded.active_project",
-            params![profile.to_string(), project.map(|id| id.to_string())],
-        );
-        match result {
-            Ok(_) => Ok(()),
-            Err(rusqlite::Error::SqliteFailure(error, _))
-                if error.code == rusqlite::ErrorCode::ConstraintViolation =>
-            {
-                Err(StorageError::UnknownProfile)
-            }
-            Err(error) => Err(error.into()),
+        if !self.profile_exists(profile)? {
+            return Err(StorageError::UnknownProfile);
         }
+        let Some(project) = project else {
+            self.connection.execute(
+                "DELETE FROM active_projects WHERE profile_id = ?1",
+                [profile.to_string()],
+            )?;
+            return Ok(());
+        };
+        // The composite foreign key rejects projects of other profiles.
+        self.connection
+            .execute(
+                "INSERT INTO active_projects (profile_id, project_id) VALUES (?1, ?2)
+                 ON CONFLICT (profile_id) DO UPDATE SET project_id = excluded.project_id",
+                params![profile.to_string(), project.to_string()],
+            )
+            .map_err(|error| {
+                if constraint_violation(&error) {
+                    StorageError::ProjectOfAnotherProfile(project)
+                } else {
+                    error.into()
+                }
+            })?;
+        Ok(())
+    }
+
+    fn module_states(&self) -> Result<ModuleStates> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT id, enabled, config FROM modules ORDER BY id")?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, bool>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut states = ModuleStates::new();
+        for row in rows {
+            let (id, enabled, config) = row?;
+            // Rows of modules with an id this build cannot parse are kept in
+            // the table but ignored here.
+            let Ok(id) = ModuleId::new(id) else { continue };
+            states.insert(
+                id,
+                ModuleSettings {
+                    enabled,
+                    config: serde_json::from_str(&config)?,
+                },
+            );
+        }
+        Ok(states)
+    }
+
+    fn set_module_state(&self, id: &ModuleId, settings: &ModuleSettings) -> Result<()> {
+        self.connection.execute(
+            "INSERT INTO modules (id, enabled, config) VALUES (?1, ?2, ?3)
+             ON CONFLICT (id) DO UPDATE SET enabled = excluded.enabled, config = excluded.config",
+            params![id.as_str(), settings.enabled, encode(&settings.config)?],
+        )?;
+        Ok(())
+    }
+
+    fn migration_notes(&self) -> Result<Vec<MigrationNote>> {
+        let mut statement = self.connection.prepare(
+            "SELECT schema_version, profile_id, message, created_at FROM migration_notes ORDER BY id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, u32>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })?;
+        let mut notes = Vec::new();
+        for row in rows {
+            let (schema_version, profile, message, created_at) = row?;
+            notes.push(MigrationNote {
+                schema_version,
+                profile: profile.map(|p| parse_id(&p)).transpose()?,
+                message,
+                created_at,
+            });
+        }
+        Ok(notes)
     }
 }
 
@@ -446,26 +664,32 @@ impl ConfigStore for SqliteStore {
 mod tests {
     use super::*;
     use deckpilot_core::{
-        ActionInstanceId, ActionParameters, ActionRegistry, MachineResourceBinding, Os,
-        ParameterValue, Project, ProjectKey, ResourceKey, ResourceKind, builtin,
+        ActionInstance, ActionInstanceId, ActionParameters, ActionTypeId, MachineResourceBinding,
+        Os, ParameterValue, ResourceKey, ResourceKind,
     };
 
     fn sample_profile(name: &str) -> Profile {
-        let registry = ActionRegistry::with_builtins();
         let mut profile = Profile::new(name);
+        let mut shop = Project::new(ProjectKey::new("SHOP").unwrap(), "Shop");
+        shop.resources
+            .insert("repository".into(), ResourceKey::new("shop.repo").unwrap());
+        profile.projects.push(shop);
+        profile.actions.push(ActionInstance {
+            id: ActionInstanceId::new(),
+            name: "Hello".into(),
+            action_type: ActionTypeId::new("general.log").unwrap(),
+            parameters: ActionParameters::new().with("message", ParameterValue::Text("hi".into())),
+            description: String::new(),
+            icon: None,
+            label: None,
+        });
         profile
-            .add_project(Project::new(ProjectKey::new("SHOP").unwrap(), "Shop"))
-            .unwrap();
-        profile.actions.push(
-            registry
-                .create_instance(
-                    "Hello",
-                    builtin::log_message_id(),
-                    &ActionParameters::new().with("message", ParameterValue::Text("hi".into())),
-                )
-                .unwrap(),
-        );
-        profile
+    }
+
+    fn temp_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("deckpilot-test-{}", ProfileId::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]
@@ -659,6 +883,7 @@ mod tests {
         let profile = store.load_profile(profile_id).unwrap().unwrap();
         assert_eq!(profile.name, "Legacy");
         assert_eq!(profile.actions[0].label, None);
+        assert_eq!(profile.actions[0].action_type.as_str(), "general.log");
         assert_eq!(profile.projects[0].id, project_id);
         assert_eq!(profile.default_project, None);
         assert_eq!(store.active_profile().unwrap(), Some(profile_id));
@@ -722,6 +947,368 @@ mod tests {
             store.setting("update.mode").unwrap().as_deref(),
             Some("download")
         );
+    }
+
+    #[test]
+    fn fresh_database_is_empty() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        assert_eq!(store.list_profiles().unwrap(), Vec::new());
+        assert_eq!(store.active_profile().unwrap(), None);
+        assert_eq!(store.module_states().unwrap(), ModuleStates::new());
+        assert_eq!(store.migration_notes().unwrap(), Vec::new());
+        let count = |table: &str| -> i64 {
+            store
+                .connection
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(count("projects"), 0);
+    }
+
+    #[test]
+    fn projects_keep_order_and_live_in_their_own_table() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut profile = sample_profile("Work");
+        for key in ["CMR", "CMS"] {
+            profile
+                .projects
+                .push(Project::new(ProjectKey::new(key).unwrap(), key));
+        }
+        profile.default_project = Some(profile.projects[1].id);
+        store.save_profile(&profile).unwrap();
+        let document: String = store
+            .connection
+            .query_row("SELECT document FROM profiles", [], |row| row.get(0))
+            .unwrap();
+        assert!(
+            !document.contains("SHOP"),
+            "projects are not in the document"
+        );
+
+        // Reorder and swap two keys in one save.
+        profile.projects.rotate_left(1);
+        profile.projects[0].key = ProjectKey::new("CMS").unwrap();
+        profile.projects[1].key = ProjectKey::new("CMR").unwrap();
+        store.save_profile(&profile).unwrap();
+        assert_eq!(
+            store.load_profile(profile.id).unwrap(),
+            Some(profile.clone())
+        );
+
+        // A removed project takes its default and active selection with it.
+        let removed = profile.projects.remove(0);
+        store
+            .set_active_project(profile.id, Some(removed.id))
+            .unwrap();
+        profile.default_project = Some(removed.id);
+        assert!(matches!(
+            store.save_profile(&profile),
+            Err(StorageError::ProjectOfAnotherProfile(_))
+        ));
+        profile.default_project = None;
+        store.save_profile(&profile).unwrap();
+        assert_eq!(store.active_project(profile.id).unwrap(), None);
+        assert_eq!(store.load_profile(profile.id).unwrap(), Some(profile));
+    }
+
+    #[test]
+    fn projects_cannot_move_between_profiles() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let work = sample_profile("Work");
+        store.save_profile(&work).unwrap();
+
+        // A second profile that claims the first profile's project.
+        let mut home = Profile::new("Home");
+        home.projects.push(work.projects[0].clone());
+        assert!(matches!(
+            store.save_profile(&home),
+            Err(StorageError::ProjectOfAnotherProfile(_))
+        ));
+        // Nothing of the failed save was written.
+        assert_eq!(store.load_profile(home.id).unwrap(), None);
+        assert_eq!(store.load_profile(work.id).unwrap(), Some(work.clone()));
+
+        // The same key in another profile is fine.
+        let home = sample_profile("Home");
+        store.save_profile(&home).unwrap();
+
+        // Active and default project must be the profile's own.
+        assert!(matches!(
+            store.set_active_project(home.id, Some(work.projects[0].id)),
+            Err(StorageError::ProjectOfAnotherProfile(_))
+        ));
+        let mut foreign_default = home.clone();
+        foreign_default.default_project = Some(work.projects[0].id);
+        assert!(store.save_profile(&foreign_default).is_err());
+
+        // Each profile keeps its own active project.
+        store
+            .set_active_project(work.id, Some(work.projects[0].id))
+            .unwrap();
+        store
+            .set_active_project(home.id, Some(home.projects[0].id))
+            .unwrap();
+        assert_eq!(
+            store.active_project(work.id).unwrap(),
+            Some(work.projects[0].id)
+        );
+        assert_eq!(
+            store.active_project(home.id).unwrap(),
+            Some(home.projects[0].id)
+        );
+
+        // Duplicate keys within one profile are rejected by the database.
+        let mut duplicate = work.clone();
+        duplicate
+            .projects
+            .push(Project::new(ProjectKey::new("shop").unwrap(), "Again"));
+        assert!(matches!(
+            store.save_profile(&duplicate),
+            Err(StorageError::DuplicateProjectKey(_))
+        ));
+    }
+
+    #[test]
+    fn module_states_round_trip() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let id = ModuleId::new("projects").unwrap();
+        let settings = ModuleSettings {
+            enabled: false,
+            config: ActionParameters::new().with("wrapAround", ParameterValue::Boolean(false)),
+        };
+        store.set_module_state(&id, &settings).unwrap();
+        assert_eq!(store.module_states().unwrap().get(&id), Some(&settings));
+        let enabled = ModuleSettings {
+            enabled: true,
+            ..settings
+        };
+        store.set_module_state(&id, &enabled).unwrap();
+        assert_eq!(store.module_states().unwrap()[&id], enabled);
+    }
+
+    /// Writes a schema 2 database with the given profile documents and
+    /// active projects and opens it, which runs migration 3.
+    fn migrate_v2(
+        profiles: &[(ProfileId, serde_json::Value)],
+        active: &[(ProfileId, ProjectId)],
+    ) -> (SqliteStore, std::path::PathBuf) {
+        let dir = temp_dir();
+        let path = dir.join("v2.db");
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection.execute_batch(MIGRATIONS[0]).unwrap();
+            connection.execute_batch(MIGRATIONS[1]).unwrap();
+            connection.pragma_update(None, "user_version", 2).unwrap();
+            for (id, document) in profiles {
+                connection
+                    .execute(
+                        "INSERT INTO profiles VALUES (?1, ?2, 2, ?3, 0)",
+                        params![
+                            id.to_string(),
+                            document["name"].as_str(),
+                            document.to_string()
+                        ],
+                    )
+                    .unwrap();
+            }
+            for (profile, project) in active {
+                connection
+                    .execute(
+                        "INSERT INTO profile_state VALUES (?1, ?2)",
+                        params![profile.to_string(), project.to_string()],
+                    )
+                    .unwrap();
+            }
+        }
+        (SqliteStore::open(&path, &Encryption::None).unwrap(), dir)
+    }
+
+    fn legacy_document(
+        id: ProfileId,
+        name: &str,
+        projects: &[(ProjectId, &str)],
+        actions: &serde_json::Value,
+        workflows: &serde_json::Value,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "id": id, "name": name, "description": "",
+            "actions": actions, "workflows": workflows, "layouts": [],
+            "projects": projects.iter().map(|(id, key)| serde_json::json!({
+                "id": id, "key": key, "name": key,
+                "resources": {"repository": format!("{}.repo", key.to_lowercase())}
+            })).collect::<Vec<_>>(),
+            "defaultProject": projects.first().map(|(id, _)| *id),
+        })
+    }
+
+    #[test]
+    fn migration_3_moves_projects_and_upgrades_actions() {
+        let work = ProfileId::new();
+        let (shop, cmr) = (ProjectId::new(), ProjectId::new());
+        let (cycle, back, select, missing, log) = (
+            ActionInstanceId::new(),
+            ActionInstanceId::new(),
+            ActionInstanceId::new(),
+            ActionInstanceId::new(),
+            ActionInstanceId::new(),
+        );
+        let text = |v: &str| serde_json::json!({"type": "text", "value": v});
+        let choice = |v: &str| serde_json::json!({"type": "choice", "value": v});
+        let actions = serde_json::json!([
+            {"id": cycle, "name": "Next", "actionType": "deckpilot.project.cycle",
+             "parameters": {"direction": choice("next")}},
+            {"id": back, "name": "Back", "actionType": "deckpilot.project.cycle",
+             "parameters": {"direction": choice("previous")}},
+            {"id": select, "name": "CMR", "actionType": "deckpilot.project.select",
+             "parameters": {"project": text("cmr")}},
+            {"id": missing, "name": "Gone", "actionType": "deckpilot.project.select",
+             "parameters": {"project": text("GONE")}},
+            {"id": log, "name": "Log", "actionType": "deckpilot.core.log",
+             "parameters": {"message": text("{project.key}")}},
+        ]);
+        let workflows = serde_json::json!([{
+            "id": deckpilot_core::WorkflowId::new(), "name": "Flow",
+            "steps": [
+                {"action": cycle, "onFailure": "stop", "overrides": {"direction": choice("previous")}},
+                {"action": select, "onFailure": "stop", "overrides": {"project": text("SHOP")},
+                 "condition": {"type": "activeProject", "project": cmr}},
+            ]
+        }]);
+        let document = legacy_document(
+            work,
+            "Work",
+            &[(shop, "SHOP"), (cmr, "CMR")],
+            &actions,
+            &workflows,
+        );
+        let (store, dir) = migrate_v2(&[(work, document)], &[(work, cmr)]);
+
+        let profile = store.load_profile(work).unwrap().unwrap();
+        let keys: Vec<_> = profile.projects.iter().map(|p| p.key.to_string()).collect();
+        assert_eq!(keys, ["SHOP", "CMR"]);
+        assert_eq!(profile.projects[0].id, shop);
+        assert_eq!(
+            profile.projects[0].resources["repository"].as_str(),
+            "shop.repo"
+        );
+        assert_eq!(profile.default_project, Some(shop));
+        assert_eq!(store.active_project(work).unwrap(), Some(cmr));
+
+        let types: Vec<_> = profile
+            .actions
+            .iter()
+            .map(|a| a.action_type.to_string())
+            .collect();
+        assert_eq!(
+            types,
+            [
+                "projects.next",
+                "projects.previous",
+                "projects.select",
+                "projects.select",
+                "general.log"
+            ]
+        );
+        assert_eq!(profile.actions[0].parameters, ActionParameters::new());
+        assert_eq!(profile.actions[2].parameters.project("project"), Some(cmr));
+        assert!(
+            profile.actions[3].parameters.is_empty(),
+            "unknown keys are not guessed"
+        );
+        let steps = &profile.workflows[0].steps;
+        assert_eq!(steps[0].overrides, ActionParameters::new());
+        assert_eq!(steps[1].overrides.project("project"), Some(shop));
+
+        let notes: Vec<_> = store
+            .migration_notes()
+            .unwrap()
+            .into_iter()
+            .map(|n| n.message)
+            .collect();
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(notes[0].contains("\"Gone\""));
+        assert!(notes[1].contains("direction override"));
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn migration_3_resolves_ambiguous_legacy_data_deterministically() {
+        // Two profiles share a project id (a hand-copied document), one of
+        // them uses a key twice, and an active project points elsewhere.
+        let (first, second) = {
+            let (a, b) = (ProfileId::new(), ProfileId::new());
+            if a.to_string() < b.to_string() {
+                (a, b)
+            } else {
+                (b, a)
+            }
+        };
+        let shared = ProjectId::new();
+        let other = ProjectId::new();
+        let select = ActionInstanceId::new();
+        let actions = serde_json::json!([
+            {"id": select, "name": "Shop", "actionType": "deckpilot.project.select",
+             "parameters": {"project": {"type": "text", "value": "SHOP"}}}
+        ]);
+        let first_doc = legacy_document(
+            first,
+            "First",
+            &[(shared, "SHOP")],
+            &serde_json::json!([]),
+            &serde_json::json!([]),
+        );
+        let second_doc = legacy_document(
+            second,
+            "Second",
+            &[(shared, "SHOP"), (other, "shop")],
+            &actions,
+            &serde_json::json!([]),
+        );
+        let run = || {
+            migrate_v2(
+                &[(first, first_doc.clone()), (second, second_doc.clone())],
+                &[(first, other), (second, shared)],
+            )
+        };
+        let (store, dir) = run();
+        let a = store.load_profile(first).unwrap().unwrap();
+        let b = store.load_profile(second).unwrap().unwrap();
+
+        // The profile processed first keeps the id; the second gets a new one
+        // and its references follow.
+        assert_eq!(a.projects[0].id, shared);
+        assert_ne!(b.projects[0].id, shared);
+        assert_eq!(b.default_project, Some(b.projects[0].id));
+        assert_eq!(
+            b.actions[0].parameters.project("project"),
+            Some(b.projects[0].id)
+        );
+        assert_eq!(
+            store.active_project(second).unwrap(),
+            Some(b.projects[0].id)
+        );
+        // Keys are unique per profile again; nothing moved between profiles.
+        assert_eq!(b.projects[1].key.as_str(), "shop-2");
+        assert_eq!(b.projects[1].id, other);
+        assert_eq!(a.projects.len(), 1);
+        // The first profile's active project belonged to the second one.
+        assert_eq!(store.active_project(first).unwrap(), None);
+        let notes = store.migration_notes().unwrap();
+        assert_eq!(notes.len(), 3, "{notes:?}");
+        assert!(notes.iter().all(|n| n.profile.is_some()));
+        let derived = b.projects[0].id;
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+
+        // Running the same migration again produces the same ids.
+        let (store, dir) = run();
+        assert_eq!(
+            store.load_profile(second).unwrap().unwrap().projects[0].id,
+            derived
+        );
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

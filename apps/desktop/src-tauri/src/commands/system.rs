@@ -3,7 +3,7 @@ use tauri::State;
 
 use deckpilot_core::{ActionType, ActiveProjectContext, Os, Project};
 use deckpilot_device::DeviceModel;
-use deckpilot_storage::{ConfigStore, LaunchInfo, ProfileSummary};
+use deckpilot_storage::{ConfigStore, LaunchInfo, MigrationNote, ProfileSummary};
 
 use crate::error::CommandResult;
 use crate::state::{AppState, load_profile, machine_config};
@@ -45,7 +45,7 @@ pub fn get_overview(state: State<'_, AppState>) -> CommandResult<Overview> {
         profile_count: profiles.len(),
         active_profile,
         active_project,
-        action_type_count: state.registry.action_types().count(),
+        action_type_count: state.actions().action_types().count(),
         device_model_count: state.catalog.iter().count(),
         resource_binding_count: machine_config(&store)?.bindings.len(),
     })
@@ -81,9 +81,16 @@ pub fn launch_info(state: State<'_, AppState>) -> LaunchView {
     }
 }
 
+/// Action types that can be used for new actions: those of enabled modules.
 #[tauri::command]
 pub fn list_action_types(state: State<'_, AppState>) -> Vec<ActionType> {
-    state.registry.action_types().cloned().collect()
+    state.actions().action_types().cloned().collect()
+}
+
+/// Changes schema migrations made to stored data, for review.
+#[tauri::command]
+pub fn migration_notes(state: State<'_, AppState>) -> CommandResult<Vec<MigrationNote>> {
+    Ok(state.store().migration_notes()?)
 }
 
 #[tauri::command]

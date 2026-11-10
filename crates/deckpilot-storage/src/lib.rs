@@ -8,6 +8,10 @@
 //! * **Runtime state** – which profile and project are active, device
 //!   brightness. Written by the background agent while it is running.
 //!
+//! Projects are stored in their own table with the profile as owner. Database
+//! constraints guarantee that a project belongs to exactly one profile and
+//! that the default and active project of a profile are its own projects.
+//!
 //! The database may be opened by the agent and the configuration app at the
 //! same time; SQLite's WAL mode and a busy timeout serialize their writes.
 //!
@@ -15,9 +19,12 @@
 //! the operating system's credential store or an encrypted database, never in
 //! portable documents.
 
+mod legacy;
 mod sqlite;
 
-use deckpilot_core::{MachineConfig, Profile, ProfileId, ProjectId};
+use deckpilot_core::{
+    MachineConfig, ModuleId, ModuleSettings, ModuleStates, Profile, ProfileId, ProjectId,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -25,7 +32,22 @@ pub use sqlite::{DatabaseKey, Encryption, SqliteStore};
 
 /// Version of the JSON document format written for profiles and machine
 /// configuration. Bumped when the serialized shape changes incompatibly.
-pub const DOCUMENT_VERSION: u32 = 2;
+///
+/// Version 3 no longer contains projects and the default project; they are
+/// stored in their own tables.
+pub const DOCUMENT_VERSION: u32 = 3;
+
+/// A change a schema migration made to user data beyond a plain format
+/// upgrade, for example a project that needed a new id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationNote {
+    pub schema_version: u32,
+    pub profile: Option<ProfileId>,
+    pub message: String,
+    /// Seconds since the Unix epoch.
+    pub created_at: i64,
+}
 
 /// Result of recording an application start.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +75,10 @@ pub enum StorageError {
     InvalidKey,
     #[error("profile does not exist")]
     UnknownProfile,
+    #[error("project {0} belongs to another profile")]
+    ProjectOfAnotherProfile(ProjectId),
+    #[error("project key `{0}` is already used in this profile")]
+    DuplicateProjectKey(String),
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;
@@ -95,4 +121,11 @@ pub trait ConfigStore {
     /// Records that `component` started with `version` and reports whether
     /// this is the first start after a version change.
     fn record_launch(&self, component: &str, version: &str) -> Result<LaunchInfo>;
+
+    /// Stored enabled state and configuration of feature modules.
+    fn module_states(&self) -> Result<ModuleStates>;
+    fn set_module_state(&self, id: &ModuleId, settings: &ModuleSettings) -> Result<()>;
+
+    /// Changes made by schema migrations that the user may want to review.
+    fn migration_notes(&self) -> Result<Vec<MigrationNote>>;
 }

@@ -10,6 +10,7 @@
 mod agent;
 mod commands;
 mod error;
+mod modules;
 mod state;
 #[cfg(test)]
 mod tests;

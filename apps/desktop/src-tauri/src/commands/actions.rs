@@ -1,7 +1,9 @@
 use serde::Deserialize;
 use tauri::State;
 
-use deckpilot_core::{ActionInstance, ActionInstanceId, ActionParameters, ActionTypeId, ProfileId};
+use deckpilot_core::{
+    ActionInstance, ActionInstanceId, ActionParameters, ActionTypeId, Profile, ProfileId,
+};
 
 use super::modify_profile;
 use crate::error::{CommandError, CommandResult};
@@ -21,6 +23,20 @@ pub struct NewAction {
     label: Option<String>,
 }
 
+/// Rejects parameters that refer to another profile, e.g. a project.
+fn check_in_profile(
+    state: &AppState,
+    action: &ActionInstance,
+    profile: &Profile,
+) -> CommandResult<()> {
+    let problems = state.actions().check_in_profile(action, profile);
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(CommandError::Invalid(problems.join("; ")))
+    }
+}
+
 #[tauri::command]
 pub fn create_action(
     state: State<'_, AppState>,
@@ -36,8 +52,9 @@ pub fn create_action(
         icon: action.icon,
         label: action.label,
     };
-    state.registry.validate_instance(&mut instance)?;
+    state.actions().validate_instance(&mut instance)?;
     modify_profile(&state, profile_id, |profile| {
+        check_in_profile(&state, &instance, profile)?;
         profile.actions.push(instance.clone());
         Ok(instance)
     })
@@ -51,8 +68,9 @@ pub fn update_action(
     action: ActionInstance,
 ) -> CommandResult<ActionInstance> {
     let mut action = action;
-    state.registry.validate_instance(&mut action)?;
+    state.actions().validate_instance(&mut action)?;
     modify_profile(&state, profile_id, |profile| {
+        check_in_profile(&state, &action, profile)?;
         let slot = profile
             .actions
             .iter_mut()
@@ -82,7 +100,7 @@ pub fn duplicate_action(
             .clone();
         copy.id = ActionInstanceId::new();
         copy.name = name;
-        state.registry.validate_instance(&mut copy)?;
+        state.actions().validate_instance(&mut copy)?;
         profile.actions.push(copy.clone());
         Ok(copy)
     })

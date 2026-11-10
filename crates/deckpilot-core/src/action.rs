@@ -6,9 +6,10 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{ActionInstanceId, IdentifierError, ResourceKind, ResourceRef};
+use crate::{ActionInstanceId, IdentifierError, ProjectId, ResourceKind, ResourceRef};
 
-/// Identifier of an action type, e.g. `deckpilot.core.log`.
+/// Identifier of an action type, e.g. `projects.next`. The first segment is
+/// the id of the module that provides the type.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct ActionTypeId(String);
@@ -70,6 +71,8 @@ pub enum ParameterKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         kind: Option<ResourceKind>,
     },
+    /// A project of the profile the action belongs to.
+    Project,
 }
 
 /// Schema entry for one parameter of an action type.
@@ -95,6 +98,7 @@ pub enum ParameterValue {
     Boolean(bool),
     Choice(String),
     Resource(ResourceRef),
+    Project(ProjectId),
 }
 
 /// Parameter values of an action instance, keyed by [`ParameterSpec::key`].
@@ -143,6 +147,25 @@ impl ActionParameters {
             ParameterValue::Resource(value) => Some(value),
             _ => None,
         }
+    }
+
+    pub fn project(&self, key: &str) -> Option<ProjectId> {
+        match self.get(key)? {
+            ParameterValue::Project(value) => Some(*value),
+            _ => None,
+        }
+    }
+
+    /// Every project referenced by a parameter value.
+    pub fn projects(&self) -> impl Iterator<Item = ProjectId> + '_ {
+        self.0.values().filter_map(|value| match value {
+            ParameterValue::Project(id) => Some(*id),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut ParameterValue> {
+        self.0.values_mut()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&String, &ParameterValue)> {
@@ -247,7 +270,8 @@ fn check_value(spec: &ParameterSpec, value: &ParameterValue) -> Result<(), Param
                 Ok(())
             }
         }
-        (ParameterKind::Boolean, ParameterValue::Boolean(_)) => Ok(()),
+        (ParameterKind::Boolean, ParameterValue::Boolean(_))
+        | (ParameterKind::Project, ParameterValue::Project(_)) => Ok(()),
         (ParameterKind::Choice { options }, ParameterValue::Choice(choice)) => {
             if options.contains(choice) {
                 Ok(())
@@ -272,6 +296,7 @@ fn check_value(spec: &ParameterSpec, value: &ParameterValue) -> Result<(), Param
                 ParameterKind::Boolean => "boolean",
                 ParameterKind::Choice { .. } => "choice",
                 ParameterKind::Resource { .. } => "resource",
+                ParameterKind::Project => "project",
             },
         }),
     }

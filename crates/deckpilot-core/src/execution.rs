@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CycleDirection, MachineConfig, MachineResourceBinding, Profile, Project, ProjectId,
-    ResolveError, ResourceKind, ResourceRef,
+    MachineConfig, MachineResourceBinding, Profile, Project, ProjectId, ResolveError, ResourceKind,
+    ResourceRef,
 };
 
 /// Read-only view of everything an action may depend on at execution time.
@@ -30,11 +30,13 @@ impl<'a> ExecutionContext<'a> {
     }
 }
 
-/// A change to the runtime context requested by an action.
+/// A change to the runtime context requested by an action. The engine
+/// applies it after checking that the requesting module holds the matching
+/// [`Capability`](crate::Capability) and that the target belongs to the
+/// active profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ContextEffect {
-    CycleProject { direction: CycleDirection },
     SelectProject { project: ProjectId },
 }
 

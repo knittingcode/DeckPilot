@@ -17,7 +17,7 @@ pub fn save_workflow(
     super::trim_in_place(&mut workflow.name);
     super::trim_in_place(&mut workflow.description);
     modify_profile(&state, profile_id, |profile| {
-        let issues = workflow.validate(profile, &state.registry);
+        let issues = workflow.validate(profile, &state.actions());
         if !issues.is_empty() {
             return Err(CommandError::Invalid(issues.join("\n")));
         }

@@ -10,12 +10,14 @@
 #![allow(clippy::needless_pass_by_value)]
 
 mod actions;
-mod agent;
+pub(crate) mod agent;
 mod layouts;
+mod modules;
 mod profiles;
-mod projects;
 mod system;
 mod workflows;
+
+use crate::modules::projects;
 
 use deckpilot_core::{Profile, ProfileId};
 
@@ -30,13 +32,16 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         system::launch_info,
         system::list_action_types,
         system::list_device_models,
+        system::migration_notes,
+        modules::list_modules,
+        modules::set_module_enabled,
+        modules::set_module_config,
         profiles::list_profiles,
         profiles::get_profile,
         profiles::create_profile,
         profiles::update_profile_details,
         profiles::duplicate_profile,
         profiles::delete_profile,
-        profiles::set_default_project,
         actions::create_action,
         actions::update_action,
         actions::duplicate_action,
@@ -48,6 +53,10 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         projects::update_project,
         projects::move_project,
         projects::delete_project,
+        projects::set_default_project,
+        projects::copy_project,
+        projects::cycle_project,
+        projects::select_project,
         projects::get_machine_config,
         projects::set_resource_binding,
         projects::remove_resource_binding,
@@ -67,8 +76,6 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         agent::get_autostart,
         agent::set_autostart,
         agent::set_active_profile,
-        agent::cycle_project,
-        agent::select_project,
         agent::run_action,
         agent::run_workflow,
         crate::updates::update_state,
@@ -88,7 +95,7 @@ fn trim_in_place(value: &mut String) {
 }
 
 /// Loads a profile, applies `change`, saves it and notifies the agent.
-fn modify_profile<T>(
+pub(crate) fn modify_profile<T>(
     state: &AppState,
     id: ProfileId,
     change: impl FnOnce(&mut Profile) -> CommandResult<T>,

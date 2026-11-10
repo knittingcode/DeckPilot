@@ -1,12 +1,18 @@
 //! Demonstration data for the development database.
+//!
+//! This is the only place that creates example projects and actions. A
+//! production database starts empty. The seed includes an empty profile so
+//! that empty states stay visible during development.
 
 use deckpilot_core::{
     ActionInstance, ActionInstanceId, ActionParameters, ActionRegistry, BindingTarget,
     ControlBinding, DeviceLayout, LayoutPage, MachineConfig, MachineResourceBinding, OnFailure, Os,
     ParameterValue, Profile, Project, ProjectKey, ResourceKey, ResourceKind, ResourceRef,
-    StepCondition, Trigger, Workflow, WorkflowId, builtin,
+    StepCondition, Trigger, Workflow, WorkflowId,
 };
 use deckpilot_device::{ControlId, TouchGesture, models};
+use deckpilot_modules::general;
+use deckpilot_modules::projects::{ProjectCatalog, actions};
 use deckpilot_storage::{ConfigStore, Encryption, SqliteStore};
 
 use crate::session::DevPaths;
@@ -119,36 +125,39 @@ fn project_role(role: &str) -> ActionParameters {
 
 /// Actions and the "Start Work" workflow of the Work profile.
 fn work_actions(b: &mut Builder<'_>) -> Result<WorkIds> {
-    let cycle = |direction: &str| {
-        ActionParameters::new().with("direction", ParameterValue::Choice(direction.into()))
-    };
     let next = b.action(
         "Next project",
-        builtin::cycle_project_id(),
-        &cycle("next"),
+        actions::next_id(),
+        &ActionParameters::new(),
         "chevron-right",
         Some("{project.key}"),
     )?;
     let previous = b.action(
         "Previous project",
-        builtin::cycle_project_id(),
-        &cycle("previous"),
+        actions::previous_id(),
+        &ActionParameters::new(),
         "chevron-left",
         Some("Previous"),
     )?;
     let mut selectors = Vec::new();
-    for project in ["SHOP", "CMR", "CMS"] {
-        let parameters = ActionParameters::new().with("project", text(project));
-        let name = format!("Select {project}");
+    let projects: Vec<_> = b
+        .profile
+        .projects
+        .iter()
+        .map(|p| (p.id, p.key.to_string()))
+        .collect();
+    for (id, key) in projects {
+        let parameters = ActionParameters::new().with("project", ParameterValue::Project(id));
+        let name = format!("Select {key}");
         selectors.push(b.action(
             &name,
-            builtin::select_project_id(),
+            actions::select_id(),
             &parameters,
             "folder",
-            Some(project),
+            Some(&key),
         )?);
     }
-    let resolve = builtin::resolve_resource_id;
+    let resolve = actions::resolve_resource_id;
     let repository = b.action(
         "Repository — active project",
         resolve(),
@@ -179,7 +188,7 @@ fn work_actions(b: &mut Builder<'_>) -> Result<WorkIds> {
     let message = ActionParameters::new().with("message", text("Now working on {project.name}"));
     let announce = b.action(
         "Announce project",
-        builtin::log_message_id(),
+        general::log_id(),
         &message,
         "megaphone",
         Some("{project.name}"),
@@ -359,21 +368,21 @@ fn personal_profile(registry: &ActionRegistry) -> Result<Profile> {
     )?;
     b.action(
         "Next project",
-        builtin::cycle_project_id(),
+        actions::next_id(),
         &ActionParameters::new(),
         "chevron-right",
         Some("{project.key}"),
     )?;
     let announce = b.action(
         "Announce project",
-        builtin::log_message_id(),
+        general::log_id(),
         &ActionParameters::new().with("message", text("Personal time: {project.name}")),
         "coffee",
         None,
     )?;
     let repository = b.action(
         "Repository — active project",
-        builtin::resolve_resource_id(),
+        actions::resolve_resource_id(),
         &ActionParameters::new().with(
             "resource",
             ParameterValue::Resource(ResourceRef::ProjectRole {
@@ -445,11 +454,13 @@ pub fn seed(paths: &DevPaths) -> Result<bool> {
     if !store.list_profiles()?.is_empty() {
         return Ok(false);
     }
-    let registry = ActionRegistry::with_builtins();
+    let registry = deckpilot_modules::builtin(Os::current()).action_registry();
     let work = work_profile(&registry)?;
     let personal = personal_profile(&registry)?;
+    let mut empty = Profile::new("Empty");
+    empty.description = "No projects, actions or layouts yet".into();
     let catalog = deckpilot_device::ModelCatalog::builtin();
-    for profile in [&work, &personal] {
+    for profile in [&work, &personal, &empty] {
         let issues = profile.validate(&catalog);
         if !issues.is_empty() {
             return Err(format!("seed profile `{}` is invalid: {issues:?}", profile.name).into());
@@ -467,7 +478,7 @@ mod tests {
 
     #[test]
     fn demonstration_profiles_are_valid_and_independent() {
-        let registry = ActionRegistry::with_builtins();
+        let registry = deckpilot_modules::builtin(Os::current()).action_registry();
         let catalog = deckpilot_device::ModelCatalog::builtin();
         let work = work_profile(&registry).unwrap();
         let personal = personal_profile(&registry).unwrap();
@@ -481,5 +492,14 @@ mod tests {
         assert_eq!(work.workflows[0].name, personal.workflows[0].name);
         assert_ne!(work.workflows[0].id, personal.workflows[0].id);
         assert_ne!(work.workflows[0].steps, personal.workflows[0].steps);
+        // Every seeded action is valid in its own profile.
+        for profile in [&work, &personal] {
+            for action in &profile.actions {
+                assert_eq!(
+                    registry.check_in_profile(action, profile),
+                    Vec::<String>::new()
+                );
+            }
+        }
     }
 }

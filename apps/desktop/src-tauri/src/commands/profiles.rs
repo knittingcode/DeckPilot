@@ -147,20 +147,3 @@ pub fn delete_profile(state: State<'_, AppState>, profile_id: ProfileId) -> Comm
         Err(CommandError::NotFound("profile"))
     }
 }
-
-#[tauri::command]
-pub fn set_default_project(
-    state: State<'_, AppState>,
-    profile_id: ProfileId,
-    project_id: Option<ProjectId>,
-) -> CommandResult<()> {
-    modify_profile(&state, profile_id, |profile| {
-        if let Some(id) = project_id
-            && profile.project(id).is_none()
-        {
-            return Err(CommandError::NotFound("project"));
-        }
-        profile.default_project = project_id;
-        Ok(())
-    })
-}

@@ -6,11 +6,10 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::project::ProjectContextError;
 use crate::{
     ActionInstance, ActionInstanceId, ActionParameters, ActionRegistry, ActionResult, ActionStatus,
     ActiveProjectContext, ContextEffect, ExecutionContext, MachineConfig, OnFailure, Profile,
-    StepCondition, WorkflowId,
+    ProjectContextError, StepCondition, WorkflowId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -139,10 +138,15 @@ impl Engine {
     ) -> Result<ActionResult, EngineError> {
         let project = context.project(profile)?;
         let Some(handler) = self.registry.handler(&instance.action_type) else {
-            return Ok(ActionResult::failure(format!(
-                "action type `{}` is not available",
-                instance.action_type
-            )));
+            return Ok(self.registry.dispatch(
+                &instance.action_type,
+                &instance.parameters,
+                &ExecutionContext {
+                    profile,
+                    project,
+                    machine,
+                },
+            ));
         };
         if handler.definition().requires_project && project.is_none() {
             return Ok(ActionResult::failure(
@@ -163,18 +167,26 @@ impl Engine {
                 )));
             }
         };
+        let problems = handler.check(&parameters, profile);
+        if !problems.is_empty() {
+            return Ok(ActionResult::failure(format!(
+                "invalid configuration: {}",
+                problems.join("; ")
+            )));
+        }
         let execution = ExecutionContext {
             profile,
             project,
             machine,
         };
-        let mut result = handler.execute(&parameters, &execution);
+        let mut result = self
+            .registry
+            .dispatch(&instance.action_type, &parameters, &execution);
         if result.is_success() {
             for effect in &result.effects {
+                // Selection is validated against the active profile, so an
+                // action can never activate another profile's project.
                 let applied = match effect {
-                    ContextEffect::CycleProject { direction } => {
-                        context.cycle(profile, *direction).map(|_| ())
-                    }
                     ContextEffect::SelectProject { project } => context.select(profile, *project),
                 };
                 if let Err(error) = applied {
@@ -190,7 +202,8 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ActionParameters, Os, ParameterValue, Project, ProjectKey, Workflow, builtin};
+    use crate::testing::{echo_type, registry, select_type, with_projects};
+    use crate::{ActionParameters, Os, ParameterValue, Workflow};
 
     struct Fixture {
         profile: Profile,
@@ -200,18 +213,13 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
-        let engine = Engine::new(ActionRegistry::with_builtins());
+        let engine = Engine::new(registry());
         let registry = engine.registry();
-        let mut profile = Profile::new("Work");
-        for key in ["SHOP", "CMR", "CMS"] {
-            profile
-                .add_project(Project::new(ProjectKey::new(key).unwrap(), key))
-                .unwrap();
-        }
+        let mut profile = with_projects("Work", &["SHOP", "CMR", "CMS"]);
         let log = registry
             .create_instance(
                 "Announce",
-                builtin::log_message_id(),
+                echo_type(),
                 &ActionParameters::new().with(
                     "message",
                     ParameterValue::Text("now on {project.key}".into()),
@@ -219,11 +227,7 @@ mod tests {
             )
             .unwrap();
         let next = registry
-            .create_instance(
-                "Next project",
-                builtin::cycle_project_id(),
-                &ActionParameters::new(),
-            )
+            .create_instance("Next project", select_type(), &ActionParameters::new())
             .unwrap();
         let (log_id, next_id) = (log.id, next.id);
         profile.actions.extend([log, next]);
@@ -335,7 +339,7 @@ mod tests {
     #[test]
     fn workflow_validation_reports_problems() {
         let mut f = fixture();
-        let registry = ActionRegistry::with_builtins();
+        let registry = registry();
         let mut workflow = Workflow::new(" ").step(f.log, OnFailure::Stop);
         workflow.steps[0].condition = StepCondition::PreviousSucceeded;
         workflow.steps[0].overrides =
@@ -357,7 +361,7 @@ mod tests {
         let broken = ActionInstance {
             id: ActionInstanceId::new(),
             name: "Broken".into(),
-            action_type: builtin::log_message_id(),
+            action_type: echo_type(),
             parameters: ActionParameters::new(),
             description: String::new(),
             icon: None,

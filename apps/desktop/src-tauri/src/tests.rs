@@ -138,7 +138,7 @@ fn configuration_flow_through_ipc() {
             "profileId": profile_id,
             "action": {
                 "name": "Where am I",
-                "actionType": "deckpilot.resource.resolve",
+                "actionType": "projects.resolve-resource",
                 "parameters": {
                     "resource": { "type": "resource", "value": { "type": "projectRole", "role": "repository" } }
                 }
@@ -164,7 +164,7 @@ fn configuration_flow_through_ipc() {
         "create_action",
         json!({
             "profileId": profile_id,
-            "action": { "name": "Broken", "actionType": "deckpilot.core.log", "parameters": {} }
+            "action": { "name": "Broken", "actionType": "general.log", "parameters": {} }
         }),
     );
     assert!(invalid.unwrap_err().as_str().unwrap().contains("message"));
@@ -202,7 +202,7 @@ fn lists_static_catalogs() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|t| t["id"] == "deckpilot.core.log")
+            .any(|t| t["id"] == "general.log")
     );
     let models = h.ok("list_device_models", json!({}));
     assert_eq!(models[0]["id"], "elgato.streamdeck.mk2");
@@ -222,7 +222,7 @@ fn log_action(h: &Harness, profile_id: &str, name: &str, message: &str) -> Value
             "profileId": profile_id,
             "action": {
                 "name": name,
-                "actionType": "deckpilot.core.log",
+                "actionType": "general.log",
                 "parameters": { "message": { "type": "text", "value": message } },
                 "description": "Says hello",
                 "icon": "megaphone",
@@ -632,7 +632,7 @@ fn runtime_state_and_actions_go_through_the_agent() {
             "profileId": profile_id,
             "action": {
                 "name": "Announce",
-                "actionType": "deckpilot.core.log",
+                "actionType": "general.log",
                 "parameters": { "message": { "type": "text", "value": "on {project.key}" } }
             }
         }),
@@ -679,4 +679,177 @@ fn runtime_state_and_actions_go_through_the_agent() {
 
     h.ok("stop_agent", json!({}));
     wait_for(&h, |s| s["running"] == false);
+}
+
+#[test]
+fn fresh_installation_has_an_empty_action_library() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    let view = h.ok("get_profile", json!({ "profileId": profile_id }));
+    assert_eq!(view["profile"]["actions"], json!([]));
+    assert_eq!(view["profile"]["workflows"], json!([]));
+    assert_eq!(view["profile"]["projects"], json!([]));
+    assert_eq!(view["profile"]["layouts"], json!([]));
+    // Modules provide types, not instances.
+    let modules = h.ok("list_modules", json!({}));
+    let ids: Vec<_> = modules
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(ids, ["general", "projects"]);
+    assert_eq!(modules[1]["pages"][0]["id"], "projects");
+    assert_eq!(modules[1]["actionTypes"].as_array().unwrap().len(), 5);
+    assert_eq!(h.ok("migration_notes", json!({})), json!([]));
+}
+
+#[test]
+fn disabled_modules_hide_types_but_keep_saved_actions() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    let next = h.ok(
+        "create_action",
+        json!({
+            "profileId": profile_id,
+            "action": { "name": "Next", "actionType": "projects.next", "parameters": {} }
+        }),
+    );
+
+    let modules = h.ok(
+        "set_module_enabled",
+        json!({ "moduleId": "projects", "enabled": false }),
+    );
+    assert_eq!(modules[1]["enabled"], false);
+    let types = h.ok("list_action_types", json!({}));
+    assert!(
+        types
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| !t["id"].as_str().unwrap().starts_with("projects."))
+    );
+    // New actions of the module and project changes are refused ...
+    assert!(
+        h.call(
+            "create_action",
+            json!({
+                "profileId": profile_id,
+                "action": { "name": "Again", "actionType": "projects.next", "parameters": {} }
+            }),
+        )
+        .unwrap_err()
+        .as_str()
+        .unwrap()
+        .contains("disabled")
+    );
+    assert!(
+        h.call(
+            "create_project",
+            json!({ "profileId": profile_id, "project": { "key": "SHOP", "name": "" } }),
+        )
+        .is_err()
+    );
+    // ... but the saved action is still there and the state survives restarts.
+    let view = h.ok("get_profile", json!({ "profileId": profile_id }));
+    assert_eq!(view["profile"]["actions"][0]["id"], next["id"]);
+    let reopened = AppState::open(h.paths.clone()).unwrap();
+    assert!(
+        !reopened
+            .modules()
+            .is_enabled(&deckpilot_modules::projects::module_id())
+    );
+
+    h.ok(
+        "set_module_enabled",
+        json!({ "moduleId": "projects", "enabled": true }),
+    );
+    let invalid = h.call(
+        "set_module_config",
+        json!({ "moduleId": "projects", "config": { "wrapAround": { "type": "text", "value": "x" } } }),
+    );
+    assert!(invalid.is_err());
+    let configured = h.ok(
+        "set_module_config",
+        json!({ "moduleId": "projects", "config": { "wrapAround": { "type": "boolean", "value": false } } }),
+    );
+    assert_eq!(configured[1]["configValues"]["wrapAround"]["value"], false);
+}
+
+#[test]
+fn projects_stay_in_their_profile() {
+    let h = Harness::new();
+    let work = new_profile(&h, "Work");
+    let home = new_profile(&h, "Home");
+    let shop = h.ok(
+        "create_project",
+        json!({ "profileId": work, "project": { "key": "SHOP", "name": "Shop", "resources": { "repository": "shop.repository" } } }),
+    );
+    let shop_id = shop["id"].as_str().unwrap();
+
+    // Another profile cannot edit, delete, select or reference it.
+    let edit = h.call(
+        "update_project",
+        json!({ "profileId": home, "projectId": shop_id, "project": { "key": "SHOP", "name": "Mine" } }),
+    );
+    assert!(edit.is_err());
+    assert!(
+        h.call(
+            "delete_project",
+            json!({ "profileId": home, "projectId": shop_id })
+        )
+        .is_err()
+    );
+    assert!(
+        h.call(
+            "set_default_project",
+            json!({ "profileId": home, "projectId": shop_id })
+        )
+        .is_err()
+    );
+    let select = h.call(
+        "create_action",
+        json!({
+            "profileId": home,
+            "action": {
+                "name": "Shop",
+                "actionType": "projects.select",
+                "parameters": { "project": { "type": "project", "value": shop_id } }
+            }
+        }),
+    );
+    assert!(
+        select
+            .unwrap_err()
+            .as_str()
+            .unwrap()
+            .contains("does not belong to this profile")
+    );
+
+    // Copying is explicit and creates an independent project.
+    let copy = h.ok(
+        "copy_project",
+        json!({ "profileId": work, "projectId": shop_id, "targetProfileId": home }),
+    );
+    assert_ne!(copy["id"], shop["id"]);
+    assert_eq!(copy["resources"], shop["resources"]);
+    assert!(
+        h.call(
+            "copy_project",
+            json!({ "profileId": work, "projectId": shop_id, "targetProfileId": home }),
+        )
+        .is_err(),
+        "the key is taken now"
+    );
+    h.ok(
+        "update_project",
+        json!({ "profileId": home, "projectId": copy["id"], "project": { "key": "SHOP", "name": "Home shop" } }),
+    );
+    let work_view = h.ok("get_profile", json!({ "profileId": work }));
+    assert_eq!(work_view["profile"]["projects"][0]["name"], "Shop");
+    let home_view = h.ok("get_profile", json!({ "profileId": home }));
+    assert_eq!(
+        home_view["profile"]["projects"].as_array().unwrap().len(),
+        1
+    );
 }

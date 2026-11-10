@@ -22,6 +22,7 @@ deckpilot-core.workspace = true
 deckpilot-device = { workspace = true, features = ["mock"] }
 deckpilot-hid.workspace = true
 deckpilot-ipc.workspace = true
+deckpilot-modules.workspace = true
 deckpilot-storage.workspace = true
 font8x8.workspace = true
 interprocess.workspace = true
@@ -35,6 +36,7 @@ tracing-subscriber.workspace = true
 tray-icon.workspace = true
 
 [dev-dependencies]
+deckpilot-modules.workspace = true
 serde_json.workspace = true
 
 [lints]
