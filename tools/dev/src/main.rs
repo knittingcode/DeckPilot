@@ -66,7 +66,7 @@ Commands:
   hardware-test [--mock] [--dir <data-dir>] [--force]
                          Guided test of a physical Stream Deck with the real
                          agent; --mock checks the procedure on a simulated MK.2
-  validation seed|unlock|status <data-dir>
+  validation seed|populate|unlock|status|inventory <data-dir>
                          Update-test helpers on an isolated data directory
                          (see docs/release-validation.md)
   verify-signature <file> <file.sig>

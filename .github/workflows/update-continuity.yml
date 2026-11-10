@@ -1,0 +1,72 @@
+# Keychain continuity across an update between two Developer ID signed
+# builds, with the default system-managed key (docs/release-validation.md).
+#
+# Two versions are built from this commit and signed with the release's
+# Developer ID certificate — never notarized: no Apple submission. Updater
+# artifacts are signed with a throwaway key generated in the job, and the
+# update comes from a loopback endpoint on the runner: no release, nothing
+# public. The agent keeps its key in a temporary keychain that exists only
+# for this job.
+name: Update continuity
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/update-continuity.yml
+      - tools/release-validation/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-continuity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  continuity:
+    name: Keychain access after a signed update (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 120
+    # Secrets are not available to pull requests from forks.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: update-continuity
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Temporary keychain for the agent
+        run: |
+          keychain="$RUNNER_TEMP/continuity.keychain-db"
+          security create-keychain -p "" "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p "" "$keychain"
+          echo "TEST_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+      - name: Update between two signed versions with a system-managed key
+        env:
+          KEY_MODE: system
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+        run: tools/release-validation/update-test.sh "$RUNNER_TEMP/update-test"
+      - name: Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-continuity-logs
+          path: |
+            ${{ runner.temp }}/update-test/*.log
+            ${{ runner.temp }}/update-test/data/logs/
+          if-no-files-found: ignore
+      - name: Remove the temporary keychain
+        if: always()
+        run: |
+          [ -n "${TEST_KEYCHAIN:-}" ] && security delete-keychain "$TEST_KEYCHAIN" || true
