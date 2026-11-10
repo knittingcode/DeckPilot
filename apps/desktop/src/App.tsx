@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event"
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { SecurityGate } from "@/components/security-gate"
 import { ErrorNotice, Loading } from "@/components/page"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { Toaster } from "@/components/ui/sonner"
@@ -160,7 +161,9 @@ export function App() {
   return (
     <ThemeProvider>
       <TooltipProvider>
-        <Studio />
+        <SecurityGate>
+          <Studio />
+        </SecurityGate>
         <Toaster position="bottom-right" />
       </TooltipProvider>
     </ThemeProvider>

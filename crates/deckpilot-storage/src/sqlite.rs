@@ -1848,6 +1848,8 @@ mod tests {
         drop(store);
         let store = SqliteStore::open(&path, &encryption).unwrap();
         assert_eq!(store.migration_history().unwrap().len(), 1);
+        // Windows cannot delete files that are still open.
+        drop(store);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

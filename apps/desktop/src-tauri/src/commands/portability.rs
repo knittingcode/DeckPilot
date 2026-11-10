@@ -22,10 +22,10 @@ use crate::state::{APP_VERSION, AppState};
 
 /// The decrypted export between preview and apply.
 #[derive(Debug, Default)]
-pub struct PendingImport(Mutex<Option<(u64, Payload)>>);
+pub struct PendingImport(Mutex<Option<(u32, Payload)>>);
 
 impl PendingImport {
-    fn take(&self, token: u64) -> Option<Payload> {
+    fn take(&self, token: u32) -> Option<Payload> {
         let mut pending = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         match pending.take() {
             Some((stored, payload)) if stored == token => Some(payload),
@@ -36,8 +36,12 @@ impl PendingImport {
         }
     }
 
-    fn put(&self, payload: Payload) -> u64 {
-        let token = u64::from(std::process::id()) ^ now().unsigned_abs().rotate_left(17);
+    /// A random token (32 bits, exact in JavaScript numbers) ties the apply
+    /// call to the preview the user saw.
+    fn put(&self, payload: Payload) -> u32 {
+        let mut bytes = [0u8; 4];
+        let _ = deckpilot_storage::crypto::random_bytes(&mut bytes);
+        let token = u32::from_le_bytes(bytes);
         *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some((token, payload));
         token
     }
@@ -123,7 +127,7 @@ pub fn export_configuration(
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewResult {
-    token: u64,
+    token: u32,
     preview: ImportPreview,
 }
 
@@ -159,7 +163,7 @@ pub fn preview_import(
 pub fn apply_import(
     state: State<'_, AppState>,
     pending: State<'_, PendingImport>,
-    token: u64,
+    token: u32,
     options: ImportOptions,
 ) -> CommandResult<ImportSummary> {
     let content = pending

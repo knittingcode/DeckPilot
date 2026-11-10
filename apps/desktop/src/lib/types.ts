@@ -380,3 +380,81 @@ export interface LaunchView {
   } | null
   encryption: { enabled: boolean; passwordRequired: boolean }
 }
+
+export type DatabaseState = "missing" | "plaintext" | "encrypted"
+
+/** Whether the configuration can be used; see `docs/security.md`. */
+export interface SecurityView {
+  database: DatabaseState
+  unlocked: boolean
+  /** The password must be entered once after an update. */
+  confirmationRequired: boolean
+  appVersion: string
+  /** Unencrypted copies kept after encrypting a legacy database. */
+  legacyCopies: string[]
+  backupDir: string
+}
+
+export interface ExportResult {
+  path: string
+  profiles: number
+  modules: number
+  bytes: number
+}
+
+export type ImportConflict = { type: "sameId"; name: string } | { type: "sameName"; id: string }
+
+export interface ImportProfilePreview {
+  id: string
+  name: string
+  actions: number
+  workflows: number
+  projects: number
+  layouts: number
+  conflict: ImportConflict | null
+  modules: string[]
+}
+
+export interface ImportModulePreview {
+  id: string
+  name: string | null
+  status: "ready" | "missing" | "incompatible"
+  enabled: boolean
+  skippedSettings: string[]
+  problem: string | null
+}
+
+export interface MissingResource {
+  key: string
+  kind: ResourceKind | null
+  profiles: string[]
+}
+
+export interface ImportPreview {
+  exportedAt: number
+  appVersion: string
+  profiles: ImportProfilePreview[]
+  modules: ImportModulePreview[]
+  unknownActionTypes: string[]
+  missingResources: MissingResource[]
+  warnings: string[]
+  localProfiles: [string, string][]
+}
+
+export type ImportMode = "merge" | "replace"
+export type ConflictResolution = "keepBoth" | "replace" | "skip"
+
+export interface ImportOptions {
+  mode: ImportMode
+  profiles: string[]
+  conflicts: Record<string, ConflictResolution>
+  moduleSettings: boolean
+}
+
+export interface ImportSummary {
+  imported: [string, string][]
+  removed: [string, string][]
+  skipped: string[]
+  renamed: string[]
+  modules: string[]
+}

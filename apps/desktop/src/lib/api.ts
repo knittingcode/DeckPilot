@@ -9,7 +9,12 @@ import type {
   ControlFace,
   DeviceLayout,
   DeviceModel,
+  ExportResult,
+  ImportOptions,
+  ImportPreview,
+  ImportSummary,
   LaunchView,
+  SecurityView,
   MachineConfig,
   MigrationNote,
   ModuleInfo,
@@ -44,6 +49,31 @@ export interface ProjectInput {
 
 /** Typed wrappers around the backend commands. */
 export const api = {
+  securityStatus: () => invoke<SecurityView>("security_status"),
+  setupPassword: (password: string, confirmation: string) =>
+    invoke<SecurityView>("setup_password", { input: { password, confirmation } }),
+  unlock: (password: string) => invoke<SecurityView>("unlock", { password }),
+  confirmPassword: (password: string) => invoke<SecurityView>("confirm_password", { password }),
+  encryptLegacyDatabase: (password: string, confirmation: string) =>
+    invoke<SecurityView>("encrypt_legacy_database", { input: { password, confirmation } }),
+  changePassword: (current: string, password: string, confirmation: string) =>
+    invoke<SecurityView>("change_password", { input: { current, password, confirmation } }),
+  lock: () => invoke<SecurityView>("lock"),
+  removeUnencryptedCopies: () => invoke<SecurityView>("remove_unencrypted_copies"),
+
+  exportConfiguration: (request: {
+    path: string
+    password: string
+    confirmation: string
+    profiles: string[] | null
+    includeModuleSettings: boolean
+  }) => invoke<ExportResult>("export_configuration", { request }),
+  previewImport: (path: string, password: string) =>
+    invoke<{ token: number; preview: ImportPreview }>("preview_import", { path, password }),
+  applyImport: (token: number, options: ImportOptions) =>
+    invoke<ImportSummary>("apply_import", { token, options }),
+  cancelImport: () => invoke<null>("cancel_import"),
+
   getOverview: () => invoke<Overview>("get_overview"),
   launchInfo: () => invoke<LaunchView>("launch_info"),
   listActionTypes: () => invoke<ActionType[]>("list_action_types"),
