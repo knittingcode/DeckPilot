@@ -1,33 +1,35 @@
-use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use deckpilot_core::{ActionRegistry, Engine, MachineConfig, Os, Profile, ProfileId};
+use deckpilot_core::{ActionRegistry, MachineConfig, Os, Profile, ProfileId};
 use deckpilot_device::ModelCatalog;
+use deckpilot_ipc::AgentPaths;
 use deckpilot_storage::{ConfigStore, Encryption, SqliteStore, StorageError};
 
 use crate::error::{CommandError, CommandResult};
 
-const DATABASE_FILE: &str = "deckpilot.db";
-
 /// Shared application state.
+///
+/// The configuration app writes configuration documents (profiles, machine
+/// bindings). Runtime state (active profile and project, brightness) belongs
+/// to the background agent while it runs and is changed through IPC.
 #[derive(Debug)]
 pub struct AppState {
     store: Mutex<SqliteStore>,
-    pub engine: Engine,
+    /// Validates action parameters; actions are executed by the agent.
+    pub registry: ActionRegistry,
     pub catalog: ModelCatalog,
-    pub database_path: PathBuf,
+    pub paths: AgentPaths,
 }
 
 impl AppState {
-    pub fn open(data_dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        std::fs::create_dir_all(data_dir)?;
-        let database_path = data_dir.join(DATABASE_FILE);
-        let store = SqliteStore::open(&database_path, &Encryption::None)?;
+    pub fn open(paths: AgentPaths) -> Result<Self, Box<dyn std::error::Error>> {
+        paths.create_dirs()?;
+        let store = SqliteStore::open(&paths.database, &Encryption::None)?;
         Ok(Self {
             store: Mutex::new(store),
-            engine: Engine::new(ActionRegistry::with_builtins()),
+            registry: ActionRegistry::with_builtins(),
             catalog: ModelCatalog::builtin(),
-            database_path,
+            paths,
         })
     }
 

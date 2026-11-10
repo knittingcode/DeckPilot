@@ -15,6 +15,8 @@ pub enum CommandError {
     ProjectContext(#[from] deckpilot_core::project::ProjectContextError),
     #[error(transparent)]
     Identifier(#[from] deckpilot_core::IdentifierError),
+    #[error(transparent)]
+    Agent(#[from] deckpilot_ipc::ClientError),
     #[error("{0}")]
     Invalid(String),
     #[error("{0} not found")]

@@ -1,26 +1,29 @@
 import { Info } from "lucide-react"
+import { useState } from "react"
 
-import { ErrorNotice, Loading, Page } from "@/components/page"
+import { AgentBadge, AgentStopped, DeviceRow, RefreshDevicesButton } from "@/components/agent"
+import { EmptyState, ErrorNotice, Loading, Page } from "@/components/page"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { useAsync } from "@/hooks/use-async"
-import { api } from "@/lib/api"
+import { api, errorMessage } from "@/lib/api"
+import { useAppContext } from "@/lib/app-context"
 import { hex } from "@/lib/format"
-import type { DeviceModel } from "@/lib/types"
+import type { DeviceInfo, DeviceModel } from "@/lib/types"
 
 export function DevicesPage() {
   const { state } = useAsync(() => api.listDeviceModels(), "models")
 
   return (
-    <Page title="Devices" description="Supported device models and their capabilities">
+    <Page title="Devices" description="Connected devices and supported models">
+      <ConnectedDevices />
       <Alert>
         <Info />
-        <AlertTitle>No device communication yet</AlertTitle>
+        <AlertTitle>Hardware support is not yet verified</AlertTitle>
         <AlertDescription>
-          Device discovery and input handling will be provided by the background agent. The models
-          below are descriptors used for layout validation; none has been tested on physical
-          hardware.
+          The Stream Deck MK.2 driver has not been tested on a physical device yet. On Linux, access
+          to the device requires a udev rule; see the documentation.
         </AlertDescription>
       </Alert>
       {state.status === "loading" && <Loading />}
@@ -31,6 +34,58 @@ export function DevicesPage() {
   )
 }
 
+function ConnectedDevices() {
+  const { agent, profiles, refresh } = useAppContext()
+  const [error, setError] = useState<string | null>(null)
+  const activeProfile = profiles.activeProfileId
+
+  const generate = (device: DeviceInfo) => {
+    if (!activeProfile) return
+    setError(null)
+    api.createDefaultLayout(activeProfile, device.id.model).then(refresh, (e: unknown) => {
+      setError(errorMessage(e))
+    })
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          Connected devices <AgentBadge />
+        </CardTitle>
+        <CardDescription>
+          Devices are discovered by the background agent. A generated layout places the active
+          profile&apos;s actions on the keys in order; a layout editor is planned.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-2">
+        {error && <ErrorNotice error={error} />}
+        {agent && !agent.running && <AgentStopped />}
+        {agent?.status && (
+          <>
+            {agent.status.devices.length === 0 ? (
+              <EmptyState title="No Stream Deck detected" />
+            ) : (
+              agent.status.devices.map((device) => (
+                <DeviceRow key={device.id.serial} device={device} onGenerateLayout={generate} />
+              ))
+            )}
+            <div>
+              <RefreshDevicesButton />
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+const SUPPORT_LABELS: Record<DeviceModel["support"], string> = {
+  verified: "Verified on hardware",
+  unverified: "Driver not yet tested on hardware",
+  descriptorOnly: "Descriptor only",
+}
+
 function DeviceModelCard({ model }: { model: DeviceModel }) {
   const { keys, encoders, touch } = model.capabilities
   return (
@@ -39,7 +94,7 @@ function DeviceModelCard({ model }: { model: DeviceModel }) {
         <CardTitle className="flex items-center gap-2">
           {model.name}
           <Badge variant={model.support === "verified" ? "default" : "outline"}>
-            {model.support === "verified" ? "Verified on hardware" : "Descriptor only"}
+            {SUPPORT_LABELS[model.support]}
           </Badge>
         </CardTitle>
         <CardDescription>

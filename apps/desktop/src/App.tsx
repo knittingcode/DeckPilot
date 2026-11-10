@@ -1,12 +1,14 @@
-import { useCallback, useMemo, useState } from "react"
+import { listen } from "@tauri-apps/api/event"
+import { useCallback, useEffect, useMemo, useState } from "react"
 
 import { AppSidebar, type PageId } from "@/components/app-sidebar"
 import { ErrorNotice, Loading } from "@/components/page"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useAsync } from "@/hooks/use-async"
-import { api } from "@/lib/api"
+import { AGENT_STATUS_EVENT, api } from "@/lib/api"
 import { AppContext, type AppContextValue } from "@/lib/app-context"
+import type { AgentConnection } from "@/lib/types"
 import { ActionsPage } from "@/pages/actions"
 import { DashboardPage } from "@/pages/dashboard"
 import { DevicesPage } from "@/pages/devices"
@@ -28,13 +30,35 @@ export function App() {
   const [revision, setRevision] = useState(0)
   const { state } = useAsync(() => api.listProfiles(), String(revision))
 
+  const [agent, setAgent] = useState<AgentConnection | null>(null)
+
   const refresh = useCallback(() => {
     setRevision((value) => value + 1)
   }, [])
 
+  // The backend forwards every agent state change (button presses, device
+  // hotplug, profile switches from the tray); reload views when one arrives.
+  useEffect(() => {
+    api.agentStatus().then(setAgent, () => {
+      setAgent({ running: false, status: null, canStart: false })
+    })
+    const unlisten = listen<AgentConnection>(AGENT_STATUS_EVENT, (event) => {
+      setAgent(event.payload)
+      refresh()
+    })
+    return () => {
+      void unlisten.then((stop) => {
+        stop()
+      })
+    }
+  }, [refresh])
+
   const context = useMemo<AppContextValue | null>(
-    () => (state.status === "ready" ? { profiles: state.data, refresh, revision } : null),
-    [state, refresh, revision],
+    () =>
+      state.status === "ready"
+        ? { profiles: state.data, refresh, revision, agent, setAgent }
+        : null,
+    [state, refresh, revision, agent],
   )
 
   if (!context) {
