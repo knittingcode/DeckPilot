@@ -1,7 +1,8 @@
-import { Play, RefreshCw } from "lucide-react"
+import { Play, RefreshCw, RotateCw, TriangleAlert } from "lucide-react"
 import { useState } from "react"
+import { toast } from "sonner"
 
-import { ErrorNotice } from "@/components/page"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { api, errorMessage } from "@/lib/api"
@@ -23,17 +24,15 @@ export function AgentBadge() {
 export function AgentStopped() {
   const { agent, setAgent } = useAppContext()
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   const start = async () => {
     setBusy(true)
-    setError(null)
     try {
       const connection = await api.startAgent()
       setAgent(connection)
-      if (!connection.running) setError("The agent did not start. Check its log for details.")
+      if (!connection.running) toast.error("The agent did not start. Check its log for details.")
     } catch (e) {
-      setError(errorMessage(e))
+      toast.error(errorMessage(e))
     } finally {
       setBusy(false)
     }
@@ -45,7 +44,6 @@ export function AgentStopped() {
         The background agent handles devices and runs actions. It keeps running when this window is
         closed.
       </p>
-      {error && <ErrorNotice error={error} />}
       <div>
         <Button size="sm" disabled={busy || !agent?.canStart} onClick={() => void start()}>
           <Play /> Start agent
@@ -61,37 +59,60 @@ export function AgentStopped() {
   )
 }
 
-export function RefreshDevicesButton() {
-  const [error, setError] = useState<string | null>(null)
+/** Shown when the running agent is not the one shipped with this app. */
+export function AgentCompatibilityNotice() {
+  const { agent, setAgent } = useAppContext()
+  const [busy, setBusy] = useState(false)
+  const compatibility = agent?.compatibility
+  if (!agent?.running || !compatibility || compatibility.type === "compatible") return null
+  const restart = async () => {
+    setBusy(true)
+    try {
+      setAgent(await api.restartAgent())
+      toast.success("The agent was restarted")
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
-    <>
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => {
-          setError(null)
-          api.refreshDevices().catch((e: unknown) => {
-            setError(errorMessage(e))
-          })
-        }}
-      >
-        <RefreshCw /> Refresh devices
-      </Button>
-      {error && <ErrorNotice error={error} />}
-    </>
+    <Alert>
+      <TriangleAlert />
+      <AlertTitle>The running agent does not match this app</AlertTitle>
+      <AlertDescription>
+        <p>
+          Agent {compatibility.agent}, app {compatibility.app}. Restart the agent so both run the
+          same version.
+        </p>
+        <Button className="mt-2" size="sm" disabled={busy} onClick={() => void restart()}>
+          <RotateCw /> Restart agent
+        </Button>
+      </AlertDescription>
+    </Alert>
   )
 }
 
-export function DeviceRow({
-  device,
-  onGenerateLayout,
-}: {
-  device: DeviceInfo
-  onGenerateLayout?: (device: DeviceInfo) => void
-}) {
+export function RefreshDevicesButton() {
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={() => {
+        api.refreshDevices().then(
+          () => toast.success("Devices refreshed"),
+          (e: unknown) => toast.error(errorMessage(e)),
+        )
+      }}
+    >
+      <RefreshCw /> Refresh devices
+    </Button>
+  )
+}
+
+export function DeviceRow({ device, action }: { device: DeviceInfo; action?: React.ReactNode }) {
   const connected = device.state === "connected"
   const layout = device.layout
-  const needsLayout = layout.type === "missing" || layout.type === "invalid"
   return (
     <div className="grid gap-1 rounded-lg border p-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -102,18 +123,9 @@ export function DeviceRow({
         <Badge variant={connected ? "default" : "outline"}>
           {connected ? "Connected" : "Disconnected"}
         </Badge>
+        <Badge variant="secondary">{device.source === "mock" ? "Simulated" : "USB"}</Badge>
         <div className="flex-1" />
-        {onGenerateLayout && layout.type !== "noProfile" && layout.type !== "unknownModel" && (
-          <Button
-            variant={needsLayout ? "default" : "outline"}
-            size="sm"
-            onClick={() => {
-              onGenerateLayout(device)
-            }}
-          >
-            {needsLayout ? "Create layout from actions" : "Regenerate layout"}
-          </Button>
-        )}
+        {action}
       </div>
       <p className="text-xs text-muted-foreground">
         {describeLayout(layout)}

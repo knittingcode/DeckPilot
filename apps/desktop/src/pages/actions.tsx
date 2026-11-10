@@ -1,15 +1,13 @@
-import { Play, Trash2 } from "lucide-react"
-import { useState } from "react"
+import { Plus, Search } from "lucide-react"
+import { useMemo, useState } from "react"
 
+import { ActionEditor } from "@/components/action-editor"
 import { EmptyState, ErrorNotice, Loading, Page } from "@/components/page"
-import { ParameterField } from "@/components/parameter-field"
 import { RequireProfile } from "@/components/require-profile"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
@@ -18,256 +16,187 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useAsync } from "@/hooks/use-async"
-import { api, errorMessage } from "@/lib/api"
+import { useEditingProfile } from "@/hooks/use-profile"
+import { api } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
-import { buildParameters, describeValue, initialValue } from "@/lib/parameters"
-import type { ActionResult, ActionType, ParameterValue, Profile } from "@/lib/types"
+import { ActionIcon } from "@/components/action-icon"
+import type { ActionInstance, ActionType, ProfileView } from "@/lib/types"
+import { cn } from "@/lib/utils"
 
 export function ActionsPage() {
   return (
-    <Page title="Actions" description="Configured actions of the active profile">
-      <RequireProfile>{(profileId) => <ActionsView profileId={profileId} />}</RequireProfile>
+    <Page title="Action Library" description="Configure actions before assigning them to keys">
+      <RequireProfile>{() => <ActionLibrary />}</RequireProfile>
     </Page>
   )
 }
 
-function ActionsView({ profileId }: { profileId: string }) {
-  const { revision, refresh } = useAppContext()
-  const { state, reload } = useAsync(
-    () => Promise.all([api.getProfile(profileId), api.listActionTypes()]),
-    `${profileId}:${revision}`,
-  )
-
-  if (state.status === "loading") return <Loading />
+function ActionLibrary() {
+  const { state, reload, profileId } = useEditingProfile()
+  const types = useAsync(() => api.listActionTypes(), "types").state
+  if (state.status === "loading" || types.status === "loading") return <Loading />
   if (state.status === "error") return <ErrorNotice error={state.error} />
-  const [view, types] = state.data
-  const changed = () => {
+  if (types.status === "error") return <ErrorNotice error={types.error} />
+  if (!profileId) return null
+  return <Library view={state.data} types={types.data} profileId={profileId} reload={reload} />
+}
+
+function Library({
+  view,
+  types,
+  profileId,
+  reload,
+}: {
+  view: ProfileView
+  types: ActionType[]
+  profileId: string
+  reload: () => void
+}) {
+  const { profiles, agent, refresh } = useAppContext()
+  const [query, setQuery] = useState("")
+  const [category, setCategory] = useState("all")
+  const [selected, setSelected] = useState<string | null>(view.profile.actions[0]?.id ?? "new")
+  const typeOf = (id: string) => types.find((t) => t.id === id)
+  const categories = [...new Set(types.map((t) => t.category))]
+
+  const groups = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    const matches = view.profile.actions.filter((action) => {
+      const type = types.find((t) => t.id === action.actionType)
+      const haystack =
+        `${action.name} ${action.description ?? ""} ${type?.name ?? ""}`.toLowerCase()
+      return (
+        (!needle || haystack.includes(needle)) &&
+        (category === "all" || type?.category === category)
+      )
+    })
+    const byCategory = new Map<string, ActionInstance[]>()
+    for (const action of matches) {
+      const key = types.find((t) => t.id === action.actionType)?.category ?? "Other"
+      byCategory.set(key, [...(byCategory.get(key) ?? []), action])
+    }
+    return [...byCategory.entries()].sort(([a], [b]) => a.localeCompare(b))
+  }, [view.profile.actions, types, query, category])
+
+  const current =
+    selected && selected !== "new" ? view.profile.actions.find((a) => a.id === selected) : null
+  const canRun = Boolean(agent?.running) && profiles.activeProfileId === profileId
+  const changed = (action?: ActionInstance) => {
+    if (action) setSelected(action.id)
     reload()
     refresh()
   }
 
   return (
-    <>
-      {view.issues.length > 0 && (
-        <Alert variant="destructive">
-          <AlertDescription>
-            <ul className="list-disc pl-4">
-              {view.issues.map((issue) => (
-                <li key={issue}>{issue}</li>
-              ))}
-            </ul>
-          </AlertDescription>
-        </Alert>
-      )}
-      <ActionList profile={view.profile} types={types} onChange={changed} />
-      <NewActionForm profileId={profileId} types={types} onCreated={changed} />
-    </>
-  )
-}
-
-function ActionList({
-  profile,
-  types,
-  onChange,
-}: {
-  profile: Profile
-  types: ActionType[]
-  onChange: () => void
-}) {
-  const { agent } = useAppContext()
-  const agentRunning = agent?.running ?? false
-  const [results, setResults] = useState<Record<string, ActionResult>>({})
-  const [error, setError] = useState<string | null>(null)
-  const typeName = (id: string) => types.find((t) => t.id === id)?.name ?? id
-
-  const runAction = async (actionId: string) => {
-    setError(null)
-    try {
-      const result = await api.runAction(profile.id, actionId)
-      setResults((current) => ({ ...current, [actionId]: result }))
-      onChange()
-    } catch (e) {
-      setError(errorMessage(e))
-    }
-  }
-
-  const remove = async (actionId: string) => {
-    setError(null)
-    try {
-      await api.deleteAction(profile.id, actionId)
-      onChange()
-    } catch (e) {
-      setError(errorMessage(e))
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Configured actions</CardTitle>
-        <CardDescription>
-          Actions are defined independently of device controls. “Run” executes an action in the
-          background agent without pressing a key{agentRunning ? "" : " (start the agent first)"}.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-2">
-        {error && <ErrorNotice error={error} />}
-        {profile.actions.length === 0 ? (
-          <EmptyState title="No actions configured" />
-        ) : (
-          profile.actions.map((action) => {
-            const result = results[action.id]
-            return (
-              <div key={action.id} className="grid gap-2 rounded-lg border p-3">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">{action.name}</span>
-                  <Badge variant="secondary">{typeName(action.actionType)}</Badge>
-                  <div className="flex-1" />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!agentRunning}
-                    onClick={() => void runAction(action.id)}
-                  >
-                    <Play /> Run
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Delete ${action.name}`}
-                    onClick={() => void remove(action.id)}
-                  >
-                    <Trash2 />
-                  </Button>
-                </div>
-                <dl className="grid grid-cols-[8rem_1fr] gap-x-4 text-xs">
-                  {Object.entries(action.parameters).map(([key, value]) => (
-                    <div key={key} className="contents">
-                      <dt className="text-muted-foreground">{key}</dt>
-                      <dd className="font-mono break-all">{describeValue(value)}</dd>
-                    </div>
-                  ))}
-                </dl>
-                {result && (
-                  <p
-                    className="rounded-md bg-muted px-3 py-2 font-mono text-xs data-[status=failed]:text-destructive"
-                    data-status={result.status}
-                  >
-                    {result.status === "succeeded" ? "✓" : "✗"} {result.message}
-                  </p>
-                )}
-              </div>
-            )
-          })
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-function NewActionForm({
-  profileId,
-  types,
-  onCreated,
-}: {
-  profileId: string
-  types: ActionType[]
-  onCreated: () => void
-}) {
-  const [typeId, setTypeId] = useState(types[0]?.id ?? "")
-  const [name, setName] = useState("")
-  const [values, setValues] = useState<Record<string, ParameterValue>>(() =>
-    initialValues(types[0]),
-  )
-  const [error, setError] = useState<string | null>(null)
-  const actionType = types.find((t) => t.id === typeId)
-
-  const selectType = (id: string) => {
-    setTypeId(id)
-    setValues(initialValues(types.find((t) => t.id === id)))
-  }
-
-  const submit = async (event: React.SyntheticEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!actionType) return
-    setError(null)
-    try {
-      await api.createAction(profileId, {
-        name,
-        actionType: actionType.id,
-        parameters: buildParameters(actionType.parameters, values),
-      })
-      setName("")
-      setValues(initialValues(actionType))
-      onCreated()
-    } catch (e) {
-      setError(errorMessage(e))
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>New action</CardTitle>
-        <CardDescription>Parameters are validated against the action type.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form className="grid max-w-xl gap-4" onSubmit={(e) => void submit(e)}>
-          {error && <ErrorNotice error={error} />}
-          <div className="grid gap-2">
-            <Label htmlFor="action-type">Action type</Label>
-            <Select value={typeId} onValueChange={selectType}>
-              <SelectTrigger id="action-type" className="w-72">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {types.map((type) => (
-                  <SelectItem key={type.id} value={type.id}>
-                    {type.category} › {type.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {actionType && (
-              <p className="text-xs text-muted-foreground">{actionType.description}</p>
-            )}
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="action-name">Name</Label>
-            <Input
-              id="action-name"
-              value={name}
-              onChange={(e) => {
-                setName(e.target.value)
+    <div className="grid gap-4 xl:grid-cols-[minmax(18rem,24rem)_1fr]">
+      <Card className="xl:max-h-[calc(100vh-7rem)] xl:overflow-hidden">
+        <CardHeader className="gap-3">
+          <div className="flex items-center gap-2">
+            <CardTitle className="flex-1">Actions</CardTitle>
+            <Button
+              size="sm"
+              onClick={() => {
+                setSelected("new")
               }}
-              placeholder="Start Work"
-              required
-            />
-          </div>
-          {actionType?.parameters.map((spec) => {
-            const value = values[spec.key] ?? initialValue(spec)
-            return (
-              <ParameterField
-                key={`${actionType.id}:${spec.key}`}
-                spec={spec}
-                value={value}
-                onChange={(next) => {
-                  setValues((current) => ({ ...current, [spec.key]: next }))
-                }}
-              />
-            )
-          })}
-          <div>
-            <Button type="submit" disabled={!actionType || !name.trim()}>
-              Create action
+            >
+              <Plus /> New
             </Button>
           </div>
-        </form>
-      </CardContent>
-    </Card>
-  )
-}
+          <div className="relative">
+            <Search className="absolute top-2.5 left-2 size-4 text-muted-foreground" />
+            <Input
+              className="pl-8"
+              placeholder="Search actions"
+              aria-label="Search actions"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value)
+              }}
+            />
+          </div>
+          <Select value={category} onValueChange={setCategory}>
+            <SelectTrigger className="w-full" aria-label="Filter by category">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All categories</SelectItem>
+              {categories.map((c) => (
+                <SelectItem key={c} value={c}>
+                  {c}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </CardHeader>
+        <CardContent className="grid gap-4 xl:overflow-y-auto">
+          {view.profile.actions.length === 0 && (
+            <EmptyState title="No actions yet">Create your first action.</EmptyState>
+          )}
+          {view.profile.actions.length > 0 && groups.length === 0 && (
+            <p className="text-sm text-muted-foreground">No actions match.</p>
+          )}
+          {groups.map(([group, actions]) => (
+            <section key={group} className="grid gap-1" aria-label={group}>
+              <h3 className="px-2 text-xs font-medium text-muted-foreground uppercase">{group}</h3>
+              {actions.map((action) => {
+                const used = view.actionUsages[action.id]?.length ?? 0
+                return (
+                  <button
+                    key={action.id}
+                    type="button"
+                    className={cn(
+                      "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                      selected === action.id && "bg-accent",
+                    )}
+                    onClick={() => {
+                      setSelected(action.id)
+                    }}
+                  >
+                    <ActionIcon name={action.icon} className="size-4 shrink-0" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate">{action.name}</span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {typeOf(action.actionType)?.name ?? action.actionType}
+                      </span>
+                    </span>
+                    {used > 0 && (
+                      <Badge variant="secondary" title={`Used ${used} time(s)`}>
+                        {used}
+                      </Badge>
+                    )}
+                  </button>
+                )
+              })}
+            </section>
+          ))}
+        </CardContent>
+      </Card>
 
-function initialValues(type: ActionType | undefined): Record<string, ParameterValue> {
-  return Object.fromEntries((type?.parameters ?? []).map((spec) => [spec.key, initialValue(spec)]))
+      <Card>
+        <CardHeader>
+          <CardTitle>{current ? current.name : "New action"}</CardTitle>
+          <CardDescription>
+            {current
+              ? (typeOf(current.actionType)?.name ?? current.actionType)
+              : "Choose a type and configure its parameters"}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ActionEditor
+            key={current?.id ?? "new"}
+            profileId={profileId}
+            types={types}
+            action={current ?? null}
+            usages={current ? (view.actionUsages[current.id] ?? []) : []}
+            canRun={canRun}
+            onSaved={changed}
+            onDeleted={() => {
+              setSelected(null)
+              changed()
+            }}
+          />
+        </CardContent>
+      </Card>
+    </div>
+  )
 }
