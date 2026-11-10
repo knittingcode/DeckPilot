@@ -114,7 +114,7 @@ export function AppSidebar({
   current: PageId
   onNavigate: (page: PageId) => void
 }) {
-  const { agent, updates, modules, openSettings } = useAppContext()
+  const { updates, modules, openSettings } = useAppContext()
   const updateAvailable = Boolean(updates?.available)
   const fromModules = moduleNavigation(modules)
   const groups = GROUPS.map((group) =>
@@ -169,25 +169,6 @@ export function AppSidebar({
             {updateAvailable && <SidebarMenuBadge>Update</SidebarMenuBadge>}
           </SidebarMenuItem>
         </SidebarMenu>
-        <button
-          type="button"
-          className="flex items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-muted-foreground group-data-[collapsible=icon]:hidden hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-          title="Background agent settings"
-          onClick={() => {
-            openSettings("agent")
-          }}
-        >
-          <span
-            className={cn(
-              "size-2 rounded-full",
-              agent?.running ? "bg-emerald-500" : "bg-muted-foreground/50",
-            )}
-            aria-hidden
-          />
-          {agent?.running ? "Agent running" : "Agent stopped"}
-          {agent?.status &&
-            ` · ${agent.status.devices.length} device${agent.status.devices.length === 1 ? "" : "s"}`}
-        </button>
       </SidebarFooter>
     </Sidebar>
   )

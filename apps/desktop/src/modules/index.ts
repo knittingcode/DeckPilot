@@ -105,3 +105,15 @@ export function moduleSettingsPages(modules: ModuleInfo[]): ModuleSettingsPage[]
       view: frontend(module.id)?.settings ?? null,
     }))
 }
+
+/** Status bar components of enabled modules that run on this system. */
+export function moduleStatusItems(modules: ModuleInfo[]) {
+  return modules
+    .filter((m) => m.enabled && m.supported)
+    .flatMap((m) =>
+      (frontend(m.id)?.statusItems ?? []).map((component, i) => ({
+        key: `${m.id}:${i}`,
+        component,
+      })),
+    )
+}

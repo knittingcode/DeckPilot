@@ -15,7 +15,10 @@
   --titlebar-gap: 0.25rem;
   --titlebar-padding-x: 0.75rem;
 
-  /* Height of the main window's status bar; 0 where there is none. */
+  /* Main window status bar (components/status-bar.tsx). The layout uses
+     --statusbar-height, which is the size where the bar is shown and 0
+     elsewhere (dialog windows). */
+  --statusbar-size: 1.625rem;
   --statusbar-height: 0px;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
