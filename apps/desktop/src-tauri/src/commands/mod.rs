@@ -12,6 +12,7 @@
 mod actions;
 pub(crate) mod agent;
 mod layouts;
+mod logs;
 mod machine;
 mod modules;
 pub(crate) mod portability;
@@ -59,6 +60,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         portability::cancel_import,
         system::get_overview,
         system::launch_info,
+        logs::read_agent_log,
         system::list_action_types,
         system::list_device_models,
         system::migration_notes,

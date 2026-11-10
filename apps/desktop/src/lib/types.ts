@@ -487,6 +487,8 @@ export interface ImportPreview {
   missingResources: MissingResource[]
   warnings: string[]
   localProfiles: [string, string][]
+  /** Portable application settings in the export. */
+  settings: AppSettings
 }
 
 export type ImportMode = "merge" | "replace"
@@ -497,6 +499,20 @@ export interface ImportOptions {
   profiles: string[]
   conflicts: Record<string, ConflictResolution>
   moduleSettings: boolean
+  appSettings: boolean
+}
+
+/** Application settings that mean the same on every computer. */
+export interface AppSettings {
+  updates?: { mode: UpdateMode; automaticChecks: boolean; checkIntervalHours: number }
+}
+
+/** The end of the agent's log. */
+export interface LogView {
+  directory: string
+  file: string | null
+  lines: string[]
+  truncated: boolean
 }
 
 export interface ImportSummary {
@@ -505,4 +521,5 @@ export interface ImportSummary {
   skipped: string[]
   renamed: string[]
   modules: string[]
+  settings: string[]
 }

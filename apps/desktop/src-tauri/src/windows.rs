@@ -67,6 +67,10 @@ fn core_window(id: &str) -> Option<WindowSpec> {
         "security.migrate" => spec("Encrypt your configuration", WindowSize::Compact, true),
         "security.confirm" => spec("Confirm your password", WindowSize::Compact, true),
         "workflows.execution-summary" => spec("Workflow summary", WindowSize::Medium, false),
+        "portability.export" => spec("Export configuration", WindowSize::Medium, false),
+        "portability.import" => spec("Import configuration", WindowSize::Medium, false),
+        "updates.progress" => spec("DeckPilot update", WindowSize::Compact, false),
+        "app.logs" => spec("DeckPilot logs", WindowSize::Large, false),
         _ => return None,
     })
 }
@@ -74,7 +78,9 @@ fn core_window(id: &str) -> Option<WindowSpec> {
 /// Whether a window may open while the configuration is locked: only the
 /// windows that unlock it.
 fn allowed_while_locked(id: &str) -> bool {
-    id.starts_with("security.")
+    // The logs help when the configuration cannot be opened; they never
+    // contain configuration values, keys or passwords.
+    id.starts_with("security.") || id == "app.logs"
 }
 
 /// Looks up `id` in the catalog and checks that it may open now.
@@ -252,10 +258,14 @@ pub fn label_for(id: &str) -> String {
 
 /// Open windows and whether they were sized yet.
 #[derive(Debug, Default)]
-pub struct WindowRegistry(Mutex<HashMap<String, (WindowSpec, bool)>>);
+pub struct WindowRegistry(Mutex<HashMap<String, Registered>>);
+
+/// An open window: its spec and the size the last fit gave it (`None` until
+/// the first fit).
+type Registered = (WindowSpec, Option<(f64, f64)>);
 
 impl WindowRegistry {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, (WindowSpec, bool)>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Registered>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -331,7 +341,7 @@ pub fn open<R: Runtime>(app: &AppHandle<R>, spec: &WindowSpec) -> Result<(), Win
     }
     app.state::<WindowRegistry>()
         .lock()
-        .insert(label.clone(), (spec.clone(), false));
+        .insert(label.clone(), (spec.clone(), None));
     if let Err(error) = builder.build() {
         app.state::<WindowRegistry>().remove(&label);
         return Err(WindowError::Platform(error.to_string()));
@@ -346,7 +356,7 @@ pub fn open<R: Runtime>(app: &AppHandle<R>, spec: &WindowSpec) -> Result<(), Win
             .state::<WindowRegistry>()
             .lock()
             .get(&label)
-            .is_some_and(|(_, fitted)| !fitted);
+            .is_some_and(|(_, last_fit)| last_fit.is_none());
         if not_sized && let Some(window) = handle.get_webview_window(&label) {
             let _ = window.show();
             let _ = window.set_focus();
@@ -371,11 +381,12 @@ pub fn fit<R: Runtime>(
     let app = window.app_handle();
     let label = window.label().to_owned();
     let registry = app.state::<WindowRegistry>();
-    let (spec, fitted) = registry
+    let (spec, last_fit) = registry
         .lock()
         .get(&label)
         .cloned()
         .ok_or_else(|| WindowError::Unknown(label.clone()))?;
+    let fitted = last_fit.is_some();
     let limits = limits(spec.size);
     let work = window
         .current_monitor()
@@ -391,9 +402,7 @@ pub fn fit<R: Runtime>(
     let outer = window
         .outer_size()
         .map_or(current, |s| logical(s.width, s.height));
-    let target = if fitted && limits.resizable {
-        current
-    } else {
+    let target = if follows_content(limits.resizable, last_fit, current) {
         window_size(
             Measurement {
                 content,
@@ -404,7 +413,10 @@ pub fn fit<R: Runtime>(
             limits,
             work,
         )
+    } else {
+        current
     };
+
     // Changes below a pixel would only cause resize feedback loops.
     let changed = (target.0 - current.0).abs() >= 1.0 || (target.1 - current.1).abs() >= 1.0;
     if changed {
@@ -423,14 +435,26 @@ pub fn fit<R: Runtime>(
             let _ = window.set_position(LogicalPosition::new(x, y));
         }
     }
+    if let Some(entry) = registry.lock().get_mut(&label) {
+        entry.1 = Some(target);
+    }
     if !fitted {
-        if let Some(entry) = registry.lock().get_mut(&label) {
-            entry.1 = true;
-        }
         let _ = window.show();
         let _ = window.set_focus();
     }
     Ok(target)
+}
+
+/// Whether a window is sized to its content now. Fixed-size windows always
+/// are. A resizable window is until the user resizes it: as long as it still
+/// has the size of the last fit, it follows its content (e.g. a log that
+/// was still loading at the first fit); afterwards the user's size wins.
+pub fn follows_content(resizable: bool, last_fit: Option<(f64, f64)>, current: (f64, f64)) -> bool {
+    match last_fit {
+        _ if !resizable => true,
+        None => true,
+        Some(last) => (last.0 - current.0).abs() < 1.0 && (last.1 - current.1).abs() < 1.0,
+    }
 }
 
 /// Shows the main window, if this process has one. Returns whether it did.
@@ -510,6 +534,18 @@ mod tests {
     }
 
     #[test]
+    fn resizable_windows_follow_their_content_until_the_user_resizes_them() {
+        // Fixed-size windows always follow their content.
+        assert!(follows_content(false, Some((400.0, 300.0)), (500.0, 200.0)));
+        // A resizable window before its first fit, and while it still has
+        // the fitted size (content that loaded later can grow it).
+        assert!(follows_content(true, None, (720.0, 420.0)));
+        assert!(follows_content(true, Some((720.0, 420.0)), (720.4, 420.0)));
+        // Resized by the user: their size is kept.
+        assert!(!follows_content(true, Some((720.0, 420.0)), (900.0, 600.0)));
+    }
+
+    #[test]
     fn the_catalog_checks_existence_modules_and_lock_state() {
         let mut modules = registry();
         let unlock = resolve("security.unlock", &modules, false).unwrap();
@@ -519,6 +555,24 @@ mod tests {
             Err(WindowError::Locked)
         );
         assert!(resolve("workflows.execution-summary", &modules, true).is_ok());
+        // Export, import and updates need the open configuration; the log
+        // helps when it cannot be opened.
+        for id in [
+            "portability.export",
+            "portability.import",
+            "updates.progress",
+        ] {
+            assert_eq!(
+                resolve(id, &modules, false),
+                Err(WindowError::Locked),
+                "{id}"
+            );
+            assert!(!resolve(id, &modules, true).unwrap().blocking);
+        }
+        assert_eq!(
+            resolve("app.logs", &modules, false).unwrap().size,
+            WindowSize::Large
+        );
         assert_eq!(
             resolve("notes.viewer", &modules, true).unwrap().size,
             WindowSize::Large

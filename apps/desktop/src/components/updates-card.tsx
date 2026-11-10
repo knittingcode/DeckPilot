@@ -126,13 +126,23 @@ export function UpdatesCard() {
               {phase !== "ready" && (
                 <Button
                   disabled={busy || phase !== "idle"}
-                  onClick={() => void run(() => api.downloadUpdate())}
+                  onClick={() => {
+                    // Progress follows in its own window as well.
+                    void api.openWindow("updates.progress").catch(() => undefined)
+                    void run(() => api.downloadUpdate())
+                  }}
                 >
                   <Download /> Download
                 </Button>
               )}
               {phase === "ready" && (
-                <Button disabled={busy} onClick={() => void run(() => api.installUpdate())}>
+                <Button
+                  disabled={busy}
+                  onClick={() => {
+                    void api.openWindow("updates.progress").catch(() => undefined)
+                    void run(() => api.installUpdate())
+                  }}
+                >
                   <RotateCw /> Install and restart
                 </Button>
               )}

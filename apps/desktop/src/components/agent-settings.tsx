@@ -1,4 +1,4 @@
-import { Square } from "lucide-react"
+import { ScrollText, Square } from "lucide-react"
 import { useEffect, useState } from "react"
 
 import { AgentBadge, AgentStopped } from "@/components/agent"
@@ -27,6 +27,15 @@ export function AgentSettings() {
       <CardContent className="grid gap-6">
         {agent && !agent.running && <AgentStopped />}
         {agent?.status && <RunningAgent status={agent.status} />}
+        <Button
+          variant="outline"
+          className="justify-self-start"
+          onClick={() => {
+            api.openWindow("app.logs").catch(() => undefined)
+          }}
+        >
+          <ScrollText /> Show log…
+        </Button>
       </CardContent>
     </Card>
   )

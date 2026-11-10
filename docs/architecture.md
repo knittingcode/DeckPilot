@@ -184,6 +184,17 @@ validated against the device model and previewed with the same face logic the
 agent uses. The frontend is React + TypeScript with Tailwind CSS and shadcn/ui
 components; `src/lib/types.ts` mirrors the serialized Rust types.
 
+Native windows besides the main window come from one catalog
+(`src-tauri/src/windows.rs`) and are opened by identifier only — by the app,
+or by the agent over IPC: the prompts that open the configuration
+(`security.*`), export and import (`portability.*`), update progress
+(`updates.progress`), the agent log (`app.logs`), the workflow summary, and
+windows declared by enabled modules. Every window renders through the shared
+`ModalShell` and is sized to its content by the window manager (no
+per-window dimensions); the catalog decides whether a window may open while
+the configuration is locked. Only the export and import windows may use file
+dialogs.
+
 ## Configuration separation
 
 | Area                   | Contents                                       | Portable |

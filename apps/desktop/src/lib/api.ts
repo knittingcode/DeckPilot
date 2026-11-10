@@ -14,6 +14,7 @@ import type {
   ImportPreview,
   ImportSummary,
   LaunchView,
+  LogView,
   SecurityPolicy,
   SecurityView,
   WindowSpec,
@@ -91,7 +92,9 @@ export const api = {
     confirmation: string
     profiles: string[] | null
     includeModuleSettings: boolean
+    includeAppSettings: boolean
   }) => invoke<ExportResult>("export_configuration", { request }),
+  readAgentLog: (lines: number) => invoke<LogView>("read_agent_log", { lines }),
   previewImport: (path: string, password: string) =>
     invoke<{ token: number; preview: ImportPreview }>("preview_import", { path, password }),
   applyImport: (token: number, options: ImportOptions) =>
@@ -205,6 +208,11 @@ export const AUTHENTICATION_REQUIRED = "authentication required"
 export function isAuthenticationRequired(error: unknown): boolean {
   return errorMessage(error) === AUTHENTICATION_REQUIRED
 }
+
+/** Sent to every window after imported data was written. */
+export const CONFIGURATION_CHANGED_EVENT = "deckpilot://configuration-changed"
+/** Asks the main window to show a page (payload: the page id). */
+export const NAVIGATE_EVENT = "deckpilot://navigate"
 
 /** Sent to every window when the configuration was locked or unlocked. */
 export const SECURITY_CHANGED_EVENT = "deckpilot://security-changed"

@@ -21,6 +21,16 @@ const CORE_WINDOWS: Record<string, View> = {
   "workflows.execution-summary": lazy(() =>
     import("./workflow-summary").then((m) => ({ default: m.WorkflowSummaryWindow })),
   ),
+  "portability.export": lazy(() =>
+    import("./portability-windows").then((m) => ({ default: m.ExportWindow })),
+  ),
+  "portability.import": lazy(() =>
+    import("./portability-windows").then((m) => ({ default: m.ImportWindow })),
+  ),
+  "updates.progress": lazy(() =>
+    import("./update-window").then((m) => ({ default: m.UpdateWindow })),
+  ),
+  "app.logs": lazy(() => import("./logs-window").then((m) => ({ default: m.LogsWindow }))),
 }
 
 /** The view for a window identifier: the application's or a module's. */

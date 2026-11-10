@@ -80,8 +80,9 @@ make down     # stop; development data in .dev/ is kept
 isolated database in `.dev/data` with demonstration data and never touches
 your real configuration. Without Make: `cargo run -p deckpilot-dev -- up`.
 
-On Linux, install `packaging/linux/70-deckpilot-streamdeck.rules` to access
-the device without root.
+On Linux, the `.deb` and `.rpm` packages install the udev rule that gives
+access to the device without root. For the AppImage or a source build,
+install `packaging/linux/70-deckpilot-streamdeck.rules` yourself.
 
 See [docs/development.md](docs/development.md) for all commands.
 

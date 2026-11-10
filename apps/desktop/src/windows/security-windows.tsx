@@ -296,6 +296,15 @@ function SystemKeyProblem({
         </p>
       )}
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+      <button
+        type="button"
+        className="justify-self-start text-xs text-muted-foreground underline underline-offset-2"
+        onClick={() => {
+          api.openWindow("app.logs").catch(() => undefined)
+        }}
+      >
+        Show the agent log
+      </button>
     </ModalShell>
   )
 }

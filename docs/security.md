@@ -287,10 +287,14 @@ or to the ciphertext is detected. A wrong password and a modified file are
 reported the same way.
 
 The payload (version 1) contains profiles (with projects, actions,
-workflows, layouts), the portable settings of feature modules and the
-logical resource keys the profiles use with their kinds. It never contains
-machine paths or application locations, the database key, passwords, IPC
-tokens, runtime state or caches.
+workflows, layouts and their bindings), the portable settings of feature
+modules, portable application settings (how updates are checked and
+applied) and the logical resource keys the profiles use with their kinds.
+It never contains machine paths or application locations, the database key
+or anything from the credential store, passwords, IPC tokens, the security
+policy (importing it could weaken another computer's protection), runtime
+state (such as the time of the last update check) or caches. Exporting works
+the same in both protection modes and asks for authentication first.
 
 ### Importing
 

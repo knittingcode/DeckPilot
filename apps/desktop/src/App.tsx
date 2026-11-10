@@ -8,7 +8,13 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useAsync } from "@/hooks/use-async"
-import { AGENT_STATUS_EVENT, UPDATE_STATE_EVENT, api } from "@/lib/api"
+import {
+  AGENT_STATUS_EVENT,
+  CONFIGURATION_CHANGED_EVENT,
+  NAVIGATE_EVENT,
+  UPDATE_STATE_EVENT,
+  api,
+} from "@/lib/api"
 import { AppContext, type AppContextValue, type CorePageId, type PageId } from "@/lib/app-context"
 import { ThemeProvider } from "@/components/theme-provider"
 import type { AgentConnection, ModuleInfo, UpdateState } from "@/lib/types"
@@ -87,7 +93,22 @@ function Studio() {
     const unlistenUpdates = listen<UpdateState>(UPDATE_STATE_EVENT, (event) => {
       setUpdates(event.payload)
     })
+    // An import in its own window changed profiles and module settings.
+    const unlistenChanges = listen(CONFIGURATION_CHANGED_EVENT, () => {
+      api.listModules().then(setModules, () => undefined)
+      refresh()
+    })
+    const unlistenNavigate = listen<string>(NAVIGATE_EVENT, (event) => {
+      const page = event.payload
+      if (Object.hasOwn(PAGES, page) || page.includes("/")) setPage(page as PageId)
+    })
     return () => {
+      void unlistenChanges.then((stop) => {
+        stop()
+      })
+      void unlistenNavigate.then((stop) => {
+        stop()
+      })
       void unlistenAgent.then((stop) => {
         stop()
       })
