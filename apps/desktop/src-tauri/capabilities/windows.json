@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "windows",
+  "description": "Permissions for prompts and module windows (no file dialogs)",
+  "windows": ["w-*"],
+  "permissions": ["core:default"]
+}

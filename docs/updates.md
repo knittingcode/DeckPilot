@@ -12,7 +12,10 @@ The app reads
 GitHub's `latest` alias never points at drafts or pre-releases, so this is the
 stable channel. The manifest is produced by the Tauri bundler and lists one
 artifact per platform target (`darwin-aarch64`, `darwin-x86_64`,
-`linux-x86_64`, `windows-x86_64`).
+`linux-x86_64`, `windows-x86_64`) and, on Linux, per package type: the
+updater installs the same kind of package that is installed (AppImage,
+`.deb` or `.rpm`; the latter two through the system package tools, which
+ask for administrator authorization).
 
 ## Authenticity
 
@@ -20,6 +23,11 @@ artifact per platform target (`darwin-aarch64`, `darwin-x86_64`,
   build. The app downloads an artifact and verifies its signature against the
   public key compiled into the app (`DECKPILOT_UPDATER_PUBKEY` at build time)
   before installing. Checksums alone are not trusted.
+- The signature's signed comment names the version the artifact was built
+  for, and the app requires it to match the announced version
+  (`requireSignedVersion`). The manifest itself is not signed; this binding
+  prevents serving an older, validly signed release as a newer one. The
+  release workflow checks it before a draft can be published.
 - `requireSignedVersion` is enabled: the version is part of the signed data,
   so an old, genuinely signed artifact cannot be offered as a newer version
   (downgrade protection).
@@ -62,13 +70,26 @@ A running executable is never overwritten. After any restart the app compares
 its version with the agent's (`AgentCompatibility`) and offers to restart a
 mismatching agent, so mismatched versions are not left running side by side.
 
+Only one check, download or installation runs at a time; a second attempt
+is refused while one is in progress. A failed installation is reported as a
+failure, the downloaded update stays ready to retry, and the agent is
+started again (it opens a system-managed configuration by itself, or is
+unlocked by the app). The agent processes requests one
+at a time, so a running workflow finishes before the agent stops for an
+update.
+
 ## First launch after an update
 
-Every start of the configuration app is recorded (`app_launches`, schema
-version 2). The app reports the first start after a version change and shows a
-notice. Database encryption is not enabled yet; once it is, this is where the
-password will be requested. Until then no password prompt is shown and none is
-stored.
+Every start of the configuration app is recorded (`app_launches`). With the
+default system-managed key an update needs no prompt; with a password, the
+password is needed after the restart anyway. Users can additionally require
+an authentication once after each update in Settings → Security (see
+[security.md](security.md#locking-and-authentication)). The database is never re-encrypted
+by an update. Schema upgrades are preceded by a verified encrypted backup.
+
+A newer database is never opened by an older DeckPilot (see
+[data-model.md](data-model.md#compatibility-between-versions)); the updater
+never installs an older version than the running one.
 
 ## Verification status
 

@@ -13,14 +13,17 @@ use deckpilot_core::{
     ModuleRegistry, Os, ProfileId, ProjectId, Runtime, RuntimeOutcome,
 };
 use deckpilot_device::{
-    CombinedBackend, ControlId, DeviceBackend, DeviceEvent, DeviceId, DeviceModel, ModelCatalog,
-    mock::MockBackend,
+    CombinedBackend, ControlId, ControlInput, DeviceBackend, DeviceEvent, DeviceId, DeviceModel,
+    ModelCatalog, mock::MockBackend,
 };
 use deckpilot_ipc::{
-    AgentEvent, AgentPaths, AgentStatus, DeviceInfo, ErrorCode, IpcError, PROTOCOL_VERSION,
-    ProfileInfo, Request, Response, token,
+    AgentEvent, AgentPaths, AgentStatus, DeviceInfo, ErrorCode, IpcError, LockReason,
+    PROTOCOL_VERSION, ProfileInfo, ProtectionMode, Request, Response, SecurityState, token,
 };
-use deckpilot_storage::{ConfigStore, Encryption, SqliteStore, StorageError};
+use deckpilot_keystore::KeyStore;
+use deckpilot_storage::policy::AutoLock;
+use deckpilot_storage::vault::{DatabaseState, Vault};
+use deckpilot_storage::{ConfigStore, DatabaseKey, SqliteStore, StorageError};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tracing::{debug, info, warn};
 
@@ -29,11 +32,25 @@ use crate::devices::{DeviceIo, DeviceSignal};
 use crate::instance::{InstanceLock, LockError};
 use crate::render;
 
+mod security;
+
+pub use security::{AUTO_LOCK_CHECK, Clock, system_clock};
+
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_BRIGHTNESS: u8 = 60;
 
 /// Opens the configuration application.
 pub type DesktopOpener = Box<dyn Fn() -> Result<(), String> + Send>;
+/// Starts the configuration application for one window (by identifier)
+/// when no configuration app is connected.
+pub type WindowOpener = Box<dyn Fn(&str) -> Result<(), String> + Send>;
+
+/// Window shown when a key is pressed while the configuration is locked.
+pub const UNLOCK_WINDOW: &str = "security.unlock";
+/// Window with the result of the last workflow.
+pub const WORKFLOW_SUMMARY_WINDOW: &str = "workflows.execution-summary";
+/// Repeated key presses while locked open the prompt at most this often.
+const UNLOCK_PROMPT_INTERVAL: Duration = Duration::from_secs(10);
 
 pub struct AgentOptions {
     pub paths: AgentPaths,
@@ -44,6 +61,15 @@ pub struct AgentOptions {
     pub rescan_interval: Duration,
     pub autostart: Option<Autostart>,
     pub open_desktop: Option<DesktopOpener>,
+    pub open_window: Option<WindowOpener>,
+    /// The operating system's credential store for system-managed keys.
+    /// `None`: not available; such databases stay locked.
+    pub key_store: Option<Arc<dyn KeyStore>>,
+    /// How often auto-lock conditions are checked.
+    pub auto_lock_check: Duration,
+    pub clock: Clock,
+    /// Detects the screen lock, where the platform allows it.
+    pub screen_lock: Option<Arc<dyn deckpilot_presence::ScreenLockMonitor>>,
 }
 
 impl std::fmt::Debug for AgentOptions {
@@ -82,6 +108,11 @@ pub(crate) enum Command {
         reply: oneshot::Sender<Result<Response, IpcError>>,
     },
     Tray(TrayCommand),
+    /// The system key was read (or a configuration set up) on a blocking
+    /// thread.
+    SystemKey(security::KeyOutcome),
+    /// Try to read the system key again after the store was unreachable.
+    RetrySystemKey,
 }
 
 /// Cloneable access to a running agent.
@@ -121,7 +152,30 @@ struct DeviceSession {
 pub struct Agent {
     options: AgentOptions,
     _lock: InstanceLock,
-    store: SqliteStore,
+    /// Open while unlocked.
+    store: Option<SqliteStore>,
+    /// Key of the open database, handed to the configuration app on request.
+    key: Option<DatabaseKey>,
+    security: SecurityState,
+    /// How the key is protected, once a database exists.
+    protection: Option<ProtectionMode>,
+    lock_reason: Option<LockReason>,
+    /// Why the database could not be opened automatically.
+    security_problem: Option<String>,
+    auto_lock: AutoLock,
+    /// Seconds since the Unix epoch of the last device input or request
+    /// that changed something; wall-clock time, so sleep counts as idle.
+    last_activity: u64,
+    /// Wall-clock time of the last auto-lock check, to notice sleep.
+    last_check: SystemTime,
+    /// Whether the screen was locked at the last check.
+    screen_was_locked: bool,
+    /// A read of the system key is running on a blocking thread.
+    key_pending: bool,
+    /// Requests waiting for that read.
+    key_waiters: Vec<oneshot::Sender<Result<Response, IpcError>>>,
+    /// Automatic retries after the credential store was unreachable.
+    key_retries: u32,
     runtime: Runtime,
     /// Feature modules with their stored state; the runtime's engine
     /// executes the action types of the enabled ones.
@@ -135,6 +189,9 @@ pub struct Agent {
     open_failures: BTreeMap<DeviceId, String>,
     persisted_project: Option<ProjectId>,
     last_input_at: Option<u64>,
+    /// Report of the last workflow, for the summary window.
+    last_workflow: Option<deckpilot_core::WorkflowReport>,
+    last_unlock_prompt: Option<std::time::Instant>,
     handle: AgentHandle,
     commands: mpsc::UnboundedReceiver<Command>,
     signals_tx: mpsc::UnboundedSender<DeviceSignal>,
@@ -162,23 +219,17 @@ impl Agent {
     /// Tokio runtime.
     pub fn start(options: AgentOptions, lock: InstanceLock) -> Result<Self, AgentError> {
         let paths = &options.paths;
-        let store = SqliteStore::open(&paths.database, &Encryption::None)?;
-        let machine = if let Some(machine) = store.load_machine_config()? {
-            machine
-        } else {
-            let machine = MachineConfig::new(Os::current());
-            store.save_machine_config(&machine)?;
-            machine
-        };
-        let brightness = store.device_brightness()?.unwrap_or(DEFAULT_BRIGHTNESS);
-        let modules = load_modules(&store)?;
+        // The agent starts locked. `run` then opens a database with a
+        // system-managed key by itself; a password-protected one waits for
+        // the key from the configuration app. Nothing is read before that.
+        let security = security_state(&paths.database)?;
+        let modules = deckpilot_modules::builtin(Os::current());
         let mut runtime = Runtime::new(
             Engine::new(modules.action_registry()),
             ModelCatalog::builtin(),
-            machine,
+            MachineConfig::new(Os::current()),
         );
-        let (profile, project) = load_active(&store)?;
-        runtime.set_profile(profile, project);
+        runtime.set_placeholder(Some("Locked"));
 
         let endpoint = paths.endpoint();
         let token = token::create(&paths.token_file)?;
@@ -194,23 +245,39 @@ impl Agent {
             desktop_clients: Arc::new(AtomicUsize::new(0)),
         };
         let server = crate::server::spawn(listener, handle.clone(), token, shutdown_rx);
-        info!(endpoint = %endpoint.display(), backend = options.backend.name(), "agent started");
+        info!(endpoint = %endpoint.display(), backend = options.backend.name(), ?security, "agent started");
 
         let persisted_project = runtime.active_project_id();
+        let protection = security::protection_mode(&paths.database);
+        let last_check = (options.clock)();
         Ok(Self {
             endpoint: endpoint.display(),
             options,
             _lock: lock,
-            store,
+            store: None,
+            key: None,
+            lock_reason: (security == SecurityState::Locked).then_some(LockReason::Startup),
+            protection,
+            security,
+            security_problem: None,
+            auto_lock: AutoLock::Never,
+            last_activity: 0,
+            last_check,
+            screen_was_locked: false,
+            key_pending: false,
+            key_waiters: Vec::new(),
+            key_retries: 0,
             runtime,
             modules,
-            brightness,
+            brightness: DEFAULT_BRIGHTNESS,
             started_at: unix_now(),
             sessions: BTreeMap::new(),
             next_session: 0,
             open_failures: BTreeMap::new(),
             persisted_project,
             last_input_at: None,
+            last_workflow: None,
+            last_unlock_prompt: None,
             handle,
             commands,
             signals_tx,
@@ -227,12 +294,20 @@ impl Agent {
     /// Runs until `shutdown` completes or a client or the tray requests it.
     pub async fn run(mut self, shutdown: impl Future<Output = ()>) -> Result<(), AgentError> {
         tokio::pin!(shutdown);
+        // A database with a system-managed key opens without the user; a new
+        // one is set up the same way. The key is read on a blocking thread,
+        // so a credential store prompt does not stop the agent. Failures
+        // leave a clear locked state.
+        self.open_automatically(None);
         // Initial discovery and state for subscribers (e.g. the tray menu).
         self.rescan();
         self.publish();
         let mut rescan = tokio::time::interval(self.options.rescan_interval);
         rescan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         rescan.reset();
+        let mut auto_lock = tokio::time::interval(self.options.auto_lock_check);
+        auto_lock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        auto_lock.reset();
         loop {
             let flow = tokio::select! {
                 () = &mut shutdown => Flow::Stop,
@@ -243,6 +318,10 @@ impl Agent {
                 }
                 _ = rescan.tick() => {
                     self.rescan();
+                    Flow::Continue
+                }
+                _ = auto_lock.tick() => {
+                    self.check_auto_lock();
                     Flow::Continue
                 }
             };
@@ -268,6 +347,22 @@ impl Agent {
 
     fn handle_command(&mut self, command: Command) -> Flow {
         match command {
+            Command::Request {
+                request: Request::SystemUnlock,
+                reply,
+            } => {
+                // Answered once the system key was read.
+                self.open_automatically(Some(reply));
+                Flow::Continue
+            }
+            Command::SystemKey(outcome) => {
+                self.finish_system_key(outcome);
+                Flow::Continue
+            }
+            Command::RetrySystemKey => {
+                self.open_automatically(None);
+                Flow::Continue
+            }
             Command::Request { request, reply } => {
                 let stop = matches!(request, Request::Shutdown | Request::PrepareForUpdate);
                 if matches!(request, Request::PrepareForUpdate) {
@@ -278,7 +373,12 @@ impl Agent {
             }
             Command::Tray(TrayCommand::Quit) => Flow::Stop,
             Command::Tray(TrayCommand::OpenWindow) => {
-                if let Err(error) = self.show_window() {
+                let opened = if self.security == SecurityState::Locked {
+                    self.request_window(UNLOCK_WINDOW)
+                } else {
+                    self.show_window()
+                };
+                if let Err(error) = opened {
                     warn!(%error, "cannot open the configuration app");
                 }
                 Flow::Continue
@@ -308,6 +408,15 @@ impl Agent {
             tracing::trace!(?request, "request");
         } else {
             debug!(?request, "request");
+            self.last_activity = self.now_seconds();
+        }
+        if self.security != SecurityState::Unlocked
+            && matches!(
+                request,
+                Request::ListProfiles | Request::GetActiveProfile | Request::GetActiveProject
+            )
+        {
+            return Err(locked());
         }
         match request {
             Request::GetStatus => Ok(Response::Status {
@@ -337,6 +446,9 @@ impl Agent {
 
     /// Requests that change runtime state.
     fn handle_change(&mut self, request: Request) -> Result<Response, IpcError> {
+        if let Some(result) = self.handle_security(&request) {
+            return result;
+        }
         match request {
             Request::SetActiveProfile { profile } => {
                 self.set_active_profile(profile)?;
@@ -373,6 +485,7 @@ impl Agent {
                 for step in &report.steps {
                     self.report_action(step.action, &step.result);
                 }
+                self.last_workflow = Some(report.clone());
                 self.after_change();
                 Ok(Response::WorkflowReport { report })
             }
@@ -393,6 +506,13 @@ impl Agent {
                 self.show_window().map_err(failed)?;
                 Ok(Response::Ok)
             }
+            Request::RequestWindow { window } => {
+                self.request_window(&window).map_err(failed)?;
+                Ok(Response::Ok)
+            }
+            Request::GetLastWorkflowReport => Ok(Response::LastWorkflow {
+                report: self.last_workflow.clone(),
+            }),
             Request::SimulateInput {
                 device,
                 control,
@@ -410,7 +530,40 @@ impl Agent {
             | Request::Subscribe
             | Request::Shutdown
             | Request::PrepareForUpdate => self.handle_request(request),
+            Request::Unlock { .. }
+            | Request::Lock
+            | Request::GetDatabaseKey
+            | Request::SystemUnlock
+            | Request::UseSystemKey { .. } => {
+                unreachable!("handled above")
+            }
         }
+    }
+
+    fn store(&self) -> Result<&SqliteStore, IpcError> {
+        self.store.as_ref().ok_or_else(locked)
+    }
+
+    /// Reads machine bindings, brightness, modules and the active profile
+    /// after unlocking.
+    fn load_configuration(&mut self) -> Result<(), StorageError> {
+        let store = self.store.as_ref().ok_or(StorageError::InvalidKey)?;
+        let machine = if let Some(machine) = store.load_machine_config()? {
+            machine
+        } else {
+            let machine = MachineConfig::new(Os::current());
+            store.save_machine_config(&machine)?;
+            machine
+        };
+        let brightness = store.device_brightness()?.unwrap_or(DEFAULT_BRIGHTNESS);
+        self.runtime.set_machine(machine);
+        if brightness != self.brightness {
+            self.brightness = brightness;
+            for session in self.sessions.values() {
+                session.io.set_brightness(brightness);
+            }
+        }
+        self.reload_configuration()
     }
 
     fn active_project_response(&self) -> Response {
@@ -420,7 +573,7 @@ impl Agent {
     }
 
     fn set_brightness(&mut self, percent: u8) -> Result<(), IpcError> {
-        self.store
+        self.store()?
             .set_device_brightness(percent)
             .map_err(|e| storage_error(&e))?;
         self.brightness = percent;
@@ -471,6 +624,40 @@ impl Agent {
         })
     }
 
+    /// Has the configuration app open the window `id`: through a connected
+    /// app, or by starting the app for that window only. The agent never
+    /// draws windows itself and sends nothing but the identifier.
+    fn request_window(&self, id: &str) -> Result<(), String> {
+        if !deckpilot_ipc::is_window_id(id) {
+            return Err(format!("invalid window identifier `{id}`"));
+        }
+        if self.handle.desktop_clients.load(Ordering::SeqCst) > 0 {
+            let _ = self.handle.events.send(AgentEvent::OpenWindow {
+                window: id.to_owned(),
+            });
+            return Ok(());
+        }
+        match &self.options.open_window {
+            Some(open) => open(id),
+            None => Err("opening windows is not supported".into()),
+        }
+    }
+
+    /// A key was pressed while locked: ask to unlock, but not on
+    /// every press.
+    fn prompt_unlock(&mut self) {
+        let due = self
+            .last_unlock_prompt
+            .is_none_or(|last| last.elapsed() >= UNLOCK_PROMPT_INTERVAL);
+        if !due {
+            return;
+        }
+        self.last_unlock_prompt = Some(std::time::Instant::now());
+        if let Err(error) = self.request_window(UNLOCK_WINDOW) {
+            warn!(%error, "cannot show the unlock prompt");
+        }
+    }
+
     fn show_window(&self) -> Result<(), String> {
         if self.handle.desktop_clients.load(Ordering::SeqCst) > 0 {
             let _ = self.handle.events.send(AgentEvent::ShowWindow);
@@ -483,18 +670,15 @@ impl Agent {
     }
 
     fn set_active_profile(&mut self, id: ProfileId) -> Result<(), IpcError> {
-        let profile = self
-            .store
+        let store = self.store()?;
+        let profile = store
             .load_profile(id)
             .map_err(|e| storage_error(&e))?
             .ok_or_else(|| IpcError::new(ErrorCode::NotFound, "profile does not exist"))?;
-        self.store
+        store
             .set_active_profile(Some(id))
             .map_err(|e| storage_error(&e))?;
-        let project = self
-            .store
-            .active_project(id)
-            .map_err(|e| storage_error(&e))?;
+        let project = store.active_project(id).map_err(|e| storage_error(&e))?;
         info!(profile = %profile.name, "profile activated");
         self.runtime.set_profile(Some(profile), project);
         self.persisted_project = self.runtime.active_project_id();
@@ -539,14 +723,18 @@ impl Agent {
     }
 
     fn reload_configuration(&mut self) -> Result<(), StorageError> {
-        if let Some(machine) = self.store.load_machine_config()? {
+        let Some(store) = self.store.as_ref() else {
+            return Ok(());
+        };
+        if let Some(machine) = store.load_machine_config()? {
             self.runtime.set_machine(machine);
         }
         // Module states may have changed in the configuration app.
-        self.modules = load_modules(&self.store)?;
+        self.modules = load_modules(store)?;
+        self.auto_lock = deckpilot_storage::policy::security_policy(store)?.auto_lock;
+        let (profile, project) = load_active(store)?;
         self.runtime
             .set_engine(Engine::new(self.modules.action_registry()));
-        let (profile, project) = load_active(&self.store)?;
         match profile {
             Some(profile) if self.runtime.profile().is_some_and(|p| p.id == profile.id) => {
                 self.runtime.reload_profile(profile);
@@ -565,7 +753,11 @@ impl Agent {
         if project != self.persisted_project
             && let Some(profile) = self.runtime.profile().map(|p| p.id)
         {
-            match self.store.set_active_project(profile, project) {
+            let saved = match self.store.as_ref() {
+                Some(store) => store.set_active_project(profile, project),
+                None => Ok(()),
+            };
+            match saved {
                 Ok(()) => self.persisted_project = project,
                 Err(error) => warn!(%error, "cannot persist the active project"),
             }
@@ -605,6 +797,13 @@ impl Agent {
                     return;
                 }
                 self.last_input_at = Some(unix_now());
+                self.last_activity = self.now_seconds();
+                if self.security != SecurityState::Unlocked {
+                    if matches!(input, ControlInput::Press) {
+                        self.prompt_unlock();
+                    }
+                    return;
+                }
                 let event = DeviceEvent::Input {
                     device: device.clone(),
                     control,
@@ -617,6 +816,13 @@ impl Agent {
                     Ok(RuntimeOutcome::Workflow { report }) => {
                         for step in &report.steps {
                             self.report_action(step.action, &step.result);
+                        }
+                        // A workflow started from the deck has no window of
+                        // its own; show what failed.
+                        let failed = report.status == deckpilot_core::ActionStatus::Failed;
+                        self.last_workflow = Some(report);
+                        if failed && let Err(error) = self.request_window(WORKFLOW_SUMMARY_WINDOW) {
+                            warn!(%error, "cannot show the workflow summary");
                         }
                     }
                     Ok(RuntimeOutcome::Ignored { reason }) => {
@@ -759,7 +965,10 @@ impl Agent {
     }
 
     fn profiles(&self) -> Vec<ProfileInfo> {
-        self.store
+        let Some(store) = self.store.as_ref() else {
+            return Vec::new();
+        };
+        store
             .list_profiles()
             .map(|list| {
                 list.into_iter()
@@ -821,6 +1030,12 @@ impl Agent {
             devices: self.device_infos(),
             brightness: self.brightness,
             last_input_at: self.last_input_at,
+            security: self.security,
+            protection: self.protection,
+            lock_reason: self.lock_reason,
+            security_problem: self.security_problem.clone(),
+            waiting_for_key_store: self.key_pending,
+            screen_lock_detection: self.options.screen_lock.is_some(),
         }
     }
 
@@ -837,8 +1052,23 @@ fn unix_now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
+fn locked() -> IpcError {
+    IpcError::new(ErrorCode::Locked, "the configuration is locked")
+}
+
+/// The agent's state for the database at `path`, without opening it.
+fn security_state(path: &std::path::Path) -> Result<SecurityState, StorageError> {
+    Ok(match Vault::new(path).state()? {
+        DatabaseState::Missing => SecurityState::Uninitialized,
+        DatabaseState::Plaintext => SecurityState::LegacyPlaintext,
+        DatabaseState::Encrypted => SecurityState::Locked,
+    })
+}
+
 fn load_modules(store: &SqliteStore) -> Result<ModuleRegistry, StorageError> {
     let (modules, problems) = deckpilot_modules::configured(&store.module_states()?);
+    // Schemas of all registered modules, enabled or not.
+    store.apply_module_schemas(&modules.schemas())?;
     for problem in problems {
         warn!(%problem, "stored module state was not applied");
     }
@@ -918,6 +1148,11 @@ pub fn default_options(paths: AgentPaths, mock_models: &[DeviceModel]) -> AgentO
         rescan_interval: Duration::from_secs(2),
         autostart,
         open_desktop: Some(Box::new(crate::launcher::open_desktop)),
+        open_window: Some(Box::new(crate::launcher::open_window)),
+        key_store: security::system_key_store(),
+        auto_lock_check: AUTO_LOCK_CHECK,
+        clock: system_clock(),
+        screen_lock: deckpilot_presence::screen_lock_monitor().map(Arc::from),
     }
 }
 

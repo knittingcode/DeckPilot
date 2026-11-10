@@ -23,6 +23,14 @@ pub enum CommandError {
     Agent(#[from] deckpilot_ipc::ClientError),
     #[error(transparent)]
     Updater(#[from] tauri_plugin_updater::Error),
+    #[error("the configuration is locked")]
+    Locked,
+    #[error("confirm that it is you to continue")]
+    ConfirmationRequired,
+    /// The operation is sensitive; the frontend asks the user to
+    /// authenticate and retries. The message is matched in `src/lib/api.ts`.
+    #[error("authentication required")]
+    AuthenticationRequired,
     #[error("{0}")]
     Invalid(String),
     #[error("{0} not found")]

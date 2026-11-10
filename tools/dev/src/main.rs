@@ -31,7 +31,9 @@ Usage: deckpilot-dev <command> [options]
 
 Commands:
   doctor                 Check development dependencies
-  up [--foreground]      Start the agent and the app with live reload
+  up [--foreground] [--locked]
+                         Start the agent and the app with live reload
+                         (--locked: lock the configuration after start)
      [--devices <list>]  Simulated devices: mk2,xl,plus (default) or none
   down                   Stop the session started by `up`
   restart                down + up
@@ -40,14 +42,28 @@ Commands:
                          Show session logs (follow with -f)
   agent                  Run the agent in the foreground (dev data)
   ui                     Run the app with HMR in the foreground (dev data)
-  seed [--reset]         Fill the dev database with demonstration data
+  seed [--reset] [--password] [--encrypt-legacy]
+                         Fill the dev database with demonstration data. A new
+                         database gets a system-managed key from the agent
+                         (Keychain service \"DeckPilot Development\");
+                         --password: protect it with the dev password instead
+                         --encrypt-legacy: encrypt an unencrypted database
+                         from an earlier version with the dev password
+  window <id>            Ask the dev agent to open a native window, e.g.
+                         security.unlock or workflows.execution-summary
+  press <serial> <key>   Press a key of a simulated device
   clean [--data]         Remove logs and session files (and dev data)
   check-versions [--tag <tag>]
                          Verify that all version numbers match
   package [-- <tauri build args>]
                          Build installers including the agent
   verify-release <dir>   Check a release's latest.json and artifact signatures
-                         (public key from DECKPILOT_UPDATER_PUBKEY)";
+                         (public key from DECKPILOT_UPDATER_PUBKEY)
+  check-updater-key      Check that DECKPILOT_UPDATER_PUBKEY is a valid public key
+  release-notes          Print the CHANGELOG.md section of the current version
+  verify-signature <file> <file.sig>
+                         Verify one updater signature against
+                         DECKPILOT_UPDATER_PUBKEY";
 
 /// The configuration app in development mode.
 const UI_ARGS: &[&str] = &["--filter", "@deckpilot/desktop", "tauri", "dev"];
@@ -201,6 +217,176 @@ fn wait_for_agent(paths: &DevPaths, agent: &mut Child, timeout: Duration) -> Res
     Err("the agent did not become ready in time".into())
 }
 
+/// `seed [--reset] [--password] [--encrypt-legacy]`.
+fn seed_command(
+    paths: &DevPaths,
+    reset: bool,
+    password: bool,
+    encrypt_legacy: bool,
+) -> Result<(), String> {
+    if reset {
+        if Session::load(paths).is_some_and(|s| s.supervisor_alive()) {
+            return Err("stop the session before resetting its data".into());
+        }
+        let _ = std::fs::remove_dir_all(&paths.data);
+    }
+    if encrypt_legacy {
+        if Session::load(paths).is_some_and(|s| s.supervisor_alive()) {
+            return Err("stop the session before encrypting its data".into());
+        }
+        seed::encrypt_legacy(paths).map_err(|e| e.to_string())?;
+        println!("encrypted the development database with the development password");
+    }
+    let mut seeded = seed::seed(paths, password).map_err(|e| e.to_string())?;
+    // A system-managed database is seeded with the key of the running agent.
+    if !seeded {
+        seeded = seed_through_agent(paths)?;
+    }
+    let missing = !paths.data.join("deckpilot.db").exists();
+    println!(
+        "{}",
+        if seeded {
+            "seeded demonstration data"
+        } else if missing {
+            "no database yet: `make up` creates one with a system-managed key and seeds it"
+        } else {
+            "already seeded (or the agent is not running)"
+        }
+    );
+    Ok(())
+}
+
+/// Seeds a system-managed development database with the key of the running
+/// development agent and lets it reload. Nothing happens if the agent is
+/// not running or locked.
+fn seed_through_agent(paths: &DevPaths) -> Result<bool, String> {
+    let key = runtime().block_on(async {
+        let mut client = AgentClient::connect(&paths.agent_paths(), ClientKind::Other).await?;
+        client.request(Request::GetDatabaseKey).await
+    });
+    let Ok(Response::DatabaseKey { key }) = key else {
+        return Ok(false);
+    };
+    let key = deckpilot_storage::DatabaseKey::from_hex(key.expose()).map_err(|e| e.to_string())?;
+    let seeded = seed::seed_with_key(paths, key).map_err(|e| e.to_string())?;
+    if seeded {
+        let _ = dev_request(paths, Request::ReloadConfiguration);
+    }
+    Ok(seeded)
+}
+
+/// `window` and `press`: requests to the running development agent.
+fn agent_command(name: &str, args: &[String], paths: &DevPaths) -> Result<(), String> {
+    match name {
+        "window" => {
+            let id = args.first().ok_or("expected a window identifier")?;
+            dev_request(paths, Request::RequestWindow { window: id.clone() })
+        }
+        "press" => {
+            let (Some(serial), Some(key)) = (args.first(), args.get(1)) else {
+                return Err("expected a simulated device serial and a key index".into());
+            };
+            let index: u16 = key.parse().map_err(|_| "the key index must be a number")?;
+            let status = runtime()
+                .block_on(agent_status(paths))
+                .map_err(|e| e.to_string())?;
+            let device = status
+                .devices
+                .iter()
+                .find(|d| &d.id.serial == serial)
+                .ok_or_else(|| format!("no simulated device {serial}"))?
+                .id
+                .clone();
+            dev_request(
+                paths,
+                Request::SimulateInput {
+                    device,
+                    control: deckpilot_device::ControlId::Key { index },
+                    input: deckpilot_device::ControlInput::Press,
+                },
+            )
+        }
+        other => Err(format!("unknown command `{other}`")),
+    }
+}
+
+/// Sends one request to the development agent.
+fn dev_request(paths: &DevPaths, request: Request) -> Result<(), String> {
+    runtime()
+        .block_on(async {
+            let mut client = AgentClient::connect(&paths.agent_paths(), ClientKind::Other).await?;
+            client.request(request).await
+        })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Prepares the started development agent. A system-managed configuration
+/// is open already (and is seeded on the first start); a password-protected
+/// one is unlocked with the development password, so that `make up` behaves
+/// like an unlocked session. `--locked` (`make up LOCKED=1`) locks it to try
+/// the unlock screens.
+fn unlock_dev_agent(paths: &DevPaths, locked: bool) {
+    let mut status = runtime().block_on(agent_status(paths)).ok();
+    if status.as_ref().is_some_and(|s| s.waiting_for_key_store) {
+        // A rebuilt agent has a new code signature: macOS asks once per
+        // build whether it may use its Keychain item.
+        println!(
+            "the agent is waiting for the credential store; on macOS, answer the Keychain dialog \
+             for the rebuilt agent (\"Always Allow\"), or use `deckpilot-dev seed --reset --password` \
+             to develop without the Keychain"
+        );
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while status.as_ref().is_some_and(|s| s.waiting_for_key_store) && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(500));
+            status = runtime().block_on(agent_status(paths)).ok();
+        }
+    }
+    if status
+        .as_ref()
+        .is_some_and(|s| s.protection == Some(deckpilot_ipc::ProtectionMode::SystemManaged))
+    {
+        match seed_through_agent(paths) {
+            Ok(true) => println!("seeded the development database with demonstration data"),
+            Ok(false) => {}
+            Err(error) => println!("could not seed the development database: {error}"),
+        }
+        if let Some(problem) = status.and_then(|s| s.security_problem) {
+            println!("agent locked: {problem}");
+        } else if locked {
+            let _ = dev_request(paths, Request::Lock);
+            println!("agent locked; unlock it in the app (system authentication)");
+        } else {
+            println!("configuration opened with the system-managed development key");
+        }
+        return;
+    }
+    if locked {
+        println!(
+            "agent left locked; the development password is `{}`",
+            seed::DEV_PASSWORD
+        );
+        return;
+    }
+    let Some(key) = seed::dev_key(paths) else {
+        println!("agent locked: the app asks for a password");
+        return;
+    };
+    let unlocked = runtime().block_on(async {
+        let mut client = AgentClient::connect(&paths.agent_paths(), ClientKind::Other).await?;
+        client
+            .request(Request::Unlock {
+                key: deckpilot_ipc::KeyMaterial::new(key.to_hex()),
+            })
+            .await
+    });
+    match unlocked {
+        Ok(_) => println!("agent unlocked with the development password"),
+        Err(error) => println!("could not unlock the agent: {error}"),
+    }
+}
+
 fn stop_agent_gracefully(paths: &DevPaths, owned: Option<&OwnedProcess>) {
     let runtime = runtime();
     let requested = runtime
@@ -219,7 +405,12 @@ fn stop_agent_gracefully(paths: &DevPaths, owned: Option<&OwnedProcess>) {
 }
 
 /// Runs the session in this process until a stop is requested.
-fn supervise(paths: &DevPaths, devices: &str, foreground: bool) -> Result<(), String> {
+fn supervise(
+    paths: &DevPaths,
+    devices: &str,
+    foreground: bool,
+    locked: bool,
+) -> Result<(), String> {
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
     ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst)).map_err(|e| e.to_string())?;
@@ -251,6 +442,7 @@ fn supervise(paths: &DevPaths, devices: &str, foreground: bool) -> Result<(), St
         return Err(error);
     }
     println!("agent ready (data: {})", paths.data.display());
+    unlock_dev_agent(paths, locked);
 
     let mut ui_command = Command::new(program("pnpm"));
     ui_command.args(UI_ARGS);
@@ -315,7 +507,7 @@ fn build_agent(paths: &DevPaths) -> Result<(), String> {
     }
 }
 
-fn up(paths: &DevPaths, devices: &str, foreground: bool) -> Result<(), String> {
+fn up(paths: &DevPaths, devices: &str, foreground: bool, locked: bool) -> Result<(), String> {
     paths.ensure_isolated()?;
     paths.create().map_err(|e| e.to_string())?;
     if let Some(session) = Session::load(paths) {
@@ -330,18 +522,21 @@ fn up(paths: &DevPaths, devices: &str, foreground: bool) -> Result<(), String> {
         clean_stale(paths, &session);
     }
     doctor()?;
-    if seed::seed(paths).map_err(|e| e.to_string())? {
+    if seed::seed(paths, false).map_err(|e| e.to_string())? {
         println!("seeded the development database with demonstration data");
     }
     build_agent(paths)?;
 
     if foreground {
-        return supervise(paths, devices, true);
+        return supervise(paths, devices, true, locked);
     }
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut command = Command::new(exe);
     command.args(["supervise", "--devices", devices]);
+    if locked {
+        command.arg("--locked");
+    }
     command.current_dir(&paths.root);
     let log = std::fs::File::create(logs::log_path(&paths.logs, "supervisor"))
         .map_err(|e| e.to_string())?;
@@ -470,12 +665,24 @@ fn status(paths: &DevPaths) {
 fn foreground_agent(paths: &DevPaths, devices: &str) -> Result<(), String> {
     paths.ensure_isolated()?;
     paths.create().map_err(|e| e.to_string())?;
-    seed::seed(paths).map_err(|e| e.to_string())?;
+    seed::seed(paths, false).map_err(|e| e.to_string())?;
     let mut command = Command::new("cargo");
     command
         .args(["run", "-p", "deckpilot-agent", "--"])
         .args(agent_args(devices));
     dev_env(&mut command, paths);
+    // Unlock the agent once it is listening, as `make up` does.
+    let watcher = paths.clone();
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while Instant::now() < deadline {
+            if runtime().block_on(agent_status(&watcher)).is_ok() {
+                unlock_dev_agent(&watcher, false);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    });
     let status = command.status().map_err(|e| e.to_string())?;
     if status.success() {
         Ok(())
@@ -526,13 +733,13 @@ fn run(args: &[String]) -> Result<(), String> {
     let devices = option(args, "--devices").unwrap_or_else(|| DEFAULT_DEVICES.to_owned());
     match args.first().map(String::as_str) {
         Some("doctor") => doctor(),
-        Some("up") => up(&paths, &devices, flag("--foreground")),
-        Some("supervise") => supervise(&paths, &devices, false),
+        Some("up") => up(&paths, &devices, flag("--foreground"), flag("--locked")),
+        Some("supervise") => supervise(&paths, &devices, false, flag("--locked")),
         Some("down") => down(&paths),
         Some("restart") => {
             let devices = Session::load(&paths).map_or(devices, |s| s.devices);
             down(&paths)?;
-            up(&paths, &devices, false)
+            up(&paths, &devices, false, flag("--locked"))
         }
         Some("status") => {
             status(&paths);
@@ -563,25 +770,14 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         Some("agent") => foreground_agent(&paths, &devices),
         Some("ui") => foreground_ui(&paths),
-        Some("seed") => {
-            if flag("--reset") {
-                if Session::load(&paths).is_some_and(|s| s.supervisor_alive()) {
-                    return Err("stop the session before resetting its data".into());
-                }
-                let _ = std::fs::remove_dir_all(&paths.data);
-            }
-            let seeded = seed::seed(&paths).map_err(|e| e.to_string())?;
-            println!(
-                "{}",
-                if seeded {
-                    "seeded demonstration data"
-                } else {
-                    "already seeded"
-                }
-            );
-            Ok(())
-        }
+        Some("seed") => seed_command(
+            &paths,
+            flag("--reset"),
+            flag("--password"),
+            flag("--encrypt-legacy"),
+        ),
         Some("clean") => clean(&paths, flag("--data")),
+        Some(command @ ("window" | "press")) => agent_command(command, &args[1..], &paths),
         Some("check-versions") => {
             let version = versions::check(&paths.root, option(args, "--tag").as_deref())?;
             println!("all versions are {version}");
@@ -596,19 +792,10 @@ fn run(args: &[String]) -> Result<(), String> {
                 .collect();
             package::package(&paths.root, &extra)
         }
-        Some("verify-release") => {
-            let dir = args
-                .get(1)
-                .ok_or("expected the directory with the release files")?;
-            let key = std::env::var("DECKPILOT_UPDATER_PUBKEY")
-                .map_err(|_| "DECKPILOT_UPDATER_PUBKEY is not set".to_owned())?;
-            let version = versions::check(&paths.root, None)?;
-            let verified = release::verify(std::path::Path::new(dir), &key, &version)?;
-            for line in verified {
-                println!("verified {line}");
-            }
-            Ok(())
-        }
+        Some(
+            command @ ("verify-release" | "check-updater-key" | "verify-signature"
+            | "release-notes"),
+        ) => release::command(command, &args[1..], &paths.root),
         Some("help" | "--help" | "-h") | None => {
             println!("{USAGE}");
             Ok(())

@@ -104,6 +104,14 @@
   #root {
     @apply h-full;
   }
+  /* Popup windows size themselves to their content: their document must not
+     take the main window's full-height layout. */
+  html[data-window],
+  html[data-window] body,
+  html[data-window] #root {
+    height: auto;
+    min-height: 100%;
+  }
   body {
     @apply bg-background text-foreground antialiased select-none;
   }

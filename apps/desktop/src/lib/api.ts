@@ -9,7 +9,15 @@ import type {
   ControlFace,
   DeviceLayout,
   DeviceModel,
+  ExportResult,
+  ImportOptions,
+  ImportPreview,
+  ImportSummary,
   LaunchView,
+  LogView,
+  SecurityPolicy,
+  SecurityView,
+  WindowSpec,
   MachineConfig,
   MigrationNote,
   ModuleInfo,
@@ -44,6 +52,55 @@ export interface ProjectInput {
 
 /** Typed wrappers around the backend commands. */
 export const api = {
+  openWindow: (id: string) => invoke<null>("open_window", { id }),
+  currentWindow: () => invoke<WindowSpec | null>("current_window"),
+  fitWindow: (width: number, height: number, viewportWidth: number, viewportHeight: number) =>
+    invoke<[number, number]>("fit_window", { width, height, viewportWidth, viewportHeight }),
+  closeWindow: () => invoke<null>("close_window"),
+  showMainWindow: () => invoke<boolean>("show_main_window"),
+  finishSecurityPrompt: () => invoke<null>("finish_security_prompt"),
+  lastWorkflowReport: () => invoke<WorkflowReport | null>("last_workflow_report"),
+
+  securityStatus: () => invoke<SecurityView>("security_status"),
+  setupPassword: (password: string, confirmation: string) =>
+    invoke<SecurityView>("setup_password", { input: { password, confirmation } }),
+  unlock: (password: string) => invoke<SecurityView>("unlock", { password }),
+  /** Opens a system-managed configuration (after a lock: with the system check). */
+  systemUnlock: () => invoke<SecurityView>("system_unlock"),
+  /** The authentication the security policy asks for; `null` without a password. */
+  confirmIdentity: (password: string | null) =>
+    invoke<SecurityView>("confirm_identity", { password }),
+  /** Authenticates for the next sensitive operation. */
+  authenticate: (password: string | null) => invoke<null>("authenticate", { password }),
+  usePassword: (password: string, confirmation: string) =>
+    invoke<SecurityView>("use_password", { input: { password, confirmation } }),
+  useSystemKey: () => invoke<SecurityView>("use_system_key"),
+  /** Moves the key file of a missing database aside and starts over. */
+  startNewConfiguration: () => invoke<SecurityView>("start_new_configuration"),
+  setSecurityPolicy: (policy: SecurityPolicy) =>
+    invoke<SecurityView>("set_security_policy", { policy }),
+  encryptLegacyDatabase: (password: string, confirmation: string) =>
+    invoke<SecurityView>("encrypt_legacy_database", { input: { password, confirmation } }),
+  changePassword: (current: string, password: string, confirmation: string) =>
+    invoke<SecurityView>("change_password", { input: { current, password, confirmation } }),
+  lock: () => invoke<SecurityView>("lock"),
+  removeUnencryptedCopies: () => invoke<SecurityView>("remove_unencrypted_copies"),
+
+  exportConfiguration: (request: {
+    path: string
+    password: string
+    confirmation: string
+    profiles: string[] | null
+    includeModuleSettings: boolean
+    includeAppSettings: boolean
+  }) => invoke<ExportResult>("export_configuration", { request }),
+  readAgentLog: (lines: number) => invoke<LogView>("read_agent_log", { lines }),
+  previewImport: (path: string, password: string) =>
+    invoke<{ token: number; preview: ImportPreview }>("preview_import", { path, password }),
+  applyImport: (token: number, options: ImportOptions) =>
+    invoke<ImportSummary>("apply_import", { token, options }),
+  cancelImport: () => invoke<null>("cancel_import"),
+
   getOverview: () => invoke<Overview>("get_overview"),
   launchInfo: () => invoke<LaunchView>("launch_info"),
   listActionTypes: () => invoke<ActionType[]>("list_action_types"),
@@ -145,6 +202,20 @@ export const api = {
 }
 
 /** Backend event carrying the latest {@link AgentConnection}. */
+/** The backend's answer to a sensitive operation without a fresh authentication. */
+export const AUTHENTICATION_REQUIRED = "authentication required"
+
+export function isAuthenticationRequired(error: unknown): boolean {
+  return errorMessage(error) === AUTHENTICATION_REQUIRED
+}
+
+/** Sent to every window after imported data was written. */
+export const CONFIGURATION_CHANGED_EVENT = "deckpilot://configuration-changed"
+/** Asks the main window to show a page (payload: the page id). */
+export const NAVIGATE_EVENT = "deckpilot://navigate"
+
+/** Sent to every window when the configuration was locked or unlocked. */
+export const SECURITY_CHANGED_EVENT = "deckpilot://security-changed"
 export const AGENT_STATUS_EVENT = "agent-status"
 /** Backend event carrying the latest {@link UpdateState}. */
 export const UPDATE_STATE_EVENT = "update-state"

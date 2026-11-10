@@ -145,25 +145,47 @@ These are deliberate for now and documented so they can move later:
 None of these depend on a module crate; `deckpilot-core` has no dependency on
 any module.
 
-## Planned interfaces
+## Portability contract
 
-For a later milestone, so that these parts can move into modules without
-breaking stored data:
+Each module declares in its manifest what may leave the computer in an
+export (`Portability`):
 
-- **Module-owned data:** `ModuleData` — a per-profile, per-module JSON value
-  (`profile_module_data(profile_id, module_id, version, document)`) handed to
-  the module, with the profile's lifecycle (duplicate, delete) applied by the
-  core through `FeatureModule::remap_ids` / `on_profile_deleted` hooks.
-- **Runtime context:** a typed slot map in the session
-  (`ContextSlots<ModuleId, Value>`) instead of the built-in active project,
-  with `ContextEffect::Set { slot, value }` checked against a capability per
-  slot. Label templates would ask modules for placeholders
-  (`FeatureModule::placeholders`).
-- **Module migrations:** `FeatureModule::migrations() -> &[ModuleMigration]`
-  with `ModuleMigration { version: u32, apply: fn(&Transaction) -> Result }`,
-  tracked per module in a `module_migrations (module_id, version)` table and
-  run after the core migrations in the same transaction. Migrations of
-  disabled modules still run, so enabling a module later never sees old data.
+- `version` — the format version of the module's exported data (`0`: the
+  module exports nothing);
+- `settings` — the scope of each setting: `portable`, `machineSpecific` or
+  `sensitive`. Settings that are not listed are treated as machine-specific
+  and never exported.
+
+On import, the core checks the module's data without running module code:
+the module must be installed, the exported version must not be newer than
+the module's contract (older versions are accepted), settings that are not
+portable for the local module are dropped and reported, and the rest must
+satisfy the module's configuration schema. Data of modules this build does
+not include is reported and not imported. Actions of such modules are
+imported and shown as unavailable.
+
+## Module-owned schema
+
+Modules can own database tables through declared, versioned SQL steps
+(`ModuleManifest::migrations`). The core applies pending steps for every
+registered module — enabled or not, so enabling a module later never meets
+an old schema — in one transaction per module, and records the version in
+`module_schemas`. A module schema newer than the installed module is
+refused. The projects module declares version 1 to take ownership of the
+`projects`, `default_projects` and `active_projects` tables created by core
+schema 3; later changes to those tables belong in its own steps.
+
+## Still planned
+
+- **Module-owned profile data:** a per-profile, per-module document handed
+  to the module, with the profile's lifecycle (duplicate, delete) applied by
+  the core through hooks, so that projects can leave the core profile model.
+- **Runtime context slots** instead of the built-in active project, with
+  effects checked against a capability per slot, and module-provided label
+  placeholders.
+- **Import migrations in code** for modules whose exported data changes
+  shape; until then, a module accepts older export versions only if their
+  settings still validate.
 
 ## Adding a module
 

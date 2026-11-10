@@ -5,13 +5,16 @@ use serde_json::{Value, json};
 use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
 use tauri::webview::InvokeRequest;
-use tauri::{WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use deckpilot_agent::{Agent, AgentOptions, InstanceLock};
 use deckpilot_device::{mock::MockBackend, models};
 use deckpilot_ipc::AgentPaths;
 
 use crate::state::AppState;
+use deckpilot_keystore::MemoryKeyStore;
+use deckpilot_presence::{Method, PresenceCheck, Scripted, Unavailable};
+use std::sync::Arc;
 
 /// Origin the bundled frontend is served from. Requests from any other origin
 /// are treated as remote and rejected by Tauri's access control.
@@ -21,6 +24,9 @@ const APP_ORIGIN: &str = if cfg!(windows) {
     "tauri://localhost"
 };
 
+/// Password of the test databases. Not used anywhere else.
+const PASSWORD: &str = "test password 1";
+
 struct Harness {
     window: WebviewWindow<tauri::test::MockRuntime>,
     paths: AgentPaths,
@@ -28,14 +34,42 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        Self::new_on(Self::temp_paths())
+    }
+
+    /// A password-protected configuration in `paths`.
+    fn new_on(paths: AgentPaths) -> Self {
+        let harness = Self::without_setup(paths);
+        // First start: the user sets a password, which creates the
+        // encrypted database.
+        harness.ok(
+            "setup_password",
+            json!({ "input": { "password": PASSWORD, "confirmation": PASSWORD } }),
+        );
+        harness
+    }
+
+    fn temp_paths() -> AgentPaths {
         let data_dir = std::env::temp_dir().join(format!(
             "deckpilot-desktop-test-{}",
             deckpilot_core::ProfileId::new()
         ));
-        let paths = AgentPaths::in_dir(data_dir);
+        AgentPaths::in_dir(data_dir)
+    }
+
+    /// The app started on `paths` without any user interaction. The
+    /// computer offers no system authentication.
+    fn without_setup(paths: AgentPaths) -> Self {
+        Self::with_presence(paths, Arc::new(Unavailable))
+    }
+
+    /// As `without_setup`, with a scripted Touch ID (never the real one).
+    fn with_presence(paths: AgentPaths, presence: Arc<dyn PresenceCheck>) -> Self {
         let app = mock_builder()
-            .manage(AppState::open(paths.clone()).expect("open state"))
+            .manage(AppState::with_presence(paths.clone(), presence).expect("open state"))
             .manage(crate::updates::UpdateManager::default())
+            .manage(crate::commands::portability::PendingImport::default())
+            .manage(crate::windows::WindowRegistry::default())
             .invoke_handler(crate::commands::handler())
             .build(mock_context(noop_assets()))
             .expect("build app");
@@ -43,6 +77,19 @@ impl Harness {
             .build()
             .expect("build window");
         Self { window, paths }
+    }
+
+    fn error(&self, cmd: &str, args: Value) -> String {
+        self.call(cmd, args)
+            .expect_err(cmd)
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    /// Unlocks the app (and a running agent) as the unlock screen does.
+    fn unlock(&self) {
+        self.ok("unlock", json!({ "password": PASSWORD }));
     }
 
     fn call(&self, cmd: &str, args: Value) -> Result<Value, Value> {
@@ -567,11 +614,22 @@ fn updates_report_their_configuration_and_store_preferences() {
 
     let launch = h.ok("launch_info", json!({}));
     assert_eq!(launch["launch"]["firstAfterUpdate"], false);
-    assert_eq!(launch["encryption"]["passwordRequired"], false);
+    assert_eq!(launch["encryption"]["enabled"], true);
+    assert_eq!(launch["encryption"]["passwordRequired"], true);
 }
 
-/// Starts a real agent with a simulated MK.2 on its own runtime.
+/// Starts a real agent with a simulated MK.2 on its own runtime, without a
+/// credential store.
 fn start_agent(paths: &AgentPaths) -> (tokio::runtime::Runtime, MockBackend) {
+    start_agent_with(paths, None)
+}
+
+/// As `start_agent`, with an in-memory credential store standing in for
+/// the Keychain (no real credentials are touched).
+fn start_agent_with(
+    paths: &AgentPaths,
+    keys: Option<MemoryKeyStore>,
+) -> (tokio::runtime::Runtime, MockBackend) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -586,7 +644,13 @@ fn start_agent(paths: &AgentPaths) -> (tokio::runtime::Runtime, MockBackend) {
         rescan_interval: std::time::Duration::from_millis(50),
         autostart: None,
         open_desktop: None,
+        open_window: None,
+        key_store: keys.map(|keys| -> Arc<dyn deckpilot_keystore::KeyStore> { Arc::new(keys) }),
+        auto_lock_check: std::time::Duration::from_millis(50),
+        clock: deckpilot_agent::system_clock(),
+        screen_lock: None,
     };
+    paths.create_dirs().unwrap();
     let lock = InstanceLock::acquire(&paths.lock_file).unwrap();
     runtime.block_on(async {
         let agent = Agent::start(options, lock).unwrap();
@@ -596,7 +660,7 @@ fn start_agent(paths: &AgentPaths) -> (tokio::runtime::Runtime, MockBackend) {
 }
 
 fn wait_for(h: &Harness, predicate: impl Fn(&Value) -> bool) -> Value {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
         let status = h.ok("agent_status", json!({}));
         if predicate(&status) {
@@ -637,6 +701,7 @@ fn runtime_state_and_actions_go_through_the_agent() {
     );
 
     let (_runtime, mock) = start_agent(&h.paths);
+    h.unlock();
     let status = wait_for(&h, |s| {
         s["running"] == true && s["status"]["devices"][0]["state"] == "connected"
     });
@@ -769,6 +834,8 @@ fn disabled_modules_hide_types_but_keep_saved_actions() {
     let view = h.ok("get_profile", json!({ "profileId": profile_id }));
     assert_eq!(view["profile"]["actions"][0]["id"], next["id"]);
     let reopened = AppState::open(h.paths.clone()).unwrap();
+    let key = h.window.state::<AppState>().key().unwrap();
+    reopened.attach(key, false).unwrap();
     assert!(
         !reopened
             .modules()
@@ -913,6 +980,7 @@ fn modules_and_project_copies_work_with_the_running_agent() {
     let current = action("Current", "projects.select", json!({ "project_id": null }));
 
     let (_runtime, _mock) = start_agent(&h.paths);
+    h.unlock();
     wait_for(&h, |s| s["running"] == true);
     let run = |id: &str| h.ok("run_action", json!({ "profileId": work, "actionId": id }));
 
@@ -1011,4 +1079,991 @@ fn modules_and_project_copies_work_with_the_running_agent() {
 
     h.ok("stop_agent", json!({}));
     wait_for(&h, |s| s["running"] == false);
+}
+
+#[test]
+fn the_configuration_is_locked_without_the_password() {
+    let h = Harness::new();
+    let status = h.ok("security_status", json!({}));
+    assert_eq!(status["database"], "encrypted");
+    assert_eq!(status["unlocked"], true);
+    let profile = new_profile(&h, "Work");
+
+    h.ok("lock", json!({}));
+    assert_eq!(h.ok("security_status", json!({}))["unlocked"], false);
+    assert_eq!(
+        h.error("list_profiles", json!({})),
+        "the configuration is locked"
+    );
+    assert_eq!(
+        h.error("unlock", json!({ "password": "not the password" })),
+        "the password is not correct"
+    );
+    h.unlock();
+    assert_eq!(
+        h.ok("list_profiles", json!({}))["profiles"][0]["id"],
+        json!(profile)
+    );
+    // The database file holds no readable configuration.
+    let bytes = std::fs::read(&h.paths.database).unwrap();
+    assert!(!bytes.windows(15).any(|w| w == b"SQLite format 3"));
+    // Short passwords and mismatched confirmations are refused.
+    let other = Harness::without_setup(Harness::temp_paths());
+    assert!(
+        other
+            .error(
+                "setup_password",
+                json!({ "input": { "password": "short", "confirmation": "short" } })
+            )
+            .contains("at least 8")
+    );
+    assert!(
+        other
+            .error(
+                "setup_password",
+                json!({ "input": { "password": "long enough", "confirmation": "long enougH" } })
+            )
+            .contains("do not match")
+    );
+}
+
+#[test]
+fn changing_the_password_keeps_the_agent_and_data() {
+    let h = Harness::new();
+    let profile = new_profile(&h, "Work");
+    let (_runtime, _mock) = start_agent(&h.paths);
+    h.unlock();
+    wait_for(&h, |s| s["status"]["security"] == "unlocked");
+
+    assert_eq!(
+        h.error(
+            "change_password",
+            json!({ "input": { "current": "wrong", "password": "brand new pw", "confirmation": "brand new pw" } }),
+        ),
+        "the password is not correct"
+    );
+    h.ok(
+        "change_password",
+        json!({ "input": { "current": PASSWORD, "password": "brand new pw", "confirmation": "brand new pw" } }),
+    );
+    // The agent was locked during the swap and is unlocked again.
+    let status = wait_for(&h, |s| s["status"]["security"] == "unlocked");
+    assert_eq!(status["status"]["activeProfile"]["id"], json!(profile));
+    h.ok("lock", json!({}));
+    wait_for(&h, |s| s["status"]["security"] == "locked");
+    assert!(h.call("unlock", json!({ "password": PASSWORD })).is_err());
+    h.ok("unlock", json!({ "password": "brand new pw" }));
+    wait_for(&h, |s| s["status"]["security"] == "unlocked");
+    assert_eq!(
+        h.ok("list_profiles", json!({}))["profiles"][0]["id"],
+        json!(profile)
+    );
+    h.ok("stop_agent", json!({}));
+    wait_for(&h, |s| s["running"] == false);
+}
+
+#[test]
+fn a_restarted_app_reuses_the_unlocked_agent_without_asking() {
+    let h = Harness::new();
+    new_profile(&h, "Work");
+    let (_runtime, _mock) = start_agent(&h.paths);
+    h.unlock();
+    wait_for(&h, |s| s["status"]["security"] == "unlocked");
+
+    // The window is closed and opened again: a new app process.
+    let restarted = Harness::without_setup(h.paths.clone());
+    let status = restarted.ok("security_status", json!({}));
+    assert_eq!(status["unlocked"], true, "{status}");
+    assert_eq!(
+        restarted.ok("list_profiles", json!({}))["profiles"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    h.ok("stop_agent", json!({}));
+    wait_for(&h, |s| s["running"] == false);
+
+    // With the agent stopped, a new app process must ask.
+    let cold = Harness::without_setup(h.paths.clone());
+    assert_eq!(cold.ok("security_status", json!({}))["unlocked"], false);
+}
+
+#[test]
+fn the_password_is_confirmed_once_after_an_update() {
+    let h = Harness::new();
+    new_profile(&h, "Work");
+    // The previous version confirmed the password; this is the first start
+    // of the new version, unlocked with the key of the running agent.
+    {
+        use deckpilot_storage::ConfigStore as _;
+        let state = h.window.state::<AppState>();
+        let store = state.store().unwrap();
+        store
+            .set_setting("security.confirmedVersion", "0.0.1")
+            .unwrap();
+        // The default asks only for sensitive operations.
+        store
+            .set_setting("security.reauthentication", "afterUpdate")
+            .unwrap();
+    }
+    let state = h.window.state::<AppState>();
+    let key = state.key().unwrap();
+    state.detach();
+    state.attach(key.clone(), false).unwrap();
+
+    let status = h.ok("security_status", json!({}));
+    assert_eq!(status["confirmationRequired"], true);
+    assert_eq!(status["unlocked"], false);
+    assert!(h.error("list_profiles", json!({})).contains("confirm"));
+    assert!(
+        h.call("confirm_identity", json!({ "password": "wrong" }))
+            .is_err()
+    );
+    h.ok("confirm_identity", json!({ "password": PASSWORD }));
+    assert_eq!(
+        h.ok("list_profiles", json!({}))["profiles"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Later starts of the same version do not ask again.
+    state.detach();
+    state.attach(key, false).unwrap();
+    assert_eq!(
+        h.ok("security_status", json!({}))["confirmationRequired"],
+        false
+    );
+}
+
+#[test]
+fn legacy_databases_are_encrypted_on_request() {
+    let paths = Harness::temp_paths();
+    paths.create_dirs().unwrap();
+    let profile = {
+        use deckpilot_storage::{ConfigStore, Encryption, SqliteStore};
+        let store = SqliteStore::open(&paths.database, &Encryption::None).unwrap();
+        let profile = deckpilot_core::Profile::new("From 0.3");
+        store.save_profile(&profile).unwrap();
+        profile
+    };
+    let h = Harness::without_setup(paths);
+    let status = h.ok("security_status", json!({}));
+    assert_eq!(status["database"], "plaintext");
+    assert_eq!(
+        h.error("list_profiles", json!({})),
+        "the configuration is locked"
+    );
+
+    let status = h.ok(
+        "encrypt_legacy_database",
+        json!({ "input": { "password": PASSWORD, "confirmation": PASSWORD } }),
+    );
+    assert_eq!(status["database"], "encrypted");
+    assert_eq!(status["unlocked"], true);
+    assert_eq!(status["legacyCopies"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        h.ok("list_profiles", json!({}))["profiles"][0]["id"],
+        json!(profile.id)
+    );
+    // Sensitive: needs a fresh authentication.
+    assert_eq!(
+        h.error("remove_unencrypted_copies", json!({})),
+        "authentication required"
+    );
+    h.ok("authenticate", json!({ "password": PASSWORD }));
+    let status = h.ok("remove_unencrypted_copies", json!({}));
+    assert_eq!(status["legacyCopies"], json!([]));
+}
+
+#[test]
+fn configuration_round_trips_through_an_encrypted_export() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    h.ok(
+        "create_project",
+        json!({ "profileId": profile_id, "project": { "key": "SHOP", "name": "", "resources": { "repository": "shop.repository" } } }),
+    );
+    h.ok(
+        "set_resource_binding",
+        json!({ "key": "shop.repository", "kind": "directory", "value": "/private/machine/path" }),
+    );
+    let file = h.paths.data_dir.join("work.deckpilot");
+    let path = file.display().to_string();
+    h.ok("authenticate", json!({ "password": PASSWORD }));
+    let result = h.ok(
+        "export_configuration",
+        json!({ "request": { "path": path, "password": "export secret", "confirmation": "export secret", "profiles": null, "includeModuleSettings": true } }),
+    );
+    assert_eq!(result["profiles"], 1);
+    let bytes = std::fs::read(&file).unwrap();
+    for visible in [&b"Work"[..], b"SHOP", b"/private/machine/path"] {
+        assert!(!bytes.windows(visible.len()).any(|w| w == visible));
+    }
+
+    assert!(
+        h.error(
+            "preview_import",
+            json!({ "path": path, "password": "wrong" })
+        )
+        .contains("password is wrong")
+    );
+    // A modified file is rejected the same way.
+    let mut tampered = bytes.clone();
+    let middle = tampered.len() - 10;
+    tampered[middle] = if tampered[middle] == b'A' { b'B' } else { b'A' };
+    let tampered_path = h.paths.data_dir.join("tampered.deckpilot");
+    std::fs::write(&tampered_path, &tampered).unwrap();
+    assert!(
+        h.call(
+            "preview_import",
+            json!({ "path": tampered_path.display().to_string(), "password": "export secret" })
+        )
+        .is_err()
+    );
+
+    // Importing into the same installation: a conflict, kept as a copy.
+    let preview = h.ok(
+        "preview_import",
+        json!({ "path": path, "password": "export secret" }),
+    );
+    assert_eq!(
+        preview["preview"]["profiles"][0]["conflict"]["type"],
+        "sameId"
+    );
+    assert_eq!(preview["preview"]["missingResources"], json!([]));
+    let summary = h.ok(
+        "apply_import",
+        json!({ "token": preview["token"], "options": { "profiles": [profile_id], "conflicts": { profile_id.clone(): "keepBoth" } } }),
+    );
+    assert_eq!(summary["renamed"][0], "Work (imported)");
+    let profiles = h.ok("list_profiles", json!({}));
+    assert_eq!(profiles["profiles"].as_array().unwrap().len(), 2);
+    // The token is used up.
+    assert!(
+        h.call(
+            "apply_import",
+            json!({ "token": preview["token"], "options": { "profiles": [profile_id] } })
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn native_windows_are_opened_by_identifier_and_reused() {
+    use crate::windows::{self, WindowRegistry};
+    let h = Harness::new();
+    let app = h.window.app_handle().clone();
+    let count = || app.webview_windows().len();
+    let before = count();
+
+    h.ok("open_window", json!({ "id": "security.unlock" }));
+    let label = windows::label_for("security.unlock");
+    let prompt = app.get_webview_window(&label).expect("window created");
+    assert_eq!(count(), before + 1);
+    // A second request focuses the same window instead of opening another.
+    h.ok("open_window", json!({ "id": "security.unlock" }));
+    assert_eq!(count(), before + 1);
+
+    // Unknown windows and windows that need the configuration while it is
+    // locked are refused; nothing but an identifier can be requested.
+    assert!(
+        h.error("open_window", json!({ "id": "logs.viewer" }))
+            .contains("no window")
+    );
+    assert!(
+        h.error("open_window", json!({ "id": "../index.html" }))
+            .contains("no window")
+    );
+    h.ok("lock", json!({}));
+    assert!(
+        h.error(
+            "open_window",
+            json!({ "id": "workflows.execution-summary" })
+        )
+        .contains("locked")
+    );
+    h.unlock();
+    h.ok(
+        "open_window",
+        json!({ "id": "workflows.execution-summary" }),
+    );
+
+    // Sizing: within the compact limits, shown after the first fit.
+    let size = windows::fit(&prompt, (390.0, 280.0), (390.0, 280.0)).unwrap();
+    assert_eq!(size, (390.0, 280.0));
+    let size = windows::fit(&prompt, (100.0, 2000.0), (390.0, 280.0)).unwrap();
+    assert_eq!(size.0, 360.0);
+    assert!(size.1 <= 760.0, "clamped: {size:?}");
+    // The main window is not a sized prompt.
+    assert!(
+        h.error(
+            "fit_window",
+            json!({ "width": 300.0, "height": 200.0, "viewportWidth": 300.0, "viewportHeight": 200.0 })
+        )
+            .contains("no window")
+    );
+    assert!(
+        h.call(
+            "fit_window",
+            json!({ "width": -1.0, "height": 200.0, "viewportWidth": 300.0, "viewportHeight": 200.0 })
+        )
+            .is_err()
+    );
+    assert_eq!(
+        h.ok("current_window", json!({})),
+        Value::Null,
+        "the main window has no window spec"
+    );
+
+    // Closing removes the window from the registry (cleanup).
+    let registry = app.state::<WindowRegistry>();
+    assert_eq!(registry.open_labels().len(), 2);
+    windows::closed(&app, &label, true);
+    assert!(registry.spec(&label).is_none());
+    assert_eq!(registry.open_labels().len(), 1);
+}
+
+// System-managed keys and sensitive operations. The agent's credential store
+// is in memory and Touch ID is scripted; nothing real is touched.
+
+fn status(h: &Harness) -> Value {
+    h.ok("security_status", json!({}))
+}
+
+/// Waits until the agent opened the configuration with the system key and
+/// the app attached to it.
+fn wait_unlocked(h: &Harness) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let view = status(h);
+        if view["unlocked"] == true {
+            return view;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "not unlocked: {view}, agent: {}",
+            h.ok("agent_status", json!({}))
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+fn agent_security(h: &Harness) -> Value {
+    h.ok("agent_status", json!({}))["status"].clone()
+}
+
+#[test]
+fn a_fresh_install_opens_without_a_password() {
+    let paths = Harness::temp_paths();
+    let keys = MemoryKeyStore::new();
+    let (_runtime, _mock) = start_agent_with(&paths, Some(keys.clone()));
+    let h = Harness::without_setup(paths);
+    // The agent created the database with a key in the credential store;
+    // the app opens it with the key from the agent.
+    let view = wait_unlocked(&h);
+    assert_eq!(view["protection"], "systemManaged");
+    assert_eq!(view["database"], "encrypted");
+    assert_eq!(view["verification"], "confirmationOnly");
+    assert_eq!(view["policy"]["autoLock"], "never");
+    assert_eq!(keys.ids().len(), 1);
+    new_profile(&h, "Work");
+    let launch = h.ok("launch_info", json!({}));
+    assert_eq!(launch["encryption"]["passwordRequired"], false);
+
+    // A second start of the app (the agent keeps running): no prompt.
+    let again = Harness::without_setup(h.paths.clone());
+    let view = status(&again);
+    assert_eq!(view["unlocked"], true);
+    assert_eq!(view["confirmationRequired"], false);
+    assert_eq!(
+        again.ok("list_profiles", json!({}))["profiles"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn sensitive_operations_need_a_fresh_authentication() {
+    let paths = Harness::temp_paths();
+    let keys = MemoryKeyStore::new();
+    let (_runtime, _mock) = start_agent_with(&paths, Some(keys));
+    let touch_id = Arc::new(Scripted::new(Some(Method::TouchId), false));
+    let h = Harness::with_presence(paths, touch_id.clone());
+    wait_unlocked(&h);
+    assert_eq!(status(&h)["verification"], "touchId");
+    let export = || {
+        let path = h.paths.data_dir.join("all.deckpilot").display().to_string();
+        h.call(
+            "export_configuration",
+            json!({ "request": { "path": path, "password": "export secret", "confirmation": "export secret", "profiles": null, "includeModuleSettings": true } }),
+        )
+    };
+    assert_eq!(export().unwrap_err(), "authentication required");
+    // A failed system check grants nothing.
+    assert!(h.call("authenticate", json!({})).is_err());
+    assert_eq!(export().unwrap_err(), "authentication required");
+    touch_id
+        .succeed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    h.ok("authenticate", json!({}));
+    export().unwrap();
+    // One authentication allows one operation.
+    assert_eq!(export().unwrap_err(), "authentication required");
+    assert_eq!(
+        touch_id.prompts.load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+
+    // Ordinary work never asks.
+    let profile = new_profile(&h, "Work");
+    h.ok("set_active_profile", json!({ "profileId": profile }));
+    assert_eq!(
+        touch_id.prompts.load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+}
+
+#[test]
+fn switching_between_password_and_system_key() {
+    let paths = Harness::temp_paths();
+    let keys = MemoryKeyStore::new();
+    let h = Harness::new_on(paths);
+    let (_runtime, _mock) = start_agent_with(&h.paths, Some(keys.clone()));
+    h.unlock();
+    let profile = new_profile(&h, "Work");
+    assert_eq!(status(&h)["protection"], "password");
+    assert_eq!(status(&h)["verification"], "password");
+
+    // Sensitive: the current password is required first.
+    assert_eq!(
+        h.error("use_system_key", json!({})),
+        "authentication required"
+    );
+    assert!(
+        h.call("authenticate", json!({ "password": "wrong password" }))
+            .is_err()
+    );
+    h.ok("authenticate", json!({ "password": PASSWORD }));
+    let view = h.ok("use_system_key", json!({}));
+    assert_eq!(view["protection"], "systemManaged");
+    assert_eq!(view["unlocked"], true);
+    assert_eq!(keys.ids().len(), 1);
+    assert_eq!(agent_security(&h)["protection"], "systemManaged");
+    assert!(
+        h.error("unlock", json!({ "password": PASSWORD }))
+            .contains("system key")
+    );
+    assert_eq!(
+        h.ok("list_profiles", json!({}))["profiles"][0]["id"],
+        json!(profile)
+    );
+
+    // Back to a password. Without system authentication on this computer,
+    // the explicit confirmation is the authentication.
+    assert_eq!(
+        h.error(
+            "use_password",
+            json!({ "input": { "password": "another password", "confirmation": "another password" } })
+        ),
+        "authentication required"
+    );
+    h.ok("authenticate", json!({}));
+    let view = h.ok(
+        "use_password",
+        json!({ "input": { "password": "another password", "confirmation": "another password" } }),
+    );
+    assert_eq!(view["protection"], "password");
+    h.ok("lock", json!({}));
+    assert!(h.call("unlock", json!({ "password": PASSWORD })).is_err());
+    h.ok("unlock", json!({ "password": "another password" }));
+    assert_eq!(
+        h.ok("list_profiles", json!({}))["profiles"][0]["id"],
+        json!(profile)
+    );
+    // The earlier system key is kept, not deleted.
+    assert_eq!(keys.ids().len(), 1);
+}
+
+#[test]
+fn a_locked_system_key_configuration_unlocks_with_the_system_check() {
+    let paths = Harness::temp_paths();
+    let keys = MemoryKeyStore::new();
+    let (_runtime, _mock) = start_agent_with(&paths, Some(keys));
+    let touch_id = Arc::new(Scripted::new(Some(Method::TouchId), true));
+    let h = Harness::with_presence(paths, touch_id.clone());
+    wait_unlocked(&h);
+    let view = h.ok("lock", json!({}));
+    assert_eq!(view["unlocked"], false);
+    assert_eq!(view["lockReason"], "requested");
+    // The app restarting meanwhile does not get the key.
+    assert_eq!(status(&h)["unlocked"], false);
+
+    touch_id
+        .succeed
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    assert!(h.call("system_unlock", json!({})).is_err());
+    assert_eq!(agent_security(&h)["security"], "locked");
+    touch_id
+        .succeed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let view = h.ok("system_unlock", json!({}));
+    assert_eq!(view["unlocked"], true);
+    assert_eq!(
+        touch_id.prompts.load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+}
+
+#[test]
+fn policies_need_a_way_to_verify_the_user() {
+    let paths = Harness::temp_paths();
+    let (_runtime, _mock) = start_agent_with(&paths, Some(MemoryKeyStore::new()));
+    let h = Harness::without_setup(paths);
+    wait_unlocked(&h);
+    // System key, no system authentication: locking would be pointless.
+    let idle =
+        json!({ "policy": { "autoLock": "idle15Minutes", "reauthentication": "sensitiveOnly" } });
+    assert!(
+        h.error("set_security_policy", idle.clone())
+            .contains("does not offer")
+    );
+
+    // With a password, the user can be verified.
+    let h = Harness::new();
+    let (_runtime, _mock) = start_agent(&h.paths);
+    h.unlock();
+    assert_eq!(
+        h.error("set_security_policy", idle.clone()),
+        "authentication required"
+    );
+    h.ok("authenticate", json!({ "password": PASSWORD }));
+    let view = h.ok("set_security_policy", idle);
+    assert_eq!(view["policy"]["autoLock"], "idle15Minutes");
+
+    // Every launch: the next start asks again.
+    h.ok("authenticate", json!({ "password": PASSWORD }));
+    h.ok(
+        "set_security_policy",
+        json!({ "policy": { "autoLock": "idle15Minutes", "reauthentication": "everyLaunch" } }),
+    );
+    let state = h.window.state::<AppState>();
+    let key = state.key().unwrap();
+    state.detach();
+    state.attach(key, false).unwrap();
+    assert_eq!(status(&h)["confirmationRequired"], true);
+    h.ok("confirm_identity", json!({ "password": PASSWORD }));
+    assert_eq!(status(&h)["unlocked"], true);
+}
+
+#[test]
+fn key_store_names_match_the_credential_store() {
+    assert_eq!(
+        crate::commands::security::key_store_name(),
+        deckpilot_keystore::platform_store_name()
+    );
+}
+
+#[test]
+fn an_update_does_not_ask_for_anything_with_a_system_key() {
+    let paths = Harness::temp_paths();
+    let (_runtime, _mock) = start_agent_with(&paths, Some(MemoryKeyStore::new()));
+    let h = Harness::without_setup(paths);
+    wait_unlocked(&h);
+    new_profile(&h, "Work");
+    // The previous version was confirmed and recorded its launch.
+    {
+        use deckpilot_storage::ConfigStore as _;
+        let state = h.window.state::<AppState>();
+        let store = state.store().unwrap();
+        store
+            .set_setting("security.confirmedVersion", "0.3.0")
+            .unwrap();
+        store.record_launch("desktop", "0.3.0").unwrap();
+    }
+    // First start of the new version: the app gets the key from the agent.
+    let again = Harness::without_setup(h.paths.clone());
+    let view = status(&again);
+    assert_eq!(view["unlocked"], true, "{view}");
+    assert_eq!(view["confirmationRequired"], false);
+    let launch = again.ok("launch_info", json!({}));
+    assert_eq!(launch["launch"]["firstAfterUpdate"], true);
+    assert_eq!(launch["encryption"]["passwordRequired"], false);
+}
+
+#[test]
+fn a_missing_database_needs_an_explicit_decision() {
+    let h = Harness::new();
+    new_profile(&h, "Work");
+    let state = h.window.state::<AppState>();
+    state.detach();
+    for suffix in ["", "-wal", "-shm"] {
+        let mut path = h.paths.database.clone().into_os_string();
+        path.push(suffix);
+        let _ = std::fs::remove_file(path);
+    }
+    let view = status(&h);
+    assert_eq!(view["database"], "missing");
+    assert_eq!(view["databaseMissing"], true);
+    // Neither a password setup nor an old key creates a new database.
+    assert!(
+        h.error(
+            "setup_password",
+            json!({ "input": { "password": PASSWORD, "confirmation": PASSWORD } })
+        )
+        .contains("missing")
+    );
+    assert!(!h.paths.database.exists());
+
+    // Starting over moves the key file aside; then setup works again.
+    h.ok("start_new_configuration", json!({}));
+    let view = status(&h);
+    assert_eq!(view["databaseMissing"], false);
+    let aside = std::fs::read_dir(&h.paths.data_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("deckpilot.vault.orphaned-")
+        });
+    assert!(aside, "the old key file is kept");
+    h.ok(
+        "setup_password",
+        json!({ "input": { "password": PASSWORD, "confirmation": PASSWORD } }),
+    );
+    assert_eq!(h.ok("list_profiles", json!({}))["profiles"], json!([]));
+}
+
+#[test]
+fn the_screen_lock_option_needs_detection() {
+    let h = Harness::new();
+    let (_runtime, _mock) = start_agent(&h.paths);
+    h.unlock();
+    assert_eq!(status(&h)["screenLockDetection"], false);
+    h.ok("authenticate", json!({ "password": PASSWORD }));
+    assert!(
+        h.error(
+            "set_security_policy",
+            json!({ "policy": { "autoLock": "screenLock", "reauthentication": "sensitiveOnly" } })
+        )
+        .contains("cannot detect the screen lock")
+    );
+}
+
+#[test]
+fn every_deliberate_lock_needs_authentication_to_undo() {
+    use crate::commands::security::lock_needs_authentication;
+    use deckpilot_ipc::LockReason;
+    for reason in [
+        LockReason::Requested,
+        LockReason::Idle,
+        LockReason::Sleep,
+        LockReason::ScreenLocked,
+    ] {
+        assert!(lock_needs_authentication(Some(reason)), "{reason:?}");
+    }
+    for reason in [LockReason::Startup, LockReason::KeyUnavailable] {
+        assert!(!lock_needs_authentication(Some(reason)), "{reason:?}");
+    }
+    assert!(!lock_needs_authentication(None));
+}
+
+// Export and import through the real commands, between two installations.
+
+/// A profile with projects, an action, a workflow and a layout with
+/// bindings, written as the configuration studio would.
+fn rich_profile(h: &Harness, name: &str) -> deckpilot_core::Profile {
+    use deckpilot_core::{DeviceLayout, Profile};
+    use deckpilot_storage::ConfigStore as _;
+    let id = new_profile(h, name);
+    h.ok(
+        "create_project",
+        json!({ "profileId": id, "project": { "key": "SHOP", "name": "Shop", "resources": { "repository": "shop.repository" } } }),
+    );
+    log_action(h, &id, "Announce", "{project.key}");
+    let state = h.window.state::<AppState>();
+    let store = state.store().unwrap();
+    let mut profile: Profile = store.load_profile(id.parse().unwrap()).unwrap().unwrap();
+    let action = profile.actions[0].id;
+    profile
+        .workflows
+        .push(deckpilot_core::Workflow::new("Start").step(action, deckpilot_core::OnFailure::Stop));
+    let layout = DeviceLayout::generate("Main", &models::stream_deck_mk2(), &profile);
+    let layout_id = layout.id;
+    assert!(
+        !layout.pages[0].bindings.is_empty(),
+        "the layout has bindings"
+    );
+    profile.layouts.push(layout);
+    profile.activate_layout(layout_id).unwrap();
+    store.save_profile(&profile).unwrap();
+    profile
+}
+
+fn export_to(h: &Harness, file: &std::path::Path, password: Option<&str>) -> Value {
+    h.ok("authenticate", json!({ "password": password }));
+    h.ok(
+        "export_configuration",
+        json!({ "request": { "path": file.display().to_string(), "password": "export secret", "confirmation": "export secret", "profiles": null, "includeModuleSettings": true, "includeAppSettings": true } }),
+    )
+}
+
+fn database_is_encrypted(paths: &AgentPaths) -> bool {
+    let header = std::fs::read(&paths.database).unwrap();
+    !header.starts_with(b"SQLite format 3")
+}
+
+#[test]
+fn a_system_key_installation_moves_to_a_password_installation() {
+    use deckpilot_storage::ConfigStore as _;
+
+    // Source: system-managed key, Touch ID.
+    let source_paths = Harness::temp_paths();
+    let source_keys = MemoryKeyStore::new();
+    let (_source_runtime, _mock) = start_agent_with(&source_paths, Some(source_keys.clone()));
+    let source = Harness::with_presence(
+        source_paths,
+        Arc::new(Scripted::new(Some(Method::TouchId), true)),
+    );
+    wait_unlocked(&source);
+    let profile = rich_profile(&source, "Work");
+    source.ok(
+        "set_resource_binding",
+        json!({ "key": "shop.repository", "kind": "directory", "value": "/source/machine/shop" }),
+    );
+    source.ok(
+        "set_update_preferences",
+        json!({ "preferences": { "mode": "downloadAndAsk", "automaticChecks": false, "checkIntervalHours": 48, "lastCheck": null } }),
+    );
+    let file = source.paths.data_dir.join("work.deckpilot");
+    let result = export_to(&source, &file, None);
+    assert_eq!(result["profiles"], 1);
+    let bytes = std::fs::read(&file).unwrap();
+    for secret in [
+        &b"Work"[..],
+        b"SHOP",
+        b"/source/machine/shop",
+        b"downloadAndAsk",
+    ] {
+        assert!(!bytes.windows(secret.len()).any(|w| w == secret));
+    }
+    assert_eq!(source_keys.ids().len(), 1);
+
+    // Target: password protection, its own binding for the same resource.
+    let target = Harness::new();
+    target.ok(
+        "set_resource_binding",
+        json!({ "key": "shop.repository", "kind": "directory", "value": "/target/machine/shop" }),
+    );
+    assert!(
+        target
+            .error(
+                "preview_import",
+                json!({ "path": file.display().to_string(), "password": "wrong" })
+            )
+            .contains("password is wrong")
+    );
+    let preview = target.ok(
+        "preview_import",
+        json!({ "path": file.display().to_string(), "password": "export secret" }),
+    );
+    assert_eq!(
+        preview["preview"]["settings"]["updates"]["mode"],
+        "downloadAndAsk"
+    );
+    assert_eq!(preview["preview"]["missingResources"], json!([]));
+    let summary = target.ok(
+        "apply_import",
+        json!({ "token": preview["token"], "options": { "profiles": [profile.id.to_string()], "moduleSettings": true, "appSettings": true } }),
+    );
+    assert_eq!(summary["settings"], json!(["updates"]));
+
+    // Everything arrived as it was: projects, actions, workflows, layouts
+    // and their bindings, with the same identifiers.
+    let state = target.window.state::<AppState>();
+    let imported = state
+        .store()
+        .unwrap()
+        .load_profile(profile.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(imported.projects, profile.projects);
+    assert_eq!(imported.actions, profile.actions);
+    assert_eq!(imported.workflows, profile.workflows);
+    assert_eq!(imported.layouts, profile.layouts);
+    assert_eq!(imported.active_layouts, profile.active_layouts);
+    // This computer's binding is kept; the import is not activated.
+    let machine = target.ok("get_machine_config", json!({}));
+    assert_eq!(machine["bindings"][0]["value"], "/target/machine/shop");
+    assert_eq!(
+        target.ok("list_profiles", json!({}))["activeProfileId"],
+        Value::Null
+    );
+    let updates = target.ok("update_state", json!({}));
+    assert_eq!(updates["preferences"]["mode"], "downloadAndAsk");
+    assert_eq!(updates["preferences"]["checkIntervalHours"], 48);
+    // Still encrypted with the target's own protection; no plaintext or
+    // temporary files were left.
+    assert!(database_is_encrypted(&target.paths));
+    assert_eq!(status(&target)["protection"], "password");
+    let leftovers: Vec<_> = std::fs::read_dir(&target.paths.data_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains(".tmp") || name.contains("unencrypted"))
+        .collect();
+    assert_eq!(leftovers, Vec::<String>::new());
+
+    // And back: a password installation exports as well.
+    let back = target.paths.data_dir.join("back.deckpilot");
+    export_to(&target, &back, Some(PASSWORD));
+    assert!(back.exists());
+    assert_eq!(source_keys.ids().len(), 1, "no credential was touched");
+}
+
+#[test]
+fn replacing_with_selected_profiles() {
+    let source = Harness::new();
+    let home = rich_profile(&source, "Home");
+    let work = rich_profile(&source, "Work 2");
+    let file = source.paths.data_dir.join("both.deckpilot");
+    export_to(&source, &file, Some(PASSWORD));
+
+    let target = Harness::new();
+    let local = new_profile(&target, "Local");
+    target.ok(
+        "set_resource_binding",
+        json!({ "key": "shop.repository", "kind": "directory", "value": "/target/shop" }),
+    );
+    let preview = target.ok(
+        "preview_import",
+        json!({ "path": file.display().to_string(), "password": "export secret" }),
+    );
+    assert_eq!(preview["preview"]["localProfiles"][0][0], json!(local));
+    let summary = target.ok(
+        "apply_import",
+        json!({ "token": preview["token"], "options": { "mode": "replace", "profiles": [work.id.to_string()] } }),
+    );
+    assert_eq!(summary["removed"][0][1], "Local");
+    let names: Vec<String> = target.ok("list_profiles", json!({}))["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, ["Work 2"]);
+    assert!(!names.contains(&home.name));
+    assert_eq!(
+        target.ok("get_machine_config", json!({}))["bindings"][0]["value"],
+        "/target/shop"
+    );
+}
+
+#[test]
+fn hostile_archives_are_rejected_without_changes() {
+    let h = Harness::new();
+    new_profile(&h, "Mine");
+    let dir = &h.paths.data_dir;
+    let oversized = dir.join("huge.deckpilot");
+    std::fs::write(&oversized, vec![b' '; 33 * 1024 * 1024]).unwrap();
+    assert!(
+        h.error(
+            "preview_import",
+            json!({ "path": oversized.display().to_string(), "password": "x" })
+        )
+        .contains("too large")
+    );
+    let garbage = dir.join("garbage.deckpilot");
+    std::fs::write(
+        &garbage,
+        br#"{"header":"{\"format\":\"deckpilot-configuration\"}","ciphertext":"AAAA"}"#,
+    )
+    .unwrap();
+    assert!(
+        h.call(
+            "preview_import",
+            json!({ "path": garbage.display().to_string(), "password": "x" })
+        )
+        .is_err()
+    );
+    // Applying without a preview, or with a made-up token, does nothing.
+    assert!(
+        h.call(
+            "apply_import",
+            json!({ "token": 12345, "options": { "profiles": [] } })
+        )
+        .is_err()
+    );
+    assert_eq!(
+        h.ok("list_profiles", json!({}))["profiles"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_failed_import_changes_nothing_and_can_be_retried() {
+    let source = Harness::new();
+    rich_profile(&source, "Imported");
+    let file = source.paths.data_dir.join("one.deckpilot");
+    export_to(&source, &file, Some(PASSWORD));
+
+    let target = Harness::new();
+    new_profile(&target, "Existing");
+    let preview = |h: &Harness| {
+        h.ok(
+            "preview_import",
+            json!({ "path": file.display().to_string(), "password": "export secret" }),
+        )
+    };
+    let first = preview(&target);
+    // Another connection holds the write lock: the import transaction cannot
+    // be written and is rolled back as a whole.
+    let key = target.window.state::<AppState>().key().unwrap();
+    let blocker = deckpilot_storage::SqliteStore::open(
+        &target.paths.database,
+        &deckpilot_storage::Encryption::Key(key),
+    )
+    .unwrap();
+    blocker
+        .connection_for_tests()
+        .execute_batch("BEGIN EXCLUSIVE;")
+        .unwrap();
+    assert!(
+        target
+            .call(
+                "apply_import",
+                json!({ "token": first["token"], "options": { "profiles": [first["preview"]["profiles"][0]["id"]], "moduleSettings": true } }),
+            )
+            .is_err()
+    );
+    blocker
+        .connection_for_tests()
+        .execute_batch("ROLLBACK;")
+        .unwrap();
+    drop(blocker);
+    let names = |h: &Harness| -> Vec<String> {
+        h.ok("list_profiles", json!({}))["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(names(&target), ["Existing"]);
+    // The file is unchanged and the import can simply be repeated.
+    let second = preview(&target);
+    target.ok(
+        "apply_import",
+        json!({ "token": second["token"], "options": { "profiles": [second["preview"]["profiles"][0]["id"]] } }),
+    );
+    assert_eq!(names(&target), ["Existing", "Imported"]);
 }

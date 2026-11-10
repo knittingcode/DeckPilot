@@ -380,3 +380,146 @@ export interface LaunchView {
   } | null
   encryption: { enabled: boolean; passwordRequired: boolean }
 }
+
+export type WindowSize = "fit" | "compact" | "medium" | "large" | "fullscreen"
+
+/** A native window as the window manager knows it. */
+export interface WindowSpec {
+  id: string
+  title: string
+  size: WindowSize
+  blocking: boolean
+}
+
+export type DatabaseState = "missing" | "plaintext" | "encrypted"
+
+/** How the database key is protected; see `docs/security.md`. */
+export type ProtectionMode = "systemManaged" | "password"
+
+export type LockReason =
+  "startup" | "requested" | "idle" | "sleep" | "screenLocked" | "keyUnavailable"
+
+/**
+ * How the user is verified for sensitive operations and after a lock:
+ * the DeckPilot password, the operating system (Touch ID / login
+ * password), or — with a system key and no system check — only an
+ * explicit confirmation.
+ */
+export type Verification = "password" | "touchId" | "devicePassword" | "confirmationOnly"
+
+export type AutoLock = "never" | "sleep" | "screenLock" | "idle15Minutes" | "idle1Hour"
+export type Reauthentication = "sensitiveOnly" | "afterUpdate" | "everyLaunch"
+
+export interface SecurityPolicy {
+  autoLock: AutoLock
+  reauthentication: Reauthentication
+}
+
+/** Whether the configuration can be used; see `docs/security.md`. */
+export interface SecurityView {
+  database: DatabaseState
+  protection: ProtectionMode | null
+  unlocked: boolean
+  /** The user must authenticate before continuing (security policy). */
+  confirmationRequired: boolean
+  lockReason: LockReason | null
+  /** The agent is reading the key; the credential store may show a prompt. */
+  waitingForKeyStore: boolean
+  /** A key file exists but its database is missing; nothing is created. */
+  databaseMissing: boolean
+  /** Whether the agent can detect this computer's screen lock. */
+  screenLockDetection: boolean
+  /** Why the configuration could not be opened automatically. */
+  problem: string | null
+  /** Name of the credential store, e.g. "macOS Keychain". */
+  keyStore: string
+  verification: Verification
+  /** Stored policy; present while unlocked. */
+  policy: SecurityPolicy | null
+  agentRunning: boolean
+  appVersion: string
+  /** Unencrypted copies kept after encrypting a legacy database. */
+  legacyCopies: string[]
+  backupDir: string
+}
+
+export interface ExportResult {
+  path: string
+  profiles: number
+  modules: number
+  bytes: number
+}
+
+export type ImportConflict = { type: "sameId"; name: string } | { type: "sameName"; id: string }
+
+export interface ImportProfilePreview {
+  id: string
+  name: string
+  actions: number
+  workflows: number
+  projects: number
+  layouts: number
+  conflict: ImportConflict | null
+  modules: string[]
+}
+
+export interface ImportModulePreview {
+  id: string
+  name: string | null
+  status: "ready" | "missing" | "incompatible"
+  enabled: boolean
+  skippedSettings: string[]
+  problem: string | null
+}
+
+export interface MissingResource {
+  key: string
+  kind: ResourceKind | null
+  profiles: string[]
+}
+
+export interface ImportPreview {
+  exportedAt: number
+  appVersion: string
+  profiles: ImportProfilePreview[]
+  modules: ImportModulePreview[]
+  unknownActionTypes: string[]
+  missingResources: MissingResource[]
+  warnings: string[]
+  localProfiles: [string, string][]
+  /** Portable application settings in the export. */
+  settings: AppSettings
+}
+
+export type ImportMode = "merge" | "replace"
+export type ConflictResolution = "keepBoth" | "replace" | "skip"
+
+export interface ImportOptions {
+  mode: ImportMode
+  profiles: string[]
+  conflicts: Record<string, ConflictResolution>
+  moduleSettings: boolean
+  appSettings: boolean
+}
+
+/** Application settings that mean the same on every computer. */
+export interface AppSettings {
+  updates?: { mode: UpdateMode; automaticChecks: boolean; checkIntervalHours: number }
+}
+
+/** The end of the agent's log. */
+export interface LogView {
+  directory: string
+  file: string | null
+  lines: string[]
+  truncated: boolean
+}
+
+export interface ImportSummary {
+  imported: [string, string][]
+  removed: [string, string][]
+  skipped: string[]
+  renamed: string[]
+  modules: string[]
+  settings: string[]
+}

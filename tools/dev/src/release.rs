@@ -32,52 +32,137 @@ pub fn verify(dir: &Path, public_key: &str, expected_version: &str) -> Result<Ve
         let path = dir.join(name);
         let data =
             std::fs::read(&path).map_err(|e| format!("{target}: cannot read {name}: {e}"))?;
-        signature::verify(public_key, &artifact.signature, &data)
+        // As the installed app checks it: a valid signature that names the
+        // announced version (the app requires it, see `requireSignedVersion`).
+        signature::verify_release_artifact(public_key, &artifact.signature, &data, &version)
             .map_err(|e| format!("{target}: {name}: {e}"))?;
         verified.push(format!("{target}: {name}"));
     }
     Ok(verified)
 }
 
+/// The section of `version` in the changelog (`## [x.y.z] ...` up to the
+/// next `## `), without its heading. Fails if it is missing or empty: a
+/// release always has notes.
+pub fn release_notes(changelog: &str, version: &str) -> Result<String, String> {
+    let heading = format!("## [{version}]");
+    let mut lines = changelog
+        .lines()
+        .skip_while(|line| !line.starts_with(&heading));
+    if lines.next().is_none() {
+        return Err(format!("CHANGELOG.md has no section for {version}"));
+    }
+    let notes: Vec<&str> = lines.take_while(|line| !line.starts_with("## ")).collect();
+    let notes = notes.join("\n").trim().to_owned();
+    if notes.is_empty() {
+        return Err(format!("the CHANGELOG.md section for {version} is empty"));
+    }
+    Ok(notes)
+}
+
+/// `verify-release`, `check-updater-key`, `verify-signature` and
+/// `release-notes`.
+pub fn command(name: &str, args: &[String], root: &Path) -> Result<(), String> {
+    match name {
+        "verify-release" => {
+            let dir = args
+                .first()
+                .ok_or("expected the directory with the release files")?;
+            let key = updater_key()?;
+            let version = crate::versions::check(root, None)?;
+            let verified = verify(Path::new(dir), &key, &version)?;
+            for line in verified {
+                println!("verified {line}");
+            }
+            Ok(())
+        }
+        "check-updater-key" => {
+            let key = updater_key()?;
+            deckpilot_update::signature::check_public_key(&key)
+                .map_err(|e| format!("DECKPILOT_UPDATER_PUBKEY: {e}"))?;
+            println!("DECKPILOT_UPDATER_PUBKEY is a valid updater public key");
+            Ok(())
+        }
+        "verify-signature" => {
+            let (Some(file), Some(signature)) = (args.first(), args.get(1)) else {
+                return Err("expected the file and its .sig file".into());
+            };
+            let key = updater_key()?;
+            let data = std::fs::read(file).map_err(|e| format!("{file}: {e}"))?;
+            let signature =
+                std::fs::read_to_string(signature).map_err(|e| format!("{signature}: {e}"))?;
+            deckpilot_update::signature::verify(&key, &signature, &data)
+                .map_err(|e| format!("{file}: {e}"))?;
+            println!("{file}: signature verified with DECKPILOT_UPDATER_PUBKEY");
+            Ok(())
+        }
+        "release-notes" => {
+            let version = crate::versions::check(root, None)?;
+            let changelog = std::fs::read_to_string(root.join("CHANGELOG.md"))
+                .map_err(|e| format!("CHANGELOG.md: {e}"))?;
+            println!("{}", release_notes(&changelog, &version)?);
+            Ok(())
+        }
+        other => Err(format!("unknown release command `{other}`")),
+    }
+}
+
+/// The updater public key from the environment. Public, but still never
+/// printed: log output should not need it.
+fn updater_key() -> Result<String, String> {
+    std::env::var("DECKPILOT_UPDATER_PUBKEY")
+        .ok()
+        .filter(|key| !key.trim().is_empty())
+        .ok_or_else(|| "DECKPILOT_UPDATER_PUBKEY is not set".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
 
-    const FIXTURES: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../crates/deckpilot-update/tests/fixtures"
-    );
-
-    fn release_dir(version: &str, url_name: &str) -> std::path::PathBuf {
+    /// A release directory with one artifact, signed by a key made for this
+    /// test only, with `signed_version` in the signed comment. Returns the
+    /// directory and the public key.
+    fn release_dir(
+        version: &str,
+        signed_version: Option<&str>,
+        url_name: &str,
+    ) -> (std::path::PathBuf, String) {
         let dir = std::env::temp_dir().join(format!("deckpilot-release-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::copy(
-            Path::new(FIXTURES).join("artifact.bin"),
-            dir.join("artifact.bin"),
+        let data = b"release artifact";
+        std::fs::write(dir.join("artifact.bin"), data).unwrap();
+        let keys = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        let comment = match signed_version {
+            Some(v) => format!("timestamp:1\tfile:artifact.bin\tversion:{v}"),
+            None => "timestamp:1\tfile:artifact.bin".to_owned(),
+        };
+        let signature = minisign::sign(
+            None,
+            &keys.sk,
+            std::io::Cursor::new(&data[..]),
+            Some(&comment),
+            None,
         )
         .unwrap();
-        let signature =
-            std::fs::read_to_string(Path::new(FIXTURES).join("artifact.bin.sig")).unwrap();
         let manifest = serde_json::json!({
             "version": version,
             "platforms": { "linux-x86_64": {
-                "signature": signature.trim(),
+                "signature": STANDARD.encode(signature.to_string()),
                 "url": format!("{}v{version}/{url_name}", deckpilot_update::DOWNLOAD_PREFIX)
             }}
         });
         std::fs::write(dir.join("latest.json"), manifest.to_string()).unwrap();
-        dir
-    }
-
-    fn key() -> String {
-        std::fs::read_to_string(Path::new(FIXTURES).join("test-key.pub")).unwrap()
+        (dir, STANDARD.encode(keys.pk.to_box().unwrap().to_string()))
     }
 
     #[test]
     fn accepts_a_consistent_signed_release() {
-        let dir = release_dir("1.2.3", "artifact.bin");
+        let (dir, key) = release_dir("1.2.3", Some("1.2.3"), "artifact.bin");
         assert_eq!(
-            verify(&dir, &key(), "1.2.3").unwrap(),
+            verify(&dir, &key, "1.2.3").unwrap(),
             ["linux-x86_64: artifact.bin"]
         );
         std::fs::remove_dir_all(dir).unwrap();
@@ -85,26 +170,83 @@ mod tests {
 
     #[test]
     fn rejects_version_mismatch_tampering_and_missing_files() {
-        let dir = release_dir("1.2.3", "artifact.bin");
+        let (dir, key) = release_dir("1.2.3", Some("1.2.3"), "artifact.bin");
         assert!(
-            verify(&dir, &key(), "1.2.4")
+            verify(&dir, &key, "1.2.4")
                 .unwrap_err()
                 .contains("announces")
         );
         std::fs::write(dir.join("artifact.bin"), b"tampered").unwrap();
         assert!(
-            verify(&dir, &key(), "1.2.3")
+            verify(&dir, &key, "1.2.3")
                 .unwrap_err()
                 .contains("does not match")
         );
         std::fs::remove_dir_all(&dir).unwrap();
 
-        let missing = release_dir("1.2.3", "other.bin");
+        let (missing, key) = release_dir("1.2.3", Some("1.2.3"), "other.bin");
         assert!(
-            verify(&missing, &key(), "1.2.3")
+            verify(&missing, &key, "1.2.3")
                 .unwrap_err()
                 .contains("cannot read")
         );
         std::fs::remove_dir_all(missing).unwrap();
+
+        // A key other than the configured one.
+        let (dir, _) = release_dir("1.2.3", Some("1.2.3"), "artifact.bin");
+        let (other, other_key) = release_dir("1.2.3", Some("1.2.3"), "artifact.bin");
+        assert!(
+            verify(&dir, &other_key, "1.2.3")
+                .unwrap_err()
+                .contains("does not match")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(other).unwrap();
+    }
+
+    #[test]
+    fn release_notes_come_from_the_changelog() {
+        let changelog =
+            "# Changelog\n\n## [1.2.3] - 2026-01-01\n\n### Added\n\n- A\n\n## [1.2.2]\n\n- B\n";
+        assert_eq!(
+            release_notes(changelog, "1.2.3").unwrap(),
+            "### Added\n\n- A"
+        );
+        assert_eq!(release_notes(changelog, "1.2.2").unwrap(), "- B");
+        assert!(
+            release_notes(changelog, "1.2.4")
+                .unwrap_err()
+                .contains("no section")
+        );
+        assert!(
+            release_notes("## [1.0.0]\n\n## [0.9.0]\n- x", "1.0.0")
+                .unwrap_err()
+                .contains("empty")
+        );
+        // The repository's own changelog covers the current version.
+        let own =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../CHANGELOG.md"))
+                .unwrap();
+        assert!(release_notes(&own, env!("CARGO_PKG_VERSION")).is_ok());
+    }
+
+    #[test]
+    fn rejects_signatures_the_app_would_refuse() {
+        // Signed without the version: installations require it.
+        let (dir, key) = release_dir("1.2.3", None, "artifact.bin");
+        assert!(
+            verify(&dir, &key, "1.2.3")
+                .unwrap_err()
+                .contains("does not record the version")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+        // An older artifact announced as the new version.
+        let (dir, key) = release_dir("1.2.3", Some("1.2.2"), "artifact.bin");
+        assert!(
+            verify(&dir, &key, "1.2.3")
+                .unwrap_err()
+                .contains("signed for version 1.2.2")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

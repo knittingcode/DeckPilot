@@ -6,7 +6,7 @@
 //! menu selections go back to the agent as [`TrayCommand`]s.
 
 use deckpilot_device::ConnectionState;
-use deckpilot_ipc::{AgentEvent, AgentStatus};
+use deckpilot_ipc::{AgentEvent, AgentStatus, LockReason, SecurityState};
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tracing::{error, warn};
@@ -169,10 +169,20 @@ fn build_menu(status: Option<&AgentStatus>) -> Menu {
         }
     };
 
-    append(menu.append(&MenuItem::with_id(OPEN, "Open DeckPilot", true, None)));
+    let security = status.map_or(SecurityState::Locked, |s| s.security);
+    let open_label = match security {
+        SecurityState::Unlocked => "Open DeckPilot",
+        _ => "Open DeckPilot to Unlock…",
+    };
+    append(menu.append(&MenuItem::with_id(OPEN, open_label, true, None)));
     append(menu.append(&PredefinedMenuItem::separator()));
+    let reason = status.and_then(|s| s.lock_reason);
+    if let Some(notice) = security_notice(security, reason) {
+        append(menu.append(&MenuItem::new(notice, false, None)));
+        append(menu.append(&PredefinedMenuItem::separator()));
+    }
 
-    let profiles = Submenu::new("Active Profile", true);
+    let profiles = Submenu::new("Active Profile", security == SecurityState::Unlocked);
     match status.map(|s| s.profiles.as_slice()).unwrap_or_default() {
         [] => append(profiles.append(&MenuItem::new("No profiles", false, None))),
         list => {
@@ -230,6 +240,19 @@ fn build_menu(status: Option<&AgentStatus>) -> Menu {
     menu
 }
 
+/// What the tray says while the configuration cannot be read.
+fn security_notice(security: SecurityState, reason: Option<LockReason>) -> Option<&'static str> {
+    match (security, reason) {
+        (SecurityState::Unlocked, _) => None,
+        (SecurityState::Locked, Some(LockReason::KeyUnavailable)) => {
+            Some("Locked – the key could not be read from the credential store")
+        }
+        (SecurityState::Locked, _) => Some("Locked – actions are paused"),
+        (SecurityState::Uninitialized, _) => Some("Set up DeckPilot to start"),
+        (SecurityState::LegacyPlaintext, _) => Some("Encrypt your configuration to continue"),
+    }
+}
+
 /// A 32 x 32 tray icon drawn in code: a rounded key grid with one lit key.
 fn icon() -> Result<Icon, String> {
     const SIZE: u32 = 32;
@@ -266,6 +289,19 @@ fn icon() -> Result<Icon, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locked_states_are_explained() {
+        assert_eq!(security_notice(SecurityState::Unlocked, None), None);
+        for state in [
+            SecurityState::Locked,
+            SecurityState::Uninitialized,
+            SecurityState::LegacyPlaintext,
+        ] {
+            assert!(security_notice(state, None).is_some());
+            assert!(security_notice(state, Some(LockReason::KeyUnavailable)).is_some());
+        }
+    }
 
     #[test]
     fn menu_ids_map_to_commands() {

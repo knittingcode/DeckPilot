@@ -12,18 +12,20 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 
-/** Asks before a destructive action. */
+/** Asks before a destructive (or otherwise significant) action. */
 export function ConfirmDialog({
   trigger,
   title,
   description,
   confirmLabel = "Delete",
+  destructive = true,
   onConfirm,
 }: {
   trigger: ReactNode
   title: string
   description: ReactNode
   confirmLabel?: string
+  destructive?: boolean
   onConfirm: () => void
 }) {
   return (
@@ -37,7 +39,9 @@ export function ConfirmDialog({
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction
-            className="bg-destructive text-white hover:bg-destructive/90"
+            className={
+              destructive ? "bg-destructive text-white hover:bg-destructive/90" : undefined
+            }
             onClick={onConfirm}
           >
             {confirmLabel}

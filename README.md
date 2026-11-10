@@ -31,8 +31,13 @@ which control triggers it.
 - **Device models** describe capabilities (key grids, encoders, touch surfaces)
   independently of actions. Layouts are validated against them.
 
-All configuration is stored locally. DeckPilot has no cloud service, no
-synchronization and no telemetry.
+All configuration is stored locally and always encrypted (SQLCipher). By
+default the key is kept in the operating system's credential store (macOS
+Keychain, Windows Credential Manager, Secret Service), so DeckPilot opens
+without a password; a password (Argon2id) can be chosen instead. Encrypted
+exports are the backup and move a configuration to another computer.
+DeckPilot has no cloud service, no synchronization and no telemetry. See
+[security](docs/security.md).
 
 ## Repository layout
 
@@ -45,6 +50,7 @@ crates/
   deckpilot-ipc/       Agent IPC protocol, endpoint and client
   deckpilot-update/    Update manifest, signature and policy logic
   deckpilot-modules/   The list of built-in feature modules
+  deckpilot-portability/ Encrypted configuration export and import
 modules/
   general/             General actions (log message)
   projects/            Projects module: project actions and management
@@ -74,8 +80,9 @@ make down     # stop; development data in .dev/ is kept
 isolated database in `.dev/data` with demonstration data and never touches
 your real configuration. Without Make: `cargo run -p deckpilot-dev -- up`.
 
-On Linux, install `packaging/linux/70-deckpilot-streamdeck.rules` to access
-the device without root.
+On Linux, the `.deb` and `.rpm` packages install the udev rule that gives
+access to the device without root. For the AppImage or a source build,
+install `packaging/linux/70-deckpilot-streamdeck.rules` yourself.
 
 See [docs/development.md](docs/development.md) for all commands.
 
@@ -84,6 +91,7 @@ See [docs/development.md](docs/development.md) for all commands.
 - [Architecture](docs/architecture.md)
 - [Background agent and IPC](docs/background-agent.md)
 - [Updates](docs/updates.md) and [releasing](docs/releasing.md)
+- [Security and encryption](docs/security.md)
 - [Feature modules](docs/modules.md)
 - [Data model](docs/data-model.md)
 - [Development](docs/development.md)
@@ -106,10 +114,14 @@ See [docs/development.md](docs/development.md) for all commands.
   project, resolve resource).
 - Workflow steps can only use the built-in actions; integrations such as
   launching applications or Docker are not available yet.
-- Database encryption is not enabled in the app; no password is requested.
-- Database encryption is available in the storage crate behind the `sqlcipher`
-  feature but is not enabled in the app; there is no password setup or
-  import/export yet.
+- Touch ID (macOS) is the only system authentication; on Windows and Linux a
+  system-key setup cannot lock automatically and confirms sensitive
+  operations with a dialog only (Windows Hello and polkit are not integrated).
+- Locking with the screen lock is detected on macOS and Linux (logind), not
+  on Windows.
+- macOS builds are not code-signed yet: after every update (and every
+  rebuild in development) macOS asks for the login keychain password before
+  the agent may read the system key.
 - CI builds and tests on Linux, macOS and Windows; the agent and app have been
   run manually on macOS only.
 

@@ -12,10 +12,14 @@
 mod actions;
 pub(crate) mod agent;
 mod layouts;
+mod logs;
 mod machine;
 mod modules;
+pub(crate) mod portability;
 mod profiles;
+pub(crate) mod security;
 mod system;
+pub(crate) mod windows;
 mod workflows;
 
 use crate::modules::projects;
@@ -29,8 +33,34 @@ use crate::state::{AppState, load_profile};
 pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static
 {
     tauri::generate_handler![
+        security::security_status,
+        security::setup_password,
+        security::unlock,
+        security::confirm_identity,
+        security::system_unlock,
+        security::authenticate,
+        security::use_password,
+        security::use_system_key,
+        security::set_security_policy,
+        security::start_new_configuration,
+        security::encrypt_legacy_database,
+        security::change_password,
+        security::lock,
+        security::remove_unencrypted_copies,
+        windows::open_window,
+        windows::current_window,
+        windows::fit_window,
+        windows::close_window,
+        windows::show_main_window,
+        windows::finish_security_prompt,
+        agent::last_workflow_report,
+        portability::export_configuration,
+        portability::preview_import,
+        portability::apply_import,
+        portability::cancel_import,
         system::get_overview,
         system::launch_info,
+        logs::read_agent_log,
         system::list_action_types,
         system::list_device_models,
         system::migration_notes,
@@ -101,7 +131,7 @@ pub(crate) fn modify_profile<T>(
     id: ProfileId,
     change: impl FnOnce(&mut Profile) -> CommandResult<T>,
 ) -> CommandResult<T> {
-    let store = state.store();
+    let store = state.store()?;
     let mut profile = load_profile(&store, id)?;
     let result = change(&mut profile)?;
     deckpilot_storage::ConfigStore::save_profile(&*store, &profile)?;

@@ -81,7 +81,26 @@ newline-delimited JSON framing and an async client.
 
 The background agent: device sessions and I/O threads, layout rendering,
 request handling, IPC server, system tray, autostart and single-instance
-lock.
+lock. It is the only process that reads the operating system's credential
+store: with the default system-managed key it opens the configuration at
+login by itself (and creates it on first start); with password protection it
+starts **locked** until the configuration app hands it the key derived from
+the password. It also enforces automatic locking (see
+[security.md](security.md#trust-boundary-between-the-app-and-the-agent)).
+
+### `deckpilot-keystore`
+
+Storage of database keys in the platform credential store (macOS Keychain,
+Windows Credential Manager, Secret Service) behind a small `KeyStore` trait,
+an in-memory store for tests, separate service names for development builds,
+and no file fallback.
+
+### `deckpilot-presence`
+
+Operating-system user verification for the configuration app: Touch ID or
+the login password through `LocalAuthentication` on macOS; reports no method
+elsewhere. Its Objective-C calls are the only `unsafe` code in the workspace,
+kept in one module.
 
 ### `deckpilot-core`
 
@@ -126,6 +145,12 @@ Action types and feature pages come from modules: `modules/general` and
 agent and the app build their registries from it. See
 [Feature modules](modules.md).
 
+### `deckpilot-portability`
+
+Encrypted configuration export and import: the archive format
+(XChaCha20-Poly1305, Argon2id), the payload, validation of untrusted
+imports, the preview and the import plan. See [security.md](security.md).
+
 ### `deckpilot-storage`
 
 - `ConfigStore` trait used by the application
@@ -134,8 +159,13 @@ agent and the app build their registries from it. See
   projects, default and active projects live in tables whose constraints keep
   each project inside its profile
 - Module states and migration notes are stored alongside
-- Optional SQLCipher encryption (`sqlcipher` feature) using `PRAGMA key`;
+- SQLCipher encryption always, with a raw 256-bit key that is either random
+  and kept in the credential store or derived from the user's password
+  (`vault`: setup, unlock, switching between the two, password change,
+  legacy migration, crash recovery); security policies (`policy`);
   DeckPilot does not implement cryptography itself
+- Verified encrypted backups before schema upgrades, migration history and
+  module-owned schema versions
 
 ### `apps/desktop` (configuration studio)
 
@@ -154,6 +184,17 @@ validated against the device model and previewed with the same face logic the
 agent uses. The frontend is React + TypeScript with Tailwind CSS and shadcn/ui
 components; `src/lib/types.ts` mirrors the serialized Rust types.
 
+Native windows besides the main window come from one catalog
+(`src-tauri/src/windows.rs`) and are opened by identifier only — by the app,
+or by the agent over IPC: the prompts that open the configuration
+(`security.*`), export and import (`portability.*`), update progress
+(`updates.progress`), the agent log (`app.logs`), the workflow summary, and
+windows declared by enabled modules. Every window renders through the shared
+`ModalShell` and is sized to its content by the window manager (no
+per-window dimensions); the catalog decides whether a window may open while
+the configuration is locked. Only the export and import windows may use file
+dialogs.
+
 ## Configuration separation
 
 | Area                   | Contents                                       | Portable |
@@ -166,11 +207,9 @@ components; `src/lib/types.ts` mirrors the serialized Rust types.
 Portable data never contains absolute paths: `ResourceKey` rejects them by
 construction.
 
-## Security model (planned)
+## Security model
 
-- The database can be encrypted with SQLCipher. The key will be derived from a
-  user password requested during initial setup, imports, exports and on the
-  first launch after an update.
-- Exports will be encrypted with an established, audited format; no custom
-  cryptography.
-- Secrets will be stored separately from portable profiles.
+See [security.md](security.md): an always-encrypted database whose key is
+system-managed (default) or password-derived, sensitive operations behind a
+fresh authentication, encrypted exports (XChaCha20-Poly1305, Argon2id) as
+the portable backup, and no secrets in portable profiles.

@@ -57,6 +57,12 @@ export function isModulePageAvailable(modules: ModuleInfo[], id: string): boolea
   return Boolean(module?.pages.some((p) => p.id === pageId) && id in MODULE_VIEWS)
 }
 
+/** The view of a module window, by identifier. */
+export function moduleWindowView(id: string) {
+  const module = FRONTEND_MODULES.find((m) => id.startsWith(`${m.id}.`))
+  return module?.windows?.[id] ?? null
+}
+
 /** Dashboard cards of enabled modules. */
 export function dashboardCards(modules: ModuleInfo[]) {
   return modules

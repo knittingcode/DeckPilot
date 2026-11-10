@@ -13,6 +13,7 @@ coverage/
 # Tauri generated files and staged sidecar binaries
 apps/desktop/src-tauri/gen/schemas/
 apps/desktop/src-tauri/binaries/
+apps/desktop/src-tauri/tauri.updater.conf.json
 
 # Development session data, logs and demo workspace (see `make up`)
 /.dev/

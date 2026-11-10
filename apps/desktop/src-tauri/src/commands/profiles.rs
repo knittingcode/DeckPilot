@@ -21,7 +21,7 @@ pub struct ProfilesView {
 
 #[tauri::command]
 pub fn list_profiles(state: State<'_, AppState>) -> CommandResult<ProfilesView> {
-    let store = state.store();
+    let store = state.store()?;
     Ok(ProfilesView {
         profiles: store.list_profiles()?,
         active_profile_id: store.active_profile()?,
@@ -43,7 +43,7 @@ pub fn get_profile(
     state: State<'_, AppState>,
     profile_id: ProfileId,
 ) -> CommandResult<ProfileView> {
-    let store = state.store();
+    let store = state.store()?;
     let profile = load_profile(&store, profile_id)?;
     let context = ActiveProjectContext::restore(&profile, store.active_project(profile_id)?);
     let issues = profile
@@ -99,7 +99,7 @@ pub fn create_profile(
         description: description.trim().to_owned(),
         ..Profile::new(checked_name(&name)?)
     };
-    let store = state.store();
+    let store = state.store()?;
     store.save_profile(&profile)?;
     if store.active_profile()?.is_none() {
         store.set_active_profile(Some(profile.id))?;
@@ -132,7 +132,7 @@ pub fn duplicate_profile(
     name: String,
 ) -> CommandResult<ProfileSummary> {
     let name = checked_name(&name)?;
-    let store = state.store();
+    let store = state.store()?;
     let copy = load_profile(&store, profile_id)?.duplicate(&name);
     store.save_profile(&copy)?;
     summary(&store, copy.id)
@@ -140,7 +140,7 @@ pub fn duplicate_profile(
 
 #[tauri::command]
 pub fn delete_profile(state: State<'_, AppState>, profile_id: ProfileId) -> CommandResult<()> {
-    if state.store().delete_profile(profile_id)? {
+    if state.store()?.delete_profile(profile_id)? {
         crate::agent::notify_reload(&state.paths);
         Ok(())
     } else {

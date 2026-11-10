@@ -19,9 +19,12 @@
 //! the operating system's credential store or an encrypted database, never in
 //! portable documents.
 
+pub mod crypto;
 mod legacy;
+pub mod policy;
 mod project_actions;
 mod sqlite;
+pub mod vault;
 
 use deckpilot_core::{
     MachineConfig, ModuleId, ModuleSettings, ModuleStates, Profile, ProfileId, ProjectId,
@@ -29,7 +32,9 @@ use deckpilot_core::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub use sqlite::{DatabaseKey, Encryption, SqliteStore};
+pub use sqlite::{
+    ConfigChanges, DatabaseKey, Encryption, MigrationRecord, SqliteStore, backup_dir,
+};
 
 /// Version of the JSON document format written for profiles and machine
 /// configuration. Bumped when the serialized shape changes incompatibly.
@@ -77,6 +82,37 @@ pub enum StorageError {
     InvalidKey,
     #[error("profile does not exist")]
     UnknownProfile,
+    #[error("file system error: {0}")]
+    Io(#[source] std::io::Error),
+    #[error("the database failed its integrity check: {0}")]
+    Corrupt(String),
+    #[error("the database upgrade could not be verified ({reason}); the previous state is in the backup {}", .backup.as_deref().unwrap_or("(none)"))]
+    MigrationFailed {
+        reason: String,
+        backup: Option<String>,
+    },
+    #[error("module `{module}` has schema version {found}; this build supports up to {supported}")]
+    UnsupportedModuleSchema {
+        module: String,
+        found: u32,
+        supported: u32,
+    },
+    #[error(transparent)]
+    Crypto(#[from] crypto::CryptoError),
+    #[error("{0}")]
+    Vault(String),
+    #[error(transparent)]
+    KeyStore(#[from] deckpilot_keystore::KeyStoreError),
+    /// The key file shows that a configuration was set up here, but its
+    /// database is missing. Nothing is created until the user decides.
+    #[error(
+        "the configuration database is missing, although DeckPilot was set up in this folder; nothing was created"
+    )]
+    DatabaseMissing,
+    /// The database is protected by a password (or a system key) and none
+    /// was supplied.
+    #[error("the {0} is needed to open the database")]
+    CredentialsRequired(&'static str),
     #[error("project {0} belongs to another profile")]
     ProjectOfAnotherProfile(ProjectId),
     #[error("project key `{0}` is already used in this profile")]

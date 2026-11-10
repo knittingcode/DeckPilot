@@ -91,7 +91,7 @@ pub async fn set_active_profile(
     .await
     {
         Ok(_) => Ok(()),
-        Err(ClientError::NotRunning) => Ok(state.store().set_active_profile(Some(profile_id))?),
+        Err(ClientError::NotRunning) => Ok(state.store()?.set_active_profile(Some(profile_id))?),
         Err(error) => Err(error.into()),
     }
 }
@@ -99,7 +99,7 @@ pub async fn set_active_profile(
 /// Actions and workflows run in the active profile, which is what the agent
 /// runs.
 fn ensure_active(state: &AppState, profile_id: ProfileId) -> CommandResult<()> {
-    if state.store().active_profile()? == Some(profile_id) {
+    if state.store()?.active_profile()? == Some(profile_id) {
         Ok(())
     } else {
         Err(CommandError::Invalid("the profile is not active".into()))
@@ -149,6 +149,21 @@ pub async fn run_workflow(
     .map_err(agent_required)?
     {
         Response::WorkflowReport { report } => Ok(report),
+        other => Err(unexpected(&other)),
+    }
+}
+
+/// The report of the last workflow the agent ran, for the summary window.
+#[tauri::command]
+pub async fn last_workflow_report(
+    state: State<'_, AppState>,
+) -> CommandResult<Option<WorkflowReport>> {
+    state.store()?;
+    match agent::request(&state.paths, Request::GetLastWorkflowReport)
+        .await
+        .map_err(agent_required)?
+    {
+        Response::LastWorkflow { report } => Ok(report),
         other => Err(unexpected(&other)),
     }
 }

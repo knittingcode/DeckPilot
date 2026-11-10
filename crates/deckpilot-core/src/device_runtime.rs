@@ -81,6 +81,9 @@ pub struct Runtime {
     devices: DeviceRegistry,
     /// Page stack per connected device; the last entry is the visible page.
     navigation: BTreeMap<DeviceId, Vec<PageId>>,
+    /// Shown instead of "No profile" while there is no profile, e.g.
+    /// "Locked" while the configuration is encrypted and not unlocked.
+    placeholder: Option<String>,
 }
 
 impl Runtime {
@@ -92,7 +95,13 @@ impl Runtime {
             session: None,
             devices: DeviceRegistry::default(),
             navigation: BTreeMap::new(),
+            placeholder: None,
         }
+    }
+
+    /// Sets the text devices show while no profile is loaded.
+    pub fn set_placeholder(&mut self, text: Option<&str>) {
+        self.placeholder = text.map(str::to_owned);
     }
 
     pub fn engine(&self) -> &Engine {
@@ -289,7 +298,7 @@ impl Runtime {
         };
 
         let Some(profile) = self.profile() else {
-            return notice("No profile");
+            return notice(self.placeholder.as_deref().unwrap_or("No profile"));
         };
         let (Some(layout), Some(page)) =
             (self.layout_for(&device.model), self.current_page(device))

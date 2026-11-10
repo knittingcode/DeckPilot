@@ -25,7 +25,7 @@ pub struct Overview {
 
 #[tauri::command]
 pub fn get_overview(state: State<'_, AppState>) -> CommandResult<Overview> {
-    let store = state.store();
+    let store = state.store()?;
     let profiles = store.list_profiles()?;
     let active_id = store.active_profile()?;
     let active_profile = profiles.iter().find(|p| Some(p.id) == active_id).cloned();
@@ -54,9 +54,10 @@ pub fn get_overview(state: State<'_, AppState>) -> CommandResult<Overview> {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EncryptionState {
-    /// The database is encrypted. Not available yet; see the roadmap.
+    /// The database is encrypted (always, since 0.4).
     enabled: bool,
-    /// A password must be entered before the configuration can be read.
+    /// The key is derived from a password (rather than kept in the
+    /// system credential store), so a password opens the configuration.
     password_required: bool,
 }
 
@@ -67,16 +68,17 @@ pub struct LaunchView {
     encryption: EncryptionState,
 }
 
-/// How this start relates to the previous one. After an update, an
-/// encrypted database would require the password here; encryption is not
-/// enabled yet, so no prompt is needed.
+/// How this start relates to the previous one, and how the configuration
+/// is protected. Whether an update asks for authentication is decided by
+/// the security policy when the database is opened (see `AppState::attach`).
 #[tauri::command]
 pub fn launch_info(state: State<'_, AppState>) -> LaunchView {
     LaunchView {
-        launch: state.launch.clone(),
+        launch: state.launch(),
         encryption: EncryptionState {
-            enabled: false,
-            password_required: false,
+            enabled: true,
+            password_required: state.protection()
+                == Some(deckpilot_storage::vault::ProtectionMode::Password),
         },
     }
 }
@@ -90,7 +92,7 @@ pub fn list_action_types(state: State<'_, AppState>) -> Vec<ActionType> {
 /// Changes schema migrations made to stored data, for review.
 #[tauri::command]
 pub fn migration_notes(state: State<'_, AppState>) -> CommandResult<Vec<MigrationNote>> {
-    Ok(state.store().migration_notes()?)
+    Ok(state.store()?.migration_notes()?)
 }
 
 #[tauri::command]

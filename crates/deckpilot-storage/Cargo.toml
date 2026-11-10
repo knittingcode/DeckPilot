@@ -9,19 +9,26 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+argon2.workspace = true
+base64.workspace = true
 deckpilot-core.workspace = true
+deckpilot-keystore.workspace = true
+getrandom.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true
 
 [features]
-# Build against SQLCipher instead of plain SQLite so that `Encryption::Key`
-# can be used. Requires a C toolchain; OpenSSL is vendored.
+# Production databases are encrypted with SQLCipher. OpenSSL (its crypto
+# provider) is built from source and linked statically, so the binaries do
+# not depend on a system OpenSSL. Requires a C toolchain and Perl.
+default = ["sqlcipher"]
 sqlcipher = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
 
 [dev-dependencies]

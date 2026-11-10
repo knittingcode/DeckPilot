@@ -7,6 +7,18 @@
 #   secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD its password
 #   vars.DECKPILOT_UPDATER_PUBKEY              matching public key, compiled
 #                                              into the app to verify updates
+#
+# macOS Developer ID signing and notarization (all required together):
+#   secrets.APPLE_CERTIFICATE           base64 .p12: "Developer ID Application" certificate and key
+#   secrets.APPLE_CERTIFICATE_PASSWORD  its password
+#   vars.APPLE_SIGNING_IDENTITY         "Developer ID Application: Name (TEAMID)"
+#   vars.APPLE_TEAM_ID                  the team identifier
+#   secrets.APPLE_API_KEY               App Store Connect API private key (.p8 content or base64)
+#   vars.APPLE_API_KEY_ID               its key ID
+#   vars.APPLE_API_ISSUER               its issuer ID
+# Without them the release is blocked, unless vars.DECKPILOT_ALLOW_UNSIGNED_MACOS
+# is "true": unsigned macOS builds work, but macOS asks for the login keychain
+# password after every update (see docs/security.md).
 name: Release
 
 on:
@@ -33,6 +45,9 @@ jobs:
   prepare:
     name: Check versions and configuration
     runs-on: ubuntu-latest
+    outputs:
+      macos-signing: ${{ steps.macos.outputs.signing }}
+      notes: ${{ steps.notes.outputs.notes }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,6 +63,47 @@ jobs:
         run: |
           test -n "$KEY" || { echo "::error::secret TAURI_SIGNING_PRIVATE_KEY is not configured"; exit 1; }
           test -n "$PUBKEY" || { echo "::error::variable DECKPILOT_UPDATER_PUBKEY is not configured"; exit 1; }
+      - name: Updater public key is well formed
+        env:
+          DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
+        run: cargo run --locked -p deckpilot-dev -- check-updater-key
+      # The CHANGELOG.md section of the version becomes the release notes and
+      # the notes of the in-app update; a release without notes is refused.
+      - name: Release notes
+        id: notes
+        run: |
+          notes=$(cargo run --locked -q -p deckpilot-dev -- release-notes)
+          delimiter="notes-$(openssl rand -hex 8)"
+          { echo "notes<<$delimiter"; echo "$notes"; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
+      - name: macOS signing configuration
+        id: macos
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
+          ALLOW_UNSIGNED: ${{ vars.DECKPILOT_ALLOW_UNSIGNED_MACOS }}
+        run: |
+          missing=""
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_KEY_CONTENT APPLE_SIGNING_IDENTITY APPLE_TEAM_ID APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            test -n "${!name}" || missing="$missing $name"
+          done
+          if [ -z "$missing" ]; then
+            case "$APPLE_SIGNING_IDENTITY" in
+              "Developer ID Application: "*"($APPLE_TEAM_ID)") ;;
+              *) echo "::error::APPLE_SIGNING_IDENTITY must be a 'Developer ID Application: … (APPLE_TEAM_ID)' identity"; exit 1 ;;
+            esac
+            echo "signing=true" >> "$GITHUB_OUTPUT"
+          elif [ "$ALLOW_UNSIGNED" = "true" ]; then
+            echo "::warning::macOS builds are NOT signed or notarized (missing:$missing). Gatekeeper warns, and macOS asks for the login keychain password after every update."
+            echo "signing=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::macOS Developer ID signing is not configured (missing:$missing). Configure it, or set the variable DECKPILOT_ALLOW_UNSIGNED_MACOS to true to release unsigned macOS builds deliberately."
+            exit 1
+          fi
 
   build:
     name: Build (${{ matrix.target }})
@@ -65,6 +121,11 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+      # Build provenance attestations for the release artifacts.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -82,6 +143,28 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
+      # Developer ID signing (application and the bundled agent, with the
+      # hardened runtime) and notarization by the Tauri bundler. A stable
+      # signature keeps the agent's Keychain access across updates.
+      - name: Enable macOS signing and notarization
+        if: runner.os == 'macOS' && needs.prepare.outputs.macos-signing == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
+        run: |
+          # The private key goes to a file (APPLE_API_KEY_PATH); the bundler
+          # reads the key *ID* from APPLE_API_KEY. Delimited values: a
+          # certificate may span several lines.
+          .github/scripts/apple-api-key.sh
+          export APPLE_API_KEY="$APPLE_API_KEY_ID"
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_ISSUER; do
+            delimiter="value-$(openssl rand -hex 8)"
+            { echo "$name<<$delimiter"; echo "${!name}"; echo "$delimiter"; } >> "$GITHUB_ENV"
+          done
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -97,6 +180,15 @@ jobs:
           mkdir -p apps/desktop/src-tauri/binaries
           cp "target/${{ matrix.target }}/release/deckpilot-agent${suffix}" \
              "apps/desktop/src-tauri/binaries/deckpilot-agent-${{ matrix.target }}${suffix}"
+      # The bundler checks the updater artifacts against the public key in
+      # the configuration (empty in tauri.conf.json; the app compiles it in).
+      - name: Updater public key for the bundler
+        shell: bash
+        env:
+          DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
+        run: |
+          jq -n --arg key "$DECKPILOT_UPDATER_PUBKEY" '{plugins: {updater: {pubkey: $key}}}' \
+            > apps/desktop/src-tauri/tauri.updater.conf.json
       - name: Build and upload the application
         uses: tauri-apps/tauri-action@v0
         env:
@@ -108,11 +200,80 @@ jobs:
           projectPath: apps/desktop
           tagName: ${{ env.TAG }}
           releaseName: DeckPilot ${{ env.TAG }}
-          releaseBody: See CHANGELOG and the release notes below.
+          releaseBody: ${{ needs.prepare.outputs.notes }}
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
-          args: --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
+          args: --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json --config src-tauri/tauri.updater.conf.json
+      # The updater key compiled into the app must be the configured one;
+      # otherwise installations could not verify (or would trust other) updates.
+      - name: Embedded updater key matches DECKPILOT_UPDATER_PUBKEY
+        shell: bash
+        env:
+          DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
+        run: |
+          suffix=""; [ "${{ runner.os }}" = "Windows" ] && suffix=".exe"
+          binary="target/${{ matrix.target }}/release/deckpilot-desktop${suffix}"
+          grep -q -F -a -- "$DECKPILOT_UPDATER_PUBKEY" "$binary" \
+            || { echo "::error::$binary does not contain the configured updater public key"; exit 1; }
+          echo "the configured updater public key is embedded in $binary"
+      # The bundler notarizes and staples the app; the disk image is
+      # notarized and stapled here and replaces the uploaded one.
+      - name: Notarize and staple the disk image
+        if: runner.os == 'macOS' && needs.prepare.outputs.macos-signing == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
+        run: |
+          dmg=$(find "target/${{ matrix.target }}/release/bundle/dmg" -maxdepth 1 -name '*.dmg' | head -n 1)
+          .github/scripts/notarize.sh "$dmg"
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+          gh release upload "$TAG" "$dmg" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' \
+            | grep -q -x -F "$(basename "$dmg")" \
+            || { echo "::error::the stapled disk image did not replace the uploaded one"; exit 1; }
+      - name: Verify macOS signatures, agent identity and notarization
+        if: runner.os == 'macOS' && needs.prepare.outputs.macos-signing == 'true'
+        env:
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          bundle="target/${{ matrix.target }}/release/bundle"
+          app=$(find "$bundle/macos" -maxdepth 1 -name '*.app' | head -n 1)
+          .github/scripts/verify-macos-app.sh "$app"
+          # The updater installs the archived app: it must be the same signed,
+          # notarized and stapled bundle.
+          extracted="$RUNNER_TEMP/updater-app"
+          rm -rf "$extracted" && mkdir -p "$extracted"
+          tar -xzf "$(find "$bundle/macos" -maxdepth 1 -name '*.app.tar.gz' | head -n 1)" -C "$extracted"
+          .github/scripts/verify-macos-app.sh "$(find "$extracted" -maxdepth 1 -name '*.app' | head -n 1)"
+          # And the app inside the disk image.
+          mount=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$(find "$bundle/dmg" -maxdepth 1 -name '*.dmg' | head -n 1)" >/dev/null
+          .github/scripts/verify-macos-app.sh "$(find "$mount" -maxdepth 1 -name '*.app' | head -n 1)"
+          hdiutil detach "$mount" >/dev/null
+      - name: Note unsigned platform builds
+        if: runner.os == 'Windows' || (runner.os == 'macOS' && needs.prepare.outputs.macos-signing != 'true')
+        shell: bash
+        run: |
+          echo "### ${{ matrix.target }}: not code-signed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Installers carry no platform code signature (updater artifacts are signed). See docs/releasing.md." >> "$GITHUB_STEP_SUMMARY"
+      # Signed statement that these files were built by this workflow from
+      # this tag; verify with `gh attestation verify <file> --repo <owner/repo>`.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            target/${{ matrix.target }}/release/bundle/**/*.dmg
+            target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz
+            target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            target/${{ matrix.target }}/release/bundle/**/*.deb
+            target/${{ matrix.target }}/release/bundle/**/*.rpm
+            target/${{ matrix.target }}/release/bundle/**/*.msi
+            target/${{ matrix.target }}/release/bundle/**/*.exe
+            target/${{ matrix.target }}/release/bundle/**/*.sig
 
   verify:
     name: Verify artifacts and publish checksums

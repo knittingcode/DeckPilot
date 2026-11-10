@@ -1,9 +1,12 @@
 //! The `general` module: action types that do not belong to a specific
 //! feature and have no side effects on the host system.
 
+use std::collections::BTreeMap;
+
 use deckpilot_core::{
     ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, Capability,
     ExecutionContext, FeatureModule, ModuleId, ModuleManifest, ParameterKind, ParameterSpec,
+    Portability,
 };
 
 pub const MODULE_ID: &str = "general";
@@ -42,6 +45,13 @@ impl GeneralModule {
                 config: Vec::new(),
                 dependencies: Vec::new(),
                 enabled_by_default: true,
+                // Only the enabled state travels; there are no settings.
+                portability: Portability {
+                    version: 1,
+                    settings: BTreeMap::new(),
+                },
+                migrations: Vec::new(),
+                windows: Vec::new(),
             },
         }
     }

@@ -3,6 +3,8 @@ import { Monitor, Moon, Sun } from "lucide-react"
 import { AgentSettings } from "@/components/agent-settings"
 import { MigrationNotesCard } from "@/components/migration-notes"
 import { ModulesCard } from "@/components/modules-card"
+import { PortabilityCard } from "@/components/portability-card"
+import { SecurityCard } from "@/components/security-card"
 import { ErrorNotice, Loading, Page } from "@/components/page"
 import { UpdatesCard } from "@/components/updates-card"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -21,7 +23,10 @@ export function SettingsPage() {
     String(revision),
   )
   return (
-    <Page title="Settings" description="Appearance, modules, agent, updates and diagnostics">
+    <Page
+      title="Settings"
+      description="Appearance, security, export, modules, agent, updates and diagnostics"
+    >
       <Card>
         <CardHeader>
           <CardTitle>Appearance</CardTitle>
@@ -48,6 +53,8 @@ export function SettingsPage() {
           </ToggleGroup>
         </CardContent>
       </Card>
+      <SecurityCard />
+      <PortabilityCard />
       <ModulesCard />
       <AgentSettings />
       <UpdatesCard />
@@ -76,11 +83,7 @@ export function SettingsPage() {
               <dt className="text-muted-foreground">Previous version</dt>
               <dd>{state.data[1].launch?.previousVersion ?? "—"}</dd>
               <dt className="text-muted-foreground">Database encryption</dt>
-              <dd>
-                {state.data[1].encryption.enabled
-                  ? "Enabled"
-                  : "Not enabled (planned; no password is requested)"}
-              </dd>
+              <dd>SQLCipher, key derived with Argon2id</dd>
             </dl>
           )}
         </CardContent>

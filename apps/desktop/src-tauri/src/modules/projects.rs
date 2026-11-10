@@ -143,7 +143,7 @@ pub fn copy_project(
     target_profile_id: ProfileId,
 ) -> CommandResult<Project> {
     state.require_module(&module_id())?;
-    let source = load_profile(&state.store(), profile_id)?;
+    let source = load_profile(&*state.store()?, profile_id)?;
     modify_profile(&state, target_profile_id, |target| {
         let id = source.copy_project_to(project_id, target)?;
         target
@@ -156,7 +156,7 @@ pub fn copy_project(
 /// Switching acts on the active profile, which is what the agent runs.
 fn ensure_active(state: &AppState, profile_id: ProfileId) -> CommandResult<()> {
     state.require_module(&module_id())?;
-    if state.store().active_profile()? == Some(profile_id) {
+    if state.store()?.active_profile()? == Some(profile_id) {
         Ok(())
     } else {
         Err(CommandError::Invalid("the profile is not active".into()))
@@ -175,7 +175,7 @@ pub async fn cycle_project(
         Ok(other) => Err(unexpected(&other)),
         Err(ClientError::NotRunning) => {
             let wrap = switching::wrap_around(&state.modules());
-            let store = state.store();
+            let store = state.store()?;
             let profile = load_profile(&store, profile_id)?;
             let context =
                 ActiveProjectContext::restore(&profile, store.active_project(profile_id)?);
@@ -196,7 +196,7 @@ pub async fn select_project(
 ) -> CommandResult<()> {
     ensure_active(&state, profile_id)?;
     // Ownership is checked here as well as in the agent.
-    let profile = load_profile(&state.store(), profile_id)?;
+    let profile = load_profile(&*state.store()?, profile_id)?;
     if profile.project(project_id).is_none() {
         return Err(CommandError::NotFound("project"));
     }
@@ -210,7 +210,7 @@ pub async fn select_project(
     {
         Ok(_) => Ok(()),
         Err(ClientError::NotRunning) => Ok(state
-            .store()
+            .store()?
             .set_active_project(profile_id, Some(project_id))?),
         Err(error) => Err(error.into()),
     }
@@ -268,7 +268,7 @@ pub fn check_resources(
     profile_id: ProfileId,
 ) -> CommandResult<Vec<ResourceCheck>> {
     state.require_module(&module_id())?;
-    let store = state.store();
+    let store = state.store()?;
     let profile = load_profile(&store, profile_id)?;
     let config = machine_config(&store)?;
     let mut used: BTreeMap<ResourceKey, Vec<String>> = BTreeMap::new();

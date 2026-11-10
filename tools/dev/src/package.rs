@@ -31,6 +31,11 @@ pub fn stage_agent(root: &Path, agent: &Path, target: &str) -> Result<PathBuf, S
     Ok(destination)
 }
 
+/// Tauri configuration fragment with the updater public key.
+pub fn updater_config(public_key: &str) -> String {
+    serde_json::json!({ "plugins": { "updater": { "pubkey": public_key.trim() } } }).to_string()
+}
+
 fn run(command: &mut Command) -> Result<(), String> {
     let status = command.status().map_err(|e| e.to_string())?;
     if status.success() {
@@ -69,6 +74,27 @@ pub fn package(root: &Path, extra: &[String]) -> Result<(), String> {
         // Signed updater artifacts need the release key; local packages skip them.
         println!("TAURI_SIGNING_PRIVATE_KEY is not set: building without updater artifacts");
         build.args(["--config", r#"{"bundle":{"createUpdaterArtifacts":false}}"#]);
+    } else {
+        // The bundler checks the updater artifacts against the public key in
+        // the configuration; it is the same key the app is compiled with.
+        let key = std::env::var("DECKPILOT_UPDATER_PUBKEY")
+            .ok()
+            .filter(|key| !key.trim().is_empty())
+            .ok_or("signing updater artifacts needs DECKPILOT_UPDATER_PUBKEY (the matching public key)")?;
+        let config = root.join("target/tauri.updater.conf.json");
+        std::fs::create_dir_all(root.join("target")).map_err(|e| e.to_string())?;
+        std::fs::write(&config, updater_config(&key)).map_err(|e| e.to_string())?;
+        build.arg("--config").arg(&config);
     }
     run(build.args(extra))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_updater_config_carries_the_public_key() {
+        let config: serde_json::Value =
+            serde_json::from_str(&super::updater_config("dW50cnVzdGVk\n")).unwrap();
+        assert_eq!(config["plugins"]["updater"]["pubkey"], "dW50cnVzdGVk");
+    }
 }

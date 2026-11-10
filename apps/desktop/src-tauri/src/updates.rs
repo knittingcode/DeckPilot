@@ -32,7 +32,7 @@ use crate::state::AppState;
 /// Base64 minisign public key of the release signing key, set at build time.
 pub const PUBLIC_KEY: Option<&str> = option_env!("DECKPILOT_UPDATER_PUBKEY");
 pub const STATE_EVENT: &str = "update-state";
-const PREFERENCES_KEY: &str = "update.preferences";
+const PREFERENCES_KEY: &str = deckpilot_update::policy::PREFERENCES_SETTING;
 /// How often the background task wakes up to see whether a check is due.
 const TICK: Duration = Duration::from_secs(30 * 60);
 
@@ -116,12 +116,12 @@ impl UpdateManager {
     }
 }
 
+/// Stored preferences; the defaults while the configuration is locked.
 fn preferences(state: &AppState) -> UpdatePreferences {
     state
         .store()
-        .setting(PREFERENCES_KEY)
         .ok()
-        .flatten()
+        .and_then(|store| store.setting(PREFERENCES_KEY).ok().flatten())
         .and_then(|text| serde_json::from_str::<UpdatePreferences>(&text).ok())
         .unwrap_or_default()
         .sanitized()
@@ -130,7 +130,7 @@ fn preferences(state: &AppState) -> UpdatePreferences {
 fn save_preferences(state: &AppState, preferences: &UpdatePreferences) -> CommandResult<()> {
     let text =
         serde_json::to_string(preferences).map_err(|e| CommandError::Invalid(e.to_string()))?;
-    state.store().set_setting(PREFERENCES_KEY, &text)?;
+    state.store()?.set_setting(PREFERENCES_KEY, &text)?;
     Ok(())
 }
 
@@ -165,11 +165,38 @@ fn set_phase<R: Runtime>(app: &AppHandle<R>, phase: Phase, error: Option<String>
     publish(app);
 }
 
+/// Whether an operation may start while the updater is in `current`.
+/// Only one check, download or installation runs at a time.
+fn may_start(current: Phase) -> bool {
+    !matches!(
+        current,
+        Phase::Checking | Phase::Downloading | Phase::Installing
+    )
+}
+
+/// Moves to `phase` unless another update operation is running; the check
+/// and the change happen under one lock, so two attempts cannot both start.
+fn begin<R: Runtime>(app: &AppHandle<R>, phase: Phase) -> CommandResult<()> {
+    {
+        let manager = app.state::<UpdateManager>();
+        let mut inner = manager.lock();
+        if !may_start(inner.phase) {
+            return Err(CommandError::Invalid(
+                "another update operation is in progress".into(),
+            ));
+        }
+        inner.phase = phase;
+        inner.error = None;
+    }
+    publish(app);
+    Ok(())
+}
+
 async fn check<R: Runtime>(app: &AppHandle<R>) -> CommandResult<Option<UpdateInfo>> {
     let key = PUBLIC_KEY
         .filter(|_| configured())
         .ok_or_else(|| CommandError::Invalid("updates are not configured in this build".into()))?;
-    set_phase(app, Phase::Checking, None);
+    begin(app, Phase::Checking)?;
     let endpoint = deckpilot_update::STABLE_ENDPOINT
         .parse()
         .map_err(|_| CommandError::Invalid("invalid update endpoint".into()))?;
@@ -185,7 +212,10 @@ async fn check<R: Runtime>(app: &AppHandle<R>) -> CommandResult<Option<UpdateInf
     let state = app.state::<AppState>();
     let mut prefs = preferences(&state);
     prefs.last_check = Some(now());
-    save_preferences(&state, &prefs)?;
+    // While locked, checks still work; the time is not stored.
+    if state.is_unlocked() {
+        save_preferences(&state, &prefs)?;
+    }
     match result {
         Ok(found) => {
             let info = found.as_ref().map(|update| UpdateInfo {
@@ -221,7 +251,7 @@ async fn download<R: Runtime>(app: &AppHandle<R>) -> CommandResult<()> {
         .update
         .clone()
         .ok_or_else(|| CommandError::Invalid("no update is available".into()))?;
-    set_phase(app, Phase::Downloading, None);
+    begin(app, Phase::Downloading)?;
     let progress_app = app.clone();
     let mut downloaded = 0u64;
     let result = update
@@ -260,7 +290,7 @@ async fn install<R: Runtime>(app: &AppHandle<R>) -> CommandResult<()> {
             _ => return Err(CommandError::Invalid("download the update first".into())),
         }
     };
-    set_phase(app, Phase::Installing, None);
+    begin(app, Phase::Installing)?;
     let paths = app.state::<AppState>().paths.clone();
     let agent_was_running = matches!(crate::agent::connection(&paths).await, Ok(c) if c.running);
     if agent_was_running {
@@ -366,4 +396,18 @@ pub fn spawn_background<R: Runtime>(app: AppHandle<R>) {
             tokio::time::sleep(TICK).await;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_one_update_operation_runs_at_a_time() {
+        assert!(may_start(Phase::Idle));
+        assert!(may_start(Phase::Ready));
+        for busy in [Phase::Checking, Phase::Downloading, Phase::Installing] {
+            assert!(!may_start(busy), "{busy:?}");
+        }
+    }
 }

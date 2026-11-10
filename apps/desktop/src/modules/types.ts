@@ -14,4 +14,10 @@ export interface FrontendModule {
   pages: Record<string, { view: View; icon: LucideIcon }>
   /** Cards shown on the dashboard while the module is enabled. */
   dashboardCards?: View[]
+  /**
+   * Views of the native windows declared in the module's manifest, by
+   * window identifier (`<module>.<name>`). The backend decides whether a
+   * window may open.
+   */
+  windows?: Record<string, View>
 }

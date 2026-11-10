@@ -15,6 +15,7 @@ help:
 	@echo ""
 	@echo "  make setup     Install dependencies and check the toolchain"
 	@echo "  make up        Start agent + app with live reload (simulated devices: DEVICES=$(DEVICES))"
+	@echo "                 LOCKED=1 keeps the agent locked to try the unlock screens"
 	@echo "  make down      Stop the development session (data is kept)"
 	@echo "  make restart   Restart the session (rebuilds the agent)"
 	@echo "  make status    Show session processes and agent state"
@@ -37,13 +38,13 @@ setup:
 	cargo build -p deckpilot-agent
 
 up:
-	$(DEV) up --devices $(DEVICES)
+	$(DEV) up --devices $(DEVICES) $(if $(LOCKED),--locked,)
 
 down:
 	$(DEV) down
 
 restart:
-	$(DEV) restart
+	$(DEV) restart $(if $(LOCKED),--locked,)
 
 status:
 	$(DEV) status

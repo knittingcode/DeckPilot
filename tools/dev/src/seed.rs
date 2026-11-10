@@ -13,7 +13,9 @@ use deckpilot_core::{
 use deckpilot_device::{ControlId, TouchGesture, models};
 use deckpilot_modules::general;
 use deckpilot_modules::projects::{ProjectCatalog, actions};
-use deckpilot_storage::{ConfigStore, Encryption, SqliteStore};
+use deckpilot_storage::crypto::Password;
+use deckpilot_storage::vault::{DatabaseState, Vault};
+use deckpilot_storage::{ConfigStore, DatabaseKey, Encryption, SqliteStore};
 
 use crate::session::DevPaths;
 
@@ -436,14 +438,84 @@ const SEEDED: &str = "dev.seeded";
 
 /// Seeds the development database if it has no profiles. Returns whether
 /// data was written.
-pub fn seed(paths: &DevPaths) -> Result<bool> {
+/// Password of the development database. A fixture for `make up` only: it
+/// exists in this development tool, never in the application, and protects
+/// nothing but demonstration data in `.dev/data`.
+pub const DEV_PASSWORD: &str = "deckpilot-dev";
+
+fn vault(paths: &DevPaths) -> Vault {
+    Vault::new(paths.data.join("deckpilot.db"))
+}
+
+/// The key of the development database, if it is encrypted with the
+/// development password.
+pub fn dev_key(paths: &DevPaths) -> Option<DatabaseKey> {
+    let vault = vault(paths);
+    match vault.state() {
+        Ok(DatabaseState::Encrypted) => vault.unlock(&Password::new(DEV_PASSWORD)).ok(),
+        _ => None,
+    }
+}
+
+/// Encrypts an unencrypted development database from an earlier version
+/// with [`DEV_PASSWORD`], like the app's migration does.
+pub fn encrypt_legacy(paths: &DevPaths) -> Result<()> {
+    let vault = vault(paths);
+    if vault.state()? == DatabaseState::Plaintext {
+        vault.encrypt_plaintext(&Password::new(DEV_PASSWORD))?;
+    }
+    Ok(())
+}
+
+/// Seeds a password-protected development database once per data
+/// directory. A missing database is left to the agent, which creates it
+/// with a system-managed key like a fresh installation; it is seeded through
+/// the agent then ([`seed_with_key`]). `password`: create a missing database
+/// protected by [`DEV_PASSWORD`] instead. An unencrypted database from an
+/// earlier version is left alone so that the migration can be tried.
+/// Returns whether data was written.
+pub fn seed(paths: &DevPaths, password: bool) -> Result<bool> {
     paths.create()?;
-    let store = SqliteStore::open(paths.data.join("deckpilot.db"), &Encryption::None)?;
+    let vault = vault(paths);
+    let key = match vault.state()? {
+        DatabaseState::Missing if password => vault.initialize(&Password::new(DEV_PASSWORD))?,
+        DatabaseState::Missing => return Ok(false),
+        DatabaseState::Plaintext => {
+            println!(
+                "the development database is unencrypted (created by an earlier version); \
+                 the agent encrypts it with a system-managed key when it starts"
+            );
+            return Ok(false);
+        }
+        DatabaseState::Encrypted => {
+            if !matches!(
+                vault.protection()?,
+                Some(deckpilot_storage::vault::Protection::Password { .. })
+            ) {
+                // System-managed: only the agent reads the key.
+                return Ok(false);
+            }
+            let Ok(key) = vault.unlock(&Password::new(DEV_PASSWORD)) else {
+                println!("the development database uses a different password; not seeding");
+                return Ok(false);
+            };
+            key
+        }
+    };
+    seed_with_key(paths, key)
+}
+
+/// Seeds the development database opened with `key` (from the agent for a
+/// system-managed key), once per data directory.
+pub fn seed_with_key(paths: &DevPaths, key: DatabaseKey) -> Result<bool> {
+    let store = SqliteStore::open(vault(paths).database(), &Encryption::Key(key))?;
     // Seed once per data directory: deleting the demo data must not bring
     // it back on the next `make up`. `seed --reset` starts a new directory.
     if store.setting(SEEDED)?.is_some() {
         return Ok(false);
     }
+    // The app asks for the password once per version; not in development.
+    store.set_setting(CONFIRMED_VERSION, env!("CARGO_PKG_VERSION"))?;
     if !store.list_profiles()?.is_empty() {
         store.set_setting(SEEDED, "existing data")?;
         return Ok(false);
@@ -466,6 +538,10 @@ pub fn seed(paths: &DevPaths) -> Result<bool> {
     store.save_machine_config(&machine(paths)?)?;
     Ok(true)
 }
+
+/// Setting the configuration app uses to ask for the password once after
+/// an update.
+const CONFIRMED_VERSION: &str = "security.confirmedVersion";
 
 #[cfg(test)]
 mod tests {

@@ -67,6 +67,15 @@ jobs:
         run: cargo run --locked -p deckpilot-dev -- check-versions
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # The agent embeds an Info.plist so that code signing uses a fixed
+      # identifier; its Keychain access across updates depends on it.
+      - name: The agent keeps a fixed code signing identifier
+        if: runner.os == 'macOS'
+        run: |
+          cp target/debug/deckpilot-agent "$RUNNER_TEMP/deckpilot-agent"
+          codesign --force --sign - --options runtime "$RUNNER_TEMP/deckpilot-agent"
+          codesign --display --verbose=2 "$RUNNER_TEMP/deckpilot-agent" 2>&1 \
+            | grep -x "Identifier=io.github.knittingcode.deckpilot.agent"
 
   sqlcipher:
     name: Storage with SQLCipher
@@ -78,3 +87,47 @@ jobs:
         run: rustup toolchain install && rustc --version && cargo clippy --version
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p deckpilot-storage --features sqlcipher --locked
+
+  # Builds the Linux .deb with the release configuration (bundled agent,
+  # udev rule) to catch packaging mistakes before a release. Nothing is
+  # signed or published.
+  package-linux:
+    name: Package check (Linux .deb)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libudev-dev
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: package-linux
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build and stage the agent
+        run: |
+          cargo build --release --locked -p deckpilot-agent
+          mkdir -p apps/desktop/src-tauri/binaries
+          cp target/release/deckpilot-agent "apps/desktop/src-tauri/binaries/deckpilot-agent-$(rustc -vV | sed -n 's/^host: //p')"
+      - name: Build the .deb
+        run: >
+          pnpm --filter @deckpilot/desktop tauri build --bundles deb
+          --config src-tauri/tauri.release.conf.json
+          --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - name: The package contains the app, the agent and the udev rule
+        run: |
+          deb=$(find target/release/bundle/deb -name '*.deb' | head -n 1)
+          contents=$(dpkg-deb --contents "$deb")
+          echo "$contents"
+          # dpkg-deb lists paths with or without a leading "./".
+          for path in usr/bin/deckpilot-agent usr/lib/udev/rules.d/70-deckpilot-streamdeck.rules 'usr/share/applications/.*\.desktop'; do
+            echo "$contents" | grep -q -E " (\./)?$path\$" || { echo "::error::$deb lacks $path"; exit 1; }
+          done
+          echo "$deb contains the app, the agent and the udev rule"

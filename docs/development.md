@@ -32,7 +32,26 @@ make up        # or: pnpm dev (same session, in the foreground; Ctrl+C stops it)
    *Empty* profile to check empty states. Demonstration data exists only in
    this seed; a production database starts with no profiles and an empty
    Action Library. The seed runs once per data directory, so demo data you
-   delete does not come back (`make seed` with `--reset` starts over);
+   delete does not come back (`make seed` with `--reset` starts over).
+   A new development database is created by the agent like a fresh
+   installation: encrypted, with a system-managed key in the credential
+   store under the separate service `DeckPilot Development` (never the
+   production `DeckPilot` entries); the demonstration data is written with
+   the key the agent hands out, so only the agent reads the credential
+   store. `deckpilot-dev seed --reset --password` creates a
+   password-protected database instead, with the development-only password
+   `deckpilot-dev`, which the supervisor uses to unlock the agent. `make up
+   LOCKED=1` locks the configuration after the start to try the unlock
+   screens (with a system key, unlocking uses Touch ID on macOS). The
+   password fixture lives only in `tools/dev` and is never used by the
+   application. Rebuilding the agent changes its code signature, so macOS
+   asks for the login keychain password before the rebuilt agent may read
+   its key ("Always Allow" holds for that build); `make up` points this out
+   and waits. Frontend changes do not rebuild the agent. To develop the
+   agent without these prompts, use a password-protected development
+   database (`deckpilot-dev seed --reset --password`). An unencrypted
+   development database from an earlier version is left alone so that the
+   app's migration can be tried;
 3. builds and starts the background agent with simulated MK.2, XL and
    Stream Deck + devices next to any connected hardware;
 4. starts the configuration app with `tauri dev` and Vite HMR.
