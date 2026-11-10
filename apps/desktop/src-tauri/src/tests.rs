@@ -648,6 +648,7 @@ fn start_agent_with(
         key_store: keys.map(|keys| -> Arc<dyn deckpilot_keystore::KeyStore> { Arc::new(keys) }),
         auto_lock_check: std::time::Duration::from_millis(50),
         clock: deckpilot_agent::system_clock(),
+        screen_lock: None,
     };
     paths.create_dirs().unwrap();
     let lock = InstanceLock::acquire(&paths.lock_file).unwrap();
@@ -1432,6 +1433,24 @@ fn status(h: &Harness) -> Value {
     h.ok("security_status", json!({}))
 }
 
+/// Waits until the agent opened the configuration with the system key and
+/// the app attached to it.
+fn wait_unlocked(h: &Harness) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let view = status(h);
+        if view["unlocked"] == true {
+            return view;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "not unlocked: {view}, agent: {}",
+            h.ok("agent_status", json!({}))
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 fn agent_security(h: &Harness) -> Value {
     h.ok("agent_status", json!({}))["status"].clone()
 }
@@ -1444,15 +1463,7 @@ fn a_fresh_install_opens_without_a_password() {
     let h = Harness::without_setup(paths);
     // The agent created the database with a key in the credential store;
     // the app opens it with the key from the agent.
-    let mut view = status(&h);
-    for _ in 0..100 {
-        if view["unlocked"] == true {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        view = status(&h);
-    }
-    assert_eq!(view["unlocked"], true, "{view}");
+    let view = wait_unlocked(&h);
     assert_eq!(view["protection"], "systemManaged");
     assert_eq!(view["database"], "encrypted");
     assert_eq!(view["verification"], "confirmationOnly");
@@ -1483,9 +1494,7 @@ fn sensitive_operations_need_a_fresh_authentication() {
     let (_runtime, _mock) = start_agent_with(&paths, Some(keys));
     let touch_id = Arc::new(Scripted::new(Some(Method::TouchId), false));
     let h = Harness::with_presence(paths, touch_id.clone());
-    while status(&h)["unlocked"] != true {
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
+    wait_unlocked(&h);
     assert_eq!(status(&h)["verification"], "touchId");
     let export = || {
         let path = h.paths.data_dir.join("all.deckpilot").display().to_string();
@@ -1587,9 +1596,7 @@ fn a_locked_system_key_configuration_unlocks_with_the_system_check() {
     let (_runtime, _mock) = start_agent_with(&paths, Some(keys));
     let touch_id = Arc::new(Scripted::new(Some(Method::TouchId), true));
     let h = Harness::with_presence(paths, touch_id.clone());
-    while status(&h)["unlocked"] != true {
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
+    wait_unlocked(&h);
     let view = h.ok("lock", json!({}));
     assert_eq!(view["unlocked"], false);
     assert_eq!(view["lockReason"], "requested");
@@ -1617,9 +1624,7 @@ fn policies_need_a_way_to_verify_the_user() {
     let paths = Harness::temp_paths();
     let (_runtime, _mock) = start_agent_with(&paths, Some(MemoryKeyStore::new()));
     let h = Harness::without_setup(paths);
-    while status(&h)["unlocked"] != true {
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
+    wait_unlocked(&h);
     // System key, no system authentication: locking would be pointless.
     let idle =
         json!({ "policy": { "autoLock": "idle15Minutes", "reauthentication": "sensitiveOnly" } });
@@ -1660,5 +1665,93 @@ fn key_store_names_match_the_credential_store() {
     assert_eq!(
         crate::commands::security::key_store_name(),
         deckpilot_keystore::platform_store_name()
+    );
+}
+
+#[test]
+fn an_update_does_not_ask_for_anything_with_a_system_key() {
+    let paths = Harness::temp_paths();
+    let (_runtime, _mock) = start_agent_with(&paths, Some(MemoryKeyStore::new()));
+    let h = Harness::without_setup(paths);
+    wait_unlocked(&h);
+    new_profile(&h, "Work");
+    // The previous version was confirmed and recorded its launch.
+    {
+        use deckpilot_storage::ConfigStore as _;
+        let state = h.window.state::<AppState>();
+        let store = state.store().unwrap();
+        store
+            .set_setting("security.confirmedVersion", "0.3.0")
+            .unwrap();
+        store.record_launch("desktop", "0.3.0").unwrap();
+    }
+    // First start of the new version: the app gets the key from the agent.
+    let again = Harness::without_setup(h.paths.clone());
+    let view = status(&again);
+    assert_eq!(view["unlocked"], true, "{view}");
+    assert_eq!(view["confirmationRequired"], false);
+    let launch = again.ok("launch_info", json!({}));
+    assert_eq!(launch["launch"]["firstAfterUpdate"], true);
+    assert_eq!(launch["encryption"]["passwordRequired"], false);
+}
+
+#[test]
+fn a_missing_database_needs_an_explicit_decision() {
+    let h = Harness::new();
+    new_profile(&h, "Work");
+    let state = h.window.state::<AppState>();
+    state.detach();
+    for suffix in ["", "-wal", "-shm"] {
+        let mut path = h.paths.database.clone().into_os_string();
+        path.push(suffix);
+        let _ = std::fs::remove_file(path);
+    }
+    let view = status(&h);
+    assert_eq!(view["database"], "missing");
+    assert_eq!(view["databaseMissing"], true);
+    // Neither a password setup nor an old key creates a new database.
+    assert!(
+        h.error(
+            "setup_password",
+            json!({ "input": { "password": PASSWORD, "confirmation": PASSWORD } })
+        )
+        .contains("missing")
+    );
+    assert!(!h.paths.database.exists());
+
+    // Starting over moves the key file aside; then setup works again.
+    h.ok("start_new_configuration", json!({}));
+    let view = status(&h);
+    assert_eq!(view["databaseMissing"], false);
+    let aside = std::fs::read_dir(&h.paths.data_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("deckpilot.vault.orphaned-")
+        });
+    assert!(aside, "the old key file is kept");
+    h.ok(
+        "setup_password",
+        json!({ "input": { "password": PASSWORD, "confirmation": PASSWORD } }),
+    );
+    assert_eq!(h.ok("list_profiles", json!({}))["profiles"], json!([]));
+}
+
+#[test]
+fn the_screen_lock_option_needs_detection() {
+    let h = Harness::new();
+    let (_runtime, _mock) = start_agent(&h.paths);
+    h.unlock();
+    assert_eq!(status(&h)["screenLockDetection"], false);
+    h.ok("authenticate", json!({ "password": PASSWORD }));
+    assert!(
+        h.error(
+            "set_security_policy",
+            json!({ "policy": { "autoLock": "screenLock", "reauthentication": "sensitiveOnly" } })
+        )
+        .contains("cannot detect the screen lock")
     );
 }

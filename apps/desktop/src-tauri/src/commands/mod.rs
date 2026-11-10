@@ -41,6 +41,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         security::use_password,
         security::use_system_key,
         security::set_security_policy,
+        security::start_new_configuration,
         security::encrypt_legacy_database,
         security::change_password,
         security::lock,

@@ -396,7 +396,8 @@ export type DatabaseState = "missing" | "plaintext" | "encrypted"
 /** How the database key is protected; see `docs/security.md`. */
 export type ProtectionMode = "systemManaged" | "password"
 
-export type LockReason = "startup" | "requested" | "idle" | "sleep" | "keyUnavailable"
+export type LockReason =
+  "startup" | "requested" | "idle" | "sleep" | "screenLocked" | "keyUnavailable"
 
 /**
  * How the user is verified for sensitive operations and after a lock:
@@ -406,7 +407,7 @@ export type LockReason = "startup" | "requested" | "idle" | "sleep" | "keyUnavai
  */
 export type Verification = "password" | "touchId" | "devicePassword" | "confirmationOnly"
 
-export type AutoLock = "never" | "sleep" | "idle15Minutes" | "idle1Hour"
+export type AutoLock = "never" | "sleep" | "screenLock" | "idle15Minutes" | "idle1Hour"
 export type Reauthentication = "sensitiveOnly" | "afterUpdate" | "everyLaunch"
 
 export interface SecurityPolicy {
@@ -422,6 +423,12 @@ export interface SecurityView {
   /** The user must authenticate before continuing (security policy). */
   confirmationRequired: boolean
   lockReason: LockReason | null
+  /** The agent is reading the key; the credential store may show a prompt. */
+  waitingForKeyStore: boolean
+  /** A key file exists but its database is missing; nothing is created. */
+  databaseMissing: boolean
+  /** Whether the agent can detect this computer's screen lock. */
+  screenLockDetection: boolean
   /** Why the configuration could not be opened automatically. */
   problem: string | null
   /** Name of the credential store, e.g. "macOS Keychain". */

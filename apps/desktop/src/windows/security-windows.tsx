@@ -1,11 +1,10 @@
 import { Fingerprint, KeyRound, LockKeyhole, ShieldCheck, TriangleAlert } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 import { ModalShell } from "@/components/modal-shell"
 import { NewPasswordFields, PasswordField } from "@/components/password-field"
 import { newPasswordReady } from "@/lib/passwords"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { useAsync } from "@/hooks/use-async"
 import { api, errorMessage } from "@/lib/api"
 import type { SecurityView } from "@/lib/types"
 
@@ -42,10 +41,144 @@ function useSubmit() {
   return { busy, error, run }
 }
 
-/** Loads the security state once; prompts render nothing until then. */
-function useSecurityView() {
-  const { state } = useAsync(() => api.securityStatus(), "security")
-  return state
+type ViewState =
+  | { status: "loading" }
+  | { status: "error"; error: string }
+  | { status: "ready"; data: SecurityView }
+
+/**
+ * Loads the security state. While the agent waits for the credential store
+ * (which may be showing a permission prompt) it is polled; once the
+ * configuration is open, the prompt finishes by itself.
+ */
+function useSecurityView(): ViewState & { reload: () => void } {
+  const [state, setState] = useState<ViewState>({ status: "loading" })
+  const [generation, setGeneration] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    api.securityStatus().then(
+      (data) => {
+        if (!cancelled) setState({ status: "ready", data })
+      },
+      (error: unknown) => {
+        if (!cancelled) setState({ status: "error", error: errorMessage(error) })
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [generation])
+  const view = state.status === "ready" ? state.data : null
+  useEffect(() => {
+    if (!view) return
+    if (view.unlocked) {
+      void finish()
+      return
+    }
+    if (!view.waitingForKeyStore) return
+    const timer = setTimeout(() => {
+      setGeneration((g) => g + 1)
+    }, 1000)
+    return () => {
+      clearTimeout(timer)
+    }
+  }, [view])
+  return {
+    ...state,
+    reload: () => {
+      setGeneration((g) => g + 1)
+    },
+  }
+}
+
+/** The agent is reading the key; the credential store may ask first. */
+function WaitingForKeyStore({ view }: { view: SecurityView }) {
+  return (
+    <ModalShell
+      size="compact"
+      blocking
+      icon={KeyRound}
+      title={`Waiting for the ${view.keyStore}`}
+      description={`DeckPilot is reading its key. If the ${view.keyStore} asks whether DeckPilot may use it, allow it.`}
+      loading
+    />
+  )
+}
+
+/**
+ * The key file shows that DeckPilot was set up here, but the database is
+ * gone. Nothing is created until the user decides.
+ */
+function MissingDatabase({ onChanged }: { onChanged: () => void }) {
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const act = (task: () => Promise<SecurityView>) => {
+    setBusy(true)
+    setError(null)
+    task()
+      .then((view) => {
+        if (view.unlocked) void finish()
+        else onChanged()
+      })
+      .catch((e: unknown) => {
+        setError(errorMessage(e))
+      })
+      .finally(() => {
+        setBusy(false)
+      })
+  }
+  return (
+    <ModalShell
+      size="compact"
+      blocking
+      icon={TriangleAlert}
+      title="Your configuration is missing"
+      description="DeckPilot was set up on this computer, but its configuration database is gone — perhaps it was moved, deleted, or is on a drive that is not connected. Nothing was created or overwritten."
+      error={error}
+      onSubmit={() => {
+        act(confirming ? () => api.startNewConfiguration() : () => api.systemUnlock())
+      }}
+      secondary={
+        confirming
+          ? {
+              label: "Back",
+              onClick: () => {
+                setConfirming(false)
+              },
+            }
+          : {
+              label: "Start a new configuration…",
+              onClick: () => {
+                setConfirming(true)
+              },
+            }
+      }
+      primary={
+        confirming
+          ? {
+              label: "Start a new configuration",
+              loadingLabel: "Creating…",
+              loading: busy,
+              variant: "destructive",
+            }
+          : { label: "Try again", loadingLabel: "Trying…", loading: busy }
+      }
+    >
+      {confirming ? (
+        <p className="text-sm text-muted-foreground">
+          DeckPilot starts with an empty configuration. The old key file is kept next to it, and its
+          key stays in the credential store, so the old configuration can still be opened if you
+          find its database. Import an encrypted export to restore your profiles.
+        </p>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Restore <span className="font-mono">deckpilot.db</span> to the data folder (or connect its
+          drive) and try again.
+        </p>
+      )}
+    </ModalShell>
+  )
 }
 
 function Loading({ title, error }: { title: string; error?: string }) {
@@ -181,6 +314,8 @@ export function SetupWindow() {
         error={state.status === "error" ? state.error : undefined}
       />
     )
+  if (state.data.waitingForKeyStore) return <WaitingForKeyStore view={state.data} />
+  if (state.data.databaseMissing) return <MissingDatabase onChanged={state.reload} />
   if (password) {
     return (
       <NewPasswordForm
@@ -233,6 +368,7 @@ export function MigrateWindow() {
         error={state.status === "error" ? state.error : undefined}
       />
     )
+  if (state.data.waitingForKeyStore) return <WaitingForKeyStore view={state.data} />
   if (password) {
     return (
       <NewPasswordForm
@@ -366,6 +502,7 @@ export function UnlockWindow() {
       />
     )
   const view = state.data
+  if (view.waitingForKeyStore) return <WaitingForKeyStore view={view} />
   if (view.protection === "password") {
     return (
       <PasswordPrompt
@@ -393,7 +530,9 @@ export function UnlockWindow() {
       ? "It was locked after a period without activity."
       : view.lockReason === "sleep"
         ? "It was locked when the computer went to sleep."
-        : "It was locked."
+        : view.lockReason === "screenLocked"
+          ? "It was locked when the screen was locked."
+          : "It was locked."
   return (
     <SystemPrompt
       view={view}

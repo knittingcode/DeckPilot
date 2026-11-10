@@ -19,6 +19,7 @@ const api = {
   confirmIdentity: vi.fn(),
   authenticate: vi.fn(),
   encryptLegacyDatabase: vi.fn(),
+  startNewConfiguration: vi.fn(),
   openWindow: vi.fn(),
   showMainWindow: vi.fn(),
   finishSecurityPrompt: vi.fn(),
@@ -39,6 +40,9 @@ function view(overrides: Partial<SecurityView>): SecurityView {
     unlocked: false,
     confirmationRequired: false,
     lockReason: null,
+    waitingForKeyStore: false,
+    databaseMissing: false,
+    screenLockDetection: true,
     problem: null,
     keyStore: "macOS Keychain",
     verification: "touchId",
@@ -264,5 +268,54 @@ describe("sensitive operations", () => {
       expect(onResult).toHaveBeenCalledWith("Error: disk full")
     })
     expect(screen.queryByText(/Authenticate to/)).not.toBeInTheDocument()
+  })
+})
+
+describe("credential store states", () => {
+  it("waits for the credential store and finishes once the agent has the key", async () => {
+    api.securityStatus
+      .mockResolvedValueOnce(view({ waitingForKeyStore: true }))
+      .mockResolvedValue(view({ unlocked: true }))
+    render(<UnlockWindow />)
+    expect(await screen.findByText("Waiting for the macOS Keychain")).toBeInTheDocument()
+    await waitFor(
+      () => {
+        expect(api.finishSecurityPrompt).toHaveBeenCalled()
+      },
+      { timeout: 3000 },
+    )
+    expect(api.systemUnlock).not.toHaveBeenCalled()
+  })
+
+  it("never creates a new configuration for a missing database without confirmation", async () => {
+    const user = userEvent.setup()
+    api.securityStatus.mockResolvedValue(
+      view({ database: "missing", databaseMissing: true, problem: "missing" }),
+    )
+    api.systemUnlock.mockRejectedValue("the configuration database is missing")
+    render(<SetupWindow />)
+    expect(await screen.findByText("Your configuration is missing")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Use a password instead" })).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Try again" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent("missing")
+    await user.click(screen.getByRole("button", { name: "Start a new configuration…" }))
+    expect(api.startNewConfiguration).not.toHaveBeenCalled()
+    api.startNewConfiguration.mockResolvedValue(view({ unlocked: true }))
+    await user.click(screen.getByRole("button", { name: "Start a new configuration" }))
+    expect(api.startNewConfiguration).toHaveBeenCalledTimes(1)
+    await waitFor(() => {
+      expect(api.finishSecurityPrompt).toHaveBeenCalled()
+    })
+  })
+
+  it("asks for Touch ID after an update only when the user clicks", async () => {
+    const user = userEvent.setup()
+    api.securityStatus.mockResolvedValue(view({ confirmationRequired: true }))
+    render(<ConfirmWindow />)
+    const button = await screen.findByRole("button", { name: "Unlock with Touch ID" })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(api.confirmIdentity).not.toHaveBeenCalled()
+    await user.click(button)
+    expect(api.confirmIdentity).toHaveBeenCalledWith(null)
   })
 })

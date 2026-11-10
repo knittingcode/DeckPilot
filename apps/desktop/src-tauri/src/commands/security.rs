@@ -47,6 +47,9 @@ pub enum Verification {
     ConfirmationOnly,
 }
 
+/// What the frontend needs to choose and render a prompt. The flags are
+/// independent facts reported to the UI, not a state machine.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SecurityView {
@@ -58,6 +61,13 @@ pub struct SecurityView {
     confirmation_required: bool,
     /// Set while the agent is locked.
     lock_reason: Option<LockReason>,
+    /// The agent is reading the key; the credential store may show a prompt.
+    waiting_for_key_store: bool,
+    /// A key file exists but its database is missing: nothing is created
+    /// until the user decides (`start_new_configuration`).
+    database_missing: bool,
+    /// Whether the agent can detect this computer's screen lock.
+    screen_lock_detection: bool,
     /// Why the configuration could not be opened automatically.
     problem: Option<String>,
     /// Name of this platform's credential store, e.g. "macOS Keychain".
@@ -105,6 +115,10 @@ async fn view(state: &AppState) -> CommandResult<SecurityView> {
         unlocked: state.is_unlocked() && !state.confirmation_pending(),
         confirmation_required: state.confirmation_pending(),
         lock_reason: status.as_ref().and_then(|s| s.lock_reason),
+        waiting_for_key_store: status.as_ref().is_some_and(|s| s.waiting_for_key_store),
+        database_missing: state.vault.state()? == DatabaseState::Missing
+            && state.vault.has_key_file(),
+        screen_lock_detection: status.as_ref().is_some_and(|s| s.screen_lock_detection),
         problem: status.as_ref().and_then(|s| s.security_problem.clone()),
         key_store: key_store_name(),
         verification: verification(state),
@@ -499,6 +513,15 @@ pub async fn set_security_policy(
                 .into(),
         ));
     }
+    if policy.auto_lock == AutoLock::ScreenLock
+        && !refresh_agent(&state)
+            .await
+            .is_some_and(|status| status.screen_lock_detection)
+    {
+        return Err(CommandError::Invalid(
+            "DeckPilot cannot detect the screen lock on this computer".into(),
+        ));
+    }
     let unchanged = security_policy(&*state.store()?)? == policy;
     if unchanged {
         return view(&state).await;
@@ -506,6 +529,21 @@ pub async fn set_security_policy(
     state.take_authorization()?;
     policy::set_security_policy(&*state.store()?, &policy)?;
     agent::reload(&state.paths).await?;
+    view(&state).await
+}
+
+/// The database is missing although a configuration was set up here (the
+/// key file exists). On the user's explicit request, the key file is moved
+/// aside (not deleted) and a new, empty configuration is created by the
+/// agent with a system key. Keys in the credential store are kept.
+#[tauri::command]
+pub async fn start_new_configuration(state: State<'_, AppState>) -> CommandResult<SecurityView> {
+    state.vault.discard_orphaned_key_file()?;
+    ensure_agent(&state).await;
+    if refresh_agent(&state).await.is_some() {
+        agent::request(&state.paths, Request::SystemUnlock).await?;
+        attach_agent_key(&state, true).await;
+    }
     view(&state).await
 }
 

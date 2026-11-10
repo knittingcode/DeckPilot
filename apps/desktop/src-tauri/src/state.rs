@@ -187,6 +187,10 @@ impl AppState {
     /// authenticated (typed the password, or passed the system check), which
     /// counts as the confirmation the security policy may ask for.
     pub fn attach(&self, key: DatabaseKey, authenticated: bool) -> CommandResult<()> {
+        // Opening a missing database would create a new, empty one.
+        if self.vault.state()? != vault::DatabaseState::Encrypted {
+            return Err(CommandError::Locked);
+        }
         let store = SqliteStore::open(&self.paths.database, &Encryption::Key(key.clone()))?;
         let (modules, problems) = deckpilot_modules::configured(&store.module_states()?);
         for problem in problems {

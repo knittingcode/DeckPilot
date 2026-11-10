@@ -74,6 +74,8 @@ export const api = {
   usePassword: (password: string, confirmation: string) =>
     invoke<SecurityView>("use_password", { input: { password, confirmation } }),
   useSystemKey: () => invoke<SecurityView>("use_system_key"),
+  /** Moves the key file of a missing database aside and starts over. */
+  startNewConfiguration: () => invoke<SecurityView>("start_new_configuration"),
   setSecurityPolicy: (policy: SecurityPolicy) =>
     invoke<SecurityView>("set_security_policy", { policy }),
   encryptLegacyDatabase: (password: string, confirmation: string) =>

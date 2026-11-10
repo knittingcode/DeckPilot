@@ -27,9 +27,10 @@ import type { AutoLock, Reauthentication, SecurityPolicy, SecurityView } from "@
 
 const AUTO_LOCK: { value: AutoLock; label: string }[] = [
   { value: "never", label: "Never" },
-  // DeckPilot notices sleep on every platform. Detecting a locked screen is
-  // not implemented, so it is not offered.
+  // Sleep is noticed on every platform; the screen lock only where the
+  // agent can detect it (see `screenLockDetection`).
   { value: "sleep", label: "When the computer sleeps" },
+  { value: "screenLock", label: "When the screen locks or the computer sleeps" },
   { value: "idle15Minutes", label: "After 15 minutes of inactivity" },
   { value: "idle1Hour", label: "After 1 hour of inactivity" },
 ]
@@ -272,7 +273,11 @@ function Policy() {
             </SelectTrigger>
             <SelectContent>
               {AUTO_LOCK.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
+                <SelectItem
+                  key={option.value}
+                  value={option.value}
+                  disabled={option.value === "screenLock" && !view.screenLockDetection}
+                >
                   {option.label}
                 </SelectItem>
               ))}
@@ -280,6 +285,8 @@ function Policy() {
           </Select>
           <p className="text-xs text-muted-foreground">
             While locked, your Stream Deck shows &quot;Locked&quot; and runs no actions.
+            {!view.screenLockDetection &&
+              " Locking with the screen is not available: DeckPilot cannot detect the screen lock on this computer."}
           </p>
         </div>
         <div className="grid gap-2">
