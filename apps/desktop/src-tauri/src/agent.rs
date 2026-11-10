@@ -293,6 +293,20 @@ async fn unlock_if_needed<R: Runtime>(
     let Some(state) = app.try_state::<crate::state::AppState>() else {
         return;
     };
+    // Opened elsewhere (the password entered in another DeckPilot window,
+    // the system key read again): follow the agent. The security policy
+    // still applies — `attach` asks for confirmation where it requires it.
+    if status.security == SecurityState::Unlocked && !state.is_unlocked() {
+        if let Some(key) = fetch_key(paths).await
+            && state.attach(key, false).is_ok()
+        {
+            if !state.confirmation_pending() {
+                crate::windows::close_security_prompts(app);
+            }
+            let _ = app.emit(crate::commands::windows::SECURITY_CHANGED, ());
+        }
+        return;
+    }
     if status.security != SecurityState::Locked || !state.is_unlocked() {
         return;
     }

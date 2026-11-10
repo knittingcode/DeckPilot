@@ -5,6 +5,23 @@ All notable changes to DeckPilot. The format follows
 [Semantic Versioning](https://semver.org/). The section of a version is used
 as the notes of its GitHub release and of the in-app update.
 
+## [0.5.0] - Unreleased
+
+### Changed
+
+- Release validation: test releases (e.g. `v0.5.0-1`) are verified like
+  final ones and are marked as pre-releases, so they never become the
+  release the app updates to.
+
+### Fixed
+
+- An open configuration app now follows the background agent when the
+  configuration is opened elsewhere (another DeckPilot window, the system
+  key becoming available) instead of waiting at its unlock prompt.
+- Windows release builds: OpenSSL is configured with Strawberry Perl.
+- Linux test releases build `.deb` and AppImage (RPM rejects pre-release
+  versions).
+
 ## [0.4.0] - Unreleased
 
 ### Added

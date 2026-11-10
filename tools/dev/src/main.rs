@@ -12,6 +12,7 @@ mod process;
 mod release;
 mod seed;
 mod session;
+mod validation;
 mod versions;
 
 use std::process::{Child, Command, ExitCode, Stdio};
@@ -61,6 +62,9 @@ Commands:
                          (public key from DECKPILOT_UPDATER_PUBKEY)
   check-updater-key      Check that DECKPILOT_UPDATER_PUBKEY is a valid public key
   release-notes          Print the CHANGELOG.md section of the current version
+  validation seed|unlock|status <data-dir>
+                         Update-test helpers on an isolated data directory
+                         (see docs/release-validation.md)
   verify-signature <file> <file.sig>
                          Verify one updater signature against
                          DECKPILOT_UPDATER_PUBKEY";
@@ -783,6 +787,7 @@ fn run(args: &[String]) -> Result<(), String> {
             println!("all versions are {version}");
             Ok(())
         }
+        Some("validation") => validation::command(&args[1..]),
         Some("package") => {
             let extra: Vec<String> = args
                 .iter()

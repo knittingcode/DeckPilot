@@ -35,6 +35,39 @@ pub const STATE_EVENT: &str = "update-state";
 const PREFERENCES_KEY: &str = deckpilot_update::policy::PREFERENCES_SETTING;
 /// How often the background task wakes up to see whether a check is due.
 const TICK: Duration = Duration::from_secs(30 * 60);
+const STARTUP_DELAY: Duration = Duration::from_secs(60);
+
+/// Build-time only: a loopback update endpoint for the reproducible update
+/// test (`docs/release-validation.md`). Official builds never set it. It
+/// cannot come from the runtime environment, and only `http://127.0.0.1:`
+/// URLs are accepted, so a build that has it can only update from this
+/// computer. Plain HTTP must also be allowed in that build's configuration;
+/// signatures are verified exactly as in release builds.
+const TEST_ENDPOINT: Option<&str> = option_env!("DECKPILOT_UPDATE_ENDPOINT");
+
+fn test_endpoint() -> Option<&'static str> {
+    TEST_ENDPOINT.filter(|endpoint| is_loopback_test_endpoint(endpoint))
+}
+
+fn is_loopback_test_endpoint(endpoint: &str) -> bool {
+    endpoint
+        .strip_prefix("http://127.0.0.1:")
+        .is_some_and(|rest| !rest.is_empty() && !rest.contains(['@', '#', '?']))
+}
+
+/// The update manifest URL: the stable channel, or the test endpoint.
+fn endpoint() -> &'static str {
+    test_endpoint().unwrap_or(deckpilot_update::STABLE_ENDPOINT)
+}
+
+/// Background timing; the update test build checks quickly.
+fn timing() -> (Duration, Duration) {
+    if test_endpoint().is_some() {
+        (Duration::from_secs(10), Duration::from_secs(15))
+    } else {
+        (STARTUP_DELAY, TICK)
+    }
+}
 
 fn now() -> u64 {
     SystemTime::now()
@@ -142,7 +175,7 @@ fn snapshot<R: Runtime>(app: &AppHandle<R>) -> UpdateState {
         current_version: env!("CARGO_PKG_VERSION"),
         configured: configured(),
         target: deckpilot_update::manifest::current_target(),
-        endpoint: deckpilot_update::STABLE_ENDPOINT,
+        endpoint: endpoint(),
         preferences: preferences(&state),
         phase: inner.phase,
         available: inner.available.clone(),
@@ -197,7 +230,7 @@ async fn check<R: Runtime>(app: &AppHandle<R>) -> CommandResult<Option<UpdateInf
         .filter(|_| configured())
         .ok_or_else(|| CommandError::Invalid("updates are not configured in this build".into()))?;
     begin(app, Phase::Checking)?;
-    let endpoint = deckpilot_update::STABLE_ENDPOINT
+    let endpoint = endpoint()
         .parse()
         .map_err(|_| CommandError::Invalid("invalid update endpoint".into()))?;
     let result = async {
@@ -361,7 +394,8 @@ pub fn spawn_background<R: Runtime>(app: AppHandle<R>) {
         return;
     }
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(60)).await;
+        let (startup, tick) = timing();
+        tokio::time::sleep(startup).await;
         loop {
             let prefs = preferences(&app.state::<AppState>());
             if prefs.is_check_due(now()) {
@@ -393,7 +427,7 @@ pub fn spawn_background<R: Runtime>(app: AppHandle<R>) {
                     | InstallDecision::WaitForIdle => {}
                 }
             }
-            tokio::time::sleep(TICK).await;
+            tokio::time::sleep(tick).await;
         }
     });
 }
@@ -408,6 +442,32 @@ mod tests {
         assert!(may_start(Phase::Ready));
         for busy in [Phase::Checking, Phase::Downloading, Phase::Installing] {
             assert!(!may_start(busy), "{busy:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::*;
+
+    #[test]
+    fn only_loopback_test_endpoints_are_accepted() {
+        assert!(is_loopback_test_endpoint(
+            "http://127.0.0.1:8765/latest.json"
+        ));
+        for rejected in [
+            "https://example.com/latest.json",
+            "http://127.0.0.1.example.com/latest.json",
+            "http://127.0.0.1:8765@evil.example/latest.json",
+            "http://localhost:8765/latest.json",
+            "http://127.0.0.1:",
+        ] {
+            assert!(!is_loopback_test_endpoint(rejected), "{rejected}");
+        }
+        // Normal builds use the stable channel.
+        if TEST_ENDPOINT.is_none() {
+            assert_eq!(endpoint(), deckpilot_update::STABLE_ENDPOINT);
+            assert_eq!(timing(), (STARTUP_DELAY, TICK));
         }
     }
 }

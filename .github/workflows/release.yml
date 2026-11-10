@@ -171,6 +171,16 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The vendored OpenSSL (SQLCipher) is configured with Perl. Bash steps
+      # on Windows would find Git's minimal Perl, which lacks modules the
+      # configure script needs; use the runner's Strawberry Perl.
+      - name: Use Strawberry Perl for OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $perl = "C:\Strawberry\perl\bin\perl.exe"
+          if (-not (Test-Path $perl)) { Write-Error "Strawberry Perl not found at $perl"; exit 1 }
+          "OPENSSL_SRC_PERL=$perl" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       # The agent ships inside the bundle as a Tauri external binary.
       - name: Build and stage the agent
         shell: bash
@@ -202,9 +212,16 @@ jobs:
           releaseName: DeckPilot ${{ env.TAG }}
           releaseBody: ${{ needs.prepare.outputs.notes }}
           releaseDraft: true
-          prerelease: false
+          # Test tags (e.g. v0.5.0-1) become pre-releases: even if published,
+          # they never become "latest", the channel the app reads.
+          prerelease: ${{ contains(env.TAG, '-') }}
           includeUpdaterJson: true
-          args: --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json --config src-tauri/tauri.updater.conf.json
+          # RPM does not allow "-" in versions: test releases (pre-release
+          # versions) build .deb and AppImage on Linux; final releases all.
+          args: >-
+            --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
+            --config src-tauri/tauri.updater.conf.json
+            ${{ (runner.os == 'Linux' && contains(env.TAG, '-')) && '--bundles deb,appimage' || '' }}
       # The updater key compiled into the app must be the configured one;
       # otherwise installations could not verify (or would trust other) updates.
       - name: Embedded updater key matches DECKPILOT_UPDATER_PUBKEY

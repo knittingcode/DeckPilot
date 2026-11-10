@@ -70,9 +70,7 @@ impl Manifest {
             return Err(ManifestError::PreRelease(self.version.clone()));
         }
         // Validate every artifact so a broken manifest is noticed early.
-        for artifact in self.platforms.values() {
-            validate_artifact(artifact)?;
-        }
+        self.validate_artifacts()?;
         if version <= *current {
             return Ok(None);
         }
@@ -87,6 +85,19 @@ impl Manifest {
             url: artifact.url.clone(),
             signature: artifact.signature.clone(),
         }))
+    }
+}
+
+impl Manifest {
+    /// Checks every artifact: a DeckPilot release download URL and a
+    /// well-formed signature. Independent of the channel: release
+    /// verification also checks pre-release (test) builds, which the stable
+    /// channel never offers.
+    pub fn validate_artifacts(&self) -> Result<(), ManifestError> {
+        for artifact in self.platforms.values() {
+            validate_artifact(artifact)?;
+        }
+        Ok(())
     }
 }
 

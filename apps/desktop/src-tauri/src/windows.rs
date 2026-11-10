@@ -457,6 +457,21 @@ pub fn follows_content(resizable: bool, last_fit: Option<(f64, f64)>, current: (
     }
 }
 
+/// Closes the prompts that open the configuration (`security.*`), once it
+/// was opened by other means. Other windows stay open.
+pub fn close_security_prompts<R: Runtime>(app: &AppHandle<R>) {
+    let prompts = app.state::<WindowRegistry>().open_labels();
+    for label in prompts
+        .iter()
+        .filter(|label| label.starts_with(&label_for("security.")))
+    {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.close();
+        }
+    }
+    show_main(app);
+}
+
 /// Shows the main window, if this process has one. Returns whether it did.
 pub fn show_main<R: Runtime>(app: &AppHandle<R>) -> bool {
     let Some(main) = app.get_webview_window(MAIN) else {
