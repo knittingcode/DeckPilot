@@ -1,7 +1,9 @@
 import { listen } from "@tauri-apps/api/event"
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react"
 
+import { AgentIndicator } from "@/components/agent"
 import { AppSidebar } from "@/components/app-sidebar"
+import { AppTitlebar } from "@/components/app-titlebar"
 import { SettingsSidebar } from "@/components/settings-sidebar"
 import { SecurityGate } from "@/components/security-gate"
 import { ErrorNotice, Loading } from "@/components/page"
@@ -10,6 +12,8 @@ import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useAsync } from "@/hooks/use-async"
 import { useNavigation } from "@/hooks/use-navigation"
+import { TitlebarContext, useTitlebar } from "@/hooks/use-titlebar"
+import { useWindowChrome } from "@/hooks/use-window-chrome"
 import {
   AGENT_STATUS_EVENT,
   CONFIGURATION_CHANGED_EVENT,
@@ -20,6 +24,7 @@ import {
 import { AppContext, type AppContextValue, type CorePageId, type PageId } from "@/lib/app-context"
 import { ThemeProvider } from "@/components/theme-provider"
 import { type Location, locationOf } from "@/lib/navigation"
+import { TitlebarStore } from "@/lib/titlebar"
 import type { AgentConnection, ModuleInfo, UpdateState } from "@/lib/types"
 import { MODULE_VIEWS, isModulePageAvailable } from "@/modules"
 import { SettingsView } from "@/settings/settings-view"
@@ -36,6 +41,26 @@ const PAGES: Record<CorePageId, React.LazyExoticComponent<() => React.JSX.Elemen
   designer: lazy(() =>
     import("@/pages/layout-designer").then((m) => ({ default: m.LayoutDesignerPage })),
   ),
+}
+
+/** Titles of core pages before they register their own, e.g. while loading. */
+const PAGE_TITLES: Record<CorePageId, string> = {
+  dashboard: "Dashboard",
+  actions: "Action Library",
+  workflows: "Workflows",
+  profiles: "Profiles",
+  models: "Device Models",
+  designer: "Layout Designer",
+}
+
+/** Shown while a page loads; the titlebar shows progress meanwhile. */
+function PageLoading() {
+  useTitlebar({ progress: true })
+  return (
+    <div className="p-6">
+      <Loading />
+    </div>
+  )
 }
 
 const EDITING_KEY = "deckpilot.editingProfile"
@@ -69,6 +94,8 @@ function Studio() {
     [modules],
   )
   const navigation = useNavigation(exists)
+  const [titlebar] = useState(() => new TitlebarStore())
+  const chrome = useWindowChrome()
   const { go } = navigation
 
   useEffect(() => {
@@ -184,31 +211,50 @@ function Studio() {
         ? MODULE_VIEWS[page]
         : undefined
   const View = Current ?? PAGES.dashboard
+  const fallbackTitle =
+    location.mode === "settings"
+      ? (findSettingsPage(context.modules, page)?.title ?? "Settings")
+      : page in PAGES
+        ? PAGE_TITLES[page as CorePageId]
+        : (context.modules
+            .flatMap((m) => m.pages.map((p) => ({ id: `${m.id}/${p.id}`, title: p.title })))
+            .find((p) => p.id === page)?.title ?? "DeckPilot")
   return (
     <AppContext value={context}>
-      <SidebarProvider>
-        {location.mode === "settings" ? (
-          <SettingsSidebar current={page} />
-        ) : (
-          <AppSidebar current={page as PageId} onNavigate={context.navigate} />
-        )}
-        <SidebarInset>
-          <Suspense
-            fallback={
-              <div className="p-6">
-                <Loading />
-              </div>
+      <TitlebarContext value={titlebar}>
+        <SidebarProvider className="h-svh min-h-0 flex-col overflow-hidden">
+          <AppTitlebar
+            store={titlebar}
+            chrome={chrome}
+            history={context.history}
+            fallbackTitle={fallbackTitle}
+            indicator={
+              <AgentIndicator
+                onOpen={() => {
+                  context.openSettings("agent")
+                }}
+              />
             }
-          >
+          />
+          <div className="flex min-h-0 flex-1">
             {location.mode === "settings" ? (
-              <SettingsView key={page} id={page} />
+              <SettingsSidebar current={page} />
             ) : (
-              // Remount on profile change: open editors never write to another profile.
-              <View key={context.editingProfileId ?? "none"} />
+              <AppSidebar current={page as PageId} onNavigate={context.navigate} />
             )}
-          </Suspense>
-        </SidebarInset>
-      </SidebarProvider>
+            <SidebarInset className="min-h-0 overflow-y-auto">
+              <Suspense fallback={<PageLoading />}>
+                {location.mode === "settings" ? (
+                  <SettingsView key={page} id={page} />
+                ) : (
+                  // Remount on profile change: open editors never write to another profile.
+                  <View key={context.editingProfileId ?? "none"} />
+                )}
+              </Suspense>
+            </SidebarInset>
+          </div>
+        </SidebarProvider>
+      </TitlebarContext>
     </AppContext>
   )
 }

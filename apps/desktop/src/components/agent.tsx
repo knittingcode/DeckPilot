@@ -141,3 +141,30 @@ export function DeviceRow({ device, action }: { device: DeviceInfo; action?: Rea
     </div>
   )
 }
+
+/** Compact connection state for the titlebar; opens the agent settings. */
+export function AgentIndicator({ onOpen }: { onOpen: () => void }) {
+  const { agent } = useAppContext()
+  const running = agent?.running ?? false
+  const label = !agent ? "Checking the agent" : running ? "Agent running" : "Agent stopped"
+  return (
+    <button
+      type="button"
+      aria-label={`${label}, open agent settings`}
+      title={label}
+      className="flex size-(--titlebar-control) shrink-0 items-center justify-center rounded-md hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      onClick={onOpen}
+    >
+      <span
+        className={
+          !agent
+            ? "size-2 rounded-full bg-muted-foreground/40"
+            : running
+              ? "size-2 rounded-full bg-emerald-500"
+              : "size-2 rounded-full bg-destructive"
+        }
+        aria-hidden
+      />
+    </button>
+  )
+}
