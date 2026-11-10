@@ -326,7 +326,22 @@ fn dev_request(paths: &DevPaths, request: Request) -> Result<(), String> {
 /// like an unlocked session. `--locked` (`make up LOCKED=1`) locks it to try
 /// the unlock screens.
 fn unlock_dev_agent(paths: &DevPaths, locked: bool) {
-    let status = runtime().block_on(agent_status(paths)).ok();
+    let mut status = runtime().block_on(agent_status(paths)).ok();
+    if status.as_ref().is_some_and(|s| s.waiting_for_key_store) {
+        // A rebuilt agent has a new code signature: macOS asks once per
+        // build whether it may use its Keychain item.
+        println!(
+            "the agent is waiting for the credential store; on macOS, answer the Keychain dialog \
+             for the rebuilt agent (\"Always Allow\"), or use `deckpilot-dev seed --reset --password` \
+             to develop without the Keychain"
+        );
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while status.as_ref().is_some_and(|s| s.waiting_for_key_store) && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(500));
+            status = runtime().block_on(agent_status(paths)).ok();
+        }
+    }
     if status
         .as_ref()
         .is_some_and(|s| s.protection == Some(deckpilot_ipc::ProtectionMode::SystemManaged))

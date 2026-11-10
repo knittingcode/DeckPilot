@@ -116,9 +116,11 @@ See [docs/development.md](docs/development.md) for all commands.
 - Touch ID (macOS) is the only system authentication; on Windows and Linux a
   system-key setup cannot lock automatically and confirms sensitive
   operations with a dialog only (Windows Hello and polkit are not integrated).
-- Automatic locking reacts to sleep and inactivity, not to the screen lock.
-- macOS builds are not code-signed yet; after an update macOS may ask once
-  whether the agent may use its Keychain item.
+- Locking with the screen lock is detected on macOS and Linux (logind), not
+  on Windows.
+- macOS builds are not code-signed yet: after every update (and every
+  rebuild in development) macOS asks for the login keychain password before
+  the agent may read the system key.
 - CI builds and tests on Linux, macOS and Windows; the agent and app have been
   run manually on macOS only.
 

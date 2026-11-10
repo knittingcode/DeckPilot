@@ -45,7 +45,11 @@ make up        # or: pnpm dev (same session, in the foreground; Ctrl+C stops it)
    screens (with a system key, unlocking uses Touch ID on macOS). The
    password fixture lives only in `tools/dev` and is never used by the
    application. Rebuilding the agent changes its code signature, so macOS
-   may ask once whether it may use its Keychain item. An unencrypted
+   asks for the login keychain password before the rebuilt agent may read
+   its key ("Always Allow" holds for that build); `make up` points this out
+   and waits. Frontend changes do not rebuild the agent. To develop the
+   agent without these prompts, use a password-protected development
+   database (`deckpilot-dev seed --reset --password`). An unencrypted
    development database from an earlier version is left alone so that the
    app's migration can be tried;
 3. builds and starts the background agent with simulated MK.2, XL and

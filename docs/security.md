@@ -54,7 +54,16 @@ file and creates the encrypted database. No password is involved.
   the user's explicit choice. An existing configuration stays locked with a
   clear message ("the key could not be read from the credential store"); it
   is not retried in a loop and nothing is re-created.
-- **Never replaced.** Every key has its own random identifier (recorded in
+- **Never replaced.** A missing database is never re-created behind the
+  user's back: when the key file shows that a configuration existed but
+  `deckpilot.db` is gone (moved, deleted, a drive not connected), nothing is
+  created and the app explains the situation; only an explicit "Start a new
+  configuration" moves the old key file aside (it is kept, as is its key)
+  and creates an empty configuration. A first setup is staged so that an
+  interruption never leaves a key file without its database. Changes to the
+  files are serialized between the agent and the app with a lock file
+  (`deckpilot.vault.lock`).
+- **Never overwritten.** Every key has its own random identifier (recorded in
   the vault file; entries are named `database-key-<id>` under the service
   `DeckPilot`). Storing never overwrites an existing entry, and DeckPilot
   never deletes a key that a database or a backup may still need: after
@@ -64,10 +73,31 @@ file and creates the encrypted database. No password is involved.
 - **One reader.** Only the background agent reads the credential store. The
   configuration app receives the key from the agent over the authenticated
   local socket. This keeps a single executable in the keychain item's access
-  list. On macOS, builds that are not code-signed with a stable identity
-  (development builds, and releases until Apple code signing is configured;
-  see [releasing.md](releasing.md)) can make macOS ask once whether the
-  updated agent may use the key ("Always Allow").
+  list, so restarting the agent or the app never prompts (verified on macOS).
+- **macOS and code signatures.** The Keychain grants access to the item to
+  the agent's *code identity*. When that identity changes — every update of
+  a build that is not signed with a Developer ID, and every rebuild of the
+  agent during development — macOS asks for the login keychain password
+  before the agent may read the key ("Always Allow" covers that build
+  only). DeckPilot does not hang meanwhile: the agent keeps running, the app
+  shows "Waiting for the macOS Keychain", and if access is denied the
+  configuration stays locked with a "Try again" button. Releases signed with
+  a Developer ID keep a stable identity across updates and are not asked;
+  until signing is configured (see [releasing.md](releasing.md)), the
+  "no prompt after an update" promise of the system key does **not** hold on
+  macOS. Windows Credential Manager and the Secret Service have no
+  per-application access list, so updates do not prompt there.
+- **Startup.** The key is read on a background thread, so a credential store
+  prompt never blocks the agent. If the store cannot be *reached* (no D-Bus
+  session yet, the keyring daemon starting after the agent at login), the
+  agent tries again after 2, 4, 8, 16, 32 and 64 seconds. A *refusal* (a
+  locked or reset keychain, a cancelled or denied prompt) is never retried
+  by itself, so the user is not asked again and again; "Try again" in the
+  app asks once more.
+- **Linux.** Items are created in the default (login) collection, labelled
+  "DeckPilot database key". If that collection is locked, the keyring shows
+  its own unlock prompt. Windows stores the credential with *local machine*
+  persistence; DPAPI ties it to the user's Windows password.
 - **Not a backup.** The key in the credential store protects the copy on
   this computer only. It does not move to another computer, and if the user
   account, the keychain or the computer is reset or lost, the configuration
@@ -126,11 +156,22 @@ password ──Argon2id──▶ 256-bit database key ──raw key──▶ SQL
 **Settings → Security** has two policies, stored in the encrypted database:
 
 - **Lock automatically:** *Never* (default), *when the computer sleeps*,
-  *after 15 minutes* or *after 1 hour of inactivity*. Inactivity means no
-  device input and no configuration change. Sleep is detected by the agent
-  on every platform (a wall-clock jump between its periodic checks). Locking
-  when the *screen* locks is not implemented and therefore not offered.
-  While locked the devices show "Locked" and run no actions.
+  *when the screen locks or the computer sleeps*, *after 15 minutes* or
+  *after 1 hour of inactivity*. Inactivity means no device input and no
+  configuration change. Sleep is detected by the agent on every platform (a
+  wall-clock jump between its checks every 5 seconds). The screen lock is
+  detected where it can be read reliably, and the option is disabled with
+  an explanation elsewhere:
+
+  | Platform | Screen lock source |
+  | -------- | ------------------ |
+  | macOS | the window server session (`CGSSessionScreenIsLocked`) |
+  | Linux | systemd-logind's `LockedHint` of the session (set by GNOME, KDE Plasma and other lockers; desktops that do not set it are not detected) |
+  | Windows | not implemented; the option is not available |
+
+  DeckPilot locks when the screen *becomes* locked, so unlocking DeckPilot
+  while the screen is still locked does not lock it again at once. While
+  locked the devices show "Locked" and run no actions.
 - **Ask for authentication:** *only for sensitive operations* (default),
   *also after updates*, or *also every time DeckPilot starts*.
 

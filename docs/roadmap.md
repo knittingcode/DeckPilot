@@ -84,7 +84,7 @@ Remaining before the milestone is complete:
 - Platform code signing (Apple notarization, Windows Authenticode), which
   also keeps macOS from asking for Keychain access after updates
 - Windows Hello and polkit as system authentication; locking with the
-  screen lock
+  screen lock on Windows
 - Secret storage for future modules that need credentials (OS keychain)
 
 ## Milestone 4 – Platform actions

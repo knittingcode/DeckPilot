@@ -36,7 +36,11 @@ pnpm --filter @deckpilot/desktop tauri signer generate -w ~/.config/deckpilot/si
 Optional, not yet configured: Apple code signing and notarization
 (`APPLE_CERTIFICATE`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`,
 `APPLE_TEAM_ID`) and Windows Authenticode signing. Without them, macOS
-Gatekeeper and Windows SmartScreen warn on first start. The updater signature
+Gatekeeper and Windows SmartScreen warn on first start, and on macOS every
+update changes the agent's code identity, so macOS asks for the login
+keychain password before the agent may read its system-managed database key
+(see [security.md](security.md#system-key)). A Developer ID signature keeps
+the identity stable across updates. The updater signature
 is independent of these platform signatures.
 
 ## Checking the signing configuration
