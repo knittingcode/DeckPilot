@@ -1,5 +1,4 @@
-// TypeScript mirrors of the serialized Rust domain types. Field names follow
-// the camelCase serde representation used by the backend.
+// TypeScript mirrors of the serialized Rust types (camelCase serde names).
 
 export type Os = "linux" | "macOs" | "windows" | "other"
 
@@ -14,6 +13,8 @@ export type ParameterKind =
   | { type: "boolean" }
   | { type: "choice"; options: string[] }
   | { type: "resource"; kind?: ResourceKind }
+  /** A project of the profile the action belongs to. */
+  | { type: "project" }
 
 export type ParameterValue =
   | { type: "text"; value: string }
@@ -21,6 +22,7 @@ export type ParameterValue =
   | { type: "boolean"; value: boolean }
   | { type: "choice"; value: string }
   | { type: "resource"; value: ResourceRef }
+  | { type: "project"; value: string }
 
 export type ActionParameters = Record<string, ParameterValue>
 
@@ -47,16 +49,28 @@ export interface ActionInstance {
   name: string
   actionType: string
   parameters: ActionParameters
+  description?: string
+  icon?: string | null
+  label?: string | null
 }
+
+export type StepCondition =
+  | { type: "always" }
+  | { type: "previousSucceeded" }
+  | { type: "previousFailed" }
+  | { type: "activeProject"; project: string }
 
 export interface WorkflowStep {
   action: string
   onFailure: "stop" | "continue"
+  condition?: StepCondition
+  overrides?: ActionParameters
 }
 
 export interface Workflow {
   id: string
   name: string
+  description?: string
   steps: WorkflowStep[]
 }
 
@@ -67,12 +81,45 @@ export interface Project {
   resources: Record<string, string>
 }
 
+export type TouchGesture = "tap" | "longPress" | "swipe"
+
+export type ControlId =
+  | { kind: "key"; index: number }
+  | { kind: "encoder"; index: number }
+  | { kind: "touchZone"; index: number }
+
+export type Trigger =
+  | { type: "press" }
+  | { type: "release" }
+  | { type: "rotateClockwise" }
+  | { type: "rotateCounterClockwise" }
+  | { type: "touch"; gesture: TouchGesture }
+
+export type BindingTarget =
+  | { type: "action"; action: string }
+  | { type: "workflow"; workflow: string }
+  | { type: "openPage"; page: string }
+  | { type: "back" }
+
+export interface ControlBinding {
+  control: ControlId
+  trigger: Trigger
+  target: BindingTarget
+  label?: string | null
+}
+
+export interface LayoutPage {
+  id: string
+  name: string
+  bindings: ControlBinding[]
+}
+
 export interface DeviceLayout {
   id: string
   name: string
   model: string
   homePage: string
-  pages: { id: string; name: string; bindings: unknown[] }[]
+  pages: LayoutPage[]
 }
 
 export interface Profile {
@@ -82,8 +129,21 @@ export interface Profile {
   actions: ActionInstance[]
   workflows: Workflow[]
   projects: Project[]
+  defaultProject?: string | null
   layouts: DeviceLayout[]
+  activeLayouts?: Record<string, string>
 }
+
+export type Usage =
+  | { type: "workflowStep"; workflow: string; workflowName: string; position: number }
+  | {
+      type: "layoutBinding"
+      layout: string
+      layoutName: string
+      page: string
+      pageName: string
+      control: ControlId
+    }
 
 export interface ProfileSummary {
   id: string
@@ -100,11 +160,28 @@ export interface ProfileView {
   profile: Profile
   activeProjectId: string | null
   issues: string[]
+  actionUsages: Record<string, Usage[]>
+  workflowUsages: Record<string, Usage[]>
 }
 
+export type ActionStatus = "succeeded" | "failed" | "skipped"
+
 export interface ActionResult {
-  status: "succeeded" | "failed"
+  status: ActionStatus
   message: string
+  /** Structured details, e.g. `projectKey`, `resource`, `value`. */
+  data?: Record<string, string>
+}
+
+export interface StepReport {
+  action: string
+  result: ActionResult
+}
+
+export interface WorkflowReport {
+  workflow: string
+  status: ActionStatus
+  steps: StepReport[]
 }
 
 export interface MachineResourceBinding {
@@ -118,10 +195,56 @@ export interface MachineConfig {
   bindings: MachineResourceBinding[]
 }
 
+export type ResourceStatus = "ok" | "missing" | "unbound" | "unchecked"
+
+export interface ResourceCheck {
+  key: string
+  kind: ResourceKind | null
+  value: string | null
+  status: ResourceStatus
+  usedBy: string[]
+}
+
+export type Capability = "profile-read" | "project-context" | "machine-resources"
+
+export interface ModulePage {
+  id: string
+  title: string
+  icon: string
+  order: number
+}
+
+/** A feature module with its state, as reported by the backend. */
+export interface ModuleInfo {
+  id: string
+  version: string
+  name: string
+  description: string
+  /** Supported operating systems; empty means all. */
+  platforms: Os[]
+  pages: ModulePage[]
+  capabilities: Capability[]
+  config: ParameterSpec[]
+  dependencies: string[]
+  enabledByDefault: boolean
+  enabled: boolean
+  supported: boolean
+  configValues: ActionParameters
+  actionTypes: ActionType[]
+}
+
+export interface MigrationNote {
+  schemaVersion: number
+  profile: string | null
+  message: string
+  createdAt: number
+}
+
 export interface Overview {
   appVersion: string
   os: Os
   databasePath: string
+  development: boolean
   profileCount: number
   activeProfile: ProfileSummary | null
   activeProject: Project | null
@@ -144,9 +267,23 @@ export interface DeviceModel {
   capabilities: {
     keys: { rows: number; columns: number; image: ImageSpec | null } | null
     encoders: { count: number; pressable: boolean } | null
-    touch: { zones: number; image: ImageSpec | null; gestures: string[] } | null
+    touch: { zones: number; image: ImageSpec | null; gestures: TouchGesture[] } | null
   }
   support: "descriptorOnly" | "unverified" | "verified"
+}
+
+export type FaceStyle = "empty" | "action" | "workflow" | "folder" | "back" | "notice"
+
+export interface KeyFace {
+  style: FaceStyle
+  title: string
+  detail?: string | null
+  highlighted?: boolean
+}
+
+export interface ControlFace {
+  control: ControlId
+  face: KeyFace
 }
 
 export type ConnectionState = "connected" | "disconnected"
@@ -169,6 +306,7 @@ export interface DeviceInfo {
   state: ConnectionState
   layout: LayoutStatus
   page: string | null
+  source: string
 }
 
 export interface ProfileInfo {
@@ -190,10 +328,55 @@ export interface AgentStatus {
   activeProject: Project | null
   devices: DeviceInfo[]
   brightness: number
+  lastInputAt: number | null
 }
+
+export type AgentCompatibility =
+  | { type: "compatible" }
+  | { type: "agentOutdated"; agent: string; app: string }
+  | { type: "agentNewer"; agent: string; app: string }
+  | { type: "unknown"; agent: string; app: string }
 
 export interface AgentConnection {
   running: boolean
   status: AgentStatus | null
   canStart: boolean
+  compatibility: AgentCompatibility | null
+  appVersion: string
+}
+
+export type UpdateMode = "notifyOnly" | "downloadAndAsk" | "installWhenIdle"
+
+export interface UpdatePreferences {
+  mode: UpdateMode
+  automaticChecks: boolean
+  checkIntervalHours: number
+  lastCheck: number | null
+}
+
+export interface UpdateInfo {
+  version: string
+  notes: string | null
+  date: string | null
+}
+
+export interface UpdateState {
+  currentVersion: string
+  configured: boolean
+  target: string
+  endpoint: string
+  preferences: UpdatePreferences
+  phase: "idle" | "checking" | "downloading" | "ready" | "installing"
+  available: UpdateInfo | null
+  progress: { downloaded: number; total: number | null } | null
+  error: string | null
+}
+
+export interface LaunchView {
+  launch: {
+    previousVersion: string | null
+    currentVersion: string
+    firstAfterUpdate: boolean
+  } | null
+  encryption: { enabled: boolean; passwordRequired: boolean }
 }

@@ -6,9 +6,13 @@ members = [
     "crates/deckpilot-storage",
     "crates/deckpilot-hid",
     "crates/deckpilot-ipc",
+    "crates/deckpilot-update",
+    "crates/deckpilot-modules",
+    "modules/general",
+    "modules/projects",
     "apps/agent",
     "apps/desktop/src-tauri",
-
+    "tools/dev",
 ]
 
 [workspace.package]
@@ -25,16 +29,24 @@ deckpilot-core = { path = "crates/deckpilot-core" }
 deckpilot-storage = { path = "crates/deckpilot-storage" }
 deckpilot-hid = { path = "crates/deckpilot-hid" }
 deckpilot-ipc = { path = "crates/deckpilot-ipc" }
+deckpilot-update = { path = "crates/deckpilot-update" }
+deckpilot-modules = { path = "crates/deckpilot-modules" }
+deckpilot-module-general = { path = "modules/general" }
+deckpilot-module-projects = { path = "modules/projects" }
 
 tauri = "2"
 tauri-build = "2"
 auto-launch = "0.6"
+ctrlc = "3"
+base64 = "0.22"
 dirs = "7"
 elgato-streamdeck = { version = "0.14", default-features = false }
 font8x8 = { version = "0.3", default-features = false }
 getrandom = "0.3"
 hidapi = "2.6"
 image = { version = "0.25", default-features = false }
+minisign-verify = "0.3"
+semver = { version = "1", features = ["serde"] }
 interprocess = { version = "2.4", features = ["tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "signal"] }
 tracing = "0.1"
@@ -45,8 +57,9 @@ tray-icon = "0.25"
 rusqlite = { version = "0.41", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 thiserror = "2"
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

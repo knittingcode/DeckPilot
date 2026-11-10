@@ -158,18 +158,28 @@ Requests (`crates/deckpilot-ipc/src/protocol.rs`):
 | `reloadConfiguration`   | Re-read configuration after the app changed it       |
 | `setBrightness`         | 0–100                                                |
 | `getAutostart` / `setAutostart` | Start at login                               |
+| `runWorkflow`           | Run a workflow of the active profile (protocol 2)    |
+| `prepareForUpdate`      | Release devices and exit for an update (protocol 2)  |
 | `subscribe`             | Receive `state`, `actionCompleted`, `showWindow`, `shuttingDown` events |
 | `showWindow`            | Bring the configuration window to the front          |
 | `shutdown`              | Stop the agent gracefully                            |
 | `simulateInput`         | Inject input into a simulated device (`--mock-devices` only) |
 
-Incompatible changes increase `PROTOCOL_VERSION`.
+The current protocol is 3: action results only carry `selectProject`
+effects, and action types use module namespaces (`projects.next`). Project
+switching requests are refused while the projects module is disabled. The
+agent also accepts protocol 1 and 2 clients
+(DeckPilot 0.2), so a newer configuration app can always stop an older agent
+during an update. The agent status includes the time of the last device input,
+which automatic updates use to wait until the deck is idle.
 
 ## Hardware support
 
 | Model             | USB ID      | Status                                  |
 | ----------------- | ----------- | --------------------------------------- |
 | Stream Deck MK.2  | `0fd9:0080` | Driver implemented, **not yet tested on a physical device** |
+| Stream Deck XL    | `0fd9:006c` | Layout design only (descriptor, no driver) |
+| Stream Deck +     | `0fd9:0084` | Layout design only (descriptor, no driver) |
 
 The driver (`crates/deckpilot-hid`) uses `elgato-streamdeck` on top of
 `hidapi`. The MK.2 descriptor (15 keys in 5 × 3, 72 × 72 px JPEG, mirrored on
@@ -206,6 +216,7 @@ need to be confirmed with real hardware.
 cargo run -p deckpilot-agent                    # tray + USB devices
 cargo run -p deckpilot-agent -- --headless      # no tray
 cargo run -p deckpilot-agent -- --mock-devices  # simulated MK.2
+cargo run -p deckpilot-agent -- --mock-devices mk2,xl,plus
 DECKPILOT_DATA_DIR=/tmp/deckpilot-dev cargo run -p deckpilot-agent -- --mock-devices
 ```
 

@@ -145,16 +145,20 @@ pub struct ActiveProjectContext {
 }
 
 impl ActiveProjectContext {
-    /// Creates a context for `profile`, selecting its first project, if any.
+    /// Creates a context for `profile`, selecting its default project, or the
+    /// first project if no valid default is set.
     pub fn new(profile: &Profile) -> Self {
+        let default = profile
+            .default_project
+            .filter(|id| profile.project(*id).is_some());
         Self {
             profile_id: profile.id,
-            project_id: profile.projects.first().map(|p| p.id),
+            project_id: default.or_else(|| profile.projects.first().map(|p| p.id)),
         }
     }
 
     /// Restores a previously persisted selection. Stale ids fall back to the
-    /// first project of the profile.
+    /// default (or first) project of the profile.
     pub fn restore(profile: &Profile, project_id: Option<ProjectId>) -> Self {
         let mut context = Self::new(profile);
         if let Some(id) = project_id.filter(|id| profile.project(*id).is_some()) {

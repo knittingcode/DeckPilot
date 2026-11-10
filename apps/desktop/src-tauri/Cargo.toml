@@ -15,10 +15,14 @@ tauri-build.workspace = true
 deckpilot-core.workspace = true
 deckpilot-device.workspace = true
 deckpilot-ipc.workspace = true
+deckpilot-modules.workspace = true
 deckpilot-storage.workspace = true
+deckpilot-update.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true
+tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
 thiserror.workspace = true
 tokio.workspace = true
 

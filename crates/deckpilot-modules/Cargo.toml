@@ -1,0 +1,20 @@
+[package]
+name = "deckpilot-modules"
+description = "The feature modules built into DeckPilot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+deckpilot-core.workspace = true
+deckpilot-module-general.workspace = true
+deckpilot-module-projects.workspace = true
+
+[dev-dependencies]
+deckpilot-device.workspace = true
+
+[lints]
+workspace = true

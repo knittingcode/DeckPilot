@@ -12,7 +12,7 @@ functionality.
 - SQLite storage with migrations; optional SQLCipher build
 - Configuration app: dashboard, actions, profiles, projects, devices, settings
 
-## Milestone 1 – Background agent and MK.2 support (current)
+## Milestone 1 – Background agent and MK.2 support (done, hardware test pending)
 
 Implemented:
 
@@ -36,10 +36,28 @@ Remaining before the milestone is complete:
 - Icons on keys
 - Event-driven device discovery where the OS provides hotplug notifications
 
-## Milestone 2 – Editors
+## Milestone 2 – Configuration studio, live development, updates (current)
 
-- Workflow editor (ordering steps, failure policy, test run)
-- Layout editor with pages and folders, usable without a connected device
+Implemented:
+
+- Action Library, Workflow editor (conditions, overrides, reordering), profile
+  and project management, per-machine resource mappings
+- Device model catalog (MK.2, XL, Stream Deck +) and a visual layout designer
+  that works without hardware
+- Supervised live development environment (`make up`, `pnpm dev`) with
+  simulated devices and isolated data
+- Signed updates from GitHub Releases with coordinated agent restart, and a
+  release pipeline that builds draft releases
+- Modular feature architecture: built-in modules (`general`, `projects`) with
+  namespaced action types, module-driven navigation, enable/disable without
+  losing configuration; projects stored per profile with database constraints
+- An empty Action Library on new installations; demonstration data only in
+  the development seed
+
+Remaining before the milestone is complete:
+
+- Provision the signing key, publish a first release and verify an update
+  between two releases end to end
 - Profile switching from the device
 
 ## Milestone 3 – Platform actions

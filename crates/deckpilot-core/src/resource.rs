@@ -162,6 +162,8 @@ impl MachineConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ResolveError {
+    #[error("the module is not allowed to read this computer's resource bindings")]
+    NotPermitted,
     #[error("no project is active")]
     NoActiveProject,
     #[error("project `{project}` does not define the resource role `{role}`")]

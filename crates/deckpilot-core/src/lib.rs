@@ -7,12 +7,12 @@
 //! values are resolved at execution time through [`MachineConfig`].
 
 pub mod action;
-pub mod builtin;
 pub mod device_runtime;
 pub mod execution;
 pub mod face;
 pub mod id;
 pub mod layout;
+pub mod module;
 pub mod platform;
 pub mod profile;
 pub mod project;
@@ -21,24 +21,35 @@ pub mod resource;
 pub mod runtime;
 pub mod workflow;
 
+#[cfg(test)]
+pub(crate) mod testing;
+
 pub use action::{
-    ActionInstance, ActionParameters, ActionType, ActionTypeId, ParameterError, ParameterKind,
-    ParameterSpec, ParameterValue,
+    ActionInstance, ActionParameters, ActionType, ActionTypeId, MAX_LABEL_CHARS, ParameterError,
+    ParameterKind, ParameterSpec, ParameterValue, validate_presentation,
 };
-pub use device_runtime::{LayoutStatus, Runtime, RuntimeOutcome};
-pub use execution::{ActionResult, ActionStatus, ContextEffect, ExecutionContext};
-pub use face::{FaceStyle, KeyFace};
+pub use device_runtime::{LayoutStatus, Runtime, RuntimeOutcome, page_faces};
+pub use execution::{
+    ActionResult, ActionStatus, CapabilityDenied, ContextEffect, ExecutionContext,
+};
+pub use face::{FaceStyle, KeyFace, render_label};
 pub use id::{ActionInstanceId, LayoutId, PageId, ProfileId, ProjectId, WorkflowId};
 pub use layout::{BindingTarget, ControlBinding, DeviceLayout, LayoutIssue, LayoutPage, Trigger};
+pub use module::{
+    Availability, Capability, FeatureModule, ModuleError, ModuleId, ModuleInfo, ModuleManifest,
+    ModulePage, ModuleRegistry, ModuleSettings, ModuleStates,
+};
 pub use platform::Os;
-pub use profile::{Profile, ProfileIssue};
-pub use project::{ActiveProjectContext, CycleDirection, Project, ProjectKey, ProjectSwitcher};
-pub use registry::{ActionHandler, ActionRegistry};
+pub use profile::{Profile, ProfileIssue, Usage};
+pub use project::{
+    ActiveProjectContext, CycleDirection, Project, ProjectContextError, ProjectKey, ProjectSwitcher,
+};
+pub use registry::{ActionHandler, ActionRegistry, RegistryError};
 pub use resource::{
     MachineConfig, MachineResourceBinding, ResolveError, ResourceKey, ResourceKind, ResourceRef,
 };
 pub use runtime::{Engine, EngineError, StepReport, WorkflowReport};
-pub use workflow::{OnFailure, Workflow, WorkflowStep};
+pub use workflow::{OnFailure, StepCondition, Workflow, WorkflowStep};
 
 /// Error returned when a textual identifier does not satisfy its format rules.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

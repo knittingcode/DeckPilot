@@ -62,6 +62,9 @@ jobs:
       - name: Check formatting
         if: runner.os == 'Linux'
         run: cargo fmt --all --check
+      - name: Check that app, agent and frontend versions match
+        if: runner.os == 'Linux'
+        run: cargo run --locked -p deckpilot-dev -- check-versions
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
 

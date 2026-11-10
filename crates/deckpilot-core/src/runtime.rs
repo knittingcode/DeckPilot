@@ -6,11 +6,10 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::project::ProjectContextError;
 use crate::{
-    ActionInstance, ActionInstanceId, ActionRegistry, ActionResult, ActionStatus,
+    ActionInstance, ActionInstanceId, ActionParameters, ActionRegistry, ActionResult, ActionStatus,
     ActiveProjectContext, ContextEffect, ExecutionContext, MachineConfig, OnFailure, Profile,
-    WorkflowId,
+    ProjectContextError, StepCondition, WorkflowId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -68,12 +67,13 @@ impl Engine {
         let instance = profile
             .action(action)
             .ok_or(EngineError::UnknownAction(action))?;
-        self.execute(profile, machine, context, instance)
+        self.execute(profile, machine, context, instance, None)
     }
 
     /// Runs the steps of a workflow in order. Effects of a step are applied
     /// before the next step runs, so a step that switches project affects the
-    /// steps after it.
+    /// steps after it. Steps whose condition is not met are reported as
+    /// skipped and do not change the outcome of "previous step" conditions.
     pub fn run_workflow(
         &self,
         profile: &Profile,
@@ -89,12 +89,31 @@ impl Engine {
             status: ActionStatus::Succeeded,
             steps: Vec::new(),
         };
+        let mut previous: Option<bool> = None;
         for step in &definition.steps {
+            let run = match step.condition {
+                StepCondition::Always => true,
+                StepCondition::PreviousSucceeded => previous == Some(true),
+                StepCondition::PreviousFailed => previous == Some(false),
+                StepCondition::ActiveProject { project } => context.project_id() == Some(project),
+            };
+            if !run {
+                let result = ActionResult::skipped("condition not met");
+                report.steps.push(StepReport {
+                    action: step.action,
+                    result,
+                });
+                continue;
+            }
             let result = match profile.action(step.action) {
-                Some(instance) => self.execute(profile, machine, context, instance)?,
+                Some(instance) => {
+                    let overrides = (!step.overrides.is_empty()).then_some(&step.overrides);
+                    self.execute(profile, machine, context, instance, overrides)?
+                }
                 None => ActionResult::failure("action no longer exists"),
             };
             let failed = !result.is_success();
+            previous = Some(!failed);
             report.steps.push(StepReport {
                 action: step.action,
                 result,
@@ -115,20 +134,26 @@ impl Engine {
         machine: &MachineConfig,
         context: &mut ActiveProjectContext,
         instance: &ActionInstance,
+        overrides: Option<&ActionParameters>,
     ) -> Result<ActionResult, EngineError> {
         let project = context.project(profile)?;
         let Some(handler) = self.registry.handler(&instance.action_type) else {
-            return Ok(ActionResult::failure(format!(
-                "action type `{}` is not available",
-                instance.action_type
-            )));
+            return Ok(self.registry.dispatch(
+                &instance.action_type,
+                &instance.parameters,
+                &ExecutionContext::new(profile, project, machine),
+            ));
         };
         if handler.definition().requires_project && project.is_none() {
             return Ok(ActionResult::failure(
                 "this action requires an active project",
             ));
         }
-        let parameters = match handler.definition().normalize(&instance.parameters) {
+        let configured = match overrides {
+            Some(overrides) => instance.parameters.overlay(overrides),
+            None => instance.parameters.clone(),
+        };
+        let parameters = match handler.definition().normalize(&configured) {
             Ok(parameters) => parameters,
             Err(errors) => {
                 let details: Vec<_> = errors.iter().map(ToString::to_string).collect();
@@ -138,18 +163,24 @@ impl Engine {
                 )));
             }
         };
-        let execution = ExecutionContext {
-            profile,
-            project,
-            machine,
-        };
-        let mut result = handler.execute(&parameters, &execution);
+        let problems = self
+            .registry
+            .check_parameters(&instance.action_type, &parameters, profile);
+        if !problems.is_empty() {
+            return Ok(ActionResult::failure(format!(
+                "invalid configuration: {}",
+                problems.join("; ")
+            )));
+        }
+        let execution = ExecutionContext::new(profile, project, machine);
+        let mut result = self
+            .registry
+            .dispatch(&instance.action_type, &parameters, &execution);
         if result.is_success() {
             for effect in &result.effects {
+                // Selection is validated against the active profile, so an
+                // action can never activate another profile's project.
                 let applied = match effect {
-                    ContextEffect::CycleProject { direction } => {
-                        context.cycle(profile, *direction).map(|_| ())
-                    }
                     ContextEffect::SelectProject { project } => context.select(profile, *project),
                 };
                 if let Err(error) = applied {
@@ -165,7 +196,8 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ActionParameters, Os, ParameterValue, Project, ProjectKey, Workflow, builtin};
+    use crate::testing::{echo_type, registry, select_type, with_projects};
+    use crate::{ActionParameters, Os, ParameterValue, Workflow};
 
     struct Fixture {
         profile: Profile,
@@ -175,18 +207,13 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
-        let engine = Engine::new(ActionRegistry::with_builtins());
+        let engine = Engine::new(registry());
         let registry = engine.registry();
-        let mut profile = Profile::new("Work");
-        for key in ["SHOP", "CMR", "CMS"] {
-            profile
-                .add_project(Project::new(ProjectKey::new(key).unwrap(), key))
-                .unwrap();
-        }
+        let mut profile = with_projects("Work", &["SHOP", "CMR", "CMS"]);
         let log = registry
             .create_instance(
                 "Announce",
-                builtin::log_message_id(),
+                echo_type(),
                 &ActionParameters::new().with(
                     "message",
                     ParameterValue::Text("now on {project.key}".into()),
@@ -194,11 +221,7 @@ mod tests {
             )
             .unwrap();
         let next = registry
-            .create_instance(
-                "Next project",
-                builtin::cycle_project_id(),
-                &ActionParameters::new(),
-            )
+            .create_instance("Next project", select_type(), &ActionParameters::new())
             .unwrap();
         let (log_id, next_id) = (log.id, next.id);
         profile.actions.extend([log, next]);
@@ -267,13 +290,76 @@ mod tests {
     }
 
     #[test]
+    fn step_conditions_and_overrides() {
+        let mut f = fixture();
+        let cms = f.profile.projects[2].id;
+        let mut workflow = Workflow::new("Conditional")
+            .step(f.log, OnFailure::Continue)
+            .step(f.log, OnFailure::Continue)
+            .step(f.log, OnFailure::Continue)
+            .step(f.log, OnFailure::Continue);
+        workflow.steps[1].condition = StepCondition::PreviousFailed;
+        workflow.steps[2].condition = StepCondition::ActiveProject { project: cms };
+        workflow.steps[3].condition = StepCondition::PreviousSucceeded;
+        workflow.steps[3].overrides = ActionParameters::new().with(
+            "message",
+            ParameterValue::Text("override {project.key}".into()),
+        );
+        let id = workflow.id;
+        f.profile.workflows.push(workflow);
+        let mut context = ActiveProjectContext::new(&f.profile);
+
+        let report = f
+            .engine
+            .run_workflow(&f.profile, &machine(), &mut context, id)
+            .unwrap();
+        let statuses: Vec<_> = report.steps.iter().map(|s| s.result.status).collect();
+        assert_eq!(
+            statuses,
+            [
+                ActionStatus::Succeeded,
+                ActionStatus::Skipped,
+                ActionStatus::Skipped,
+                ActionStatus::Succeeded
+            ]
+        );
+        assert_eq!(report.steps[3].result.message, "override SHOP");
+        assert_eq!(report.status, ActionStatus::Succeeded);
+        // The action's own configuration is unchanged.
+        let log = f.profile.action(f.log).unwrap();
+        assert_eq!(log.parameters.text("message"), Some("now on {project.key}"));
+    }
+
+    #[test]
+    fn workflow_validation_reports_problems() {
+        let mut f = fixture();
+        let registry = registry();
+        let mut workflow = Workflow::new(" ").step(f.log, OnFailure::Stop);
+        workflow.steps[0].condition = StepCondition::PreviousSucceeded;
+        workflow.steps[0].overrides =
+            ActionParameters::new().with("message", ParameterValue::Integer(3));
+        workflow = workflow.step(ActionInstanceId::new(), OnFailure::Stop);
+        let issues = workflow.validate(&f.profile, &registry);
+        assert_eq!(issues.len(), 4, "{issues:?}");
+
+        let valid = Workflow::new("Start Work")
+            .step(f.next, OnFailure::Stop)
+            .step(f.log, OnFailure::Stop);
+        assert_eq!(valid.validate(&f.profile, &registry), Vec::<String>::new());
+        f.profile.workflows.push(valid);
+    }
+
+    #[test]
     fn invalid_stored_configuration_fails_gracefully() {
         let mut f = fixture();
         let broken = ActionInstance {
             id: ActionInstanceId::new(),
             name: "Broken".into(),
-            action_type: builtin::log_message_id(),
+            action_type: echo_type(),
             parameters: ActionParameters::new(),
+            description: String::new(),
+            icon: None,
+            label: None,
         };
         let id = broken.id;
         f.profile.actions.push(broken);

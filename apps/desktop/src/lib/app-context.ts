@@ -1,17 +1,41 @@
 import { createContext, useContext } from "react"
 
-import type { AgentConnection, ProfilesView } from "./types"
+import type { ModulePageId } from "@/modules"
+
+import type { AgentConnection, ModuleInfo, ProfilesView, UpdateState } from "./types"
 
 export interface AppContextValue {
   profiles: ProfilesView
-  /** Reloads profile data after a change; pages also reload their own data. */
+  /** Profile shown in the editors; independent of the profile on the device. */
+  editingProfileId: string | null
+  setEditingProfileId: (id: string) => void
+  /** Reloads data after a change; pages reload when `revision` changes. */
   refresh: () => void
-  /** Incremented on every refresh so dependent views can reload. */
   revision: number
   /** Latest known agent state; `null` until the first status arrives. */
   agent: AgentConnection | null
   setAgent: (agent: AgentConnection) => void
+  updates: UpdateState | null
+  setUpdates: (state: UpdateState) => void
+  navigate: (page: PageId) => void
+  /** Registered feature modules and their state. */
+  modules: ModuleInfo[]
+  setModules: (modules: ModuleInfo[]) => void
 }
+
+/** Pages of the core application. */
+export type CorePageId =
+  | "dashboard"
+  | "actions"
+  | "workflows"
+  | "profiles"
+  | "models"
+  | "designer"
+  | "devices"
+  | "settings"
+
+/** A core page or a page contributed by a module (`module/page`). */
+export type PageId = CorePageId | ModulePageId
 
 export const AppContext = createContext<AppContextValue | null>(null)
 

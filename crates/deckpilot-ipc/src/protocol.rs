@@ -12,11 +12,20 @@ use serde::{Deserialize, Serialize};
 
 use deckpilot_core::{
     ActionInstanceId, ActionResult, ActionStatus, CycleDirection, LayoutStatus, ProfileId, Project,
-    ProjectId,
+    ProjectId, WorkflowId, WorkflowReport,
 };
 use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+/// Protocol spoken by this build.
+///
+/// Version 3: action results only report `selectProject` effects (project
+/// switching is computed by the projects module), and action types use
+/// module namespaces such as `projects.next`.
+pub const PROTOCOL_VERSION: u32 = 3;
+/// Oldest protocol the agent still accepts. Version 1 clients (DeckPilot
+/// 0.2) can still connect, e.g. so that a newer app can shut down an older
+/// agent during an update.
+pub const MIN_PROTOCOL_VERSION: u32 = 1;
 
 /// What kind of program is connecting. Used for diagnostics and to decide
 /// whether the configuration window is already open.
@@ -62,6 +71,10 @@ pub enum Request {
     RunAction {
         action: ActionInstanceId,
     },
+    /// Runs a workflow of the active profile. Since protocol 2.
+    RunWorkflow {
+        workflow: WorkflowId,
+    },
     /// Rescans for devices and redraws every connected device.
     RefreshDevices,
     /// Re-reads configuration from the database after the configuration app
@@ -80,6 +93,10 @@ pub enum Request {
     /// desktop client.
     ShowWindow,
     Shutdown,
+    /// Releases devices and stops so that an update can replace the agent's
+    /// executable. The agent finishes the request it is processing first.
+    /// Since protocol 2.
+    PrepareForUpdate,
     /// Injects input into a simulated device. Only accepted when the agent
     /// runs with mock devices.
     SimulateInput {
@@ -174,6 +191,9 @@ pub enum Response {
     ActionResult {
         result: ActionResult,
     },
+    WorkflowReport {
+        report: WorkflowReport,
+    },
     Autostart {
         enabled: bool,
     },
@@ -214,6 +234,9 @@ pub struct DeviceInfo {
     pub layout: LayoutStatus,
     /// Name of the page currently shown.
     pub page: Option<String>,
+    /// Backend providing the device: `elgato-hid` for USB, `mock` for
+    /// simulated devices.
+    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -234,6 +257,9 @@ pub struct AgentStatus {
     pub active_project: Option<Project>,
     pub devices: Vec<DeviceInfo>,
     pub brightness: u8,
+    /// Seconds since the Unix epoch of the last device input, if any. Used
+    /// to install updates only while the device is idle.
+    pub last_input_at: Option<u64>,
 }
 
 #[cfg(test)]
@@ -243,7 +269,7 @@ mod tests {
     #[test]
     fn messages_use_tagged_json() {
         let hello = ClientMessage::Hello {
-            protocol: PROTOCOL_VERSION,
+            protocol: 1,
             token: "t".into(),
             client: ClientKind::Desktop,
         };

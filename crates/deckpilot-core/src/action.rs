@@ -6,9 +6,10 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{ActionInstanceId, IdentifierError, ResourceKind, ResourceRef};
+use crate::{ActionInstanceId, IdentifierError, ProjectId, ResourceKind, ResourceRef};
 
-/// Identifier of an action type, e.g. `deckpilot.core.log`.
+/// Identifier of an action type, e.g. `projects.next`. The first segment is
+/// the id of the module that provides the type.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct ActionTypeId(String);
@@ -70,6 +71,8 @@ pub enum ParameterKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         kind: Option<ResourceKind>,
     },
+    /// A project of the profile the action belongs to.
+    Project,
 }
 
 /// Schema entry for one parameter of an action type.
@@ -95,12 +98,29 @@ pub enum ParameterValue {
     Boolean(bool),
     Choice(String),
     Resource(ResourceRef),
+    Project(ProjectId),
 }
 
 /// Parameter values of an action instance, keyed by [`ParameterSpec::key`].
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// A parameter that is not set is absent; `null` in JSON input means the
+/// same, so optional parameters such as `project_id` can be cleared with
+/// `null`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct ActionParameters(BTreeMap<String, ParameterValue>);
+
+impl<'de> Deserialize<'de> for ActionParameters {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let values = BTreeMap::<String, Option<ParameterValue>>::deserialize(deserializer)?;
+        Ok(Self(
+            values
+                .into_iter()
+                .filter_map(|(key, value)| value.map(|value| (key, value)))
+                .collect(),
+        ))
+    }
+}
 
 impl ActionParameters {
     pub fn new() -> Self {
@@ -145,8 +165,41 @@ impl ActionParameters {
         }
     }
 
+    pub fn project(&self, key: &str) -> Option<ProjectId> {
+        match self.get(key)? {
+            ParameterValue::Project(value) => Some(*value),
+            _ => None,
+        }
+    }
+
+    /// Every project referenced by a parameter value.
+    pub fn projects(&self) -> impl Iterator<Item = ProjectId> + '_ {
+        self.0.values().filter_map(|value| match value {
+            ParameterValue::Project(id) => Some(*id),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut ParameterValue> {
+        self.0.values_mut()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&String, &ParameterValue)> {
         self.0.iter()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Values from `overrides` replace values with the same key.
+    #[must_use]
+    pub fn overlay(&self, overrides: &ActionParameters) -> ActionParameters {
+        let mut merged = self.clone();
+        for (key, value) in &overrides.0 {
+            merged.0.insert(key.clone(), value.clone());
+        }
+        merged
     }
 }
 
@@ -233,7 +286,8 @@ fn check_value(spec: &ParameterSpec, value: &ParameterValue) -> Result<(), Param
                 Ok(())
             }
         }
-        (ParameterKind::Boolean, ParameterValue::Boolean(_)) => Ok(()),
+        (ParameterKind::Boolean, ParameterValue::Boolean(_))
+        | (ParameterKind::Project, ParameterValue::Project(_)) => Ok(()),
         (ParameterKind::Choice { options }, ParameterValue::Choice(choice)) => {
             if options.contains(choice) {
                 Ok(())
@@ -258,6 +312,7 @@ fn check_value(spec: &ParameterSpec, value: &ParameterValue) -> Result<(), Param
                 ParameterKind::Boolean => "boolean",
                 ParameterKind::Choice { .. } => "choice",
                 ParameterKind::Resource { .. } => "resource",
+                ParameterKind::Project => "project",
             },
         }),
     }
@@ -271,11 +326,56 @@ pub struct ActionInstance {
     pub name: String,
     pub action_type: ActionTypeId,
     pub parameters: ActionParameters,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// Icon name from the UI icon set (lowercase, digits and `-`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// Short text shown on a key instead of the name. Supports `{profile}`,
+    /// `{project.key}` and `{project.name}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// Longest accepted key label.
+pub const MAX_LABEL_CHARS: usize = 32;
+
+/// Checks presentation fields shared by actions and bindings.
+pub fn validate_presentation(icon: Option<&str>, label: Option<&str>) -> Result<(), String> {
+    if let Some(icon) = icon {
+        let valid = !icon.is_empty()
+            && icon.len() <= 64
+            && icon
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if !valid {
+            return Err(format!("invalid icon name `{icon}`"));
+        }
+    }
+    if let Some(label) = label
+        && label.chars().count() > MAX_LABEL_CHARS
+    {
+        return Err(format!(
+            "label must be at most {MAX_LABEL_CHARS} characters"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn null_parameters_are_not_set() {
+        let parameters: ActionParameters =
+            serde_json::from_str(r#"{"project_id": null, "a": {"type": "integer", "value": 1}}"#)
+                .unwrap();
+        assert_eq!(
+            parameters,
+            ActionParameters::new().with("a", ParameterValue::Integer(1))
+        );
+    }
     use crate::ResourceKey;
 
     fn action_type() -> ActionType {

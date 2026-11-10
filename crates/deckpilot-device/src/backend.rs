@@ -112,6 +112,86 @@ pub trait DeviceBackend: Send {
 
     /// Opens a previously discovered device.
     fn open(&mut self, device: &DeviceId) -> Result<Box<dyn DeviceHandle>, DeviceError>;
+
+    /// Name of the backend that provides `device`; differs from
+    /// [`DeviceBackend::name`] only for backends that combine others.
+    fn source(&self, _device: &DeviceId) -> &'static str {
+        self.name()
+    }
+}
+
+/// Several backends behind one interface, e.g. USB devices plus simulated
+/// ones during development. Each device is opened by the backend that
+/// discovered it.
+#[derive(Default)]
+pub struct CombinedBackend {
+    backends: Vec<Box<dyn DeviceBackend>>,
+    owners: std::collections::BTreeMap<DeviceId, usize>,
+}
+
+impl fmt::Debug for CombinedBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let names: Vec<_> = self.backends.iter().map(|b| b.name()).collect();
+        f.debug_struct("CombinedBackend")
+            .field("backends", &names)
+            .field("owners", &self.owners)
+            .finish()
+    }
+}
+
+impl CombinedBackend {
+    #[must_use]
+    pub fn with(mut self, backend: Box<dyn DeviceBackend>) -> Self {
+        self.backends.push(backend);
+        self
+    }
+}
+
+impl DeviceBackend for CombinedBackend {
+    fn name(&self) -> &'static str {
+        match self.backends.as_slice() {
+            [single] => single.name(),
+            _ => "combined",
+        }
+    }
+
+    /// Returns devices from every backend that succeeds. Fails only if all
+    /// backends fail, so one broken backend does not hide the others.
+    fn discover(&mut self) -> Result<Vec<DiscoveredDevice>, DeviceError> {
+        let mut found = Vec::new();
+        let mut first_error = None;
+        let mut succeeded = false;
+        self.owners.clear();
+        for (index, backend) in self.backends.iter_mut().enumerate() {
+            match backend.discover() {
+                Ok(devices) => {
+                    succeeded = true;
+                    for device in devices {
+                        self.owners.entry(device.id.clone()).or_insert(index);
+                        found.push(device);
+                    }
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        match first_error {
+            Some(error) if !succeeded => Err(error),
+            _ => Ok(found),
+        }
+    }
+
+    fn open(&mut self, device: &DeviceId) -> Result<Box<dyn DeviceHandle>, DeviceError> {
+        let index = *self.owners.get(device).ok_or(DeviceError::Disconnected)?;
+        self.backends[index].open(device)
+    }
+
+    fn source(&self, device: &DeviceId) -> &'static str {
+        self.owners
+            .get(device)
+            .map_or_else(|| self.name(), |index| self.backends[*index].source(device))
+    }
 }
 
 /// An opened device. Implementations are used from one dedicated I/O thread.
@@ -190,6 +270,38 @@ mod tests {
         assert_eq!(frame.pixel(2, 0), None);
         assert!(Frame::from_rgb(2, 2, vec![0; 11]).is_err());
         assert!(Frame::from_rgb(2, 2, vec![0; 12]).is_ok());
+    }
+
+    #[cfg(feature = "mock")]
+    #[test]
+    fn combined_backend_routes_devices_to_their_source() {
+        use crate::{mock::MockBackend, models};
+
+        struct Failing;
+        impl DeviceBackend for Failing {
+            fn name(&self) -> &'static str {
+                "failing"
+            }
+            fn discover(&mut self) -> Result<Vec<DiscoveredDevice>, DeviceError> {
+                Err(DeviceError::Io("no access".into()))
+            }
+            fn open(&mut self, _: &DeviceId) -> Result<Box<dyn DeviceHandle>, DeviceError> {
+                Err(DeviceError::Disconnected)
+            }
+        }
+
+        let mock = MockBackend::new();
+        let id = mock.plug(&models::stream_deck_xl(), "SIM-1");
+        let mut combined = CombinedBackend::default()
+            .with(Box::new(Failing))
+            .with(Box::new(mock));
+        let found = combined.discover().unwrap();
+        assert_eq!(found.len(), 1, "a failing backend does not hide the others");
+        assert_eq!(combined.source(&id), "mock");
+        assert!(combined.open(&id).is_ok());
+
+        let mut only_failing = CombinedBackend::default().with(Box::new(Failing));
+        assert!(only_failing.discover().is_err());
     }
 
     #[test]

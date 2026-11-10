@@ -5,11 +5,90 @@ use crate::{DeviceModel, DeviceModelId, UsbIdentity};
 /// Built-in device descriptors.
 pub mod models {
     use crate::{
-        DeviceCapabilities, DeviceModel, DeviceModelId, HardwareSupport, ImageFormat, ImageSpec,
-        ImageTransform, KeyGrid, UsbIdentity,
+        DeviceCapabilities, DeviceModel, DeviceModelId, EncoderSpec, HardwareSupport, ImageFormat,
+        ImageSpec, ImageTransform, KeyGrid, TouchGesture, TouchSurface, UsbIdentity,
     };
 
     pub const STREAM_DECK_MK2_ID: &str = "elgato.streamdeck.mk2";
+    pub const STREAM_DECK_XL_ID: &str = "elgato.streamdeck.xl";
+    pub const STREAM_DECK_PLUS_ID: &str = "elgato.streamdeck.plus";
+
+    fn jpeg(width: u32, height: u32, mirrored: bool) -> ImageSpec {
+        ImageSpec {
+            width,
+            height,
+            format: ImageFormat::Jpeg,
+            transform: ImageTransform {
+                flip_horizontal: mirrored,
+                flip_vertical: mirrored,
+                rotation: 0,
+            },
+        }
+    }
+
+    fn elgato(product_id: u16) -> UsbIdentity {
+        UsbIdentity {
+            vendor_id: 0x0fd9,
+            product_id,
+        }
+    }
+
+    /// Elgato Stream Deck XL: 32 keys (8 x 4) with 96 x 96 px JPEG images.
+    ///
+    /// Descriptor only: layouts can be designed, but there is no driver.
+    pub fn stream_deck_xl() -> DeviceModel {
+        DeviceModel {
+            id: DeviceModelId::new(STREAM_DECK_XL_ID),
+            vendor: "Elgato".into(),
+            name: "Stream Deck XL".into(),
+            usb: Some(elgato(0x006c)),
+            capabilities: DeviceCapabilities {
+                keys: Some(KeyGrid {
+                    rows: 4,
+                    columns: 8,
+                    image: Some(jpeg(96, 96, true)),
+                }),
+                encoders: None,
+                touch: None,
+            },
+            support: HardwareSupport::DescriptorOnly,
+        }
+    }
+
+    /// Elgato Stream Deck +: 8 keys (4 x 2) with 120 x 120 px images, four
+    /// pressable dials and an 800 x 100 px touch strip, modelled as four
+    /// 200 x 100 px zones (one above each dial).
+    ///
+    /// Descriptor only: layouts can be designed, but there is no driver.
+    pub fn stream_deck_plus() -> DeviceModel {
+        DeviceModel {
+            id: DeviceModelId::new(STREAM_DECK_PLUS_ID),
+            vendor: "Elgato".into(),
+            name: "Stream Deck +".into(),
+            usb: Some(elgato(0x0084)),
+            capabilities: DeviceCapabilities {
+                keys: Some(KeyGrid {
+                    rows: 2,
+                    columns: 4,
+                    image: Some(jpeg(120, 120, false)),
+                }),
+                encoders: Some(EncoderSpec {
+                    count: 4,
+                    pressable: true,
+                }),
+                touch: Some(TouchSurface {
+                    zones: 4,
+                    image: Some(jpeg(200, 100, false)),
+                    gestures: vec![
+                        TouchGesture::Tap,
+                        TouchGesture::LongPress,
+                        TouchGesture::Swipe,
+                    ],
+                }),
+            },
+            support: HardwareSupport::DescriptorOnly,
+        }
+    }
 
     /// Elgato Stream Deck MK.2: 15 keys (5 x 3) with 72 x 72 px JPEG images.
     ///
@@ -60,6 +139,8 @@ impl ModelCatalog {
     pub fn builtin() -> Self {
         let mut catalog = Self::default();
         catalog.register(models::stream_deck_mk2());
+        catalog.register(models::stream_deck_xl());
+        catalog.register(models::stream_deck_plus());
         catalog
     }
 
@@ -99,6 +180,32 @@ mod tests {
                 .is_err()
         );
         assert_eq!(model.support, HardwareSupport::Unverified);
+    }
+
+    #[test]
+    fn xl_and_plus_descriptors() {
+        let xl = models::stream_deck_xl();
+        assert_eq!(xl.capabilities.controls().len(), 32);
+        assert_eq!(xl.support, HardwareSupport::DescriptorOnly);
+
+        let plus = models::stream_deck_plus();
+        let caps = &plus.capabilities;
+        // 8 keys, 4 dials, 4 touch zones.
+        assert_eq!(caps.controls().len(), 16);
+        assert!(caps.has_display(ControlId::Key { index: 7 }));
+        assert!(caps.has_display(ControlId::TouchZone { index: 3 }));
+        assert!(!caps.has_display(ControlId::Encoder { index: 0 }));
+        assert!(
+            caps.validate_input(
+                ControlId::Encoder { index: 3 },
+                ControlInput::Rotate { delta: -1 }
+            )
+            .is_ok()
+        );
+        assert!(
+            caps.validate_input(ControlId::Encoder { index: 3 }, ControlInput::Press)
+                .is_ok()
+        );
     }
 
     #[test]

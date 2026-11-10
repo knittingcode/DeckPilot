@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::Project;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FaceStyle {
@@ -65,5 +67,39 @@ impl KeyFace {
 
     pub fn is_empty(&self) -> bool {
         self.style == FaceStyle::Empty
+    }
+}
+
+/// Expands `{profile}`, `{project.key}` and `{project.name}` in a key label.
+/// Project placeholders show `-` while no project is active.
+pub fn render_label(template: &str, profile: &str, project: Option<&Project>) -> String {
+    let (key, name) = project.map_or(("-", "-"), |p| (p.key.as_str(), p.name.as_str()));
+    template
+        .replace("{profile}", profile)
+        .replace("{project.key}", key)
+        .replace("{project.name}", name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ProjectKey;
+
+    #[test]
+    fn labels_follow_the_active_project() {
+        let shop = Project::new(ProjectKey::new("SHOP").unwrap(), "Online shop");
+        assert_eq!(
+            render_label("Git {project.key}", "Work", Some(&shop)),
+            "Git SHOP"
+        );
+        assert_eq!(
+            render_label("{project.name}", "Work", Some(&shop)),
+            "Online shop"
+        );
+        assert_eq!(
+            render_label("{profile}: {project.key}", "Work", None),
+            "Work: -"
+        );
+        assert_eq!(render_label("Plain", "Work", None), "Plain");
     }
 }

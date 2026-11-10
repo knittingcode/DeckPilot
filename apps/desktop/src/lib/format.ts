@@ -1,4 +1,5 @@
-import type { LayoutStatus, Os, ResourceKind } from "./types"
+import { controlLabel } from "./layout-model"
+import type { DeviceModel, LayoutStatus, Os, ResourceKind, Usage } from "./types"
 
 const OS_LABELS: Record<Os, string> = {
   linux: "Linux",
@@ -42,4 +43,22 @@ export function describeLayout(status: LayoutStatus): string {
     case "invalid":
       return `Layout “${status.name}” has problems`
   }
+}
+
+export function describeUsage(usage: Usage): string {
+  return usage.type === "workflowStep"
+    ? `Workflow “${usage.workflowName}”, step ${usage.position}`
+    : `Layout “${usage.layoutName}”, page “${usage.pageName}”, ${controlLabel(usage.control)}`
+}
+
+export const SUPPORT: Record<DeviceModel["support"], { label: string; detail: string }> = {
+  verified: { label: "Supported", detail: "The driver has been tested on hardware." },
+  unverified: {
+    label: "Driver not yet hardware-tested",
+    detail: "A driver exists, but it has not been verified on a physical device.",
+  },
+  descriptorOnly: {
+    label: "Layout design only",
+    detail: "Layouts can be designed and saved. There is no driver for this model yet.",
+  },
 }

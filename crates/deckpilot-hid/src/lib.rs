@@ -218,6 +218,40 @@ mod tests {
         assert!(image.transform.flip_horizontal && image.transform.flip_vertical);
     }
 
+    /// XL and + have no driver, but their layout-design descriptors must
+    /// still match the protocol implementation.
+    #[test]
+    fn descriptor_only_models_match_protocol_implementation() {
+        for (kind, model) in [
+            (Kind::Xl, models::stream_deck_xl()),
+            (Kind::Plus, models::stream_deck_plus()),
+        ] {
+            let usb = model.usb.unwrap();
+            assert_eq!(
+                (usb.vendor_id, usb.product_id),
+                (kind.vendor_id(), kind.product_id())
+            );
+            let keys = model.capabilities.keys.unwrap();
+            assert_eq!(keys.rows, u16::from(kind.row_count()));
+            assert_eq!(keys.columns, u16::from(kind.column_count()));
+            let image = keys.image.unwrap();
+            let format = kind.key_image_format();
+            assert_eq!((image.width as usize, image.height as usize), format.size);
+            let mirrored = matches!(format.mirror, ImageMirroring::Both);
+            assert_eq!(image.transform.flip_horizontal, mirrored);
+            assert_eq!(
+                model.capabilities.encoders.map_or(0, |e| e.count),
+                kind.encoder_count()
+            );
+        }
+        let plus = models::stream_deck_plus();
+        let touch = plus.capabilities.touch.unwrap();
+        let strip = Kind::Plus.lcd_strip_size().unwrap();
+        let zone = touch.image.unwrap();
+        assert_eq!(zone.width as usize * usize::from(touch.zones), strip.0);
+        assert_eq!(zone.height as usize, strip.1);
+    }
+
     #[test]
     fn only_supported_kinds_are_exposed() {
         assert!(model_for(Kind::Mk2).is_some());

@@ -8,16 +8,22 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
-import type { ParameterSpec, ParameterValue, ResourceRef } from "@/lib/types"
+import type { ParameterSpec, ParameterValue, Project, ResourceRef } from "@/lib/types"
 
-/** Form control for one action parameter, chosen from its declared kind. */
+/**
+ * Form control for one action parameter, chosen from its declared kind.
+ * `projects` are the projects of the profile the action belongs to; project
+ * parameters can only refer to those.
+ */
 export function ParameterField({
   spec,
   value,
+  projects = [],
   onChange,
 }: {
   spec: ParameterSpec
   value: ParameterValue
+  projects?: Project[]
   onChange: (value: ParameterValue) => void
 }) {
   const id = `parameter-${spec.key}`
@@ -27,7 +33,7 @@ export function ParameterField({
         {spec.label}
         {spec.required && <span className="text-destructive">*</span>}
       </Label>
-      <Control id={id} spec={spec} value={value} onChange={onChange} />
+      <Control id={id} spec={spec} value={value} projects={projects} onChange={onChange} />
       {spec.description && <p className="text-xs text-muted-foreground">{spec.description}</p>}
     </div>
   )
@@ -37,11 +43,13 @@ function Control({
   id,
   spec,
   value,
+  projects,
   onChange,
 }: {
   id: string
   spec: ParameterSpec
   value: ParameterValue
+  projects: Project[]
   onChange: (value: ParameterValue) => void
 }) {
   const kind = spec.kind
@@ -107,7 +115,79 @@ function Control({
   if (kind.type === "resource" && value.type === "resource") {
     return <ResourceControl id={id} value={value.value} onChange={onChange} />
   }
+  if (kind.type === "project" && value.type === "project") {
+    return (
+      <ProjectControl
+        id={id}
+        optional={!spec.required}
+        value={value.value}
+        projects={projects}
+        onChange={(project) => {
+          onChange({ type: "project", value: project })
+        }}
+      />
+    )
+  }
   return <p className="text-sm text-destructive">Unsupported parameter type.</p>
+}
+
+/** Select value standing for "no project set", i.e. the current project. */
+const CURRENT_PROJECT = "current"
+
+/**
+ * Chooses a project of the profile. Optional project parameters offer
+ * “Current project”, which is saved as no value (resolved when the action
+ * runs), never as the id of the project that happens to be active now.
+ */
+function ProjectControl({
+  id,
+  optional,
+  value,
+  projects,
+  onChange,
+}: {
+  id: string
+  optional: boolean
+  value: string
+  projects: Project[]
+  onChange: (project: string) => void
+}) {
+  const known = projects.some((p) => p.id === value)
+  if (projects.length === 0 && !optional) {
+    return (
+      <p id={id} className="text-sm text-muted-foreground">
+        This profile has no projects yet. Add one on the Projects page.
+      </p>
+    )
+  }
+  const selected = known ? value : value === "" && optional ? CURRENT_PROJECT : ""
+  return (
+    <>
+      <Select
+        value={selected}
+        onValueChange={(choice) => {
+          onChange(choice === CURRENT_PROJECT ? "" : choice)
+        }}
+      >
+        <SelectTrigger id={id} className="w-64">
+          <SelectValue placeholder="Choose a project" />
+        </SelectTrigger>
+        <SelectContent>
+          {optional && <SelectItem value={CURRENT_PROJECT}>Current project (default)</SelectItem>}
+          {projects.map((project) => (
+            <SelectItem key={project.id} value={project.id}>
+              {project.key} · {project.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {value !== "" && !known && (
+        <p className="text-xs text-destructive">
+          The saved project is not part of this profile. Choose one of its projects.
+        </p>
+      )}
+    </>
+  )
 }
 
 function ResourceControl({

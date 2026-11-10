@@ -3,16 +3,45 @@ import type { ReactNode } from "react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { useAppContext } from "@/lib/app-context"
+
+/** The profile a profile-scoped page edits, shown in its header. */
+function ProfileScope() {
+  const { profiles, editingProfileId } = useAppContext()
+  const profile = profiles.profiles.find((p) => p.id === editingProfileId)
+  if (!profile) return null
+  const onDevice = profile.id === profiles.activeProfileId
+  return (
+    <span
+      className="flex max-w-48 shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs"
+      title={onDevice ? "Active on the device" : "Not active on the device"}
+    >
+      <span
+        className={
+          onDevice
+            ? "size-1.5 rounded-full bg-emerald-500"
+            : "size-1.5 rounded-full bg-muted-foreground/50"
+        }
+        aria-hidden
+      />
+      <span className="text-muted-foreground">Profile</span>
+      <span className="truncate font-medium">{profile.name}</span>
+    </span>
+  )
+}
 
 export function Page({
   title,
   description,
   actions,
+  profileScoped = false,
   children,
 }: {
   title: string
   description?: string
   actions?: ReactNode
+  /** The page edits the profile chosen in the sidebar. */
+  profileScoped?: boolean
   children: ReactNode
 }) {
   return (
@@ -24,6 +53,7 @@ export function Page({
           <h1 className="truncate text-sm font-semibold">{title}</h1>
           {description && <p className="truncate text-xs text-muted-foreground">{description}</p>}
         </div>
+        {profileScoped && <ProfileScope />}
         {actions}
       </header>
       <div className="flex flex-1 flex-col gap-6 p-6">{children}</div>

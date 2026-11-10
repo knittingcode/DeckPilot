@@ -358,8 +358,11 @@ mod tests {
             profile.actions.push(crate::ActionInstance {
                 id: ActionInstanceId::new(),
                 name: format!("A{index}"),
-                action_type: crate::builtin::log_message_id(),
+                action_type: crate::testing::echo_type(),
                 parameters: crate::ActionParameters::new(),
+                description: String::new(),
+                icon: None,
+                label: None,
             });
         }
         profile

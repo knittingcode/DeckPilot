@@ -65,6 +65,16 @@ impl AgentClient {
     /// Connects and authenticates. Returns [`ClientError::NotRunning`] when no
     /// agent listens for this data directory.
     pub async fn connect(paths: &AgentPaths, client: ClientKind) -> Result<Self, ClientError> {
+        Self::connect_with_protocol(paths, client, PROTOCOL_VERSION).await
+    }
+
+    /// Connects speaking an older protocol version. Used to talk to an agent
+    /// from a previous release, for example to stop it during an update.
+    pub async fn connect_with_protocol(
+        paths: &AgentPaths,
+        client: ClientKind,
+        protocol: u32,
+    ) -> Result<Self, ClientError> {
         let stream = paths
             .endpoint()
             .connect()
@@ -88,7 +98,7 @@ impl AgentClient {
             events: VecDeque::new(),
         };
         let hello = ClientMessage::Hello {
-            protocol: PROTOCOL_VERSION,
+            protocol,
             token,
             client,
         };

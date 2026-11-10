@@ -1,0 +1,27 @@
+[package]
+name = "deckpilot-dev"
+description = "Development session supervisor for DeckPilot (not shipped)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ctrlc.workspace = true
+deckpilot-core.workspace = true
+deckpilot-device.workspace = true
+deckpilot-ipc.workspace = true
+deckpilot-modules.workspace = true
+deckpilot-storage.workspace = true
+deckpilot-update.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sysinfo.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
