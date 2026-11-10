@@ -67,6 +67,15 @@ jobs:
         run: cargo run --locked -p deckpilot-dev -- check-versions
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # The agent embeds an Info.plist so that code signing uses a fixed
+      # identifier; its Keychain access across updates depends on it.
+      - name: The agent keeps a fixed code signing identifier
+        if: runner.os == 'macOS'
+        run: |
+          cp target/debug/deckpilot-agent "$RUNNER_TEMP/deckpilot-agent"
+          codesign --force --sign - --options runtime "$RUNNER_TEMP/deckpilot-agent"
+          codesign --display --verbose=2 "$RUNNER_TEMP/deckpilot-agent" 2>&1 \
+            | grep -x "Identifier=io.github.knittingcode.deckpilot.agent"
 
   sqlcipher:
     name: Storage with SQLCipher

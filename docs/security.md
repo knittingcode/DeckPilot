@@ -82,7 +82,8 @@ file and creates the encrypted database. No password is involved.
   only). DeckPilot does not hang meanwhile: the agent keeps running, the app
   shows "Waiting for the macOS Keychain", and if access is denied the
   configuration stays locked with a "Try again" button. Releases signed with
-  a Developer ID keep a stable identity across updates and are not asked;
+  a Developer ID keep a stable identity across updates (the agent also has a
+  fixed signing identifier from an embedded `Info.plist`) and are not asked;
   until signing is configured (see [releasing.md](releasing.md)), the
   "no prompt after an update" promise of the system key does **not** hold on
   macOS. Windows Credential Manager and the Secret Service have no

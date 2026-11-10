@@ -33,7 +33,7 @@ pnpm --filter @deckpilot/desktop tauri signer generate -w ~/.config/deckpilot/si
    installations can no longer verify updates; publishing it lets anyone sign
    updates.
 
-### macOS: Developer ID signing and notarization (not yet provisioned)
+### macOS: Developer ID signing and notarization
 
 Required for a macOS release. The workflow **refuses to build macOS
 releases** without it, unless the repository variable
@@ -44,26 +44,61 @@ key in the Keychain, and the Keychain grants access to the agent's code
 identity. An unsigned (or ad-hoc signed) agent gets a new identity with
 every update, so macOS asks for the login keychain password after each
 update (verified; see [security.md](security.md#system-key)). A Developer ID
-signature keeps the identity (identifier and team) stable across releases.
+signature keeps the identity stable across releases — together with the
+agent's fixed signing identifier, `io.github.knittingcode.deckpilot.agent`,
+which comes from an `Info.plist` embedded in the agent executable
+(`apps/agent/Info.plist`; never change it). Without it, `codesign` would
+derive the identifier from the build's UUID and change it in every release.
 
-Needed, as repository secrets (from an Apple Developer Program membership):
+Credentials (Apple Developer Program; notarization with an App Store Connect
+API key):
 
-| Secret | Content |
-| ------ | ------- |
-| `APPLE_CERTIFICATE` | the *Developer ID Application* certificate with its private key, exported as `.p12` and base64-encoded |
-| `APPLE_CERTIFICATE_PASSWORD` | the `.p12` password |
-| `APPLE_SIGNING_IDENTITY` | e.g. `Developer ID Application: Name (TEAMID)` |
-| `APPLE_ID` | the Apple ID used for notarization |
-| `APPLE_PASSWORD` | an app-specific password of that Apple ID |
-| `APPLE_TEAM_ID` | the team identifier |
+| Name | Kind | Content |
+| ---- | ---- | ------- |
+| `APPLE_CERTIFICATE` | secret | the *Developer ID Application* certificate with its private key, exported as `.p12`, base64-encoded |
+| `APPLE_CERTIFICATE_PASSWORD` | secret | the `.p12` password |
+| `APPLE_API_KEY` | secret | the App Store Connect API **private key** (`AuthKey_….p8` content, or its base64 encoding) |
+| `APPLE_SIGNING_IDENTITY` | variable | `Developer ID Application: Name (TEAMID)` |
+| `APPLE_TEAM_ID` | variable | the team identifier |
+| `APPLE_API_KEY_ID` | variable | the API key's ID |
+| `APPLE_API_ISSUER` | variable | the API key's issuer ID |
 
-With them, the Tauri bundler signs the application and the bundled agent
-with the hardened runtime (`bundle.macOS.hardenedRuntime`), notarizes and
-staples the app. The workflow then verifies the signature
-(`codesign --verify --deep --strict`), that the agent is signed by the team
-with the hardened runtime, Gatekeeper's assessment (`spctl`) and the stapled
-ticket (`stapler validate`). None of this has run yet: no Apple credentials
-are configured, so notarization is **not verified**.
+(The Tauri bundler's own `APPLE_API_KEY` environment variable means the key
+*ID*; the workflow writes the private key to a file and passes it as
+`APPLE_API_KEY_PATH`, with `APPLE_API_KEY_ID` under the bundler's name.)
+
+What the release workflow does on macOS:
+
+1. The Tauri bundler imports the certificate into a temporary keychain and
+   signs inside out: the bundled agent, the app executable and the app
+   bundle, each with the hardened runtime (`bundle.macOS.hardenedRuntime`)
+   and **no entitlements** — DeckPilot needs none (USB HID access through
+   IOKit, the login Keychain, Touch ID through LocalAuthentication and the
+   system WebKit all work under the hardened runtime without them). The app
+   uses the system WebKit, so there are no embedded frameworks.
+2. The bundler submits the app to Apple's notary service, **waits for the
+   result**, fails the build unless it is *Accepted* (printing Apple's log),
+   and staples the ticket to the app. The updater archive (`.app.tar.gz`) is
+   made from the stapled app and signed with the updater key as before.
+3. The workflow notarizes the disk image the same way
+   (`.github/scripts/notarize.sh`: `notarytool submit --wait`, anything but
+   *Accepted* fails), staples it and replaces the uploaded image in the
+   draft release.
+4. `.github/scripts/verify-macos-app.sh` checks the app on disk, the app in
+   the updater archive and the app in the disk image: a strict signature over
+   the bundle, every executable signed by `APPLE_TEAM_ID` with the hardened
+   runtime and without entitlements, the agent's fixed identifier,
+   Gatekeeper's assessment (`spctl`) and the stapled ticket
+   (`stapler validate`). If the bundler skipped notarization (for example
+   because of incomplete credentials), this step fails the release.
+
+The *Signing check* workflow checks the credentials without a release: the
+certificate provides exactly the configured identity of the configured team,
+a throwaway executable signs with it (hardened runtime, secure timestamp),
+and Apple's notary service accepts the API key. A manual run with
+`notarize: true` (`gh workflow run "Signing check" -f notarize=true`) also
+submits that throwaway executable for notarization; this records a
+submission in the developer account.
 
 ### Windows: Authenticode (not yet provisioned)
 
@@ -138,11 +173,13 @@ publishes by itself.
 
 ## Status
 
-The updater signing key pair is provisioned in the repository settings, and
-the *Signing check* workflow verifies that the secrets and the public key
-belong together. A local release build signed with a throwaway key was
-checked with the same verification the workflow uses. Apple and Windows code
-signing are not provisioned. The release workflow has not run yet: no tag
-has been pushed from this repository. The first release should be treated as a test of the
+The updater signing key pair and the Apple Developer ID and notarization
+credentials are provisioned in the repository settings; the *Signing check*
+workflow verifies them on every change to release code. A local release
+build signed with a throwaway updater key was checked with the same
+verification the workflow uses. Windows code signing is not provisioned. The
+release workflow has not run yet: no tag has been pushed from this
+repository, so signing and notarization of the real application bundle and
+disk image have **not** been exercised end to end. The first release should be treated as a test of the
 pipeline, and the first update between two published releases as the test of
 installation (see [updates.md](updates.md)).

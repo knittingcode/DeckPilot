@@ -1,8 +1,16 @@
-# Proves that the configured updater signing key pair works, without
-# building or publishing a release: a throwaway file is signed with the
-# private key from the repository secrets and verified with the public key
-# from the repository variable, using the same code the release workflow and
-# the application use. No key material is printed; GitHub masks secrets.
+# Proves that the configured signing credentials work, without building or
+# publishing a release:
+#
+# - updater: a throwaway file is signed with the private key from the
+#   repository secrets and verified with the public key from the repository
+#   variable, using the same code the release workflow and the app use;
+# - macOS: the Developer ID certificate provides the configured identity of
+#   the configured team, a throwaway executable is signed with it (hardened
+#   runtime, secure timestamp), and Apple's notary service accepts the App
+#   Store Connect API key (a read-only query). Submitting the throwaway
+#   executable for notarization is optional (manual run with `notarize`).
+#
+# No key material is printed; GitHub masks secrets.
 name: Signing check
 
 on:
@@ -14,7 +22,15 @@ on:
       - apps/desktop/src-tauri/src/updates.rs
       - crates/deckpilot-update/**
       - tools/dev/**
+      - .github/scripts/**
+      - apps/agent/build.rs
+      - apps/agent/Info.plist
   workflow_dispatch:
+    inputs:
+      notarize:
+        description: Also notarize a throwaway executable (records a submission in the Apple developer account)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -55,3 +71,60 @@ jobs:
         env:
           DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
         run: cargo run --locked -p deckpilot-dev -- verify-signature "$RUNNER_TEMP/signing-check.bin" "$RUNNER_TEMP/signing-check.bin.sig"
+
+  apple:
+    name: Developer ID and notarization credentials
+    runs-on: macos-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+      - name: The certificate provides the configured Developer ID identity
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: .github/scripts/apple-certificate.sh
+      - name: Sign a throwaway executable with the hardened runtime
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          binary="$RUNNER_TEMP/deckpilot-signing-check"
+          printf 'int main(void) { return 0; }\n' > "$RUNNER_TEMP/check.c"
+          clang -o "$binary" "$RUNNER_TEMP/check.c"
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --keychain "$DECKPILOT_KEYCHAIN" \
+            --options runtime --timestamp --identifier io.github.knittingcode.deckpilot.signing-check "$binary"
+          codesign --verify --strict --verbose=2 "$binary"
+          details=$(codesign --display --verbose=2 "$binary" 2>&1)
+          echo "$details" | grep -E "^(Identifier|TeamIdentifier|Timestamp|Authority)="
+          echo "$details" | grep -q -x "TeamIdentifier=$APPLE_TEAM_ID" || { echo "::error::not signed by team APPLE_TEAM_ID"; exit 1; }
+          echo "$details" | grep -q "flags=.*runtime" || { echo "::error::the hardened runtime is missing"; exit 1; }
+          echo "$details" | grep -q "^Timestamp=" || { echo "::error::no secure timestamp"; exit 1; }
+          echo "$details" | grep -q "^Authority=Developer ID Application" || { echo "::error::not a Developer ID Application signature"; exit 1; }
+      - name: The App Store Connect API key is well formed
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
+        run: .github/scripts/apple-api-key.sh
+      - name: Apple's notary service accepts the API key
+        env:
+          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
+        run: |
+          xcrun notarytool history --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_ISSUER" --output-format json > /dev/null
+          echo "notarytool authenticated with the App Store Connect API key"
+      - name: Notarize the throwaway executable
+        if: github.event_name == 'workflow_dispatch' && inputs.notarize
+        env:
+          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
+        run: |
+          ditto -c -k --keepParent "$RUNNER_TEMP/deckpilot-signing-check" "$RUNNER_TEMP/deckpilot-signing-check.zip"
+          .github/scripts/notarize.sh "$RUNNER_TEMP/deckpilot-signing-check.zip"
+      - name: Remove the temporary keychain and key
+        if: always()
+        run: |
+          [ -n "${DECKPILOT_KEYCHAIN:-}" ] && security delete-keychain "$DECKPILOT_KEYCHAIN" || true
+          rm -rf "$RUNNER_TEMP/private_keys" "$RUNNER_TEMP/certificate.p12"

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Embedded into the macOS agent executable (section __TEXT,__info_plist; see
+  build.rs). codesign takes the signing identifier from CFBundleIdentifier, so
+  the agent keeps the same code identity in every release. The Keychain item
+  with the database key is bound to that identity: without it, codesign would
+  derive an identifier from the build's UUID, and macOS would ask for Keychain
+  access after every update. Never change the identifier.
+-->
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>io.github.knittingcode.deckpilot.agent</string>
+  <key>CFBundleName</key>
+  <string>DeckPilot Agent</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+</dict>
+</plist>
