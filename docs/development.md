@@ -31,7 +31,8 @@ make up        # or: pnpm dev (same session, in the foreground; Ctrl+C stops it)
    XL and Stream Deck +), a *Personal* profile with its own projects, and an
    *Empty* profile to check empty states. Demonstration data exists only in
    this seed; a production database starts with no profiles and an empty
-   Action Library;
+   Action Library. The seed runs once per data directory, so demo data you
+   delete does not come back (`make seed` with `--reset` starts over);
 3. builds and starts the background agent with simulated MK.2, XL and
    Stream Deck + devices next to any connected hardware;
 4. starts the configuration app with `tauri dev` and Vite HMR.

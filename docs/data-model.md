@@ -61,17 +61,10 @@ CMS, SHOP as it is pressed.
 
 ### Action types of the built-in modules
 
-Action types are provided by [feature modules](modules.md). A new profile has
-no actions; the Action Library only contains actions the user created.
-
-| Id                          | Module   | Purpose                                         |
-| --------------------------- | -------- | ----------------------------------------------- |
-| `general.log`               | general  | Message with `{profile}`, `{project.key}`, `{project.name}` placeholders |
-| `projects.next`             | projects | Make the next project active                    |
-| `projects.previous`         | projects | Make the previous project active                |
-| `projects.select`           | projects | Make a specific project of the profile active   |
-| `projects.active`           | projects | Report the active project                       |
-| `projects.resolve-resource` | projects | Show the machine value bound to a (project) resource |
+Action types are provided by [feature modules](modules.md#action-catalog).
+A new installation has no actions; the Action Library only contains actions
+the user created. `ActionResult` carries an optional `data` map with
+structured details (for example the resolved project and resource).
 
 ## Workflows
 
@@ -144,7 +137,7 @@ opens a next page (“More”) and the first key of following pages goes back.
   key is highlighted while its project is active. Without a profile or layout
   the first key shows a notice and the others stay blank.
 
-## Storage schema (version 3)
+## Storage schema (version 4)
 
 Migrations run in a transaction each; a failed migration leaves the database
 unchanged.
@@ -155,6 +148,8 @@ unchanged.
 - **Migration 3** moves projects out of the profile documents into their own
   tables, stores module state and renames action types to module namespaces.
   See [Migration 3](#migration-3) below.
+- **Migration 4** converts the projects actions to the generic catalog. See
+  [Migration 4](#migration-4).
 
 | Table              | Purpose                                              |
 | ------------------ | ---------------------------------------------------- |
@@ -207,3 +202,21 @@ Every change beyond a plain rename is recorded in `migration_notes`. Tests
 cover a version 1 database, a version 2 database with every legacy action
 type, and ambiguous data (shared ids, duplicate keys, a foreign active
 project) including that a second run produces the same ids.
+
+### Migration 4
+
+Only documents change (document format 4); action ids, names, workflows and
+layout bindings stay as they are.
+
+- `projects.select`: `project` → `project_id`, also in step overrides. A
+  select action without a project (its legacy key matched nothing) now
+  reports the current project instead of failing; a note asks the user to
+  review it.
+- `projects.resolve-resource`: the `resource` parameter becomes a resource
+  name. "Role X of the active project" becomes `resource = X`. "Fixed key K"
+  becomes `project_id = P, resource = X` when exactly one project of the same
+  profile maps X to K; otherwise the resource is left empty (the editor asks
+  for it) and a note names the old key. Step overrides follow the same rules.
+
+A test migrates every case and checks that ids, order and layout bindings are
+unchanged.
