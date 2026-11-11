@@ -4,7 +4,9 @@
 //! workflow next to the legacy step list (`Workflow::steps`); a workflow
 //! without a graph keeps running with the sequential engine exactly as
 //! before. Graphs are acyclic: repetition is a [`NodeKind::Loop`] that runs
-//! another workflow a bounded number of times.
+//! another workflow a bounded number of times, and a [`NodeKind::Call`]
+//! runs another workflow once with typed inputs and outputs
+//! ([`WorkflowInput`], [`WorkflowOutput`]).
 //!
 //! Module-provided nodes are action types. What a node offers to the editor
 //! and the engine — outputs, timeout, retry safety — is declared in
@@ -41,6 +43,10 @@ pub const MAX_NESTING: usize = 4;
 pub const MAX_RETRIES: u32 = 5;
 pub const MAX_TIMEOUT_MS: u32 = 10 * 60 * 1000;
 pub const MAX_DELAY_MS: u32 = 10 * 60 * 1000;
+/// Inputs and outputs a workflow can declare, each.
+pub const MAX_WORKFLOW_VALUES: usize = 32;
+/// Default deadline of a sub-workflow call.
+pub const DEFAULT_CALL_TIMEOUT_MS: u32 = MAX_TIMEOUT_MS;
 
 /// Identifier of a node, unique within its graph, e.g. `git_status`. Used in
 /// data mappings (`{{ steps.git_status.output.branch }}`), so it is a
@@ -211,6 +217,26 @@ pub enum NodeKind {
     Join,
     /// Runs another workflow of the profile `times` times in sequence.
     Loop { workflow: WorkflowId, times: u32 },
+    /// Runs another workflow of the profile once (a sub-workflow). Its
+    /// declared inputs take values from earlier nodes; its declared outputs
+    /// become this node's outputs. Fails through `error` like an action.
+    Call {
+        workflow: WorkflowId,
+        /// Values for the called workflow's inputs, by input key.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        inputs: BTreeMap<String, Mapping>,
+        /// Failure handling and timeout; retries are not allowed.
+        #[serde(default)]
+        policy: ErrorPolicy,
+    },
+    /// Sets this workflow's declared outputs from earlier nodes, for the
+    /// node that called it. Several may run; a later one overrides the
+    /// keys it sets.
+    Output {
+        /// Values of the workflow's outputs, by output key.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        values: BTreeMap<String, Mapping>,
+    },
     /// Waits, then continues. Cancellation interrupts the wait.
     Delay { ms: u32 },
     /// Ends the workflow successfully; running branches finish.
@@ -221,13 +247,14 @@ impl NodeKind {
     /// Output ports the kind offers.
     pub fn ports(&self) -> &'static [Port] {
         match self {
-            Self::Action { .. } => &[Port::Out, Port::Error],
+            Self::Action { .. } | Self::Call { .. } => &[Port::Out, Port::Error],
             Self::Condition { .. } => &[Port::True, Port::False],
             Self::Stop => &[],
             Self::Trigger
             | Self::Parallel
             | Self::Join
             | Self::Loop { .. }
+            | Self::Output { .. }
             | Self::Delay { .. } => &[Port::Out],
         }
     }
@@ -240,6 +267,8 @@ impl NodeKind {
             Self::Parallel => "parallel",
             Self::Join => "join",
             Self::Loop { .. } => "loop",
+            Self::Call { .. } => "call",
+            Self::Output { .. } => "output",
             Self::Delay { .. } => "delay",
             Self::Stop => "stop",
         }
@@ -404,6 +433,71 @@ impl OutputSpec {
         Self {
             sensitive: true,
             ..self
+        }
+    }
+}
+
+/// A value a workflow takes from the node that calls it. Nodes of the
+/// workflow read it as an output of its start node
+/// (`steps.<start>.output.<key>`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowInput {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    #[serde(default)]
+    pub kind: ValueKind,
+    /// A calling node must give it a value.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+    /// Used when the calling node gives no value, and when the workflow
+    /// runs on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    /// The value may be secret: it must not end up in a non-sensitive
+    /// output, and only sensitive values may be passed to it unmarked.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sensitive: bool,
+}
+
+impl WorkflowInput {
+    /// An optional text input.
+    pub fn new(key: impl Into<String>, kind: ValueKind) -> Self {
+        Self {
+            key: key.into(),
+            label: String::new(),
+            kind,
+            required: false,
+            default: None,
+            sensitive: false,
+        }
+    }
+}
+
+/// A value a workflow returns to the node that calls it, set by its
+/// [`NodeKind::Output`] nodes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowOutput {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    #[serde(default)]
+    pub kind: ValueKind,
+    /// Kept out of history and live events, like a sensitive action
+    /// output. Required when the value comes from a sensitive one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sensitive: bool,
+}
+
+impl WorkflowOutput {
+    pub fn new(key: impl Into<String>, kind: ValueKind) -> Self {
+        Self {
+            key: key.into(),
+            label: String::new(),
+            kind,
+            sensitive: false,
         }
     }
 }

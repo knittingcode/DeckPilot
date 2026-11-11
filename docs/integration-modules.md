@@ -526,7 +526,7 @@ pages. No settings.
 | `workspace.open-project` | opens | `editor`, `editorRole` (`editor`), `repositoryRole` (`repository`), `docsRole` (`docs`), `urlRoles` (resource names, one per line, at most 10), `browser` | `projectKey`, `opened`, `openedRoles`, `missingCount`, `missing` |
 
 \* sensitive: available to later nodes, not kept (addresses may carry
-tokens). `urls` is plain multi-line text, one address per line.
+tokens). `urls` and `urlRoles` are lists (edited item by item, stored one per line).
 
 **Editors.** Without a line the folder or file is opened with the editor
 (`open -a <editor> <path>` on macOS, `<editor> <path>` elsewhere). With a

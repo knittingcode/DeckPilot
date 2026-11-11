@@ -19,9 +19,11 @@ use interprocess::ConnectWaitMode;
 use interprocess::local_socket::tokio::{Listener, Stream, prelude::*};
 use interprocess::local_socket::{ConnectOptions, ListenerOptions, Name};
 
-/// Attempts to create the Windows pipe while a previous instance closes.
+/// Attempts to create the Windows pipe while a previous instance closes:
+/// up to 5 s. Under load (CI runners, a busy computer after an update) the
+/// previous agent's instance can take more than 2 s to go away.
 #[cfg(windows)]
-const LISTEN_RETRIES: u32 = 40;
+const LISTEN_RETRIES: u32 = 100;
 #[cfg(windows)]
 const LISTEN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 /// How long a connect waits for a busy endpoint. On Windows a pipe whose

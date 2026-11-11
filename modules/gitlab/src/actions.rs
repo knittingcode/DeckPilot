@@ -90,7 +90,7 @@ fn credential_parameter() -> ParameterSpec {
     parameter(
         "credential",
         "Token credential",
-        text(64),
+        ParameterKind::Credential,
         "The name of a stored credential with a GitLab token. Empty: the module's (Settings › \
          Modules › GitLab). Never the token itself.",
     )

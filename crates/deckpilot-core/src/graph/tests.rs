@@ -1215,3 +1215,757 @@ fn node_time_limits_never_exceed_the_maximum() {
     assert_eq!(node_timeout(None, 3_610_000), max);
     assert_eq!(node_timeout(Some(u32::MAX), 1_000), max);
 }
+
+// Sub-workflows ------------------------------------------------------------
+
+fn templates(values: &[(&str, &str)]) -> BTreeMap<String, Mapping> {
+    values
+        .iter()
+        .map(|(key, template)| {
+            (
+                (*key).to_owned(),
+                Mapping::Template {
+                    template: (*template).to_owned(),
+                },
+            )
+        })
+        .collect()
+}
+
+fn call(id: &str, workflow: WorkflowId, inputs: &[(&str, &str)]) -> Node {
+    node(
+        id,
+        NodeKind::Call {
+            workflow,
+            inputs: templates(inputs),
+            policy: ErrorPolicy::default(),
+        },
+    )
+}
+
+fn output_node(id: &str, values: &[(&str, &str)]) -> Node {
+    node(
+        id,
+        NodeKind::Output {
+            values: templates(values),
+        },
+    )
+}
+
+fn mapped(mut node: Node, key: &str, template: &str) -> Node {
+    if let NodeKind::Action { mappings, .. } = &mut node.kind {
+        mappings.insert(
+            key.into(),
+            Mapping::Template {
+                template: template.into(),
+            },
+        );
+    }
+    node
+}
+
+impl Fixture {
+    /// Adds a graph workflow with declared inputs and outputs.
+    fn declared(
+        &mut self,
+        name: &str,
+        graph: WorkflowGraph,
+        inputs: Vec<WorkflowInput>,
+        outputs: Vec<WorkflowOutput>,
+    ) -> WorkflowId {
+        let mut workflow = Workflow::new(name);
+        workflow.graph = Some(graph);
+        workflow.inputs = inputs;
+        workflow.outputs = outputs;
+        let id = workflow.id;
+        self.profile.workflows.push(workflow);
+        id
+    }
+
+    fn workflow_mut(&mut self, id: WorkflowId) -> &mut Workflow {
+        self.profile
+            .workflows
+            .iter_mut()
+            .find(|w| w.id == id)
+            .unwrap()
+    }
+
+    fn errors(&self, workflow: WorkflowId) -> Vec<String> {
+        self.issues(workflow)
+            .into_iter()
+            .filter(|i| i.severity == IssueSeverity::Error)
+            .map(|i| i.message)
+            .collect()
+    }
+
+    /// `Greet`: takes `name` (required) and `times` (whole number, default
+    /// 2); says hello and returns `greeting` and `times`.
+    fn greeter(&mut self) -> WorkflowId {
+        let hello = self.probe("hello", &[]);
+        let required = WorkflowInput {
+            required: true,
+            ..WorkflowInput::new("name", ValueKind::Text)
+        };
+        let times = WorkflowInput {
+            default: Some("2".into()),
+            ..WorkflowInput::new("times", ValueKind::Integer)
+        };
+        self.declared(
+            "Greet",
+            graph(
+                vec![
+                    node("start", NodeKind::Trigger),
+                    mapped(
+                        action("hello", hello),
+                        "message",
+                        "hello {{ steps.start.output.name }}",
+                    ),
+                    output_node(
+                        "done",
+                        &[
+                            ("greeting", "{{ steps.hello.output.value }}"),
+                            ("times", " {{ steps.start.output.times }} "),
+                        ],
+                    ),
+                ],
+                vec![
+                    edge("start", Port::Out, "hello"),
+                    edge("hello", Port::Out, "done"),
+                ],
+            ),
+            vec![required, times],
+            vec![
+                WorkflowOutput::new("greeting", ValueKind::Text),
+                WorkflowOutput::new("times", ValueKind::Integer),
+            ],
+        )
+    }
+
+    /// A workflow whose only action waits 30 s cooperatively.
+    fn long_workflow(&mut self) -> WorkflowId {
+        let long = self.probe("long", &[("wait_ms", ParameterValue::Integer(30_000))]);
+        self.declared(
+            "Long",
+            graph(
+                vec![node("start", NodeKind::Trigger), action("long", long)],
+                vec![edge("start", Port::Out, "long")],
+            ),
+            vec![],
+            vec![],
+        )
+    }
+}
+
+#[test]
+fn sub_workflows_take_typed_inputs_and_return_declared_outputs() {
+    let mut f = Fixture::new();
+    let greet = f.greeter();
+    let world = f.probe("world", &[]);
+    let after = f.probe("after", &[]);
+    let parent = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            action("world", world),
+            call(
+                "greet",
+                greet,
+                &[("name", "{{ steps.world.output.value }}")],
+            ),
+            mapped(
+                action("after", after),
+                "message",
+                "{{ steps.greet.output.greeting }} x{{ steps.greet.output.times }}",
+            ),
+        ],
+        vec![
+            edge("start", Port::Out, "world"),
+            edge("world", Port::Out, "greet"),
+            edge("greet", Port::Out, "after"),
+        ],
+    ));
+    assert!(f.issues(greet).is_empty(), "{:?}", f.issues(greet));
+    assert!(f.issues(parent).is_empty(), "{:?}", f.issues(parent));
+    let (report, events, _) = f.run_with(parent, &CancellationToken::new());
+    assert_eq!(report.status, RunStatus::Succeeded, "{report:?}");
+    assert_eq!(f.ran(), ["world", "hello world", "hello world x2"]);
+    let greeted = report.node(&n("greet")).unwrap();
+    assert_eq!(greeted.workflow, Some(greet));
+    assert_eq!(greeted.attempts, 1);
+    // Declared outputs only, converted to their kinds (the default `2`
+    // passed through, trimmed).
+    assert_eq!(
+        greeted.output,
+        BTreeMap::from([
+            ("greeting".to_owned(), "hello world".to_owned()),
+            ("times".to_owned(), "2".to_owned()),
+        ])
+    );
+    // The callee's own nodes are not reported as nodes of the parent.
+    assert!(report.node(&n("hello")).is_none());
+    assert!(events.iter().all(|e| match e {
+        ExecutionEvent::NodeStarted { node } => node != &n("hello"),
+        _ => true,
+    }));
+}
+
+#[test]
+fn sub_workflow_inputs_are_converted_and_checked_at_run_time() {
+    let mut f = Fixture::new();
+    let greet = f.greeter();
+    let word = f.probe("many", &[]);
+    let parent = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            action("word", word),
+            call(
+                "greet",
+                greet,
+                &[
+                    ("name", "x"),
+                    // Not a whole number.
+                    ("times", "{{ steps.word.output.value }}"),
+                ],
+            ),
+        ],
+        vec![
+            edge("start", Port::Out, "word"),
+            edge("word", Port::Out, "greet"),
+        ],
+    ));
+    let report = f.run(parent);
+    assert_eq!(report.status, RunStatus::Failed);
+    let error = report.node(&n("greet")).unwrap().error.clone().unwrap();
+    assert_eq!(error.code, "mapping");
+    assert!(error.message.contains("whole number"), "{}", error.message);
+    // The callee never ran.
+    assert_eq!(f.ran(), ["many"]);
+}
+
+#[test]
+fn sub_workflow_failures_propagate_with_a_stable_code() {
+    let mut f = Fixture::new();
+    let broken = f.probe("fail", &[]);
+    let callee = f.declared(
+        "Broken",
+        graph(
+            vec![node("start", NodeKind::Trigger), action("boom", broken)],
+            vec![edge("start", Port::Out, "boom")],
+        ),
+        vec![],
+        vec![],
+    );
+    let handler = f.probe("handled", &[]);
+    // Unhandled: the parent fails.
+    let unhandled = f.workflow(graph(
+        vec![node("start", NodeKind::Trigger), call("sub", callee, &[])],
+        vec![edge("start", Port::Out, "sub")],
+    ));
+    let report = f.run(unhandled);
+    assert_eq!(report.status, RunStatus::Failed);
+    let sub = report.node(&n("sub")).unwrap();
+    assert_eq!(sub.status, NodeStatus::Failed);
+    let error = sub.error.as_ref().unwrap();
+    assert_eq!(error.code, "subworkflow.failed");
+    assert!(
+        error.message.contains("Broken failed: boom"),
+        "{}",
+        error.message
+    );
+    // Handled through the error port.
+    let routed = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            call("sub", callee, &[]),
+            action("handler", handler),
+        ],
+        vec![
+            edge("start", Port::Out, "sub"),
+            edge("sub", Port::Error, "handler"),
+        ],
+    ));
+    let report = f.run(routed);
+    assert_eq!(report.status, RunStatus::Succeeded);
+    assert_eq!(status(&report, "sub"), NodeStatus::Failed);
+    assert_eq!(status(&report, "handler"), NodeStatus::Succeeded);
+}
+
+#[test]
+fn cancellation_reaches_a_running_sub_workflow() {
+    let mut f = Fixture::new();
+    let callee = f.long_workflow();
+    let after = f.probe("after", &[]);
+    let parent = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            call("sub", callee, &[]),
+            action("after", after),
+        ],
+        vec![
+            edge("start", Port::Out, "sub"),
+            edge("sub", Port::Out, "after"),
+        ],
+    ));
+    let cancel = CancellationToken::new();
+    let canceller = cancel_after(&cancel, 100);
+    let begun = Instant::now();
+    let (report, _, _) = f.run_with(parent, &cancel);
+    canceller.join().unwrap();
+    assert!(
+        begun.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        begun.elapsed()
+    );
+    assert_eq!(report.status, RunStatus::Cancelled);
+    let sub = report.node(&n("sub")).unwrap();
+    assert_eq!(sub.status, NodeStatus::Cancelled);
+    assert_eq!(sub.error.as_ref().unwrap().code, "cancelled");
+    assert_eq!(status(&report, "after"), NodeStatus::Cancelled);
+    assert_eq!(f.ran(), ["long"]);
+}
+
+#[test]
+fn sub_workflows_stop_at_their_timeout() {
+    let mut f = Fixture::new();
+    let callee = f.long_workflow();
+    let mut sub = call("sub", callee, &[]);
+    if let NodeKind::Call { policy, .. } = &mut sub.kind {
+        policy.timeout_ms = Some(100);
+    }
+    let parent = f.workflow(graph(
+        vec![node("start", NodeKind::Trigger), sub],
+        vec![edge("start", Port::Out, "sub")],
+    ));
+    let begun = Instant::now();
+    let report = f.run(parent);
+    assert!(
+        begun.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        begun.elapsed()
+    );
+    assert_eq!(report.status, RunStatus::Failed);
+    let sub = report.node(&n("sub")).unwrap();
+    assert_eq!(sub.status, NodeStatus::Failed);
+    assert_eq!(sub.error.as_ref().unwrap().code, "timeout");
+}
+
+#[test]
+fn sub_workflows_run_in_the_callers_project_context() {
+    let mut f = Fixture::new();
+    let select = select_project(&mut f, "Select CMS", "CMS");
+    let inside = f.probe("in cms", &[]);
+    let callee = f.declared(
+        "Check",
+        graph(
+            vec![
+                node("start", NodeKind::Trigger),
+                is_project("cms", "CMS"),
+                action("inside", inside),
+            ],
+            vec![
+                edge("start", Port::Out, "cms"),
+                edge("cms", Port::True, "inside"),
+            ],
+        ),
+        vec![],
+        vec![],
+    );
+    let parent = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            action("select", select),
+            call("sub", callee, &[]),
+        ],
+        vec![
+            edge("start", Port::Out, "select"),
+            edge("select", Port::Out, "sub"),
+        ],
+    ));
+    let (report, _, context) = f.run_with(parent, &CancellationToken::new());
+    assert_eq!(report.status, RunStatus::Succeeded);
+    assert_eq!(f.ran(), ["in cms"]);
+    assert_eq!(project_key(&f, &context), "CMS");
+}
+
+#[test]
+fn sub_workflow_validation_reports_inputs_outputs_and_retries() {
+    let mut f = Fixture::new();
+    let greet = f.greeter();
+    let missing = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            call("greet", greet, &[("nickname", "x")]),
+            output_node("out", &[("undeclared", "x")]),
+        ],
+        vec![
+            edge("start", Port::Out, "greet"),
+            edge("greet", Port::Out, "out"),
+        ],
+    ));
+    let errors = f.errors(missing);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("`nickname` is not an input of Greet")),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("needs a value for its input `name`")),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("`undeclared` is not an output")),
+        "{errors:?}"
+    );
+
+    // An output the callee does not declare cannot be referenced.
+    let probe = f.probe("p", &[]);
+    let referencing = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            call("greet", greet, &[("name", "x")]),
+            mapped(
+                action("use", probe),
+                "message",
+                "{{ steps.greet.output.nope }}",
+            ),
+        ],
+        vec![
+            edge("start", Port::Out, "greet"),
+            edge("greet", Port::Out, "use"),
+        ],
+    ));
+    let errors = f.errors(referencing);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("provides no output `nope`")),
+        "{errors:?}"
+    );
+
+    // Retries are refused; a Loop cannot run a workflow that needs inputs.
+    let mut retried = call("again", greet, &[("name", "x")]);
+    if let NodeKind::Call { policy, .. } = &mut retried.kind {
+        policy.retry.attempts = 1;
+    }
+    let looping = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            retried,
+            node(
+                "repeat",
+                NodeKind::Loop {
+                    workflow: greet,
+                    times: 2,
+                },
+            ),
+        ],
+        vec![
+            edge("start", Port::Out, "again"),
+            edge("again", Port::Out, "repeat"),
+        ],
+    ));
+    let errors = f.errors(looping);
+    assert!(
+        errors.iter().any(|e| e.contains("cannot be retried")),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("run it with a Sub-workflow node")),
+        "{errors:?}"
+    );
+
+    // A workflow that does not exist.
+    let ghost = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            call("ghost", WorkflowId::new(), &[]),
+        ],
+        vec![edge("start", Port::Out, "ghost")],
+    ));
+    assert!(
+        f.errors(ghost)
+            .iter()
+            .any(|e| e.contains("does not exist in this profile"))
+    );
+}
+
+#[test]
+fn workflow_declarations_are_checked() {
+    let mut f = Fixture::new();
+    // Declarations: keys, duplicates and defaults of the declared kind.
+    let bad = f.declared(
+        "Bad",
+        graph(vec![node("start", NodeKind::Trigger)], vec![]),
+        vec![
+            WorkflowInput::new("a b", ValueKind::Text),
+            WorkflowInput::new("x", ValueKind::Text),
+            WorkflowInput {
+                default: Some("many".into()),
+                ..WorkflowInput::new("x", ValueKind::Integer)
+            },
+        ],
+        vec![],
+    );
+    let errors = f.errors(bad);
+    assert!(
+        errors.iter().any(|e| e.contains("not a valid input key")),
+        "{errors:?}"
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("declared twice")),
+        "{errors:?}"
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("whole number")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn recursion_is_rejected_directly_indirectly_and_through_loops() {
+    let mut f = Fixture::new();
+    // Direct: a workflow that calls itself.
+    let selfish = f.workflow(WorkflowGraph::default());
+    f.workflow_mut(selfish).graph = Some(graph(
+        vec![node("start", NodeKind::Trigger), call("me", selfish, &[])],
+        vec![edge("start", Port::Out, "me")],
+    ));
+    assert!(
+        f.errors(selfish)
+            .iter()
+            .any(|e| e.contains("inside itself"))
+    );
+    assert!(f.engine.check_runnable(&f.profile, selfish).is_err());
+
+    // Indirect: a calls b, b loops over a.
+    let a = f.workflow(WorkflowGraph::default());
+    let b = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            node(
+                "repeat",
+                NodeKind::Loop {
+                    workflow: a,
+                    times: 2,
+                },
+            ),
+        ],
+        vec![edge("start", Port::Out, "repeat")],
+    ));
+    f.workflow_mut(a).graph = Some(graph(
+        vec![node("start", NodeKind::Trigger), call("b", b, &[])],
+        vec![edge("start", Port::Out, "b")],
+    ));
+    assert!(f.errors(a).iter().any(|e| e.contains("inside itself")));
+    assert!(f.errors(b).iter().any(|e| e.contains("inside itself")));
+    assert!(f.engine.check_runnable(&f.profile, a).is_err());
+}
+
+#[test]
+fn nesting_depth_is_limited() {
+    let mut f = Fixture::new();
+    let leaf = f.probe("leaf", &[]);
+    // The first workflow runs an action; each next one calls the one before.
+    let mut top = f.workflow(graph(
+        vec![node("start", NodeKind::Trigger), action("leaf", leaf)],
+        vec![edge("start", Port::Out, "leaf")],
+    ));
+    for _ in 1..MAX_NESTING {
+        top = f.workflow(graph(
+            vec![node("start", NodeKind::Trigger), call("down", top, &[])],
+            vec![edge("start", Port::Out, "down")],
+        ));
+    }
+    // MAX_NESTING levels run.
+    assert!(f.errors(top).is_empty(), "{:?}", f.errors(top));
+    assert_eq!(f.run(top).status, RunStatus::Succeeded);
+    assert_eq!(f.ran(), ["leaf"]);
+    // One more is refused.
+    let too_deep = f.workflow(graph(
+        vec![node("start", NodeKind::Trigger), call("down", top, &[])],
+        vec![edge("start", Port::Out, "down")],
+    ));
+    assert!(
+        f.errors(too_deep)
+            .iter()
+            .any(|e| e.contains(&format!("at most {MAX_NESTING} levels"))),
+        "{:?}",
+        f.errors(too_deep)
+    );
+}
+
+#[test]
+fn sensitive_values_need_sensitive_inputs_and_outputs() {
+    let mut f = Fixture::new();
+    let token = WorkflowInput {
+        sensitive: true,
+        ..WorkflowInput::new("token", ValueKind::Text)
+    };
+    let echo = |output: WorkflowOutput| (vec![token.clone()], vec![output]);
+    let leaky_graph = graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            output_node("out", &[("echo", "{{ steps.start.output.token }}")]),
+        ],
+        vec![edge("start", Port::Out, "out")],
+    );
+    let (inputs, outputs) = echo(WorkflowOutput::new("echo", ValueKind::Text));
+    let leaky = f.declared("Leaky", leaky_graph.clone(), inputs, outputs);
+    assert!(
+        f.errors(leaky)
+            .iter()
+            .any(|e| e.contains("mark the output sensitive")),
+        "{:?}",
+        f.errors(leaky)
+    );
+    let (inputs, outputs) = echo(WorkflowOutput {
+        sensitive: true,
+        ..WorkflowOutput::new("echo", ValueKind::Text)
+    });
+    let safe = f.declared("Safe", leaky_graph, inputs, outputs);
+    assert!(f.errors(safe).is_empty(), "{:?}", f.errors(safe));
+    // A sensitive output passed on to an input that is not sensitive.
+    let plain = f.declared(
+        "Plain",
+        graph(vec![node("start", NodeKind::Trigger)], vec![]),
+        vec![WorkflowInput::new("value", ValueKind::Text)],
+        vec![],
+    );
+    let parent = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            call("safe", safe, &[("token", "abc")]),
+            call("plain", plain, &[("value", "{{ steps.safe.output.echo }}")]),
+        ],
+        vec![
+            edge("start", Port::Out, "safe"),
+            edge("safe", Port::Out, "plain"),
+        ],
+    ));
+    assert!(
+        f.errors(parent)
+            .iter()
+            .any(|e| e.contains("does not mark that input sensitive")),
+        "{:?}",
+        f.errors(parent)
+    );
+}
+
+#[test]
+fn history_keeps_only_declared_non_sensitive_sub_workflow_outputs() {
+    let mut f = Fixture::new();
+    let callee = f.declared(
+        "Secretive",
+        graph(
+            vec![
+                node("start", NodeKind::Trigger),
+                output_node(
+                    "out",
+                    &[
+                        ("public", "visible"),
+                        ("secret", "{{ steps.start.output.token }}"),
+                    ],
+                ),
+            ],
+            vec![edge("start", Port::Out, "out")],
+        ),
+        vec![WorkflowInput {
+            sensitive: true,
+            ..WorkflowInput::new("token", ValueKind::Text)
+        }],
+        vec![
+            WorkflowOutput::new("public", ValueKind::Text),
+            WorkflowOutput {
+                sensitive: true,
+                ..WorkflowOutput::new("secret", ValueKind::Text)
+            },
+        ],
+    );
+    assert!(f.errors(callee).is_empty(), "{:?}", f.errors(callee));
+    let parent = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            call("sub", callee, &[("token", "hunter2")]),
+        ],
+        vec![edge("start", Port::Out, "sub")],
+    ));
+    let (report, events, _) = f.run_with(parent, &CancellationToken::new());
+    assert_eq!(report.status, RunStatus::Succeeded);
+    let sub = report.node(&n("sub")).unwrap();
+    // Later nodes can use every declared output...
+    assert_eq!(sub.output["secret"], "hunter2");
+    assert_eq!(sub.output["public"], "visible");
+    // ...history and live events keep only the non-sensitive ones.
+    let safe = crate::safe_report(sub, &f.profile, f.engine.registry());
+    assert_eq!(
+        safe.output,
+        BTreeMap::from([("public".to_owned(), "visible".to_owned())])
+    );
+    let stored = serde_json::to_string(
+        &report
+            .nodes
+            .iter()
+            .map(|node| crate::safe_report(node, &f.profile, f.engine.registry()))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    assert!(!stored.contains("hunter2"), "{stored}");
+    for event in events {
+        let text =
+            serde_json::to_string(&crate::safe_event(event, &f.profile, f.engine.registry()))
+                .unwrap();
+        assert!(!text.contains("hunter2"), "{text}");
+    }
+}
+
+#[test]
+fn workflows_with_required_inputs_do_not_run_on_their_own() {
+    let mut f = Fixture::new();
+    let greet = f.greeter();
+    let error = f.engine.check_runnable(&f.profile, greet).unwrap_err();
+    assert!(error.to_string().contains("input `name`"), "{error}");
+    // Optional inputs take their defaults when run on their own.
+    f.workflow_mut(greet).inputs[0] = WorkflowInput {
+        default: Some("you".into()),
+        ..WorkflowInput::new("name", ValueKind::Text)
+    };
+    assert!(f.engine.check_runnable(&f.profile, greet).is_ok());
+    assert_eq!(f.run(greet).status, RunStatus::Succeeded);
+    assert_eq!(f.ran(), ["hello you"]);
+}
+
+#[test]
+fn workflows_with_inputs_and_new_nodes_round_trip() {
+    let mut f = Fixture::new();
+    let greet = f.greeter();
+    let workflow = f.profile.workflow(greet).unwrap().clone();
+    let json = serde_json::to_value(&workflow).unwrap();
+    assert_eq!(json["inputs"][0]["key"], "name");
+    assert_eq!(json["inputs"][0]["required"], true);
+    assert_eq!(json["outputs"][1]["kind"], "integer");
+    assert_eq!(json["graph"]["nodes"][2]["type"], "output");
+    assert_eq!(serde_json::from_value::<Workflow>(json).unwrap(), workflow);
+    let parent = graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            call("greet", greet, &[("name", "x")]),
+        ],
+        vec![edge("start", Port::Out, "greet")],
+    );
+    let json = serde_json::to_value(&parent).unwrap();
+    assert_eq!(json["nodes"][1]["type"], "call");
+    assert_eq!(json["nodes"][1]["inputs"]["name"]["type"], "template");
+    assert_eq!(
+        serde_json::from_value::<WorkflowGraph>(json).unwrap(),
+        parent
+    );
+    // Workflows without the new fields do not serialize them.
+    let plain = serde_json::to_value(Workflow::new("Plain")).unwrap();
+    assert!(plain.get("inputs").is_none() && plain.get("outputs").is_none());
+}

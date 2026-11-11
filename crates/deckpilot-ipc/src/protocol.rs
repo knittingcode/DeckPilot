@@ -125,6 +125,68 @@ impl std::fmt::Debug for KeyMaterial {
 /// agent during an update.
 pub const MIN_PROTOCOL_VERSION: u32 = 1;
 
+/// Oldest agent protocol the configuration app works with. Agents before
+/// protocol 4 (DeckPilot 0.3 and earlier) predate the encrypted database;
+/// the app can only stop them and start its own agent.
+pub const MIN_COMPATIBLE_AGENT_PROTOCOL: u32 = 4;
+
+/// What a connection can do, derived from its negotiated protocol. Clients
+/// check these before using a feature, so an older agent is never asked for
+/// something it does not have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Capability {
+    /// `runWorkflow`. Protocol 2.
+    Workflows,
+    /// `prepareForUpdate`. Protocol 2.
+    PrepareForUpdate,
+    /// Module namespaced action types and `selectProject` effects. Protocol 3.
+    ModuleNamespaces,
+    /// The encrypted database: lock state, `unlock`, `lock`, system keys,
+    /// native windows, the last workflow report. Protocol 4.
+    EncryptedDatabase,
+    /// Background executions with progress, cancellation and history.
+    /// Protocol 5.
+    BackgroundExecutions,
+    /// Notifications for the status bar. Protocol 6.
+    Notifications,
+}
+
+impl Capability {
+    pub const ALL: [Self; 6] = [
+        Self::Workflows,
+        Self::PrepareForUpdate,
+        Self::ModuleNamespaces,
+        Self::EncryptedDatabase,
+        Self::BackgroundExecutions,
+        Self::Notifications,
+    ];
+
+    /// The protocol that introduced the capability.
+    pub fn since_protocol(self) -> u32 {
+        match self {
+            Self::Workflows | Self::PrepareForUpdate => 2,
+            Self::ModuleNamespaces => 3,
+            Self::EncryptedDatabase => 4,
+            Self::BackgroundExecutions => 5,
+            Self::Notifications => 6,
+        }
+    }
+
+    /// Every capability of `protocol`.
+    pub fn of_protocol(protocol: u32) -> Vec<Self> {
+        Self::ALL
+            .into_iter()
+            .filter(|c| c.since_protocol() <= protocol)
+            .collect()
+    }
+}
+
+/// The protocol both sides speak: the lower of the two.
+pub fn negotiate(client: u32, agent: u32) -> u32 {
+    client.min(agent)
+}
+
 /// What kind of program is connecting. Used for diagnostics and to decide
 /// whether the configuration window is already open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -325,8 +387,14 @@ impl IpcError {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ServerMessage {
     Welcome {
+        /// The newest protocol the agent speaks. The connection uses the
+        /// lower of this and the client's (see [`negotiate`]).
         protocol: u32,
         agent_version: String,
+        /// What the connection can do. Since protocol 6; derived from the
+        /// protocol for older agents.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capabilities: Vec<Capability>,
     },
     Response {
         id: u64,
@@ -438,6 +506,54 @@ pub enum AgentEvent {
     },
 }
 
+impl Request {
+    /// The first protocol that has this request. Clients do not send it on
+    /// a connection with an older protocol, and the agent refuses it there.
+    pub fn since_protocol(&self) -> u32 {
+        match self {
+            Self::StartWorkflow { .. }
+            | Self::CancelExecution { .. }
+            | Self::ListExecutions { .. }
+            | Self::GetExecution { .. }
+            | Self::ClearExecutionHistory { .. } => 5,
+            Self::Unlock { .. }
+            | Self::Lock
+            | Self::SystemUnlock
+            | Self::UseSystemKey { .. }
+            | Self::GetDatabaseKey
+            | Self::RequestWindow { .. }
+            | Self::GetLastWorkflowReport => 4,
+            Self::RunWorkflow { .. } | Self::PrepareForUpdate => 2,
+            Self::GetStatus
+            | Self::ListDevices
+            | Self::ListProfiles
+            | Self::GetActiveProfile
+            | Self::SetActiveProfile { .. }
+            | Self::GetActiveProject
+            | Self::SelectProject { .. }
+            | Self::CycleProject { .. }
+            | Self::RunAction { .. }
+            | Self::RefreshDevices
+            | Self::ReloadConfiguration
+            | Self::SetBrightness { .. }
+            | Self::GetAutostart
+            | Self::SetAutostart { .. }
+            | Self::Subscribe
+            | Self::ShowWindow
+            | Self::Shutdown
+            | Self::SimulateInput { .. } => 1,
+        }
+    }
+
+    /// The request's name on the wire, e.g. `startWorkflow`.
+    pub fn name(&self) -> String {
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(str::to_owned))
+            .unwrap_or_else(|| "request".to_owned())
+    }
+}
+
 impl AgentEvent {
     /// The first protocol that has this event; clients that speak an older
     /// one do not receive it.
@@ -519,6 +635,11 @@ pub struct AgentStatus {
     /// locking).
     #[serde(default)]
     pub screen_lock_detection: bool,
+    /// Workflows running in the background. Since protocol 6; `None` from
+    /// older agents, which cannot say. Updates and restarts wait for them
+    /// or ask before cancelling them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub running_executions: Option<u32>,
 }
 
 #[cfg(test)]

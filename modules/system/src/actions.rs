@@ -122,8 +122,17 @@ fn outcome(result: Result<ActionResult, Failure>) -> ActionResult {
     result.unwrap_or_else(|failure| failure)
 }
 
-const ARGUMENTS_HELP: &str = "One argument per line, passed as they are: nothing is split on \
-                              spaces or interpreted by a shell.";
+/// Arguments are a list: each is passed as it is.
+fn arguments_kind() -> ParameterKind {
+    ParameterKind::Lines {
+        item_label: Some("Argument".into()),
+        max_items: Some(support::MAX_ARGUMENTS),
+        max_length: Some(support::MAX_ARGUMENT_CHARS),
+    }
+}
+
+const ARGUMENTS_HELP: &str = "Each argument is passed as it is: nothing is split on spaces or \
+                              interpreted by a shell.";
 
 /// `system.open-app`: starts an application bound as a resource.
 #[derive(Debug)]
@@ -151,7 +160,7 @@ impl OpenApp {
                          identifier or a Linux .desktop id, bound on each computer.",
                     ),
                     described(
-                        parameter("arguments", "Arguments", text(8000, true), false),
+                        parameter("arguments", "Arguments", arguments_kind(), false),
                         ARGUMENTS_HELP,
                     ),
                 ],
@@ -455,7 +464,7 @@ impl RunCommand {
                         "A resource bound to an absolute path or a program name on PATH.",
                     ),
                     described(
-                        parameter("arguments", "Arguments", text(8000, true), false),
+                        parameter("arguments", "Arguments", arguments_kind(), false),
                         ARGUMENTS_HELP,
                     ),
                     described(

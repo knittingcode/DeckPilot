@@ -76,6 +76,15 @@ fn text(max_length: usize, multiline: bool) -> ParameterKind {
     }
 }
 
+/// A list of at most [`MAX_URLS`] items, one per line.
+fn list_kind(item: &str, max_length: usize) -> ParameterKind {
+    ParameterKind::Lines {
+        item_label: Some(item.into()),
+        max_items: Some(MAX_URLS),
+        max_length: Some(max_length),
+    }
+}
+
 fn resource(kind: ResourceKind) -> ParameterKind {
     ParameterKind::Resource { kind: Some(kind) }
 }
@@ -198,7 +207,7 @@ fn definition(kind: Kind) -> ActionType {
                     parameter(
                         "urls",
                         "Pages",
-                        text(MAX_URLS * 2100, true),
+                        list_kind("Page", 2048),
                         "One http or https address per line, at most 10.",
                     ),
                     None,
@@ -243,7 +252,7 @@ fn definition(kind: Kind) -> ActionType {
                 parameter(
                     "urlRoles",
                     "Other pages",
-                    text(1000, true),
+                    list_kind("Resource", 64),
                     "Project resources that are pages, one name per line, e.g. dashboard, at \
                      most 10.",
                 ),
