@@ -556,12 +556,12 @@ fn credentials_missing_refused_or_chosen() {
     assert!(none.message.contains("github.token"));
     assert_eq!(server.seen().len(), before, "nothing sent without a token");
 
-    let invalid = run_with(
-        CURRENT_USER,
-        &settings,
-        &ActionParameters::new().with("credential", text("Not A Name")),
-        &fixture.context(),
-    );
+    // Refused when saved (a credential parameter) and, should it get
+    // through, when run.
+    let parameters = ActionParameters::new().with("credential", text("Not A Name"));
+    let handler = handler_with(CURRENT_USER, &settings, &recording());
+    assert!(handler.definition().normalize(&parameters).is_err());
+    let invalid = handler.execute(&parameters, &fixture.context());
     assert_eq!(invalid.code.as_deref(), Some("invalid-parameters"));
 }
 

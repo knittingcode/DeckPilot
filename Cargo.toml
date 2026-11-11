@@ -19,6 +19,7 @@ members = [
     "modules/http",
     "modules/notifications",
     "modules/github",
+    "modules/gitlab",
     "apps/agent",
     "apps/desktop/src-tauri",
     "tools/dev",
@@ -49,6 +50,7 @@ deckpilot-module-docker = { path = "modules/docker" }
 deckpilot-module-http = { path = "modules/http" }
 deckpilot-module-notifications = { path = "modules/notifications" }
 deckpilot-module-github = { path = "modules/github" }
+deckpilot-module-gitlab = { path = "modules/gitlab" }
 deckpilot-portability = { path = "crates/deckpilot-portability" }
 deckpilot-keystore = { path = "crates/deckpilot-keystore" }
 deckpilot-presence = { path = "crates/deckpilot-presence" }
