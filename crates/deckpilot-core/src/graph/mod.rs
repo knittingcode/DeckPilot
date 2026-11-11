@@ -357,6 +357,9 @@ pub enum ValueKind {
 }
 
 /// A structured output an action provides on success, e.g. `branch`.
+///
+/// Built with [`OutputSpec::new`] and the `sensitive`/`optional` helpers in
+/// module code, so new fields do not break modules.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OutputSpec {
@@ -367,6 +370,59 @@ pub struct OutputSpec {
     /// The output is present on every success.
     #[serde(default)]
     pub always: bool,
+    /// The value may contain data that must not be kept, such as a
+    /// program's output or a response body: later nodes can use it, but
+    /// execution history and live run events leave it out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sensitive: bool,
+}
+
+impl OutputSpec {
+    /// An output present on every success.
+    pub fn new(key: impl Into<String>, label: impl Into<String>, kind: ValueKind) -> Self {
+        Self {
+            key: key.into(),
+            label: label.into(),
+            kind,
+            always: true,
+            sensitive: false,
+        }
+    }
+
+    /// Present only on some successes.
+    #[must_use]
+    pub fn optional(self) -> Self {
+        Self {
+            always: false,
+            ..self
+        }
+    }
+
+    /// Kept out of history and live events; see [`OutputSpec::sensitive`].
+    #[must_use]
+    pub fn sensitive(self) -> Self {
+        Self {
+            sensitive: true,
+            ..self
+        }
+    }
+}
+
+/// What running an action does to the computer or elsewhere, from the
+/// user's point of view. Shown in the catalog and the inspector, and used
+/// to ask for explicit permission where needed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActionEffect {
+    /// Only reads: status, lists, checks. Safe to run any time.
+    #[default]
+    ReadOnly,
+    /// Opens something for the user (an application, a page, a folder)
+    /// without changing data.
+    Opens,
+    /// Changes state: runs a command, starts or stops services, sends a
+    /// request that may change data.
+    Modifies,
 }
 
 /// How an action type behaves as a workflow node: the module SDK contract
@@ -395,6 +451,8 @@ pub struct NodeSpec {
     /// or its timeout passes. When `false`, a running action finishes before
     /// cancellation or a timeout takes effect, and the editor says so.
     pub cancellable: bool,
+    /// What running the action does; see [`ActionEffect`].
+    pub effect: ActionEffect,
 }
 
 impl Default for NodeSpec {
@@ -408,6 +466,7 @@ impl Default for NodeSpec {
             idempotent: false,
             changes_context: false,
             cancellable: false,
+            effect: ActionEffect::ReadOnly,
         }
     }
 }

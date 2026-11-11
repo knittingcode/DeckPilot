@@ -2293,3 +2293,138 @@ async fn cancelling_interrupts_a_running_action_at_once() {
     assert_eq!(node.error.as_ref().unwrap().code, "cancelled");
     agent.shutdown().await;
 }
+
+/// A workflow running `system.run-command` with the platform's shell
+/// bound as the `tools.shell` resource.
+fn command_workflow(agent: &TestAgent, script: &str) -> deckpilot_core::WorkflowId {
+    let mut machine = agent
+        .store()
+        .load_machine_config()
+        .unwrap()
+        .unwrap_or_else(|| deckpilot_core::MachineConfig::new(Os::current()));
+    machine.set_binding(deckpilot_core::MachineResourceBinding {
+        key: deckpilot_core::ResourceKey::new("tools.shell").unwrap(),
+        kind: deckpilot_core::ResourceKind::Other,
+        value: if cfg!(windows) { "cmd" } else { "sh" }.into(),
+    });
+    agent.store().save_machine_config(&machine).unwrap();
+    let arguments = if cfg!(windows) {
+        format!("/C\n{script}")
+    } else {
+        format!("-c\n{script}")
+    };
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let action = registry()
+        .create_instance(
+            "Print",
+            deckpilot_modules::system::actions::id(deckpilot_modules::system::actions::RUN_COMMAND),
+            &ActionParameters::new()
+                .with(
+                    "program",
+                    deckpilot_core::ParameterValue::Resource(deckpilot_core::ResourceRef::Fixed {
+                        key: deckpilot_core::ResourceKey::new("tools.shell").unwrap(),
+                    }),
+                )
+                .with("arguments", deckpilot_core::ParameterValue::Text(arguments)),
+        )
+        .unwrap();
+    let mut workflow = deckpilot_core::Workflow::new("Run a command");
+    workflow.graph = Some(
+        serde_json::from_value(json!({
+            "version": 1,
+            "nodes": [
+                {"id": "start", "type": "trigger"},
+                {"id": "cmd", "type": "action", "action": action.id},
+                {"id": "check", "type": "condition", "predicate": {
+                    "type": "equals",
+                    "reference": {"node": "cmd", "output": "exitCode"},
+                    "value": "0",
+                }},
+            ],
+            "edges": [
+                {"from": "start", "to": "cmd"},
+                {"from": "cmd", "to": "check"},
+            ],
+        }))
+        .unwrap(),
+    );
+    let id = workflow.id;
+    profile.actions.push(action);
+    profile.workflows.push(workflow);
+    agent.store().save_profile(&profile).unwrap();
+    id
+}
+
+fn set_system(agent: &TestAgent, enabled: bool, allow_commands: bool) {
+    agent
+        .store()
+        .set_module_state(
+            &deckpilot_modules::system::module_id(),
+            &ModuleSettings {
+                enabled,
+                config: ActionParameters::new().with(
+                    deckpilot_modules::system::ALLOW_COMMANDS,
+                    deckpilot_core::ParameterValue::Boolean(allow_commands),
+                ),
+            },
+        )
+        .unwrap();
+}
+
+fn node<'a>(
+    record: &'a deckpilot_core::ExecutionRecord,
+    id: &str,
+) -> &'a deckpilot_core::graph::NodeReport {
+    record.nodes.iter().find(|n| n.node.as_str() == id).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn system_commands_are_allowed_per_computer_and_their_output_is_not_kept() {
+    let agent = setup().await;
+    let workflow = command_workflow(&agent, "echo s3cret-output");
+    let mut client = agent.client().await;
+    client.subscribe().await.unwrap();
+    client.request(Request::ReloadConfiguration).await.unwrap();
+
+    // Off until allowed on this computer.
+    let started = start_workflow(&mut client, workflow).await;
+    let (_, finished) = execution_events(&mut client, started.id).await;
+    assert_eq!(finished.state, deckpilot_core::ExecutionState::Failed);
+    let record = agent.store().execution(started.id).unwrap().unwrap();
+    let error = node(&record, "cmd").error.clone().unwrap();
+    assert_eq!(error.action_code.as_deref(), Some("commands-disabled"));
+
+    set_system(&agent, true, true);
+    client.request(Request::ReloadConfiguration).await.unwrap();
+    let started = start_workflow(&mut client, workflow).await;
+    let (events, finished) = execution_events(&mut client, started.id).await;
+    assert_eq!(
+        finished.state,
+        deckpilot_core::ExecutionState::Succeeded,
+        "{}",
+        finished.message
+    );
+    let record = agent.store().execution(started.id).unwrap().unwrap();
+    let cmd = node(&record, "cmd");
+    // Later nodes saw the output (the condition passed on the exit code);
+    // history and live events never contain the program's output.
+    assert_eq!(cmd.output["exitCode"], "0");
+    assert!(!cmd.output.contains_key("stdout"));
+    let stored = serde_json::to_string(&record).unwrap();
+    let live = serde_json::to_string(&events).unwrap();
+    assert!(!stored.contains("s3cret-output") && !live.contains("s3cret-output"));
+
+    // Disabling the module stops its actions without touching them: the
+    // run is refused before it starts.
+    set_system(&agent, false, true);
+    client.request(Request::ReloadConfiguration).await.unwrap();
+    let refused = client.request(Request::StartWorkflow { workflow }).await;
+    assert!(
+        matches!(&refused, Err(ClientError::Agent(e)) if e.message.contains("System module is disabled")),
+        "{refused:?}"
+    );
+    let stored = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    assert!(stored.workflow(workflow).is_some());
+    drop(client);
+    agent.shutdown().await;
+}

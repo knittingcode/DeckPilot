@@ -280,6 +280,16 @@ fn module_settings_follow_the_portability_contract() {
             settings: ActionParameters::new(),
         },
     );
+    // A machine-specific permission never travels, even when an export
+    // (hand-edited or from another tool) carries it.
+    payload.modules.insert(
+        "system".into(),
+        ModuleExport {
+            version: 1,
+            enabled: true,
+            settings: ActionParameters::new().with("allowCommands", ParameterValue::Boolean(true)),
+        },
+    );
     payload.modules.insert(
         "home-automation".into(),
         ModuleExport {
@@ -303,13 +313,16 @@ fn module_settings_follow_the_portability_contract() {
             ..ImportOptions::default()
         },
     );
-    assert_eq!(summary.modules, ["projects"]);
+    assert_eq!(summary.modules, ["projects", "system"]);
+    assert_eq!(status("system").skipped_settings, ["allowCommands"]);
     let stored = store.module_states().unwrap();
     let projects = &stored[&ModuleId::new("projects").unwrap()];
     assert!(!projects.enabled);
     assert_eq!(projects.config.boolean("wrapAround"), Some(false));
     assert_eq!(projects.config.text("somethingLocal"), None);
-    assert_eq!(stored.len(), 1);
+    let system = &stored[&ModuleId::new("system").unwrap()];
+    assert_eq!(system.config.boolean("allowCommands"), Some(false));
+    assert_eq!(stored.len(), 2);
 }
 
 #[test]

@@ -14,6 +14,7 @@ pub mod face;
 pub mod graph;
 pub mod history;
 pub mod id;
+pub mod launch;
 pub mod layout;
 pub mod module;
 pub mod platform;

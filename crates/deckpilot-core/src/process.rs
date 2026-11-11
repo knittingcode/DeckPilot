@@ -13,8 +13,8 @@
 //! - Output is captured up to a limit; the rest is read and discarded so the
 //!   program never blocks on a full pipe.
 //!
-//! No built-in module runs programs yet; the helper defines the contract
-//! for those that will.
+//! Actions normally go through [`crate::ExecutionContext::run_process`],
+//! which checks the module's capability and bounds the run's time.
 
 use std::io::{self, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -48,6 +48,9 @@ pub struct ProcessOutput {
     pub code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
+    /// More output was produced than kept.
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
 }
 
 impl ProcessOutput {
@@ -66,6 +69,76 @@ pub enum ProcessError {
     TimedOut,
     #[error("waiting for the program failed: {0}")]
     Wait(#[source] io::Error),
+    #[error(transparent)]
+    NotPermitted(crate::CapabilityDenied),
+}
+
+impl ProcessError {
+    /// Stable error code for [`crate::ActionResult::code`].
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Spawn(error) if error.kind() == io::ErrorKind::NotFound => "program-not-found",
+            Self::Spawn(_) => "spawn-failed",
+            Self::Cancelled => "cancelled",
+            Self::TimedOut => "timed-out",
+            Self::Wait(_) => "wait-failed",
+            Self::NotPermitted(_) => "not-permitted",
+        }
+    }
+}
+
+/// Variables a program started by an action keeps from the agent's
+/// environment; everything else (tokens, keys, passwords that happen to be
+/// set for the agent) is removed. Modules add what their tool needs, such
+/// as `DOCKER_HOST` or `SSH_AUTH_SOCK`.
+pub const BASE_ENVIRONMENT: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "TZ",
+    "XDG_RUNTIME_DIR",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    // Windows
+    "SystemRoot",
+    "SystemDrive",
+    "windir",
+    "ComSpec",
+    "PATHEXT",
+    "USERPROFILE",
+    "USERNAME",
+    "USERDOMAIN",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "ProgramData",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "ProgramW6432",
+    "CommonProgramFiles",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    "OS",
+];
+
+/// Clears `command`'s environment except [`BASE_ENVIRONMENT`] and `extra`.
+pub fn minimal_environment(command: &mut Command, extra: &[&str]) {
+    command.env_clear();
+    for name in BASE_ENVIRONMENT.iter().chain(extra) {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
 }
 
 /// Runs `command` to completion, or stops it when `token` is cancelled.
@@ -91,15 +164,18 @@ pub fn run(
     // The program is gone; end whatever it left in its group, so the pipes
     // close and nothing is orphaned.
     end_group(&child, true);
-    let collect = |handle: Option<std::thread::JoinHandle<String>>| {
+    let collect = |handle: Option<std::thread::JoinHandle<(String, bool)>>| {
         handle.and_then(|h| h.join().ok()).unwrap_or_default()
     };
-    let (stdout, stderr) = (collect(stdout), collect(stderr));
+    let ((stdout, stdout_truncated), (stderr, stderr_truncated)) =
+        (collect(stdout), collect(stderr));
     let status = outcome?;
     Ok(ProcessOutput {
         code: status.code(),
         stdout,
         stderr,
+        stdout_truncated,
+        stderr_truncated,
     })
 }
 
@@ -162,24 +238,27 @@ fn end_group(child: &Child, _force: bool) {
         .status();
 }
 
-/// Reads a stream to its end, keeping at most `limit` bytes.
+/// Reads a stream to its end, keeping at most `limit` bytes; `true` when
+/// more was discarded.
 fn reader<R: Read + Send + 'static>(
     mut stream: R,
     limit: usize,
-) -> std::thread::JoinHandle<String> {
+) -> std::thread::JoinHandle<(String, bool)> {
     std::thread::spawn(move || {
         let mut kept = Vec::new();
+        let mut truncated = false;
         let mut buffer = [0u8; 8192];
         loop {
             match stream.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     let room = limit.saturating_sub(kept.len());
+                    truncated |= n > room;
                     kept.extend_from_slice(&buffer[..n.min(room)]);
                 }
             }
         }
-        String::from_utf8_lossy(&kept).into_owned()
+        (String::from_utf8_lossy(&kept).into_owned(), truncated)
     })
 }
 
@@ -220,6 +299,7 @@ mod tests {
         };
         let output = run(sh("yes | head -c 100000"), None, limits).unwrap();
         assert_eq!(output.stdout.len(), 10);
+        assert!(output.stdout_truncated && !output.stderr_truncated);
         assert!(output.success());
     }
 
@@ -272,6 +352,19 @@ mod tests {
         let result = run(sh("trap '' TERM; sleep 30"), Some(&token), limits);
         assert!(matches!(result, Err(ProcessError::TimedOut)), "{result:?}");
         assert!(begun.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn programs_get_a_minimal_environment() {
+        // SAFETY of the test: the variable is unique to this test.
+        let name = "DECKPILOT_TEST_SECRET_FOR_ENV";
+        assert!(std::env::var_os(name).is_none());
+        let mut command = sh("echo \"[${DECKPILOT_TEST_SECRET_FOR_ENV:-}]$PATH\"");
+        command.env(name, "s3cret");
+        minimal_environment(&mut command, &[]);
+        let output = run(command, None, ProcessLimits::default()).unwrap();
+        assert!(output.stdout.starts_with("[]"), "{}", output.stdout);
+        assert!(output.stdout.len() > 3, "PATH is kept");
     }
 
     #[test]

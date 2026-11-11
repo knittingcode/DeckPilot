@@ -1,5 +1,5 @@
 import { CAPABILITIES } from "@/lib/capabilities"
-import type { ActionType, ParameterKind } from "@/lib/types"
+import type { ActionEffect, ActionType, ParameterKind } from "@/lib/types"
 
 import type { Lookup } from "./describe"
 
@@ -10,6 +10,13 @@ const KIND_LABEL: Record<ParameterKind["type"], string> = {
   choice: "choice",
   resource: "resource",
   project: "project",
+}
+
+/** How the catalog and the inspector describe what an action does. */
+const EFFECT_LABEL: Record<ActionEffect, string> = {
+  readOnly: "Read-only",
+  opens: "Opens something",
+  modifies: "Changes things",
 }
 
 function Badge({ children, muted }: { children: string; muted?: boolean }) {
@@ -44,6 +51,9 @@ export function NodeDocumentation({ type, lookup }: { type: ActionType; lookup: 
       </p>
       {spec && (
         <div className="flex flex-wrap gap-1">
+          <Badge muted={(spec.effect ?? "readOnly") === "readOnly"}>
+            {EFFECT_LABEL[spec.effect ?? "readOnly"]}
+          </Badge>
           <Badge muted={!spec.retrySafe}>{spec.retrySafe ? "Retry-safe" : "Not retry-safe"}</Badge>
           {spec.idempotent && <Badge>Idempotent</Badge>}
           <Badge muted={!spec.cancellable}>
@@ -74,6 +84,27 @@ export function NodeDocumentation({ type, lookup }: { type: ActionType; lookup: 
                   {p.required ? "" : " (optional)"}
                 </span>
                 <span className="text-muted-foreground">{KIND_LABEL[p.kind.type]}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {spec && spec.outputs.length > 0 && (
+        <div className="grid gap-1">
+          <h4 className="text-xs font-medium">Outputs</h4>
+          <ul className="grid gap-0.5 text-xs">
+            {spec.outputs.map((o) => (
+              <li key={o.key} className="flex gap-2">
+                <code className="font-mono">{o.key}</code>
+                <span className="flex-1 text-muted-foreground">
+                  {o.label}
+                  {o.always ? "" : " (sometimes)"}
+                </span>
+                {o.sensitive && (
+                  <span className="text-muted-foreground" title="Available to later nodes only">
+                    not kept in history
+                  </span>
+                )}
               </li>
             ))}
           </ul>
