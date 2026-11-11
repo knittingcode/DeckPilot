@@ -18,13 +18,14 @@ members = [
     "modules/docker",
     "modules/http",
     "modules/notifications",
+    "modules/github",
     "apps/agent",
     "apps/desktop/src-tauri",
     "tools/dev",
 ]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.90"
 license = "Apache-2.0"
@@ -46,6 +47,7 @@ deckpilot-module-git = { path = "modules/git" }
 deckpilot-module-docker = { path = "modules/docker" }
 deckpilot-module-http = { path = "modules/http" }
 deckpilot-module-notifications = { path = "modules/notifications" }
+deckpilot-module-github = { path = "modules/github" }
 deckpilot-portability = { path = "crates/deckpilot-portability" }
 deckpilot-keystore = { path = "crates/deckpilot-keystore" }
 deckpilot-presence = { path = "crates/deckpilot-presence" }

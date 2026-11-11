@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::graph::executor::{Executor, RunStatus};
+use crate::graph::executor::{Executor, NestedRun, RunStatus};
 use crate::graph::{
     CancellationToken, ExecutionEvent, ExecutionLimits, GraphReport, IssueSeverity, MAX_NESTING,
     WorkflowGraph,
@@ -228,14 +228,26 @@ impl Engine {
         Ok(report)
     }
 
-    /// Checks that `workflow` exists and can run, without running it: a
-    /// graph must have no errors. Lets a caller reject a run before
-    /// starting it in the background.
+    /// Checks that `workflow` exists and can run on its own, without
+    /// running it: a graph must have no errors, and every required input
+    /// needs a default. Lets a caller reject a run before starting it in
+    /// the background.
     pub fn check_runnable(
         &self,
         profile: &Profile,
         workflow: WorkflowId,
     ) -> Result<(), EngineError> {
+        let definition = profile
+            .workflow(workflow)
+            .ok_or(EngineError::UnknownWorkflow(workflow))?;
+        if definition.graph.is_some() {
+            workflow_inputs(definition, &std::collections::BTreeMap::new())?;
+        }
+        self.check_graph(profile, workflow)
+    }
+
+    /// The graph of `workflow`, if it has one, has no errors.
+    fn check_graph(&self, profile: &Profile, workflow: WorkflowId) -> Result<(), EngineError> {
         let definition = profile
             .workflow(workflow)
             .ok_or(EngineError::UnknownWorkflow(workflow))?;
@@ -312,6 +324,7 @@ impl Engine {
                 output: std::collections::BTreeMap::new(),
                 error: None,
                 action: Some(step.action),
+                workflow: None,
             };
             let run = match step.condition {
                 StepCondition::Always => true,
@@ -402,7 +415,13 @@ impl Engine {
         cancel: &CancellationToken,
         on_event: &(dyn Fn(ExecutionEvent) + Sync),
     ) -> Result<GraphReport, EngineError> {
-        self.run_graph_nested(profile, machine, context, workflow, cancel, on_event, 0)
+        let definition = profile
+            .workflow(workflow)
+            .ok_or(EngineError::UnknownWorkflow(workflow))?;
+        let inputs = workflow_inputs(definition, &std::collections::BTreeMap::new())?;
+        self.run_graph_nested(
+            profile, machine, context, workflow, &inputs, cancel, on_event, 0,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -412,6 +431,7 @@ impl Engine {
         machine: &MachineConfig,
         context: &mut ActiveProjectContext,
         workflow: WorkflowId,
+        inputs: &std::collections::BTreeMap<String, String>,
         cancel: &CancellationToken,
         on_event: &(dyn Fn(ExecutionEvent) + Sync),
         depth: usize,
@@ -423,7 +443,7 @@ impl Engine {
             .graph
             .as_ref()
             .ok_or_else(|| EngineError::InvalidWorkflow("the workflow has no graph".into()))?;
-        self.check_runnable(profile, workflow)?;
+        self.check_graph(profile, workflow)?;
         if depth > MAX_NESTING {
             return Err(EngineError::InvalidWorkflow(
                 "workflows are nested too deeply".into(),
@@ -443,26 +463,51 @@ impl Engine {
                 Some(control),
             )
         };
-        // Nested workflows report their progress as part of the Loop node.
-        let run_nested = |nested: WorkflowId, context: &mut ActiveProjectContext| {
+        // Nested workflows report their progress as part of the Loop or
+        // Call node; their own nodes are not reported.
+        let run_nested = |nested: WorkflowId,
+                          values: &std::collections::BTreeMap<String, String>,
+                          context: &mut ActiveProjectContext,
+                          token: &CancellationToken| {
             let inner = profile
                 .workflow(nested)
                 .ok_or(EngineError::UnknownWorkflow(nested))?;
-            if inner.graph.is_some() {
+            let report = if let Some(inner_graph) = &inner.graph {
+                let values = workflow_inputs(inner, values)?;
                 let report = self.run_graph_nested(
                     profile,
                     machine,
                     context,
                     nested,
-                    cancel,
+                    &values,
+                    token,
                     &|_| {},
                     depth + 1,
                 )?;
-                Ok(report.status == RunStatus::Succeeded)
+                let outputs = if report.status == RunStatus::Succeeded {
+                    workflow_outputs(inner_graph, &report)
+                } else {
+                    std::collections::BTreeMap::new()
+                };
+                (report, outputs)
             } else {
-                let report = self.run_workflow(profile, machine, context, nested)?;
-                Ok(report.status == ActionStatus::Succeeded)
-            }
+                let report = self.run_steps(profile, machine, context, nested, token, &|_| {})?;
+                (report, std::collections::BTreeMap::new())
+            };
+            let (report, outputs) = report;
+            let failure = report
+                .nodes
+                .iter()
+                .find(|n| n.status == crate::graph::NodeStatus::Failed)
+                .map(|n| {
+                    let message = n.error.as_ref().map_or(n.message.as_str(), |e| &e.message);
+                    format!("{}: {}", n.node, crate::history::shorten(message))
+                });
+            Ok(NestedRun {
+                status: report.status,
+                outputs,
+                failure,
+            })
         };
         Executor {
             workflow,
@@ -471,6 +516,7 @@ impl Engine {
             registry: &self.registry,
             run_action: &run_action,
             run_nested: &run_nested,
+            inputs,
             on_event,
             cancel,
             limits: ExecutionLimits::default(),
@@ -552,6 +598,52 @@ impl Engine {
         }
         Ok(result)
     }
+}
+
+/// The values of `workflow`'s declared inputs for a run: `given` values for
+/// declared inputs, otherwise their defaults. A required input without a
+/// value is an error; values are checked by the caller.
+fn workflow_inputs(
+    workflow: &crate::Workflow,
+    given: &std::collections::BTreeMap<String, String>,
+) -> Result<std::collections::BTreeMap<String, String>, EngineError> {
+    let mut values = std::collections::BTreeMap::new();
+    for input in &workflow.inputs {
+        match (given.get(&input.key), &input.default) {
+            (Some(value), _) => {
+                values.insert(input.key.clone(), value.clone());
+            }
+            (None, Some(default)) if !input.required => {
+                values.insert(input.key.clone(), default.clone());
+            }
+            (None, _) if input.required => {
+                return Err(EngineError::InvalidWorkflow(format!(
+                    "{} needs a value for its input `{}`; run it from a Sub-workflow node",
+                    workflow.name, input.key
+                )));
+            }
+            (None, _) => {}
+        }
+    }
+    Ok(values)
+}
+
+/// The declared outputs a finished run set: the values of its Output nodes
+/// that succeeded, in the order they ran (a later one overrides).
+fn workflow_outputs(
+    graph: &WorkflowGraph,
+    report: &GraphReport,
+) -> std::collections::BTreeMap<String, String> {
+    let mut outputs = std::collections::BTreeMap::new();
+    for node in &report.nodes {
+        let is_output = graph
+            .node(&node.node)
+            .is_some_and(|n| matches!(n.kind, crate::graph::NodeKind::Output { .. }));
+        if is_output && node.status == crate::graph::NodeStatus::Succeeded {
+            outputs.extend(node.output.clone());
+        }
+    }
+    outputs
 }
 
 impl GraphReport {

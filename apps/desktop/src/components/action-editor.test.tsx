@@ -3,30 +3,19 @@ import "@testing-library/jest-dom/vitest"
 
 import { cleanup, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ActionEditor } from "./action-editor"
 import type { ActionInstance, ActionType, ModuleInfo, Project } from "@/lib/types"
+import { api, resetApi } from "@/test/api-mock"
+import { installDomStubs } from "@/test/dom"
 
-// Radix Select relies on browser APIs that jsdom does not implement.
-Element.prototype.hasPointerCapture = () => false
-Element.prototype.releasePointerCapture = () => undefined
-Element.prototype.scrollIntoView = () => undefined
+vi.mock("@/lib/api", async () => (await import("@/test/api-mock")).apiModule)
+vi.mock("sonner", async () => (await import("@/test/toast")).sonnerModule)
 
-const createAction = vi.fn()
-const updateAction = vi.fn()
+beforeAll(installDomStubs)
 
-vi.mock("@/lib/api", () => ({
-  api: {
-    createAction: (...args: unknown[]) => createAction(...args) as unknown,
-    updateAction: (...args: unknown[]) => updateAction(...args) as unknown,
-    duplicateAction: vi.fn(),
-    deleteAction: vi.fn(),
-    runAction: vi.fn(),
-  },
-  errorMessage: (error: unknown) => String(error),
-}))
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
+const { createAction, updateAction } = api
 
 const logType: ActionType = {
   id: "general.log",
@@ -112,8 +101,7 @@ function renderEditor(
 
 describe("ActionEditor", () => {
   beforeEach(() => {
-    createAction.mockReset()
-    updateAction.mockReset()
+    resetApi()
   })
   afterEach(cleanup)
 

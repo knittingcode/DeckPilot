@@ -18,6 +18,10 @@ export const MAX_NODES = 200
 export const MAX_LOOP_ITERATIONS = 100
 export const MAX_RETRIES = 5
 export const MAX_DELAY_MS = 10 * 60 * 1000
+/** Default deadline of a sub-workflow (`DEFAULT_CALL_TIMEOUT_MS`). */
+export const DEFAULT_CALL_TIMEOUT_MS = 10 * 60 * 1000
+/** Inputs and outputs a workflow can declare, each. */
+export const MAX_WORKFLOW_VALUES = 32
 const MAX_ID_LENGTH = 48
 
 export type NodeType = GraphNodeKind["type"]
@@ -26,6 +30,7 @@ export type NodeType = GraphNodeKind["type"]
 export function outputPorts(type: NodeType): GraphPort[] {
   switch (type) {
     case "action":
+    case "call":
       return ["out", "error"]
     case "condition":
       return ["true", "false"]

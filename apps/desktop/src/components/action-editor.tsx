@@ -1,4 +1,4 @@
-import { Ban, Copy, Play, Save, Trash2 } from "lucide-react"
+import { Ban, Copy, Play, Save, Trash2, TriangleAlert } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
@@ -281,6 +281,17 @@ export function ActionEditor({
         />
       </div>
 
+      {type?.node?.effect === "modifies" && (
+        <Alert>
+          <TriangleAlert />
+          <AlertTitle>This action changes things</AlertTitle>
+          <AlertDescription>
+            Running it changes state on this computer or elsewhere (for example a command, a request
+            or containers). Some modules only allow that after it is turned on in their settings on
+            each computer.
+          </AlertDescription>
+        </Alert>
+      )}
       {type && type.parameters.length > 0 && (
         <>
           <Separator />
