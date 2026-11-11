@@ -73,6 +73,74 @@ pub enum ParameterKind {
     },
     /// A project of the profile the action belongs to.
     Project,
+    /// A list edited item by item, stored as text with one item per line
+    /// (e.g. command arguments). Items keep their spaces; nothing is split
+    /// or interpreted.
+    Lines {
+        /// What one item is, e.g. "Argument".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_items: Option<usize>,
+        /// Longest item, in characters.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_length: Option<usize>,
+    },
+    /// Name/value rows, stored as text with one `name<separator>value` per
+    /// line (e.g. HTTP headers with `: `, query parameters with `=`).
+    Pairs {
+        /// `:` or `=`.
+        separator: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name_label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value_label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_items: Option<usize>,
+        /// Names compare without regard to case (duplicates are found so).
+        #[serde(default)]
+        case_insensitive: bool,
+        /// Names that look like secrets are refused: they belong in a stored
+        /// credential.
+        #[serde(default)]
+        no_secrets: bool,
+    },
+    /// Source text in a language such as `json`, stored as text.
+    Code {
+        language: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_length: Option<usize>,
+    },
+    /// The name of a credential stored on this computer, stored as text.
+    /// The secret itself is never part of the action.
+    Credential,
+}
+
+/// Whether a name looks like it holds a secret (`Authorization`, cookies,
+/// tokens, API keys, passwords).
+pub fn looks_secret(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "authorization"
+            | "proxy-authorization"
+            | "cookie"
+            | "set-cookie"
+            | "proxy-authenticate"
+            | "key"
+    ) || [
+        "token", "secret", "api-key", "api_key", "apikey", "password", "session",
+    ]
+    .iter()
+    .any(|word| name.contains(word))
+        || (name.contains("auth") && !name.contains("author"))
+}
+
+/// The items of a [`ParameterKind::Lines`] value: its non-empty lines.
+pub fn lines_of(text: &str) -> impl Iterator<Item = &str> {
+    text.lines()
+        .map(|line| line.trim_end_matches('\r'))
+        .filter(|line| !line.trim().is_empty())
 }
 
 /// Schema entry for one parameter of an action type.
@@ -271,7 +339,10 @@ fn check_value(spec: &ParameterSpec, value: &ParameterValue) -> Result<(), Param
     let key = || spec.key.clone();
     let invalid = |reason: String| ParameterError::Invalid { key: key(), reason };
     match (&spec.kind, value) {
-        (ParameterKind::Text { max_length, .. }, ParameterValue::Text(text)) => {
+        (
+            ParameterKind::Text { max_length, .. } | ParameterKind::Code { max_length, .. },
+            ParameterValue::Text(text),
+        ) => {
             if spec.required && text.trim().is_empty() {
                 return Err(ParameterError::Missing(key()));
             }
@@ -301,6 +372,30 @@ fn check_value(spec: &ParameterSpec, value: &ParameterValue) -> Result<(), Param
                 )))
             }
         }
+        (
+            ParameterKind::Lines {
+                max_items,
+                max_length,
+                ..
+            },
+            ParameterValue::Text(text),
+        ) => check_lines(spec, text, *max_items, *max_length),
+        (kind @ ParameterKind::Pairs { .. }, ParameterValue::Text(text)) => {
+            check_pairs(spec, kind, text)
+        }
+        (ParameterKind::Credential, ParameterValue::Text(text)) => {
+            let text = text.trim();
+            if text.is_empty() {
+                return if spec.required {
+                    Err(ParameterError::Missing(key()))
+                } else {
+                    Ok(())
+                };
+            }
+            crate::CredentialId::new(text)
+                .map(|_| ())
+                .map_err(|_| invalid(format!("“{text}” is not a credential name")))
+        }
         (ParameterKind::Resource { .. }, ParameterValue::Resource(reference)) => match reference {
             ResourceRef::ProjectRole { role } if role.trim().is_empty() => {
                 Err(invalid("project role must not be empty".into()))
@@ -310,7 +405,11 @@ fn check_value(spec: &ParameterSpec, value: &ParameterValue) -> Result<(), Param
         (kind, _) => Err(ParameterError::WrongType {
             key: key(),
             expected: match kind {
-                ParameterKind::Text { .. } => "text",
+                ParameterKind::Text { .. }
+                | ParameterKind::Lines { .. }
+                | ParameterKind::Pairs { .. }
+                | ParameterKind::Code { .. }
+                | ParameterKind::Credential => "text",
                 ParameterKind::Integer { .. } => "integer",
                 ParameterKind::Boolean => "boolean",
                 ParameterKind::Choice { .. } => "choice",
@@ -318,6 +417,91 @@ fn check_value(spec: &ParameterSpec, value: &ParameterValue) -> Result<(), Param
                 ParameterKind::Project => "project",
             },
         }),
+    }
+}
+
+fn check_lines(
+    spec: &ParameterSpec,
+    text: &str,
+    max_items: Option<usize>,
+    max_length: Option<usize>,
+) -> Result<(), ParameterError> {
+    let invalid = |reason: String| ParameterError::Invalid {
+        key: spec.key.clone(),
+        reason,
+    };
+    let items: Vec<&str> = lines_of(text).collect();
+    if spec.required && items.is_empty() {
+        return Err(ParameterError::Missing(spec.key.clone()));
+    }
+    if let Some(max) = max_items
+        && items.len() > max
+    {
+        return Err(invalid(format!("at most {max} items are allowed")));
+    }
+    if let Some(max) = max_length
+        && let Some(index) = items.iter().position(|i| i.chars().count() > max)
+    {
+        return Err(invalid(format!(
+            "item {} is longer than {max} characters",
+            index + 1
+        )));
+    }
+    if text.contains('\0') {
+        return Err(invalid("items cannot contain null characters".into()));
+    }
+    Ok(())
+}
+
+fn check_pairs(
+    spec: &ParameterSpec,
+    kind: &ParameterKind,
+    text: &str,
+) -> Result<(), ParameterError> {
+    let ParameterKind::Pairs {
+        separator,
+        max_items,
+        case_insensitive,
+        no_secrets,
+        ..
+    } = kind
+    else {
+        return Ok(());
+    };
+    let invalid = |reason: String| ParameterError::Invalid {
+        key: spec.key.clone(),
+        reason,
+    };
+    let mut names: Vec<String> = Vec::new();
+    for line in lines_of(text) {
+        let Some((name, _)) = line.split_once(separator.as_str()) else {
+            return Err(invalid(format!("“{line}” has no {separator}")));
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(invalid(format!("“{line}” has no name")));
+        }
+        if *no_secrets && looks_secret(name) {
+            return Err(invalid(format!(
+                "{name} looks like a secret; use a stored credential instead"
+            )));
+        }
+        let normalized = if *case_insensitive {
+            name.to_ascii_lowercase()
+        } else {
+            name.to_owned()
+        };
+        if names.contains(&normalized) {
+            return Err(invalid(format!("{name} appears more than once")));
+        }
+        names.push(normalized);
+    }
+    if spec.required && names.is_empty() {
+        return Err(ParameterError::Missing(spec.key.clone()));
+    }
+    match max_items {
+        Some(max) if names.len() > *max => Err(invalid(format!("at most {max} rows are allowed"))),
+        _ => Ok(()),
     }
 }
 
@@ -496,5 +680,107 @@ mod tests {
             serde_json::from_str::<ParameterValue>(&json).unwrap(),
             value
         );
+    }
+}
+
+#[cfg(test)]
+mod structured_text_tests {
+    use super::*;
+
+    fn spec(kind: ParameterKind) -> ActionType {
+        ActionType {
+            id: ActionTypeId::new("test.structured").unwrap(),
+            name: "Test".into(),
+            description: String::new(),
+            category: String::new(),
+            parameters: vec![ParameterSpec {
+                key: "value".into(),
+                label: "Value".into(),
+                description: None,
+                kind,
+                required: false,
+                default: None,
+            }],
+            requires_project: false,
+            node: crate::graph::NodeSpec::default(),
+        }
+    }
+
+    fn check(kind: ParameterKind, text: &str) -> Result<(), String> {
+        spec(kind)
+            .normalize(&ActionParameters::new().with("value", ParameterValue::Text(text.into())))
+            .map(|_| ())
+            .map_err(|e| e[0].to_string())
+    }
+
+    #[test]
+    fn lists_keep_their_items_and_limits() {
+        let kind = || ParameterKind::Lines {
+            item_label: None,
+            max_items: Some(2),
+            max_length: Some(10),
+        };
+        assert!(check(kind(), "--name\nJohn Smith\n\n").is_ok());
+        assert_eq!(lines_of("a b\r\n\n  \nc").collect::<Vec<_>>(), ["a b", "c"]);
+        assert!(check(kind(), "a\nb\nc").unwrap_err().contains("at most 2"));
+        assert!(
+            check(kind(), "much too long here")
+                .unwrap_err()
+                .contains("item 1")
+        );
+    }
+
+    #[test]
+    fn rows_need_names_without_duplicates_or_secrets() {
+        let headers = || ParameterKind::Pairs {
+            separator: ":".into(),
+            name_label: None,
+            value_label: None,
+            max_items: None,
+            case_insensitive: true,
+            no_secrets: true,
+        };
+        assert!(check(headers(), "Accept: application/json\nX-Id: 7").is_ok());
+        assert!(
+            check(headers(), "Accept: a\naccept: b")
+                .unwrap_err()
+                .contains("more than once")
+        );
+        assert!(
+            check(headers(), "no separator")
+                .unwrap_err()
+                .contains("has no :")
+        );
+        assert!(check(headers(), ": value").unwrap_err().contains("no name"));
+        assert!(
+            check(headers(), "X-Api-Key: 1")
+                .unwrap_err()
+                .contains("stored credential")
+        );
+        assert!(check(headers(), "X-Author: me").is_ok());
+        let query = ParameterKind::Pairs {
+            separator: "=".into(),
+            name_label: None,
+            value_label: None,
+            max_items: None,
+            case_insensitive: false,
+            no_secrets: false,
+        };
+        assert!(check(query, "a=1\nA=2").is_ok());
+    }
+
+    #[test]
+    fn credentials_are_names_and_code_is_bounded_text() {
+        assert!(check(ParameterKind::Credential, "github.token").is_ok());
+        assert!(check(ParameterKind::Credential, "").is_ok());
+        assert!(check(ParameterKind::Credential, "Not A Name").is_err());
+        let code = ParameterKind::Code {
+            language: "json".into(),
+            max_length: Some(5),
+        };
+        assert!(check(code, "{\"long\": 1}").is_err());
+        // Stored values stay plain text, as before.
+        let json = serde_json::to_value(ParameterKind::Credential).unwrap();
+        assert_eq!(json, serde_json::json!({"type": "credential"}));
     }
 }

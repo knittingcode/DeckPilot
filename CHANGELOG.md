@@ -23,6 +23,12 @@ below.
   round) for what both support, says which features need an agent restart,
   and never sends a request the agent cannot understand. Agents too old for
   this app are reported as needing an update.
+- Structured forms for module actions: command arguments and Compose
+  services are edited as reorderable lists (shown as the exact list passed
+  to the program), HTTP headers and query parameters as rows with duplicate
+  and secret warnings, the request body in a JSON editor, and credentials
+  are chosen from those stored on this computer. Stored actions keep their
+  format. Actions that change things say so before they are saved.
 - Upgrading a 0.5.0 configuration is tested with a real database created
   by 0.5.0-2: everything is kept, the encrypted backup is restorable, and a
   wrong key or a newer schema leaves the file untouched.
