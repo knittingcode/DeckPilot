@@ -15,6 +15,22 @@ export type ParameterKind =
   | { type: "resource"; kind?: ResourceKind }
   /** A project of the profile the action belongs to. */
   | { type: "project" }
+  /** A list stored as one item per line, e.g. command arguments. */
+  | { type: "lines"; itemLabel?: string; maxItems?: number; maxLength?: number }
+  /** Rows stored as one `name<separator>value` per line, e.g. headers. */
+  | {
+      type: "pairs"
+      separator: string
+      nameLabel?: string
+      valueLabel?: string
+      maxItems?: number
+      caseInsensitive?: boolean
+      noSecrets?: boolean
+    }
+  /** Source text such as a JSON body. */
+  | { type: "code"; language: string; maxLength?: number }
+  /** The name of a credential stored on this computer. */
+  | { type: "credential" }
 
 export type ParameterValue =
   | { type: "text"; value: string }
@@ -82,6 +98,35 @@ export interface Workflow {
    * saved before the setting existed; see `effectiveProjectScope`.
    */
   projectScope?: ProjectScope
+  /** Values the workflow takes when a Sub-workflow node calls it (graph workflows). */
+  inputs?: WorkflowInput[]
+  /** Values the workflow returns to a Sub-workflow node, set by its Output nodes. */
+  outputs?: WorkflowOutput[]
+}
+
+/**
+ * A value a workflow takes from the Sub-workflow node that calls it; its
+ * nodes read it as an output of the start node.
+ */
+export interface WorkflowInput {
+  key: string
+  label?: string
+  kind: ValueKind
+  /** A calling node must give it a value. */
+  required?: boolean
+  /** Used when the calling node gives none, and when the workflow runs on its own. */
+  default?: string
+  /** May be secret: only sensitive outputs may take it. */
+  sensitive?: boolean
+}
+
+/** A value a workflow returns to the Sub-workflow node that calls it. */
+export interface WorkflowOutput {
+  key: string
+  label?: string
+  kind: ValueKind
+  /** Kept out of history and live events. */
+  sensitive?: boolean
 }
 
 export type ProjectScope = "execution" | "application"
@@ -129,6 +174,14 @@ export type GraphNodeKind =
   | { type: "parallel" }
   | { type: "join" }
   | { type: "loop"; workflow: string; times: number }
+  | {
+      type: "call"
+      workflow: string
+      /** Values for the called workflow's inputs, by input key. */
+      inputs?: Record<string, GraphMapping>
+      policy: ErrorPolicy
+    }
+  | { type: "output"; values?: Record<string, GraphMapping> }
   | { type: "delay"; ms: number }
   | { type: "stop" }
 
@@ -357,7 +410,10 @@ export type NodeStatus = "succeeded" | "failed" | "skipped" | "cancelled"
 
 /** A failure, safe to show: no secrets, no raw output. */
 export interface StepError {
-  /** `action.failed`, `timeout`, `cancelled`, `mapping`, `parallel-context`, `unavailable`, `loop.failed`. */
+  /**
+   * `action.failed`, `timeout`, `cancelled`, `mapping`, `parallel-context`,
+   * `unavailable`, `loop.failed`, `subworkflow.failed`.
+   */
   code: string
   message: string
   retryable: boolean
@@ -377,6 +433,8 @@ export interface NodeReport {
   output?: Record<string, string>
   error?: StepError
   action?: string
+  /** Sub-workflow nodes: the workflow that ran; Output nodes: their own workflow. */
+  workflow?: string
 }
 
 export type ExecutionState = "running" | "succeeded" | "failed" | "cancelled" | "interrupted"

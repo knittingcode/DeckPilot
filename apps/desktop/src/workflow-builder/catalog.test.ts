@@ -43,8 +43,14 @@ describe("catalog", () => {
     expect(groups[0]?.entries[0]?.kind).toMatchObject({ type: "action", action: "a1" })
   })
 
-  it("offers a loop only when another workflow exists", () => {
+  it("offers a loop and a sub-workflow only when another workflow exists", () => {
     expect(flowEntries(undefined).some((e) => e.kind.type === "loop")).toBe(false)
+    expect(flowEntries(undefined).some((e) => e.kind.type === "call")).toBe(false)
+    expect(flowEntries(undefined).some((e) => e.kind.type === "output")).toBe(true)
+    expect(flowEntries("w2").find((e) => e.kind.type === "call")).toMatchObject({
+      title: "Sub-workflow",
+      kind: { workflow: "w2" },
+    })
     expect(flowEntries("w2").find((e) => e.kind.type === "loop")?.kind).toMatchObject({
       workflow: "w2",
       times: 2,

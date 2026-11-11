@@ -318,6 +318,7 @@ fn module_settings_follow_the_portability_contract() {
         [
             "docker",
             "git",
+            "github",
             "http",
             "notifications",
             "projects",
@@ -332,7 +333,7 @@ fn module_settings_follow_the_portability_contract() {
     assert_eq!(projects.config.text("somethingLocal"), None);
     let system = &stored[&ModuleId::new("system").unwrap()];
     assert_eq!(system.config.boolean("allowCommands"), Some(false));
-    assert_eq!(stored.len(), 6);
+    assert_eq!(stored.len(), 7);
 }
 
 #[test]

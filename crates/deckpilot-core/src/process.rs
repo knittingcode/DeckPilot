@@ -157,7 +157,7 @@ pub fn run(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command.spawn().map_err(ProcessError::Spawn)?;
+    let mut child = spawn(&mut command).map_err(ProcessError::Spawn)?;
     let stdout = child.stdout.take().map(|s| reader(s, limits.max_output));
     let stderr = child.stderr.take().map(|s| reader(s, limits.max_output));
     let outcome = supervise(&mut child, token, limits.grace);
@@ -180,6 +180,23 @@ pub fn run(
 }
 
 /// Waits for exit, stopping the program when the token is cancelled.
+/// Starts `command`, retrying briefly while its program is still open for
+/// writing elsewhere. On Linux a program that was just written (an
+/// installer's or a test's script) cannot start while another thread's
+/// child still holds the file open between fork and exec.
+pub fn spawn(command: &mut Command) -> io::Result<Child> {
+    let mut attempts = 0;
+    loop {
+        match command.spawn() {
+            Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy && attempts < 20 => {
+                attempts += 1;
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            result => return result,
+        }
+    }
+}
+
 fn supervise(
     child: &mut Child,
     token: Option<&CancellationToken>,

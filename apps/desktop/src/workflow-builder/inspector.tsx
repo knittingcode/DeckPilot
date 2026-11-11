@@ -21,6 +21,7 @@ import type {
   GraphPredicate,
   ParameterSpec,
   Project,
+  ValueKind,
   WorkflowGraph,
 } from "@/lib/types"
 
@@ -29,9 +30,21 @@ import type { NodeRun } from "./node-view"
 import { NodeRunReport } from "./run-panel"
 import { type Lookup, actionOf, formatMs } from "./describe"
 import { MappingEditor, OutputSelect } from "./mapping-editor"
-import { VALUE_KIND_LABEL, outputOptions, referenceProblem } from "./mapping"
+import {
+  type OutputOption,
+  VALUE_KIND_LABEL,
+  outputOptions,
+  parameterKindOf,
+  referenceProblem,
+} from "./mapping"
 import { NodeDocumentation } from "./node-docs"
-import { MAX_DELAY_MS, MAX_LOOP_ITERATIONS, MAX_RETRIES, upstream } from "./graph"
+import {
+  DEFAULT_CALL_TIMEOUT_MS,
+  MAX_DELAY_MS,
+  MAX_LOOP_ITERATIONS,
+  MAX_RETRIES,
+  upstream,
+} from "./graph"
 
 function Field({
   label,
@@ -96,7 +109,7 @@ export interface InspectorProps {
   issues: GraphIssue[]
   lookup: Lookup
   projects: Project[]
-  /** Other workflows a loop can run. */
+  /** Other workflows a loop or sub-workflow can run. */
   loopTargets: { id: string; name: string }[]
   onChange: Change
   onDelete: () => void
@@ -158,6 +171,10 @@ function KindEditor(props: InspectorProps) {
       return <ActionEditor {...props} />
     case "condition":
       return <ConditionEditor {...props} />
+    case "call":
+      return <CallEditor {...props} />
+    case "output":
+      return <OutputEditor {...props} />
     case "loop":
       return (
         <Section title="Loop">
@@ -576,6 +593,307 @@ function ConditionEditor({ graph, node, lookup, projects, onChange }: InspectorP
       )}
       <p className="text-xs text-muted-foreground">
         Yes and No continue with different nodes; connect them on the canvas.
+      </p>
+    </Section>
+  )
+}
+
+/** One value from earlier nodes for an input or output, or none. */
+function ValueRow({
+  id,
+  label,
+  kind,
+  required,
+  sensitive,
+  fallbackText,
+  mapping,
+  outputs,
+  graph,
+  node,
+  lookup,
+  values,
+  onChange,
+}: {
+  id: string
+  label: string
+  kind: ValueKind
+  required?: boolean
+  sensitive?: boolean
+  /** What happens without a value. */
+  fallbackText: string
+  mapping: GraphMapping | undefined
+  outputs: OutputOption[]
+  graph: WorkflowGraph
+  node: GraphNode
+  lookup: Lookup
+  values?: Record<string, Record<string, string>>
+  onChange: (mapping: GraphMapping | undefined) => void
+}) {
+  const first = outputs[0]?.reference
+  const fallback: GraphMapping = first
+    ? { type: "output", reference: first }
+    : { type: "template", template: "" }
+  const parameter: ParameterSpec = {
+    key: id,
+    label,
+    kind: parameterKindOf(kind),
+    required: Boolean(required),
+  }
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-2 rounded-md border p-2.5">
+      <div className="flex items-center gap-2">
+        <span className="flex-1 text-xs font-medium">
+          {label}
+          <span className="font-normal text-muted-foreground">
+            {" "}
+            · {VALUE_KIND_LABEL[kind]}
+            {required ? " · required" : ""}
+            {sensitive ? " · sensitive" : ""}
+          </span>
+        </span>
+        <Select
+          value={mapping ? "mapped" : "unset"}
+          onValueChange={(mode) => {
+            onChange(mode === "mapped" ? fallback : undefined)
+          }}
+        >
+          <SelectTrigger className="h-7 w-36 text-xs" aria-label={`${label} source`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="unset">No value</SelectItem>
+            <SelectItem value="mapped">From earlier nodes</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      {mapping ? (
+        <MappingEditor
+          id={`value-${id}`}
+          mapping={mapping}
+          parameter={parameter}
+          outputs={outputs}
+          values={values}
+          problem={(reference) => referenceProblem(graph, node.id, reference, lookup)}
+          onChange={onChange}
+        />
+      ) : (
+        <p className={required ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
+          {required ? "Needs a value." : fallbackText}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function withValue(
+  values: Record<string, GraphMapping> | undefined,
+  key: string,
+  mapping: GraphMapping | undefined,
+): Record<string, GraphMapping> {
+  const next = Object.fromEntries(Object.entries(values ?? {}).filter(([k]) => k !== key))
+  if (mapping) next[key] = mapping
+  return next
+}
+
+/** A sub-workflow: the workflow it runs, its inputs and failure handling. */
+function CallEditor({ graph, node, lookup, values, loopTargets, onChange }: InspectorProps) {
+  if (node.type !== "call") return null
+  const callee = lookup.workflows.find((w) => w.id === node.workflow)
+  const outputs = outputOptions(graph, node.id, lookup)
+  const policy = node.policy
+  const setPolicy = (change: Partial<ErrorPolicy>) => {
+    onChange((n) => (n.type === "call" ? { ...n, policy: { ...n.policy, ...change } } : n))
+  }
+  const declared = callee?.inputs ?? []
+  const unknown = Object.keys(node.inputs ?? {}).filter(
+    (key) => !declared.some((input) => input.key === key),
+  )
+  return (
+    <>
+      <Section title="Sub-workflow">
+        <Field
+          label="Workflow"
+          htmlFor="call-workflow"
+          hint="Runs once, with this run's project context; this run waits for it."
+        >
+          <Select
+            value={callee ? node.workflow : undefined}
+            onValueChange={(workflow) => {
+              onChange((n) => (n.type === "call" ? { ...n, workflow, inputs: {} } : n))
+            }}
+          >
+            <SelectTrigger id="call-workflow" className="w-full">
+              <SelectValue placeholder="The workflow no longer exists" />
+            </SelectTrigger>
+            <SelectContent>
+              {loopTargets.map((w) => (
+                <SelectItem key={w.id} value={w.id}>
+                  {w.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        {callee?.description && (
+          <p className="text-xs text-muted-foreground">{callee.description}</p>
+        )}
+      </Section>
+      {callee && (
+        <Section title="Inputs">
+          {declared.length === 0 && (
+            <p className="text-xs text-muted-foreground">
+              {callee.name} declares no inputs. Inputs are declared in its workflow panel.
+            </p>
+          )}
+          {declared.map((input) => (
+            <ValueRow
+              key={input.key}
+              id={input.key}
+              label={input.label || input.key}
+              kind={input.kind}
+              required={input.required}
+              sensitive={input.sensitive}
+              fallbackText={
+                input.default !== undefined
+                  ? `Uses the default “${input.default}”.`
+                  : "Not set; the workflow gets no value."
+              }
+              mapping={node.inputs?.[input.key]}
+              outputs={outputs}
+              graph={graph}
+              node={node}
+              lookup={lookup}
+              values={values}
+              onChange={(mapping) => {
+                onChange((n) =>
+                  n.type === "call" ? { ...n, inputs: withValue(n.inputs, input.key, mapping) } : n,
+                )
+              }}
+            />
+          ))}
+          {unknown.map((key) => (
+            <div key={key} className="flex items-center gap-2 text-xs text-destructive">
+              <span className="flex-1">
+                <code className="font-mono">{key}</code> is no longer an input of {callee.name}.
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-1.5 text-xs"
+                onClick={() => {
+                  onChange((n) =>
+                    n.type === "call" ? { ...n, inputs: withValue(n.inputs, key, undefined) } : n,
+                  )
+                }}
+              >
+                Remove
+              </Button>
+            </div>
+          ))}
+        </Section>
+      )}
+      <Section title="On failure">
+        <Field
+          label="When the sub-workflow fails"
+          htmlFor="call-on-error"
+          hint="A connected “On error” output always handles the failure. Sub-workflows are not retried."
+        >
+          <Select
+            value={policy.onError}
+            onValueChange={(value) => {
+              setPolicy({ onError: value as ErrorPolicy["onError"] })
+            }}
+          >
+            <SelectTrigger id="call-on-error" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="stop">Stop the workflow</SelectItem>
+              <SelectItem value="continue">Continue with Next</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field
+          label="Timeout (seconds)"
+          htmlFor="call-timeout"
+          hint={`Default ${formatMs(DEFAULT_CALL_TIMEOUT_MS)}. Cancelling the run or reaching the timeout stops the sub-workflow too.`}
+        >
+          <Input
+            id="call-timeout"
+            type="number"
+            min={1}
+            placeholder={String(DEFAULT_CALL_TIMEOUT_MS / 1000)}
+            value={policy.timeoutMs === undefined ? "" : policy.timeoutMs / 1000}
+            onChange={(e) => {
+              const text = e.target.value
+              setPolicy({
+                timeoutMs: text === "" ? undefined : Math.max(1, Math.round(Number(text) * 1000)),
+              })
+            }}
+          />
+        </Field>
+      </Section>
+      {callee && (
+        <Section title="Outputs">
+          {(callee.outputs ?? []).length === 0 ? (
+            <p className="text-xs text-muted-foreground">{callee.name} returns no outputs.</p>
+          ) : (
+            <ul className="grid gap-1 text-xs" aria-label="Sub-workflow outputs">
+              {(callee.outputs ?? []).map((output) => (
+                <li key={output.key} className="flex gap-2">
+                  <code className="font-mono">{output.key}</code>
+                  <span className="flex-1 text-muted-foreground">
+                    {output.label || output.key}
+                    {output.sensitive ? " · not kept in history" : ""}
+                  </span>
+                  <span className="text-muted-foreground">{VALUE_KIND_LABEL[output.kind]}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
+      )}
+    </>
+  )
+}
+
+/** An Output node: values of the open workflow's declared outputs. */
+function OutputEditor({ graph, node, lookup, values, onChange }: InspectorProps) {
+  if (node.type !== "output") return null
+  const declared = lookup.outputs ?? []
+  const outputs = outputOptions(graph, node.id, lookup)
+  return (
+    <Section title="Outputs">
+      {declared.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          This workflow declares no outputs. Declare them in the workflow panel (click the canvas
+          background).
+        </p>
+      )}
+      {declared.map((output) => (
+        <ValueRow
+          key={output.key}
+          id={output.key}
+          label={output.label || output.key}
+          kind={output.kind}
+          sensitive={output.sensitive}
+          fallbackText="Not set by this node."
+          mapping={node.values?.[output.key]}
+          outputs={outputs}
+          graph={graph}
+          node={node}
+          lookup={lookup}
+          values={values}
+          onChange={(mapping) => {
+            onChange((n) =>
+              n.type === "output" ? { ...n, values: withValue(n.values, output.key, mapping) } : n,
+            )
+          }}
+        />
+      ))}
+      <p className="text-xs text-muted-foreground">
+        The node that calls this workflow gets these values. When several Output nodes run, the
+        later one wins.
       </p>
     </Section>
   )

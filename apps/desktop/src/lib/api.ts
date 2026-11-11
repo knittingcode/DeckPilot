@@ -209,8 +209,7 @@ export const api = {
     pageId: string,
     projectId: string | null,
     render?: boolean,
-  ) =>
-    invoke<ControlFace[]>("preview_layout", { profileId, layout, pageId, projectId, render }),
+  ) => invoke<ControlFace[]>("preview_layout", { profileId, layout, pageId, projectId, render }),
   listIcons: (profileId: string) => invoke<IconInfo[]>("list_icons", { profileId }),
   /** `data`: the PNG or JPEG file as base64 (at most 2 MiB). */
   importIcon: (profileId: string, name: string, data: string) =>

@@ -526,9 +526,22 @@ function ProjectForm({
   }
   const submit = async (event: React.SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault()
-    const resources = Object.fromEntries(
-      rows.filter((r) => r.role.trim() || r.key.trim()).map((r) => [r.role, r.key]),
-    )
+    const filled = rows
+      .map((r) => ({ role: r.role.trim(), key: r.key.trim() }))
+      .filter((r) => r.role || r.key)
+    // A half-filled row or a repeated role would otherwise be saved silently
+    // as an empty role or overwrite the earlier row.
+    if (filled.some((r) => !r.role || !r.key)) {
+      setError("Each resource needs a role and a resource key.")
+      return
+    }
+    const roles = filled.map((r) => r.role)
+    const repeated = roles.find((role, index) => roles.indexOf(role) !== index)
+    if (repeated) {
+      setError(`The role “${repeated}” is used twice.`)
+      return
+    }
+    const resources = Object.fromEntries(filled.map((r) => [r.role, r.key]))
     try {
       if (project) await api.updateProject(profileId, project.id, { key, name, resources })
       else await api.createProject(profileId, { key, name, resources })
@@ -576,7 +589,12 @@ function ProjectForm({
       <div className="grid gap-2">
         <Label>Resources</Label>
         {rows.map((row, index) => (
-          <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+          <div
+            key={index}
+            role="group"
+            aria-label={`Resource ${index + 1}`}
+            className="grid grid-cols-[1fr_1fr_auto] gap-2"
+          >
             <Input
               aria-label="Role"
               value={row.role}

@@ -1,0 +1,19 @@
+[package]
+name = "deckpilot-module-github"
+description = "DeckPilot GitHub feature module: read-only pull requests, reviews and checks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+deckpilot-core.workspace = true
+deckpilot-module-http.workspace = true
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+serde_json.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true
