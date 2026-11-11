@@ -4,10 +4,15 @@ import type {
   ExecutionRecord,
   ExecutionState,
   ExecutionSummary,
+  NodeProgress,
 } from "@/lib/types"
 
 /** A run as this window knows it; `attempts` counts retries seen live. */
-export type LiveExecution = ExecutionRecord & { attempts?: Record<string, number> }
+export type LiveExecution = ExecutionRecord & {
+  attempts?: Record<string, number>
+  /** The latest progress of running nodes. */
+  progress?: Record<string, NodeProgress>
+}
 
 /**
  * Workflow runs as the agent reports them. Runs execute in the agent, so
@@ -82,6 +87,10 @@ export class ExecutionStore extends Store<LiveExecution> {
         let attempts = current.attempts
         if (event.type === "nodeStarted") running.add(event.node)
         if (event.type === "retrying") attempts = { ...attempts, [event.node]: event.attempt }
+        let progress = current.progress
+        if (event.type === "nodeProgress") {
+          progress = { ...progress, [event.node]: event.progress }
+        }
         if (event.type === "nodeFinished") {
           running.delete(event.report.node)
           nodes = [...nodes.filter((n) => n.node !== event.report.node), event.report]
@@ -90,6 +99,7 @@ export class ExecutionStore extends Store<LiveExecution> {
           ...current,
           nodes,
           attempts,
+          progress,
           runningNodes: [...running],
           completedNodes: message.completed,
           totalNodes: message.total,

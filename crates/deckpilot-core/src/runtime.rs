@@ -74,7 +74,7 @@ impl Engine {
         let instance = profile
             .action(action)
             .ok_or(EngineError::UnknownAction(action))?;
-        self.execute(profile, machine, context, instance, None)
+        self.execute(profile, machine, context, instance, None, None)
     }
 
     /// Runs the steps of a workflow in order. Effects of a step are applied
@@ -126,7 +126,7 @@ impl Engine {
             let result = match profile.action(step.action) {
                 Some(instance) => {
                     let overrides = (!step.overrides.is_empty()).then_some(&step.overrides);
-                    self.execute(profile, machine, context, instance, overrides)?
+                    self.execute(profile, machine, context, instance, overrides, None)?
                 }
                 None => ActionResult::failure("action no longer exists"),
             };
@@ -245,10 +245,25 @@ impl Engine {
             } else {
                 on_event(ExecutionEvent::NodeStarted { node: node.clone() });
                 let begun = std::time::Instant::now();
+                let token = cancel.child();
+                let progress = |progress: crate::Progress| {
+                    on_event(ExecutionEvent::NodeProgress {
+                        node: node.clone(),
+                        progress,
+                    });
+                };
+                let control = crate::ExecutionControl::new(&token, &progress);
                 let result = match profile.action(step.action) {
                     Some(instance) => {
                         let overrides = (!step.overrides.is_empty()).then_some(&step.overrides);
-                        self.execute(profile, machine, context, instance, overrides)?
+                        self.execute(
+                            profile,
+                            machine,
+                            context,
+                            instance,
+                            overrides,
+                            Some(&control),
+                        )?
                     }
                     None => ActionResult::failure("action no longer exists"),
                 };
@@ -332,9 +347,17 @@ impl Engine {
         }
         let run_action = |instance: &ActionInstance,
                           overrides: &ActionParameters,
-                          context: &mut ActiveProjectContext| {
+                          context: &mut ActiveProjectContext,
+                          control: &crate::ExecutionControl<'_>| {
             let overrides = (!overrides.is_empty()).then_some(overrides);
-            self.execute(profile, machine, context, instance, overrides)
+            self.execute(
+                profile,
+                machine,
+                context,
+                instance,
+                overrides,
+                Some(control),
+            )
         };
         // Nested workflows report their progress as part of the Loop node.
         let run_nested = |nested: WorkflowId, context: &mut ActiveProjectContext| {
@@ -378,14 +401,18 @@ impl Engine {
         context: &mut ActiveProjectContext,
         instance: &ActionInstance,
         overrides: Option<&ActionParameters>,
+        control: Option<&crate::ExecutionControl<'_>>,
     ) -> Result<ActionResult, EngineError> {
         let project = context.project(profile)?;
+        let base = ExecutionContext::new(profile, project, machine);
+        let base = match control {
+            Some(control) => base.with_control(control),
+            None => base,
+        };
         let Some(handler) = self.registry.handler(&instance.action_type) else {
-            return Ok(self.registry.dispatch(
-                &instance.action_type,
-                &instance.parameters,
-                &ExecutionContext::new(profile, project, machine),
-            ));
+            return Ok(self
+                .registry
+                .dispatch(&instance.action_type, &instance.parameters, &base));
         };
         if handler.definition().requires_project && project.is_none() {
             return Ok(ActionResult::failure(
@@ -415,7 +442,7 @@ impl Engine {
                 problems.join("; ")
             )));
         }
-        let execution = ExecutionContext::new(profile, project, machine);
+        let execution = base;
         let mut result = self
             .registry
             .dispatch(&instance.action_type, &parameters, &execution);

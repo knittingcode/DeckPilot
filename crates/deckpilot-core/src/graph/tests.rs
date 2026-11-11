@@ -42,12 +42,19 @@ impl ActionHandler for Probe {
     fn execute(
         &self,
         parameters: &crate::ActionParameters,
-        _: &ExecutionContext<'_>,
+        context: &ExecutionContext<'_>,
     ) -> ActionResult {
         let message = parameters.text("message").unwrap_or_default().to_owned();
         self.log.lock().unwrap().push(message.clone());
         if let Some(ms) = parameters.integer("sleep_ms") {
             std::thread::sleep(Duration::from_millis(u64::try_from(ms).unwrap()));
+        }
+        // Cooperative: waits through the context and stops when cancelled.
+        if let Some(ms) = parameters.integer("wait_ms") {
+            context.report_progress(Some(0), "waiting");
+            if !context.wait(Duration::from_millis(u64::try_from(ms).unwrap())) {
+                return ActionResult::failure(format!("{message} stopped"));
+            }
         }
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         let fail_times = parameters.integer("fail_times").unwrap_or(0);
@@ -94,6 +101,13 @@ impl Fixture {
                         ),
                         parameter(
                             "fail_times",
+                            ParameterKind::Integer {
+                                min: None,
+                                max: None,
+                            },
+                        ),
+                        parameter(
+                            "wait_ms",
                             ParameterKind::Integer {
                                 min: None,
                                 max: None,
@@ -1038,4 +1052,136 @@ fn graphs_round_trip_and_legacy_workflows_serialize_unchanged() {
 
     // Node ids are restricted to what references can name.
     assert!(serde_json::from_str::<NodeId>(r#""Bad Id""#).is_err());
+}
+
+/// Cancels `token` after `ms`, from another thread.
+fn cancel_after(token: &CancellationToken, ms: u64) -> std::thread::JoinHandle<()> {
+    let token = token.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(ms));
+        token.cancel();
+    })
+}
+
+#[test]
+fn cancellation_reaches_cooperative_actions_while_they_run() {
+    let mut f = Fixture::new();
+    let wait = f.probe("long", &[("wait_ms", ParameterValue::Integer(30_000))]);
+    let after = f.probe("after", &[]);
+    let workflow = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            action("long", wait),
+            action("after", after),
+        ],
+        vec![
+            edge("start", Port::Out, "long"),
+            edge("long", Port::Out, "after"),
+        ],
+    ));
+    let cancel = CancellationToken::new();
+    let canceller = cancel_after(&cancel, 100);
+    let begun = std::time::Instant::now();
+    let (report, events, _) = f.run_with(workflow, &cancel);
+    canceller.join().unwrap();
+    assert!(
+        begun.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        begun.elapsed()
+    );
+    assert_eq!(report.status, RunStatus::Cancelled);
+    let long = report.node(&n("long")).unwrap();
+    assert_eq!(long.status, NodeStatus::Cancelled);
+    assert_eq!(long.error.as_ref().unwrap().code, "cancelled");
+    assert_eq!(status(&report, "after"), NodeStatus::Cancelled);
+    // Progress reported by the action arrived as an event.
+    assert!(events.iter().any(|e| matches!(
+        e,
+        ExecutionEvent::NodeProgress { node, progress } if node == &n("long") && progress.message == "waiting"
+    )));
+}
+
+#[test]
+fn cancellation_during_retry_backoff_is_not_a_failure() {
+    let mut f = Fixture::new();
+    let flaky = f.probe("flaky", &[("fail_times", ParameterValue::Integer(5))]);
+    let workflow = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            with_policy(
+                action("flaky", flaky),
+                ErrorPolicy {
+                    retry: RetryPolicy {
+                        attempts: 3,
+                        backoff_ms: 30_000,
+                    },
+                    ..ErrorPolicy::default()
+                },
+            ),
+        ],
+        vec![edge("start", Port::Out, "flaky")],
+    ));
+    let cancel = CancellationToken::new();
+    let canceller = cancel_after(&cancel, 100);
+    let begun = std::time::Instant::now();
+    let report = f.run_with(workflow, &cancel).0;
+    canceller.join().unwrap();
+    assert!(begun.elapsed() < Duration::from_secs(5));
+    assert_eq!(report.status, RunStatus::Cancelled);
+    let flaky = report.node(&n("flaky")).unwrap();
+    assert_eq!(flaky.status, NodeStatus::Cancelled);
+    assert_eq!(flaky.attempts, 1);
+    assert_eq!(flaky.error.as_ref().unwrap().code, "cancelled");
+}
+
+#[test]
+fn cooperative_actions_stop_at_their_timeout_and_report_a_timeout() {
+    let mut f = Fixture::new();
+    let wait = f.probe("long", &[("wait_ms", ParameterValue::Integer(30_000))]);
+    let workflow = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            with_policy(
+                action("long", wait),
+                ErrorPolicy {
+                    timeout_ms: Some(100),
+                    ..ErrorPolicy::default()
+                },
+            ),
+        ],
+        vec![edge("start", Port::Out, "long")],
+    ));
+    let begun = std::time::Instant::now();
+    let report = f.run(workflow);
+    assert!(begun.elapsed() < Duration::from_secs(5));
+    assert_eq!(report.status, RunStatus::Failed);
+    let long = report.node(&n("long")).unwrap();
+    assert_eq!(long.status, NodeStatus::Failed);
+    assert_eq!(long.error.as_ref().unwrap().code, "timeout");
+}
+
+#[test]
+fn actions_that_finish_despite_a_cancellation_keep_their_result() {
+    let mut f = Fixture::new();
+    // Not cooperative: sleeps through the cancellation and succeeds.
+    let busy = f.probe("busy", &[("sleep_ms", ParameterValue::Integer(200))]);
+    let after = f.probe("after", &[]);
+    let workflow = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            action("busy", busy),
+            action("after", after),
+        ],
+        vec![
+            edge("start", Port::Out, "busy"),
+            edge("busy", Port::Out, "after"),
+        ],
+    ));
+    let cancel = CancellationToken::new();
+    let canceller = cancel_after(&cancel, 50);
+    let report = f.run_with(workflow, &cancel).0;
+    canceller.join().unwrap();
+    assert_eq!(status(&report, "busy"), NodeStatus::Succeeded);
+    assert_eq!(status(&report, "after"), NodeStatus::Cancelled);
+    assert_eq!(report.status, RunStatus::Cancelled);
 }

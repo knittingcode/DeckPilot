@@ -166,6 +166,7 @@ fn start_agent_with(
             std::sync::Arc::new(keys)
         }),
         auto_lock_check: Duration::from_millis(50),
+        cancel_grace: Duration::from_secs(10),
         clock: clock.unwrap_or_else(deckpilot_agent::system_clock),
         screen_lock: screen.map(|screen| -> std::sync::Arc<dyn ScreenLockMonitor> { screen }),
     };
@@ -2213,5 +2214,75 @@ async fn only_permitted_runs_change_the_active_project_and_never_over_a_newer_ch
         other => panic!("unexpected {other:?}"),
     }
     assert_eq!(active_key(&agent.status().await), Some("CMS"));
+    agent.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_interrupts_a_running_action_at_once() {
+    let agent = setup().await;
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let wait = registry()
+        .create_instance(
+            "Wait a while",
+            general::wait_id(),
+            &ActionParameters::new().with("seconds", deckpilot_core::ParameterValue::Integer(300)),
+        )
+        .unwrap();
+    let wait_id = wait.id;
+    profile.actions.push(wait);
+    let mut workflow = deckpilot_core::Workflow::new("Long wait");
+    workflow.graph = Some(
+        serde_json::from_value(json!({
+            "version": 1,
+            "nodes": [
+                {"id": "start", "type": "trigger"},
+                {"id": "wait", "type": "action", "action": wait_id},
+            ],
+            "edges": [{"from": "start", "to": "wait"}],
+        }))
+        .unwrap(),
+    );
+    let workflow_id = workflow.id;
+    profile.workflows.push(workflow);
+    agent.store().save_profile(&profile).unwrap();
+    let mut events = agent.client().await;
+    events.subscribe().await.unwrap();
+    let mut client = agent.client().await;
+    client.request(Request::ReloadConfiguration).await.unwrap();
+
+    let run = start_workflow(&mut client, workflow_id).await;
+    // Wait until the action runs and reports progress.
+    loop {
+        if let AgentEvent::ExecutionProgress {
+            event: deckpilot_core::graph::ExecutionEvent::NodeProgress { .. },
+            ..
+        } = tokio::time::timeout(TIMEOUT, events.next_event())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            break;
+        }
+    }
+    let begun = std::time::Instant::now();
+    client
+        .request(Request::CancelExecution { execution: run.id })
+        .await
+        .unwrap();
+    let (_, finished) = execution_events(&mut events, run.id).await;
+    assert!(
+        begun.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        begun.elapsed()
+    );
+    assert_eq!(finished.state, deckpilot_core::ExecutionState::Cancelled);
+    let record = execution(&mut client, run.id).await;
+    let node = record
+        .nodes
+        .iter()
+        .find(|n| n.node.as_str() == "wait")
+        .unwrap();
+    assert_eq!(node.status, deckpilot_core::graph::NodeStatus::Cancelled);
+    assert_eq!(node.error.as_ref().unwrap().code, "cancelled");
     agent.shutdown().await;
 }

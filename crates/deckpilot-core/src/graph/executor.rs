@@ -35,8 +35,6 @@
 //!   interrupts delays and retry waits. Running actions finish.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -48,35 +46,7 @@ use crate::{
     EngineError, ParameterKind, ParameterValue, Profile, WorkflowId,
 };
 
-/// Stops a run between steps. Cheap to clone; all clones share the flag.
-#[derive(Debug, Clone, Default)]
-pub struct CancellationToken(Arc<AtomicBool>);
-
-impl CancellationToken {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
-    }
-
-    /// Waits `duration` unless cancelled first; `false` if cancelled.
-    pub fn wait(&self, duration: Duration) -> bool {
-        let end = Instant::now() + duration;
-        while Instant::now() < end {
-            if self.is_cancelled() {
-                return false;
-            }
-            std::thread::sleep((end - Instant::now()).min(Duration::from_millis(20)));
-        }
-        !self.is_cancelled()
-    }
-}
+pub use crate::cancel::{CancelReason, CancellationToken};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExecutionLimits {
@@ -188,6 +158,11 @@ pub enum ExecutionEvent {
     NodeFinished {
         report: NodeReport,
     },
+    /// A running action reported progress.
+    NodeProgress {
+        node: NodeId,
+        progress: crate::Progress,
+    },
 }
 
 /// Runs one action instance with the given parameter overrides against a
@@ -196,6 +171,7 @@ pub(crate) type RunAction<'a> = dyn Fn(
         &ActionInstance,
         &ActionParameters,
         &mut ActiveProjectContext,
+        &crate::ExecutionControl<'_>,
     ) -> Result<ActionResult, EngineError>
     + Sync
     + 'a;
@@ -706,10 +682,14 @@ impl Executor<'_> {
                 return finished(report, vec![]);
             }
             let mut working = context.clone();
-            let begun = Instant::now();
-            let result = (self.run_action)(instance, &parameters, &mut working);
-            let late = begun.elapsed() > timeout;
-            let (status, error, message, output) = classify(result, late, timeout, spec.retry_safe);
+            let (status, error, message, output) = self.attempt(
+                id,
+                instance,
+                &parameters,
+                &mut working,
+                timeout,
+                spec.retry_safe,
+            );
             let report = NodeReport {
                 node: id.clone(),
                 status,
@@ -726,6 +706,10 @@ impl Executor<'_> {
                 outcome.context = Some(working);
                 return outcome;
             }
+            if status == NodeStatus::Cancelled {
+                // Stopped by a cancellation of the run: not a failure.
+                return finished(report, vec![]);
+            }
             last = Some(report);
             if attempt < attempts {
                 let wait =
@@ -736,12 +720,57 @@ impl Executor<'_> {
                     wait_ms: wait,
                 });
                 if !self.cancel.wait(Duration::from_millis(wait)) {
-                    break;
+                    // Cancelled while waiting to retry.
+                    let mut report = idle(id, NodeStatus::Cancelled, started_ms);
+                    report.attempts = attempt;
+                    report.action = Some(action);
+                    report.error = Some(StepError::new(
+                        "cancelled",
+                        "cancelled while waiting to retry",
+                        false,
+                    ));
+                    return finished(report, vec![]);
                 }
             }
         }
         let report = last.unwrap_or_else(|| idle(id, NodeStatus::Failed, started_ms));
         self.route_failure(report, policy.on_error, id)
+    }
+
+    /// Runs one attempt of an action with its own token, cancelled with the
+    /// run or at the timeout, and classifies the result.
+    fn attempt(
+        &self,
+        id: &NodeId,
+        instance: &ActionInstance,
+        parameters: &ActionParameters,
+        working: &mut ActiveProjectContext,
+        timeout: Duration,
+        retry_safe: bool,
+    ) -> (
+        NodeStatus,
+        Option<StepError>,
+        String,
+        BTreeMap<String, String>,
+    ) {
+        let begun = Instant::now();
+        let token = self.cancel.child_with_deadline(begun + timeout);
+        let progress = |progress: crate::Progress| {
+            (self.on_event)(ExecutionEvent::NodeProgress {
+                node: id.clone(),
+                progress,
+            });
+        };
+        let control = crate::ExecutionControl::new(&token, &progress);
+        let result = (self.run_action)(instance, parameters, working, &control);
+        let late = begun.elapsed() > timeout;
+        classify(
+            result,
+            late,
+            timeout,
+            retry_safe,
+            self.cancel.is_cancelled(),
+        )
     }
 
     /// A failed action continues through `error` if connected, through `out`
@@ -852,19 +881,39 @@ fn finished(report: NodeReport, ports: Vec<Port>) -> Outcome {
     }
 }
 
-/// The outcome of one attempt: status, error, message and outputs. A late
-/// result is a timeout, whatever it was.
+/// The outcome of one attempt: status, error, message and outputs.
+///
+/// - An action that succeeded in time succeeded, even if the run was
+///   cancelled meanwhile: its effects happened.
+/// - Otherwise, when the run was cancelled, the attempt is cancelled — not
+///   failed and not timed out.
+/// - A late result is a timeout, whatever it was.
 fn classify(
     result: Result<ActionResult, EngineError>,
     late: bool,
     timeout: Duration,
     retry_safe: bool,
+    cancelled: bool,
 ) -> (
     NodeStatus,
     Option<StepError>,
     String,
     BTreeMap<String, String>,
 ) {
+    let succeeded = matches!(&result, Ok(r) if r.is_success());
+    if cancelled && (!succeeded || late) {
+        let message = result.map(|r| r.message).unwrap_or_default();
+        return (
+            NodeStatus::Cancelled,
+            Some(StepError::new(
+                "cancelled",
+                "cancelled while running",
+                false,
+            )),
+            message,
+            BTreeMap::new(),
+        );
+    }
     match result {
         Ok(result) if late => (
             NodeStatus::Failed,

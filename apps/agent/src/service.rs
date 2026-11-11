@@ -70,6 +70,10 @@ pub struct AgentOptions {
     pub key_store: Option<Arc<dyn KeyStore>>,
     /// How often auto-lock conditions are checked.
     pub auto_lock_check: Duration,
+    /// How long a cancelled workflow may take to stop before it is recorded
+    /// as cancelled anyway (an action that cannot be interrupted is still
+    /// finishing; its result is discarded).
+    pub cancel_grace: Duration,
     pub clock: Clock,
     /// Detects the screen lock, where the platform allows it.
     pub screen_lock: Option<Arc<dyn deckpilot_presence::ScreenLockMonitor>>,
@@ -335,6 +339,7 @@ impl Agent {
                 }
                 _ = auto_lock.tick() => {
                     self.check_auto_lock();
+                    self.expire_cancelled_executions();
                     Flow::Continue
                 }
             };
@@ -1189,6 +1194,7 @@ pub fn default_options(paths: AgentPaths, mock_models: &[DeviceModel]) -> AgentO
         open_window: Some(Box::new(crate::launcher::open_window)),
         key_store: security::system_key_store(),
         auto_lock_check: AUTO_LOCK_CHECK,
+        cancel_grace: executions::CANCEL_GRACE,
         clock: system_clock(),
         screen_lock: deckpilot_presence::screen_lock_monitor().map(Arc::from),
     }

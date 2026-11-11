@@ -63,6 +63,19 @@ describe("ExecutionStore", () => {
     expect(store.get("e1")?.nodes).toHaveLength(2)
   })
 
+  it("keeps the latest progress of running nodes", () => {
+    const store = new ExecutionStore()
+    store.apply({ type: "executionStarted", execution: summary() })
+    store.apply({
+      type: "executionProgress",
+      execution: "e1",
+      event: { type: "nodeProgress", node: "wait", progress: { percent: 40, message: "2 of 5 s" } },
+      completed: 0,
+      total: 3,
+    })
+    expect(store.get("e1")?.progress?.wait).toEqual({ percent: 40, message: "2 of 5 s" })
+  })
+
   it("asks for runs it has not seen start", () => {
     const store = new ExecutionStore()
     expect(

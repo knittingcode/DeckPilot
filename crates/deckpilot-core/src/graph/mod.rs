@@ -24,8 +24,8 @@ use crate::{ActionInstanceId, ActionParameters, WorkflowId};
 
 pub use convert::{Conversion, from_steps};
 pub use executor::{
-    CancellationToken, ExecutionEvent, ExecutionLimits, GraphReport, NodeReport, NodeStatus,
-    RunStatus, StepError,
+    CancelReason, CancellationToken, ExecutionEvent, ExecutionLimits, GraphReport, NodeReport,
+    NodeStatus, RunStatus, StepError,
 };
 pub use mapping::{Reference, TemplateError, parse_template, references_in};
 pub use validate::{GraphIssue, IssueSeverity};
@@ -373,6 +373,8 @@ pub struct OutputSpec {
 /// for the editor and the engine. Declared by the module on its action type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+// Independent, declared properties of the node contract.
+#[allow(clippy::struct_excessive_bools)]
 pub struct NodeSpec {
     /// Version of the node's parameter and output schema.
     pub version: u32,
@@ -385,9 +387,14 @@ pub struct NodeSpec {
     pub retry_safe: bool,
     /// Running the action twice has the same effect as once.
     pub idempotent: bool,
-    /// The action changes the active project. Such actions may not run in
-    /// parallel branches.
+    /// The action selects a project: it changes the run's project context
+    /// for the nodes after it.
     pub changes_context: bool,
+    /// The action checks its cancellation token (`ExecutionContext::
+    /// is_cancelled`, `wait`) and stops promptly when the run is cancelled
+    /// or its timeout passes. When `false`, a running action finishes before
+    /// cancellation or a timeout takes effect, and the editor says so.
+    pub cancellable: bool,
 }
 
 impl Default for NodeSpec {
@@ -400,6 +407,7 @@ impl Default for NodeSpec {
             retry_safe: false,
             idempotent: false,
             changes_context: false,
+            cancellable: false,
         }
     }
 }

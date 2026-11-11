@@ -447,7 +447,11 @@ function ActionEditor({ graph, node, lookup, projects, onChange }: InspectorProp
         <Field
           label="Timeout (seconds)"
           htmlFor="node-timeout"
-          hint={`Default ${formatMs(spec?.timeoutMs ?? 30000)}`}
+          hint={`Default ${formatMs(spec?.timeoutMs ?? 30000)}. ${
+            spec?.cancellable
+              ? "Stops at once when the run is cancelled or the time is up."
+              : "Cannot be interrupted: it finishes before a cancellation or timeout takes effect, and a late result is discarded."
+          }`}
         >
           <Input
             id="node-timeout"
