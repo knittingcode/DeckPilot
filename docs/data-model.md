@@ -115,8 +115,10 @@ bound on this machine, kind mismatch.
 - **DeviceCapabilities** – optional `keys` (rows, columns, image spec),
   `encoders` (count, pressable), `touch` (zones, image spec, gestures).
 - **ControlId** – `{ "kind": "key", "index": 0 }`, `encoder`, `touchZone`.
-- **DeviceLayout** – `id`, `name`, `model`, `homePage`, `pages`.
-- **LayoutPage** – `id`, `name`, `bindings: ControlBinding[]`.
+- **DeviceLayout** – `id`, `name`, `model`, `homePage`, `pages` (in
+  order), optional `explicitTree` (see [Pages and folders](#pages-and-folders)).
+- **LayoutPage** – `id`, `name`, optional `parent` (the folder it is in),
+  `bindings: ControlBinding[]`.
 - **ControlBinding** – `control`, `trigger` (`press`, `release`,
   `rotateClockwise`, `rotateCounterClockwise`, `touch { gesture }`), `target`
   (`action`, `workflow`, `openPage`, `back`), optional `label`, optional
@@ -142,6 +144,72 @@ opens a next page (“More”) and the first key of following pages goes back.
   `appearance` (the binding's, when it sets anything), and the live state
   `indicator`, `progress`, `toggle` (see
   [Button state](modules.md#button-state)).
+
+### Pages and folders
+
+A layout's pages form a tree: every page except the home page may be in a
+folder (`parent`), and Back returns to the folder. `pages` is the order the
+editor shows.
+
+**Old layouts and inference.** Layouts written before `parent` existed
+store no tree. Their tree is inferred when read: a page's folder is the
+page that opens it first in a breadth-first walk from the home page
+through `openPage` bindings (pages in layout order, bindings in page
+order). Stored parents always win, inference never creates a cycle, and
+pages nothing opens are top level. Reading or saving a layout without
+structural edits changes nothing in it.
+
+The first structural edit — reordering, refiling, moving or copying a
+page — stores the whole tree (`DeviceLayout::infer_parents`) and sets
+`explicitTree: true`. This is lossless (bindings and stored parents are
+untouched; the tree stays the same) and idempotent (doing it again changes
+nothing). With `explicitTree`, nothing is inferred and a page without
+`parent` is top level. An editor that changes parents itself sets
+`explicitTree` (or calls `page_tree` first to get the inferred parents).
+
+**Validation.** Errors: a parent that does not exist (`UnknownParent`),
+parents that form a cycle (`ParentCycle`), a parent on the home page
+(`HomeHasParent`).
+
+**Back.** A page inside a folder must have a way back: a Back binding or a
+binding that opens one of its folders. A page without one is a *warning*
+(`MissingBack`, from `DeviceLayout::warnings`), not an error, so older
+layouts keep loading, saving and importing. For such a page the runtime
+shows an automatic Back key on its first free key (lowest key index
+without a binding; `DeviceLayout::automatic_back`) — never on a bound key;
+the layout preview shows it too.
+
+**Navigation.** Opening a page pushes it on the device's page stack. Back
+goes to the current page's folder (also when the page was opened directly
+from elsewhere); for a top-level page, back to the page that opened it.
+
+**Moving and copying** (`Profile::move_page`, `Profile::copy_page`) take a
+page with its bindings and every page inside it, at any depth:
+
+- *Within a layout*, a move puts the page into another folder (`parent`;
+  none: top level), keeping identifiers; moving a page into itself or one
+  of its folders is refused (`PageCycle`). A copy gets new identifiers, sits
+  next to the original unless a folder is given, and its links to pages
+  inside the copied tree point to the copies.
+- *To another layout*, the destination's model must support every copied
+  binding (otherwise `IncompatiblePage`, nothing changes); the page goes
+  into the given folder or the destination's home page. Links to pages
+  outside the moved tree are refused (`OpensOutside`). A moved page keeps
+  its identifiers, and keys of the old layout that opened it are removed.
+- The home page cannot be moved (`HomePage`). Reordering must list every
+  page once (`PageOrder`).
+
+App commands (Tauri):
+
+| Command | Arguments | Result |
+| ------- | --------- | ------ |
+| `page_tree` | `layout` (saved or not) | `{ pages: [{ id, name, parent, stored, depth, automaticBack }], warnings }` |
+| `reorder_pages` | `profileId`, `layoutId`, `order` | the saved layout |
+| `move_page` | `profileId`, `layoutId`, `pageId`, optional `targetLayoutId`, optional `parentId` | `{ page, removedKeys, layouts }` |
+| `copy_page` | same | same (`page` is the copy) |
+
+`save_layout` accepts `parent` and `explicitTree` and refuses the errors
+above.
 
 ### Key appearance
 

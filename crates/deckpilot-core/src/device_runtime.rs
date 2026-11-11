@@ -402,10 +402,23 @@ impl Runtime {
                 else {
                     return ignored("no layout for this device model");
                 };
-                let target = layout
+                let mut target = layout
                     .page(page_id)
                     .and_then(|page| page.binding_for(*control, *input))
                     .map(|binding| binding.target);
+                // A folder page without a way back gets one on its first
+                // free key.
+                if target.is_none() && matches!(input, deckpilot_device::ControlInput::Press) {
+                    let controls: Vec<ControlId> = model
+                        .capabilities
+                        .controls()
+                        .into_iter()
+                        .filter(|c| model.capabilities.has_display(*c))
+                        .collect();
+                    if layout.automatic_back(page_id, &controls) == Some(*control) {
+                        target = Some(BindingTarget::Back);
+                    }
+                }
                 match target {
                     None => ignored("control is not bound"),
                     Some(target) => self.dispatch(device, target),
@@ -439,9 +452,27 @@ impl Runtime {
                 })
             }
             BindingTarget::Back => {
+                // Back returns to the page's folder; for a page outside
+                // folders, to the page that opened it.
+                let current = self.current_page(device);
+                let folder = current.and_then(|page| {
+                    let layout = self.layout_for(&device.model)?;
+                    let parent = layout.parent_of(page)?;
+                    let mut path = layout.ancestors(parent);
+                    path.reverse();
+                    path.push(parent);
+                    Some((parent, path))
+                });
                 let stack = self.navigation.entry(device.clone()).or_default();
-                if stack.len() > 1 {
-                    stack.pop();
+                match folder {
+                    Some((parent, path)) => match stack.iter().position(|p| *p == parent) {
+                        Some(index) => stack.truncate(index + 1),
+                        None => *stack = path,
+                    },
+                    None if stack.len() > 1 => {
+                        stack.pop();
+                    }
+                    None => {}
                 }
                 match stack.last() {
                     Some(page) => Ok(RuntimeOutcome::Navigated {
@@ -473,14 +504,24 @@ pub fn page_faces(
             .map(|control| (*control, KeyFace::empty()))
             .collect();
     };
+    let automatic_back = layout.automatic_back(page.id, controls);
     controls
         .iter()
         .map(|control| {
             let binding = shown_binding(page, *control);
-            let face = binding.map_or_else(KeyFace::empty, |binding| {
-                face_for(registry, binding, layout, profile, project)
-                    .with_appearance(binding.appearance.as_ref())
-            });
+            let face = binding.map_or_else(
+                || {
+                    if automatic_back == Some(*control) {
+                        KeyFace::new(FaceStyle::Back, "Back")
+                    } else {
+                        KeyFace::empty()
+                    }
+                },
+                |binding| {
+                    face_for(registry, binding, layout, profile, project)
+                        .with_appearance(binding.appearance.as_ref())
+                },
+            );
             (*control, face)
         })
         .collect()
@@ -744,6 +785,53 @@ mod tests {
         let faces = runtime.faces(&device());
         assert_eq!(faces[0].1.detail.as_deref(), Some("CMS"));
         assert!(faces[2].1.highlighted);
+    }
+
+    #[test]
+    fn back_returns_to_the_folder_and_folders_without_back_get_one() {
+        let mut f = fixture();
+        let layout = &mut f.profile.layouts[0];
+        let home = layout.home_page;
+        let folder = layout.pages[1].id;
+        // "Sub" is inside the folder, has no Back key, and Home opens it
+        // directly (key 3).
+        let mut sub = LayoutPage::new("Sub");
+        sub.parent = Some(folder);
+        let sub_id = sub.id;
+        layout.pages.push(sub);
+        layout
+            .page_mut(home)
+            .unwrap()
+            .bindings
+            .push(ControlBinding::new(
+                ControlId::Key { index: 3 },
+                Trigger::Press,
+                BindingTarget::OpenPage { page: sub_id },
+            ));
+        let mut runtime = runtime();
+        runtime.set_profile(Some(f.profile), None);
+        runtime
+            .handle_event(&DeviceEvent::Connected { device: device() })
+            .unwrap();
+        runtime.handle_event(&press(3)).unwrap();
+        assert_eq!(runtime.current_page(&device()), Some(sub_id));
+        // The automatic Back sits on the first free key.
+        let faces = runtime.faces(&device());
+        assert_eq!(faces[0].1.style, FaceStyle::Back);
+        assert!(faces[1].1.is_empty());
+        // Back goes to the page's folder, not to where it was opened from.
+        assert!(matches!(
+            runtime.handle_event(&press(0)).unwrap(),
+            RuntimeOutcome::Navigated { page, .. } if page == folder
+        ));
+        // The folder's own Back key (key 1) goes home.
+        runtime.handle_event(&press(1)).unwrap();
+        assert_eq!(runtime.current_page(&device()), Some(home));
+        // Opened the usual way, the folder goes back home as before.
+        runtime.handle_event(&press(1)).unwrap();
+        assert_eq!(runtime.current_page(&device()), Some(folder));
+        runtime.handle_event(&press(1)).unwrap();
+        assert_eq!(runtime.current_page(&device()), Some(home));
     }
 
     #[test]

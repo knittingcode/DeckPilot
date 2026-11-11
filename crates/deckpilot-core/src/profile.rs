@@ -93,6 +93,16 @@ pub enum ProfileIssue {
     InvalidIcon(String),
     #[error("a profile can have at most {max} icons", max = crate::MAX_ICONS)]
     TooManyIcons,
+    #[error("the home page cannot be moved or put into a folder")]
+    HomePage,
+    #[error("a page cannot be put into itself or one of its folders")]
+    PageCycle,
+    #[error("the new order must list every page of the layout once")]
+    PageOrder,
+    #[error("the page opens pages outside it, which the other layout does not have")]
+    OpensOutside,
+    #[error("the page does not fit the layout: {0}")]
+    IncompatiblePage(String),
 }
 
 impl Profile {
@@ -507,6 +517,9 @@ fn remap_layout(
     for page in &mut layout.pages {
         if let Some(new) = pages.get(&page.id) {
             page.id = *new;
+        }
+        if let Some(new) = page.parent.and_then(|parent| pages.get(&parent)) {
+            page.parent = Some(*new);
         }
         for binding in &mut page.bindings {
             match &mut binding.target {
