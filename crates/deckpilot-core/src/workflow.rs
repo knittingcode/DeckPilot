@@ -88,6 +88,14 @@ pub struct Workflow {
     /// [`Workflow::effective_project_scope`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_scope: Option<ProjectScope>,
+    /// Values the workflow takes when a Sub-workflow node calls it. Graph
+    /// workflows only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<crate::graph::WorkflowInput>,
+    /// Values the workflow returns to a Sub-workflow node, set by its
+    /// Output nodes. Graph workflows only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<crate::graph::WorkflowOutput>,
 }
 
 impl Workflow {
@@ -99,6 +107,8 @@ impl Workflow {
             steps: Vec::new(),
             graph: None,
             project_scope: None,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
         }
     }
 
@@ -136,6 +146,19 @@ impl Workflow {
         }
     }
 
+    /// Problems of the workflow's graph in `profile`, with this workflow's
+    /// own (possibly unsaved) inputs and outputs. Empty without a graph.
+    pub fn graph_issues(
+        &self,
+        profile: &Profile,
+        registry: &ActionRegistry,
+    ) -> Vec<crate::graph::GraphIssue> {
+        self.graph
+            .as_ref()
+            .map(|graph| graph.validate_as(self, profile, registry))
+            .unwrap_or_default()
+    }
+
     #[must_use]
     pub fn step(mut self, action: ActionInstanceId, on_failure: OnFailure) -> Self {
         self.steps.push(WorkflowStep::new(action, on_failure));
@@ -148,8 +171,8 @@ impl Workflow {
         if self.name.trim().is_empty() {
             issues.push("workflow name must not be empty".to_owned());
         }
-        if let Some(graph) = &self.graph {
-            for issue in graph.validate(self.id, profile, registry) {
+        if self.graph.is_some() {
+            for issue in self.graph_issues(profile, registry) {
                 if issue.severity == crate::graph::IssueSeverity::Error {
                     issues.push(match issue.node {
                         Some(node) => format!("{node}: {}", issue.message),

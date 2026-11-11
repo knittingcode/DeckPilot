@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::NodeId;
+use super::{Mapping, NodeId, ValueKind};
 
 /// `steps.<node>.output.<key>`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -111,6 +111,54 @@ pub fn render(template: &str, outputs: &Outputs) -> Result<String, TemplateError
         }
     }
     Ok(text)
+}
+
+/// The text value of `mapping`: a whole output (or its default) or a
+/// rendered template. Nothing is evaluated.
+pub(crate) fn resolve(mapping: &Mapping, outputs: &Outputs) -> Result<String, String> {
+    match mapping {
+        Mapping::Output { reference, default } => match lookup(outputs, reference) {
+            Some(value) => Ok(value.clone()),
+            None => default
+                .clone()
+                .ok_or_else(|| format!("{reference} has no value")),
+        },
+        Mapping::Template { template } => render(template, outputs).map_err(|e| e.to_string()),
+    }
+}
+
+/// `text` checked as a value of `kind`: whole numbers and true/false must
+/// parse (and are trimmed), project keys must belong to `profile`. Text,
+/// paths and URLs are taken as they are.
+pub(crate) fn convert(
+    kind: ValueKind,
+    text: &str,
+    profile: &crate::Profile,
+) -> Result<String, String> {
+    match kind {
+        ValueKind::Text | ValueKind::Path | ValueKind::Url => Ok(text.to_owned()),
+        ValueKind::Integer => text
+            .trim()
+            .parse::<i64>()
+            .map(|n| n.to_string())
+            .map_err(|_| format!("expects a whole number, got “{text}”")),
+        ValueKind::Boolean => match text.trim() {
+            value @ ("true" | "false") => Ok(value.to_owned()),
+            _ => Err(format!("expects true or false, got “{text}”")),
+        },
+        ValueKind::ProjectKey => profile
+            .projects
+            .iter()
+            .find(|p| p.key.as_str() == text.trim())
+            .map(|p| p.key.to_string())
+            .ok_or_else(|| format!("this profile has no project “{text}”")),
+    }
+}
+
+/// Whether `key` is a valid input or output key: 1–64 letters, digits and
+/// `_` (what a reference accepts).
+pub(crate) fn is_value_key(key: &str) -> bool {
+    !key.is_empty() && key.len() <= 64 && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 #[cfg(test)]

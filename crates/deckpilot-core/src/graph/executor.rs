@@ -33,13 +33,19 @@
 //!   are discarded.
 //! - **Cancellation** is checked before every node and attempt and
 //!   interrupts delays and retry waits. Running actions finish.
+//! - **Sub-workflows.** A Call node runs another workflow with its inputs
+//!   (converted to their declared kinds) and the node's project context,
+//!   under a token that is cancelled with the run or at the node's timeout.
+//!   The callee's declared outputs, set by its Output nodes, become the
+//!   node's outputs; its project context continues after the node, like a
+//!   Loop's. Its own nodes are not reported, only the Call node.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use super::mapping::{Outputs, lookup, render};
+use super::mapping::{Outputs, convert, lookup, resolve};
 use super::{Mapping, NodeId, NodeKind, OnError, Port, Predicate, WorkflowGraph};
 use crate::{
     ActionInstance, ActionParameters, ActionRegistry, ActionResult, ActiveProjectContext,
@@ -76,7 +82,8 @@ pub enum NodeStatus {
 #[serde(rename_all = "camelCase")]
 pub struct StepError {
     /// Stable: `action.failed`, `timeout`, `cancelled`, `mapping`,
-    /// `context-conflict`, `unavailable`, `loop.failed`.
+    /// `context-conflict`, `unavailable`, `loop.failed`,
+    /// `subworkflow.failed`.
     pub code: String,
     pub message: String,
     pub retryable: bool,
@@ -118,6 +125,10 @@ pub struct NodeReport {
     /// For actions: the instance that ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<crate::ActionInstanceId>,
+    /// For Call nodes the workflow that ran, for Output nodes the workflow
+    /// they belong to: the workflow whose declared outputs `output` holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<WorkflowId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,9 +192,26 @@ pub(crate) type RunAction<'a> = dyn Fn(
     + Sync
     + 'a;
 
-/// Runs a nested workflow (Loop); `true` if it succeeded.
-pub(crate) type RunNested<'a> =
-    dyn Fn(WorkflowId, &mut ActiveProjectContext) -> Result<bool, EngineError> + Sync + 'a;
+/// How a nested workflow run (Loop, Call) ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NestedRun {
+    pub status: RunStatus,
+    /// The callee's declared outputs, when it succeeded.
+    pub outputs: BTreeMap<String, String>,
+    /// The first failure, `node: message`, when it failed.
+    pub failure: Option<String>,
+}
+
+/// Runs a nested workflow with inputs, a context it changes and the token
+/// that cancels it.
+pub(crate) type RunNested<'a> = dyn Fn(
+        WorkflowId,
+        &BTreeMap<String, String>,
+        &mut ActiveProjectContext,
+        &CancellationToken,
+    ) -> Result<NestedRun, EngineError>
+    + Sync
+    + 'a;
 
 pub(crate) struct Executor<'a> {
     pub workflow: WorkflowId,
@@ -192,6 +220,8 @@ pub(crate) struct Executor<'a> {
     pub registry: &'a ActionRegistry,
     pub run_action: &'a RunAction<'a>,
     pub run_nested: &'a RunNested<'a>,
+    /// The run's inputs: the outputs of its start node.
+    pub inputs: &'a BTreeMap<String, String>,
     pub on_event: &'a (dyn Fn(ExecutionEvent) + Sync),
     pub cancel: &'a CancellationToken,
     pub limits: ExecutionLimits,
@@ -376,11 +406,12 @@ impl Executor<'_> {
                 .outputs
                 .insert(id.clone(), outcome.report.output.clone());
         }
-        // The summary counts actions: what a user thinks of as steps.
+        // The summary counts actions and sub-workflows: what a user thinks
+        // of as steps.
         let is_action = self
             .graph
             .node(&id)
-            .is_some_and(|n| matches!(n.kind, NodeKind::Action { .. }));
+            .is_some_and(|n| matches!(n.kind, NodeKind::Action { .. } | NodeKind::Call { .. }));
         if is_action {
             let mut summary = self
                 .summary
@@ -552,7 +583,12 @@ impl Executor<'_> {
             return finished(idle(id, NodeStatus::Skipped, started_ms), vec![]);
         };
         let mut outcome = match &node.kind {
-            NodeKind::Trigger | NodeKind::Parallel | NodeKind::Join => {
+            NodeKind::Trigger => {
+                let mut report = done(id, started_ms, "");
+                report.output.clone_from(self.inputs);
+                finished(report, vec![Port::Out])
+            }
+            NodeKind::Parallel | NodeKind::Join => {
                 finished(done(id, started_ms, ""), vec![Port::Out])
             }
             NodeKind::Stop => {
@@ -589,6 +625,12 @@ impl Executor<'_> {
             NodeKind::Loop { workflow, times } => {
                 self.run_loop(id, *workflow, *times, context, started_ms)
             }
+            NodeKind::Call {
+                workflow,
+                inputs,
+                policy,
+            } => self.run_call(id, *workflow, inputs, *policy, context, outputs, started_ms),
+            NodeKind::Output { values } => self.set_outputs(id, values, outputs, started_ms),
             NodeKind::Action {
                 action,
                 overrides,
@@ -636,7 +678,21 @@ impl Executor<'_> {
             if self.cancel.is_cancelled() {
                 return finished(idle(id, NodeStatus::Cancelled, started_ms), vec![]);
             }
-            if !matches!((self.run_nested)(workflow, &mut working), Ok(true)) {
+            let run = (self.run_nested)(workflow, &BTreeMap::new(), &mut working, self.cancel);
+            let succeeded = matches!(
+                run,
+                Ok(NestedRun {
+                    status: RunStatus::Succeeded,
+                    ..
+                })
+            );
+            if !succeeded {
+                // An iteration stopped by a cancellation is not a failure.
+                if self.cancel.is_cancelled() {
+                    let mut report = idle(id, NodeStatus::Cancelled, started_ms);
+                    report.attempts = iteration;
+                    return finished(report, vec![]);
+                }
                 let mut report = idle(id, NodeStatus::Failed, started_ms);
                 report.attempts = iteration;
                 report.error = Some(StepError::new(
@@ -654,6 +710,174 @@ impl Executor<'_> {
         let mut outcome = finished(report, vec![Port::Out]);
         outcome.context = Some(working);
         outcome
+    }
+
+    /// Runs a sub-workflow once. See the module documentation.
+    #[allow(clippy::too_many_arguments)]
+    fn run_call(
+        &self,
+        id: &NodeId,
+        workflow: WorkflowId,
+        mappings: &BTreeMap<String, Mapping>,
+        policy: super::ErrorPolicy,
+        context: &ActiveProjectContext,
+        outputs: &Outputs,
+        started_ms: u64,
+    ) -> Outcome {
+        let failed = |code: &str, message: String| {
+            let mut report = idle(id, NodeStatus::Failed, started_ms);
+            report.workflow = Some(workflow);
+            report.error = Some(StepError::new(code, message, false));
+            report
+        };
+        if self.cancel.is_cancelled() {
+            return finished(idle(id, NodeStatus::Cancelled, started_ms), vec![]);
+        }
+        let Some(callee) = self.profile.workflow(workflow) else {
+            let report = failed("unavailable", "the workflow no longer exists".to_owned());
+            return self.route_failure(report, policy.on_error, id);
+        };
+        let inputs = match self.call_inputs(callee, mappings, outputs) {
+            Ok(inputs) => inputs,
+            Err(message) => {
+                let report = failed("mapping", message);
+                return self.route_failure(report, policy.on_error, id);
+            }
+        };
+        let timeout = Duration::from_millis(u64::from(
+            policy.timeout_ms.unwrap_or(super::DEFAULT_CALL_TIMEOUT_MS),
+        ));
+        let begun = Instant::now();
+        let token = self.cancel.child_with_deadline(begun + timeout);
+        let mut working = context.clone();
+        let result = (self.run_nested)(workflow, &inputs, &mut working, &token);
+        let late = begun.elapsed() > timeout;
+        let succeeded = matches!(&result, Ok(run) if run.status == RunStatus::Succeeded);
+        if self.cancel.is_cancelled() && (!succeeded || late) {
+            // Stopped by a cancellation of the run: not a failure.
+            let mut report = idle(id, NodeStatus::Cancelled, started_ms);
+            report.attempts = 1;
+            report.workflow = Some(workflow);
+            report.error = Some(StepError::new(
+                "cancelled",
+                "cancelled while running",
+                false,
+            ));
+            return finished(report, vec![]);
+        }
+        let mut report = match result {
+            Ok(_) if late || (token.is_cancelled() && !succeeded) => failed(
+                "timeout",
+                format!(
+                    "{} did not finish within {} ms; its result was discarded",
+                    callee.name,
+                    timeout.as_millis()
+                ),
+            ),
+            Ok(run) if run.status == RunStatus::Succeeded => {
+                let mut report = done(id, started_ms, &format!("ran {}", callee.name));
+                report.attempts = 1;
+                report.workflow = Some(workflow);
+                report.output = run
+                    .outputs
+                    .into_iter()
+                    .filter(|(key, _)| callee.outputs.iter().any(|o| &o.key == key))
+                    .collect();
+                let mut outcome = finished(report, vec![Port::Out]);
+                outcome.context = Some(working);
+                return outcome;
+            }
+            Ok(run) => failed(
+                "subworkflow.failed",
+                match run.failure {
+                    Some(failure) => format!("{} failed: {failure}", callee.name),
+                    None => format!("{} failed", callee.name),
+                },
+            ),
+            Err(error) => failed(
+                "subworkflow.failed",
+                format!("{} could not run: {error}", callee.name),
+            ),
+        };
+        report.attempts = 1;
+        self.route_failure(report, policy.on_error, id)
+    }
+
+    /// The values of `callee`'s inputs: mapped, otherwise the default;
+    /// each converted to its declared kind. A required input needs a
+    /// mapping.
+    fn call_inputs(
+        &self,
+        callee: &crate::Workflow,
+        mappings: &BTreeMap<String, Mapping>,
+        outputs: &Outputs,
+    ) -> Result<BTreeMap<String, String>, String> {
+        if let Some(key) = mappings
+            .keys()
+            .find(|key| !callee.inputs.iter().any(|input| &input.key == *key))
+        {
+            return Err(format!("`{key}` is not an input of {}", callee.name));
+        }
+        let mut values = BTreeMap::new();
+        for input in &callee.inputs {
+            let text = match (mappings.get(&input.key), &input.default) {
+                (Some(mapping), _) => resolve(mapping, outputs)?,
+                (None, _) if input.required => {
+                    return Err(format!("the input `{}` needs a value", input.key));
+                }
+                (None, Some(default)) => default.clone(),
+                (None, None) => continue,
+            };
+            let value = convert(input.kind, &text, self.profile)
+                .map_err(|e| format!("the input `{}` {e}", input.key))?;
+            values.insert(input.key.clone(), value);
+        }
+        Ok(values)
+    }
+
+    /// An Output node: this workflow's declared outputs from earlier nodes,
+    /// each converted to its declared kind.
+    fn set_outputs(
+        &self,
+        id: &NodeId,
+        mappings: &BTreeMap<String, Mapping>,
+        outputs: &Outputs,
+        started_ms: u64,
+    ) -> Outcome {
+        let declared = self
+            .profile
+            .workflow(self.workflow)
+            .map(|w| w.outputs.as_slice())
+            .unwrap_or_default();
+        let values: Result<BTreeMap<String, String>, String> = mappings
+            .iter()
+            .map(|(key, mapping)| {
+                let spec = declared
+                    .iter()
+                    .find(|o| &o.key == key)
+                    .ok_or_else(|| format!("`{key}` is not an output of this workflow"))?;
+                let text = resolve(mapping, outputs)?;
+                let value =
+                    convert(spec.kind, &text, self.profile).map_err(|e| format!("`{key}` {e}"))?;
+                Ok((key.clone(), value))
+            })
+            .collect();
+        match values {
+            Ok(values) => {
+                let mut report = done(id, started_ms, &format!("set {} outputs", values.len()));
+                report.output = values;
+                report.workflow = Some(self.workflow);
+                finished(report, vec![Port::Out])
+            }
+            Err(message) => {
+                let mut report = idle(id, NodeStatus::Failed, started_ms);
+                report.workflow = Some(self.workflow);
+                report.error = Some(StepError::new("mapping", message, false));
+                let mut outcome = finished(report, vec![]);
+                outcome.fails_workflow = true;
+                outcome
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -728,6 +952,7 @@ impl Executor<'_> {
                 output,
                 error,
                 action: Some(action),
+                workflow: None,
             };
             if status == NodeStatus::Succeeded {
                 let mut outcome = finished(report, vec![Port::Out]);
@@ -834,17 +1059,7 @@ impl Executor<'_> {
         let mut parameters = overrides.clone();
         let definition = self.registry.definition(&instance.action_type);
         for (key, mapping) in mappings {
-            let text = match mapping {
-                Mapping::Output { reference, default } => match lookup(outputs, reference) {
-                    Some(value) => value.clone(),
-                    None => default
-                        .clone()
-                        .ok_or_else(|| format!("{reference} has no value"))?,
-                },
-                Mapping::Template { template } => {
-                    render(template, outputs).map_err(|e| e.to_string())?
-                }
-            };
+            let text = resolve(mapping, outputs)?;
             let kind = definition
                 .and_then(|d| d.parameters.iter().find(|spec| &spec.key == key))
                 .map(|spec| &spec.kind)
@@ -896,6 +1111,7 @@ fn idle(id: &NodeId, status: NodeStatus, started_ms: u64) -> NodeReport {
         output: BTreeMap::new(),
         error: None,
         action: None,
+        workflow: None,
     }
 }
 
