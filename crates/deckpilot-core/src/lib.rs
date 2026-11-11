@@ -7,6 +7,7 @@
 //! values are resolved at execution time through [`MachineConfig`].
 
 pub mod action;
+pub mod button_state;
 pub mod cancel;
 pub mod credentials;
 pub mod device_runtime;
@@ -34,6 +35,10 @@ pub(crate) mod testing;
 pub use action::{
     ActionInstance, ActionParameters, ActionType, ActionTypeId, MAX_LABEL_CHARS, ParameterError,
     ParameterKind, ParameterSpec, ParameterValue, validate_presentation,
+};
+pub use button_state::{
+    ButtonState, Indicator, MAX_REFRESH_INTERVAL, MIN_REFRESH_INTERVAL, RefreshPolicy, StateError,
+    StateSnapshot,
 };
 pub use cancel::{CancelReason, CancellationToken};
 pub use credentials::{

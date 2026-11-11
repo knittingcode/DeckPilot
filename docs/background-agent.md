@@ -48,7 +48,15 @@ closed and reopened at any time without interrupting devices.
   way (`KeyFace`: style, title, detail, highlight). The agent renders faces to
   RGB frames at the size the model reports, and the driver converts them to
   the device format (for the MK.2: 72 × 72 JPEG, mirrored). Only keys whose
-  face changed are redrawn. Rendering never executes actions.
+  face changed are redrawn, and rendered frames are cached by face and
+  size. Rendering never executes actions.
+- **Live key state.** Keys whose action has a module-provided
+  [button state](modules.md#button-state) show it (an indicator, detail,
+  progress or toggle). Providers run on their own threads, at most four at a
+  time and never more often than their declared interval; the agent task
+  sleeps until the next one is due and redraws only keys whose state
+  changed. Keys bound to a running workflow show a running mark with its
+  progress.
 - **Tray.** On macOS the agent runs as an accessory app (no Dock icon). On
   Linux the tray uses AppIndicator; desktop environments without
   AppIndicator/StatusNotifier support (for example GNOME without the

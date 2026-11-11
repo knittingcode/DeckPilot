@@ -2784,3 +2784,179 @@ async fn notifications_reach_the_status_bar_and_the_desktop() {
     drop((app, client));
     agent.shutdown().await;
 }
+
+/// The image a key of an MK.2 shows for `face`.
+fn key_image(face: &deckpilot_core::KeyFace) -> deckpilot_device::Frame {
+    let spec = models::stream_deck_mk2()
+        .capabilities
+        .keys
+        .and_then(|keys| keys.image)
+        .unwrap();
+    deckpilot_agent::render::render(face, spec.width, spec.height)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn running_workflows_mark_and_redraw_only_their_keys() {
+    use deckpilot_core::{FaceStyle, KeyFace};
+
+    let agent = setup().await;
+    assert!(agent.frames_shown());
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let workflow = waiting_workflow(&profile, 400);
+    let workflow_id = workflow.id;
+    profile.workflows.push(workflow);
+    let key = ControlId::Key { index: 5 };
+    profile.layouts[0].pages[0]
+        .bindings
+        .push(deckpilot_core::ControlBinding {
+            control: key,
+            trigger: deckpilot_core::Trigger::Press,
+            target: deckpilot_core::BindingTarget::Workflow {
+                workflow: workflow_id,
+            },
+            label: Some("Wait".into()),
+        });
+    agent.store().save_profile(&profile).unwrap();
+    let mut events = agent.client().await;
+    events.subscribe().await.unwrap();
+    let mut client = agent.client().await;
+    client.request(Request::ReloadConfiguration).await.unwrap();
+
+    let idle = key_image(&KeyFace::new(FaceStyle::Workflow, "Wait"));
+    assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
+        frames.get(&key) == Some(&idle)
+    }));
+    let before = agent.mock.frames(&agent.device);
+    let writes = agent.mock.image_writes(&agent.device);
+
+    let started = start_workflow(&mut client, workflow_id).await;
+    // The key shows the run (a running mark and its progress)...
+    assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
+        frames.get(&key).is_some_and(|frame| frame != &idle)
+    }));
+    let (_, finished) = execution_events(&mut events, started.id).await;
+    assert_eq!(finished.state, deckpilot_core::ExecutionState::Succeeded);
+    // ...and is back to normal once it ended.
+    assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
+        frames.get(&key) == Some(&idle)
+    }));
+    assert_eq!(agent.mock.frames(&agent.device), before);
+    // Only that key was redrawn: when the run started, as its nodes
+    // finished and when it ended; never the other 14 keys.
+    let redrawn = agent.mock.image_writes(&agent.device) - writes;
+    assert!((2..=5).contains(&redrawn), "{redrawn} images written");
+    agent.shutdown().await;
+}
+
+/// The git module with a fake `git` program that logs its calls and
+/// reports a clean `main` branch: no repository is read. Returns the log.
+#[cfg(unix)]
+fn fake_git(agent: &TestAgent) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = agent.paths.data_dir.join("fake-git");
+    std::fs::create_dir_all(dir.join("shop")).unwrap();
+    let program = dir.join("git");
+    std::fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nprintf '# branch.oid \
+             1234567890abcdef1234567890abcdef12345678\\0# branch.head main\\0'\n",
+            dir.join("calls.log").display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    agent
+        .store()
+        .set_module_state(
+            &deckpilot_modules::git::module_id(),
+            &ModuleSettings {
+                enabled: true,
+                config: ActionParameters::new().with(
+                    deckpilot_modules::git::EXECUTABLE,
+                    deckpilot_core::ParameterValue::Text(program.display().to_string()),
+                ),
+            },
+        )
+        .unwrap();
+    let mut machine = agent
+        .store()
+        .load_machine_config()
+        .unwrap()
+        .unwrap_or_else(|| deckpilot_core::MachineConfig::new(Os::current()));
+    machine.set_binding(deckpilot_core::MachineResourceBinding {
+        key: deckpilot_core::ResourceKey::new("shop.repository").unwrap(),
+        kind: deckpilot_core::ResourceKind::Directory,
+        value: dir.join("shop").display().to_string(),
+    });
+    agent.store().save_machine_config(&machine).unwrap();
+    dir.join("calls.log")
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn module_states_are_shown_and_not_refreshed_more_often_than_allowed() {
+    use deckpilot_core::{ButtonState, FaceStyle, Indicator, KeyFace};
+    use deckpilot_modules::git::actions;
+
+    let agent = setup().await;
+    assert!(agent.frames_shown());
+    let calls = fake_git(&agent);
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    profile.projects[0].resources.insert(
+        "repository".into(),
+        deckpilot_core::ResourceKey::new("shop.repository").unwrap(),
+    );
+    let status = registry()
+        .create_instance(
+            "Repo",
+            actions::id(actions::STATUS),
+            &ActionParameters::new(),
+        )
+        .unwrap();
+    let key = ControlId::Key { index: 6 };
+    profile.layouts[0].pages[0]
+        .bindings
+        .push(deckpilot_core::ControlBinding {
+            control: key,
+            trigger: deckpilot_core::Trigger::Press,
+            target: deckpilot_core::BindingTarget::Action { action: status.id },
+            label: None,
+        });
+    profile.actions.push(status);
+    agent.store().save_profile(&profile).unwrap();
+    let mut client = agent.client().await;
+    client.request(Request::ReloadConfiguration).await.unwrap();
+
+    // The key shows the branch and a clean work tree once Git answered.
+    let ready = key_image(
+        &KeyFace::new(FaceStyle::Action, "Repo").with_state(
+            &ButtonState::new()
+                .with_detail("main")
+                .with_indicator(Indicator::Ok),
+        ),
+    );
+    assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
+        frames.get(&key) == Some(&ready)
+    }));
+    let count = || {
+        std::fs::read_to_string(&calls)
+            .unwrap_or_default()
+            .lines()
+            .count()
+    };
+    assert_eq!(count(), 1);
+    let writes = agent.mock.image_writes(&agent.device);
+
+    // Events (key presses that run an action) do not make the provider run
+    // again within its interval, and nothing is redrawn.
+    for _ in 0..5 {
+        agent.mock.tap(&agent.device, ControlId::Key { index: 1 });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(count(), 1);
+    assert_eq!(agent.mock.image_writes(&agent.device), writes);
+    assert_eq!(agent.mock.frames(&agent.device)[&key], ready);
+    agent.shutdown().await;
+}

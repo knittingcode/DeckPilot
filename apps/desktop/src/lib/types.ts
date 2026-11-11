@@ -488,11 +488,18 @@ export interface DeviceModel {
 
 export type FaceStyle = "empty" | "action" | "workflow" | "folder" | "back" | "notice"
 
+/** Live status mark of a key (see "Button state" in docs/modules.md). */
+export type Indicator = "ok" | "warning" | "error" | "running" | "unknown" | "loading"
+
 export interface KeyFace {
   style: FaceStyle
   title: string
   detail?: string | null
   highlighted?: boolean
+  /** Set only by the agent's live states; previews never have them. */
+  indicator?: Indicator | null
+  progress?: number | null
+  toggle?: boolean | null
 }
 
 export interface ControlFace {

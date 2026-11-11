@@ -8,8 +8,9 @@ use std::time::Duration;
 use deckpilot_core::graph::{ActionEffect, NodeSpec, OutputSpec, ValueKind};
 use deckpilot_core::process::{ProcessLimits, ProcessOutput, minimal_environment};
 use deckpilot_core::{
-    ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, ExecutionContext,
-    ParameterKind, ParameterSpec, ParameterValue, Profile, ResourceKind,
+    ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, ButtonState,
+    ExecutionContext, ParameterKind, ParameterSpec, ParameterValue, Profile, RefreshPolicy,
+    ResourceKind, StateError,
 };
 
 use crate::cli::{self, Change, ComposeTarget};
@@ -417,6 +418,53 @@ impl ActionHandler for DockerAction {
             problems.push(problem.message);
         }
         problems
+    }
+
+    /// Every key but logs shows a live state, read at most every
+    /// [`STATE_INTERVAL`](crate::state::STATE_INTERVAL).
+    fn state_policy(&self, _parameters: &ActionParameters) -> Option<RefreshPolicy> {
+        (self.kind != Kind::Logs).then(|| RefreshPolicy::every(crate::state::STATE_INTERVAL))
+    }
+
+    fn button_state(
+        &self,
+        parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> Result<ButtonState, StateError> {
+        names(parameters)?;
+        let count = |result: &ActionResult, key: &str| {
+            result
+                .data
+                .get(key)
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0)
+        };
+        if self.kind == Kind::Status {
+            let result = self.status(parameters, context);
+            if !result.is_success() {
+                return Err(result.into());
+            }
+            let available = result.data.get("available").map(String::as_str) == Some("true");
+            return Ok(crate::state::availability(available));
+        }
+        // Read-only, whatever the key does when pressed.
+        let docker_context = self.context_name(parameters, context)?;
+        match self.kind {
+            Kind::Containers => {
+                let result = self.containers(parameters, context, &docker_context)?;
+                Ok(crate::state::containers(count(&result, "running")))
+            }
+            Kind::ComposeStatus | Kind::Change(_) => {
+                let result = self.compose_status(parameters, context, &docker_context)?;
+                let toggle = matches!(self.kind, Kind::Change(Change::Up | Change::Down));
+                Ok(crate::state::compose(
+                    count(&result, "running"),
+                    count(&result, "services"),
+                    toggle,
+                ))
+            }
+            Kind::Status | Kind::Logs => Ok(ButtonState::default()),
+        }
     }
 }
 

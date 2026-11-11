@@ -86,6 +86,30 @@ impl ActionHandler for Echo {
         };
         ActionResult::success(render_label(message, &profile.name, project))
     }
+
+    /// Live state: the rendered message as the label, refreshed every 5 s;
+    /// fails for `fail`.
+    fn state_policy(&self, _parameters: &ActionParameters) -> Option<crate::RefreshPolicy> {
+        Some(crate::RefreshPolicy::every(std::time::Duration::from_secs(
+            5,
+        )))
+    }
+
+    fn button_state(
+        &self,
+        parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> Result<crate::ButtonState, crate::StateError> {
+        let message = parameters.text("message").unwrap_or_default();
+        if message == "fail" {
+            return Err(crate::StateError::new("failed", "failed on purpose"));
+        }
+        let profile = context.profile()?;
+        let project = context.project()?;
+        Ok(crate::ButtonState::new()
+            .with_label(render_label(message, &profile.name, project))
+            .with_indicator(crate::Indicator::Ok))
+    }
 }
 
 /// `test.select`: makes the configured project active, or the next one when
