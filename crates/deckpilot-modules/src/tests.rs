@@ -42,7 +42,10 @@ fn builtin_modules_register_with_namespaced_action_types() {
     let registry = builtin(Os::Linux);
     let modules = registry.modules();
     let ids: Vec<_> = modules.iter().map(|m| m.manifest.id.to_string()).collect();
-    assert_eq!(ids, ["docker", "general", "git", "projects", "system"]);
+    assert_eq!(
+        ids,
+        ["docker", "general", "git", "http", "projects", "system"]
+    );
     assert!(modules.iter().all(|m| m.enabled && m.supported));
 
     let types: Vec<_> = modules
@@ -68,6 +71,8 @@ fn builtin_modules_register_with_namespaced_action_types() {
             "git.last-commit",
             "git.remote-status",
             "git.open-repository",
+            "http.request",
+            "http.health-check",
             "projects.next",
             "projects.previous",
             "projects.select",

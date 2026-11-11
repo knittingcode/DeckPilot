@@ -2,11 +2,12 @@ import { Box, Puzzle, type LucideIcon } from "lucide-react"
 
 import type { ModuleInfo } from "@/lib/types"
 
+import { httpModule } from "./http"
 import { projectsModule } from "./projects"
 import type { FrontendModule } from "./types"
 
 /** Every module with a user interface. Modules without one need no entry. */
-const FRONTEND_MODULES: FrontendModule[] = [projectsModule]
+const FRONTEND_MODULES: FrontendModule[] = [projectsModule, httpModule]
 
 /** Page id used in navigation for a module page, e.g. `projects/projects`. */
 export type ModulePageId = `${string}/${string}`

@@ -16,6 +16,7 @@ members = [
     "modules/system",
     "modules/git",
     "modules/docker",
+    "modules/http",
     "apps/agent",
     "apps/desktop/src-tauri",
     "tools/dev",
@@ -42,6 +43,7 @@ deckpilot-module-projects = { path = "modules/projects" }
 deckpilot-module-system = { path = "modules/system" }
 deckpilot-module-git = { path = "modules/git" }
 deckpilot-module-docker = { path = "modules/docker" }
+deckpilot-module-http = { path = "modules/http" }
 deckpilot-portability = { path = "crates/deckpilot-portability" }
 deckpilot-keystore = { path = "crates/deckpilot-keystore" }
 deckpilot-presence = { path = "crates/deckpilot-presence" }

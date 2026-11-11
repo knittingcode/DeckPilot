@@ -137,7 +137,7 @@ opens a next page (“More”) and the first key of following pages goes back.
   key is highlighted while its project is active. Without a profile or layout
   the first key shows a notice and the others stay blank.
 
-## Storage schema (version 5)
+## Storage schema (version 7)
 
 Migrations run in a transaction each; a failed migration leaves the database
 unchanged.
@@ -152,6 +152,11 @@ unchanged.
   [Migration 4](#migration-4).
 - **Migration 5** adds `migration_history` (every upgrade with its backup)
   and `module_schemas` (the schema version of each module's own tables).
+- **Migration 6** adds `workflow_executions` (execution history).
+- **Migration 7** adds `credentials`: secrets that modules use by name
+  (e.g. an HTTP request's `credential`). They are machine-local: not part of
+  profiles, machine configuration or module settings, never exported, and
+  never sent to the configuration app after saving.
 
 Since version 0.4 the database is encrypted with SQLCipher; see
 [security.md](security.md). Every upgrade of an existing database is
@@ -173,6 +178,8 @@ is verified afterwards.
 | `migration_notes`  | Changes a migration made to user data, shown in Settings |
 | `migration_history`| Schema upgrades: from, to, backup file, result, time  |
 | `module_schemas`   | Schema version of each module's own tables            |
+| `workflow_executions` | Execution history: summary and safe node reports     |
+| `credentials`      | Named secrets with a description; this computer only  |
 
 Constraints keep projects inside their profile:
 

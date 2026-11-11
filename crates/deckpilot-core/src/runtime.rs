@@ -49,14 +49,36 @@ pub struct WorkflowReport {
 }
 
 /// Executes actions and workflows.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Engine {
     registry: ActionRegistry,
+    credentials: std::sync::Arc<dyn crate::CredentialSource>,
+}
+
+impl Default for Engine {
+    fn default() -> Self {
+        Self::new(ActionRegistry::default())
+    }
 }
 
 impl Engine {
     pub fn new(registry: ActionRegistry) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            credentials: std::sync::Arc::new(crate::NoCredentials),
+        }
+    }
+
+    /// The engine with the credentials stored on this computer.
+    #[must_use]
+    pub fn with_credentials(
+        self,
+        credentials: std::sync::Arc<dyn crate::CredentialSource>,
+    ) -> Self {
+        Self {
+            credentials,
+            ..self
+        }
     }
 
     pub fn registry(&self) -> &ActionRegistry {
@@ -406,7 +428,8 @@ impl Engine {
         control: Option<&crate::ExecutionControl<'_>>,
     ) -> Result<ActionResult, EngineError> {
         let project = context.project(profile)?;
-        let base = ExecutionContext::new(profile, project, machine);
+        let base = ExecutionContext::new(profile, project, machine)
+            .with_credentials(self.credentials.as_ref());
         let base = match control {
             Some(control) => base.with_control(control),
             None => base,

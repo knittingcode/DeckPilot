@@ -204,3 +204,70 @@ Error codes: `docker-not-found`, `daemon-unavailable`, `permission-denied`,
 `context-not-found`, `compose-unavailable`, `compose-file-not-found`,
 `not-found`, `invalid-name`, `changes-disabled`, `project-not-in-profile`,
 `docker-failed`, and the shared codes.
+
+## HTTP (`http`)
+
+HTTP requests and health checks.
+
+Capabilities: send network requests, use stored credentials.
+
+Settings: **Allow this computer and private networks** (`allowPrivateNetworks`,
+off), **Private hosts allowed** (`privateHosts`, one per line, e.g.
+`localhost` or `*.internal`) — both machine-specific: never exported, an
+import cannot open them — and **Largest response kept** (`maxResponseKb`,
+1–10240 KiB, 1024). Settings › HTTP also manages **credentials**.
+
+| Action type | Effect | Parameters | Outputs |
+| ----------- | ------ | ---------- | ------- |
+| `http.request` | modifies | `method` (GET, POST, PUT, PATCH, DELETE), `url`, `query` (`name=value` per line), `headers` (`Name: value` per line), `body`, `bodyType` (json, text), credential, `timeoutSeconds` (1–300, 30), `followRedirects` (on), `failOnHttpError` (on), `extract` (JSON pointer) | `status`, `ok`, `contentType`, `headers`, `body`*, `value`*, `size`, `truncated`, `url`, `redirects`, `durationMs` |
+| `http.health-check` | read-only | `url`, `expectedStatus` (`200`, `2xx`, `200-299`, `200,204`; `2xx`), `contains`, `timeoutSeconds` (1–120, 10), `failWhenUnhealthy` (on), credential | `healthy`, `status`, `reason`, `durationMs` |
+
+The credential parameters are `credential` (a stored credential's name),
+`authScheme` (`bearer`, `basic` with `user:password`, `header`, `query`) and
+`authName` (header or parameter name; `X-API-Key`, `api_key`).
+\* sensitive: available to later nodes, not kept.
+
+A JSON body is checked before sending and sent as `application/json`;
+`extract` reads one value from a JSON response with a JSON pointer (RFC
+6901, e.g. `/data/0/id`), so later nodes can use it without any expression
+language.
+
+**Network boundary (SSRF).** Only `http` and `https`. Every address a host
+resolves to is checked: loopback, private (RFC 1918), shared (100.64/10),
+link-local (169.254/16, including cloud metadata services), unique local and
+link-local IPv6, IPv4-mapped and NAT64 forms of those, multicast, reserved
+and documentation addresses are refused unless allowed for all hosts or the
+host is listed. A name resolving to both a public and a private address is
+refused. The connection then goes to exactly the checked addresses, so DNS
+cannot change between the check and the connection. Redirects (at most 5)
+are followed one at a time and checked the same way; a redirect from
+`https` to `http` is refused. No proxy is used.
+
+**Credentials** are stored per computer (Settings › HTTP › Credentials) in
+the encrypted database, listed by name and description only, and never in a
+workflow or an export. A request sends one only over `https` (or to this
+computer), never along a redirect to another origin. Headers and query
+parameters that hold secrets (`Authorization`, `Cookie`, names containing
+`token`, `secret`, `api-key`, `password`, `auth`, …) cannot be written into
+a workflow, and URLs with a user name or password are refused, so secrets
+always go through a stored credential. Secret response headers
+(`Set-Cookie`, tokens) are shown as `[redacted]`; messages and the `url`
+output leave out the query string. Nothing logs headers or tokens.
+
+**TLS** uses the operating system's certificate store (rustls with the
+platform verifier). Certificate verification cannot be turned off; a
+refused certificate fails with `tls-failed`.
+
+**Limits, timeouts and cancellation.** Responses are read up to the
+module's limit (`truncated` tells when cut). `timeoutSeconds` bounds the
+whole request including redirects; cancelling the run stops the request at
+once. `http.request` is not retry-safe (it may change data);
+`http.health-check` is retry-safe, idempotent and by default fails when
+unhealthy (`unhealthy`), or reports `healthy: false` when told not to fail.
+
+Error codes: `invalid-url`, `credentials-in-url`, `invalid-header`,
+`invalid-query`, `sensitive-header`, `invalid-body`, `blocked-address`,
+`dns-failed`, `connection-failed`, `tls-failed`, `too-many-redirects`,
+`insecure-redirect`, `insecure-credentials`, `request-failed`,
+`http-status`, `invalid-response`, `unhealthy`, `credential-missing`, and
+the shared codes.

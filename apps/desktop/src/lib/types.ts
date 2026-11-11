@@ -183,6 +183,14 @@ export interface NodeSpec {
 
 export type ActionEffect = "readOnly" | "opens" | "modifies"
 
+/** A credential stored on this computer; the secret is never sent to the app. */
+export interface CredentialInfo {
+  id: string
+  description?: string
+  /** Milliseconds since the Unix epoch. */
+  updatedAt: number
+}
+
 export interface Project {
   id: string
   key: string

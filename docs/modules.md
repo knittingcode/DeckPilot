@@ -20,6 +20,7 @@ third-party executables and no remote installation.
 | `docker` | — (settings) | read profile, read machine resources, run programs (`docker`) |
 | `general`  | — | read profile |
 | `git` | — (settings) | read profile, read machine resources, run programs (`git`), open folders |
+| `http` | — (settings with credentials) | send network requests, use stored credentials |
 | `projects` | Projects | read profile, change active project, read machine resources |
 | `system` | — (settings) | read machine resources, open applications/files/pages, run programs, see running programs |
 

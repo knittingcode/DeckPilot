@@ -19,6 +19,7 @@
 //! the operating system's credential store or an encrypted database, never in
 //! portable documents.
 
+pub mod credentials;
 pub mod crypto;
 pub mod executions;
 mod legacy;
@@ -102,6 +103,9 @@ pub enum StorageError {
     Crypto(#[from] crypto::CryptoError),
     #[error("{0}")]
     Vault(String),
+    /// A value was refused, e.g. an empty secret.
+    #[error("{0}")]
+    Invalid(String),
     #[error(transparent)]
     KeyStore(#[from] deckpilot_keystore::KeyStoreError),
     /// The key file shows that a configuration was set up here, but its

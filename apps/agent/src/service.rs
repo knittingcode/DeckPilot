@@ -781,8 +781,13 @@ impl Agent {
         self.modules = load_modules(store)?;
         self.auto_lock = deckpilot_storage::policy::security_policy(store)?.auto_lock;
         let (profile, project) = load_active(store)?;
-        self.runtime
-            .set_engine(Engine::new(self.modules.action_registry()));
+        // Credentials are loaded with the configuration, so the app asks
+        // for a reload after changing one.
+        let credentials = store.load_credentials()?;
+        self.runtime.set_engine(
+            Engine::new(self.modules.action_registry())
+                .with_credentials(std::sync::Arc::new(credentials)),
+        );
         match profile {
             Some(profile) if self.runtime.profile().is_some_and(|p| p.id == profile.id) => {
                 self.runtime.reload_profile(profile);

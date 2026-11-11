@@ -9,6 +9,7 @@ use deckpilot_core::{ModuleRegistry, ModuleStates, Os};
 pub use deckpilot_module_docker as docker;
 pub use deckpilot_module_general as general;
 pub use deckpilot_module_git as git;
+pub use deckpilot_module_http as http;
 pub use deckpilot_module_projects as projects;
 pub use deckpilot_module_system as system;
 
@@ -34,6 +35,9 @@ pub fn builtin(os: Os) -> ModuleRegistry {
         .expect("built-in modules do not conflict");
     registry
         .register(Box::new(docker::DockerModule::new()))
+        .expect("built-in modules do not conflict");
+    registry
+        .register(Box::new(http::HttpModule::new()))
         .expect("built-in modules do not conflict");
     registry
 }

@@ -2557,3 +2557,133 @@ async fn git_reads_the_repository_of_each_runs_own_project() {
     drop((events, client));
     agent.shutdown().await;
 }
+
+/// A server on 127.0.0.1 that answers every request with a JSON body and
+/// records the requests it received.
+fn json_server() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{BufRead, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = seen.clone();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut head = String::new();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+                head.push_str(&line);
+            }
+            shared.lock().unwrap().push(head);
+            let body = r#"{"build":"green","secretInBody":"b0dy-secret"}"#;
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (port, seen)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn http_requests_use_stored_credentials_and_keep_bodies_out_of_history() {
+    let agent = setup().await;
+    let (port, seen) = json_server();
+    agent
+        .store()
+        .set_credential(
+            &deckpilot_core::CredentialId::new("ci.token").unwrap(),
+            "CI",
+            Some(&deckpilot_core::Secret::new("t0ken-secret")),
+        )
+        .unwrap();
+    agent
+        .store()
+        .set_module_state(
+            &deckpilot_modules::http::module_id(),
+            &ModuleSettings {
+                enabled: true,
+                config: ActionParameters::new().with(
+                    deckpilot_modules::http::PRIVATE_HOSTS,
+                    deckpilot_core::ParameterValue::Text("127.0.0.1".into()),
+                ),
+            },
+        )
+        .unwrap();
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let request = registry()
+        .create_instance(
+            "Build status",
+            deckpilot_modules::http::actions::id(deckpilot_modules::http::actions::REQUEST),
+            &ActionParameters::new()
+                .with(
+                    "url",
+                    deckpilot_core::ParameterValue::Text(format!("http://127.0.0.1:{port}/build")),
+                )
+                .with(
+                    "credential",
+                    deckpilot_core::ParameterValue::Text("ci.token".into()),
+                )
+                .with(
+                    "extract",
+                    deckpilot_core::ParameterValue::Text("/build".into()),
+                ),
+        )
+        .unwrap();
+    let mut workflow = deckpilot_core::Workflow::new("Check the build");
+    workflow.graph = Some(
+        serde_json::from_value(json!({
+            "version": 1,
+            "nodes": [
+                {"id": "start", "type": "trigger"},
+                {"id": "request", "type": "action", "action": request.id},
+                {"id": "green", "type": "condition", "predicate": {
+                    "type": "equals",
+                    "reference": {"node": "request", "output": "value"},
+                    "value": "green",
+                }},
+            ],
+            "edges": [
+                {"from": "start", "to": "request"},
+                {"from": "request", "to": "green"},
+            ],
+        }))
+        .unwrap(),
+    );
+    let workflow_id = workflow.id;
+    profile.actions.push(request);
+    profile.workflows.push(workflow);
+    agent.store().save_profile(&profile).unwrap();
+    let mut client = agent.client().await;
+    client.subscribe().await.unwrap();
+    client.request(Request::ReloadConfiguration).await.unwrap();
+
+    let started = start_workflow(&mut client, workflow_id).await;
+    let (events, finished) = execution_events(&mut client, started.id).await;
+    assert_eq!(
+        finished.state,
+        deckpilot_core::ExecutionState::Succeeded,
+        "{}",
+        finished.message
+    );
+    assert!(seen.lock().unwrap()[0].contains("authorization: Bearer t0ken-secret"));
+    let record = agent.store().execution(started.id).unwrap().unwrap();
+    let request = node(&record, "request");
+    assert_eq!(request.output["status"], "200");
+    // The condition saw the value; history and events have neither the
+    // body, the extracted value nor the credential.
+    let green = node(&record, "green");
+    assert_eq!(green.status, deckpilot_core::graph::NodeStatus::Succeeded);
+    let stored = serde_json::to_string(&record).unwrap();
+    let live = serde_json::to_string(&events).unwrap();
+    for secret in ["t0ken-secret", "b0dy-secret", "\"value\":\"green\""] {
+        assert!(!stored.contains(secret), "{secret} in history");
+        assert!(!live.contains(secret), "{secret} in events");
+    }
+    drop(client);
+    agent.shutdown().await;
+}
