@@ -7,11 +7,26 @@ import type {
   NodeProgress,
 } from "@/lib/types"
 
+/** A retry seen live: the attempt about to start and the wait before it. */
+export interface RetryWait {
+  attempt: number
+  waitMs: number
+}
+
 /** A run as this window knows it; `attempts` counts retries seen live. */
 export type LiveExecution = ExecutionRecord & {
   attempts?: Record<string, number>
   /** The latest progress of running nodes. */
   progress?: Record<string, NodeProgress>
+  /** Retries seen live per node; history records keep only the final attempt. */
+  retries?: Record<string, RetryWait[]>
+  /** When running nodes were seen to start, in ms after the run started. */
+  nodeStarts?: Record<string, number>
+}
+
+/** What only this window saw live, kept when the agent's record replaces a run. */
+function liveDetails(run: LiveExecution | undefined) {
+  return run ? { retries: run.retries, nodeStarts: run.nodeStarts } : {}
 }
 
 /**
@@ -20,6 +35,9 @@ export type LiveExecution = ExecutionRecord & {
  * opens or the agent (re)connects, and kept current by execution events.
  */
 export class ExecutionStore extends Store<LiveExecution> {
+  /** The current time; replaceable in tests. */
+  clock: () => number = () => Date.now()
+
   /**
    * Replaces the known runs with the agent's list, keeping node details
    * already loaded for runs that are still listed.
@@ -35,7 +53,7 @@ export class ExecutionStore extends Store<LiveExecution> {
 
   /** A run loaded with its node reports. */
   load(record: ExecutionRecord) {
-    this.put(record.id, record)
+    this.put(record.id, { ...record, ...liveDetails(this.get(record.id)) })
   }
 
   /** Adds runs from a history list, keeping what is known about them. */
@@ -74,7 +92,11 @@ export class ExecutionStore extends Store<LiveExecution> {
         return true
       case "executionFinished": {
         const current = this.get(message.execution.id)
-        this.put(message.execution.id, { ...message.execution, nodes: current?.nodes ?? [] })
+        this.put(message.execution.id, {
+          ...message.execution,
+          nodes: current?.nodes ?? [],
+          ...liveDetails(current),
+        })
         return true
       }
       case "executionProgress": {
@@ -85,8 +107,23 @@ export class ExecutionStore extends Store<LiveExecution> {
         let nodes = current.nodes
         const event = message.event
         let attempts = current.attempts
-        if (event.type === "nodeStarted") running.add(event.node)
-        if (event.type === "retrying") attempts = { ...attempts, [event.node]: event.attempt }
+        let retries = current.retries
+        let nodeStarts = current.nodeStarts
+        if (event.type === "nodeStarted") {
+          running.add(event.node)
+          nodeStarts = {
+            ...nodeStarts,
+            [event.node]: Math.max(0, this.clock() - current.startedAt),
+          }
+        }
+        if (event.type === "retrying") {
+          attempts = { ...attempts, [event.node]: event.attempt }
+          const seen = retries?.[event.node] ?? []
+          retries = {
+            ...retries,
+            [event.node]: [...seen, { attempt: event.attempt, waitMs: event.waitMs }],
+          }
+        }
         let progress = current.progress
         if (event.type === "nodeProgress") {
           progress = { ...progress, [event.node]: event.progress }
@@ -99,6 +136,8 @@ export class ExecutionStore extends Store<LiveExecution> {
           ...current,
           nodes,
           attempts,
+          retries,
+          nodeStarts,
           progress,
           runningNodes: [...running],
           completedNodes: message.completed,
