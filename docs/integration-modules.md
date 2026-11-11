@@ -518,6 +518,65 @@ Error codes: `invalid-site-url`, `invalid-issue-key`, `invalid-project`,
 `invalid-response`, `url-not-allowed`, `credential-missing`, the HTTP
 module's network codes, and the shared codes.
 
+## Workspace (`workspace`)
+
+Opens a project's working set: the repository, or a file in it at a line,
+in an editor, and web pages in the browser. It only opens things — there is
+no shell, nothing runs in a terminal and nothing is changed. Editors and
+browsers are application resources bound on each computer, never program
+names written into a workflow.
+
+Capabilities: read profile, machine resources, open applications, files and
+pages. No settings.
+
+| Action type | Effect | Parameters | Outputs |
+| ----------- | ------ | ---------- | ------- |
+| `workspace.open-in-editor` | opens | `application` (the editor, an application resource), `editor` (`vscode`, `cursor`, `jetbrains`, `zed`, `sublime`, `other`; `other`), `location` (folder resource; empty: the project's `repository`), `path` (relative file or folder), `line`, `column` (1–10 000 000) | `path`, `application`, `located` |
+| `workspace.open-urls` | opens | `urls` (one http/https address per line, at most 10), `browser` (optional application resource) | `opened`, `failed`, `urls`* |
+| `workspace.open-project` | opens | `editor`, `editorRole` (`editor`), `repositoryRole` (`repository`), `docsRole` (`docs`), `urlRoles` (resource names, one per line, at most 10), `browser` | `projectKey`, `opened`, `openedRoles`, `missingCount`, `missing` |
+
+\* sensitive: available to later nodes, not kept (addresses may carry
+tokens). `urls` and `urlRoles` are lists (edited item by item, stored one per line).
+
+**Editors.** Without a line the folder or file is opened with the editor
+(`open -a <editor> <path>` on macOS, `<editor> <path>` elsewhere). With a
+line, known editors get their own arguments: Visual Studio Code and Cursor
+`--goto <file>:<line>[:<column>]`, JetBrains IDEs `--line N [--column M]
+<file>`, Zed and Sublime Text `<file>:<line>[:<column>]`; `other` opens the
+file without the line (`located` is false). A line needs a file, and a
+column needs a line. When the editor resource is a command-line tool (a
+path such as `/usr/local/bin/code`, `idea`, `zed` or `subl`), it is started
+directly with these arguments on every system, so the line also reaches an
+editor that is already running; with a macOS application bundle the
+arguments go through `open -a … --args`, which only reaches an editor that
+is not running yet. A tool given by path must exist.
+
+**Paths** follow the System module's rules: relative to the folder, no
+`..`, no absolute paths or drive letters, and the file or folder must exist
+(`invalid-path`, `not-found`).
+
+**Pages** follow the System module's URL rules, limited to `http` and
+`https` (no `mailto`, `file`, `javascript:` or application schemes:
+`invalid-url`). Every address is checked before any is opened. They open in
+the default browser, or in the `browser` resource (`open -a <browser> <url>`
+on macOS, `<browser> <url>` elsewhere). If some pages cannot be opened the
+node still succeeds with `failed`; it fails only when none opened.
+
+**Project workspace.** `workspace.open-project` uses the run's current
+project: it opens the `repositoryRole` folder in the `editorRole`
+application, the `docsRole` resource (a page in the browser, or a folder in
+the file manager) and each resource in `urlRoles` as a page. Empty role
+names are skipped. Resources the project does not define, that are not
+bound on this computer, are of the wrong kind or are not valid pages are
+listed in `missing` (`<role>: <reason>`, one per line) and do not stop the
+others; the node fails with `nothing-opened` only when nothing could be
+opened.
+
+Error codes: `invalid-position`, `no-urls`, `too-many-urls`,
+`nothing-opened`, the System module's `invalid-url`, `invalid-path` and
+`not-found`, the launch codes (`unsupported-target`, `program-not-found`,
+`spawn-failed`, `open-failed`), and the shared codes.
+
 ## Notifications (`notifications`)
 
 Shows notifications from workflows: as native desktop notifications and in

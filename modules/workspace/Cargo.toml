@@ -1,0 +1,17 @@
+[package]
+name = "deckpilot-module-workspace"
+description = "DeckPilot workspace feature module: open projects in editors and browsers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+deckpilot-core.workspace = true
+deckpilot-module-system.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true
