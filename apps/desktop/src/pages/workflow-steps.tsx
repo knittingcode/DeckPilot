@@ -198,13 +198,13 @@ export function StepEditor({
         </div>
 
         <div className="grid gap-2">
-          <Label>Steps</Label>
+          <Label id="workflow-steps-label">Steps</Label>
           {workflow.steps.length === 0 && (
             <p className="text-sm text-muted-foreground">Add actions below.</p>
           )}
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
             <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-              <ol className="grid gap-2">
+              <ol className="grid gap-2" aria-labelledby="workflow-steps-label">
                 {workflow.steps.map((step, index) => (
                   <SortableStep
                     key={ids[index]}

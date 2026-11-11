@@ -28,8 +28,18 @@ result() {
   [ "$2" = ok ] || failures=$((failures + 1))
 }
 
-if [ ! -d "$OLD_TREE" ]; then
+if [ ! -f "$OLD_TREE/Cargo.toml" ]; then
+  # A build cache may already have restored the old tree's target folder;
+  # it is kept aside while the worktree is created.
+  if [ -d "$OLD_TREE/target" ]; then
+    mv "$OLD_TREE/target" "$WORK/old-target"
+  fi
+  # Anything else in the folder is left alone: creating the worktree fails.
+  if [ -d "$OLD_TREE" ]; then rmdir "$OLD_TREE"; fi
   git -C "$ROOT" worktree add --detach "$OLD_TREE" "$OLD_TAG" >&2
+  if [ -d "$WORK/old-target" ]; then
+    mv "$WORK/old-target" "$OLD_TREE/target"
+  fi
 fi
 log "building $OLD_TAG"
 (cd "$OLD_TREE" && cargo build --locked -q -p deckpilot-agent -p deckpilot-dev)
