@@ -70,7 +70,8 @@ path or a name found on `PATH` — so an imported workflow cannot choose what
 runs. Arguments are passed as they are, one per line: nothing is split on
 spaces, quoted or expanded. Output is kept up to 64 KiB per stream
 (`outputTruncated` tells when more was produced). The node is cancellable
-and not retry-safe.
+and not retry-safe. In a workflow a node runs at most 10 minutes, so a
+longer `timeoutSeconds` only applies when the action runs from a key.
 
 Error codes: `invalid-url`, `invalid-path`, `invalid-arguments`,
 `not-found`, `commands-disabled`, `exit-nonzero`, `unsupported-target`,
@@ -198,7 +199,8 @@ never read into results. There are no Swarm operations.
 is stopped with its process group. Cancelling `compose up` or `down`
 partway leaves the project as far as Compose got; running the action again
 completes it (both are retry-safe and idempotent). Reading commands are
-limited to 30 s, changes to the module's time limit.
+limited to 30 s, changes to the module's time limit — in a workflow at most
+10 minutes, the longest any node runs.
 
 Error codes: `docker-not-found`, `daemon-unavailable`, `permission-denied`,
 `context-not-found`, `compose-unavailable`, `compose-file-not-found`,

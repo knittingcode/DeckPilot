@@ -63,28 +63,6 @@ const KNOWN: &[(&str, &str, &str)] = &[
     // Findings in modules outside the integration modules, kept until their
     // owners decide.
     (
-        "docker.compose-up",
-        "action-timeout",
-        "its own limit follows the Docker time-limit setting (up to 30 min); MAX_TIMEOUT_MS \
-         only bounds a node's override",
-    ),
-    (
-        "docker.compose-down",
-        "action-timeout",
-        "as docker.compose-up",
-    ),
-    (
-        "docker.compose-restart",
-        "action-timeout",
-        "as docker.compose-up",
-    ),
-    (
-        "system.run-command",
-        "action-timeout",
-        "its own limit allows commands up to an hour; MAX_TIMEOUT_MS only bounds a node's \
-         override",
-    ),
-    (
         "docker.status",
         "run-missing-output",
         "without a Docker program, `context` (declared always present) is left out",

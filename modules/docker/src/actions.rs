@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
-use deckpilot_core::graph::{ActionEffect, NodeSpec, OutputSpec, ValueKind};
+use deckpilot_core::graph::{ActionEffect, MAX_TIMEOUT_MS, NodeSpec, OutputSpec, ValueKind};
 use deckpilot_core::process::{ProcessLimits, ProcessOutput, minimal_environment};
 use deckpilot_core::{
     ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, ExecutionContext,
@@ -179,7 +179,9 @@ fn compose_outputs() -> Vec<OutputSpec> {
 
 #[allow(clippy::too_many_lines)] // One table of the seven action types.
 fn definition(kind: Kind) -> ActionType {
-    let change_timeout = 1_810_000;
+    // A workflow node runs at most MAX_TIMEOUT_MS; the module's longer time
+    // limit applies when a change runs outside a workflow.
+    let change_timeout = MAX_TIMEOUT_MS;
     let (id_value, name, description, parameters, spec) = match kind {
         Kind::Status => (
             STATUS,

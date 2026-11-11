@@ -694,8 +694,7 @@ impl Executor<'_> {
             }
         };
         let spec = definition.map(|d| d.node.clone()).unwrap_or_default();
-        let timeout =
-            Duration::from_millis(u64::from(policy.timeout_ms.unwrap_or(spec.timeout_ms)));
+        let timeout = node_timeout(policy.timeout_ms, spec.timeout_ms);
         let attempts = 1 + if spec.retry_safe {
             policy.retry.attempts.min(super::MAX_RETRIES)
         } else {
@@ -981,4 +980,15 @@ fn classify(
             BTreeMap::new(),
         ),
     }
+}
+
+/// A node's time limit: its override, else its action type's own, and never
+/// more than [`super::MAX_TIMEOUT_MS`]. Longer limits of an action (a
+/// command's or Compose's) apply only when it runs outside a workflow.
+pub(crate) fn node_timeout(override_ms: Option<u32>, declared_ms: u32) -> Duration {
+    Duration::from_millis(u64::from(
+        override_ms
+            .unwrap_or(declared_ms)
+            .min(super::MAX_TIMEOUT_MS),
+    ))
 }
