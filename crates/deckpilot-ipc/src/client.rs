@@ -12,6 +12,9 @@ use crate::{
     Response, ServerMessage, SharedStream, token,
 };
 
+/// How long the agent has to answer a new connection's `hello`.
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 #[derive(Debug, Error)]
 pub enum ClientError {
     #[error("the DeckPilot agent is not running")]
@@ -102,8 +105,20 @@ impl AgentClient {
             token,
             client,
         };
-        write_message(&mut connection.writer, &hello).await?;
-        match connection.receive().await? {
+        // An endpoint that accepts but never answers (an agent that is
+        // stopping or stuck) must not keep the caller waiting forever.
+        let welcome = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
+            write_message(&mut connection.writer, &hello).await?;
+            connection.receive().await
+        })
+        .await
+        .map_err(|_| {
+            ClientError::Io(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the agent did not answer the handshake",
+            ))
+        })??;
+        match welcome {
             ServerMessage::Welcome { agent_version, .. } => {
                 connection.agent_version = agent_version;
                 Ok(connection)

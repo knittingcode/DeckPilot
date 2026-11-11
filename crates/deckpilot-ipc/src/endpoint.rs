@@ -15,14 +15,19 @@
 use std::io;
 use std::path::Path;
 
+use interprocess::ConnectWaitMode;
 use interprocess::local_socket::tokio::{Listener, Stream, prelude::*};
-use interprocess::local_socket::{ListenerOptions, Name};
+use interprocess::local_socket::{ConnectOptions, ListenerOptions, Name};
 
 /// Attempts to create the Windows pipe while a previous instance closes.
 #[cfg(windows)]
 const LISTEN_RETRIES: u32 = 40;
 #[cfg(windows)]
 const LISTEN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+/// How long a connect waits for a busy endpoint. On Windows a pipe whose
+/// instances are all taken (or left behind by a previous agent) would
+/// otherwise be waited for indefinitely.
+const CONNECT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
@@ -134,8 +139,23 @@ impl Endpoint {
         }
     }
 
+    /// Connects, waiting at most [`CONNECT_WAIT`] for a busy endpoint. A
+    /// timeout is reported as [`io::ErrorKind::TimedOut`].
     pub async fn connect(&self) -> io::Result<Stream> {
-        Stream::connect(self.name()?).await
+        let options = ConnectOptions::new()
+            .name(self.name()?)
+            .wait_mode(ConnectWaitMode::Timeout(CONNECT_WAIT));
+        match tokio::time::timeout(CONNECT_WAIT * 2, options.connect_tokio()).await {
+            Ok(Ok(stream)) => Ok(stream),
+            Ok(Err(error)) if error.kind() == io::ErrorKind::WouldBlock => {
+                Err(io::Error::new(io::ErrorKind::TimedOut, error))
+            }
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the agent endpoint did not accept the connection",
+            )),
+        }
     }
 }
 

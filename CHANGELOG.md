@@ -73,6 +73,9 @@ as the notes of its GitHub release and of the in-app update.
 - Windows release builds: OpenSSL is configured with Strawberry Perl.
 - Linux test releases build `.deb` and AppImage (RPM rejects pre-release
   versions).
+- Connecting to the agent gives up after a few seconds instead of waiting
+  indefinitely when its endpoint is busy or does not answer (on Windows a
+  busy named pipe was waited for without a limit).
 
 ## [0.4.0] - Unreleased
 
