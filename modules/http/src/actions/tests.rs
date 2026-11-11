@@ -418,7 +418,14 @@ fn credentials_are_sent_but_never_shown() {
     let handler = handler(REQUEST, &settings);
     let written = get(&server.url("/json")).with("headers", text("Authorization: Bearer abc"));
     assert_eq!(handler.check(&written, &fixture.profile).len(), 1);
-    let result = run_with(REQUEST, &settings, &written, &fixture.context());
+    // The schema refuses it when the action is saved...
+    let refused = handler.definition().normalize(&written).unwrap_err();
+    assert!(
+        refused[0].to_string().contains("stored credential"),
+        "{refused:?}"
+    );
+    // ...and the action refuses it at run time should it get there anyway.
+    let result = handler.execute(&written, &fixture.context());
     assert_eq!(result.code.as_deref(), Some(codes::SENSITIVE_HEADER));
     let in_url = get(&format!("http://bob:pw@127.0.0.1:{}/json", server.port));
     assert_eq!(
