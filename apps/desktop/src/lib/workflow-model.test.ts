@@ -7,6 +7,7 @@ import {
   newStep,
   removeStep,
   setOverride,
+  shownWorkflow,
   validateWorkflow,
 } from "./workflow-model"
 import type { Workflow } from "./types"
@@ -45,5 +46,30 @@ describe("workflow editing", () => {
       "while SHOP is active",
     )
     expect(describeCondition(undefined, projects)).toBe("always")
+  })
+})
+
+describe("shown workflow", () => {
+  const a: Workflow = { id: "a", name: "A", steps: [] }
+  const b: Workflow = { id: "b", name: "B", steps: [] }
+  const before = { revision: 1 }
+  const after = { revision: 2 }
+  const drafts = ["new", "new-steps"]
+
+  it("shows loaded workflows and drafts directly", () => {
+    expect(shownWorkflow({ id: "b" }, [a, b], before, drafts)).toBe("b")
+    expect(shownWorkflow({ id: "new-steps" }, [a], before, drafts)).toBe("new-steps")
+  })
+
+  it("keeps showing the previous workflow until the reload brings the new one", () => {
+    const selection = { id: "copy", waiting: { data: before, shown: "a" } }
+    expect(shownWorkflow(selection, [a, b], before, drafts)).toBe("a")
+    expect(shownWorkflow(selection, [a, b, { ...a, id: "copy" }], after, drafts)).toBe("copy")
+  })
+
+  it("falls back once a reload arrived without the workflow", () => {
+    const selection = { id: "gone", waiting: { data: before, shown: "a" } }
+    expect(shownWorkflow(selection, [b], after, drafts)).toBe("b")
+    expect(shownWorkflow(selection, [], after, drafts)).toBe("new")
   })
 })

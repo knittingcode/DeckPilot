@@ -46,9 +46,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libudev-dev
+        run: tools/ci/install-linux-deps.sh
       # Installs the toolchain pinned in rust-toolchain.toml.
       - name: Install Rust toolchain
         run: rustup toolchain install && rustc --version && cargo clippy --version
@@ -105,9 +103,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libudev-dev
+        run: tools/ci/install-linux-deps.sh
       - name: Install Rust toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
