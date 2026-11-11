@@ -63,6 +63,14 @@ an editor belongs to the modules for those tools. Results are structured
 resources `resource`, `resourceKey`, `kind` and `value`. Missing resources
 fail with a message naming the project and resource.
 
+Failures carry the shared codes `no-active-project`, `not-permitted`,
+`resource-role-missing`, `resource-unbound`, `resource-kind-mismatch` and
+`invalid-parameters`, plus `project-not-in-profile` (an explicit project of
+another profile), `no-projects`, `at-last-project` and `at-first-project`
+(next/previous without `wrapAround`). `projects.next`, `projects.previous`
+and `projects.select` are declared as modifying, since switching the active
+project changes state; the resource types and `projects.active` only read.
+
 The projects module owns the Projects page, project management (create,
 edit, reorder, delete, default project, explicit copy to another profile),
 active project switching (actions, the tray and the app all use

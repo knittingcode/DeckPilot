@@ -63,16 +63,6 @@ const KNOWN: &[(&str, &str, &str)] = &[
     // Findings in modules outside the integration modules, kept until their
     // owners decide.
     (
-        "projects.next",
-        "action-retry",
-        "changes the active project but is declared read-only",
-    ),
-    (
-        "projects.previous",
-        "action-retry",
-        "changes the active project but is declared read-only",
-    ),
-    (
         "notifications.show",
         "run-denied-succeeds",
         "by design a notification that cannot be shown does not fail the node (`shown` is \
@@ -82,26 +72,6 @@ const KNOWN: &[(&str, &str, &str)] = &[
         "notifications.workflow-summary",
         "run-denied-succeeds",
         "as notifications.show",
-    ),
-    (
-        "projects.select",
-        "run-failure-without-code",
-        "failures have no ActionResult.code",
-    ),
-    (
-        "projects.repository",
-        "run-failure-without-code",
-        "failures have no ActionResult.code",
-    ),
-    (
-        "projects.documentation",
-        "run-failure-without-code",
-        "failures have no ActionResult.code",
-    ),
-    (
-        "projects.resolve-resource",
-        "run-failure-without-code",
-        "failures have no ActionResult.code",
     ),
 ];
 

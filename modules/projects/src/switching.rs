@@ -20,6 +20,17 @@ pub enum StepError {
     AtFirst,
 }
 
+impl StepError {
+    /// Stable error code for [`deckpilot_core::ActionResult::code`].
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::NoProjects => "no-projects",
+            Self::AtLast => "at-last-project",
+            Self::AtFirst => "at-first-project",
+        }
+    }
+}
+
 /// The project after (or before) `current` in the profile's order. Without
 /// wrap-around, stepping past either end is an error. A missing or stale
 /// `current` starts at the first (or last) project.
