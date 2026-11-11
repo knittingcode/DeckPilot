@@ -36,6 +36,7 @@ export const FLOW_TITLE: Record<NodeType, string> = {
   loop: "Loop",
   call: "Sub-workflow",
   output: "Outputs",
+  setVariable: "Set variable",
   delay: "Delay",
   stop: "Stop",
 }
@@ -49,6 +50,7 @@ export const FLOW_DESCRIPTION: Record<NodeType, string> = {
   loop: "Runs another workflow a fixed number of times.",
   call: "Runs another workflow once with inputs and uses its outputs.",
   output: "Sets this workflow's outputs for the node that calls it.",
+  setVariable: "Assigns variables of this run for the nodes after it.",
   delay: "Waits before continuing.",
   stop: "Ends the workflow successfully.",
 }
@@ -66,6 +68,7 @@ export function flowEntries(otherWorkflow: string | undefined): CatalogEntry[] {
         ]
       : []),
     { type: "output", values: {} },
+    { type: "setVariable", values: {} },
     { type: "delay", ms: 1000 },
     { type: "stop" },
   ]
