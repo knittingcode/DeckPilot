@@ -323,9 +323,19 @@ async fn install<R: Runtime>(app: &AppHandle<R>) -> CommandResult<()> {
             _ => return Err(CommandError::Invalid("download the update first".into())),
         }
     };
-    begin(app, Phase::Installing)?;
     let paths = app.state::<AppState>().paths.clone();
-    let agent_was_running = matches!(crate::agent::connection(&paths).await, Ok(c) if c.running);
+    // An update never ends running workflows: it waits until they finished
+    // (automatic installation tries again later) or the user cancels them.
+    let current = crate::agent::connection(&paths).await;
+    if let Ok(connection) = &current
+        && let Some(running) = connection.running_executions().filter(|n| *n > 0)
+    {
+        let message = crate::agent::running_workflows_message(running);
+        set_phase(app, Phase::Ready, Some(message.clone()));
+        return Err(CommandError::Invalid(message));
+    }
+    begin(app, Phase::Installing)?;
+    let agent_was_running = matches!(current, Ok(c) if c.running);
     if agent_was_running {
         crate::agent::stop_any_version(&paths, Request::PrepareForUpdate).await?;
         if !crate::agent::wait_until_stopped(&paths, Duration::from_secs(15)).await {
@@ -380,11 +390,14 @@ pub fn set_update_preferences<R: Runtime>(
     Ok(snapshot(&app))
 }
 
-/// Seconds since the agent's last device input, if it runs.
-async fn agent_last_input(paths: &AgentPaths) -> Option<u64> {
+/// The agent's last device input and whether workflows are running in it.
+async fn agent_activity(paths: &AgentPaths) -> (Option<u64>, bool) {
     match crate::agent::request(paths, Request::GetStatus).await {
-        Ok(Response::Status { status }) => status.last_input_at,
-        _ => None,
+        Ok(Response::Status { status }) => (
+            status.last_input_at,
+            status.running_executions.is_some_and(|n| n > 0),
+        ),
+        _ => (None, false),
     }
 }
 
@@ -408,11 +421,13 @@ pub fn spawn_background<R: Runtime>(app: AppHandle<R>) {
             };
             if available {
                 let paths = app.state::<AppState>().paths.clone();
+                let (agent_last_input_at, workflows_running) = agent_activity(&paths).await;
                 let context = InstallContext {
                     downloaded,
                     user_confirmed: false,
-                    agent_busy: false,
-                    agent_last_input_at: agent_last_input(&paths).await,
+                    // Running workflows are never ended by an update.
+                    agent_busy: workflows_running,
+                    agent_last_input_at,
                     now: now(),
                 };
                 match decide(prefs.mode, &context) {
