@@ -148,16 +148,7 @@ fn shown(text: &str) -> String {
 /// Headers whose values are secrets: never set from a workflow, never
 /// shown from a response.
 pub fn sensitive_header(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    matches!(
-        name.as_str(),
-        "authorization" | "proxy-authorization" | "cookie" | "set-cookie" | "proxy-authenticate"
-    ) || [
-        "token", "secret", "api-key", "api_key", "apikey", "password", "session",
-    ]
-    .iter()
-    .any(|word| name.contains(word))
-        || (name.contains("auth") && !name.contains("author"))
+    deckpilot_core::looks_secret(name)
 }
 
 /// Headers the client sets itself.
@@ -236,7 +227,7 @@ pub fn query(text: &str) -> Result<Vec<(String, String)>, (&'static str, String)
         if name.is_empty() {
             return Err((codes::INVALID_QUERY, format!("“{line}” has no name")));
         }
-        if sensitive_header(name) || name.eq_ignore_ascii_case("key") {
+        if sensitive_header(name) {
             return Err((
                 codes::SENSITIVE_HEADER,
                 format!("the query parameter {name} looks like a secret; use a stored credential"),

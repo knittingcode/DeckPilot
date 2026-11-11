@@ -15,6 +15,22 @@ export type ParameterKind =
   | { type: "resource"; kind?: ResourceKind }
   /** A project of the profile the action belongs to. */
   | { type: "project" }
+  /** A list stored as one item per line, e.g. command arguments. */
+  | { type: "lines"; itemLabel?: string; maxItems?: number; maxLength?: number }
+  /** Rows stored as one `name<separator>value` per line, e.g. headers. */
+  | {
+      type: "pairs"
+      separator: string
+      nameLabel?: string
+      valueLabel?: string
+      maxItems?: number
+      caseInsensitive?: boolean
+      noSecrets?: boolean
+    }
+  /** Source text such as a JSON body. */
+  | { type: "code"; language: string; maxLength?: number }
+  /** The name of a credential stored on this computer. */
+  | { type: "credential" }
 
 export type ParameterValue =
   | { type: "text"; value: string }
