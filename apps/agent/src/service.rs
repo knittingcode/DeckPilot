@@ -91,6 +91,10 @@ pub enum AgentError {
     Storage(#[from] StorageError),
     #[error("{0}")]
     Io(#[from] std::io::Error),
+    #[error("cannot write the client token: {0}")]
+    Token(#[source] std::io::Error),
+    #[error("cannot listen for clients: {0}")]
+    Endpoint(#[source] std::io::Error),
 }
 
 /// Commands issued by the tray menu.
@@ -237,8 +241,8 @@ impl Agent {
         runtime.set_placeholder(Some("Locked"));
 
         let endpoint = paths.endpoint();
-        let token = token::create(&paths.token_file)?;
-        let listener = endpoint.listen()?;
+        let token = token::create(&paths.token_file).map_err(AgentError::Token)?;
+        let listener = endpoint.listen().map_err(AgentError::Endpoint)?;
 
         let (commands_tx, commands) = mpsc::unbounded_channel();
         let (signals_tx, signals) = mpsc::unbounded_channel();
