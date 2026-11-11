@@ -101,4 +101,38 @@ describe("ExecutionStore", () => {
     expect(ordered).toEqual(["e2", "e1"])
     expect(ExecutionStore.ofProfile(store.getSnapshot(), "other")).toEqual([])
   })
+
+  it("keeps retry waits and node starts seen live after the run finishes", () => {
+    const store = new ExecutionStore()
+    store.clock = () => 1250
+    store.apply({ type: "executionStarted", execution: summary() })
+    store.apply({
+      type: "executionProgress",
+      execution: "e1",
+      event: { type: "nodeStarted", node: "fetch" },
+      completed: 0,
+      total: 3,
+    })
+    for (const [attempt, waitMs] of [
+      [2, 100],
+      [3, 200],
+    ] as const) {
+      store.apply({
+        type: "executionProgress",
+        execution: "e1",
+        event: { type: "retrying", node: "fetch", attempt, waitMs },
+        completed: 0,
+        total: 3,
+      })
+    }
+    expect(store.get("e1")?.nodeStarts).toEqual({ fetch: 250 })
+    expect(store.get("e1")?.attempts).toEqual({ fetch: 3 })
+    store.apply({ type: "executionFinished", execution: summary({ state: "succeeded" }) })
+    store.load({ ...summary({ state: "succeeded" }), nodes: [node("fetch", { attempts: 3 })] })
+    expect(store.get("e1")?.retries?.fetch).toEqual([
+      { attempt: 2, waitMs: 100 },
+      { attempt: 3, waitMs: 200 },
+    ])
+    expect(store.get("e1")?.nodeStarts).toEqual({ fetch: 250 })
+  })
 })

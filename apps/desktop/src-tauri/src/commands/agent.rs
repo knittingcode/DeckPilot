@@ -40,8 +40,23 @@ pub async fn stop_agent(state: State<'_, AppState>) -> CommandResult<()> {
 
 /// Stops the running agent (of any version) and starts the one shipped with
 /// this application, e.g. after an update or when versions differ.
+///
+/// Workflows running in the agent would be interrupted, so the restart is
+/// refused while any run unless `interrupt_running` confirms it; the
+/// interrupted runs are then recorded as such in the history.
 #[tauri::command]
-pub async fn restart_agent(state: State<'_, AppState>) -> CommandResult<AgentConnection> {
+pub async fn restart_agent(
+    state: State<'_, AppState>,
+    interrupt_running: Option<bool>,
+) -> CommandResult<AgentConnection> {
+    let current = agent::connection(&state.paths).await?;
+    if let Some(running) = current.running_executions().filter(|n| *n > 0)
+        && !interrupt_running.unwrap_or(false)
+    {
+        return Err(CommandError::Invalid(agent::running_workflows_message(
+            running,
+        )));
+    }
     agent::stop_any_version(&state.paths, Request::Shutdown).await?;
     if !agent::wait_until_stopped(&state.paths, Duration::from_secs(10)).await {
         return Err(CommandError::Invalid(
