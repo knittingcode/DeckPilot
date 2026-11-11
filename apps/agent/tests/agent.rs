@@ -2960,3 +2960,59 @@ async fn module_states_are_shown_and_not_refreshed_more_often_than_allowed() {
     assert_eq!(agent.mock.frames(&agent.device)[&key], ready);
     agent.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connections_offer_only_what_their_protocol_has() {
+    let agent = setup().await;
+    // The current client gets everything.
+    let current = agent.client().await;
+    assert_eq!(current.protocol(), PROTOCOL_VERSION);
+    assert_eq!(
+        current.capabilities(),
+        deckpilot_ipc::Capability::of_protocol(PROTOCOL_VERSION)
+    );
+    // A 0.5.0 client (protocol 4) is welcomed with protocol 4's capabilities
+    // and refused what it could not know, even if it sent it anyway.
+    let paths = agent.paths.clone();
+    let stream = paths.endpoint().connect().await.unwrap();
+    let stream = SharedStream::new(stream);
+    let mut reader = BufReader::new(stream.clone());
+    let mut writer = stream;
+    let token = std::fs::read_to_string(&paths.token_file).unwrap();
+    write_message(
+        &mut writer,
+        &json!({"type": "hello", "protocol": 4, "token": token.trim(), "client": "desktop"}),
+    )
+    .await
+    .unwrap();
+    let welcome: Value = read_message(&mut reader).await.unwrap().unwrap();
+    assert_eq!(welcome["protocol"], PROTOCOL_VERSION);
+    assert_eq!(
+        welcome["capabilities"],
+        json!([
+            "workflows",
+            "prepareForUpdate",
+            "moduleNamespaces",
+            "encryptedDatabase"
+        ])
+    );
+    write_message(
+        &mut writer,
+        &json!({"type": "request", "id": 1, "request": {"type": "listExecutions"}}),
+    )
+    .await
+    .unwrap();
+    let refused: Value = read_message(&mut reader).await.unwrap().unwrap();
+    assert_eq!(refused["error"]["code"], "unsupported", "{refused}");
+    // The status is still served, with the running count newer clients use.
+    write_message(
+        &mut writer,
+        &json!({"type": "request", "id": 2, "request": {"type": "getStatus"}}),
+    )
+    .await
+    .unwrap();
+    let status: Value = read_message(&mut reader).await.unwrap().unwrap();
+    assert_eq!(status["response"]["status"]["runningExecutions"], 0);
+    drop((reader, writer, current));
+    agent.shutdown().await;
+}

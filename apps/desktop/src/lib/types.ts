@@ -538,6 +538,8 @@ export interface ProfileInfo {
 export interface AgentStatus {
   version: string
   protocol: number
+  /** Workflows running in the background; absent from older agents. */
+  runningExecutions?: number
   pid: number
   startedAt: number
   dataDir: string
@@ -557,6 +559,17 @@ export type AgentCompatibility =
   | { type: "agentOutdated"; agent: string; app: string }
   | { type: "agentNewer"; agent: string; app: string }
   | { type: "unknown"; agent: string; app: string }
+  /** The agent is too old for any protocol this app speaks; replace it. */
+  | { type: "updateRequired"; agent: string; app: string }
+
+/** What a connection to the agent can do, from its negotiated protocol. */
+export type AgentCapability =
+  | "workflows"
+  | "prepareForUpdate"
+  | "moduleNamespaces"
+  | "encryptedDatabase"
+  | "backgroundExecutions"
+  | "notifications"
 
 export interface AgentConnection {
   running: boolean
@@ -564,6 +577,9 @@ export interface AgentConnection {
   canStart: boolean
   compatibility: AgentCompatibility | null
   appVersion: string
+  /** Protocol of the connection: the lower of the app's and the agent's. */
+  protocol?: number | null
+  capabilities?: AgentCapability[]
 }
 
 export type UpdateMode = "notifyOnly" | "downloadAndAsk" | "installWhenIdle"
