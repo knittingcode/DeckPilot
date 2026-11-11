@@ -247,7 +247,7 @@ fn safe_config(manifest: &ModuleManifest) -> ActionParameters {
 fn sample(spec: &ParameterSpec) -> ParameterValue {
     let key = spec.key.to_ascii_lowercase();
     match &spec.kind {
-        ParameterKind::Text { .. } => ParameterValue::Text(
+        ParameterKind::Text { .. } | ParameterKind::Lines { .. } => ParameterValue::Text(
             if key.contains("url") {
                 CLOSED_URL
             } else {
@@ -271,6 +271,13 @@ fn sample(spec: &ParameterSpec) -> ParameterValue {
         }),
         // A project that is not in the profile.
         ParameterKind::Project => ParameterValue::Project(ProjectId::new()),
+        ParameterKind::Pairs { separator, .. } => {
+            ParameterValue::Text(format!("contract{separator}value"))
+        }
+        ParameterKind::Code { language, .. } => {
+            ParameterValue::Text(if language == "json" { "{}" } else { "" }.into())
+        }
+        ParameterKind::Credential => ParameterValue::Text(CREDENTIAL.into()),
     }
 }
 
@@ -362,6 +369,10 @@ fn frontend_kind(kind: &ParameterKind) -> &'static str {
         ParameterKind::Choice { .. } => "choice",
         ParameterKind::Resource { .. } => "resource",
         ParameterKind::Project => "project",
+        ParameterKind::Lines { .. } => "lines",
+        ParameterKind::Pairs { .. } => "pairs",
+        ParameterKind::Code { .. } => "code",
+        ParameterKind::Credential => "credential",
     }
 }
 
@@ -372,6 +383,44 @@ fn renderable(kind: &ParameterKind) -> bool {
         .and_then(|rest| rest.split("export type").next())
         .unwrap_or_default();
     union.contains(&format!("type: \"{}\"", frontend_kind(kind)))
+}
+
+/// What is wrong with a parameter kind's own settings.
+fn kind_problem(spec: &ParameterSpec) -> Option<String> {
+    let key = &spec.key;
+    match &spec.kind {
+        ParameterKind::Choice { options } => {
+            let unique: BTreeSet<_> = options.iter().collect();
+            (options.is_empty() || unique.len() != options.len())
+                .then(|| format!("{key}: choice options are empty or repeated"))
+        }
+        ParameterKind::Integer {
+            min: Some(min),
+            max: Some(max),
+        } if min > max => Some(format!("{key}: min {min} is above max {max}")),
+        ParameterKind::Text {
+            max_length: Some(0),
+            ..
+        }
+        | ParameterKind::Code {
+            max_length: Some(0),
+            ..
+        } => Some(format!("{key}: max length 0")),
+        ParameterKind::Lines {
+            max_items,
+            max_length,
+            ..
+        } if *max_items == Some(0) || *max_length == Some(0) => {
+            Some(format!("{key}: a list of no items or empty items"))
+        }
+        ParameterKind::Pairs { separator, .. } if separator != ":" && separator != "=" => {
+            Some(format!("{key}: pairs separated by “{separator}”"))
+        }
+        ParameterKind::Code { language, .. } if language.trim().is_empty() => {
+            Some(format!("{key}: code without a language"))
+        }
+        _ => None,
+    }
 }
 
 /// Problems with a parameter's schema and default.
@@ -386,28 +435,8 @@ fn schema_problems(spec: &ParameterSpec) -> Vec<(&'static str, String)> {
             format!("{} has a kind the app cannot draw", spec.key),
         ));
     }
-    match &spec.kind {
-        ParameterKind::Choice { options } => {
-            let unique: BTreeSet<_> = options.iter().collect();
-            if options.is_empty() || unique.len() != options.len() {
-                problems.push((
-                    "parameter-schema",
-                    format!("{}: choice options are empty or repeated", spec.key),
-                ));
-            }
-        }
-        ParameterKind::Integer {
-            min: Some(min),
-            max: Some(max),
-        } if min > max => problems.push((
-            "parameter-schema",
-            format!("{}: min {min} is above max {max}", spec.key),
-        )),
-        ParameterKind::Text {
-            max_length: Some(0),
-            ..
-        } => problems.push(("parameter-schema", format!("{}: max length 0", spec.key))),
-        _ => {}
+    if let Some(problem) = kind_problem(spec) {
+        problems.push(("parameter-schema", problem));
     }
     if let Some(default) = &spec.default {
         let fits = match (&spec.kind, default) {
@@ -418,7 +447,16 @@ fn schema_problems(spec: &ParameterSpec) -> Vec<(&'static str, String)> {
             (ParameterKind::Integer { min, max }, ParameterValue::Integer(value)) => {
                 min.is_none_or(|min| *value >= min) && max.is_none_or(|max| *value <= max)
             }
-            (ParameterKind::Boolean, ParameterValue::Boolean(_))
+            (ParameterKind::Code { max_length, .. }, ParameterValue::Text(text)) => {
+                max_length.is_none_or(|max| text.chars().count() <= max)
+            }
+            (
+                ParameterKind::Lines { .. }
+                | ParameterKind::Pairs { .. }
+                | ParameterKind::Credential,
+                ParameterValue::Text(_),
+            )
+            | (ParameterKind::Boolean, ParameterValue::Boolean(_))
             | (ParameterKind::Resource { .. }, ParameterValue::Resource(_)) => true,
             (ParameterKind::Choice { options }, ParameterValue::Choice(choice)) => {
                 options.contains(choice)
@@ -455,19 +493,11 @@ fn schema_problems(spec: &ParameterSpec) -> Vec<(&'static str, String)> {
             ),
         ));
     }
-    if key.contains("credential")
-        && !matches!(
-            spec.kind,
-            ParameterKind::Text {
-                multiline: false,
-                max_length: Some(1..=64)
-            }
-        )
-    {
+    if key.contains("credential") && spec.kind != ParameterKind::Credential {
         problems.push((
             "credential-parameter",
             format!(
-                "{} must be a one-line credential name of at most 64 characters",
+                "{} must be a credential parameter (ParameterKind::Credential)",
                 spec.key
             ),
         ));
