@@ -41,6 +41,10 @@ as the notes of its GitHub release and of the in-app update.
   bar. Text is plain and bounded; a notification that cannot be shown does
   not stop the workflow unless marked critical. Preferences: desktop,
   status bar and the least severity shown.
+- Development seed: *Start Work* and *End Work* example workflows that
+  combine the Git, Docker, System and Notifications modules using only
+  logical resources (development data only; a new installation stays
+  empty).
 - Action types declare what running them does (read-only, opens something,
   changes things) and failures carry a stable error code; both are shown in
   the workflow editor.

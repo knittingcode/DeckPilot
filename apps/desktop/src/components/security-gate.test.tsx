@@ -91,7 +91,10 @@ describe("SecurityGate (main window)", () => {
       </SecurityGate>,
     )
     expect(await screen.findByText("Configuration studio")).toBeInTheDocument()
-    expect(api.showMainWindow).toHaveBeenCalled()
+    // Shown from an effect after the content renders.
+    await waitFor(() => {
+      expect(api.showMainWindow).toHaveBeenCalled()
+    })
     expect(api.openWindow).not.toHaveBeenCalled()
   })
 })

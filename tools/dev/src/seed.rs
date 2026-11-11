@@ -19,6 +19,8 @@ use deckpilot_storage::{ConfigStore, DatabaseKey, Encryption, SqliteStore};
 
 use crate::session::DevPaths;
 
+mod examples;
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 struct Builder<'a> {
@@ -83,12 +85,21 @@ fn work_profile(registry: &ActionRegistry) -> Result<Profile> {
     b.project(
         "SHOP",
         "Online Shop",
-        &[("repository", "shop.repository"), ("docs", "shop.docs")],
+        &[
+            ("repository", "shop.repository"),
+            ("docs", "shop.docs"),
+            ("compose", "shop.compose"),
+            ("editor", "dev.editor"),
+        ],
     )?;
     b.project(
         "CMR",
         "Customer Relations",
-        &[("repository", "cmr.repository"), ("docs", "cmr.docs")],
+        &[
+            ("repository", "cmr.repository"),
+            ("docs", "cmr.docs"),
+            ("editor", "dev.editor"),
+        ],
     )?;
     b.project(
         "CMS",
@@ -116,6 +127,7 @@ struct WorkIds {
     announce: ActionInstanceId,
     shop_repository: ActionInstanceId,
     start: WorkflowId,
+    end: WorkflowId,
 }
 
 /// Actions and the "Start Work" workflow of the Work profile.
@@ -186,17 +198,21 @@ fn work_actions(b: &mut Builder<'_>) -> Result<WorkIds> {
         Some("{project.name}"),
     )?;
 
-    let mut start = Workflow::new("Start Work")
+    let mut steps = Workflow::new("Announce and resolve")
         .step(announce, OnFailure::Continue)
         .step(repository, OnFailure::Continue)
         .step(docs, OnFailure::Continue)
         .step(shop_repository, OnFailure::Stop);
-    start.description = "Announce the project and resolve its resources".into();
-    start.steps[3].condition = StepCondition::ActiveProject {
+    steps.description = "Announce the project and resolve its resources".into();
+    steps.steps[3].condition = StepCondition::ActiveProject {
         project: b.profile.projects[0].id,
     };
-    let start_id = start.id;
-    b.profile.workflows.push(start);
+    // The integration examples come first: Start Work is on a key.
+    let work = examples::actions(b)?;
+    let start = examples::start_work(&work);
+    let end = examples::end_work(&work);
+    let (start_id, end_id) = (start.id, end.id);
+    b.profile.workflows.extend([start, end, steps]);
     b.profile
         .workflows
         .push(check_workflow(announce, repository, docs));
@@ -209,6 +225,7 @@ fn work_actions(b: &mut Builder<'_>) -> Result<WorkIds> {
         announce,
         shop_repository,
         start: start_id,
+        end: end_id,
     })
 }
 
@@ -310,6 +327,7 @@ fn mk2_layout(ids: &WorkIds) -> DeviceLayout {
             },
         ),
         press(key(7), BindingTarget::Action { action: ids.docs }),
+        press(key(8), BindingTarget::Workflow { workflow: ids.end }),
         folder,
     ];
     main.pages.push(tools);
@@ -469,6 +487,32 @@ fn machine(paths: &DevPaths) -> Result<MachineConfig> {
         "https://example.com/docs/cmr".into(),
     )?;
     // cms.repository is intentionally left unbound.
+
+    // Start Work / End Work: SHOP's Compose project (services start only
+    // after Settings › Docker allows it) and an editor per platform.
+    let shop = paths.workspace.join("shop");
+    let compose = shop.join("compose.yaml");
+    if !compose.exists() {
+        std::fs::write(
+            &compose,
+            "# DeckPilot development example: started by Start Work, stopped by End Work.\n\
+             services:\n  idle:\n    image: busybox:1.36\n    command: [\"sleep\", \"infinity\"]\n",
+        )?;
+    }
+    bind(
+        "shop.compose",
+        ResourceKind::DockerEnvironment,
+        shop.display().to_string(),
+    )?;
+    let editor = match Os::current() {
+        Os::MacOs => Some("TextEdit".to_owned()),
+        Os::Windows => Some(r"C:\Windows\System32\notepad.exe".to_owned()),
+        // Linux desktops differ; bind `dev.editor` to try it.
+        Os::Linux | Os::Other => None,
+    };
+    if let Some(editor) = editor {
+        bind("dev.editor", ResourceKind::Application, editor)?;
+    }
     Ok(config)
 }
 
@@ -598,14 +642,40 @@ mod tests {
             work.validate(&catalog)
         );
         assert_eq!(personal.validate(&catalog), Vec::new());
-        // The graph workflow runs: no validation errors.
-        let check = work
+        // The graph workflows run: no validation errors.
+        let engine = deckpilot_core::Engine::new(registry);
+        let graphs: Vec<_> = work
             .workflows
             .iter()
-            .find(|w| w.graph.is_some())
-            .expect("a graph workflow");
-        let engine = deckpilot_core::Engine::new(registry);
-        assert_eq!(engine.check_runnable(&work, check.id), Ok(()));
+            .filter(|w| w.graph.is_some())
+            .map(|w| w.name.as_str())
+            .collect();
+        assert_eq!(graphs, ["Start Work", "End Work", "Project check"]);
+        for workflow in work.workflows.iter().filter(|w| w.graph.is_some()) {
+            assert_eq!(
+                engine.check_runnable(&work, workflow.id),
+                Ok(()),
+                "{}",
+                workflow.name
+            );
+            let issues =
+                workflow
+                    .graph
+                    .as_ref()
+                    .unwrap()
+                    .validate(workflow.id, &work, engine.registry());
+            // No problems at all, not even warnings.
+            assert!(issues.is_empty(), "{}: {issues:?}", workflow.name);
+            // They never change the active project.
+            assert_eq!(
+                workflow.project_scope,
+                if workflow.name == "Project check" {
+                    None
+                } else {
+                    Some(deckpilot_core::ProjectScope::Execution)
+                }
+            );
+        }
         let registry = engine.registry();
         assert_eq!(work.layouts.len(), 3);
         assert_eq!(work.workflows[0].name, personal.workflows[0].name);

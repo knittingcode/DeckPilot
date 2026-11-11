@@ -29,7 +29,16 @@ make up        # or: pnpm dev (same session, in the foreground; Ctrl+C stops it)
    `.dev/data` and seeds it with demonstration data on first use: a *Work*
    profile (SHOP → CMR → CMS, actions, a workflow and layouts for the MK.2,
    XL and Stream Deck +), a *Personal* profile with its own projects, and an
-   *Empty* profile to check empty states. Demonstration data exists only in
+   *Empty* profile to check empty states. The Work profile has the
+   integration examples *Start Work* (resolve the project, check Git and
+   Docker, start SHOP's Compose services when Docker runs, open the editor,
+   show a summary) and *End Work* (list uncommitted changes, stop the
+   project's services when it has them, show a summary). They use only
+   logical resources — `repository`, `compose` and `editor` of the current
+   project — bound in the dev machine configuration (`.dev/workspace/shop`
+   with a `compose.yaml`; TextEdit on macOS, Notepad on Windows; bind
+   `dev.editor` yourself on Linux). Starting and stopping services only
+   happens after Settings › Docker allows it. Demonstration data exists only in
    this seed; a production database starts with no profiles and an empty
    Action Library. The seed runs once per data directory, so demo data you
    delete does not come back (`make seed` with `--reset` starts over).
