@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use deckpilot_ipc::client::request_once;
 use deckpilot_ipc::{
-    AgentClient, AgentEvent, AgentPaths, AgentStatus, ClientError, ClientKind, ErrorCode,
-    KeyMaterial, Request, Response, SecurityState,
+    AgentClient, AgentEvent, AgentPaths, AgentStatus, Capability, ClientError, ClientKind,
+    ErrorCode, KeyMaterial, Request, Response, SecurityState,
 };
 use deckpilot_storage::DatabaseKey;
 use deckpilot_update::compatibility::{self, AgentCompatibility};
@@ -39,6 +39,12 @@ pub struct AgentConnection {
     pub compatibility: Option<AgentCompatibility>,
     /// Version of this application.
     pub app_version: &'static str,
+    /// The protocol of the connection to the agent: the lower of this
+    /// app's and the agent's.
+    pub protocol: Option<u32>,
+    /// What the agent can do over this connection. Features outside it are
+    /// unavailable until the agent is restarted with this app's agent.
+    pub capabilities: Vec<Capability>,
 }
 
 impl AgentConnection {
@@ -49,35 +55,57 @@ impl AgentConnection {
             can_start: agent_executable().is_some(),
             compatibility: None,
             app_version: APP_VERSION,
+            protocol: None,
+            capabilities: Vec::new(),
         }
     }
 
-    fn running(status: AgentStatus) -> Self {
+    fn running(status: AgentStatus, protocol: u32, capabilities: Vec<Capability>) -> Self {
         Self {
             running: true,
             compatibility: Some(compatibility::check(APP_VERSION, &status.version)),
             status: Some(status),
             can_start: agent_executable().is_some(),
             app_version: APP_VERSION,
+            protocol: Some(protocol),
+            capabilities,
         }
     }
 
-    /// An agent that only speaks an older protocol (from a previous release).
-    fn outdated() -> Self {
+    /// An agent too old for any protocol this app speaks (DeckPilot 0.3 or
+    /// earlier): it can only be stopped and replaced.
+    fn update_required() -> Self {
         Self {
             running: true,
             status: None,
             can_start: agent_executable().is_some(),
-            compatibility: Some(AgentCompatibility::AgentOutdated {
+            compatibility: Some(AgentCompatibility::UpdateRequired {
                 agent: "unknown (older protocol)".into(),
                 app: APP_VERSION.into(),
             }),
             app_version: APP_VERSION,
+            protocol: None,
+            capabilities: Vec::new(),
         }
+    }
+
+    /// Workflows running in the agent; `None` when it cannot say.
+    pub fn running_executions(&self) -> Option<u32> {
+        self.status.as_ref().and_then(|s| s.running_executions)
     }
 }
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Why the agent is not stopped now.
+pub fn running_workflows_message(running: u32) -> String {
+    format!(
+        "{running} workflow{} running in the background; wait until {} finished or cancel {}",
+        if running == 1 { " is" } else { "s are" },
+        if running == 1 { "it has" } else { "they have" },
+        if running == 1 { "it" } else { "them" },
+    )
+}
 
 /// Stops a running agent of this or an older release. Older agents reject
 /// the current protocol, so the request is repeated with protocol 1.
@@ -150,14 +178,25 @@ pub async fn fetch_key(paths: &AgentPaths) -> Option<DatabaseKey> {
 }
 
 pub async fn connection(paths: &AgentPaths) -> Result<AgentConnection, ClientError> {
-    match request(paths, Request::GetStatus).await {
-        Ok(Response::Status { status }) => Ok(AgentConnection::running(*status)),
-        Ok(other) => Err(ClientError::Protocol(format!("{other:?}"))),
+    let mut client = match AgentClient::connect(paths, ClientKind::Desktop).await {
+        Ok(client) => client,
         // A connection closed during the handshake means the agent is stopping.
-        Err(ClientError::NotRunning | ClientError::Closed) => Ok(AgentConnection::stopped()),
-        Err(ClientError::Agent(error)) if error.code == ErrorCode::UnsupportedProtocol => {
-            Ok(AgentConnection::outdated())
+        Err(ClientError::NotRunning | ClientError::Closed) => {
+            return Ok(AgentConnection::stopped());
         }
+        Err(ClientError::Agent(error)) if error.code == ErrorCode::UnsupportedProtocol => {
+            return Ok(AgentConnection::update_required());
+        }
+        Err(error) => return Err(error),
+    };
+    match client.request(Request::GetStatus).await {
+        Ok(Response::Status { status }) => Ok(AgentConnection::running(
+            *status,
+            client.protocol(),
+            client.capabilities().to_vec(),
+        )),
+        Ok(other) => Err(ClientError::Protocol(format!("{other:?}"))),
+        Err(ClientError::NotRunning | ClientError::Closed) => Ok(AgentConnection::stopped()),
         Err(error) => Err(error),
     }
 }
@@ -260,16 +299,18 @@ pub fn spawn_bridge<R: Runtime>(app: AppHandle<R>, paths: AgentPaths) {
 
 async fn subscribe<R: Runtime>(app: &AppHandle<R>, paths: &AgentPaths) -> Result<(), ClientError> {
     let mut client = AgentClient::connect(paths, ClientKind::Desktop).await?;
+    let (protocol, capabilities) = (client.protocol(), client.capabilities().to_vec());
+    let running = |status| AgentConnection::running(status, protocol, capabilities.clone());
     if let Response::Status { status } = client.request(Request::GetStatus).await? {
         unlock_if_needed(app, paths, &status).await;
-        let _ = app.emit(STATUS_EVENT, AgentConnection::running(*status));
+        let _ = app.emit(STATUS_EVENT, running(*status));
     }
     client.subscribe().await?;
     loop {
         match client.next_event().await? {
             AgentEvent::State { status } => {
                 unlock_if_needed(app, paths, &status).await;
-                let _ = app.emit(STATUS_EVENT, AgentConnection::running(*status));
+                let _ = app.emit(STATUS_EVENT, running(*status));
             }
             AgentEvent::ShowWindow => show_window(app),
             AgentEvent::OpenWindow { window } => {
