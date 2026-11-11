@@ -46,7 +46,14 @@ function Workflows() {
 const NEW = "new"
 
 function newWorkflow(): Workflow {
-  return { id: crypto.randomUUID(), name: "New workflow", description: "", steps: [] }
+  // New workflows keep project changes to their runs.
+  return {
+    id: crypto.randomUUID(),
+    name: "New workflow",
+    description: "",
+    steps: [],
+    projectScope: "execution",
+  }
 }
 
 /** Switches between the profile's workflows. */

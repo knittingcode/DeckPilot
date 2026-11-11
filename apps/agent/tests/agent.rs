@@ -2030,3 +2030,188 @@ async fn older_clients_do_not_receive_execution_events() {
     }
     agent.shutdown().await;
 }
+
+/// A graph workflow: select `project`, wait `ms`, then announce the
+/// project of the run's context.
+fn select_wait_announce(
+    profile: &mut Profile,
+    project: &str,
+    ms: u32,
+    scope: deckpilot_core::ProjectScope,
+) -> deckpilot_core::Workflow {
+    let project_id = profile
+        .projects
+        .iter()
+        .find(|p| p.key.as_str() == project)
+        .unwrap()
+        .id;
+    let select = registry()
+        .create_instance(
+            &format!("Select {project}"),
+            actions::select_id(),
+            &ActionParameters::new().with(
+                actions::PROJECT_ID,
+                deckpilot_core::ParameterValue::Project(project_id),
+            ),
+        )
+        .unwrap();
+    let select_id = select.id;
+    profile.actions.push(select);
+    let mut workflow = deckpilot_core::Workflow::new(format!("Work on {project}"));
+    workflow.project_scope = Some(scope);
+    workflow.graph = Some(
+        serde_json::from_value(json!({
+            "version": 1,
+            "nodes": [
+                {"id": "start", "type": "trigger"},
+                {"id": "select", "type": "action", "action": select_id},
+                {"id": "wait", "type": "delay", "ms": ms},
+                {"id": "announce", "type": "action", "action": profile.actions[1].id},
+            ],
+            "edges": [
+                {"from": "start", "to": "select"},
+                {"from": "select", "to": "wait"},
+                {"from": "wait", "to": "announce"},
+            ],
+        }))
+        .unwrap(),
+    );
+    workflow
+}
+
+async fn execution(
+    client: &mut AgentClient,
+    id: deckpilot_core::ExecutionId,
+) -> deckpilot_core::ExecutionRecord {
+    match client
+        .request(Request::GetExecution { execution: id })
+        .await
+        .unwrap()
+    {
+        Response::Execution { execution } => *execution,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+fn announced(record: &deckpilot_core::ExecutionRecord) -> String {
+    record
+        .nodes
+        .iter()
+        .find(|n| n.node.as_str() == "announce")
+        .map(|n| n.message.clone())
+        .unwrap_or_default()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_runs_keep_their_own_project_context() {
+    let agent = setup().await;
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let cmr = select_wait_announce(
+        &mut profile,
+        "CMR",
+        400,
+        deckpilot_core::ProjectScope::Execution,
+    );
+    let cms = select_wait_announce(
+        &mut profile,
+        "CMS",
+        100,
+        deckpilot_core::ProjectScope::Execution,
+    );
+    let (slow, fast) = (cmr.id, cms.id);
+    profile.workflows.extend([cmr, cms]);
+    agent.store().save_profile(&profile).unwrap();
+    let mut events = agent.client().await;
+    events.subscribe().await.unwrap();
+    let mut client = agent.client().await;
+    client.request(Request::ReloadConfiguration).await.unwrap();
+
+    // Both run at the same time, each selecting another project.
+    let first = start_workflow(&mut client, slow).await;
+    let second = start_workflow(&mut client, fast).await;
+    assert_eq!(first.initial_project, second.initial_project);
+    let mut finished = Vec::new();
+    while finished.len() < 2 {
+        if let AgentEvent::ExecutionFinished { execution } =
+            tokio::time::timeout(TIMEOUT, events.next_event())
+                .await
+                .unwrap()
+                .unwrap()
+        {
+            finished.push(execution.id);
+        }
+    }
+    let first = execution(&mut client, first.id).await;
+    let second = execution(&mut client, second.id).await;
+    assert_eq!(announced(&first), "CMR");
+    assert_eq!(announced(&second), "CMS");
+    assert!(matches!(
+        first.summary.project,
+        Some(deckpilot_core::ProjectOutcome::KeptInRun { .. })
+    ));
+    // The application's active project never changed.
+    assert_eq!(active_key(&agent.status().await), Some("SHOP"));
+    agent.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_permitted_runs_change_the_active_project_and_never_over_a_newer_choice() {
+    let agent = setup().await;
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let workflow = select_wait_announce(
+        &mut profile,
+        "CMR",
+        300,
+        deckpilot_core::ProjectScope::Application,
+    );
+    let workflow_id = workflow.id;
+    profile.workflows.push(workflow);
+    agent.store().save_profile(&profile).unwrap();
+    let mut events = agent.client().await;
+    events.subscribe().await.unwrap();
+    let mut client = agent.client().await;
+    client.request(Request::ReloadConfiguration).await.unwrap();
+
+    // Nothing else changes the active project: the run's project is applied.
+    let run = start_workflow(&mut client, workflow_id).await;
+    assert_eq!(
+        run.project_scope,
+        Some(deckpilot_core::ProjectScope::Application)
+    );
+    let (_, done) = execution_events(&mut events, run.id).await;
+    assert!(matches!(
+        done.project,
+        Some(deckpilot_core::ProjectOutcome::Applied { .. })
+    ));
+    agent
+        .wait_for_status(|s| active_key(s) == Some("CMR"))
+        .await;
+
+    // The user picks another project while the run waits: their choice
+    // stands and the run records why it did not switch.
+    let cms = profile
+        .projects
+        .iter()
+        .find(|p| p.key.as_str() == "CMS")
+        .unwrap()
+        .id;
+    let shop = profile.projects[0].id;
+    client
+        .request(Request::SelectProject { project: shop })
+        .await
+        .unwrap();
+    let run = start_workflow(&mut client, workflow_id).await;
+    client
+        .request(Request::SelectProject { project: cms })
+        .await
+        .unwrap();
+    let (_, done) = execution_events(&mut events, run.id).await;
+    match done.project {
+        Some(deckpilot_core::ProjectOutcome::NotApplied { reason, .. }) => {
+            assert!(reason.contains("changed during the run"), "{reason}");
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    assert_eq!(active_key(&agent.status().await), Some("CMS"));
+    agent.shutdown().await;
+}

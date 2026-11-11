@@ -81,7 +81,6 @@ impl WorkflowGraph {
         if checker.structure() {
             checker.compute_ancestors();
             checker.nodes(owner);
-            checker.parallel_regions();
         }
         checker.issues
     }
@@ -454,44 +453,6 @@ impl Checker<'_> {
                 Some(id),
                 "the timeout must be between 1 ms and 10 minutes",
             ));
-        }
-    }
-
-    /// Actions that change the active project may not run while parallel
-    /// branches are open: the order of their effects would be undefined.
-    fn parallel_regions(&mut self) {
-        let graph = self.graph;
-        let Some(order) = graph.topological_order() else {
-            return;
-        };
-        let mut open: BTreeMap<&NodeId, usize> = BTreeMap::new();
-        for id in order {
-            let Some(node) = graph.node(id) else { continue };
-            let inside = graph
-                .incoming(id)
-                .map(|edge| open.get(&edge.from).copied().unwrap_or(0))
-                .max()
-                .unwrap_or(0);
-            let after = match node.kind {
-                NodeKind::Parallel => inside + 1,
-                NodeKind::Join => inside.saturating_sub(1),
-                _ => inside,
-            };
-            open.insert(id, after);
-            if inside > 0
-                && let NodeKind::Action { action, .. } = &node.kind
-                && let Some(instance) = self.profile.action(*action)
-                && let Some(definition) = self.registry.definition(&instance.action_type)
-                && definition.node.changes_context
-            {
-                self.issues.push(GraphIssue::error(
-                    Some(id),
-                    format!(
-                        "{} changes the active project and cannot run in parallel branches",
-                        definition.name
-                    ),
-                ));
-            }
         }
     }
 }

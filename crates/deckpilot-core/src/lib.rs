@@ -36,7 +36,8 @@ pub use execution::{
 };
 pub use face::{FaceStyle, KeyFace, render_label};
 pub use history::{
-    ExecutionRecord, ExecutionState, ExecutionSummary, ExecutionTrigger, safe_event, safe_report,
+    ExecutionRecord, ExecutionState, ExecutionSummary, ExecutionTrigger, ProjectOutcome,
+    safe_event, safe_report,
 };
 pub use id::{ActionInstanceId, ExecutionId, LayoutId, PageId, ProfileId, ProjectId, WorkflowId};
 pub use layout::{BindingTarget, ControlBinding, DeviceLayout, LayoutIssue, LayoutPage, Trigger};
@@ -55,7 +56,7 @@ pub use resource::{
     MachineConfig, MachineResourceBinding, ResolveError, ResourceKey, ResourceKind, ResourceRef,
 };
 pub use runtime::{Engine, EngineError, StepReport, WorkflowReport};
-pub use workflow::{OnFailure, StepCondition, Workflow, WorkflowStep};
+pub use workflow::{OnFailure, ProjectScope, StepCondition, Workflow, WorkflowStep};
 
 /// Error returned when a textual identifier does not satisfy its format rules.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

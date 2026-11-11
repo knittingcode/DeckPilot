@@ -46,6 +46,7 @@ import type {
   GraphPort,
   ModuleInfo,
   ProfileView,
+  ProjectScope,
   Workflow,
   WorkflowGraph,
 } from "@/lib/types"
@@ -76,6 +77,8 @@ import {
   updateNode,
 } from "./graph"
 import { IssueList, NodeInspector } from "./inspector"
+import { ProjectScopeSetting } from "./project-scope"
+import { effectiveProjectScope, selectsProjects } from "./project-scope-model"
 import { type FlowNode, type NodeRun, NodeView } from "./node-view"
 
 const NODE_TYPES = { workflow: NodeView }
@@ -229,6 +232,9 @@ function Builder({
   }, [measured, ready, flow])
   const clipboard = useRef<Clipboard | null>(null)
   const actions = view.profile.actions
+  const [projectScope, setProjectScope] = useState<ProjectScope>(() =>
+    effectiveProjectScope(initial, initialGraph, actions, types),
+  )
 
   const lookup = useMemo<Lookup>(
     () => ({
@@ -257,14 +263,30 @@ function Builder({
   )
 
   const workflow: Workflow = useMemo(
-    () => ({ ...initial, name: name.trim(), description: description.trim(), graph }),
-    [initial, name, description, graph],
+    () => ({
+      ...initial,
+      name: name.trim(),
+      description: description.trim(),
+      graph,
+      projectScope,
+    }),
+    [initial, name, description, graph, projectScope],
   )
   const dirty =
     isNew ||
     notes.length > 0 ||
-    JSON.stringify({ n: workflow.name, d: workflow.description ?? "", g: graph }) !==
-      JSON.stringify({ n: initial.name, d: initial.description ?? "", g: initial.graph })
+    JSON.stringify({
+      n: workflow.name,
+      d: workflow.description ?? "",
+      g: graph,
+      s: projectScope,
+    }) !==
+      JSON.stringify({
+        n: initial.name,
+        d: initial.description ?? "",
+        g: initial.graph,
+        s: initial.projectScope ?? projectScope,
+      })
 
   // The engine's validation, shown on the nodes.
   useEffect(() => {
@@ -767,6 +789,11 @@ function Builder({
                       }}
                     />
                   </div>
+                  <ProjectScopeSetting
+                    scope={projectScope}
+                    selectsProjects={selectsProjects(graph, actions, types)}
+                    onChange={setProjectScope}
+                  />
                   <IssueList issues={graphIssues} />
                   {errors.length > 0 && graphIssues.length === 0 && (
                     <p className="text-xs text-destructive">
