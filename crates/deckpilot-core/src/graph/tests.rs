@@ -402,9 +402,14 @@ fn parallel_branches_run_concurrently_and_join_once() {
     );
     assert_eq!(f.ran().last().map(String::as_str), Some("last"));
     assert_eq!(f.ran().iter().filter(|m| *m == "last").count(), 1);
-    // Results are applied in a fixed order, whatever finished first.
+    // Nodes are recorded as they finish: the branches in either order,
+    // the Join after both.
     let order: Vec<_> = report.nodes.iter().map(|r| r.node.as_str()).collect();
-    assert_eq!(order, ["start", "fork", "left", "right", "join", "last"]);
+    assert_eq!(order[..2], ["start", "fork"]);
+    let mut branches = order[2..4].to_vec();
+    branches.sort_unstable();
+    assert_eq!(branches, ["left", "right"]);
+    assert_eq!(order[4..], ["join", "last"]);
 }
 
 fn select_project(f: &mut Fixture, name: &str, key: &str) -> crate::ActionInstanceId {
@@ -2370,4 +2375,113 @@ fn variables_and_set_variable_nodes_round_trip() {
             .get("variables")
             .is_none()
     );
+}
+
+// Branch progress -------------------------------------------------------------
+
+/// `start → fork`, then `quick → next` and `slow` (a delay of `slow_ms`)
+/// in parallel, joined before `after`.
+fn branches(f: &mut Fixture, slow_ms: u32) -> WorkflowId {
+    let quick = f.probe("quick", &[]);
+    let next = f.probe("next", &[]);
+    let after = f.probe("after", &[]);
+    f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            node("fork", NodeKind::Parallel),
+            action("quick", quick),
+            action("next", next),
+            node("slow", NodeKind::Delay { ms: slow_ms }),
+            node("join", NodeKind::Join),
+            action("after", after),
+        ],
+        vec![
+            edge("start", Port::Out, "fork"),
+            edge("fork", Port::Out, "quick"),
+            edge("fork", Port::Out, "slow"),
+            edge("quick", Port::Out, "next"),
+            edge("next", Port::Out, "join"),
+            edge("slow", Port::Out, "join"),
+            edge("join", Port::Out, "after"),
+        ],
+    ))
+}
+
+fn finished_order(events: &[ExecutionEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            ExecutionEvent::NodeFinished { report } => Some(report.node.as_str().to_owned()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_finished_branch_moves_on_without_waiting_for_its_siblings() {
+    let mut f = Fixture::new();
+    let workflow = branches(&mut f, 600);
+    let (report, events, _) = f.run_with(workflow, &CancellationToken::new());
+    assert_eq!(report.status, RunStatus::Succeeded, "{report:?}");
+    let order = finished_order(&events);
+    let at = |id: &str| order.iter().position(|n| n == id).unwrap();
+    // The quick branch finishes and its next node runs while `slow` waits;
+    // the Join waits for both branches.
+    assert!(at("quick") < at("slow"), "{order:?}");
+    assert!(at("next") < at("slow"), "{order:?}");
+    assert!(
+        at("slow") < at("join") && at("join") < at("after"),
+        "{order:?}"
+    );
+    // The history lists nodes as they finished.
+    let reported: Vec<&str> = report.nodes.iter().map(|n| n.node.as_str()).collect();
+    assert_eq!(reported, order);
+    assert_eq!(f.ran(), ["quick", "next", "after"]);
+}
+
+#[test]
+fn cancelling_stops_only_nodes_that_have_not_finished() {
+    let mut f = Fixture::new();
+    let workflow = branches(&mut f, 30_000);
+    let cancel = CancellationToken::new();
+    let canceller = cancel_after(&cancel, 300);
+    let begun = Instant::now();
+    let (report, _, _) = f.run_with(workflow, &cancel);
+    canceller.join().unwrap();
+    assert!(begun.elapsed() < Duration::from_secs(5));
+    assert_eq!(report.status, RunStatus::Cancelled);
+    // The quick branch had finished: it keeps its results.
+    assert_eq!(status(&report, "quick"), NodeStatus::Succeeded);
+    assert_eq!(status(&report, "next"), NodeStatus::Succeeded);
+    for id in ["slow", "join", "after"] {
+        assert_eq!(status(&report, id), NodeStatus::Cancelled, "{id}");
+    }
+    assert_eq!(f.ran(), ["quick", "next"]);
+}
+
+#[test]
+fn at_most_four_nodes_run_at_the_same_time() {
+    let mut f = Fixture::new();
+    let mut nodes = vec![
+        node("start", NodeKind::Trigger),
+        node("fork", NodeKind::Parallel),
+        node("join", NodeKind::Join),
+    ];
+    let mut edges = vec![edge("start", Port::Out, "fork")];
+    for index in 0..6 {
+        let id = format!("b{index}");
+        let probe = f.probe(&id, &[("sleep_ms", ParameterValue::Integer(200))]);
+        nodes.push(action(&id, probe));
+        edges.push(edge("fork", Port::Out, &id));
+        edges.push(edge(&id, Port::Out, "join"));
+    }
+    let workflow = f.workflow(graph(nodes, edges));
+    let started = Instant::now();
+    let report = f.run(workflow);
+    let elapsed = started.elapsed();
+    assert_eq!(report.status, RunStatus::Succeeded);
+    // Six branches of 200 ms, four at a time: two rounds.
+    assert!(elapsed >= Duration::from_millis(390), "{elapsed:?}");
+    assert!(elapsed < Duration::from_millis(1_000), "{elapsed:?}");
+    assert_eq!(f.ran().len(), 6);
 }

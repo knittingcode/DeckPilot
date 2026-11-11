@@ -894,8 +894,8 @@ function OutputEditor({ graph, node, lookup, values, onChange }: InspectorProps)
         />
       ))}
       <p className="text-xs text-muted-foreground">
-        The node that calls this workflow gets these values. When several Output nodes run, the
-        later one wins.
+        The node that calls this workflow gets these values. When several Output nodes run, the one
+        that finishes later wins.
       </p>
     </Section>
   )
