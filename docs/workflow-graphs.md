@@ -197,8 +197,33 @@ Workflows → a workflow opens in the graph editor (`apps/desktop/src/workflow-b
   the graph behaves differently. Nothing is stored until the graph is saved,
   and the steps are kept.
 
+## Watching runs
+
+The editor shows runs of the open workflow on the canvas, whether they were
+started in the editor, from a Stream Deck or while the app was closed:
+
+- **Live.** The newest run is followed automatically: running nodes are
+  highlighted (with the attempt when an action is retried), finished nodes
+  show succeeded, failed, skipped or cancelled with their duration, and the
+  connections a run took are emphasized. The toolbar shows the run's state
+  and real progress (resolved nodes of all nodes); the titlebar's Run
+  button becomes *Cancel run*.
+- **Node details.** Selecting a node shows what it did in the shown run:
+  result, attempts, start and duration, its message, a structured error
+  (code, message, whether a retry may help) and its outputs — only the
+  outputs its action declares.
+- **History.** Without a selection, the inspector lists the workflow's last
+  20 runs with state, trigger (app or Stream Deck), start time and duration;
+  a run is shown on the canvas by selecting it. Running entries have
+  progress and Cancel. The history can be cleared.
+- **Reconnection.** The list is read again when the window opens or the
+  agent reconnects, and node reports of finished runs are loaded on demand,
+  so closing and reopening the app loses nothing.
+- **Status bar.** Running workflows of the active profile appear as
+  background activity with progress and Cancel; failures and interruptions
+  raise a notification.
+
 ## Roadmap
 
-Milestones so far: the model, SDK and engine; running graphs in the agent;
-the visual editor. Next: execution visualization on the graph and a history
-view.
+Milestones: the model, SDK and engine; running graphs in the agent; the
+visual editor; watching runs on the graph with their history.

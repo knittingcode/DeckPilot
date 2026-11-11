@@ -173,12 +173,11 @@ function WorkflowsView({
       initial={workflow}
       graph={workflow.graph ?? conversion?.graph ?? emptyGraph()}
       isNew={!current}
-      notes={conversion?.notes ?? []}
+      notes={workflow.graph ? [] : (conversion?.notes ?? [])}
       toolbar={switcher}
-      onSaved={(id) => {
-        setConversions((c) => Object.fromEntries(Object.entries(c).filter(([key]) => key !== id)))
-        changed(id)
-      }}
+      // The conversion stays until the reloaded profile has the saved
+      // graph, so the editor is not replaced by the step editor meanwhile.
+      onSaved={changed}
       onDeleted={() => {
         changed()
       }}

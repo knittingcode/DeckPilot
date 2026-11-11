@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
 import { useExecutions } from "@/hooks/use-executions"
@@ -8,21 +8,85 @@ import { useAppContext } from "@/lib/app-context"
 import { ExecutionStore } from "@/lib/executions"
 
 import { type BuilderProps, WorkflowBuilder } from "./builder"
+import { nodeRuns, runSummary } from "./run-model"
+import { RunHistory, StateIcon } from "./run-panel"
 
 const NO_EXECUTIONS = new ExecutionStore()
+const HISTORY = 20
 
-type Props = Omit<BuilderProps, "canRun" | "running" | "onRun" | "onCancelRun">
+type Props = Omit<
+  BuilderProps,
+  "canRun" | "running" | "onRun" | "onCancelRun" | "run" | "workflowPanel"
+>
 
-/** The builder with running the workflow in the agent. */
+/** The current time, ticking while `active`. */
+function useNow(active: boolean) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!active) return
+    const timer = setInterval(() => {
+      setNow(Date.now())
+    }, 500)
+    return () => {
+      clearInterval(timer)
+    }
+  }, [active])
+  return now
+}
+
+/**
+ * The builder with running the workflow in the agent, the run shown on the
+ * canvas and the run history. Runs come from the agent, so a run started from
+ * the deck or before the window opened shows the same way.
+ */
 export function WorkflowRun(props: Props) {
   const { agent, profiles } = useAppContext()
   const executions = useExecutions()
-  const runs = useSnapshot(executions ?? NO_EXECUTIONS)
-  const latest = ExecutionStore.ofProfile(runs, props.profileId).find(
-    (r) => r.workflow === props.initial.id,
-  )
+  const all = useSnapshot(executions ?? NO_EXECUTIONS)
+  const workflowId = props.initial.id
+  const runs = ExecutionStore.ofProfile(all, props.profileId)
+    .filter((r) => r.workflow === workflowId)
+    .slice(0, HISTORY)
+  const latest = runs[0]
   const running = latest?.state === "running"
   const [starting, setStarting] = useState(false)
+  // `undefined`: follow the newest run; `null`: show none.
+  const [chosen, setChosen] = useState<string | null | undefined>(undefined)
+  const shownId = chosen === undefined ? (latest?.id ?? null) : chosen
+  const shown = runs.find((r) => r.id === shownId)
+  const now = useNow(running)
+  const connection = agent?.running ? (agent.status?.startedAt ?? 0) : null
+
+  // The history of this workflow, also after the agent reconnects.
+  useEffect(() => {
+    if (props.isNew || !executions || connection === null) return
+    let current = true
+    api.listExecutions(workflowId, HISTORY).then(
+      (list) => {
+        if (current) executions.merge(list)
+      },
+      () => undefined,
+    )
+    return () => {
+      current = false
+    }
+  }, [executions, workflowId, props.isNew, connection])
+
+  // Node reports of a finished run that was only listed.
+  const missing = shown && shown.state !== "running" && shown.nodes.length === 0 ? shown.id : null
+  useEffect(() => {
+    if (!missing || !executions) return
+    api.getExecution(missing).then(
+      (record) => {
+        executions.load(record)
+      },
+      () => undefined,
+    )
+  }, [missing, executions])
+
+  const cancel = (id: string) => {
+    api.cancelExecution(id).catch((e: unknown) => toast.error(errorMessage(e)))
+  }
   const canRun =
     !props.isNew &&
     !starting &&
@@ -32,12 +96,48 @@ export function WorkflowRun(props: Props) {
   return (
     <WorkflowBuilder
       {...props}
+      toolbar={
+        <>
+          {props.toolbar}
+          {shown && (
+            <span
+              className="flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground"
+              aria-live="polite"
+            >
+              <StateIcon state={shown.state} className="size-3.5 shrink-0" />
+              {runSummary(shown, now)}
+            </span>
+          )}
+        </>
+      }
+      run={nodeRuns(shown)}
+      workflowPanel={
+        props.isNew ? undefined : (
+          <RunHistory
+            runs={runs}
+            shown={shownId}
+            now={now}
+            onShow={setChosen}
+            onCancel={cancel}
+            onClear={() => {
+              api
+                .clearExecutionHistory(workflowId)
+                .then(() => {
+                  executions?.forget((r) => r.workflow === workflowId)
+                  setChosen(undefined)
+                })
+                .catch((e: unknown) => toast.error(errorMessage(e)))
+            }}
+          />
+        )
+      }
       canRun={canRun}
       running={running || starting}
       onRun={() => {
         setStarting(true)
+        setChosen(undefined)
         api
-          .startWorkflow(props.profileId, props.initial.id)
+          .startWorkflow(props.profileId, workflowId)
           .then((execution) => executions?.apply({ type: "executionStarted", execution }))
           .catch((e: unknown) => toast.error(errorMessage(e)))
           .finally(() => {
@@ -47,7 +147,7 @@ export function WorkflowRun(props: Props) {
       onCancelRun={
         latest && running
           ? () => {
-              api.cancelExecution(latest.id).catch((e: unknown) => toast.error(errorMessage(e)))
+              cancel(latest.id)
             }
           : undefined
       }

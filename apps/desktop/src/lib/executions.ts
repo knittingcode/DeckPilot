@@ -6,12 +6,15 @@ import type {
   ExecutionSummary,
 } from "@/lib/types"
 
+/** A run as this window knows it; `attempts` counts retries seen live. */
+export type LiveExecution = ExecutionRecord & { attempts?: Record<string, number> }
+
 /**
  * Workflow runs as the agent reports them. Runs execute in the agent, so
  * this is only a view: it is filled from `listExecutions` when the window
  * opens or the agent (re)connects, and kept current by execution events.
  */
-export class ExecutionStore extends Store<ExecutionRecord> {
+export class ExecutionStore extends Store<LiveExecution> {
   /**
    * Replaces the known runs with the agent's list, keeping node details
    * already loaded for runs that are still listed.
@@ -30,6 +33,28 @@ export class ExecutionStore extends Store<ExecutionRecord> {
     this.put(record.id, record)
   }
 
+  /** Adds runs from a history list, keeping what is known about them. */
+  merge(summaries: ExecutionSummary[]) {
+    for (const summary of summaries) {
+      const current = this.get(summary.id)
+      // A live run knows more than a list read a moment ago.
+      if (current?.state === "running" && summary.state === "running") continue
+      this.put(summary.id, { ...current, ...summary, nodes: current?.nodes ?? [] })
+    }
+  }
+
+  /** Forgets finished runs, e.g. after the history was cleared. */
+  forget(matches: (record: LiveExecution) => boolean) {
+    let changed = false
+    for (const [id, record] of this.values) {
+      if (record.state !== "running" && matches(record)) {
+        this.values.delete(id)
+        changed = true
+      }
+    }
+    if (changed) this.publish()
+  }
+
   /**
    * Applies an agent event. Returns `false` for progress of a run this
    * store does not know yet; the caller then loads it.
@@ -37,7 +62,10 @@ export class ExecutionStore extends Store<ExecutionRecord> {
   apply(message: AgentExecutionEvent): boolean {
     switch (message.type) {
       case "executionStarted":
-        this.put(message.execution.id, { ...message.execution, nodes: [] })
+        // Progress may arrive before the answer that started the run.
+        if (!this.get(message.execution.id)) {
+          this.put(message.execution.id, { ...message.execution, nodes: [] })
+        }
         return true
       case "executionFinished": {
         const current = this.get(message.execution.id)
@@ -51,7 +79,9 @@ export class ExecutionStore extends Store<ExecutionRecord> {
         const running = new Set(current.runningNodes ?? [])
         let nodes = current.nodes
         const event = message.event
+        let attempts = current.attempts
         if (event.type === "nodeStarted") running.add(event.node)
+        if (event.type === "retrying") attempts = { ...attempts, [event.node]: event.attempt }
         if (event.type === "nodeFinished") {
           running.delete(event.report.node)
           nodes = [...nodes.filter((n) => n.node !== event.report.node), event.report]
@@ -59,6 +89,7 @@ export class ExecutionStore extends Store<ExecutionRecord> {
         this.put(current.id, {
           ...current,
           nodes,
+          attempts,
           runningNodes: [...running],
           completedNodes: message.completed,
           totalNodes: message.total,
@@ -69,7 +100,7 @@ export class ExecutionStore extends Store<ExecutionRecord> {
   }
 
   /** Runs of a profile, newest first. */
-  static ofProfile(records: ExecutionRecord[], profileId: string | null) {
+  static ofProfile<T extends ExecutionSummary>(records: T[], profileId: string | null) {
     return records
       .filter((r) => r.profile === profileId)
       .sort((a, b) => b.startedAt - a.startedAt || a.id.localeCompare(b.id))
@@ -88,4 +119,9 @@ export const EXECUTION_STATE_LABEL: Record<ExecutionState, string> = {
 export function executionProgress(summary: ExecutionSummary) {
   if (summary.totalNodes === 0) return summary.state === "running" ? 0 : 100
   return Math.round((summary.completedNodes / summary.totalNodes) * 100)
+}
+
+/** Milliseconds a run took, or has been running. */
+export function executionDuration(summary: ExecutionSummary, now: number) {
+  return (summary.finishedAt ?? now) - summary.startedAt
 }

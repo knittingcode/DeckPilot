@@ -695,7 +695,6 @@ function Builder({
             multiSelectionKeyCode={IS_MAC ? "Meta" : "Control"}
             minZoom={0.2}
             maxZoom={2}
-            proOptions={{ hideAttribution: true }}
             colorMode="system"
           >
             <Background gap={20} size={1} />
@@ -737,6 +736,7 @@ function Builder({
                   change(removeNodes(graph, [node.id]))
                   selectOnly([])
                 }}
+                run={run?.[node.id]}
               />
             ) : (
               <div className="grid">
