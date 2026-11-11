@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ButtonState, Indicator, Project, StateSnapshot};
+use crate::{ButtonState, Indicator, KeyAppearance, Project, StateSnapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +42,9 @@ pub struct KeyFace {
     /// On/off state of a toggle-like action.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toggle: Option<bool>,
+    /// The binding's colours, title placement and icon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appearance: Option<KeyAppearance>,
 }
 
 impl KeyFace {
@@ -54,6 +57,7 @@ impl KeyFace {
             indicator: None,
             progress: None,
             toggle: None,
+            appearance: None,
         }
     }
 
@@ -66,6 +70,7 @@ impl KeyFace {
             indicator: None,
             progress: None,
             toggle: None,
+            appearance: None,
         }
     }
 
@@ -90,6 +95,14 @@ impl KeyFace {
     #[must_use]
     pub fn with_progress(mut self, percent: Option<u8>) -> Self {
         self.progress = percent.map(|p| p.min(100));
+        self
+    }
+
+    /// The face with a binding's appearance (`None` and default
+    /// appearances leave it as it is).
+    #[must_use]
+    pub fn with_appearance(mut self, appearance: Option<&KeyAppearance>) -> Self {
+        self.appearance = appearance.filter(|a| !a.is_default()).cloned();
         self
     }
 

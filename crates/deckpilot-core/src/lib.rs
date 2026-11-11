@@ -7,6 +7,7 @@
 //! values are resolved at execution time through [`MachineConfig`].
 
 pub mod action;
+pub mod appearance;
 pub mod button_state;
 pub mod cancel;
 pub mod credentials;
@@ -36,6 +37,10 @@ pub use action::{
     ActionInstance, ActionParameters, ActionType, ActionTypeId, MAX_LABEL_CHARS, ParameterError,
     ParameterKind, ParameterSpec, ParameterValue, validate_presentation,
 };
+pub use appearance::{
+    Color, FontSize, Icon, IconData, IconFit, IconRef, KeyAppearance, MAX_ICON_BYTES,
+    MAX_ICON_NAME, MAX_ICON_SIZE, MAX_ICONS, TitleAlign,
+};
 pub use button_state::{
     ButtonState, Indicator, MAX_REFRESH_INTERVAL, MIN_REFRESH_INTERVAL, RefreshPolicy, StateError,
     StateSnapshot,
@@ -55,7 +60,9 @@ pub use history::{
     ExecutionRecord, ExecutionState, ExecutionSummary, ExecutionTrigger, ProjectOutcome,
     safe_event, safe_report,
 };
-pub use id::{ActionInstanceId, ExecutionId, LayoutId, PageId, ProfileId, ProjectId, WorkflowId};
+pub use id::{
+    ActionInstanceId, ExecutionId, IconId, LayoutId, PageId, ProfileId, ProjectId, WorkflowId,
+};
 pub use layout::{BindingTarget, ControlBinding, DeviceLayout, LayoutIssue, LayoutPage, Trigger};
 pub use module::{
     Availability, Capability, FeatureModule, ModuleError, ModuleId, ModuleInfo, ModuleManifest,

@@ -75,6 +75,13 @@ pub fn validate(
         {
             return invalid(format!("profile `{name}` has duplicate identifiers"));
         }
+        // Icons are decoded (with limits) before anything is shown, so a
+        // crafted image is refused here.
+        for icon in &profile.icons {
+            if let Err(error) = deckpilot_render::icons::sanitize(icon) {
+                return invalid(format!("profile `{name}`: icon “{}”: {error}", icon.name));
+            }
+        }
         for issue in profile.validate(catalog) {
             match issue {
                 // Device capabilities may differ between versions; such
@@ -475,6 +482,12 @@ pub fn plan(
         } else {
             profile.clone()
         };
+        // Icons are stored as DeckPilot encoded them, never as they came.
+        let mut imported = imported;
+        for icon in &mut imported.icons {
+            *icon = deckpilot_render::icons::sanitize(icon)
+                .map_err(|e| PortabilityError::Invalid(format!("icon “{}”: {e}", icon.name)))?;
+        }
         names.insert(imported.name.to_lowercase());
         remaining_projects.extend(imported.projects.iter().map(|p| p.id));
         summary.imported.push((imported.id, imported.name.clone()));

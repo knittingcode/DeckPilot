@@ -11,6 +11,7 @@ members = [
     "crates/deckpilot-portability",
     "crates/deckpilot-keystore",
     "crates/deckpilot-presence",
+    "crates/deckpilot-render",
     "modules/general",
     "modules/projects",
     "modules/system",
@@ -49,6 +50,7 @@ deckpilot-module-notifications = { path = "modules/notifications" }
 deckpilot-portability = { path = "crates/deckpilot-portability" }
 deckpilot-keystore = { path = "crates/deckpilot-keystore" }
 deckpilot-presence = { path = "crates/deckpilot-presence" }
+deckpilot-render = { path = "crates/deckpilot-render" }
 
 tauri = "2"
 tauri-build = "2"

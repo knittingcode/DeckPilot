@@ -936,8 +936,8 @@ dependencies = [
  "deckpilot-keystore",
  "deckpilot-modules",
  "deckpilot-presence",
+ "deckpilot-render",
  "deckpilot-storage",
- "font8x8",
  "interprocess",
  "serde_json",
  "tao",
@@ -954,6 +954,7 @@ dependencies = [
 name = "deckpilot-core"
 version = "0.5.0"
 dependencies = [
+ "base64 0.22.1",
  "deckpilot-device",
  "rustix",
  "serde",
@@ -966,6 +967,7 @@ dependencies = [
 name = "deckpilot-desktop"
 version = "0.5.0"
 dependencies = [
+ "base64 0.22.1",
  "deckpilot-agent",
  "deckpilot-core",
  "deckpilot-device",
@@ -974,6 +976,7 @@ dependencies = [
  "deckpilot-modules",
  "deckpilot-portability",
  "deckpilot-presence",
+ "deckpilot-render",
  "deckpilot-storage",
  "deckpilot-update",
  "serde",
@@ -1141,6 +1144,7 @@ dependencies = [
  "deckpilot-core",
  "deckpilot-device",
  "deckpilot-modules",
+ "deckpilot-render",
  "deckpilot-storage",
  "deckpilot-update",
  "serde",
@@ -1161,6 +1165,16 @@ dependencies = [
  "objc2-local-authentication",
  "thiserror 2.0.21",
  "zbus",
+]
+
+[[package]]
+name = "deckpilot-render"
+version = "0.5.0"
+dependencies = [
+ "deckpilot-core",
+ "deckpilot-device",
+ "font8x8",
+ "image",
 ]
 
 [[package]]
@@ -2365,6 +2379,7 @@ dependencies = [
  "byteorder-lite",
  "moxcms",
  "num-traits",
+ "png",
  "zune-core",
  "zune-jpeg",
 ]

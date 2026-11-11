@@ -74,6 +74,22 @@ pub struct ControlBinding {
     pub target: BindingTarget,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// How the key looks; `None`: the default look of its style.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appearance: Option<crate::KeyAppearance>,
+}
+
+impl ControlBinding {
+    /// A binding with the default label and look.
+    pub fn new(control: ControlId, trigger: Trigger, target: BindingTarget) -> Self {
+        Self {
+            control,
+            trigger,
+            target,
+            label: None,
+            appearance: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,6 +149,8 @@ pub enum LayoutIssue {
     },
     #[error("page `{page}`: binding references a missing action, workflow or page")]
     DanglingTarget { page: String, control: ControlId },
+    #[error("page `{page}`: {control} shows an icon that is not in the profile")]
+    MissingIcon { page: String, control: ControlId },
 }
 
 impl DeviceLayout {
@@ -174,10 +192,8 @@ impl DeviceLayout {
             .collect();
 
         let press = |control, target, label: Option<String>| ControlBinding {
-            control,
-            trigger: Trigger::Press,
-            target,
             label,
+            ..ControlBinding::new(control, Trigger::Press, target)
         };
 
         let mut next = 0;
@@ -304,6 +320,14 @@ impl DeviceLayout {
                     control,
                 });
             }
+            if let Some(icon) = binding.appearance.as_ref().and_then(|a| a.icon)
+                && profile.icon(icon.id).is_none()
+            {
+                issues.push(LayoutIssue::MissingIcon {
+                    page: name(),
+                    control,
+                });
+            }
         }
     }
 }
@@ -349,6 +373,7 @@ mod tests {
             trigger,
             target,
             label: None,
+            appearance: None,
         }
     }
 
@@ -471,6 +496,50 @@ mod tests {
             layout.validate(&catalog(), &profile),
             Vec::<LayoutIssue>::new()
         );
+    }
+
+    #[test]
+    fn appearances_are_optional_and_icons_must_exist() {
+        // A binding stored before appearances existed.
+        let old = serde_json::json!({
+            "control": ControlId::Key { index: 3 },
+            "trigger": {"type": "press"},
+            "target": {"type": "back"},
+            "label": "Up",
+        });
+        let binding: ControlBinding = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(binding.appearance, None);
+        assert_eq!(serde_json::to_value(&binding).unwrap(), old);
+
+        let mut profile = Profile::new("Work");
+        let icon = crate::Icon {
+            id: crate::IconId::new(),
+            name: "Logo".into(),
+            width: 8,
+            height: 8,
+            png: crate::IconData::new(crate::appearance::tests::png_header(8, 8)),
+        };
+        let mut layout = DeviceLayout::new("Main", DeviceModelId::new(models::STREAM_DECK_MK2_ID));
+        let home = layout.home_page;
+        let mut back = bind(
+            ControlId::Key { index: 0 },
+            Trigger::Press,
+            BindingTarget::Back,
+        );
+        back.appearance = Some(crate::KeyAppearance {
+            icon: Some(crate::IconRef {
+                id: icon.id,
+                fit: crate::IconFit::Fit,
+            }),
+            ..crate::KeyAppearance::default()
+        });
+        layout.page_mut(home).unwrap().bindings.push(back);
+        assert!(matches!(
+            layout.validate(&catalog(), &profile)[..],
+            [LayoutIssue::MissingIcon { .. }]
+        ));
+        profile.add_icon(icon).unwrap();
+        assert_eq!(layout.validate(&catalog(), &profile), []);
     }
 
     #[test]

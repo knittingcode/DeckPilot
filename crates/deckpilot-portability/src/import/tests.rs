@@ -519,3 +519,97 @@ fn portable_application_settings_travel_without_local_state() {
     );
     assert_eq!(target.setting("security.autoLock").unwrap(), None);
 }
+
+/// A profile with an imported icon shown on a key with an appearance.
+fn with_icon(store: &SqliteStore, profile: &Profile) -> Profile {
+    let png = deckpilot_render::frame_png(&deckpilot_device::Frame::filled(40, 20, [9, 99, 199]))
+        .unwrap();
+    let mut profile = profile.clone();
+    let icon = deckpilot_render::icons::import("Logo", &png).unwrap();
+    let id = profile.add_icon(icon).unwrap();
+    let mut layout = deckpilot_core::DeviceLayout::generate(
+        "Main",
+        &deckpilot_device::models::stream_deck_mk2(),
+        &profile,
+    );
+    layout.pages[0].bindings[0].appearance = Some(deckpilot_core::KeyAppearance {
+        background: Some(deckpilot_core::Color([1, 2, 3])),
+        icon: Some(deckpilot_core::IconRef {
+            id,
+            fit: deckpilot_core::IconFit::Crop,
+        }),
+        ..deckpilot_core::KeyAppearance::default()
+    });
+    profile.layouts.push(layout);
+    store.save_profile(&profile).unwrap();
+    profile
+}
+
+#[test]
+fn icons_and_appearances_travel_with_their_profile() {
+    let (source, profiles) = store_with(&["Work"]);
+    let work = with_icon(&source, &profiles[0]);
+    let payload = round_trip(&exported(&source));
+    assert_eq!(payload.profiles[0].icons, work.icons);
+
+    let target = SqliteStore::open_in_memory().unwrap();
+    apply(
+        &target,
+        &payload,
+        &ImportOptions {
+            profiles: vec![work.id],
+            ..ImportOptions::default()
+        },
+    );
+    let imported = target.load_profile(work.id).unwrap().unwrap();
+    assert_eq!(imported, work);
+
+    // Importing again as a copy keeps the icon and its references.
+    let summary = apply(
+        &target,
+        &payload,
+        &ImportOptions {
+            profiles: vec![work.id],
+            conflicts: BTreeMap::from([(work.id, ConflictResolution::KeepBoth)]),
+            ..ImportOptions::default()
+        },
+    );
+    let copy = target.load_profile(summary.imported[0].0).unwrap().unwrap();
+    assert_ne!(copy.id, work.id);
+    assert_eq!(copy.icons, work.icons);
+    assert_eq!(copy.validate(&catalog()), []);
+}
+
+#[test]
+fn crafted_icons_are_refused() {
+    let (source, profiles) = store_with(&["Work"]);
+    with_icon(&source, &profiles[0]);
+    let payload = exported(&source);
+
+    // Dimensions in the header that do not match the declared ones.
+    let mut lying = payload.clone();
+    lying.profiles[0].icons[0].width = 255;
+    assert!(validate(&lying, &catalog()).is_err());
+    // Not a PNG.
+    let mut not_png = payload.clone();
+    not_png.profiles[0].icons[0].png = deckpilot_core::IconData::new(b"GIF89a".to_vec());
+    assert!(validate(&not_png, &catalog()).is_err());
+    // A PNG signature and header with damaged image data.
+    let mut damaged = payload.clone();
+    let mut bytes = damaged.profiles[0].icons[0].png.bytes().to_vec();
+    let end = bytes.len();
+    bytes.truncate(end - 20);
+    damaged.profiles[0].icons[0].png = deckpilot_core::IconData::new(bytes);
+    assert!(validate(&damaged, &catalog()).is_err());
+    // A key showing an icon the profile does not have.
+    let mut dangling = payload.clone();
+    dangling.profiles[0].icons.clear();
+    assert!(validate(&dangling, &catalog()).is_err());
+    // Profiles from before icons existed have none and stay valid.
+    let mut old = serde_json::to_value(&payload.profiles[0]).unwrap();
+    old.as_object_mut().unwrap().remove("icons");
+    old["layouts"] = serde_json::json!([]);
+    let old: Profile = serde_json::from_value(old).unwrap();
+    assert_eq!(old.icons, []);
+    assert_eq!(old.validate(&catalog()), []);
+}

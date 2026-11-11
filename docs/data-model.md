@@ -21,12 +21,13 @@ Profile
 ├── projects:  Project[]        (stored in the `projects` table; order = cycle order)
 ├── defaultProject             (stored in `default_projects`)
 ├── layouts:   DeviceLayout[]   (any number per device model)
-└── activeLayouts              (the layout used for each model)
+├── activeLayouts              (the layout used for each model)
+└── icons:     Icon[]           (images for key icons; omitted when empty)
 ```
 
 `Profile::validate` reports duplicate project keys, a default project or
 project parameters that do not belong to the profile, workflow steps that
-reference missing actions, and layout problems. `Profile::duplicate` copies a
+reference missing actions, invalid or duplicate icons, and layout problems. `Profile::duplicate` copies a
 profile with new identifiers for everything in it and remaps all internal
 references, so the copy is fully independent.
 
@@ -118,11 +119,13 @@ bound on this machine, kind mismatch.
 - **LayoutPage** – `id`, `name`, `bindings: ControlBinding[]`.
 - **ControlBinding** – `control`, `trigger` (`press`, `release`,
   `rotateClockwise`, `rotateCounterClockwise`, `touch { gesture }`), `target`
-  (`action`, `workflow`, `openPage`, `back`), optional `label`.
+  (`action`, `workflow`, `openPage`, `back`), optional `label`, optional
+  `appearance` (see [Key appearance](#key-appearance)).
 
 Folders are pages opened with `openPage` and left with `back`. Layout
 validation checks that controls and triggers exist on the model, that each
-control/trigger pair is bound at most once per page, and that targets exist.
+control/trigger pair is bound at most once per page, that targets exist and
+that icons a binding shows are in the profile (`MissingIcon`).
 
 A profile uses its first layout for a model. `DeviceLayout::generate` creates
 one from the profile's actions and workflows using only the model's
@@ -135,7 +138,83 @@ opens a next page (“More”) and the first key of following pages goes back.
   `folder`, `back`, `notice`), `title`, optional `detail`, `highlighted`. A
   project switcher shows the active project as detail; a *Select project*
   key is highlighted while its project is active. Without a profile or layout
-  the first key shows a notice and the others stay blank.
+  the first key shows a notice and the others stay blank. Optional fields:
+  `appearance` (the binding's, when it sets anything), and the live state
+  `indicator`, `progress`, `toggle` (see
+  [Button state](modules.md#button-state)).
+
+### Key appearance
+
+`ControlBinding.appearance` is optional, and so is every field in it; unset
+fields keep the look of the key's style. Bindings without it (all layouts
+written before it existed) serialize exactly as before.
+
+```json
+{
+  "background": "#102030",
+  "textColor": "#ffcc00",
+  "fontSize": "large",
+  "titleAlign": "bottom",
+  "showTitle": true,
+  "icon": { "id": "<icon id>", "fit": "crop" }
+}
+```
+
+| Field | Values | Default |
+| ----- | ------ | ------- |
+| `background`, `textColor` | `#rrggbb` (either case; stored lower case) | the style's colours |
+| `fontSize` | `small` (the 8 px font), `medium` (8 px, 16 px from 120 px keys), `large` (one step above medium) | `medium` |
+| `titleAlign` | `top`, `middle`, `bottom` | `middle`; `bottom` with an icon |
+| `showTitle` | `false` hides the title and the secondary line | shown |
+| `icon` | `{ id, fit }`: an icon of the profile; `fit` is `fit` (whole icon, aspect kept, transparent borders), `fill` (stretched to the key), `crop` (covers the key, aspect kept, overflow cut off) | no icon; `fit` |
+
+Invalid colours or values make the layout unreadable and are refused when
+saving; an icon id that is not in the profile is a layout issue. The app
+does not store an appearance that sets nothing.
+
+The key is drawn in this order: background, icon (scaled to the key's image
+size), highlight border, title (in the text colour; with a dark shadow over
+an icon), then the live state marks. The same renderer
+(`crates/deckpilot-render`) draws device images in the agent and previews
+in the app.
+
+### Icons
+
+```
+Icon
+├── id      IconId (UUID)
+├── name    1–64 characters
+├── width, height   pixels, at most 256 each
+└── png     PNG bytes as base64, at most 192 KiB
+```
+
+- **Import** (`import_icon` in the app): PNG or JPEG only, recognised by
+  content; at most 2 MiB and 4096 × 4096 pixels, checked by the decoder
+  before it allocates (at most 80 MiB). The image is scaled down to at most
+  256 pixels per side (never up) and encoded again as PNG, which drops all
+  metadata (EXIF, text chunks, colour profiles); if the PNG is still larger
+  than 192 KiB it is scaled down further. Only that PNG is stored. Importing
+  the same image twice returns the existing icon.
+- **Limits**: at most 64 icons per profile. An icon shown by a key cannot be
+  deleted (`InUse`).
+- **Storage and export**: icons are part of the profile document, so they
+  are copied with profile copies and travel in encrypted exports. On import
+  (`deckpilot-portability`), every icon is checked (byte size, PNG header,
+  declared dimensions), decoded with the same limits and encoded again;
+  an export with a damaged or lying icon is refused, and a key that refers
+  to a missing icon makes the profile invalid.
+- **Drawing**: the agent decodes the active profile's icons (with limits)
+  when the configuration is loaded; an icon that cannot be decoded is left
+  out and its key is drawn without it.
+
+App commands (Tauri):
+
+| Command | Arguments | Result |
+| ------- | --------- | ------ |
+| `list_icons` | `profileId` | `IconInfo[]`: `id`, `name`, `width`, `height`, `bytes`, `dataUrl` (PNG `data:` URL), `usages` |
+| `import_icon` | `profileId`, `name`, `data` (the file as base64) | `IconInfo` |
+| `delete_icon` | `profileId`, `iconId` | — (refused while in use) |
+| `preview_layout` | as before, plus optional `render` | `ControlFace[]`; with `render: true` each also has `image`, the key as the device shows it (PNG `data:` URL at the model's image size) |
 
 ## Storage schema (version 7)
 
