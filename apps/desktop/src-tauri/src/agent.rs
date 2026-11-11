@@ -20,6 +20,9 @@ pub const STATUS_EVENT: &str = "agent-status";
 /// execution events as they are (`executionStarted`, `executionProgress`,
 /// `executionFinished`).
 pub const EXECUTION_EVENT: &str = "workflow-execution";
+/// Event with a notification an action asked the agent to show, for the
+/// status bar.
+pub const NOTIFICATION_EVENT: &str = "agent-notification";
 
 /// Overrides the agent executable.
 const AGENT_BIN_ENV: &str = "DECKPILOT_AGENT_BIN";
@@ -283,6 +286,9 @@ async fn subscribe<R: Runtime>(app: &AppHandle<R>, paths: &AgentPaths) -> Result
             | AgentEvent::ExecutionProgress { .. }
             | AgentEvent::ExecutionFinished { .. }) => {
                 let _ = app.emit(EXECUTION_EVENT, event);
+            }
+            AgentEvent::Notification { notification } => {
+                let _ = app.emit(NOTIFICATION_EVENT, notification);
             }
         }
     }

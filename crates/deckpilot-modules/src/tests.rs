@@ -44,7 +44,15 @@ fn builtin_modules_register_with_namespaced_action_types() {
     let ids: Vec<_> = modules.iter().map(|m| m.manifest.id.to_string()).collect();
     assert_eq!(
         ids,
-        ["docker", "general", "git", "http", "projects", "system"]
+        [
+            "docker",
+            "general",
+            "git",
+            "http",
+            "notifications",
+            "projects",
+            "system"
+        ]
     );
     assert!(modules.iter().all(|m| m.enabled && m.supported));
 
@@ -73,6 +81,8 @@ fn builtin_modules_register_with_namespaced_action_types() {
             "git.open-repository",
             "http.request",
             "http.health-check",
+            "notifications.show",
+            "notifications.workflow-summary",
             "projects.next",
             "projects.previous",
             "projects.select",

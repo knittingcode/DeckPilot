@@ -271,3 +271,45 @@ Error codes: `invalid-url`, `credentials-in-url`, `invalid-header`,
 `insecure-redirect`, `insecure-credentials`, `request-failed`,
 `http-status`, `invalid-response`, `unhealthy`, `credential-missing`, and
 the shared codes.
+
+## Notifications (`notifications`)
+
+Shows notifications from workflows: as native desktop notifications and in
+the configuration app's status bar.
+
+Capabilities: read profile (for the workflow's name), show notifications.
+
+Settings (portable): **Desktop notifications** (on), **Status bar** (on),
+**Show from** (`minimumSeverity`: info, success, warning, error; info).
+
+| Action type | Effect | Parameters | Outputs |
+| ----------- | ------ | ---------- | ------- |
+| `notifications.show` | opens | `title` (one line, ≤100), `body` (≤500), `severity` (info, success, warning, error), `critical` (off) | `shown`, `desktop`, `statusBar`, `reason` |
+| `notifications.workflow-summary` | opens | `title` (default: the workflow's name), `details` (lines added below), `onlyOnFailure` (off), `critical` (off) | same, plus `summary` |
+
+Title and text can contain outputs of earlier nodes (`{{ steps.<node>.output.<key> }}`).
+They are plain text: control characters and bidirectional overrides are
+removed, lengths are bounded, and nothing is rendered as HTML (markup is
+escaped for Linux notification services, React escapes it in the app).
+The node's message names the title only, so the text is not kept in
+history.
+
+`workflow-summary` reports how the run is going when the node runs: actions
+that succeeded, failed (with their node ids), were skipped or cancelled, and
+the time so far — never messages or outputs. Its severity follows the
+result (error when something failed). With `onlyOnFailure` a clean run
+shows nothing.
+
+**Delivery.** The agent shows a notification in the status bar of every
+open app window (protocol 6 `notification` event) and natively:
+`osascript` on macOS (`display notification`, text passed as arguments),
+`notify-send` on Linux, a PowerShell toast on Windows (text passed in
+environment variables and inserted as XML text nodes). A notification that
+cannot be shown anywhere — the app is closed and desktop notifications are
+off, denied or unavailable — does not stop the workflow: the node succeeds
+with `shown: false` and the `reason`, unless it is `critical`
+(`notification-not-shown`). Notifications less severe than **Show from**
+are not shown and do not fail. macOS cannot report that notifications are
+denied for the helper; they are then counted as shown.
+
+Error codes: `notification-not-shown`.

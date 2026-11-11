@@ -315,7 +315,14 @@ fn module_settings_follow_the_portability_contract() {
     );
     assert_eq!(
         summary.modules,
-        ["docker", "git", "http", "projects", "system"]
+        [
+            "docker",
+            "git",
+            "http",
+            "notifications",
+            "projects",
+            "system"
+        ]
     );
     assert_eq!(status("system").skipped_settings, ["allowCommands"]);
     let stored = store.module_states().unwrap();
@@ -325,7 +332,7 @@ fn module_settings_follow_the_portability_contract() {
     assert_eq!(projects.config.text("somethingLocal"), None);
     let system = &stored[&ModuleId::new("system").unwrap()];
     assert_eq!(system.config.boolean("allowCommands"), Some(false));
-    assert_eq!(stored.len(), 5);
+    assert_eq!(stored.len(), 6);
 }
 
 #[test]

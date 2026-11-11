@@ -164,12 +164,15 @@ Requests (`crates/deckpilot-ipc/src/protocol.rs`):
 | `listExecutions` / `getExecution` | Running and recorded runs (protocol 5)     |
 | `clearExecutionHistory` | Delete recorded runs of the profile (protocol 5)     |
 | `prepareForUpdate`      | Release devices and exit for an update (protocol 2)  |
-| `subscribe`             | Receive `state`, `actionCompleted`, `showWindow`, `openWindow`, `shuttingDown` and `execution*` events |
+| `subscribe`             | Receive `state`, `actionCompleted`, `showWindow`, `openWindow`, `shuttingDown`, `execution*` and `notification` events |
 | `showWindow`            | Bring the configuration window to the front          |
 | `shutdown`              | Stop the agent gracefully                            |
 | `simulateInput`         | Inject input into a simulated device (`--mock-devices` only) |
 
-The current protocol is 5: workflows run in the background (see
+The current protocol is 6: actions show notifications, which the agent
+sends to the app as `notification` events for its status bar (see
+[Integration modules](integration-modules.md#notifications-notifications)).
+Protocol 5 runs workflows in the background (see
 [Workflow graphs](workflow-graphs.md#running-in-the-agent)). Protocol 4 added
 the encrypted database; protocol 3 made action results only carry
 `selectProject` effects, with action types in module namespaces

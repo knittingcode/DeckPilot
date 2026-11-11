@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event"
 import {
   Download,
   MonitorSmartphone,
@@ -21,7 +22,8 @@ import {
   summary,
   updateItem,
 } from "@/lib/status-model"
-import type { AgentConnection, UpdateState } from "@/lib/types"
+import { NOTIFICATION_EVENT } from "@/lib/api"
+import type { ActionNotification, AgentConnection, UpdateState } from "@/lib/types"
 
 function Detail({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -218,6 +220,7 @@ export function CoreStatusItems() {
       <AgentEvents agent={agent} />
       <UpdateEvents updates={updates} />
       <SecurityEvents />
+      <ActionNotifications />
     </>
   )
 }
@@ -317,6 +320,34 @@ function UpdateEvents({ updates }: { updates: UpdateState | null }) {
       operations.finish("update.install", updates.error ? { error: "Installation failed" } : {})
     }
   }, [updates, stores])
+  return null
+}
+
+/**
+ * Notifications that workflow actions ask for. Each is its own entry; the
+ * text is shown as plain text (React escapes it).
+ */
+function ActionNotifications() {
+  const stores = useStatus()
+  const counter = useRef(0)
+  useEffect(() => {
+    if (!stores) return
+    const stop = listen<ActionNotification>(NOTIFICATION_EVENT, ({ payload }) => {
+      if (!payload.statusBar) return
+      counter.current += 1
+      stores.notifications.notify({
+        key: `action.notification.${Date.now()}.${counter.current}`,
+        severity: payload.severity === "success" ? "info" : payload.severity,
+        title: payload.title,
+        message: payload.body,
+      })
+    })
+    return () => {
+      void stop.then((unlisten) => {
+        unlisten()
+      })
+    }
+  }, [stores])
   return null
 }
 
