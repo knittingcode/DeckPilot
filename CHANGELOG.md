@@ -5,7 +5,16 @@ All notable changes to DeckPilot. The format follows
 [Semantic Versioning](https://semver.org/). The section of a version is used
 as the notes of its GitHub release and of the in-app update.
 
+**Release status.** No version has been published yet. 0.5.0 exists only as
+two signed draft prereleases (0.5.0-1 and 0.5.0-2) made to test signing,
+notarization and packaging; they were never made public and are not offered
+by the updater. The versions before 0.5.0 were never released either. 0.6.0
+is the first version intended for publication.
+
 ## [0.6.0] - Unreleased
+
+The first public release. It includes everything listed for 0.1.0 to 0.5.0
+below.
 
 ### Added
 
@@ -61,7 +70,7 @@ as the notes of its GitHub release and of the in-app update.
   changes things) and failures carry a stable error code; both are shown in
   the workflow editor.
 
-## [0.5.0] - Unreleased
+## [0.5.0] - Not released (draft prereleases 0.5.0-1 and 0.5.0-2 only)
 
 ### Added
 
@@ -133,7 +142,7 @@ as the notes of its GitHub release and of the in-app update.
   indefinitely when its endpoint is busy or does not answer (on Windows a
   busy named pipe was waited for without a limit).
 
-## [0.4.0] - Unreleased
+## [0.4.0] - Not released
 
 ### Added
 
@@ -169,7 +178,7 @@ as the notes of its GitHub release and of the in-app update.
 - See [docs/security.md](docs/security.md) for what each protection mode
   guarantees and its limits.
 
-## [0.3.0]
+## [0.3.0] - Not released
 
 ### Added
 
@@ -179,14 +188,14 @@ as the notes of its GitHub release and of the in-app update.
 - Modular features (General, Projects) and an application updater based on
   signed GitHub releases.
 
-## [0.2.0]
+## [0.2.0] - Not released
 
 ### Added
 
 - The background agent with a system tray, Stream Deck MK.2 support and an
   authenticated local IPC.
 
-## [0.1.0]
+## [0.1.0] - Not released
 
 ### Added
 
