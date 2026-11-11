@@ -63,6 +63,14 @@ an editor belongs to the modules for those tools. Results are structured
 resources `resource`, `resourceKey`, `kind` and `value`. Missing resources
 fail with a message naming the project and resource.
 
+Failures carry the shared codes `no-active-project`, `not-permitted`,
+`resource-role-missing`, `resource-unbound`, `resource-kind-mismatch` and
+`invalid-parameters`, plus `project-not-in-profile` (an explicit project of
+another profile), `no-projects`, `at-last-project` and `at-first-project`
+(next/previous without `wrapAround`). `projects.next`, `projects.previous`
+and `projects.select` are declared as modifying, since switching the active
+project changes state; the resource types and `projects.active` only read.
+
 The projects module owns the Projects page, project management (create,
 edit, reorder, delete, default project, explicit copy to another profile),
 active project switching (actions, the tray and the app all use
@@ -158,9 +166,14 @@ cancellation the agent waits up to 10 s for the run to stop; a run still
 busy with a non-interruptible action is then recorded as cancelled, and the
 action's late result is discarded.
 
-**Timeout.** `NodeSpec::timeout_ms` (default 30 s; a node may override it,
-at most 10 minutes). Cooperative handlers stop at the deadline; a result
-arriving late is a timeout and its effects are discarded.
+**Timeout.** `NodeSpec::timeout_ms` (default 30 s; a node may override it).
+A node's time limit is at most 10 minutes (`MAX_TIMEOUT_MS`), whether it is
+the action type's own or the node's override: action types declare at most
+that, and the engine caps anything longer. An action's own longer limit — a
+command's `timeoutSeconds`, the Docker module's time limit — still applies
+when it runs outside a workflow, e.g. from a key. Cooperative handlers stop
+at the deadline; a result arriving late is a timeout and its effects are
+discarded.
 
 **Retryability.** `NodeSpec::retry_safe`: the engine retries a failed
 attempt (up to five times, exponential backoff, cancellable waits) only when

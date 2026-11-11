@@ -70,7 +70,8 @@ path or a name found on `PATH` — so an imported workflow cannot choose what
 runs. Arguments are passed as they are, one per line: nothing is split on
 spaces, quoted or expanded. Output is kept up to 64 KiB per stream
 (`outputTruncated` tells when more was produced). The node is cancellable
-and not retry-safe.
+and not retry-safe. In a workflow a node runs at most 10 minutes, so a
+longer `timeoutSeconds` only applies when the action runs from a key.
 
 Error codes: `invalid-url`, `invalid-path`, `invalid-arguments`,
 `not-found`, `commands-disabled`, `exit-nonzero`, `unsupported-target`,
@@ -163,7 +164,8 @@ cannot turn it on), **Compose resource** (`composeRole`, default
 **Contexts.** Every command is `docker --context <name> …`: the action's
 `context`, else the module's, else the context `docker context show`
 reports. The name is part of every result (`context`), so it is visible
-which engine was used; remote contexts (`ssh://`, TCP with TLS) work like
+which engine was used — except a `docker.status` that found no Docker and
+no context was chosen, since then no current context can be asked; remote contexts (`ssh://`, TCP with TLS) work like
 the local one. `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`, TLS
 variables and `SSH_AUTH_SOCK` are passed on.
 
@@ -204,7 +206,8 @@ never read into results. There are no Swarm operations.
 is stopped with its process group. Cancelling `compose up` or `down`
 partway leaves the project as far as Compose got; running the action again
 completes it (both are retry-safe and idempotent). Reading commands are
-limited to 30 s, changes to the module's time limit.
+limited to 30 s, changes to the module's time limit — in a workflow at most
+10 minutes, the longest any node runs.
 
 **Key state.** Keys show whether Docker is available (`docker.status`),
 how many containers run (`docker.containers`) and how many of a Compose

@@ -63,49 +63,6 @@ const KNOWN: &[(&str, &str, &str)] = &[
     // Findings in modules outside the integration modules, kept until their
     // owners decide.
     (
-        "docker.compose-up",
-        "action-timeout",
-        "its own limit follows the Docker time-limit setting (up to 30 min); MAX_TIMEOUT_MS \
-         only bounds a node's override",
-    ),
-    (
-        "docker.compose-down",
-        "action-timeout",
-        "as docker.compose-up",
-    ),
-    (
-        "docker.compose-restart",
-        "action-timeout",
-        "as docker.compose-up",
-    ),
-    (
-        "system.run-command",
-        "action-timeout",
-        "its own limit allows commands up to an hour; MAX_TIMEOUT_MS only bounds a node's \
-         override",
-    ),
-    (
-        "docker.status",
-        "run-missing-output",
-        "without a Docker program, `context` (declared always present) is left out",
-    ),
-    ("general.log", "action-icon", "no icon declared"),
-    (
-        "general.log",
-        "action-retry",
-        "read-only, but marked neither retry-safe nor idempotent",
-    ),
-    (
-        "projects.next",
-        "action-retry",
-        "changes the active project but is declared read-only",
-    ),
-    (
-        "projects.previous",
-        "action-retry",
-        "changes the active project but is declared read-only",
-    ),
-    (
         "notifications.show",
         "run-denied-succeeds",
         "by design a notification that cannot be shown does not fail the node (`shown` is \
@@ -115,26 +72,6 @@ const KNOWN: &[(&str, &str, &str)] = &[
         "notifications.workflow-summary",
         "run-denied-succeeds",
         "as notifications.show",
-    ),
-    (
-        "projects.select",
-        "run-failure-without-code",
-        "failures have no ActionResult.code",
-    ),
-    (
-        "projects.repository",
-        "run-failure-without-code",
-        "failures have no ActionResult.code",
-    ),
-    (
-        "projects.documentation",
-        "run-failure-without-code",
-        "failures have no ActionResult.code",
-    ),
-    (
-        "projects.resolve-resource",
-        "run-failure-without-code",
-        "failures have no ActionResult.code",
     ),
 ];
 
@@ -383,6 +320,26 @@ fn renderable(kind: &ParameterKind) -> bool {
         .and_then(|rest| rest.split("export type").next())
         .unwrap_or_default();
     union.contains(&format!("type: \"{}\"", frontend_kind(kind)))
+}
+
+/// The app's icon set for actions; an icon outside it is drawn as the
+/// default icon.
+const FRONTEND_ICONS: &str = include_str!("../../../apps/desktop/src/lib/icons.ts");
+
+/// The names in the app's `ACTION_ICONS` map.
+fn action_icons() -> BTreeSet<String> {
+    let map = FRONTEND_ICONS
+        .split("export const ACTION_ICONS")
+        .nth(1)
+        .and_then(|rest| rest.split_once('{'))
+        .and_then(|(_, body)| body.split_once('}'))
+        .map(|(body, _)| body)
+        .unwrap_or_default();
+    map.lines()
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, _)| name.trim().trim_matches('"').to_owned())
+        .filter(|name| !name.is_empty() && !name.starts_with("//"))
+        .collect()
 }
 
 /// What is wrong with a parameter kind's own settings.
@@ -657,6 +614,11 @@ fn action_types_are_described() {
 }
 
 fn audit_action_types(subjects: &[Box<dyn FeatureModule>], report: &mut Report) {
+    let icons = action_icons();
+    assert!(
+        icons.len() > 10 && icons.contains("zap"),
+        "the icon set could not be read: {icons:?}"
+    );
     for module in subjects {
         let manifest = module.manifest();
         let processes = manifest
@@ -686,6 +648,14 @@ fn audit_action_types(subjects: &[Box<dyn FeatureModule>], report: &mut Report) 
                 .is_none_or(|i| i.trim().is_empty())
             {
                 report.add(id, "action-icon", "no icon");
+            } else if let Some(icon) = &action.node.icon
+                && !icons.contains(icon.as_str())
+            {
+                report.add(
+                    id,
+                    "action-icon",
+                    format!("icon “{icon}” is not in the app's icon set"),
+                );
             }
             let keys: BTreeSet<_> = action.node.outputs.iter().map(|o| &o.key).collect();
             if keys.len() != action.node.outputs.len()

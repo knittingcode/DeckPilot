@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use deckpilot_core::graph::{ActionEffect, NodeSpec, OutputSpec, ValueKind};
+use deckpilot_core::graph::{ActionEffect, MAX_TIMEOUT_MS, NodeSpec, OutputSpec, ValueKind};
 use deckpilot_core::launch::{self, Launcher, OpenTarget};
 use deckpilot_core::process::{ProcessLimits, minimal_environment};
 use deckpilot_core::{
@@ -488,10 +488,9 @@ impl RunCommand {
                         OutputSpec::new("outputTruncated", "Output truncated", ValueKind::Boolean),
                         OutputSpec::new("durationMs", "Duration (ms)", ValueKind::Integer),
                     ],
-                    // The action's own time limit applies; a node can set a
-                    // shorter one.
-                    timeout_ms: u32::try_from((MAX_COMMAND_SECONDS + 10) * 1000)
-                        .unwrap_or(u32::MAX),
+                    // A workflow node runs at most MAX_TIMEOUT_MS; the
+                    // command's own longer limit applies outside workflows.
+                    timeout_ms: MAX_TIMEOUT_MS,
                     retry_safe: false,
                     idempotent: false,
                     cancellable: true,
