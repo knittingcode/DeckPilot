@@ -25,6 +25,8 @@ apps/desktop/src-tauri/tauri.updater.conf.json
 *.db-journal
 *.db-wal
 *.db-shm
+# Test fixtures (encrypted, made with the development password)
+!crates/*/tests/fixtures/**/*.db
 
 # Environment and secrets
 .env
