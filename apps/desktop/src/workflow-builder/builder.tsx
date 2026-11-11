@@ -52,6 +52,7 @@ import type {
   WorkflowGraph,
   WorkflowInput,
   WorkflowOutput,
+  WorkflowTrigger,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -86,6 +87,7 @@ import { IssueList, NodeInspector } from "./inspector"
 import { ProjectScopeSetting } from "./project-scope"
 import { effectiveProjectScope, selectsProjects } from "./project-scope-model"
 import { type FlowNode, type NodeRun, NodeView } from "./node-view"
+import { TriggersEditor } from "./triggers-editor"
 import { WorkflowInterfaceEditor } from "./workflow-interface"
 
 const NODE_TYPES = { workflow: NodeView }
@@ -219,6 +221,8 @@ function Builder({
   const [description, setDescription] = useState(initial.description ?? "")
   const [inputs, setInputs] = useState<WorkflowInput[]>(initial.inputs ?? [])
   const [outputs, setOutputs] = useState<WorkflowOutput[]>(initial.outputs ?? [])
+  const [triggers, setTriggers] = useState<WorkflowTrigger[]>(initial.triggers ?? [])
+  const [triggersPaused, setTriggersPaused] = useState(Boolean(initial.triggersPaused))
   const [state, setState] = useState(() => history(initialGraph))
   const graph = state.present
   const [selected, setSelected] = useState<string[]>([])
@@ -264,8 +268,20 @@ function Builder({
       modules,
       inputs,
       outputs,
+      triggers,
+      triggersPaused,
     }),
-    [actions, types, view.profile.workflows, view.profile.projects, modules, inputs, outputs],
+    [
+      actions,
+      types,
+      view.profile.workflows,
+      view.profile.projects,
+      modules,
+      inputs,
+      outputs,
+      triggers,
+      triggersPaused,
+    ],
   )
   const loopTargets = view.profile.workflows
     .filter((w) => w.id !== initial.id)
@@ -293,8 +309,10 @@ function Builder({
       projectScope,
       inputs: inputs.length ? inputs : undefined,
       outputs: outputs.length ? outputs : undefined,
+      triggers: triggers.length ? triggers : undefined,
+      triggersPaused: triggersPaused || undefined,
     }),
-    [initial, name, description, graph, projectScope, inputs, outputs],
+    [initial, name, description, graph, projectScope, inputs, outputs, triggers, triggersPaused],
   )
   const dirty =
     isNew ||
@@ -306,6 +324,8 @@ function Builder({
       s: projectScope,
       i: inputs,
       o: outputs,
+      t: triggers,
+      p: triggersPaused,
     }) !==
       JSON.stringify({
         n: initial.name,
@@ -314,6 +334,8 @@ function Builder({
         s: initial.projectScope ?? projectScope,
         i: initial.inputs ?? [],
         o: initial.outputs ?? [],
+        t: initial.triggers ?? [],
+        p: Boolean(initial.triggersPaused),
       })
 
   // The engine's validation, shown on the nodes.
@@ -933,6 +955,13 @@ function Builder({
                   outputs={outputs}
                   onInputs={setInputs}
                   onOutputs={setOutputs}
+                />
+                <TriggersEditor
+                  triggers={triggers}
+                  paused={triggersPaused}
+                  inputs={inputs}
+                  onTriggers={setTriggers}
+                  onPaused={setTriggersPaused}
                 />
                 {workflowPanel}
               </div>

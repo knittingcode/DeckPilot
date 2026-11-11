@@ -18,6 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 auto-launch.workspace = true
+chrono.workspace = true
 deckpilot-core.workspace = true
 deckpilot-device = { workspace = true, features = ["mock"] }
 deckpilot-hid.workspace = true
