@@ -34,7 +34,8 @@ if [ ! -f "$OLD_TREE/Cargo.toml" ]; then
   if [ -d "$OLD_TREE/target" ]; then
     mv "$OLD_TREE/target" "$WORK/old-target"
   fi
-  rm -rf "$OLD_TREE"
+  # Anything else in the folder is left alone: creating the worktree fails.
+  if [ -d "$OLD_TREE" ]; then rmdir "$OLD_TREE"; fi
   git -C "$ROOT" worktree add --detach "$OLD_TREE" "$OLD_TAG" >&2
   if [ -d "$WORK/old-target" ]; then
     mv "$WORK/old-target" "$OLD_TREE/target"
