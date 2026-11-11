@@ -1,0 +1,62 @@
+{
+  "version": "0.5.0-2",
+  "protocol": 4,
+  "pid": 4242,
+  "startedAt": 1762797600,
+  "dataDir": "/data/deckpilot",
+  "logDir": "/data/deckpilot/logs",
+  "endpoint": "/tmp/deckpilot-501/agent-0000000000000000.sock",
+  "backend": "combined",
+  "profiles": [
+    {
+      "id": "2f6a73c4-7019-40e0-b10d-a5eb16d61b52",
+      "name": "Empty"
+    },
+    {
+      "id": "39ce65e5-c82e-4a49-8ba4-afe3564b7bfa",
+      "name": "Personal"
+    },
+    {
+      "id": "a9a4759d-e6bf-440d-b16a-bca754269d74",
+      "name": "Work"
+    }
+  ],
+  "activeProfile": {
+    "id": "a9a4759d-e6bf-440d-b16a-bca754269d74",
+    "name": "Work"
+  },
+  "activeProject": {
+    "id": "a498a66b-4789-4ace-8c11-0ef51745bb27",
+    "key": "SHOP",
+    "name": "Online Shop",
+    "resources": {
+      "docs": "shop.docs",
+      "repository": "shop.repository"
+    }
+  },
+  "devices": [
+    {
+      "id": {
+        "model": "elgato.streamdeck.mk2",
+        "serial": "SIM-MK2-01"
+      },
+      "modelName": "Stream Deck MK.2",
+      "state": "connected",
+      "layout": {
+        "type": "compatible",
+        "layout": "b694e790-bbaa-4b0e-874d-3cc147dc2844",
+        "name": "Main"
+      },
+      "page": "Home",
+      "source": "mock"
+    }
+  ],
+  "brightness": 60,
+  "lastInputAt": null,
+  "security": "unlocked",
+  "protection": "password",
+  "lockReason": null,
+  "securityProblem": null,
+  "waitingForKeyStore": false,
+  "screenLockDetection": true
+}
