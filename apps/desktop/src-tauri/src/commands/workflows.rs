@@ -1,10 +1,40 @@
 use tauri::State;
 
+use deckpilot_core::graph::{Conversion, GraphIssue, from_steps};
 use deckpilot_core::{ProfileId, Workflow, WorkflowId};
 
 use super::modify_profile;
 use crate::error::{CommandError, CommandResult};
-use crate::state::AppState;
+use crate::state::{AppState, load_profile};
+
+/// Problems of a workflow's graph, as the engine sees them, for the editor
+/// to show on the nodes. The workflow does not have to be saved.
+#[tauri::command]
+pub fn validate_workflow_graph(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+    workflow: Workflow,
+) -> CommandResult<Vec<GraphIssue>> {
+    let profile = load_profile(&*state.store()?, profile_id)?;
+    Ok(workflow
+        .graph
+        .as_ref()
+        .map(|graph| graph.validate(workflow.id, &profile, &state.actions()))
+        .unwrap_or_default())
+}
+
+/// The graph form of a workflow's steps, with notes where it behaves
+/// differently. Nothing is saved: the editor stores the graph when the user
+/// saves, and the steps are kept.
+#[tauri::command]
+pub fn convert_workflow(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+    workflow: Workflow,
+) -> CommandResult<Conversion> {
+    let profile = load_profile(&*state.store()?, profile_id)?;
+    Ok(from_steps(&workflow, &profile))
+}
 
 /// Creates or replaces a workflow after validating it.
 #[tauri::command]

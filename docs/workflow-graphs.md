@@ -164,8 +164,41 @@ reconnects, so runs started from the deck or before the app restarted appear
 with their real progress; running workflows show in the status bar with
 progress and a Cancel button.
 
+## Editor
+
+Workflows → a workflow opens in the graph editor (`apps/desktop/src/workflow-builder`):
+
+- **Catalog** (left): the flow nodes (Condition, Parallel, Join, Loop, Delay,
+  Stop) and, per enabled module, the profile's actions of the action types
+  the module provides, with a button to create a new action of each type.
+  The catalog is built from the module registry; the editor has no
+  module-specific code. Search filters by name, description and module.
+  Entries are dragged onto the canvas, or clicked to add them after the
+  selected node (connected through its first free output).
+- **Canvas** (centre): zoom, pan, minimap, typed outputs (*Next*, *On error*,
+  *Yes*, *No*). Connections the engine would reject — into the start node,
+  a second connection from an output (other than a Parallel node's), a
+  second incoming connection (other than a Join's), cycles — are refused
+  while dragging. Undo and redo (⌘Z, ⇧⌘Z), copy and paste (⌘C, ⌘V, with new
+  node ids), delete (⌫), arrange (layered by depth), save (⌘S).
+- **Inspector** (right): the selected node — label, id, problems, and its
+  settings: the action and, per parameter, the action's value, a value for
+  this node, or a value from earlier nodes (one declared output, or text
+  with `{{ steps.<node>.output.<key> }}`); what happens on failure, retries
+  (only for retry-safe actions), timeout; condition, loop and delay
+  settings. Without a selection: the workflow's name and description,
+  graph-wide problems, migration notes, duplicate and delete.
+- **Validation** is the engine's (`validate_workflow_graph`), run as the
+  graph changes. Problems show on the nodes, in the minimap and in the
+  status bar. A workflow with errors cannot be saved, so a stored graph
+  always runs.
+- **Workflows without a graph** keep their step editor. *Open in graph
+  editor* converts the steps (`convert_workflow`) and shows the notes where
+  the graph behaves differently. Nothing is stored until the graph is saved,
+  and the steps are kept.
+
 ## Roadmap
 
-This is the second milestone: the model, SDK and engine (first), and running
-graphs in the agent (second). Next: the visual editor, then execution
-visualization on the graph and a history view.
+Milestones so far: the model, SDK and engine; running graphs in the agent;
+the visual editor. Next: execution visualization on the graph and a history
+view.

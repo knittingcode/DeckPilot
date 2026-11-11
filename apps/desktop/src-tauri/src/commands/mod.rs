@@ -81,6 +81,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         workflows::save_workflow,
         workflows::duplicate_workflow,
         workflows::delete_workflow,
+        workflows::validate_workflow_graph,
+        workflows::convert_workflow,
         projects::create_project,
         projects::update_project,
         projects::move_project,

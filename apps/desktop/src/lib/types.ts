@@ -135,6 +135,19 @@ export interface WorkflowGraph {
   edges: GraphEdge[]
 }
 
+/** A problem the engine found in a graph; `node` is missing for the graph as a whole. */
+export interface GraphIssue {
+  node?: string
+  severity: "error" | "warning"
+  message: string
+}
+
+/** The graph form of a step workflow, with notes where it behaves differently. */
+export interface Conversion {
+  graph: WorkflowGraph
+  notes: string[]
+}
+
 export type ValueKind = "text" | "integer" | "boolean" | "path" | "url" | "projectKey"
 
 /** How an action type behaves as a workflow node (module SDK contract). */
