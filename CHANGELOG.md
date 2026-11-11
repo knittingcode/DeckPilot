@@ -114,6 +114,19 @@ below.
   outputs (sensitive ones are never shown).
 - New step workflows can be created from the workflow switcher and the
   title bar.
+- Workspace module: open a file in an editor (VS Code, Cursor, JetBrains
+  IDEs, Zed, Sublime) at a line and column, open up to ten web pages, and
+  open a project's editor, repository, documents and pages at once from its
+  resources. It uses no shell and changes nothing.
+- Page tree: pages can be placed in folders, reordered, and moved or copied
+  with their subpages, also to another layout when its device supports
+  every key. Back returns to the page's folder; a page in a folder without
+  a way back gets an automatic Back key on its first free key. Existing
+  layouts get their tree inferred without being rewritten.
+- Appearance in the layout editor: colours with a contrast hint, text size
+  and title position, an icon library with usage counts, PNG and JPEG
+  import checked before upload, and previews drawn by the same renderer as
+  the device. Changes apply to every selected key and can be undone.
 
 ### Fixed
 
@@ -123,6 +136,12 @@ below.
   no longer fails while another process is writing to it.
 - On Linux, starting a program that was written a moment earlier (for
   example by an installer) no longer fails with "Text file busy".
+- Parallel branches of a workflow no longer wait for their slowest
+  sibling: each node starts as soon as its inputs are ready, and a node
+  that crashes fails the run instead of stalling it.
+- Built-in actions: time limits longer than the engine allows are capped,
+  switching the active project is marked as changing things, failures carry
+  error codes, and every action icon exists in the app.
 
 ## [0.5.0] - Not released (draft prereleases 0.5.0-1 and 0.5.0-2 only)
 
