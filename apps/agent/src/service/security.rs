@@ -315,6 +315,7 @@ impl Agent {
         self.lock_reason = (self.security == SecurityState::Locked).then_some(reason);
         self.refresh_protection();
         self.runtime.set_profile(None, None);
+        self.reload_icons();
         self.runtime.set_placeholder(Some("Locked"));
         self.persisted_project = None;
         info!(?reason, "configuration locked");

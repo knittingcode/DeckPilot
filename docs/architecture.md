@@ -95,6 +95,14 @@ Windows Credential Manager, Secret Service) behind a small `KeyStore` trait,
 an in-memory store for tests, separate service names for development builds,
 and no file fallback.
 
+### `deckpilot-render`
+
+Draws `KeyFace`s into `Frame`s (title, appearance, icon, live state marks)
+with a frame cache, and imports, checks and scales key icons (PNG and JPEG
+decoded with limits, re-encoded as PNG). Used by the agent for device
+images and by the configuration app for exact previews; the export import
+uses it to check icons. See [Key appearance](data-model.md#key-appearance).
+
 ### `deckpilot-presence`
 
 Operating-system user verification for the configuration app: Touch ID or

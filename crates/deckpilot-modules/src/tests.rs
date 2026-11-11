@@ -286,6 +286,7 @@ fn deck_profile(
         trigger: Trigger::Press,
         target: BindingTarget::Action { action },
         label: label.map(Into::into),
+        appearance: None,
     };
     layout.pages[0]
         .bindings
