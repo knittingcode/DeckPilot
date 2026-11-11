@@ -1,0 +1,18 @@
+[package]
+name = "deckpilot-render"
+description = "Key rendering and icon processing for DeckPilot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+deckpilot-core.workspace = true
+deckpilot-device.workspace = true
+font8x8.workspace = true
+image = { workspace = true, features = ["png", "jpeg"] }
+
+[lints]
+workspace = true

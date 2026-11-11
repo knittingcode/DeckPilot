@@ -51,6 +51,7 @@ fn builtin_modules_register_with_namespaced_action_types() {
             "github",
             "gitlab",
             "http",
+            "jira",
             "notifications",
             "projects",
             "system"
@@ -95,6 +96,10 @@ fn builtin_modules_register_with_namespaced_action_types() {
             "gitlab.open",
             "http.request",
             "http.health-check",
+            "jira.myself",
+            "jira.issue",
+            "jira.issues",
+            "jira.open",
             "notifications.show",
             "notifications.workflow-summary",
             "projects.next",
@@ -281,6 +286,7 @@ fn deck_profile(
         trigger: Trigger::Press,
         target: BindingTarget::Action { action },
         label: label.map(Into::into),
+        appearance: None,
     };
     layout.pages[0]
         .bindings

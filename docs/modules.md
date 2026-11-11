@@ -23,6 +23,7 @@ third-party executables and no remote installation.
 | `github` | — (settings) | send network requests, use stored credentials, open pages |
 | `gitlab` | — (settings) | send network requests, use stored credentials, open pages |
 | `http` | — (settings with credentials) | send network requests, use stored credentials |
+| `jira` | — (settings) | send network requests, use stored credentials, open pages |
 | `notifications` | — (settings) | read profile, show notifications |
 | `projects` | Projects | read profile, change active project, read machine resources |
 | `system` | — (settings) | read machine resources, open applications/files/pages, run programs, see running programs |
@@ -170,7 +171,7 @@ as once. Informational for users and future replays.
 
 **Structured errors.** A failed node reports `StepError { code, message,
 retryable, actionCode }` with stable codes: `action.failed`, `timeout`,
-`cancelled`, `mapping`, `context-conflict`, `unavailable`, `loop.failed`,
+`cancelled`, `mapping`, `context-conflict`, `variable-conflict`, `unavailable`, `loop.failed`,
 `subworkflow.failed`.
 For `action.failed`, `actionCode` is the action's own code
 (`ActionResult::error(code, message)`), documented by its module, e.g.

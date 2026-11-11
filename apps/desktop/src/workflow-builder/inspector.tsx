@@ -175,6 +175,8 @@ function KindEditor(props: InspectorProps) {
       return <CallEditor {...props} />
     case "output":
       return <OutputEditor {...props} />
+    case "setVariable":
+      return <SetVariableEditor {...props} />
     case "loop":
       return (
         <Section title="Loop">
@@ -894,6 +896,50 @@ function OutputEditor({ graph, node, lookup, values, onChange }: InspectorProps)
       <p className="text-xs text-muted-foreground">
         The node that calls this workflow gets these values. When several Output nodes run, the
         later one wins.
+      </p>
+    </Section>
+  )
+}
+
+/** A Set variable node: new values of the open workflow's variables. */
+function SetVariableEditor({ graph, node, lookup, values, onChange }: InspectorProps) {
+  if (node.type !== "setVariable") return null
+  const declared = lookup.variables ?? []
+  const outputs = outputOptions(graph, node.id, lookup)
+  return (
+    <Section title="Variables">
+      {declared.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          This workflow declares no variables. Declare them in the workflow panel (click the canvas
+          background).
+        </p>
+      )}
+      {declared.map((variable) => (
+        <ValueRow
+          key={variable.key}
+          id={`variable-${variable.key}`}
+          label={variable.label || variable.key}
+          kind={variable.kind}
+          sensitive={variable.sensitive}
+          fallbackText="Not changed by this node."
+          mapping={node.values?.[variable.key]}
+          outputs={outputs}
+          graph={graph}
+          node={node}
+          lookup={lookup}
+          values={values}
+          onChange={(mapping) => {
+            onChange((n) =>
+              n.type === "setVariable"
+                ? { ...n, values: withValue(n.values, variable.key, mapping) }
+                : n,
+            )
+          }}
+        />
+      ))}
+      <p className="text-xs text-muted-foreground">
+        Nodes after this one read the new values as “Variable · …”. Variables last for one run; a
+        sub-workflow gets them only through its inputs.
       </p>
     </Section>
   )

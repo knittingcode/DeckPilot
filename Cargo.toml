@@ -11,6 +11,7 @@ members = [
     "crates/deckpilot-portability",
     "crates/deckpilot-keystore",
     "crates/deckpilot-presence",
+    "crates/deckpilot-render",
     "modules/general",
     "modules/projects",
     "modules/system",
@@ -20,6 +21,7 @@ members = [
     "modules/notifications",
     "modules/github",
     "modules/gitlab",
+    "modules/jira",
     "apps/agent",
     "apps/desktop/src-tauri",
     "tools/dev",
@@ -51,9 +53,11 @@ deckpilot-module-http = { path = "modules/http" }
 deckpilot-module-notifications = { path = "modules/notifications" }
 deckpilot-module-github = { path = "modules/github" }
 deckpilot-module-gitlab = { path = "modules/gitlab" }
+deckpilot-module-jira = { path = "modules/jira" }
 deckpilot-portability = { path = "crates/deckpilot-portability" }
 deckpilot-keystore = { path = "crates/deckpilot-keystore" }
 deckpilot-presence = { path = "crates/deckpilot-presence" }
+deckpilot-render = { path = "crates/deckpilot-render" }
 
 tauri = "2"
 tauri-build = "2"

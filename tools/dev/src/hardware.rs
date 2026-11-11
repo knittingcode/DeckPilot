@@ -137,6 +137,7 @@ fn test_profile(prefix: &str, keys: u16, catalog: &ModelCatalog) -> Result<Profi
                 trigger,
                 target: BindingTarget::Action { action: action.id },
                 label: Some(label.clone()),
+                appearance: None,
             });
             profile.actions.push(action);
         }
