@@ -94,6 +94,13 @@ pub(crate) struct Executions {
     retention: Retention,
 }
 
+impl Executions {
+    /// How many workflows are running.
+    pub(crate) fn running_count(&self) -> usize {
+        self.running.len()
+    }
+}
+
 impl std::fmt::Debug for Executions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Executions")
