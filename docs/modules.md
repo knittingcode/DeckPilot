@@ -23,6 +23,7 @@ third-party executables and no remote installation.
 | `github` | — (settings) | send network requests, use stored credentials, open pages |
 | `gitlab` | — (settings) | send network requests, use stored credentials, open pages |
 | `http` | — (settings with credentials) | send network requests, use stored credentials |
+| `jira` | — (settings) | send network requests, use stored credentials, open pages |
 | `notifications` | — (settings) | read profile, show notifications |
 | `projects` | Projects | read profile, change active project, read machine resources |
 | `system` | — (settings) | read machine resources, open applications/files/pages, run programs, see running programs |

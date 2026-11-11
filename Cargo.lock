@@ -1115,6 +1115,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "deckpilot-module-jira"
+version = "0.5.0"
+dependencies = [
+ "base64 0.22.1",
+ "deckpilot-core",
+ "deckpilot-module-http",
+ "reqwest",
+ "serde_json",
+ "url",
+]
+
+[[package]]
 name = "deckpilot-module-notifications"
 version = "0.5.0"
 dependencies = [
@@ -1151,6 +1163,7 @@ dependencies = [
  "deckpilot-module-github",
  "deckpilot-module-gitlab",
  "deckpilot-module-http",
+ "deckpilot-module-jira",
  "deckpilot-module-notifications",
  "deckpilot-module-projects",
  "deckpilot-module-system",
