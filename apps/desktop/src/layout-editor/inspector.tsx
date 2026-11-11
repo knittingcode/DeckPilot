@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import { Eraser, FolderOpen, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -41,6 +42,8 @@ interface InspectorProps {
   onClear: () => void
   onOpenFolder: () => void
   onClose: () => void
+  /** The look of the selected keys (appearance panel). */
+  appearance?: ReactNode
 }
 
 /** Settings of the selected control, or a summary of a multi-selection. */
@@ -76,6 +79,7 @@ export function Inspector(props: InspectorProps) {
           <Button variant="outline" size="sm" className="w-fit" onClick={props.onClear}>
             <Eraser /> Clear {selection.length} controls
           </Button>
+          {props.appearance && <div className="border-t pt-4">{props.appearance}</div>}
         </CardContent>
       </Card>
     )
@@ -94,6 +98,7 @@ function ControlInspector({
   onClear,
   onOpenFolder,
   onClose,
+  appearance,
 }: InspectorProps & { control: ControlId }) {
   const bindings = bindingsFor(draft, pageId, control)
   return (
@@ -122,6 +127,7 @@ function ControlInspector({
                           trigger,
                           target,
                           label: binding?.label ?? null,
+                          ...(binding?.appearance ? { appearance: binding.appearance } : {}),
                         })
                       : removeBinding(draft, pageId, control, trigger),
                   )
@@ -176,6 +182,7 @@ function ControlInspector({
         <p className="text-xs text-muted-foreground">
           Only events this model can produce are offered. Unbound controls stay blank on the device.
         </p>
+        {appearance && <div className="border-t pt-4">{appearance}</div>}
       </CardContent>
     </Card>
   )
