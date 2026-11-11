@@ -37,6 +37,8 @@ import {
 } from "@/lib/layout-model"
 import type { ControlId, DeviceLayout, DeviceModel, KeyFace, ProfileView } from "@/lib/types"
 
+import { effectiveUsage } from "./appearance"
+import { AppearancePanel, type IconState } from "./appearance-panel"
 import { ControlMenu } from "./control-menu"
 import {
   boundControls,
@@ -51,22 +53,37 @@ import { LibraryPanel } from "./library-panel"
 import { PageBar } from "./page-bar"
 import { targetGroups } from "./targets"
 import { shortcutLabel, useEditorShortcuts } from "./use-editor-shortcuts"
+import { useIcons } from "./use-icons"
 import { useLayoutEditing } from "./use-layout-editing"
 
-/** Faces exactly as the agent would render them, debounced. */
+/**
+ * Faces and key images exactly as the agent would render them (with
+ * appearance and icons), debounced while editing.
+ */
 function usePreviewFaces(
   profileId: string,
   draft: DeviceLayout,
   pageId: string,
   project: string | null,
+  /** Changes when the profile's icons change, so previews pick them up. */
+  iconsVersion: string,
 ) {
-  const [faces, setFaces] = useState(new Map<string, KeyFace>())
+  const [preview, setPreview] = useState({
+    faces: new Map<string, KeyFace>(),
+    images: new Map<string, string>(),
+  })
   useEffect(() => {
     let cancelled = false
     const timer = setTimeout(() => {
-      api.previewLayout(profileId, draft, pageId, project).then(
+      api.previewLayout(profileId, draft, pageId, project, true).then(
         (result) => {
-          if (!cancelled) setFaces(new Map(result.map((r) => [controlKey(r.control), r.face])))
+          if (cancelled) return
+          setPreview({
+            faces: new Map(result.map((r) => [controlKey(r.control), r.face])),
+            images: new Map(
+              result.flatMap((r) => (r.image ? [[controlKey(r.control), r.image] as const] : [])),
+            ),
+          })
         },
         () => undefined,
       )
@@ -75,8 +92,8 @@ function usePreviewFaces(
       cancelled = true
       clearTimeout(timer)
     }
-  }, [profileId, draft, pageId, project])
-  return faces
+  }, [profileId, draft, pageId, project, iconsVersion])
+  return preview
 }
 
 export function LayoutEditor({
@@ -101,7 +118,18 @@ export function LayoutEditor({
   const [errors, setErrors] = useState<string[]>([])
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved)
   const { actions, workflows, projects } = view.profile
-  const faces = usePreviewFaces(profileId, draft, pageId, previewProject)
+  const library = useIcons(profileId)
+  const { faces, images } = usePreviewFaces(
+    profileId,
+    draft,
+    pageId,
+    previewProject,
+    library.icons.map((i) => i.id).join(","),
+  )
+  const iconState: IconState = {
+    ...library,
+    usage: (icon) => effectiveUsage(icon.usages, icon.id, saved, draft),
+  }
   const groups = useMemo(
     () => targetGroups(view.profile, draft, pageId),
     [view.profile, draft, pageId],
@@ -270,6 +298,7 @@ export function LayoutEditor({
               <div className="overflow-x-auto p-1">
                 <DeviceCanvas
                   model={model}
+                  images={images}
                   faces={faces}
                   icons={icons}
                   captions={summaries}
@@ -369,6 +398,18 @@ export function LayoutEditor({
             if (selection.focus) commands.openFolder(selection.focus)
           }}
           onClose={commands.clearSelection}
+          appearance={
+            selected.length > 0 ? (
+              <AppearancePanel
+                draft={draft}
+                pageId={pageId}
+                controls={selected}
+                images={images}
+                icons={iconState}
+                onChange={commands.restyle}
+              />
+            ) : undefined
+          }
         />
       </div>
     </DndContext>

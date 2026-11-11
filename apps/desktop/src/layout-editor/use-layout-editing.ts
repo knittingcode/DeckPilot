@@ -4,6 +4,7 @@ import { toast } from "sonner"
 import { addPage, controlLabel, deletePage, page as findPage, renamePage } from "@/lib/layout-model"
 import type { BindingTarget, ControlId, DeviceLayout, DeviceModel } from "@/lib/types"
 
+import { type KeyLookChange, applyAppearance } from "./appearance"
 import {
   assignTarget,
   canRedo,
@@ -68,6 +69,16 @@ export function useLayoutEditing(model: DeviceModel, saved: DeviceLayout) {
 
   const commands = {
     change,
+    /**
+     * Changes the look of the selected keys. Applied to the latest draft, so
+     * a change that arrives later (after an icon import) does not undo edits
+     * made meanwhile.
+     */
+    restyle: (look: KeyLookChange, group?: string) => {
+      setState((s) =>
+        commit(s, applyAppearance(s.present, pageId, selected, look).layout, group ?? null),
+      )
+    },
     select: (control: ControlId, mode: SelectMode) => {
       setSelection((s) => select(model, s, control, mode))
     },

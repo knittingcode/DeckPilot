@@ -130,8 +130,14 @@ export function selectedInOrder(model: DeviceModel, selection: Selection): Contr
 
 type ControlBindings = Omit<ControlBinding, "control">[]
 
+/** A control's bindings without the control; label and appearance travel along. */
 function strip(bindings: ControlBinding[]): ControlBindings {
-  return bindings.map(({ trigger, target, label }) => ({ trigger, target, label: label ?? null }))
+  return bindings.map(({ trigger, target, label, appearance }) => ({
+    trigger,
+    target,
+    label: label ?? null,
+    ...(appearance ? { appearance } : {}),
+  }))
 }
 
 /** Removes every binding of the given controls on a page. */
@@ -199,7 +205,16 @@ export function assignTarget(
   let next = layout
   for (const control of controls) {
     const trigger = defaultTrigger(model, next, pageId, control)
-    if (trigger) next = setBinding(next, pageId, { control, trigger, target, label: null })
+    if (!trigger) continue
+    // Replacing a binding keeps how the key looks.
+    const replaced = bindingsFor(next, pageId, control).find((b) => sameTrigger(b.trigger, trigger))
+    next = setBinding(next, pageId, {
+      control,
+      trigger,
+      target,
+      label: null,
+      ...(replaced?.appearance ? { appearance: replaced.appearance } : {}),
+    })
   }
   return next
 }

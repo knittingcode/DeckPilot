@@ -18,6 +18,7 @@ const saveLayout = vi.fn()
 vi.mock("@/lib/api", () => ({
   api: {
     previewLayout: () => Promise.resolve([]),
+    listIcons: () => Promise.resolve([]),
     saveLayout: (...args: unknown[]) => saveLayout(...args) as unknown,
   },
   errorMessage: (error: unknown) => String(error),
