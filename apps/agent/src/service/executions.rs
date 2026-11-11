@@ -142,6 +142,21 @@ impl Executions {
         }
     }
 
+    /// How far the running run of `workflow` is, in percent of its nodes
+    /// (0 until it knows its nodes); `None` if it is not running.
+    pub(super) fn progress_of(&self, workflow: WorkflowId) -> Option<u8> {
+        let (_, run) = self
+            .running
+            .iter()
+            .find(|(_, run)| run.record.summary.workflow == workflow)?;
+        let summary = &run.record.summary;
+        let percent = (u64::from(summary.completed_nodes) * 100)
+            .checked_div(u64::from(summary.total_nodes))
+            .unwrap_or(0)
+            .min(100);
+        Some(u8::try_from(percent).unwrap_or(100))
+    }
+
     /// Ids of runs that are not over yet, or whose final record is not
     /// written yet.
     fn pending_ids(&self) -> Vec<ExecutionId> {
@@ -253,6 +268,8 @@ impl Agent {
         let _ = self.handle.events.send(AgentEvent::ExecutionStarted {
             execution: summary.clone(),
         });
+        // Keys bound to the workflow show that it runs.
+        self.render_all();
         Ok(summary)
     }
 
@@ -288,6 +305,8 @@ impl Agent {
                     completed,
                     total,
                 });
+                // Only keys whose progress changed are redrawn.
+                self.render_all();
             }
             ExecutionUpdate::Finished {
                 execution,

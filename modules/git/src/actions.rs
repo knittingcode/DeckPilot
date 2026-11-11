@@ -7,8 +7,9 @@ use std::time::Duration;
 use deckpilot_core::graph::{ActionEffect, NodeSpec, OutputSpec, ValueKind};
 use deckpilot_core::launch::{self, Launcher, OpenTarget};
 use deckpilot_core::{
-    ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, Capability,
-    ExecutionContext, Os, ParameterKind, ParameterSpec, ParameterValue, Profile, ResourceKind,
+    ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, ButtonState,
+    Capability, ExecutionContext, Os, ParameterKind, ParameterSpec, ParameterValue, Profile,
+    RefreshPolicy, ResourceKind, StateError,
 };
 
 use crate::codes;
@@ -312,6 +313,38 @@ impl ActionHandler for GitAction {
             }
             _ => Vec::new(),
         }
+    }
+
+    /// Status and branch keys show the branch (and for status whether the
+    /// work tree is clean), read at most every
+    /// [`STATE_INTERVAL`](crate::state::STATE_INTERVAL).
+    fn state_policy(&self, _parameters: &ActionParameters) -> Option<RefreshPolicy> {
+        matches!(self.kind, Kind::Status | Kind::Branch)
+            .then(|| RefreshPolicy::every(crate::state::STATE_INTERVAL))
+    }
+
+    fn button_state(
+        &self,
+        parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> Result<ButtonState, StateError> {
+        let repository = repo::resolve(parameters, context, &self.settings)?;
+        let changes = self.kind == Kind::Status;
+        // Untracked files count as changes, but their folders are not
+        // listed file by file.
+        let untracked = if changes {
+            "--untracked-files=normal"
+        } else {
+            "--untracked-files=no"
+        };
+        let output = self.git(
+            context,
+            &repository,
+            &["status", "--porcelain=v2", "--branch", "-z", untracked],
+        )?;
+        let status = porcelain::parse(&output)
+            .map_err(|e| StateError::new(codes::GIT_FAILED, e.to_string()))?;
+        Ok(crate::state::state_of(&status, changes))
     }
 }
 
