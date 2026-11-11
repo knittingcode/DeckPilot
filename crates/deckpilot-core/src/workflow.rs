@@ -96,6 +96,10 @@ pub struct Workflow {
     /// Output nodes. Graph workflows only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outputs: Vec<crate::graph::WorkflowOutput>,
+    /// Values that live for one run, set by Set variable nodes. Graph
+    /// workflows only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variables: Vec<crate::graph::WorkflowVariable>,
     /// Schedules and lifecycle events that start the workflow in the agent
     /// (see [`crate::trigger`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -116,6 +120,7 @@ impl Workflow {
             project_scope: None,
             inputs: Vec::new(),
             outputs: Vec::new(),
+            variables: Vec::new(),
             triggers: Vec::new(),
             triggers_paused: false,
         }

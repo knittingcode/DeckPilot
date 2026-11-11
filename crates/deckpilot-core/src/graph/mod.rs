@@ -43,8 +43,12 @@ pub const MAX_NESTING: usize = 4;
 pub const MAX_RETRIES: u32 = 5;
 pub const MAX_TIMEOUT_MS: u32 = 10 * 60 * 1000;
 pub const MAX_DELAY_MS: u32 = 10 * 60 * 1000;
-/// Inputs and outputs a workflow can declare, each.
+/// Inputs, outputs and variables a workflow can declare, each.
 pub const MAX_WORKFLOW_VALUES: usize = 32;
+/// The pseudo-node whose outputs are the run's variables:
+/// `steps.vars.output.<key>`. Reserved as a node id in workflows that
+/// declare variables.
+pub const VARIABLES_NODE: &str = "vars";
 /// Default deadline of a sub-workflow call.
 pub const DEFAULT_CALL_TIMEOUT_MS: u32 = MAX_TIMEOUT_MS;
 
@@ -229,6 +233,13 @@ pub enum NodeKind {
         #[serde(default)]
         policy: ErrorPolicy,
     },
+    /// Assigns the run's variables from earlier nodes and variables. Later
+    /// nodes on its path read them as `steps.vars.output.<key>`.
+    SetVariable {
+        /// New values of the workflow's variables, by variable key.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        values: BTreeMap<String, Mapping>,
+    },
     /// Sets this workflow's declared outputs from earlier nodes, for the
     /// node that called it. Several may run; a later one overrides the
     /// keys it sets.
@@ -255,6 +266,7 @@ impl NodeKind {
             | Self::Join
             | Self::Loop { .. }
             | Self::Output { .. }
+            | Self::SetVariable { .. }
             | Self::Delay { .. } => &[Port::Out],
         }
     }
@@ -269,6 +281,7 @@ impl NodeKind {
             Self::Loop { .. } => "loop",
             Self::Call { .. } => "call",
             Self::Output { .. } => "output",
+            Self::SetVariable { .. } => "setVariable",
             Self::Delay { .. } => "delay",
             Self::Stop => "stop",
         }
@@ -497,6 +510,40 @@ impl WorkflowOutput {
             key: key.into(),
             label: String::new(),
             kind,
+            sensitive: false,
+        }
+    }
+}
+
+/// A value that lives for one run of the workflow: set by
+/// [`NodeKind::SetVariable`] nodes, read as `steps.vars.output.<key>`.
+/// Never shared with other runs, other workflows or sub-workflows (pass it
+/// through an input instead).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowVariable {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    #[serde(default)]
+    pub kind: ValueKind,
+    /// The value when a run starts; without one the variable has no value
+    /// until it is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial: Option<String>,
+    /// May hold a secret: only sensitive outputs and variables may take it,
+    /// and history never shows it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sensitive: bool,
+}
+
+impl WorkflowVariable {
+    pub fn new(key: impl Into<String>, kind: ValueKind) -> Self {
+        Self {
+            key: key.into(),
+            label: String::new(),
+            kind,
+            initial: None,
             sensitive: false,
         }
     }
