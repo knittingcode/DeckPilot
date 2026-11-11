@@ -2,12 +2,14 @@ import {
   CircleAlert,
   CircleCheck,
   CircleSlash,
+  Clock,
   Cpu,
   Loader2,
   MousePointerClick,
   PlugZap,
   Square,
   Trash2,
+  Zap,
 } from "lucide-react"
 
 import { ConfirmDialog } from "@/components/confirm-dialog"
@@ -19,7 +21,7 @@ import { cn } from "@/lib/utils"
 
 import { formatMs } from "./describe"
 import type { NodeRun } from "./node-view"
-import { projectOutcomeText, runSummary } from "./run-model"
+import { projectOutcomeText, runSummary, triggerText } from "./run-model"
 
 export function StateIcon({ state, className }: { state: ExecutionState; className?: string }) {
   const icon = {
@@ -111,14 +113,15 @@ export function RunHistory({
                 <StateIcon state={run.state} className="size-3.5" />
                 <span className="flex-1 font-medium">{runSummary(run, now)}</span>
                 {run.trigger === "device" ? (
-                  <Cpu
-                    className="size-3.5 text-muted-foreground"
-                    aria-label="Started from a Stream Deck"
-                  />
+                  <Cpu className="size-3.5 text-muted-foreground" aria-label={triggerText(run)} />
+                ) : run.trigger === "schedule" ? (
+                  <Clock className="size-3.5 text-muted-foreground" aria-label={triggerText(run)} />
+                ) : run.trigger === "lifecycle" ? (
+                  <Zap className="size-3.5 text-muted-foreground" aria-label={triggerText(run)} />
                 ) : (
                   <MousePointerClick
                     className="size-3.5 text-muted-foreground"
-                    aria-label="Started in the app"
+                    aria-label={triggerText(run)}
                   />
                 )}
               </span>
@@ -191,7 +194,12 @@ export function NodeRunReport({ run }: { run: NodeRun }) {
         {report.attempts > 0 && (
           <>
             <dt className="text-muted-foreground">Attempts</dt>
-            <dd>{report.attempts}</dd>
+            <dd>
+              {report.attempts}
+              {report.attempts > 1 && (
+                <span className="text-muted-foreground"> · retry waits under Run details</span>
+              )}
+            </dd>
           </>
         )}
         <dt className="text-muted-foreground">Started</dt>

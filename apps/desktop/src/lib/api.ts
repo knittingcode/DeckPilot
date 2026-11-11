@@ -220,7 +220,9 @@ export const api = {
   agentStatus: () => invoke<AgentConnection>("agent_status"),
   startAgent: () => invoke<AgentConnection>("start_agent"),
   stopAgent: () => invoke<null>("stop_agent"),
-  restartAgent: () => invoke<AgentConnection>("restart_agent"),
+  /** Refused while workflows run unless `interruptRunning` confirms ending them. */
+  restartAgent: (interruptRunning = false) =>
+    invoke<AgentConnection>("restart_agent", { interruptRunning }),
   refreshDevices: () => invoke<null>("refresh_devices"),
   setBrightness: (percent: number) => invoke<null>("set_brightness", { percent }),
   getAutostart: () => invoke<boolean>("get_autostart"),

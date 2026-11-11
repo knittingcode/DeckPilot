@@ -4,6 +4,7 @@ import {
   CircleCheck,
   CircleSlash,
   GitBranch,
+  LogOut,
   Loader2,
   Merge,
   OctagonX,
@@ -13,6 +14,8 @@ import {
   Split,
   Timer,
   TriangleAlert,
+  Variable,
+  Workflow as WorkflowIcon,
 } from "lucide-react"
 import { createElement } from "react"
 
@@ -45,6 +48,9 @@ const FLOW_ICONS = {
   parallel: Split,
   join: Merge,
   loop: Repeat,
+  call: WorkflowIcon,
+  output: LogOut,
+  setVariable: Variable,
   delay: Timer,
   stop: OctagonX,
 } as const

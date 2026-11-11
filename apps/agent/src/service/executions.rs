@@ -94,6 +94,13 @@ pub(crate) struct Executions {
     retention: Retention,
 }
 
+impl Executions {
+    /// How many workflows are running.
+    pub(crate) fn running_count(&self) -> usize {
+        self.running.len()
+    }
+}
+
 impl std::fmt::Debug for Executions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Executions")
@@ -174,6 +181,25 @@ impl Agent {
         workflow: WorkflowId,
         trigger: ExecutionTrigger,
     ) -> Result<ExecutionSummary, IpcError> {
+        self.start_execution_with(workflow, trigger, super::triggers::Launch::default())
+    }
+
+    /// Whether a run of `workflow` is not over yet.
+    pub(super) fn is_running(&self, workflow: WorkflowId) -> bool {
+        self.executions
+            .running
+            .iter()
+            .any(|(_, r)| r.record.summary.workflow == workflow)
+    }
+
+    /// [`Agent::start_execution`] with input values and the trigger's
+    /// details (schedules, lifecycle events).
+    pub(super) fn start_execution_with(
+        &mut self,
+        workflow: WorkflowId,
+        trigger: ExecutionTrigger,
+        launch: super::triggers::Launch,
+    ) -> Result<ExecutionSummary, IpcError> {
         if self.security != SecurityState::Unlocked {
             return Err(locked());
         }
@@ -186,14 +212,9 @@ impl Agent {
             .ok_or_else(|| engine_error(&EngineError::UnknownWorkflow(workflow)))?;
         let engine = self.runtime.shared_engine();
         engine
-            .check_runnable(profile, workflow)
+            .check_runnable_with(profile, workflow, &launch.inputs)
             .map_err(|e| engine_error(&e))?;
-        if self
-            .executions
-            .running
-            .iter()
-            .any(|(_, r)| r.record.summary.workflow == workflow)
-        {
+        if self.is_running(workflow) {
             return Err(failed("this workflow is already running".into()));
         }
         if self.executions.running.len() >= MAX_RUNNING {
@@ -204,6 +225,7 @@ impl Agent {
         let id = ExecutionId::new();
         let scope = definition.effective_project_scope(profile, engine.registry());
         let mut record = ExecutionRecord::start(id, definition, profile, trigger, self.now_ms());
+        record.summary.trigger_detail = launch.detail;
         let profile = Arc::new(profile.clone());
         let context = self
             .runtime
@@ -221,6 +243,7 @@ impl Agent {
             profile.clone(),
             self.runtime.machine().clone(),
             context,
+            launch.inputs,
             cancel.clone(),
             self.handle.commands.clone(),
         )
@@ -601,6 +624,7 @@ fn spawn_run(
     profile: Arc<Profile>,
     machine: deckpilot_core::MachineConfig,
     mut context: ActiveProjectContext,
+    inputs: std::collections::BTreeMap<String, String>,
     cancel: CancellationToken,
     commands: tokio::sync::mpsc::UnboundedSender<Command>,
 ) -> std::io::Result<()> {
@@ -616,11 +640,12 @@ fn spawn_run(
             };
             // A panicking action must not leave the run open forever.
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                engine.execute_workflow(
+                engine.execute_workflow_with(
                     &profile,
                     &machine,
                     &mut context,
                     workflow,
+                    &inputs,
                     &cancel,
                     &on_event,
                 )

@@ -149,7 +149,16 @@ fn compose_parameters() -> Vec<ParameterSpec> {
 }
 
 fn services_parameter(description: &str) -> ParameterSpec {
-    parameter("services", "Services", text(2000, true), description)
+    parameter(
+        "services",
+        "Services",
+        ParameterKind::Lines {
+            item_label: Some("Service".into()),
+            max_items: Some(50),
+            max_length: Some(128),
+        },
+        description,
+    )
 }
 
 fn out(key: &str, label: &str, kind: ValueKind) -> OutputSpec {

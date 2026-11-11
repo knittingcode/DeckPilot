@@ -35,6 +35,7 @@ use crate::render;
 mod executions;
 mod security;
 mod states;
+mod triggers;
 
 pub use security::{AUTO_LOCK_CHECK, Clock, system_clock};
 
@@ -215,6 +216,8 @@ pub struct Agent {
     last_unlock_prompt: Option<std::time::Instant>,
     /// Workflows running in the background, and unsaved history.
     executions: executions::Executions,
+    /// Schedules and lifecycle events that start workflows.
+    triggers: triggers::Triggers,
     /// Live key states from module providers.
     states: states::ButtonStates,
     /// Rendered key images by face and size.
@@ -309,6 +312,7 @@ impl Agent {
             last_workflow: None,
             last_unlock_prompt: None,
             executions: executions::Executions::default(),
+            triggers: triggers::Triggers::default(),
             states: states::ButtonStates::default(),
             frames: render::FrameCache::new(FRAME_CACHE),
             icons: render::Icons::default(),
@@ -363,6 +367,7 @@ impl Agent {
                 _ = auto_lock.tick() => {
                     self.check_auto_lock();
                     self.expire_cancelled_executions();
+                    self.tick_schedules();
                     Flow::Continue
                 }
                 () = tokio::time::sleep_until(state_due) => {
@@ -373,6 +378,7 @@ impl Agent {
             if matches!(flow, Flow::Stop) {
                 break;
             }
+            self.observe_lifecycle();
         }
         self.stop().await;
         Ok(())
@@ -1159,6 +1165,9 @@ impl Agent {
             security_problem: self.security_problem.clone(),
             waiting_for_key_store: self.key_pending,
             screen_lock_detection: self.options.screen_lock.is_some(),
+            running_executions: Some(
+                u32::try_from(self.executions.running_count()).unwrap_or(u32::MAX),
+            ),
         }
     }
 

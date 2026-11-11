@@ -15,6 +15,22 @@ export type ParameterKind =
   | { type: "resource"; kind?: ResourceKind }
   /** A project of the profile the action belongs to. */
   | { type: "project" }
+  /** A list stored as one item per line, e.g. command arguments. */
+  | { type: "lines"; itemLabel?: string; maxItems?: number; maxLength?: number }
+  /** Rows stored as one `name<separator>value` per line, e.g. headers. */
+  | {
+      type: "pairs"
+      separator: string
+      nameLabel?: string
+      valueLabel?: string
+      maxItems?: number
+      caseInsensitive?: boolean
+      noSecrets?: boolean
+    }
+  /** Source text such as a JSON body. */
+  | { type: "code"; language: string; maxLength?: number }
+  /** The name of a credential stored on this computer. */
+  | { type: "credential" }
 
 export type ParameterValue =
   | { type: "text"; value: string }
@@ -82,6 +98,87 @@ export interface Workflow {
    * saved before the setting existed; see `effectiveProjectScope`.
    */
   projectScope?: ProjectScope
+  /** Values the workflow takes when a Sub-workflow node calls it (graph workflows). */
+  inputs?: WorkflowInput[]
+  /** Values the workflow returns to a Sub-workflow node, set by its Output nodes. */
+  outputs?: WorkflowOutput[]
+  /** Values that live for one run, set by Set variable nodes (graph workflows). */
+  variables?: WorkflowVariable[]
+  /** Schedules and lifecycle events that start the workflow in the agent. */
+  triggers?: WorkflowTrigger[]
+  /** None of the triggers starts the workflow. */
+  triggersPaused?: boolean
+}
+
+export type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun"
+
+/** When a scheduled trigger is due; times are local `HH:MM`. */
+export type Schedule =
+  | { every: "interval"; minutes: number }
+  | { every: "daily"; at: string }
+  | { every: "weekly"; days: Weekday[]; at: string }
+
+export type LifecycleEvent =
+  "agentStarted" | "profileActivated" | "projectChanged" | "deviceConnected" | "deviceDisconnected"
+
+/** What a firing knows, offered to workflow inputs. */
+export type EventField =
+  | "firedAt"
+  | "profileName"
+  | "projectKey"
+  | "projectName"
+  | "previousProjectKey"
+  | "deviceId"
+  | "deviceModel"
+
+export type TriggerValue = { type: "fixed"; value: string } | { type: "event"; field: EventField }
+
+/** Something that starts a workflow by itself (crates/deckpilot-core/src/trigger.rs). */
+export type WorkflowTrigger = (
+  { type: "schedule"; schedule: Schedule } | { type: "lifecycle"; event: LifecycleEvent }
+) & {
+  /** Values for the workflow's inputs, by input key. */
+  inputs?: Record<string, TriggerValue>
+}
+
+/**
+ * A value a workflow takes from the Sub-workflow node that calls it; its
+ * nodes read it as an output of the start node.
+ */
+export interface WorkflowInput {
+  key: string
+  label?: string
+  kind: ValueKind
+  /** A calling node must give it a value. */
+  required?: boolean
+  /** Used when the calling node gives none, and when the workflow runs on its own. */
+  default?: string
+  /** May be secret: only sensitive outputs may take it. */
+  sensitive?: boolean
+}
+
+/**
+ * A value that lives for one run of the workflow. Set by Set variable nodes
+ * and read as `steps.vars.output.<key>`; never shared with other runs or
+ * sub-workflows.
+ */
+export interface WorkflowVariable {
+  key: string
+  label?: string
+  kind: ValueKind
+  /** The value when a run starts. */
+  initial?: string
+  /** May hold a secret: never shown in history. */
+  sensitive?: boolean
+}
+
+/** A value a workflow returns to the Sub-workflow node that calls it. */
+export interface WorkflowOutput {
+  key: string
+  label?: string
+  kind: ValueKind
+  /** Kept out of history and live events. */
+  sensitive?: boolean
 }
 
 export type ProjectScope = "execution" | "application"
@@ -129,6 +226,15 @@ export type GraphNodeKind =
   | { type: "parallel" }
   | { type: "join" }
   | { type: "loop"; workflow: string; times: number }
+  | {
+      type: "call"
+      workflow: string
+      /** Values for the called workflow's inputs, by input key. */
+      inputs?: Record<string, GraphMapping>
+      policy: ErrorPolicy
+    }
+  | { type: "output"; values?: Record<string, GraphMapping> }
+  | { type: "setVariable"; values?: Record<string, GraphMapping> }
   | { type: "delay"; ms: number }
   | { type: "stop" }
 
@@ -357,7 +463,10 @@ export type NodeStatus = "succeeded" | "failed" | "skipped" | "cancelled"
 
 /** A failure, safe to show: no secrets, no raw output. */
 export interface StepError {
-  /** `action.failed`, `timeout`, `cancelled`, `mapping`, `parallel-context`, `unavailable`, `loop.failed`. */
+  /**
+   * `action.failed`, `timeout`, `cancelled`, `mapping`, `parallel-context`,
+   * `unavailable`, `loop.failed`, `subworkflow.failed`, `variable-conflict`.
+   */
   code: string
   message: string
   retryable: boolean
@@ -377,10 +486,14 @@ export interface NodeReport {
   output?: Record<string, string>
   error?: StepError
   action?: string
+  /** Sub-workflow nodes: the workflow that ran; Output nodes: their own workflow. */
+  workflow?: string
+  /** A Set variable node: `output` holds the variables it set. */
+  setsVariables?: boolean
 }
 
 export type ExecutionState = "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
-export type ExecutionTrigger = "app" | "device"
+export type ExecutionTrigger = "app" | "device" | "schedule" | "lifecycle" | "other"
 
 export interface ExecutionSummary {
   id: string
@@ -388,6 +501,8 @@ export interface ExecutionSummary {
   workflowName: string
   profile: string
   trigger: ExecutionTrigger
+  /** For schedules and lifecycle events: which one, e.g. `every 15 min`. */
+  triggerDetail?: string
   state: ExecutionState
   /** Milliseconds since the Unix epoch. */
   startedAt: number
@@ -582,6 +697,8 @@ export interface ProfileInfo {
 export interface AgentStatus {
   version: string
   protocol: number
+  /** Workflows running in the background; absent from older agents. */
+  runningExecutions?: number
   pid: number
   startedAt: number
   dataDir: string
@@ -601,6 +718,17 @@ export type AgentCompatibility =
   | { type: "agentOutdated"; agent: string; app: string }
   | { type: "agentNewer"; agent: string; app: string }
   | { type: "unknown"; agent: string; app: string }
+  /** The agent is too old for any protocol this app speaks; replace it. */
+  | { type: "updateRequired"; agent: string; app: string }
+
+/** What a connection to the agent can do, from its negotiated protocol. */
+export type AgentCapability =
+  | "workflows"
+  | "prepareForUpdate"
+  | "moduleNamespaces"
+  | "encryptedDatabase"
+  | "backgroundExecutions"
+  | "notifications"
 
 export interface AgentConnection {
   running: boolean
@@ -608,6 +736,9 @@ export interface AgentConnection {
   canStart: boolean
   compatibility: AgentCompatibility | null
   appVersion: string
+  /** Protocol of the connection: the lower of the app's and the agent's. */
+  protocol?: number | null
+  capabilities?: AgentCapability[]
 }
 
 export type UpdateMode = "notifyOnly" | "downloadAndAsk" | "installWhenIdle"

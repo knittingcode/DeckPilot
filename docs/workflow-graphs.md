@@ -29,11 +29,15 @@ matters (the step before is itself conditional).
 | Parallel | `out` (several) | Starts its branches at the same time |
 | Join | `out` | Waits for all incoming branches |
 | Loop | `out` | Runs another workflow of the profile 1–100 times |
+| Sub-workflow (`call`) | `out`, `error` | Runs another workflow once with inputs; its outputs become the node's |
+| Outputs (`output`) | `out` | Sets the workflow's declared outputs for the node that called it |
+| Set variable (`setVariable`) | `out` | Assigns the run's variables for the nodes after it |
 | Delay | `out` | Waits up to 10 minutes; cancellable |
 | Stop | — | Ends the workflow successfully |
 
-Graphs are acyclic; repetition is a Loop node, and a workflow may not loop
-into itself (directly or through others; nesting at most four levels). Only
+Graphs are acyclic; repetition is a Loop node, and a workflow may not run
+itself through Loop or Sub-workflow nodes (directly or through others;
+nesting at most four levels). Only
 Parallel may connect one port to several nodes, and only Join may have
 several incoming connections. At most 200 nodes.
 
@@ -56,6 +60,96 @@ not expanded again. Validation checks that the referenced node runs before
 to the parameter's kind (whole numbers, true/false, project keys of this
 profile); resource parameters cannot be mapped. Mappings refer only to node
 ids and output keys, so they are portable between computers.
+
+### Sub-workflows
+
+A workflow can declare a typed interface (stored as optional `inputs` and
+`outputs` of the workflow; workflows without them are unchanged):
+
+- **Inputs**: `key`, `label`, `kind` (a `ValueKind`: text, whole number,
+  yes/no, path, URL, project key), `required`, `default`, `sensitive`. The
+  workflow's nodes read an input as an output of its start node
+  (`steps.start.output.<key>`), with the same mappings as everywhere else.
+- **Outputs**: `key`, `label`, `kind`, `sensitive`. An **Outputs** node
+  (`{"type": "output", "values": {"<key>": <mapping>}}`) sets them from
+  earlier nodes. Several may run (for example one per branch); a later one
+  overrides the keys it sets. Outputs no Output node sets are absent.
+
+A **Sub-workflow** node (`{"type": "call", "workflow": "<id>", "inputs":
+{"<key>": <mapping>}, "policy": {...}}`) runs another workflow of the same
+profile once:
+
+- **Inputs** are mappings, exactly like action parameters: one earlier
+  output or text with outputs; nothing is evaluated. An input without a
+  mapping gets its default; a required input must be mapped. Values are
+  converted to the input's kind when the node runs (whole numbers and
+  yes/no must parse, project keys must belong to the profile); a value that
+  does not convert fails the node with `mapping` before the callee starts.
+- **Outputs**: the callee's declared outputs become the node's outputs, so
+  later nodes map them as `steps.<node>.output.<key>`. Output values are
+  converted to their kind by the Outputs node that sets them.
+- **Execution.** The callee runs with the node's project context, under a
+  token that is cancelled when the run is cancelled or at the node's
+  timeout (default 10 minutes, at most 10). Its project changes continue
+  after the node, as with a Loop. Its own nodes are not reported; the node
+  reports its status, outputs and error. A failure of the callee fails the
+  node with `subworkflow.failed` ("Greet failed: hello: …"), a timeout
+  with `timeout`, a cancellation is `cancelled`. Failure handling works as
+  for actions (`error` port, *continue*); sub-workflows are never retried.
+- **Running on its own.** A workflow with required inputs cannot be run
+  directly (from the app or a deck); it is meant to be called. Optional
+  inputs take their defaults when it runs on its own.
+- **Validation**: the callee exists in the profile; no recursion, directly
+  or indirectly, through Sub-workflow and Loop nodes alike; at most four
+  levels of nesting; every required input is mapped and only declared
+  inputs are; references to a Sub-workflow node use outputs the callee
+  declares; Outputs nodes set only declared outputs; declared keys are
+  unique and valid and defaults fit their kind. A Loop cannot run a
+  workflow with required inputs.
+- **Sensitive values.** A value that comes from a sensitive output (an
+  action's, a sensitive input, a sensitive sub-workflow output) may only be
+  passed to a sensitive input or set as a sensitive output; validation
+  rejects anything else. History and live events keep only a Sub-workflow
+  or Outputs node's non-sensitive declared outputs, and never the inputs a
+  start node received.
+
+### Variables
+
+A workflow can declare **variables** (optional `variables`: `key`, `label`,
+`kind`, `initial`, `sensitive`): typed values that live for one run.
+
+- **Setting.** A **Set variable** node (`{"type": "setVariable", "values":
+  {"<key>": <mapping>}}`) assigns one or more variables with the usual
+  mappings (one output, or text with outputs; nothing is evaluated).
+  Values are converted to the variable's kind; a value that does not fit
+  fails the node with `mapping`.
+- **Reading.** Nodes read a variable as an output of the pseudo-node
+  `vars`: `steps.vars.output.<key>` (in templates `{{ steps.vars.output.key
+  }}`), with the same mappings and conditions as any output. No new syntax:
+  in a workflow that declares variables the node id `vars` is reserved;
+  workflows without variables are unchanged.
+- **Values flow along the connections**, like the project context: a node
+  sees the value set by the last Set variable node on its path, otherwise
+  the initial value (a variable without one has no value; a mapping with a
+  default can cover that). Branches of a Condition each set their own
+  value; the node after the Join sees the value of the branch that ran.
+- **Parallel branches** that set the same variable are resolved at the
+  Join by the rule for project contexts: branches that set it since they
+  split must end with the same value, a branch that did not set it agrees
+  with anything, and different values fail the Join with
+  `variable-conflict` — no branch silently wins. Validation warns about
+  such writes.
+- **Scope.** Variables belong to one run: every run starts from the initial
+  values, and nothing is shared with other runs, workflows or profiles. A
+  sub-workflow has its own variables and gets the caller's values only
+  through its declared inputs.
+- **Sensitive variables** follow the sensitive-value rule: a sensitive value
+  may only be set into a sensitive variable, and a sensitive variable only
+  passed on to sensitive inputs, outputs or variables. History and live
+  events show a Set variable node's non-sensitive variables only.
+- **Validation**: valid, unique keys (at most 32), initial values of their
+  kind, Set variable nodes set only declared variables, references name
+  declared variables, `vars` is not used as a node id.
 
 ## Module node SDK
 
@@ -109,6 +203,7 @@ resource actions also the resource, its key, kind and value.
   (handled), through `out` with *continue*, and otherwise fails the workflow:
   nodes already running finish, nothing new starts. Errors have a stable code
   (`action.failed`, `timeout`, `mapping`, `parallel-context`, `loop.failed`,
+  `subworkflow.failed`, `context-conflict`, `variable-conflict`,
   `unavailable`), a message and whether a retry could help.
 - **Retries** (retry-safe actions only): up to five, with exponential backoff.
 - **Deadlines.** Each attempt's token is cancelled at its timeout, so
@@ -195,14 +290,80 @@ Each finished run records what happened (`project`): `unchanged`,
   two runs on different projects resolve different resources.
 - **Retries and timeouts** each attempt on a fresh copy of the node's input
   context; a failed or late attempt's changes are discarded.
-- **Reentrancy.** A workflow cannot start while it runs; a Loop cannot run
-  its own workflow (validation rejects recursion and limits nesting).
+- **Reentrancy.** A workflow cannot start while it runs; a Loop or
+  Sub-workflow cannot run its own workflow (validation rejects recursion
+  and limits nesting). Nested runs execute inside their node's thread.
 - **One writer.** Only the agent's single task changes runtime state and
   writes execution history; run threads report through a channel.
 - **Shutdown.** Running workflows are recorded as interrupted when the agent
   stops; a record still marked running when the database opens (a crash) is
   marked interrupted then. The agent waits for its IPC connections to close
   before it reports that it stopped.
+
+## Triggers
+
+A workflow can start by itself: its optional `triggers` (stored with the
+workflow; workflows without them are unchanged) are schedules and lifecycle
+events, and `triggersPaused` pauses all of them.
+
+```json
+"triggers": [
+  { "type": "schedule", "schedule": { "every": "interval", "minutes": 15 } },
+  { "type": "schedule", "schedule": { "every": "weekly", "days": ["mon", "fri"], "at": "09:00" } },
+  { "type": "lifecycle", "event": "deviceConnected",
+    "inputs": { "serial": { "type": "event", "field": "deviceId" } } }
+]
+```
+
+- **Schedules**: every *n* minutes (1 minute to 7 days), every day at a
+  local time, or on chosen weekdays at a local time (`HH:MM`).
+- **Lifecycle events**: `agentStarted` (once per agent start, when the
+  configuration is first unlocked), `profileActivated`, `projectChanged`
+  (within the active profile), `deviceConnected`, `deviceDisconnected`.
+- **Inputs.** A trigger gives the workflow's inputs a fixed value or a
+  field of the event: `firedAt` (local `YYYY-MM-DD HH:MM`), `profileName`,
+  `projectKey`, `projectName`, `previousProjectKey` (project changed),
+  `deviceId` (the serial) and `deviceModel` (device events). Values are
+  converted to the input's kind as for sub-workflows; a field fits a text
+  input or one of its own kind (project keys). Inputs without a value get
+  their default.
+- **Validation**: intervals of at least one minute, valid times and
+  weekdays, only declared inputs, fields the event has, fixed values of the
+  input's kind, a value for every required input, and no self-triggering:
+  a workflow started by project changes may not change the active project
+  (its project scope must be `execution`), or it would start itself again.
+
+**When triggers fire.** The agent runs one scheduler and watches its own
+state after every event it handles (active profile, active project,
+connected devices):
+
+- only for the **active profile**, and only while the configuration is
+  **unlocked** — nothing that happened while locked is replayed; unlocking
+  takes the current state as the starting point, and devices connected
+  while locked do not count as connected;
+- a firing is **skipped** while the previous run of the workflow still
+  runs, while its triggers are paused, and when four workflows already run;
+- runs are recorded in history with the trigger kind (`schedule`,
+  `lifecycle`) and which one (`every 15 min`, `deviceConnected`).
+
+**Time.** The scheduler is checked every few seconds:
+
+- An interval counts real time from when the trigger was first seen (agent
+  started and unlocked, profile activated, workflow saved or resumed).
+- Daily and weekly times are local wall-clock times in the computer's time
+  zone and fire at most once per local date.
+- **No catch-up.** A firing may be up to two minutes late; one that is
+  later — the computer slept, the agent did not run, the configuration was
+  locked — is skipped and never made up. An interval then continues with
+  its next due time; a time first seen within its minute waits for the
+  next day.
+- **Daylight saving time.** A local time that does not exist on a day
+  (clocks go forward) does not fire that day; a time that occurs twice
+  (clocks go back) fires once. Intervals are not affected.
+
+In the editor, triggers are edited in the workflow panel (nothing
+selected): add a schedule or an event, choose values for the workflow's
+inputs, pause them. The start node shows them.
 
 ## Running in the agent
 
@@ -236,8 +397,10 @@ app, a Stream Deck control or another client; no window has to be open.
   interrupted. A run still marked running when the database is opened (the
   agent crashed or the computer lost power) is marked interrupted then.
 - **Safe outputs.** Reports, events and records only contain the outputs the
-  node's action type declares in its node spec, and messages are shortened to
-  500 characters. Parameters and other action data are never recorded.
+  node's action type declares in its node spec (for Sub-workflow and
+  Outputs nodes: the workflow's declared outputs), never sensitive ones,
+  and messages are shortened to 500 characters. Parameters, workflow inputs
+  and other action data are never recorded.
 - **Profiles.** Lists, details and cancellation are limited to the active
   profile's runs.
 
@@ -250,8 +413,8 @@ progress and a Cancel button.
 
 Workflows → a workflow opens in the graph editor (`apps/desktop/src/workflow-builder`):
 
-- **Catalog** (left): the flow nodes (Condition, Parallel, Join, Loop, Delay,
-  Stop) and, per enabled module, the profile's actions of the action types
+- **Catalog** (left): the flow nodes (Condition, Parallel, Join, Loop,
+  Sub-workflow, Outputs, Delay, Stop) and, per enabled module, the profile's actions of the action types
   the module provides, with a button to create a new action of each type.
   The catalog is built from the module registry; the editor has no
   module-specific code. Search filters by name, description and module.
@@ -289,7 +452,17 @@ Workflows → a workflow opens in the graph editor (`apps/desktop/src/workflow-b
   actions), timeout (saying whether the action can be interrupted), and
   **about this node**: its type id and version, module, the module's
   permissions, behaviour (retry-safe, idempotent, interruptible, selects a
-  project) and its inputs and outputs with their types.
+  project) and its inputs and outputs with their types. A **Sub-workflow**
+  node chooses the workflow, maps each of its inputs (required ones say so;
+  optional ones show their default), sets failure handling and timeout,
+  and lists the outputs it provides. An **Outputs** node maps each of the
+  workflow's declared outputs.
+- **Inputs and outputs** of the open workflow are edited in the workflow
+  panel (nothing selected): key, type, label, required, default and
+  sensitive. The start node then offers the inputs to mappings.
+- **Variables** are declared in the workflow panel too (key, type, label,
+  initial value, sensitive). A **Set variable** node maps each of them, and
+  every output picker offers them as *Variable · …*.
 - **Validation** is the engine's (`validate_workflow_graph`), run as the
   graph changes. Problems show on the nodes, in the minimap and in the
   status bar. A workflow with errors cannot be saved, so a stored graph
@@ -314,10 +487,18 @@ started in the editor, from a Stream Deck or while the app was closed:
   result, attempts, start and duration, its message, a structured error
   (code, message, whether a retry may help) and its outputs — only the
   outputs its action declares.
+- **Run details.** Below the history, the shown run is broken down: total
+  and summed node time with the slowest nodes, failures with error code,
+  action code and whether a retry may help, and a timeline of every node's
+  start and duration relative to the run, with parallel branches marked.
+  Choosing a node shows its retries, failure and declared outputs (shortened
+  previews; sensitive outputs are shown as *not kept*). Retry waits are known
+  only for runs watched live; the history keeps only the final attempt.
 - **History.** Without a selection, the inspector lists the workflow's last
   20 runs with state, trigger (app or Stream Deck), start time and duration;
   a run is shown on the canvas by selecting it. Running entries have
-  progress and Cancel. The history can be cleared.
+  progress and Cancel. The history can be cleared. Runs started by a
+  schedule or an event show which one.
 - **Reconnection.** The list is read again when the window opens or the
   agent reconnects, and node reports of finished runs are loaded on demand,
   so closing and reopening the app loses nothing.
@@ -328,4 +509,5 @@ started in the editor, from a Stream Deck or while the app was closed:
 ## Roadmap
 
 Milestones: the model, SDK and engine; running graphs in the agent; the
-visual editor; watching runs on the graph with their history.
+visual editor; watching runs on the graph with their history; sub-workflows
+with typed inputs and outputs.

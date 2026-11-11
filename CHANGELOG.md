@@ -5,9 +5,36 @@ All notable changes to DeckPilot. The format follows
 [Semantic Versioning](https://semver.org/). The section of a version is used
 as the notes of its GitHub release and of the in-app update.
 
+**Release status.** No version has been published yet. 0.5.0 exists only as
+two signed draft prereleases (0.5.0-1 and 0.5.0-2) made to test signing,
+notarization and packaging; they were never made public and are not offered
+by the updater. The versions before 0.5.0 were never released either. 0.6.0
+is the first version intended for publication.
+
 ## [0.6.0] - Unreleased
 
+The first public release. It includes everything listed for 0.1.0 to 0.5.0
+below.
+
 ### Added
+
+- The app and the agent negotiate their protocol and the capabilities that
+  come with it, so a newer app works with an older agent (and the other way
+  round) for what both support, says which features need an agent restart,
+  and never sends a request the agent cannot understand. Agents too old for
+  this app are reported as needing an update.
+- Structured forms for module actions: command arguments and Compose
+  services are edited as reorderable lists (shown as the exact list passed
+  to the program), HTTP headers and query parameters as rows with duplicate
+  and secret warnings, the request body in a JSON editor, and credentials
+  are chosen from those stored on this computer. Stored actions keep their
+  format. Actions that change things say so before they are saved.
+- Upgrading a 0.5.0 configuration is tested with a real database created
+  by 0.5.0-2: everything is kept, the encrypted backup is restorable, and a
+  wrong key or a newer schema leaves the file untouched.
+- The agent reports running workflows. Updates wait for them, and
+  restarting the agent from the app asks before interrupting them; nothing
+  ends a workflow silently.
 
 - System module: open applications, web pages, files and folders, run
   commands and check whether a program is running. Applications, folders
@@ -49,7 +76,7 @@ as the notes of its GitHub release and of the in-app update.
   changes things) and failures carry a stable error code; both are shown in
   the workflow editor.
 
-## [0.5.0] - Unreleased
+## [0.5.0] - Not released (draft prereleases 0.5.0-1 and 0.5.0-2 only)
 
 ### Added
 
@@ -121,7 +148,7 @@ as the notes of its GitHub release and of the in-app update.
   indefinitely when its endpoint is busy or does not answer (on Windows a
   busy named pipe was waited for without a limit).
 
-## [0.4.0] - Unreleased
+## [0.4.0] - Not released
 
 ### Added
 
@@ -157,7 +184,7 @@ as the notes of its GitHub release and of the in-app update.
 - See [docs/security.md](docs/security.md) for what each protection mode
   guarantees and its limits.
 
-## [0.3.0]
+## [0.3.0] - Not released
 
 ### Added
 
@@ -167,14 +194,14 @@ as the notes of its GitHub release and of the in-app update.
 - Modular features (General, Projects) and an application updater based on
   signed GitHub releases.
 
-## [0.2.0]
+## [0.2.0] - Not released
 
 ### Added
 
 - The background agent with a system tray, Stream Deck MK.2 support and an
   authenticated local IPC.
 
-## [0.1.0]
+## [0.1.0] - Not released
 
 ### Added
 

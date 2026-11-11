@@ -1,0 +1,208 @@
+//! The client against simulated agents of earlier releases: they accept
+//! `hello` only up to their own protocol, answer like those releases did
+//! (fixtures recorded from the real DeckPilot 0.5.0-2 agent), and record
+//! every request they receive, so a test can prove that nothing newer than
+//! their protocol was ever sent.
+
+use std::sync::{Arc, Mutex};
+
+use deckpilot_ipc::framing::{read_message, write_message};
+use deckpilot_ipc::{
+    AgentClient, AgentPaths, Capability, ClientError, ClientKind, ClientMessage, ErrorCode,
+    IpcError, Request, Response, ServerMessage, SharedStream, token,
+};
+use interprocess::local_socket::tokio::prelude::*;
+use tokio::io::BufReader;
+
+/// The status a 0.5.0-2 agent sent, as recorded from the real binary.
+const STATUS_0_5_0_2: &str = include_str!("fixtures/agent-0.5.0-2-status.json");
+/// The `welcome` a 0.5.0-2 agent sent to a protocol 4 client.
+const WELCOME_0_5_0_2: &str = include_str!("fixtures/agent-0.5.0-2-welcome.json");
+
+struct Peer {
+    paths: AgentPaths,
+    received: Arc<Mutex<Vec<serde_json::Value>>>,
+    hellos: Arc<Mutex<Vec<u32>>>,
+}
+
+impl Drop for Peer {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.paths.data_dir);
+    }
+}
+
+/// An agent that speaks protocols up to `max`, like a release before
+/// protocol negotiation: it refuses a newer `hello` outright.
+/// Must be called inside a Tokio runtime.
+fn peer(max: u32, version: &'static str) -> Peer {
+    let dir = std::env::temp_dir().join(format!(
+        "deckpilot-ipc-peer-{}-{}",
+        std::process::id(),
+        getrandom_suffix()
+    ));
+    let paths = AgentPaths::in_dir(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let secret = token::create(&paths.token_file).unwrap();
+    let listener = paths.endpoint().listen().unwrap();
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let hellos = Arc::new(Mutex::new(Vec::new()));
+    let (seen, greeted) = (received.clone(), hellos.clone());
+    tokio::spawn(async move {
+        loop {
+            let Ok(stream) = listener.accept().await else {
+                return;
+            };
+            let (seen, greeted, secret) = (seen.clone(), greeted.clone(), secret.clone());
+            tokio::spawn(async move {
+                let stream = SharedStream::new(stream);
+                let mut reader = BufReader::new(stream.clone());
+                let mut writer = stream;
+                let Ok(Some(ClientMessage::Hello {
+                    protocol, token, ..
+                })) = read_message::<_, ClientMessage>(&mut reader).await
+                else {
+                    return;
+                };
+                greeted.lock().unwrap().push(protocol);
+                if !(1..=max).contains(&protocol) || token != secret {
+                    let error = ServerMessage::Error {
+                        id: None,
+                        error: IpcError::new(
+                            ErrorCode::UnsupportedProtocol,
+                            format!("protocol {protocol} is not supported; expected 1 to {max}"),
+                        ),
+                    };
+                    let _ = write_message(&mut writer, &error).await;
+                    return;
+                }
+                // Recorded from the real 0.5.0-2 agent; releases before
+                // protocol 6 send no capabilities.
+                let mut welcome: serde_json::Value = serde_json::from_str(WELCOME_0_5_0_2).unwrap();
+                welcome["protocol"] = max.into();
+                welcome["agent_version"] = version.into();
+                let _ = write_message(&mut writer, &welcome).await;
+                while let Ok(Some(message)) =
+                    read_message::<_, serde_json::Value>(&mut reader).await
+                {
+                    seen.lock().unwrap().push(message.clone());
+                    let id = message["id"].as_u64().unwrap_or_default();
+                    let reply = match message["request"]["type"].as_str() {
+                        Some("getStatus") => serde_json::json!({
+                            "type": "response", "id": id,
+                            "response": {"type": "status", "status":
+                                serde_json::from_str::<serde_json::Value>(STATUS_0_5_0_2).unwrap()},
+                        }),
+                        _ => serde_json::json!({
+                            "type": "error", "id": id,
+                            "error": {"code": "invalidRequest", "message": "invalid request"},
+                        }),
+                    };
+                    if write_message(&mut writer, &reply).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    Peer {
+        paths,
+        received,
+        hellos,
+    }
+}
+
+fn getrandom_suffix() -> u64 {
+    let mut bytes = [0u8; 8];
+    getrandom::fill(&mut bytes).unwrap();
+    u64::from_le_bytes(bytes)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_protocol_4_agent_is_used_with_protocol_4_only() {
+    let peer = peer(4, "0.5.0-2");
+    let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    // The client stepped down from its own protocol until accepted.
+    assert_eq!(*peer.hellos.lock().unwrap(), [6, 5, 4]);
+    assert_eq!(client.protocol(), 4);
+    assert_eq!(client.agent_protocol(), 4);
+    assert_eq!(client.agent_version(), "0.5.0-2");
+    assert!(client.supports(Capability::EncryptedDatabase));
+    assert!(!client.supports(Capability::BackgroundExecutions));
+    assert!(!client.supports(Capability::Notifications));
+
+    // The status of the real 0.5.0-2 agent is read; what it cannot say
+    // stays unknown instead of being guessed.
+    let Response::Status { status } = client.request(Request::GetStatus).await.unwrap() else {
+        panic!("status expected")
+    };
+    assert_eq!(status.version, "0.5.0-2");
+    assert_eq!(status.running_executions, None);
+
+    // Background runs need protocol 5: refused before anything is sent.
+    let refused = client
+        .request(Request::ListExecutions {
+            workflow: None,
+            limit: None,
+        })
+        .await;
+    assert!(
+        matches!(
+            &refused,
+            Err(ClientError::Unsupported {
+                needs: 5,
+                protocol: 4,
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
+    let sent: Vec<String> = peer
+        .received
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|m| m["request"]["type"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(sent, ["getStatus"]);
+    assert!(
+        refused
+            .unwrap_err()
+            .to_string()
+            .contains("restart the agent")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agents_older_than_protocol_4_need_replacing() {
+    let peer = peer(3, "0.3.0");
+    let refused = AgentClient::connect(&peer.paths, ClientKind::Desktop).await;
+    assert!(
+        matches!(&refused, Err(ClientError::Agent(e)) if e.code == ErrorCode::UnsupportedProtocol),
+        "{refused:?}"
+    );
+    // It never went below the oldest protocol the app works with.
+    assert_eq!(*peer.hellos.lock().unwrap(), [6, 5, 4]);
+    // Protocol 1 still works for stopping it during an update.
+    let mut stopper = AgentClient::connect_with_protocol(&peer.paths, ClientKind::Desktop, 1)
+        .await
+        .unwrap();
+    assert_eq!(stopper.protocol(), 1);
+    assert_eq!(stopper.capabilities(), []);
+    assert!(matches!(
+        stopper.request(Request::PrepareForUpdate).await,
+        Err(ClientError::Unsupported { needs: 2, .. })
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_protocol_5_agent_has_no_notifications() {
+    let peer = peer(5, "0.5.0-dev");
+    let client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    assert_eq!(client.protocol(), 5);
+    assert!(client.supports(Capability::BackgroundExecutions));
+    assert!(!client.supports(Capability::Notifications));
+}

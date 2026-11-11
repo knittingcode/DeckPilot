@@ -57,6 +57,10 @@ impl From<RunStatus> for ExecutionState {
 }
 
 /// What started a run.
+///
+/// Stored and sent as a camelCase string. Kinds added later read as
+/// [`ExecutionTrigger::Other`], so history written by a newer agent stays
+/// readable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ExecutionTrigger {
@@ -64,6 +68,13 @@ pub enum ExecutionTrigger {
     App,
     /// A Stream Deck control.
     Device,
+    /// A schedule of the workflow (see [`crate::trigger`]).
+    Schedule,
+    /// A lifecycle event, such as a device connecting.
+    Lifecycle,
+    /// A kind this version does not know.
+    #[serde(other)]
+    Other,
 }
 
 /// What a finished run did to the application's active project.
@@ -95,6 +106,10 @@ pub struct ExecutionSummary {
     pub workflow_name: String,
     pub profile: ProfileId,
     pub trigger: ExecutionTrigger,
+    /// For schedules and lifecycle events: which one, e.g. `every 15 min`
+    /// or `deviceConnected`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_detail: Option<String>,
     pub state: ExecutionState,
     /// Milliseconds since the Unix epoch.
     pub started_at: u64,
@@ -152,6 +167,7 @@ impl ExecutionRecord {
                 workflow_name: shorten(&workflow.name),
                 profile: profile.id,
                 trigger,
+                trigger_detail: None,
                 state: ExecutionState::Running,
                 started_at: now_ms,
                 finished_at: None,
@@ -229,6 +245,8 @@ impl ExecutionRecord {
                     output: std::collections::BTreeMap::new(),
                     error: None,
                     action: None,
+                    workflow: None,
+                    sets_variables: false,
                 });
             }
         }
@@ -245,26 +263,50 @@ impl ExecutionRecord {
 }
 
 /// `report` with what may be shown and stored: outputs the node's action
-/// type declares and does not mark sensitive, and shortened messages.
+/// type (or, for sub-workflow and Output nodes, the workflow) declares and
+/// does not mark sensitive, and shortened messages. Anything else, such as
+/// the inputs a start node received, is left out.
 pub fn safe_report(
     report: &NodeReport,
     profile: &Profile,
     registry: &ActionRegistry,
 ) -> NodeReport {
-    let declared: Vec<&str> = report
-        .action
-        .and_then(|action| profile.action(action))
-        .and_then(|instance| registry.definition(&instance.action_type))
-        .map(|definition| {
-            definition
-                .node
-                .outputs
-                .iter()
-                .filter(|o| !o.sensitive)
-                .map(|o| o.key.as_str())
-                .collect()
-        })
-        .unwrap_or_default();
+    let declared: Vec<&str> = if let Some(action) = report.action {
+        profile
+            .action(action)
+            .and_then(|instance| registry.definition(&instance.action_type))
+            .map(|definition| {
+                definition
+                    .node
+                    .outputs
+                    .iter()
+                    .filter(|o| !o.sensitive)
+                    .map(|o| o.key.as_str())
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else if let Some(workflow) = report.workflow {
+        profile
+            .workflow(workflow)
+            .map(|w| {
+                if report.sets_variables {
+                    w.variables
+                        .iter()
+                        .filter(|v| !v.sensitive)
+                        .map(|v| v.key.as_str())
+                        .collect()
+                } else {
+                    w.outputs
+                        .iter()
+                        .filter(|o| !o.sensitive)
+                        .map(|o| o.key.as_str())
+                        .collect()
+                }
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let mut safe = report.clone();
     safe.message = shorten(&report.message);
     safe.output = report
@@ -327,6 +369,8 @@ mod tests {
             output: BTreeMap::new(),
             error: None,
             action: None,
+            workflow: None,
+            sets_variables: false,
         }
     }
 
