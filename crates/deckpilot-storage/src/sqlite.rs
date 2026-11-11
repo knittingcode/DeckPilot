@@ -70,6 +70,23 @@ const MIGRATIONS: &[&str] = &[
     crate::credentials::SCHEMA,
 ];
 
+/// Runs `step` again while SQLite reports the database busy, for up to
+/// [`BUSY_TIMEOUT`].
+fn retry_busy(mut step: impl FnMut() -> rusqlite::Result<()>) -> Result<()> {
+    let deadline = std::time::Instant::now() + BUSY_TIMEOUT;
+    loop {
+        match step() {
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if error.code == rusqlite::ErrorCode::DatabaseBusy
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            other => return Ok(other?),
+        }
+    }
+}
+
 /// Backups kept per database; older ones are removed after a new one is
 /// verified.
 const KEPT_BACKUPS: usize = 5;
@@ -149,7 +166,18 @@ impl SqliteStore {
         apply_key(&connection, encryption)?;
         connection.busy_timeout(BUSY_TIMEOUT)?;
         connection.pragma_update(None, "foreign_keys", true)?;
-        connection.pragma_update(None, "journal_mode", "WAL")?;
+        // Changing the journal mode needs a lock that SQLite may refuse at
+        // once (without the busy handler) while another connection — the
+        // agent or the app — writes. The mode persists in the file, so it is
+        // only changed when needed, and a busy answer is retried.
+        retry_busy(|| {
+            let mode: String =
+                connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+            if !mode.eq_ignore_ascii_case("wal") {
+                connection.pragma_update(None, "journal_mode", "WAL")?;
+            }
+            Ok(())
+        })?;
         let store = Self {
             connection,
             path,

@@ -186,6 +186,11 @@ the encrypted database; protocol 3 made action results only carry
 `selectProject` effects, with action types in module namespaces
 (`projects.next`). Project switching requests are refused while the projects
 module is disabled. Events are only sent to clients whose protocol has them.
+Clients negotiate the protocol (stepping down until an older agent accepts
+their `hello`) and never send a request newer than the connection's
+protocol; the agent refuses such a request with `unsupported`. See
+[Compatibility](compatibility.md) for the negotiation, the capabilities and
+the tested version matrix.
 The agent also accepts protocol 1 and 2 clients
 (DeckPilot 0.2), so a newer configuration app can always stop an older agent
 during an update. The agent status includes the time of the last device input,
