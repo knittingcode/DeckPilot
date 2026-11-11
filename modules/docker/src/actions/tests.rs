@@ -261,6 +261,59 @@ esac
     }
 
     #[test]
+    fn keys_show_live_state_without_changing_anything() {
+        use deckpilot_core::{ButtonState, Indicator};
+
+        let running = fake(Engine::Running);
+        // Changes are not allowed: reading the state needs no permission.
+        let settings = running.settings(&[]);
+        let state = |kind: &str| {
+            let handler = handler(kind, &settings);
+            let parameters = handler.definition().normalize(&none()).unwrap();
+            handler.state_policy(&parameters)?;
+            Some(handler.button_state(&parameters, &running.context()))
+        };
+
+        let up = state(COMPOSE_UP).unwrap().unwrap();
+        assert_eq!(
+            up,
+            ButtonState::new()
+                .with_detail("1/2 up")
+                .with_indicator(Indicator::Warning)
+                .with_toggle(false)
+        );
+        let restart = state(COMPOSE_RESTART).unwrap().unwrap();
+        assert_eq!(restart.toggle, None);
+        assert_eq!(
+            state(COMPOSE_STATUS).unwrap().unwrap().detail.as_deref(),
+            Some("1/2 up")
+        );
+        assert_eq!(
+            state(CONTAINERS).unwrap().unwrap().detail.as_deref(),
+            Some("1 running")
+        );
+        assert_eq!(
+            state(STATUS).unwrap().unwrap().indicator,
+            Some(Indicator::Ok)
+        );
+        assert!(state(LOGS).is_none());
+        // Only reading commands ran.
+        for call in running.calls() {
+            assert!(
+                !call
+                    .iter()
+                    .any(|arg| ["up", "down", "restart"].contains(&arg.as_str())),
+                "{call:?}"
+            );
+        }
+
+        let down = fake(Engine::Down);
+        let handler = handler(STATUS, &down.settings(&[]));
+        let unavailable = handler.button_state(&none(), &down.context()).unwrap();
+        assert_eq!(unavailable.indicator, Some(Indicator::Error));
+    }
+
+    #[test]
     fn availability_is_an_answer_not_a_failure() {
         let running = fake(Engine::Running);
         let status = running.run(STATUS, &running.settings(&[]), &none());
