@@ -124,6 +124,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn interrupted_or_corrupted_downloads_are_rejected() {
+        let truncated = &ARTIFACT[..ARTIFACT.len() / 2];
+        let mut extended = ARTIFACT.to_vec();
+        extended.push(0);
+        let zeroed = vec![0u8; ARTIFACT.len()];
+        for (what, data) in [
+            ("truncated", truncated),
+            ("extended", &extended[..]),
+            ("zeroed", &zeroed[..]),
+            ("empty", &[][..]),
+        ] {
+            assert_eq!(
+                verify(PUBLIC_KEY, SIGNATURE, data),
+                Err(SignatureError::Mismatch),
+                "{what}"
+            );
+        }
+        // A valid signature by another key (not the release key).
+        let (_, foreign) = signed(ARTIFACT, "timestamp:1\tversion:9.9.9");
+        assert_eq!(
+            verify(PUBLIC_KEY, &foreign, ARTIFACT),
+            Err(SignatureError::Mismatch)
+        );
+    }
+
     /// Signs `data` with a key made for this test only (never stored).
     fn signed(data: &[u8], trusted_comment: &str) -> (String, String) {
         let keys = minisign::KeyPair::generate_unencrypted_keypair().unwrap();

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use deckpilot_ipc::framing::{FrameError, read_message, write_message};
 use deckpilot_ipc::{
-    AgentEvent, ClientKind, ClientMessage, ErrorCode, IpcError, MIN_PROTOCOL_VERSION,
+    AgentEvent, Capability, ClientKind, ClientMessage, ErrorCode, IpcError, MIN_PROTOCOL_VERSION,
     PROTOCOL_VERSION, Request, Response, ServerMessage, SharedStream, token,
 };
 use interprocess::local_socket::tokio::{Listener, Stream, prelude::*};
@@ -128,6 +128,7 @@ async fn authenticate(
                 let welcome = ServerMessage::Welcome {
                     protocol: PROTOCOL_VERSION,
                     agent_version: VERSION.into(),
+                    capabilities: Capability::of_protocol(protocol),
                 };
                 return send(writer, &welcome).await.then_some((client, protocol));
             }
@@ -166,7 +167,7 @@ async fn serve(
                 let reply = match message {
                     Ok(None) | Err(FrameError::Io(_)) => break,
                     Ok(Some(value)) => {
-                        handle_message(value, &handle, client, &mut events, &mut desktop).await
+                        handle_message(value, &handle, (client, protocol), &mut events, &mut desktop).await
                     }
                     Err(FrameError::Malformed(e)) => {
                         error(None, ErrorCode::InvalidRequest, format!("malformed message: {e}"))
@@ -212,7 +213,7 @@ async fn serve(
 async fn handle_message(
     value: serde_json::Value,
     handle: &AgentHandle,
-    client: ClientKind,
+    (client, protocol): (ClientKind, u32),
     events: &mut Option<broadcast::Receiver<AgentEvent>>,
     desktop: &mut Option<DesktopGuard>,
 ) -> ServerMessage {
@@ -235,6 +236,19 @@ async fn handle_message(
     };
     if let Err(message) = request.validate() {
         return error(Some(id), ErrorCode::InvalidRequest, message);
+    }
+    // A request the client's protocol does not have is refused rather than
+    // guessed at: the client and the agent would disagree on its meaning.
+    let needs = request.since_protocol();
+    if needs > protocol {
+        return error(
+            Some(id),
+            ErrorCode::Unsupported,
+            format!(
+                "`{}` needs protocol {needs}; this connection uses protocol {protocol}",
+                request.name()
+            ),
+        );
     }
     if matches!(request, Request::Subscribe) {
         if events.is_none() {

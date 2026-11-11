@@ -27,9 +27,20 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
-function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
+type CardTitleElement = "h2" | "h3" | "h4" | "h5" | "h6" | "div"
+
+/**
+ * The card's title, a heading (`h3` by default) so screen readers can list
+ * and jump to cards. Use `as="div"` where a heading is not allowed, e.g.
+ * inside a button. Headings carry no default styles (Tailwind preflight).
+ */
+function CardTitle({
+  className,
+  as: Element = "h3",
+  ...props
+}: React.ComponentProps<"div"> & { as?: CardTitleElement }) {
   return (
-    <div
+    <Element
       data-slot="card-title"
       className={cn("leading-none font-semibold", className)}
       {...props}

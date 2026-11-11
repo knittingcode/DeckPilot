@@ -15,6 +15,22 @@ export type ParameterKind =
   | { type: "resource"; kind?: ResourceKind }
   /** A project of the profile the action belongs to. */
   | { type: "project" }
+  /** A list stored as one item per line, e.g. command arguments. */
+  | { type: "lines"; itemLabel?: string; maxItems?: number; maxLength?: number }
+  /** Rows stored as one `name<separator>value` per line, e.g. headers. */
+  | {
+      type: "pairs"
+      separator: string
+      nameLabel?: string
+      valueLabel?: string
+      maxItems?: number
+      caseInsensitive?: boolean
+      noSecrets?: boolean
+    }
+  /** Source text such as a JSON body. */
+  | { type: "code"; language: string; maxLength?: number }
+  /** The name of a credential stored on this computer. */
+  | { type: "credential" }
 
 export type ParameterValue =
   | { type: "text"; value: string }
@@ -82,6 +98,35 @@ export interface Workflow {
    * saved before the setting existed; see `effectiveProjectScope`.
    */
   projectScope?: ProjectScope
+  /** Values the workflow takes when a Sub-workflow node calls it (graph workflows). */
+  inputs?: WorkflowInput[]
+  /** Values the workflow returns to a Sub-workflow node, set by its Output nodes. */
+  outputs?: WorkflowOutput[]
+}
+
+/**
+ * A value a workflow takes from the Sub-workflow node that calls it; its
+ * nodes read it as an output of the start node.
+ */
+export interface WorkflowInput {
+  key: string
+  label?: string
+  kind: ValueKind
+  /** A calling node must give it a value. */
+  required?: boolean
+  /** Used when the calling node gives none, and when the workflow runs on its own. */
+  default?: string
+  /** May be secret: only sensitive outputs may take it. */
+  sensitive?: boolean
+}
+
+/** A value a workflow returns to the Sub-workflow node that calls it. */
+export interface WorkflowOutput {
+  key: string
+  label?: string
+  kind: ValueKind
+  /** Kept out of history and live events. */
+  sensitive?: boolean
 }
 
 export type ProjectScope = "execution" | "application"
@@ -129,6 +174,14 @@ export type GraphNodeKind =
   | { type: "parallel" }
   | { type: "join" }
   | { type: "loop"; workflow: string; times: number }
+  | {
+      type: "call"
+      workflow: string
+      /** Values for the called workflow's inputs, by input key. */
+      inputs?: Record<string, GraphMapping>
+      policy: ErrorPolicy
+    }
+  | { type: "output"; values?: Record<string, GraphMapping> }
   | { type: "delay"; ms: number }
   | { type: "stop" }
 
@@ -316,7 +369,10 @@ export type NodeStatus = "succeeded" | "failed" | "skipped" | "cancelled"
 
 /** A failure, safe to show: no secrets, no raw output. */
 export interface StepError {
-  /** `action.failed`, `timeout`, `cancelled`, `mapping`, `parallel-context`, `unavailable`, `loop.failed`. */
+  /**
+   * `action.failed`, `timeout`, `cancelled`, `mapping`, `parallel-context`,
+   * `unavailable`, `loop.failed`, `subworkflow.failed`.
+   */
   code: string
   message: string
   retryable: boolean
@@ -336,6 +392,8 @@ export interface NodeReport {
   output?: Record<string, string>
   error?: StepError
   action?: string
+  /** Sub-workflow nodes: the workflow that ran; Output nodes: their own workflow. */
+  workflow?: string
 }
 
 export type ExecutionState = "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
@@ -531,6 +589,8 @@ export interface ProfileInfo {
 export interface AgentStatus {
   version: string
   protocol: number
+  /** Workflows running in the background; absent from older agents. */
+  runningExecutions?: number
   pid: number
   startedAt: number
   dataDir: string
@@ -550,6 +610,17 @@ export type AgentCompatibility =
   | { type: "agentOutdated"; agent: string; app: string }
   | { type: "agentNewer"; agent: string; app: string }
   | { type: "unknown"; agent: string; app: string }
+  /** The agent is too old for any protocol this app speaks; replace it. */
+  | { type: "updateRequired"; agent: string; app: string }
+
+/** What a connection to the agent can do, from its negotiated protocol. */
+export type AgentCapability =
+  | "workflows"
+  | "prepareForUpdate"
+  | "moduleNamespaces"
+  | "encryptedDatabase"
+  | "backgroundExecutions"
+  | "notifications"
 
 export interface AgentConnection {
   running: boolean
@@ -557,6 +628,9 @@ export interface AgentConnection {
   canStart: boolean
   compatibility: AgentCompatibility | null
   appVersion: string
+  /** Protocol of the connection: the lower of the app's and the agent's. */
+  protocol?: number | null
+  capabilities?: AgentCapability[]
 }
 
 export type UpdateMode = "notifyOnly" | "downloadAndAsk" | "installWhenIdle"

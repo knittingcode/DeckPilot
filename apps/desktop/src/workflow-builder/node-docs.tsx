@@ -10,6 +10,10 @@ const KIND_LABEL: Record<ParameterKind["type"], string> = {
   choice: "choice",
   resource: "resource",
   project: "project",
+  lines: "list",
+  pairs: "rows",
+  code: "code",
+  credential: "credential",
 }
 
 /** How the catalog and the inspector describe what an action does. */

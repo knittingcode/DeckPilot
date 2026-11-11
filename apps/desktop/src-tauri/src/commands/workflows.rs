@@ -16,11 +16,7 @@ pub fn validate_workflow_graph(
     workflow: Workflow,
 ) -> CommandResult<Vec<GraphIssue>> {
     let profile = load_profile(&*state.store()?, profile_id)?;
-    Ok(workflow
-        .graph
-        .as_ref()
-        .map(|graph| graph.validate(workflow.id, &profile, &state.actions()))
-        .unwrap_or_default())
+    Ok(workflow.graph_issues(&profile, &state.actions()))
 }
 
 /// The graph form of a workflow's steps, with notes where it behaves
