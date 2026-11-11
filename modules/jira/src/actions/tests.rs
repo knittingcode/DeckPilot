@@ -593,7 +593,11 @@ fn credentials_missing_refused_or_malformed() {
     assert_eq!(plain.code.as_deref(), Some("credential-missing"));
     assert!(plain.message.contains("email:api-token"));
     assert!(!plain.message.contains("withoutEmail"));
-    let invalid = run_with(MYSELF, &settings, &with("Not A Name"), &fixture.context());
+    // Refused when saved (a credential parameter) and, should it get
+    // through, when run.
+    let handler = handler_with(MYSELF, &settings, &recording());
+    assert!(handler.definition().normalize(&with("Not A Name")).is_err());
+    let invalid = handler.execute(&with("Not A Name"), &fixture.context());
     assert_eq!(invalid.code.as_deref(), Some("invalid-parameters"));
     assert_eq!(
         server.seen().len(),

@@ -199,10 +199,7 @@ impl JiraModule {
                              › Credentials). Never the secret itself."
                                 .into(),
                         ),
-                        kind: ParameterKind::Text {
-                            multiline: false,
-                            max_length: Some(64),
-                        },
+                        kind: ParameterKind::Credential,
                         required: true,
                         default: Some(ParameterValue::Text(DEFAULT_CREDENTIAL.into())),
                     },
