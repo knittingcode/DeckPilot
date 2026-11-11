@@ -50,6 +50,8 @@ import type {
   ProjectScope,
   Workflow,
   WorkflowGraph,
+  WorkflowInput,
+  WorkflowOutput,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -84,6 +86,7 @@ import { IssueList, NodeInspector } from "./inspector"
 import { ProjectScopeSetting } from "./project-scope"
 import { effectiveProjectScope, selectsProjects } from "./project-scope-model"
 import { type FlowNode, type NodeRun, NodeView } from "./node-view"
+import { WorkflowInterfaceEditor } from "./workflow-interface"
 
 const NODE_TYPES = { workflow: NodeView }
 
@@ -214,6 +217,8 @@ function Builder({
   const flow = useReactFlow<FlowNode>()
   const [name, setName] = useState(initial.name)
   const [description, setDescription] = useState(initial.description ?? "")
+  const [inputs, setInputs] = useState<WorkflowInput[]>(initial.inputs ?? [])
+  const [outputs, setOutputs] = useState<WorkflowOutput[]>(initial.outputs ?? [])
   const [state, setState] = useState(() => history(initialGraph))
   const graph = state.present
   const [selected, setSelected] = useState<string[]>([])
@@ -257,8 +262,10 @@ function Builder({
       workflows: view.profile.workflows,
       projects: view.profile.projects,
       modules,
+      inputs,
+      outputs,
     }),
-    [actions, types, view.profile.workflows, view.profile.projects, modules],
+    [actions, types, view.profile.workflows, view.profile.projects, modules, inputs, outputs],
   )
   const loopTargets = view.profile.workflows
     .filter((w) => w.id !== initial.id)
@@ -284,8 +291,10 @@ function Builder({
       description: description.trim(),
       graph,
       projectScope,
+      inputs: inputs.length ? inputs : undefined,
+      outputs: outputs.length ? outputs : undefined,
     }),
-    [initial, name, description, graph, projectScope],
+    [initial, name, description, graph, projectScope, inputs, outputs],
   )
   const dirty =
     isNew ||
@@ -295,12 +304,16 @@ function Builder({
       d: workflow.description ?? "",
       g: graph,
       s: projectScope,
+      i: inputs,
+      o: outputs,
     }) !==
       JSON.stringify({
         n: initial.name,
         d: initial.description ?? "",
         g: initial.graph,
         s: initial.projectScope ?? projectScope,
+        i: initial.inputs ?? [],
+        o: initial.outputs ?? [],
       })
 
   // The engine's validation, shown on the nodes.
@@ -915,6 +928,12 @@ function Builder({
                     </div>
                   )}
                 </div>
+                <WorkflowInterfaceEditor
+                  inputs={inputs}
+                  outputs={outputs}
+                  onInputs={setInputs}
+                  onOutputs={setOutputs}
+                />
                 {workflowPanel}
               </div>
             )}
