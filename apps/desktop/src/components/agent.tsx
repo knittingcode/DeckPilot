@@ -82,8 +82,12 @@ export function AgentCompatibilityNotice() {
       <AlertTitle>The running agent does not match this app</AlertTitle>
       <AlertDescription>
         <p>
-          Agent {compatibility.agent}, app {compatibility.app}. Restart the agent so both run the
-          same version.
+          {compatibility.type === "agentOutdated"
+            ? `The agent (${compatibility.agent}) is older than this app (${compatibility.app}).`
+            : compatibility.type === "agentNewer"
+              ? `The agent (${compatibility.agent}) is newer than this app (${compatibility.app}).`
+              : `The agent's version (${compatibility.agent}) could not be compared with this app (${compatibility.app}).`}{" "}
+          Restart the agent so both run the same version.
         </p>
         <Button className="mt-2" size="sm" disabled={busy} onClick={() => void restart()}>
           <RotateCw /> Restart agent
