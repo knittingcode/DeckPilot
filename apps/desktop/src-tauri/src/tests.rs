@@ -770,6 +770,7 @@ fn fresh_installation_has_an_empty_action_library() {
             "general",
             "git",
             "github",
+            "gitlab",
             "http",
             "notifications",
             "projects",

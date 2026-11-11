@@ -20,6 +20,7 @@ members = [
     "modules/http",
     "modules/notifications",
     "modules/github",
+    "modules/gitlab",
     "apps/agent",
     "apps/desktop/src-tauri",
     "tools/dev",
@@ -35,6 +36,7 @@ publish = false
 
 [workspace.dependencies]
 deckpilot-device = { path = "crates/deckpilot-device" }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 deckpilot-core = { path = "crates/deckpilot-core" }
 deckpilot-storage = { path = "crates/deckpilot-storage" }
 deckpilot-hid = { path = "crates/deckpilot-hid" }
@@ -49,6 +51,7 @@ deckpilot-module-docker = { path = "modules/docker" }
 deckpilot-module-http = { path = "modules/http" }
 deckpilot-module-notifications = { path = "modules/notifications" }
 deckpilot-module-github = { path = "modules/github" }
+deckpilot-module-gitlab = { path = "modules/gitlab" }
 deckpilot-portability = { path = "crates/deckpilot-portability" }
 deckpilot-keystore = { path = "crates/deckpilot-keystore" }
 deckpilot-presence = { path = "crates/deckpilot-presence" }

@@ -29,6 +29,8 @@ export function runNodeInfo(graph: WorkflowGraph, lookup: Lookup) {
   }
 }
 
+export { triggerText } from "./trigger-model"
+
 /** The run state of every node of `run`, for the canvas. */
 export function nodeRuns(run: LiveExecution | undefined): Record<string, NodeRun> | undefined {
   if (!run) return undefined

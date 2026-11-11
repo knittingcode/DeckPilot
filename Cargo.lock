@@ -929,6 +929,7 @@ name = "deckpilot-agent"
 version = "0.6.0"
 dependencies = [
  "auto-launch",
+ "chrono",
  "deckpilot-core",
  "deckpilot-device",
  "deckpilot-hid",
@@ -1095,6 +1096,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "deckpilot-module-gitlab"
+version = "0.6.0"
+dependencies = [
+ "deckpilot-core",
+ "deckpilot-module-http",
+ "reqwest",
+ "serde_json",
+ "url",
+]
+
+[[package]]
 name = "deckpilot-module-http"
 version = "0.6.0"
 dependencies = [
@@ -1141,6 +1153,7 @@ dependencies = [
  "deckpilot-module-general",
  "deckpilot-module-git",
  "deckpilot-module-github",
+ "deckpilot-module-gitlab",
  "deckpilot-module-http",
  "deckpilot-module-notifications",
  "deckpilot-module-projects",

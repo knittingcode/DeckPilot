@@ -28,6 +28,7 @@ pub mod project;
 pub mod registry;
 pub mod resource;
 pub mod runtime;
+pub mod trigger;
 pub mod workflow;
 
 #[cfg(test)]
@@ -79,6 +80,10 @@ pub use resource::{
     MachineConfig, MachineResourceBinding, ResolveError, ResourceKey, ResourceKind, ResourceRef,
 };
 pub use runtime::{Engine, EngineError, StepReport, WorkflowReport};
+pub use trigger::{
+    EventField, LifecycleEvent, Schedule, Scheduler, TriggerEvent, TriggerKind, TriggerValue,
+    WallTime, WorkflowTrigger,
+};
 pub use workflow::{OnFailure, ProjectScope, StepCondition, Workflow, WorkflowStep};
 
 /// Error returned when a textual identifier does not satisfy its format rules.
