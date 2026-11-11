@@ -68,6 +68,12 @@ pub fn save_layout(
             .filter(|l| !l.is_empty());
         deckpilot_core::validate_presentation(None, binding.label.as_deref())
             .map_err(CommandError::Invalid)?;
+        // Colours and sizes are checked when the layout is read; a default
+        // appearance is not stored. Icons must exist (checked below).
+        binding.appearance = binding
+            .appearance
+            .take()
+            .and_then(deckpilot_core::KeyAppearance::normalized);
     }
     modify_profile(&state, profile_id, |profile| {
         let issues = layout.validate(&state.catalog, profile);
@@ -133,10 +139,30 @@ pub fn activate_layout(
 pub struct ControlFace {
     control: ControlId,
     face: KeyFace,
+    /// With `render`: the key as the device shows it (appearance, icon,
+    /// title), as a PNG `data:` URL at the model's image size. `None` for
+    /// controls without a display.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image: Option<String>,
+}
+
+/// The image size of `control` on `capabilities`, if it has a display.
+fn image_size(
+    capabilities: &deckpilot_device::DeviceCapabilities,
+    control: ControlId,
+) -> Option<(u32, u32)> {
+    let spec = match control {
+        ControlId::Key { .. } => capabilities.keys.and_then(|k| k.image),
+        ControlId::TouchZone { .. } => capabilities.touch.as_ref().and_then(|t| t.image),
+        ControlId::Encoder { .. } => None,
+    }?;
+    Some((spec.width, spec.height))
 }
 
 /// What every control of a (possibly unsaved) layout page shows for a given
-/// project, without a device and without running any action.
+/// project, without a device and without running any action. With
+/// `render`, each face also comes as the image the device would show,
+/// drawn by the agent's renderer.
 #[tauri::command]
 pub fn preview_layout(
     state: State<'_, AppState>,
@@ -144,6 +170,7 @@ pub fn preview_layout(
     layout: DeviceLayout,
     page_id: PageId,
     project_id: Option<ProjectId>,
+    render: Option<bool>,
 ) -> CommandResult<Vec<ControlFace>> {
     let store = state.store()?;
     let profile = load_profile(&store, profile_id)?;
@@ -156,10 +183,25 @@ pub fn preview_layout(
     let project = context.project(&profile)?;
     let controls = model.capabilities.controls();
     let actions = state.actions();
+    let icons = render
+        .unwrap_or(false)
+        .then(|| deckpilot_render::Icons::from_profile(&profile));
     Ok(
         page_faces(&actions, &layout, page_id, &profile, project, &controls)
             .into_iter()
-            .map(|(control, face)| ControlFace { control, face })
+            .map(|(control, face)| {
+                let image = icons.as_ref().and_then(|icons| {
+                    let (width, height) = image_size(&model.capabilities, control)?;
+                    let frame = deckpilot_render::render_with(&face, width, height, icons);
+                    let png = deckpilot_render::frame_png(&frame)?;
+                    Some(deckpilot_core::IconData::new(png).data_url())
+                });
+                ControlFace {
+                    control,
+                    face,
+                    image,
+                }
+            })
             .collect(),
     )
 }

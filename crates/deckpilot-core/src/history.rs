@@ -246,6 +246,7 @@ impl ExecutionRecord {
                     error: None,
                     action: None,
                     workflow: None,
+                    sets_variables: false,
                 });
             }
         }
@@ -288,11 +289,19 @@ pub fn safe_report(
         profile
             .workflow(workflow)
             .map(|w| {
-                w.outputs
-                    .iter()
-                    .filter(|o| !o.sensitive)
-                    .map(|o| o.key.as_str())
-                    .collect()
+                if report.sets_variables {
+                    w.variables
+                        .iter()
+                        .filter(|v| !v.sensitive)
+                        .map(|v| v.key.as_str())
+                        .collect()
+                } else {
+                    w.outputs
+                        .iter()
+                        .filter(|o| !o.sensitive)
+                        .map(|o| o.key.as_str())
+                        .collect()
+                }
             })
             .unwrap_or_default()
     } else {
@@ -361,6 +370,7 @@ mod tests {
             error: None,
             action: None,
             workflow: None,
+            sets_variables: false,
         }
     }
 

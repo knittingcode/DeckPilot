@@ -8,8 +8,8 @@ use thiserror::Error;
 use deckpilot_device::{ControlId, DeviceModelId, ModelCatalog};
 
 use crate::{
-    ActionInstance, ActionInstanceId, BindingTarget, DeviceLayout, LayoutId, LayoutIssue, PageId,
-    ProfileId, Project, ProjectId, StepCondition, Workflow, WorkflowId,
+    ActionInstance, ActionInstanceId, BindingTarget, DeviceLayout, Icon, IconId, LayoutId,
+    LayoutIssue, PageId, ProfileId, Project, ProjectId, StepCondition, Workflow, WorkflowId,
 };
 
 /// A self-contained set of actions, workflows, projects and layouts.
@@ -39,6 +39,9 @@ pub struct Profile {
     /// their first layout.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub active_layouts: BTreeMap<DeviceModelId, LayoutId>,
+    /// Images imported for key icons (see [`crate::appearance`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub icons: Vec<Icon>,
 }
 
 /// Where an action or workflow is referenced.
@@ -86,6 +89,10 @@ pub enum ProfileIssue {
     ForeignProject(String),
     #[error("the default project does not belong to this profile")]
     ForeignDefaultProject,
+    #[error("{0}")]
+    InvalidIcon(String),
+    #[error("a profile can have at most {max} icons", max = crate::MAX_ICONS)]
+    TooManyIcons,
 }
 
 impl Profile {
@@ -100,7 +107,67 @@ impl Profile {
             default_project: None,
             layouts: Vec::new(),
             active_layouts: BTreeMap::new(),
+            icons: Vec::new(),
         }
+    }
+
+    pub fn icon(&self, id: IconId) -> Option<&Icon> {
+        self.icons.iter().find(|icon| icon.id == id)
+    }
+
+    /// Layout bindings that show an icon.
+    pub fn icon_usages(&self, id: IconId) -> Vec<Usage> {
+        let mut usages = Vec::new();
+        for layout in &self.layouts {
+            for page in &layout.pages {
+                for binding in &page.bindings {
+                    if binding
+                        .appearance
+                        .as_ref()
+                        .and_then(|a| a.icon)
+                        .is_some_and(|icon| icon.id == id)
+                    {
+                        usages.push(Usage::LayoutBinding {
+                            layout: layout.id,
+                            layout_name: layout.name.clone(),
+                            page: page.id,
+                            page_name: page.name.clone(),
+                            control: binding.control,
+                        });
+                    }
+                }
+            }
+        }
+        usages
+    }
+
+    /// Adds a checked icon. An icon with the same image is reused, so
+    /// importing the same file twice adds it once.
+    pub fn add_icon(&mut self, icon: Icon) -> Result<IconId, ProfileIssue> {
+        icon.check().map_err(ProfileIssue::InvalidIcon)?;
+        if let Some(existing) = self.icons.iter().find(|i| i.png == icon.png) {
+            return Ok(existing.id);
+        }
+        if self.icons.len() >= crate::MAX_ICONS {
+            return Err(ProfileIssue::TooManyIcons);
+        }
+        let id = icon.id;
+        self.icons.push(icon);
+        Ok(id)
+    }
+
+    /// Deletes an icon that no key shows.
+    pub fn delete_icon(&mut self, id: IconId) -> Result<Icon, ProfileIssue> {
+        let used = self.icon_usages(id).len();
+        if used > 0 {
+            return Err(ProfileIssue::InUse(used));
+        }
+        let index = self
+            .icons
+            .iter()
+            .position(|icon| icon.id == id)
+            .ok_or(ProfileIssue::NotFound("icon"))?;
+        Ok(self.icons.remove(index))
     }
 
     pub fn action(&self, id: ActionInstanceId) -> Option<&ActionInstance> {
@@ -401,6 +468,20 @@ impl Profile {
                 }
             }
         }
+        if self.icons.len() > crate::MAX_ICONS {
+            issues.push(ProfileIssue::TooManyIcons);
+        }
+        for (index, icon) in self.icons.iter().enumerate() {
+            if let Err(problem) = icon.check() {
+                issues.push(ProfileIssue::InvalidIcon(problem));
+            }
+            if self.icons[..index].iter().any(|other| other.id == icon.id) {
+                issues.push(ProfileIssue::InvalidIcon(format!(
+                    "icon “{}” appears twice",
+                    icon.name
+                )));
+            }
+        }
         for layout in &self.layouts {
             let found = layout.validate(catalog, self);
             issues.extend(found.into_iter().map(|issue| ProfileIssue::Layout {
@@ -492,6 +573,88 @@ mod tests {
         );
     }
 
+    fn icon(side: u32) -> Icon {
+        Icon {
+            id: IconId::new(),
+            name: format!("Icon {side}"),
+            width: side,
+            height: side,
+            png: crate::IconData::new(crate::appearance::tests::png_header(side, side)),
+        }
+    }
+
+    #[test]
+    fn icons_are_added_once_bounded_and_deleted_when_unused() {
+        let mut profile = Profile::new("Work");
+        let first = icon(16);
+        let id = profile.add_icon(first.clone()).unwrap();
+        // The same image again is the same icon.
+        let again = Icon {
+            id: IconId::new(),
+            ..first
+        };
+        assert_eq!(profile.add_icon(again).unwrap(), id);
+        assert_eq!(profile.icons.len(), 1);
+        assert!(matches!(
+            profile.add_icon(icon(1024)),
+            Err(ProfileIssue::InvalidIcon(_))
+        ));
+        for side in 1..crate::MAX_ICONS {
+            let side = side + 100;
+            profile
+                .add_icon(icon(u32::try_from(side).unwrap()))
+                .unwrap();
+        }
+        assert_eq!(profile.add_icon(icon(250)), Err(ProfileIssue::TooManyIcons));
+
+        let mut layout = DeviceLayout::new(
+            "Main",
+            DeviceModelId::new(deckpilot_device::models::STREAM_DECK_MK2_ID),
+        );
+        let home = layout.home_page;
+        let mut binding = crate::ControlBinding::new(
+            ControlId::Key { index: 0 },
+            crate::Trigger::Press,
+            BindingTarget::Back,
+        );
+        binding.appearance = Some(crate::KeyAppearance {
+            icon: Some(crate::IconRef {
+                id,
+                fit: crate::IconFit::Fill,
+            }),
+            ..crate::KeyAppearance::default()
+        });
+        layout.page_mut(home).unwrap().bindings.push(binding);
+        profile.layouts.push(layout);
+        assert_eq!(profile.icon_usages(id).len(), 1);
+        assert_eq!(profile.delete_icon(id), Err(ProfileIssue::InUse(1)));
+        // Copies keep icons and references.
+        let copy = profile.duplicate("Copy");
+        assert_eq!(copy.icons, profile.icons);
+        assert_eq!(copy.icon_usages(id).len(), 1);
+
+        profile.layouts.clear();
+        assert_eq!(profile.delete_icon(id).unwrap().id, id);
+        assert_eq!(profile.delete_icon(id), Err(ProfileIssue::NotFound("icon")));
+
+        // Hand-edited or crafted profiles are reported.
+        profile.icons.push(icon(4));
+        let duplicate = profile.icons.last().unwrap().clone();
+        profile.icons.push(duplicate);
+        assert!(
+            profile
+                .validate(&ModelCatalog::builtin())
+                .iter()
+                .any(|issue| matches!(issue, ProfileIssue::TooManyIcons))
+        );
+        assert!(
+            profile
+                .validate(&ModelCatalog::builtin())
+                .iter()
+                .any(|issue| matches!(issue, ProfileIssue::InvalidIcon(m) if m.contains("twice")))
+        );
+    }
+
     #[test]
     fn rejects_duplicate_project_keys() {
         let mut profile = Profile::new("Work");
@@ -559,6 +722,7 @@ mod tests {
             trigger: Trigger::Press,
             target: BindingTarget::Workflow { workflow: w_id },
             label: None,
+            appearance: None,
         });
         let l_id = layout.id;
         profile.layouts.push(layout);

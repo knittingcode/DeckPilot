@@ -31,6 +31,7 @@ matters (the step before is itself conditional).
 | Loop | `out` | Runs another workflow of the profile 1–100 times |
 | Sub-workflow (`call`) | `out`, `error` | Runs another workflow once with inputs; its outputs become the node's |
 | Outputs (`output`) | `out` | Sets the workflow's declared outputs for the node that called it |
+| Set variable (`setVariable`) | `out` | Assigns the run's variables for the nodes after it |
 | Delay | `out` | Waits up to 10 minutes; cancellable |
 | Stop | — | Ends the workflow successfully |
 
@@ -112,6 +113,44 @@ profile once:
   or Outputs node's non-sensitive declared outputs, and never the inputs a
   start node received.
 
+### Variables
+
+A workflow can declare **variables** (optional `variables`: `key`, `label`,
+`kind`, `initial`, `sensitive`): typed values that live for one run.
+
+- **Setting.** A **Set variable** node (`{"type": "setVariable", "values":
+  {"<key>": <mapping>}}`) assigns one or more variables with the usual
+  mappings (one output, or text with outputs; nothing is evaluated).
+  Values are converted to the variable's kind; a value that does not fit
+  fails the node with `mapping`.
+- **Reading.** Nodes read a variable as an output of the pseudo-node
+  `vars`: `steps.vars.output.<key>` (in templates `{{ steps.vars.output.key
+  }}`), with the same mappings and conditions as any output. No new syntax:
+  in a workflow that declares variables the node id `vars` is reserved;
+  workflows without variables are unchanged.
+- **Values flow along the connections**, like the project context: a node
+  sees the value set by the last Set variable node on its path, otherwise
+  the initial value (a variable without one has no value; a mapping with a
+  default can cover that). Branches of a Condition each set their own
+  value; the node after the Join sees the value of the branch that ran.
+- **Parallel branches** that set the same variable are resolved at the
+  Join by the rule for project contexts: branches that set it since they
+  split must end with the same value, a branch that did not set it agrees
+  with anything, and different values fail the Join with
+  `variable-conflict` — no branch silently wins. Validation warns about
+  such writes.
+- **Scope.** Variables belong to one run: every run starts from the initial
+  values, and nothing is shared with other runs, workflows or profiles. A
+  sub-workflow has its own variables and gets the caller's values only
+  through its declared inputs.
+- **Sensitive variables** follow the sensitive-value rule: a sensitive value
+  may only be set into a sensitive variable, and a sensitive variable only
+  passed on to sensitive inputs, outputs or variables. History and live
+  events show a Set variable node's non-sensitive variables only.
+- **Validation**: valid, unique keys (at most 32), initial values of their
+  kind, Set variable nodes set only declared variables, references name
+  declared variables, `vars` is not used as a node id.
+
 ## Module node SDK
 
 Modules provide nodes through their action types. `ActionType::node`
@@ -164,8 +203,8 @@ resource actions also the resource, its key, kind and value.
   (handled), through `out` with *continue*, and otherwise fails the workflow:
   nodes already running finish, nothing new starts. Errors have a stable code
   (`action.failed`, `timeout`, `mapping`, `parallel-context`, `loop.failed`,
-  `subworkflow.failed`, `unavailable`), a message and whether a retry could
-  help.
+  `subworkflow.failed`, `context-conflict`, `variable-conflict`,
+  `unavailable`), a message and whether a retry could help.
 - **Retries** (retry-safe actions only): up to five, with exponential backoff.
 - **Deadlines.** Each attempt's token is cancelled at its timeout, so
   cooperative actions stop there. A result that arrives after the timeout
@@ -421,6 +460,9 @@ Workflows → a workflow opens in the graph editor (`apps/desktop/src/workflow-b
 - **Inputs and outputs** of the open workflow are edited in the workflow
   panel (nothing selected): key, type, label, required, default and
   sensitive. The start node then offers the inputs to mappings.
+- **Variables** are declared in the workflow panel too (key, type, label,
+  initial value, sensitive). A **Set variable** node maps each of them, and
+  every output picker offers them as *Variable · …*.
 - **Validation** is the engine's (`validate_workflow_graph`), run as the
   graph changes. Problems show on the nodes, in the minimap and in the
   status bar. A workflow with errors cannot be saved, so a stored graph

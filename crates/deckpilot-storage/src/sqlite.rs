@@ -1763,6 +1763,7 @@ mod tests {
                 trigger: Trigger::Press,
                 target: BindingTarget::Action { action: *action },
                 label: None,
+                appearance: None,
             });
         }
         document["layouts"] = serde_json::to_value([&layout]).unwrap();

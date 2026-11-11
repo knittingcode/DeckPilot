@@ -39,6 +39,11 @@
 //!   The callee's declared outputs, set by its Output nodes, become the
 //!   node's outputs; its project context continues after the node, like a
 //!   Loop's. Its own nodes are not reported, only the Call node.
+//! - **Variables** flow along the connections like the project context:
+//!   a node reads (as `steps.vars.output.<key>`) the values set on its
+//!   path, starting from the initial values. A Join merges them by the same
+//!   rule; branches that set a variable to different values fail it
+//!   (`variable-conflict`). Variables belong to the run alone.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
@@ -82,8 +87,8 @@ pub enum NodeStatus {
 #[serde(rename_all = "camelCase")]
 pub struct StepError {
     /// Stable: `action.failed`, `timeout`, `cancelled`, `mapping`,
-    /// `context-conflict`, `unavailable`, `loop.failed`,
-    /// `subworkflow.failed`.
+    /// `context-conflict`, `variable-conflict`, `unavailable`,
+    /// `loop.failed`, `subworkflow.failed`.
     pub code: String,
     pub message: String,
     pub retryable: bool,
@@ -127,8 +132,12 @@ pub struct NodeReport {
     pub action: Option<crate::ActionInstanceId>,
     /// For Call nodes the workflow that ran, for Output nodes the workflow
     /// they belong to: the workflow whose declared outputs `output` holds.
+    /// For Set variable nodes, the workflow whose variables it set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<WorkflowId>,
+    /// A Set variable node: `output` holds the variables it set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sets_variables: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -238,6 +247,10 @@ struct RunState {
     taken: BTreeMap<NodeId, BTreeSet<Port>>,
     /// The context each node that ran passes on.
     contexts: BTreeMap<NodeId, Carried>,
+    /// The variables each node that ran passes on.
+    variables: BTreeMap<NodeId, Variables>,
+    /// The variables when the run starts: their initial values.
+    initial_variables: Variables,
     outputs: Outputs,
     reports: Vec<NodeReport>,
     failed: bool,
@@ -248,6 +261,10 @@ struct RunState {
 /// (`None`: the run's initial context).
 type Carried = (Option<ActiveProjectContext>, Vec<NodeId>);
 
+/// The variables passed along a connection: per key the value (if any) and
+/// the nodes that set it, in order.
+type Variables = BTreeMap<String, (Option<String>, Vec<NodeId>)>;
+
 /// What a node did: its report and the output ports it took.
 struct Outcome {
     report: NodeReport,
@@ -257,6 +274,8 @@ struct Outcome {
     stops_workflow: bool,
     /// Context after the node, when the node can change it.
     context: Option<ActiveProjectContext>,
+    /// Variables the node set.
+    variables: BTreeMap<String, String>,
 }
 
 impl Executor<'_> {
@@ -274,6 +293,8 @@ impl Executor<'_> {
             initial: context.clone(),
             taken: BTreeMap::new(),
             contexts: BTreeMap::new(),
+            variables: BTreeMap::new(),
+            initial_variables: self.initial_variables(),
             outputs: Outputs::new(),
             reports: Vec::new(),
             failed: false,
@@ -329,6 +350,7 @@ impl Executor<'_> {
     /// parallel when there are several) and records their outcomes.
     fn run_wave(&self, wave: &[NodeId], state: &mut RunState) {
         let mut active: Vec<(&NodeId, Carried)> = Vec::new();
+        let mut received_variables: BTreeMap<&NodeId, Variables> = BTreeMap::new();
         let mut outcomes = Vec::new();
         for id in wave {
             let activated = self.activated(id, &state.taken);
@@ -348,41 +370,161 @@ impl Executor<'_> {
                 state.taken.insert(id.clone(), BTreeSet::new());
                 continue;
             }
-            match self.input_context(id, &state.taken, &state.contexts) {
-                Ok(input) => active.push((id, input)),
-                Err(message) => {
+            let input = self
+                .input_context(id, &state.taken, &state.contexts)
+                .map_err(|message| ("context-conflict", message))
+                .and_then(|context| {
+                    self.input_variables(id, state)
+                        .map(|variables| (context, variables))
+                        .map_err(|message| ("variable-conflict", message))
+                });
+            match input {
+                Ok((context, variables)) => {
+                    active.push((id, context));
+                    received_variables.insert(id, variables);
+                }
+                Err((code, message)) => {
                     (self.on_event)(ExecutionEvent::NodeStarted { node: id.clone() });
                     let mut report = idle(id, NodeStatus::Failed, ms(state.start));
-                    report.error = Some(StepError::new("context-conflict", message, false));
+                    report.error = Some(StepError::new(code, message, false));
                     let mut outcome = finished(report, vec![]);
                     outcome.fails_workflow = true;
                     outcomes.push(outcome);
                 }
             }
         }
-        let runnable: Vec<(&NodeId, ActiveProjectContext)> = active
+        // What each node reads: earlier outputs, and the variables on its
+        // path as the outputs of `vars`.
+        let runnable: Vec<(&NodeId, ActiveProjectContext, Outputs)> = active
             .iter()
-            .map(|(id, (input, _))| (*id, input.clone().unwrap_or_else(|| state.initial.clone())))
+            .map(|(id, (input, _))| {
+                let mut outputs = state.outputs.clone();
+                if let (Some(variables), Ok(node)) = (
+                    received_variables.get(id),
+                    NodeId::new(super::VARIABLES_NODE),
+                ) && !state.initial_variables.is_empty()
+                {
+                    outputs.insert(
+                        node,
+                        variables
+                            .iter()
+                            .filter_map(|(key, (value, _))| Some((key.clone(), value.clone()?)))
+                            .collect(),
+                    );
+                }
+                (
+                    *id,
+                    input.clone().unwrap_or_else(|| state.initial.clone()),
+                    outputs,
+                )
+            })
             .collect();
         if runnable.len() > 1 {
-            outcomes.extend(self.run_concurrently(&runnable, &state.outputs, state.start));
+            outcomes.extend(self.run_concurrently(&runnable, state.start));
         } else {
             outcomes.extend(
                 runnable
                     .iter()
-                    .map(|(id, input)| self.node(id, input, &state.outputs, state.start)),
+                    .map(|(id, input, outputs)| self.node(id, input, outputs, state.start)),
             );
         }
         let carried: BTreeMap<&NodeId, Carried> = active.into_iter().collect();
         for outcome in outcomes {
             let received = carried.get(&outcome.report.node).cloned();
-            self.record(outcome, received, state);
+            let variables = received_variables.remove(&outcome.report.node);
+            self.record(outcome, received, variables, state);
         }
+    }
+
+    /// The variables when the run starts: every declared variable, with its
+    /// initial value converted to its kind (validation checked it).
+    fn initial_variables(&self) -> Variables {
+        self.profile
+            .workflow(self.workflow)
+            .map(|w| w.variables.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .map(|variable| {
+                let value = variable
+                    .initial
+                    .as_ref()
+                    .and_then(|text| convert(variable.kind, text, self.profile).ok());
+                (variable.key.clone(), (value, Vec::new()))
+            })
+            .collect()
+    }
+
+    /// The variables a node starts with: those of the node it follows, or
+    /// for a Join the merge of its taken branches, by the rule for project
+    /// contexts: per variable, branches that set it since they split must
+    /// end with the same value; otherwise the Join fails.
+    fn input_variables(&self, id: &NodeId, state: &RunState) -> Result<Variables, String> {
+        let incoming: Vec<&Variables> = self
+            .graph
+            .incoming(id)
+            .filter(|edge| {
+                state
+                    .taken
+                    .get(&edge.from)
+                    .is_some_and(|ports| ports.contains(&edge.port))
+            })
+            .filter_map(|edge| state.variables.get(&edge.from))
+            .collect();
+        let Some(first) = incoming.first() else {
+            return Ok(state.initial_variables.clone());
+        };
+        let mut merged = Variables::new();
+        for key in first.keys() {
+            let branches: Vec<&(Option<String>, Vec<NodeId>)> =
+                incoming.iter().filter_map(|vars| vars.get(key)).collect();
+            let Some(base) = branches.first() else {
+                continue;
+            };
+            let shared = branches
+                .iter()
+                .skip(1)
+                .fold(base.1.len(), |len, (_, writers)| {
+                    base.1[..len]
+                        .iter()
+                        .zip(writers)
+                        .take_while(|(a, b)| a == b)
+                        .count()
+                });
+            let diverged: Vec<&&(Option<String>, Vec<NodeId>)> = branches
+                .iter()
+                .filter(|(_, writers)| writers.len() > shared)
+                .collect();
+            let Some(winner) = diverged.first() else {
+                merged.insert(key.clone(), (*base).clone());
+                continue;
+            };
+            if !diverged.iter().all(|(value, _)| value == &winner.0) {
+                return Err(format!(
+                    "branches set the variable `{key}` to different values; a Join continues only when they agree"
+                ));
+            }
+            let mut writers = winner.1.clone();
+            for (_, other) in diverged.iter().skip(1) {
+                for writer in &other[shared..] {
+                    if !writers.contains(writer) {
+                        writers.push(writer.clone());
+                    }
+                }
+            }
+            merged.insert(key.clone(), (winner.0.clone(), writers));
+        }
+        Ok(merged)
     }
 
     /// Records what a node did: the context it passes on (what it received
     /// plus its own change), its outputs, the ports it took and its report.
-    fn record(&self, mut outcome: Outcome, received: Option<Carried>, state: &mut RunState) {
+    fn record(
+        &self,
+        mut outcome: Outcome,
+        received: Option<Carried>,
+        variables: Option<Variables>,
+        state: &mut RunState,
+    ) {
         state.failed |= outcome.fails_workflow;
         state.stopped |= outcome.stops_workflow;
         let id = outcome.report.node.clone();
@@ -390,6 +532,13 @@ impl Executor<'_> {
             outcome.report.status,
             NodeStatus::Succeeded | NodeStatus::Failed
         ) {
+            let mut passed = variables.unwrap_or_else(|| state.initial_variables.clone());
+            for (key, value) in std::mem::take(&mut outcome.variables) {
+                let entry = passed.entry(key).or_default();
+                entry.0 = Some(value);
+                entry.1.push(id.clone());
+            }
+            state.variables.insert(id.clone(), passed);
             let (input, mut changes) = received.unwrap_or((None, Vec::new()));
             let input = input.unwrap_or_else(|| state.initial.clone());
             let passed = match outcome.context.take() {
@@ -536,8 +685,7 @@ impl Executor<'_> {
     /// each with its own context. Outcomes keep the order of `active`.
     fn run_concurrently(
         &self,
-        active: &[(&NodeId, ActiveProjectContext)],
-        outputs: &Outputs,
+        active: &[(&NodeId, ActiveProjectContext, Outputs)],
         start: Instant,
     ) -> Vec<Outcome> {
         let mut outcomes = Vec::with_capacity(active.len());
@@ -545,7 +693,9 @@ impl Executor<'_> {
             let results: Vec<Outcome> = std::thread::scope(|scope| {
                 let handles: Vec<_> = chunk
                     .iter()
-                    .map(|(id, input)| scope.spawn(move || self.node(id, input, outputs, start)))
+                    .map(|(id, input, outputs)| {
+                        scope.spawn(move || self.node(id, input, outputs, start))
+                    })
                     .collect();
                 handles
                     .into_iter()
@@ -631,6 +781,7 @@ impl Executor<'_> {
                 policy,
             } => self.run_call(id, *workflow, inputs, *policy, context, outputs, started_ms),
             NodeKind::Output { values } => self.set_outputs(id, values, outputs, started_ms),
+            NodeKind::SetVariable { values } => self.set_variables(id, values, outputs, started_ms),
             NodeKind::Action {
                 action,
                 overrides,
@@ -835,6 +986,54 @@ impl Executor<'_> {
         Ok(values)
     }
 
+    /// A Set variable node: new values of this workflow's variables, each
+    /// converted to its declared kind. They reach the nodes after it.
+    fn set_variables(
+        &self,
+        id: &NodeId,
+        mappings: &BTreeMap<String, Mapping>,
+        outputs: &Outputs,
+        started_ms: u64,
+    ) -> Outcome {
+        let declared = self
+            .profile
+            .workflow(self.workflow)
+            .map(|w| w.variables.as_slice())
+            .unwrap_or_default();
+        let values: Result<BTreeMap<String, String>, String> = mappings
+            .iter()
+            .map(|(key, mapping)| {
+                let spec = declared
+                    .iter()
+                    .find(|v| &v.key == key)
+                    .ok_or_else(|| format!("`{key}` is not a variable of this workflow"))?;
+                let text = resolve(mapping, outputs)?;
+                let value =
+                    convert(spec.kind, &text, self.profile).map_err(|e| format!("`{key}` {e}"))?;
+                Ok((key.clone(), value))
+            })
+            .collect();
+        let mut report = idle(id, NodeStatus::Failed, started_ms);
+        report.workflow = Some(self.workflow);
+        report.sets_variables = true;
+        match values {
+            Ok(values) => {
+                report.status = NodeStatus::Succeeded;
+                report.message = format!("set {} variables", values.len());
+                report.output.clone_from(&values);
+                let mut outcome = finished(report, vec![Port::Out]);
+                outcome.variables = values;
+                outcome
+            }
+            Err(message) => {
+                report.error = Some(StepError::new("mapping", message, false));
+                let mut outcome = finished(report, vec![]);
+                outcome.fails_workflow = true;
+                outcome
+            }
+        }
+    }
+
     /// An Output node: this workflow's declared outputs from earlier nodes,
     /// each converted to its declared kind.
     fn set_outputs(
@@ -953,6 +1152,7 @@ impl Executor<'_> {
                 error,
                 action: Some(action),
                 workflow: None,
+                sets_variables: false,
             };
             if status == NodeStatus::Succeeded {
                 let mut outcome = finished(report, vec![Port::Out]);
@@ -1116,6 +1316,7 @@ fn idle(id: &NodeId, status: NodeStatus, started_ms: u64) -> NodeReport {
         error: None,
         action: None,
         workflow: None,
+        sets_variables: false,
     }
 }
 
@@ -1132,6 +1333,7 @@ fn finished(report: NodeReport, ports: Vec<Port>) -> Outcome {
         fails_workflow: false,
         stops_workflow: false,
         context: None,
+        variables: BTreeMap::new(),
     }
 }
 
