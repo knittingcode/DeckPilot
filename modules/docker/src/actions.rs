@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
-use deckpilot_core::graph::{ActionEffect, NodeSpec, OutputSpec, ValueKind};
+use deckpilot_core::graph::{ActionEffect, MAX_TIMEOUT_MS, NodeSpec, OutputSpec, ValueKind};
 use deckpilot_core::process::{ProcessLimits, ProcessOutput, minimal_environment};
 use deckpilot_core::{
     ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, ButtonState,
@@ -165,6 +165,30 @@ fn out(key: &str, label: &str, kind: ValueKind) -> OutputSpec {
     OutputSpec::new(key, label, kind)
 }
 
+/// `docker.status` succeeds without Docker, when the current context cannot
+/// be asked; its `context` is then left out.
+fn status_node() -> NodeSpec {
+    let mut spec = node(
+        "container",
+        vec![
+            out("available", "Available", ValueKind::Boolean),
+            out("reason", "Why not available", ValueKind::Text).optional(),
+            out("clientVersion", "Client version", ValueKind::Text).optional(),
+            out("serverVersion", "Engine version", ValueKind::Text).optional(),
+            out("serverOs", "Engine OS", ValueKind::Text).optional(),
+            out("composeVersion", "Compose version", ValueKind::Text).optional(),
+        ],
+        60_000,
+        ActionEffect::ReadOnly,
+    );
+    for output in &mut spec.outputs {
+        if output.key == CONTEXT {
+            output.always = false;
+        }
+    }
+    spec
+}
+
 fn node(icon: &str, outputs: Vec<OutputSpec>, timeout_ms: u32, effect: ActionEffect) -> NodeSpec {
     let mut all = outputs;
     all.push(out(CONTEXT, "Docker context", ValueKind::Text));
@@ -189,7 +213,9 @@ fn compose_outputs() -> Vec<OutputSpec> {
 
 #[allow(clippy::too_many_lines)] // One table of the seven action types.
 fn definition(kind: Kind) -> ActionType {
-    let change_timeout = 1_810_000;
+    // A workflow node runs at most MAX_TIMEOUT_MS; the module's longer time
+    // limit applies when a change runs outside a workflow.
+    let change_timeout = MAX_TIMEOUT_MS;
     let (id_value, name, description, parameters, spec) = match kind {
         Kind::Status => (
             STATUS,
@@ -198,19 +224,7 @@ fn definition(kind: Kind) -> ActionType {
              client, engine and Compose versions. Succeeds when Docker is unavailable; \
              `available` says so and `reason` why.",
             vec![context_parameter()],
-            node(
-                "container",
-                vec![
-                    out("available", "Available", ValueKind::Boolean),
-                    out("reason", "Why not available", ValueKind::Text).optional(),
-                    out("clientVersion", "Client version", ValueKind::Text).optional(),
-                    out("serverVersion", "Engine version", ValueKind::Text).optional(),
-                    out("serverOs", "Engine OS", ValueKind::Text).optional(),
-                    out("composeVersion", "Compose version", ValueKind::Text).optional(),
-                ],
-                60_000,
-                ActionEffect::ReadOnly,
-            ),
+            status_node(),
         ),
         Kind::Containers => (
             CONTAINERS,

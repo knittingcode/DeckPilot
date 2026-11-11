@@ -1210,6 +1210,17 @@ fn saving_and_loading_keeps_positions_exactly() {
     assert_eq!(loaded.nodes[1].position.x, 412.5);
 }
 
+#[test]
+fn node_time_limits_never_exceed_the_maximum() {
+    use super::executor::node_timeout;
+    let max = Duration::from_millis(u64::from(MAX_TIMEOUT_MS));
+    assert_eq!(node_timeout(None, 30_000), Duration::from_secs(30));
+    assert_eq!(node_timeout(Some(500), 30_000), Duration::from_millis(500));
+    // An action type that declares more is still bounded in a workflow.
+    assert_eq!(node_timeout(None, 3_610_000), max);
+    assert_eq!(node_timeout(Some(u32::MAX), 1_000), max);
+}
+
 // Sub-workflows ------------------------------------------------------------
 
 fn templates(values: &[(&str, &str)]) -> BTreeMap<String, Mapping> {

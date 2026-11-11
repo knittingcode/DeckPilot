@@ -37,6 +37,7 @@ import {
   Star,
   Terminal,
   Timer,
+  User,
   Wrench,
   Zap,
   type LucideIcon,
@@ -84,4 +85,5 @@ export const ACTION_ICONS: Record<string, LucideIcon> = {
   star: Star,
   settings: Settings,
   wrench: Wrench,
+  user: User,
 }

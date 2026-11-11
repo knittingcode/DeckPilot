@@ -140,7 +140,7 @@ fn definition(kind: Kind) -> ActionType {
             "An issue's summary, status, type, priority and assignee.",
             vec![issue_parameter(true)],
             reading(
-                "ticket",
+                "file-text",
                 vec![
                     out("key", "Key", ValueKind::Text),
                     // Written by people and may say anything.
@@ -239,7 +239,7 @@ fn definition(kind: Kind) -> ActionType {
                 issue_parameter(false),
             ],
             NodeSpec {
-                icon: Some("external-link".into()),
+                icon: Some("link".into()),
                 outputs: vec![out("url", "Opened", ValueKind::Url)],
                 timeout_ms: 15_000,
                 retry_safe: true,

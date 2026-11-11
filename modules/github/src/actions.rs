@@ -190,7 +190,7 @@ fn definition(kind: Kind) -> ActionType {
             "A repository's default branch, visibility, counts and when it was last pushed.",
             vec![repository_parameter(true)],
             reading(
-                "book",
+                "book-open",
                 vec![
                     out("fullName", "Repository", ValueKind::Text),
                     out("description", "Description", ValueKind::Text)
@@ -229,7 +229,7 @@ fn definition(kind: Kind) -> ActionType {
                 "Counts and lists open pull requests of a repository, or yours across \
                  repositories.",
                 vec![repository_parameter(false), filter, limit_parameter()],
-                reading("git-pull-request", list_outputs()),
+                reading("git-branch", list_outputs()),
             )
         }
         Kind::ReviewRequests => (
@@ -238,7 +238,7 @@ fn definition(kind: Kind) -> ActionType {
             "Open pull requests waiting for your review (directly or through a team), in every \
              repository or one.",
             vec![repository_parameter(false), limit_parameter()],
-            reading("eye", list_outputs()),
+            reading("search", list_outputs()),
         ),
         Kind::Checks => (
             CHECKS,
@@ -276,7 +276,7 @@ fn definition(kind: Kind) -> ActionType {
         ),
         Kind::Open => {
             let node = NodeSpec {
-                icon: Some("external-link".into()),
+                icon: Some("link".into()),
                 outputs: vec![out("url", "Opened", ValueKind::Url)],
                 timeout_ms: 15_000,
                 retry_safe: true,
