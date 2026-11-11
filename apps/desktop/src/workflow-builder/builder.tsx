@@ -53,6 +53,7 @@ import type {
   WorkflowInput,
   WorkflowOutput,
   WorkflowTrigger,
+  WorkflowVariable,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -88,6 +89,7 @@ import { ProjectScopeSetting } from "./project-scope"
 import { effectiveProjectScope, selectsProjects } from "./project-scope-model"
 import { type FlowNode, type NodeRun, NodeView } from "./node-view"
 import { TriggersEditor } from "./triggers-editor"
+import { VariablesEditor } from "./variables-editor"
 import { WorkflowInterfaceEditor } from "./workflow-interface"
 
 const NODE_TYPES = { workflow: NodeView }
@@ -221,6 +223,7 @@ function Builder({
   const [description, setDescription] = useState(initial.description ?? "")
   const [inputs, setInputs] = useState<WorkflowInput[]>(initial.inputs ?? [])
   const [outputs, setOutputs] = useState<WorkflowOutput[]>(initial.outputs ?? [])
+  const [variables, setVariables] = useState<WorkflowVariable[]>(initial.variables ?? [])
   const [triggers, setTriggers] = useState<WorkflowTrigger[]>(initial.triggers ?? [])
   const [triggersPaused, setTriggersPaused] = useState(Boolean(initial.triggersPaused))
   const [state, setState] = useState(() => history(initialGraph))
@@ -268,6 +271,7 @@ function Builder({
       modules,
       inputs,
       outputs,
+      variables,
       triggers,
       triggersPaused,
     }),
@@ -279,6 +283,7 @@ function Builder({
       modules,
       inputs,
       outputs,
+      variables,
       triggers,
       triggersPaused,
     ],
@@ -309,10 +314,22 @@ function Builder({
       projectScope,
       inputs: inputs.length ? inputs : undefined,
       outputs: outputs.length ? outputs : undefined,
+      variables: variables.length ? variables : undefined,
       triggers: triggers.length ? triggers : undefined,
       triggersPaused: triggersPaused || undefined,
     }),
-    [initial, name, description, graph, projectScope, inputs, outputs, triggers, triggersPaused],
+    [
+      initial,
+      name,
+      description,
+      graph,
+      projectScope,
+      inputs,
+      outputs,
+      variables,
+      triggers,
+      triggersPaused,
+    ],
   )
   const dirty =
     isNew ||
@@ -324,6 +341,7 @@ function Builder({
       s: projectScope,
       i: inputs,
       o: outputs,
+      v: variables,
       t: triggers,
       p: triggersPaused,
     }) !==
@@ -334,6 +352,7 @@ function Builder({
         s: initial.projectScope ?? projectScope,
         i: initial.inputs ?? [],
         o: initial.outputs ?? [],
+        v: initial.variables ?? [],
         t: initial.triggers ?? [],
         p: Boolean(initial.triggersPaused),
       })
@@ -956,6 +975,7 @@ function Builder({
                   onInputs={setInputs}
                   onOutputs={setOutputs}
                 />
+                <VariablesEditor variables={variables} onChange={setVariables} />
                 <TriggersEditor
                   triggers={triggers}
                   paused={triggersPaused}

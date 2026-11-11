@@ -22,6 +22,8 @@ export const MAX_DELAY_MS = 10 * 60 * 1000
 export const DEFAULT_CALL_TIMEOUT_MS = 10 * 60 * 1000
 /** Inputs and outputs a workflow can declare, each. */
 export const MAX_WORKFLOW_VALUES = 32
+/** The pseudo-node whose outputs are the run's variables (`VARIABLES_NODE`). */
+export const VARIABLES_NODE = "vars"
 const MAX_ID_LENGTH = 48
 
 export type NodeType = GraphNodeKind["type"]
@@ -73,7 +75,8 @@ export function isNodeId(id: string) {
 
 /** A readable, unused node id derived from `base` (e.g. an action name). */
 export function nodeId(base: string, taken: Iterable<string>) {
-  const used = new Set(taken)
+  // `vars` names the run's variables in references.
+  const used = new Set([...taken, VARIABLES_NODE])
   let slug = base
     .normalize("NFKD")
     .toLowerCase()

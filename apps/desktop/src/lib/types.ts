@@ -102,6 +102,8 @@ export interface Workflow {
   inputs?: WorkflowInput[]
   /** Values the workflow returns to a Sub-workflow node, set by its Output nodes. */
   outputs?: WorkflowOutput[]
+  /** Values that live for one run, set by Set variable nodes (graph workflows). */
+  variables?: WorkflowVariable[]
   /** Schedules and lifecycle events that start the workflow in the agent. */
   triggers?: WorkflowTrigger[]
   /** None of the triggers starts the workflow. */
@@ -152,6 +154,21 @@ export interface WorkflowInput {
   /** Used when the calling node gives none, and when the workflow runs on its own. */
   default?: string
   /** May be secret: only sensitive outputs may take it. */
+  sensitive?: boolean
+}
+
+/**
+ * A value that lives for one run of the workflow. Set by Set variable nodes
+ * and read as `steps.vars.output.<key>`; never shared with other runs or
+ * sub-workflows.
+ */
+export interface WorkflowVariable {
+  key: string
+  label?: string
+  kind: ValueKind
+  /** The value when a run starts. */
+  initial?: string
+  /** May hold a secret: never shown in history. */
   sensitive?: boolean
 }
 
@@ -217,6 +234,7 @@ export type GraphNodeKind =
       policy: ErrorPolicy
     }
   | { type: "output"; values?: Record<string, GraphMapping> }
+  | { type: "setVariable"; values?: Record<string, GraphMapping> }
   | { type: "delay"; ms: number }
   | { type: "stop" }
 
@@ -447,7 +465,7 @@ export type NodeStatus = "succeeded" | "failed" | "skipped" | "cancelled"
 export interface StepError {
   /**
    * `action.failed`, `timeout`, `cancelled`, `mapping`, `parallel-context`,
-   * `unavailable`, `loop.failed`, `subworkflow.failed`.
+   * `unavailable`, `loop.failed`, `subworkflow.failed`, `variable-conflict`.
    */
   code: string
   message: string
@@ -470,6 +488,8 @@ export interface NodeReport {
   action?: string
   /** Sub-workflow nodes: the workflow that ran; Output nodes: their own workflow. */
   workflow?: string
+  /** A Set variable node: `output` holds the variables it set. */
+  setsVariables?: boolean
 }
 
 export type ExecutionState = "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
