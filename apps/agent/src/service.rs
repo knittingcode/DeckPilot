@@ -222,6 +222,8 @@ pub struct Agent {
     states: states::ButtonStates,
     /// Rendered key images by face and size.
     frames: render::FrameCache,
+    /// Decoded icons of the active profile.
+    icons: render::Icons,
     handle: AgentHandle,
     commands: mpsc::UnboundedReceiver<Command>,
     signals_tx: mpsc::UnboundedSender<DeviceSignal>,
@@ -313,6 +315,7 @@ impl Agent {
             triggers: triggers::Triggers::default(),
             states: states::ButtonStates::default(),
             frames: render::FrameCache::new(FRAME_CACHE),
+            icons: render::Icons::default(),
             handle,
             commands,
             signals_tx,
@@ -765,6 +768,7 @@ impl Agent {
         info!(profile = %profile.name, "profile activated");
         self.states.reset();
         self.runtime.set_profile(Some(profile), project);
+        self.reload_icons();
         self.persisted_project = self.runtime.active_project_id();
         self.after_change();
         Ok(())
@@ -839,6 +843,7 @@ impl Agent {
             }
             other => self.runtime.set_profile(other, project),
         }
+        self.reload_icons();
         info!("configuration reloaded");
         self.after_change();
         Ok(())
@@ -865,6 +870,17 @@ impl Agent {
         self.states.invalidate();
         self.render_all();
         self.publish();
+    }
+
+    /// Decodes the active profile's icons (with limits) after it changed.
+    /// Rendered frames are dropped, as an icon may have changed.
+    fn reload_icons(&mut self) {
+        self.icons = self
+            .runtime
+            .profile()
+            .map(render::Icons::from_profile)
+            .unwrap_or_default();
+        self.frames.clear();
     }
 
     /// Redraws the keys of every device whose face changed and starts the
@@ -1067,8 +1083,10 @@ impl Agent {
                 ControlId::Encoder { .. } => None,
             };
             let Some(spec) = size else { continue };
-            let frame =
-                (!face.is_empty()).then(|| self.frames.frame(&face, spec.width, spec.height));
+            let frame = (!face.is_empty()).then(|| {
+                self.frames
+                    .frame(&face, spec.width, spec.height, &self.icons)
+            });
             updates.push((control, frame));
             session.rendered.insert(control, face);
         }

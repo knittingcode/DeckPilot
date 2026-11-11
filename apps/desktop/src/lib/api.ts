@@ -7,6 +7,7 @@ import type {
   ActionType,
   AgentConnection,
   ControlFace,
+  IconInfo,
   CredentialInfo,
   Conversion,
   GraphIssue,
@@ -207,7 +208,14 @@ export const api = {
     layout: DeviceLayout,
     pageId: string,
     projectId: string | null,
-  ) => invoke<ControlFace[]>("preview_layout", { profileId, layout, pageId, projectId }),
+    render?: boolean,
+  ) => invoke<ControlFace[]>("preview_layout", { profileId, layout, pageId, projectId, render }),
+  listIcons: (profileId: string) => invoke<IconInfo[]>("list_icons", { profileId }),
+  /** `data`: the PNG or JPEG file as base64 (at most 2 MiB). */
+  importIcon: (profileId: string, name: string, data: string) =>
+    invoke<IconInfo>("import_icon", { profileId, name, data }),
+  deleteIcon: (profileId: string, iconId: string) =>
+    invoke<null>("delete_icon", { profileId, iconId }),
 
   agentStatus: () => invoke<AgentConnection>("agent_status"),
   startAgent: () => invoke<AgentConnection>("start_agent"),

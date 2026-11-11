@@ -479,6 +479,7 @@ pub fn page_faces(
             let binding = shown_binding(page, *control);
             let face = binding.map_or_else(KeyFace::empty, |binding| {
                 face_for(registry, binding, layout, profile, project)
+                    .with_appearance(binding.appearance.as_ref())
             });
             (*control, face)
         })
@@ -590,6 +591,7 @@ mod tests {
             trigger: Trigger::Press,
             target,
             label: None,
+            appearance: None,
         };
         layout.page_mut(home).unwrap().bindings.extend([
             bind(0, BindingTarget::Action { action: next_id }),
@@ -742,6 +744,34 @@ mod tests {
         let faces = runtime.faces(&device());
         assert_eq!(faces[0].1.detail.as_deref(), Some("CMS"));
         assert!(faces[2].1.highlighted);
+    }
+
+    #[test]
+    fn faces_carry_the_binding_appearance() {
+        let mut f = fixture();
+        let look = crate::KeyAppearance {
+            background: Some(crate::Color([10, 20, 30])),
+            ..crate::KeyAppearance::default()
+        };
+        f.profile.layouts[0].pages[0].bindings[1].appearance = Some(look.clone());
+        // A default appearance is the same as none.
+        f.profile.layouts[0].pages[0].bindings[2].appearance =
+            Some(crate::KeyAppearance::default());
+        let layout = &f.profile.layouts[0];
+        let controls = deckpilot_device::models::stream_deck_mk2()
+            .capabilities
+            .controls();
+        let faces = page_faces(
+            &registry(),
+            layout,
+            layout.home_page,
+            &f.profile,
+            None,
+            &controls,
+        );
+        assert_eq!(faces[1].1.appearance, Some(look));
+        assert_eq!(faces[2].1.appearance, None);
+        assert_eq!(faces[0].1.appearance, None);
     }
 
     #[test]
