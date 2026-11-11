@@ -12,7 +12,7 @@ import type {
   WorkflowGraph,
 } from "@/lib/types"
 
-import { type Lookup, actionOf } from "./describe"
+import { type Lookup, actionOf, nodeOutputs } from "./describe"
 import { upstream } from "./graph"
 
 export type Segment = { type: "text"; text: string } | { type: "output"; reference: GraphReference }
@@ -55,6 +55,8 @@ export interface OutputOption {
   /** "node label · output label" */
   label: string
   kind: ValueKind
+  /** Kept out of history; may only go to sensitive inputs and outputs. */
+  sensitive?: boolean
 }
 
 /** Declared outputs of the nodes that run before `id`. */
@@ -62,11 +64,16 @@ export function outputOptions(graph: WorkflowGraph, id: string, lookup: Lookup):
   return upstream(graph, id).flatMap((nodeId) => {
     const node = graph.nodes.find((n) => n.id === nodeId)
     if (!node) return []
-    const { action, type } = actionOf(node, lookup)
-    return (type?.node?.outputs ?? []).map((output) => ({
+    const { action } = actionOf(node, lookup)
+    const callee =
+      node.type === "call" ? lookup.workflows.find((w) => w.id === node.workflow) : undefined
+    const title =
+      node.label || action?.name || callee?.name || (node.type === "trigger" ? "Inputs" : nodeId)
+    return nodeOutputs(node, lookup).map((output) => ({
       reference: { node: nodeId, output: output.key },
-      label: `${node.label || action?.name || nodeId} · ${output.label}`,
+      label: `${title} · ${output.label}`,
       kind: output.kind,
+      sensitive: output.sensitive,
     }))
   })
 }
@@ -83,11 +90,27 @@ export function referenceProblem(
   if (!upstream(graph, id).includes(reference.node)) {
     return `“${reference.node}” does not run before this node`
   }
-  const { type } = actionOf(node, lookup)
-  if (!type?.node?.outputs.some((o) => o.key === reference.output)) {
+  if (!nodeOutputs(node, lookup).some((o) => o.key === reference.output)) {
     return `“${reference.node}” has no output “${reference.output}”`
   }
   return null
+}
+
+/**
+ * The parameter kind a value of `kind` is checked like: sub-workflow inputs
+ * and workflow outputs are converted to their kind the way parameters are.
+ */
+export function parameterKindOf(kind: ValueKind): ParameterKind {
+  switch (kind) {
+    case "integer":
+      return { type: "integer" }
+    case "boolean":
+      return { type: "boolean" }
+    case "projectKey":
+      return { type: "project" }
+    default:
+      return { type: "text", multiline: false }
+  }
 }
 
 export const VALUE_KIND_LABEL: Record<ValueKind, string> = {
