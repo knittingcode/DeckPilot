@@ -160,7 +160,10 @@ export function DashboardPage() {
                   <Card className="transition-colors hover:bg-accent/50">
                     <CardHeader>
                       <CardDescription>{label} in the active profile</CardDescription>
-                      <CardTitle className="text-2xl tabular-nums">{count}</CardTitle>
+                      {/* Inside a button: no heading, the label describes the number. */}
+                      <CardTitle as="div" className="text-2xl tabular-nums">
+                        {count}
+                      </CardTitle>
                     </CardHeader>
                   </Card>
                 </button>
