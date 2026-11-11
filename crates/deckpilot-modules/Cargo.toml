@@ -17,6 +17,8 @@ deckpilot-module-git.workspace = true
 deckpilot-module-docker.workspace = true
 deckpilot-module-http.workspace = true
 deckpilot-module-notifications.workspace = true
+deckpilot-module-github.workspace = true
+deckpilot-module-gitlab.workspace = true
 
 [dev-dependencies]
 deckpilot-device.workspace = true

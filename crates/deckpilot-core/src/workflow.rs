@@ -88,6 +88,21 @@ pub struct Workflow {
     /// [`Workflow::effective_project_scope`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_scope: Option<ProjectScope>,
+    /// Values the workflow takes when a Sub-workflow node calls it. Graph
+    /// workflows only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<crate::graph::WorkflowInput>,
+    /// Values the workflow returns to a Sub-workflow node, set by its
+    /// Output nodes. Graph workflows only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<crate::graph::WorkflowOutput>,
+    /// Schedules and lifecycle events that start the workflow in the agent
+    /// (see [`crate::trigger`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<crate::trigger::WorkflowTrigger>,
+    /// The triggers are paused: none of them starts the workflow.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub triggers_paused: bool,
 }
 
 impl Workflow {
@@ -99,6 +114,10 @@ impl Workflow {
             steps: Vec::new(),
             graph: None,
             project_scope: None,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            triggers: Vec::new(),
+            triggers_paused: false,
         }
     }
 
@@ -136,6 +155,22 @@ impl Workflow {
         }
     }
 
+    /// Problems of the workflow's graph in `profile`, with this workflow's
+    /// own (possibly unsaved) inputs and outputs, and of its triggers.
+    pub fn graph_issues(
+        &self,
+        profile: &Profile,
+        registry: &ActionRegistry,
+    ) -> Vec<crate::graph::GraphIssue> {
+        let mut issues = self
+            .graph
+            .as_ref()
+            .map(|graph| graph.validate_as(self, profile, registry))
+            .unwrap_or_default();
+        issues.extend(self.trigger_issues(profile, registry));
+        issues
+    }
+
     #[must_use]
     pub fn step(mut self, action: ActionInstanceId, on_failure: OnFailure) -> Self {
         self.steps.push(WorkflowStep::new(action, on_failure));
@@ -148,8 +183,8 @@ impl Workflow {
         if self.name.trim().is_empty() {
             issues.push("workflow name must not be empty".to_owned());
         }
-        if let Some(graph) = &self.graph {
-            for issue in graph.validate(self.id, profile, registry) {
+        {
+            for issue in self.graph_issues(profile, registry) {
                 if issue.severity == crate::graph::IssueSeverity::Error {
                     issues.push(match issue.node {
                         Some(node) => format!("{node}: {}", issue.message),

@@ -769,6 +769,8 @@ fn fresh_installation_has_an_empty_action_library() {
             "docker",
             "general",
             "git",
+            "github",
+            "gitlab",
             "http",
             "notifications",
             "projects",

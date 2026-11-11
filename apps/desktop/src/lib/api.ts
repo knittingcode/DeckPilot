@@ -211,8 +211,7 @@ export const api = {
     pageId: string,
     projectId: string | null,
     render?: boolean,
-  ) =>
-    invoke<ControlFace[]>("preview_layout", { profileId, layout, pageId, projectId, render }),
+  ) => invoke<ControlFace[]>("preview_layout", { profileId, layout, pageId, projectId, render }),
   pageTree: (layout: DeviceLayout) => invoke<PageTree>("page_tree", { layout }),
   reorderPages: (profileId: string, layoutId: string, order: string[]) =>
     invoke<DeviceLayout>("reorder_pages", { profileId, layoutId, order }),
