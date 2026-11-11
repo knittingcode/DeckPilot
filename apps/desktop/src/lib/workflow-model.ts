@@ -80,3 +80,30 @@ export function validateWorkflow(workflow: Workflow, actionIds: Set<string>): st
   })
   return issues
 }
+
+/**
+ * Which workflow the editor shows. After a save, duplicate or delete the
+ * editor asks for a workflow that may not be in the profile yet; until the
+ * reloaded profile arrives it keeps showing what it showed before instead of
+ * falling back to an empty new workflow.
+ */
+export interface WorkflowSelection {
+  /** A workflow id, or a marker for a new, unsaved workflow. */
+  id: string
+  /** While waiting for a reload: the profile data at the time and what was shown. */
+  waiting?: { data: unknown; shown: string }
+}
+
+export function shownWorkflow(
+  selection: WorkflowSelection,
+  workflows: Workflow[],
+  data: unknown,
+  drafts: string[],
+): string {
+  const { id, waiting } = selection
+  if (drafts.includes(id) || workflows.some((w) => w.id === id)) return id
+  // The requested workflow has not arrived yet.
+  if (waiting && waiting.data === data) return waiting.shown
+  // Reloaded without it (for example deleted elsewhere): the first one, or a new one.
+  return workflows[0]?.id ?? drafts[0] ?? id
+}
