@@ -336,11 +336,11 @@ impl Agent {
                 break;
             }
         }
-        self.stop();
+        self.stop().await;
         Ok(())
     }
 
-    fn stop(mut self) {
+    async fn stop(mut self) {
         info!("agent shutting down");
         self.interrupt_executions();
         let _ = self.handle.events.send(AgentEvent::ShuttingDown);
@@ -349,7 +349,11 @@ impl Agent {
             let controls = session.rendered.keys().copied().collect();
             session.io.close(controls);
         }
+        // Wait until the listener is closed, so that an agent started right
+        // after (an update, a restart) can create the endpoint again; on
+        // Windows a pipe name stays taken while a listener holds it.
         self.server.abort();
+        let _ = (&mut self.server).await;
         let _ = std::fs::remove_file(&self.options.paths.token_file);
     }
 

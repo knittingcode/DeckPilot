@@ -18,7 +18,11 @@ pub fn create(path: &Path) -> io::Result<String> {
             hex
         });
 
-    let _ = std::fs::remove_file(path);
+    // Written next to the target and renamed over it, so readers never see
+    // a partial token. Windows refuses to replace a file that is still
+    // being closed or deleted (e.g. by the previous agent, or a scanner),
+    // so the rename is retried briefly.
+    let temporary = path.with_extension(format!("{}.tmp", &token[..16]));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -26,9 +30,25 @@ pub fn create(path: &Path) -> io::Result<String> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(path)?;
-    file.write_all(token.as_bytes())?;
-    file.sync_all()?;
+    {
+        let mut file = options.open(&temporary)?;
+        file.write_all(token.as_bytes())?;
+        file.sync_all()?;
+    }
+    let mut attempt = 0;
+    loop {
+        match std::fs::rename(&temporary, path) {
+            Ok(()) => break,
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied && attempt < 20 => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(error) => {
+                let _ = std::fs::remove_file(&temporary);
+                return Err(error);
+            }
+        }
+    }
     Ok(token)
 }
 
