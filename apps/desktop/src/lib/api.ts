@@ -244,6 +244,8 @@ export const SECURITY_CHANGED_EVENT = "deckpilot://security-changed"
 export const AGENT_STATUS_EVENT = "agent-status"
 /** Backend event with an {@link AgentExecutionEvent}. */
 export const EXECUTION_EVENT = "workflow-execution"
+/** Backend event with an {@link ActionNotification} for the status bar. */
+export const NOTIFICATION_EVENT = "agent-notification"
 /** Backend event carrying the latest {@link UpdateState}. */
 export const UPDATE_STATE_EVENT = "update-state"
 

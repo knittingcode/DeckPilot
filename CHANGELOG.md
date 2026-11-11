@@ -36,6 +36,11 @@ as the notes of its GitHub release and of the in-app update.
   address and redirect is checked. Credentials are stored on this computer
   and used by name — never in a workflow or an export, only over https,
   and never shown. Responses are bounded; TLS verification is always on.
+- Notifications module: show a notification (title, text, severity) or a
+  summary of the workflow run, as a desktop notification and in the status
+  bar. Text is plain and bounded; a notification that cannot be shown does
+  not stop the workflow unless marked critical. Preferences: desktop,
+  status bar and the least severity shown.
 - Action types declare what running them does (read-only, opens something,
   changes things) and failures carry a stable error code; both are shown in
   the workflow editor.

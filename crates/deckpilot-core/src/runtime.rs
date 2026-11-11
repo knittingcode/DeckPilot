@@ -53,6 +53,7 @@ pub struct WorkflowReport {
 pub struct Engine {
     registry: ActionRegistry,
     credentials: std::sync::Arc<dyn crate::CredentialSource>,
+    notifier: std::sync::Arc<dyn crate::notify::Notifier>,
 }
 
 impl Default for Engine {
@@ -66,7 +67,14 @@ impl Engine {
         Self {
             registry,
             credentials: std::sync::Arc::new(crate::NoCredentials),
+            notifier: std::sync::Arc::new(crate::notify::NoNotifier),
         }
+    }
+
+    /// The engine with a way to show notifications.
+    #[must_use]
+    pub fn with_notifier(self, notifier: std::sync::Arc<dyn crate::notify::Notifier>) -> Self {
+        Self { notifier, ..self }
     }
 
     /// The engine with the credentials stored on this computer.
@@ -414,6 +422,11 @@ impl Engine {
             on_event,
             cancel,
             limits: ExecutionLimits::default(),
+            summary: std::sync::Mutex::new(crate::RunSummary {
+                workflow: Some(workflow),
+                ..crate::RunSummary::default()
+            }),
+            started: std::time::Instant::now(),
         }
         .run(context)
     }
@@ -429,7 +442,8 @@ impl Engine {
     ) -> Result<ActionResult, EngineError> {
         let project = context.project(profile)?;
         let base = ExecutionContext::new(profile, project, machine)
-            .with_credentials(self.credentials.as_ref());
+            .with_credentials(self.credentials.as_ref())
+            .with_notifier(self.notifier.as_ref());
         let base = match control {
             Some(control) => base.with_control(control),
             None => base,

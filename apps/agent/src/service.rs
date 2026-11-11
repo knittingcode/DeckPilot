@@ -77,6 +77,9 @@ pub struct AgentOptions {
     pub clock: Clock,
     /// Detects the screen lock, where the platform allows it.
     pub screen_lock: Option<Arc<dyn deckpilot_presence::ScreenLockMonitor>>,
+    /// Shows native desktop notifications. `None`: only the app's status
+    /// bar shows them.
+    pub notifier: Option<Arc<dyn deckpilot_core::notify::Notifier>>,
 }
 
 impl std::fmt::Debug for AgentOptions {
@@ -784,9 +787,15 @@ impl Agent {
         // Credentials are loaded with the configuration, so the app asks
         // for a reload after changing one.
         let credentials = store.load_credentials()?;
+        let notifier = crate::notifications::AgentNotifier {
+            events: self.handle.events.clone(),
+            desktop_clients: self.handle.desktop_clients.clone(),
+            native: self.options.notifier.clone(),
+        };
         self.runtime.set_engine(
             Engine::new(self.modules.action_registry())
-                .with_credentials(std::sync::Arc::new(credentials)),
+                .with_credentials(std::sync::Arc::new(credentials))
+                .with_notifier(std::sync::Arc::new(notifier)),
         );
         match profile {
             Some(profile) if self.runtime.profile().is_some_and(|p| p.id == profile.id) => {
@@ -1202,6 +1211,7 @@ pub fn default_options(paths: AgentPaths, mock_models: &[DeviceModel]) -> AgentO
         cancel_grace: executions::CANCEL_GRACE,
         clock: system_clock(),
         screen_lock: deckpilot_presence::screen_lock_monitor().map(Arc::from),
+        notifier: Some(Arc::new(crate::notifications::SystemNotifier)),
     }
 }
 

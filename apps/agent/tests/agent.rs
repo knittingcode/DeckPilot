@@ -132,6 +132,8 @@ struct Extras {
     keys: Option<MemoryKeyStore>,
     clock: Option<Clock>,
     screen: Option<std::sync::Arc<ScriptedScreenLock>>,
+    /// Native notifications; never real ones in tests.
+    notifier: Option<std::sync::Arc<deckpilot_core::notify::RecordingNotifier>>,
 }
 
 /// Windows the agent asked to open by starting the app.
@@ -147,6 +149,7 @@ fn start_agent_with(
         keys,
         clock,
         screen,
+        notifier,
     } = extras;
     let lock = InstanceLock::acquire(&paths.lock_file)?;
     let options = AgentOptions {
@@ -168,6 +171,7 @@ fn start_agent_with(
         auto_lock_check: Duration::from_millis(50),
         cancel_grace: Duration::from_secs(10),
         clock: clock.unwrap_or_else(deckpilot_agent::system_clock),
+        notifier: notifier.map(|n| -> std::sync::Arc<dyn deckpilot_core::notify::Notifier> { n }),
         screen_lock: screen.map(|screen| -> std::sync::Arc<dyn ScreenLockMonitor> { screen }),
     };
     let agent = Agent::start(options, lock)?;
@@ -2685,5 +2689,98 @@ async fn http_requests_use_stored_credentials_and_keep_bodies_out_of_history() {
         assert!(!live.contains(secret), "{secret} in events");
     }
     drop(client);
+    agent.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn notifications_reach_the_status_bar_and_the_desktop() {
+    let paths = temp_paths();
+    let (work, key) = seed(&paths);
+    let mock = MockBackend::new();
+    let device = mock.plug(&models::stream_deck_mk2(), "TEST-0001");
+    let native = std::sync::Arc::new(deckpilot_core::notify::RecordingNotifier::new());
+    let (task, stop) = start_agent_with(
+        paths.clone(),
+        mock.clone(),
+        Extras {
+            notifier: Some(native.clone()),
+            ..Extras::default()
+        },
+    )
+    .unwrap();
+    unlock_agent(&paths, &key).await;
+    let agent = TestAgent {
+        paths,
+        mock,
+        device,
+        work,
+        key,
+        task: Some(task),
+        stop: Some(stop),
+    };
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let summary = registry()
+        .create_instance(
+            "Summary",
+            deckpilot_modules::notifications::id(
+                deckpilot_modules::notifications::WORKFLOW_SUMMARY,
+            ),
+            &ActionParameters::new(),
+        )
+        .unwrap();
+    let mut workflow = deckpilot_core::Workflow::new("Start work");
+    workflow.graph = Some(
+        serde_json::from_value(json!({
+            "version": 1,
+            "nodes": [
+                {"id": "start", "type": "trigger"},
+                {"id": "announce", "type": "action", "action": profile.actions[1].id},
+                {"id": "summary", "type": "action", "action": summary.id},
+            ],
+            "edges": [
+                {"from": "start", "to": "announce"},
+                {"from": "announce", "to": "summary"},
+            ],
+        }))
+        .unwrap(),
+    );
+    let workflow_id = workflow.id;
+    profile.actions.push(summary);
+    profile.workflows.push(workflow);
+    agent.store().save_profile(&profile).unwrap();
+
+    // The configuration app is open and listening.
+    let mut app = AgentClient::connect(&agent.paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    app.subscribe().await.unwrap();
+    let mut client = agent.client().await;
+    client.request(Request::ReloadConfiguration).await.unwrap();
+    let started = start_workflow(&mut client, workflow_id).await;
+    let shown = loop {
+        if let AgentEvent::Notification { notification } =
+            tokio::time::timeout(TIMEOUT, app.next_event())
+                .await
+                .unwrap()
+                .unwrap()
+        {
+            break notification;
+        }
+    };
+    assert_eq!(shown.title, "Start work");
+    assert!(shown.body.starts_with("1 succeeded"), "{}", shown.body);
+    assert_eq!(shown.severity, deckpilot_core::notify::Severity::Success);
+    let record = loop {
+        let record = execution(&mut client, started.id).await;
+        if record.summary.state != deckpilot_core::ExecutionState::Running {
+            break record;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let node = node(&record, "summary");
+    assert_eq!(node.output["desktop"], "true");
+    assert_eq!(node.output["statusBar"], "true");
+    assert_eq!(native.shown().len(), 1);
+    drop((app, client));
     agent.shutdown().await;
 }

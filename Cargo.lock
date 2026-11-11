@@ -1093,6 +1093,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "deckpilot-module-notifications"
+version = "0.5.0"
+dependencies = [
+ "deckpilot-core",
+]
+
+[[package]]
 name = "deckpilot-module-projects"
 version = "0.5.0"
 dependencies = [
@@ -1120,6 +1127,7 @@ dependencies = [
  "deckpilot-module-general",
  "deckpilot-module-git",
  "deckpilot-module-http",
+ "deckpilot-module-notifications",
  "deckpilot-module-projects",
  "deckpilot-module-system",
 ]

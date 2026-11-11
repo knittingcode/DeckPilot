@@ -30,7 +30,10 @@ use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId};
 /// Version 5: workflows run in the background. `startWorkflow` returns an
 /// execution that reports progress as events; runs can be cancelled, listed
 /// and inspected afterwards (execution history).
-pub const PROTOCOL_VERSION: u32 = 5;
+///
+/// Version 6: actions show notifications; the agent sends them to the app
+/// as `notification` events for its status bar.
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Most executions returned by one `listExecutions`.
 pub const MAX_EXECUTION_LIST: u32 = 200;
@@ -428,6 +431,11 @@ pub enum AgentEvent {
     ExecutionFinished {
         execution: ExecutionSummary,
     },
+    /// An action asked to show a notification; the app shows it in its
+    /// status bar. Since protocol 6.
+    Notification {
+        notification: deckpilot_core::notify::Notification,
+    },
 }
 
 impl AgentEvent {
@@ -438,6 +446,7 @@ impl AgentEvent {
             Self::ExecutionStarted { .. }
             | Self::ExecutionProgress { .. }
             | Self::ExecutionFinished { .. } => 5,
+            Self::Notification { .. } => 6,
             Self::OpenWindow { .. } => 4,
             Self::State { .. }
             | Self::ActionCompleted { .. }

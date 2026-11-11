@@ -30,6 +30,17 @@ import type {
 } from "@/lib/types"
 import { moduleStatusItems } from "@/modules"
 
+/** Listeners of backend events, as the app registers them. */
+const backend = new Map<string, (event: { payload: unknown }) => void>()
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (name: string, handler: (event: { payload: unknown }) => void) => {
+    backend.set(name, handler)
+    return Promise.resolve(() => {
+      backend.delete(name)
+    })
+  },
+}))
+
 beforeAll(() => {
   if (!("ResizeObserver" in globalThis)) {
     vi.stubGlobal(
@@ -295,6 +306,34 @@ describe("status bar", () => {
       />,
     )
     expect(bar.queryByText("LAB")).not.toBeInTheDocument()
+  })
+
+  it("lists the notifications workflow actions show", async () => {
+    const stores = createStatusStores()
+    render(<Shell stores={stores} value={context({})} />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const emit = backend.get("agent-notification")
+    expect(emit).toBeDefined()
+    act(() => {
+      emit?.({
+        payload: {
+          title: "<b>Start work</b>",
+          body: "3 succeeded",
+          severity: "success",
+          desktop: true,
+          statusBar: true,
+        },
+      })
+      emit?.({
+        payload: { title: "Hidden", severity: "error", desktop: true, statusBar: false },
+      })
+    })
+    const shown = stores.notifications.getSnapshot()
+    expect(shown.map((n) => n.title)).toEqual(["<b>Start work</b>"])
+    expect(shown[0].severity).toBe("info")
+    expect(shown[0].message).toBe("3 succeeded")
   })
 
   it("notifies once when the agent stops and when a device disconnects", () => {

@@ -650,6 +650,7 @@ fn start_agent_with(
         cancel_grace: std::time::Duration::from_secs(10),
         clock: deckpilot_agent::system_clock(),
         screen_lock: None,
+        notifier: None,
     };
     paths.create_dirs().unwrap();
     let lock = InstanceLock::acquire(&paths.lock_file).unwrap();
@@ -764,7 +765,15 @@ fn fresh_installation_has_an_empty_action_library() {
         .collect();
     assert_eq!(
         ids,
-        ["docker", "general", "git", "http", "projects", "system"]
+        [
+            "docker",
+            "general",
+            "git",
+            "http",
+            "notifications",
+            "projects",
+            "system"
+        ]
     );
     let module = |id: &str| {
         modules

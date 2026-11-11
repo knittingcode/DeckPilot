@@ -183,6 +183,15 @@ export interface NodeSpec {
 
 export type ActionEffect = "readOnly" | "opens" | "modifies"
 
+/** A notification an action asked the agent to show; plain text. */
+export interface ActionNotification {
+  title: string
+  body?: string
+  severity: "info" | "success" | "warning" | "error"
+  desktop: boolean
+  statusBar: boolean
+}
+
 /** A credential stored on this computer; the secret is never sent to the app. */
 export interface CredentialInfo {
   id: string

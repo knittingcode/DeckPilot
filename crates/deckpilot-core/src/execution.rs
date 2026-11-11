@@ -33,6 +33,23 @@ pub struct ExecutionContext<'a> {
     control: Option<&'a ExecutionControl<'a>>,
     /// Credentials stored on this computer.
     credentials: Option<&'a dyn crate::CredentialSource>,
+    /// Shows notifications.
+    notifier: Option<&'a dyn crate::notify::Notifier>,
+}
+
+/// How the workflow run an action belongs to is going, for actions that
+/// report on it. Node ids and counts only: no messages or outputs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSummary {
+    pub workflow: Option<crate::WorkflowId>,
+    pub elapsed_ms: u64,
+    pub succeeded: u32,
+    pub failed: u32,
+    pub skipped: u32,
+    pub cancelled: u32,
+    /// Ids of the nodes that failed so far.
+    pub failed_nodes: Vec<String>,
 }
 
 /// Progress a running action reports, shown on its workflow node.
@@ -53,6 +70,7 @@ pub struct Progress {
 pub struct ExecutionControl<'a> {
     cancel: &'a crate::CancellationToken,
     progress: &'a (dyn Fn(Progress) + Sync),
+    summary: Option<RunSummary>,
 }
 
 impl<'a> ExecutionControl<'a> {
@@ -60,7 +78,20 @@ impl<'a> ExecutionControl<'a> {
         cancel: &'a crate::CancellationToken,
         progress: &'a (dyn Fn(Progress) + Sync),
     ) -> Self {
-        Self { cancel, progress }
+        Self {
+            cancel,
+            progress,
+            summary: None,
+        }
+    }
+
+    /// With how the run is going when the attempt starts.
+    #[must_use]
+    pub fn with_summary(self, summary: RunSummary) -> Self {
+        Self {
+            summary: Some(summary),
+            ..self
+        }
     }
 }
 
@@ -86,7 +117,36 @@ impl<'a> ExecutionContext<'a> {
             capabilities: None,
             control: None,
             credentials: None,
+            notifier: None,
         }
+    }
+
+    /// The same context with a way to show notifications.
+    #[must_use]
+    pub fn with_notifier(self, notifier: &'a dyn crate::notify::Notifier) -> Self {
+        Self {
+            notifier: Some(notifier),
+            ..self
+        }
+    }
+
+    /// Shows a notification with the module's
+    /// [`Capability::Notifications`]. `Err` says why it could not be shown.
+    pub fn notify(
+        &self,
+        notification: &crate::notify::Notification,
+    ) -> Result<crate::notify::Delivery, String> {
+        self.require(Capability::Notifications)
+            .map_err(|denied| denied.to_string())?;
+        self.notifier
+            .ok_or_else(|| "notifications are not available".to_owned())?
+            .notify(notification)
+    }
+
+    /// How the workflow run is going, when the action runs in a workflow
+    /// graph.
+    pub fn run_summary(&self) -> Option<&'a RunSummary> {
+        self.control.and_then(|control| control.summary.as_ref())
     }
 
     /// The same context with access to stored credentials.

@@ -195,6 +195,9 @@ pub(crate) struct Executor<'a> {
     pub on_event: &'a (dyn Fn(ExecutionEvent) + Sync),
     pub cancel: &'a CancellationToken,
     pub limits: ExecutionLimits,
+    /// How the run is going, for actions that report on it.
+    pub summary: std::sync::Mutex<crate::RunSummary>,
+    pub started: Instant,
 }
 
 /// What a run has resolved so far.
@@ -372,6 +375,26 @@ impl Executor<'_> {
             state
                 .outputs
                 .insert(id.clone(), outcome.report.output.clone());
+        }
+        // The summary counts actions: what a user thinks of as steps.
+        let is_action = self
+            .graph
+            .node(&id)
+            .is_some_and(|n| matches!(n.kind, NodeKind::Action { .. }));
+        if is_action {
+            let mut summary = self
+                .summary
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match outcome.report.status {
+                NodeStatus::Succeeded => summary.succeeded += 1,
+                NodeStatus::Failed => {
+                    summary.failed += 1;
+                    summary.failed_nodes.push(id.as_str().to_owned());
+                }
+                NodeStatus::Skipped => summary.skipped += 1,
+                NodeStatus::Cancelled => summary.cancelled += 1,
+            }
         }
         (self.on_event)(ExecutionEvent::NodeFinished {
             report: outcome.report.clone(),
@@ -766,7 +789,13 @@ impl Executor<'_> {
                 progress,
             });
         };
-        let control = crate::ExecutionControl::new(&token, &progress);
+        let mut summary = self
+            .summary
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        summary.elapsed_ms = ms(self.started);
+        let control = crate::ExecutionControl::new(&token, &progress).with_summary(summary);
         let result = (self.run_action)(instance, parameters, working, &control);
         let late = begun.elapsed() > timeout;
         classify(

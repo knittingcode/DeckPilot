@@ -18,6 +18,7 @@ pub mod id;
 pub mod launch;
 pub mod layout;
 pub mod module;
+pub mod notify;
 pub mod platform;
 pub mod process;
 pub mod profile;
@@ -42,7 +43,7 @@ pub use credentials::{
 pub use device_runtime::{LayoutStatus, Runtime, RuntimeOutcome, page_faces};
 pub use execution::{
     ActionResult, ActionStatus, CapabilityDenied, ContextEffect, ExecutionContext,
-    ExecutionControl, Progress,
+    ExecutionControl, Progress, RunSummary,
 };
 pub use face::{FaceStyle, KeyFace, render_label};
 pub use history::{
