@@ -2428,3 +2428,132 @@ async fn system_commands_are_allowed_per_computer_and_their_output_is_not_kept()
     drop(client);
     agent.shutdown().await;
 }
+
+/// Runs `git` for test setup in a temporary repository only.
+fn test_git(dir: &std::path::Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env(
+            "GIT_CONFIG_GLOBAL",
+            if cfg!(windows) { "NUL" } else { "/dev/null" },
+        )
+        .output()
+        .unwrap();
+    assert!(status.status.success(), "{args:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn git_reads_the_repository_of_each_runs_own_project() {
+    let agent = setup().await;
+    // Temporary repositories for CMR and CMS, on separate branches.
+    let root = agent.paths.data_dir.join("repositories");
+    let mut machine = agent
+        .store()
+        .load_machine_config()
+        .unwrap()
+        .unwrap_or_else(|| deckpilot_core::MachineConfig::new(Os::current()));
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    for key in ["CMR", "CMS"] {
+        let dir = root.join(key.to_lowercase());
+        std::fs::create_dir_all(&dir).unwrap();
+        test_git(
+            &dir,
+            &["init", "-q", "-b", &format!("work-{}", key.to_lowercase())],
+        );
+        let resource =
+            deckpilot_core::ResourceKey::new(format!("{}.repo", key.to_lowercase())).unwrap();
+        machine.set_binding(deckpilot_core::MachineResourceBinding {
+            key: resource.clone(),
+            kind: deckpilot_core::ResourceKind::Directory,
+            value: dir.display().to_string(),
+        });
+        let project = profile
+            .projects
+            .iter_mut()
+            .find(|p| p.key.as_str() == key)
+            .unwrap();
+        project.resources.insert("repository".into(), resource);
+    }
+    agent.store().save_machine_config(&machine).unwrap();
+    // Each workflow selects its project, waits, then reads "the current
+    // project's" repository.
+    let status = registry()
+        .create_instance(
+            "Status",
+            deckpilot_modules::git::actions::id(deckpilot_modules::git::actions::STATUS),
+            &ActionParameters::new(),
+        )
+        .unwrap();
+    let status_id = status.id;
+    profile.actions.push(status);
+    let mut workflows = Vec::new();
+    for (key, ms) in [("CMR", 300), ("CMS", 50)] {
+        let mut workflow = select_wait_announce(
+            &mut profile,
+            key,
+            ms,
+            deckpilot_core::ProjectScope::Execution,
+        );
+        let graph = workflow.graph.as_mut().unwrap();
+        for node in &mut graph.nodes {
+            if let deckpilot_core::graph::NodeKind::Action { action, .. } = &mut node.kind
+                && node.id.as_str() == "announce"
+            {
+                *action = status_id;
+            }
+        }
+        workflows.push(workflow.id);
+        profile.workflows.push(workflow);
+    }
+    agent.store().save_profile(&profile).unwrap();
+    let mut events = agent.client().await;
+    events.subscribe().await.unwrap();
+    let mut client = agent.client().await;
+    client.request(Request::ReloadConfiguration).await.unwrap();
+
+    let first = start_workflow(&mut client, workflows[0]).await;
+    let second = start_workflow(&mut client, workflows[1]).await;
+    let mut finished = 0;
+    while finished < 2 {
+        if let AgentEvent::ExecutionFinished { .. } =
+            tokio::time::timeout(TIMEOUT, events.next_event())
+                .await
+                .unwrap()
+                .unwrap()
+        {
+            finished += 1;
+        }
+    }
+    for (id, key, branch) in [
+        (first.id, "CMR", "work-cmr"),
+        (second.id, "CMS", "work-cms"),
+    ] {
+        let record = execution(&mut client, id).await;
+        let status = node(&record, "announce");
+        assert_eq!(
+            status.status,
+            deckpilot_core::graph::NodeStatus::Succeeded,
+            "{:?}",
+            status.error
+        );
+        assert_eq!(status.output["projectKey"], key);
+        assert_eq!(status.output["branch"], branch);
+        assert_eq!(status.output["unborn"], "true");
+    }
+    assert_eq!(active_key(&agent.status().await), Some("SHOP"));
+    drop((events, client));
+    agent.shutdown().await;
+}

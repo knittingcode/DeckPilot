@@ -16,6 +16,13 @@ as the notes of its GitHub release and of the in-app update.
   a minimal environment; running them is off until allowed in Settings ›
   System on this computer. Their output reaches later workflow nodes but is
   never kept in history.
+- Git module: status, branch, changed files, last commit and remote state
+  of a project's repository, and opening it. Uses the repository of the
+  workflow's project or an explicitly chosen project, never changes the
+  active project, and never changes a repository. Remote state is what was
+  last fetched unless a refresh is asked for (`git ls-remote`, which
+  changes nothing locally). Detached HEADs, branches without commits and
+  missing remotes are reported as such.
 - Action types declare what running them does (read-only, opens something,
   changes things) and failures carry a stable error code; both are shown in
   the workflow editor.
