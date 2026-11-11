@@ -102,7 +102,7 @@ fn credential_parameters() -> Vec<ParameterSpec> {
         parameter(
             "credential",
             "Credential",
-            text(64, false),
+            ParameterKind::Credential,
             "The name of a credential stored on this computer (Settings › HTTP). The secret \
              is never part of the workflow.",
         ),
@@ -142,6 +142,7 @@ fn out(key: &str, label: &str, kind: ValueKind) -> OutputSpec {
     OutputSpec::new(key, label, kind)
 }
 
+#[allow(clippy::too_many_lines)] // One declaration of the request parameters.
 fn request_definition() -> ActionType {
     let mut parameters = vec![
         required(
@@ -152,17 +153,38 @@ fn request_definition() -> ActionType {
         parameter(
             "query",
             "Query parameters",
-            text(4000, true),
-            "name=value, one per line; values are encoded.",
+            ParameterKind::Pairs {
+                separator: "=".into(),
+                name_label: Some("Parameter".into()),
+                value_label: Some("Value".into()),
+                max_items: Some(50),
+                case_insensitive: false,
+                no_secrets: true,
+            },
+            "Values are encoded. Secrets belong in a stored credential.",
         ),
         parameter(
             "headers",
             "Headers",
-            text(8000, true),
-            "Name: value, one per line. Secrets (Authorization, cookies, tokens) belong in a \
-             stored credential.",
+            ParameterKind::Pairs {
+                separator: ":".into(),
+                name_label: Some("Header".into()),
+                value_label: Some("Value".into()),
+                max_items: Some(50),
+                case_insensitive: true,
+                no_secrets: true,
+            },
+            "Secrets (Authorization, cookies, tokens) belong in a stored credential.",
         ),
-        parameter("body", "Body", text(MAX_BODY_CHARS, true), ""),
+        parameter(
+            "body",
+            "Body",
+            ParameterKind::Code {
+                language: "json".into(),
+                max_length: Some(MAX_BODY_CHARS),
+            },
+            "",
+        ),
         required(
             parameter(
                 "bodyType",

@@ -1265,7 +1265,11 @@ impl Executor<'_> {
                 .map(|spec| &spec.kind)
                 .ok_or_else(|| format!("`{key}` is not a parameter of this action"))?;
             let value = match kind {
-                ParameterKind::Text { .. } => ParameterValue::Text(text),
+                ParameterKind::Text { .. }
+                | ParameterKind::Lines { .. }
+                | ParameterKind::Pairs { .. }
+                | ParameterKind::Code { .. }
+                | ParameterKind::Credential => ParameterValue::Text(text),
                 ParameterKind::Integer { .. } => ParameterValue::Integer(
                     text.trim()
                         .parse()
