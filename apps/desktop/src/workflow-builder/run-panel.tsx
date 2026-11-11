@@ -203,8 +203,23 @@ export function NodeRunReport({ run }: { run: NodeRun }) {
         <p className="rounded bg-muted px-2 py-1.5 text-xs break-words">{report.message}</p>
       )}
       {report.error && (
-        <div className="grid gap-0.5 rounded border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-xs">
-          <span className="font-mono text-destructive">{report.error.code}</span>
+        <div
+          className={cn(
+            "grid gap-0.5 rounded border px-2 py-1.5 text-xs",
+            // A cancellation is not a failure.
+            report.error.code === "cancelled"
+              ? "bg-muted"
+              : "border-destructive/40 bg-destructive/5",
+          )}
+        >
+          <span
+            className={cn(
+              "font-mono",
+              report.error.code === "cancelled" ? "text-muted-foreground" : "text-destructive",
+            )}
+          >
+            {report.error.code}
+          </span>
           <span className="break-words">{report.error.message}</span>
           {report.error.retryable && (
             <span className="text-muted-foreground">Running it again may help.</span>
