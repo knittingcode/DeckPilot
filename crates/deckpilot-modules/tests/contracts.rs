@@ -62,12 +62,6 @@ const KNOWN: &[(&str, &str, &str)] = &[
     ),
     // Findings in modules outside the integration modules, kept until their
     // owners decide.
-    ("general.log", "action-icon", "no icon declared"),
-    (
-        "general.log",
-        "action-retry",
-        "read-only, but marked neither retry-safe nor idempotent",
-    ),
     (
         "projects.next",
         "action-retry",
