@@ -158,7 +158,8 @@ cannot turn it on), **Compose resource** (`composeRole`, default
 **Contexts.** Every command is `docker --context <name> …`: the action's
 `context`, else the module's, else the context `docker context show`
 reports. The name is part of every result (`context`), so it is visible
-which engine was used; remote contexts (`ssh://`, TCP with TLS) work like
+which engine was used — except a `docker.status` that found no Docker and
+no context was chosen, since then no current context can be asked; remote contexts (`ssh://`, TCP with TLS) work like
 the local one. `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`, TLS
 variables and `SSH_AUTH_SOCK` are passed on.
 

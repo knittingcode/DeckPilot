@@ -62,11 +62,6 @@ const KNOWN: &[(&str, &str, &str)] = &[
     ),
     // Findings in modules outside the integration modules, kept until their
     // owners decide.
-    (
-        "docker.status",
-        "run-missing-output",
-        "without a Docker program, `context` (declared always present) is left out",
-    ),
     ("general.log", "action-icon", "no icon declared"),
     (
         "general.log",
