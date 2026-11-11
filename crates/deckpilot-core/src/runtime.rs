@@ -237,11 +237,21 @@ impl Engine {
         profile: &Profile,
         workflow: WorkflowId,
     ) -> Result<(), EngineError> {
+        self.check_runnable_with(profile, workflow, &std::collections::BTreeMap::new())
+    }
+
+    /// [`Engine::check_runnable`] for a run with these input values.
+    pub fn check_runnable_with(
+        &self,
+        profile: &Profile,
+        workflow: WorkflowId,
+        inputs: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), EngineError> {
         let definition = profile
             .workflow(workflow)
             .ok_or(EngineError::UnknownWorkflow(workflow))?;
         if definition.graph.is_some() {
-            workflow_inputs(definition, &std::collections::BTreeMap::new())?;
+            workflow_inputs(definition, inputs)?;
         }
         self.check_graph(profile, workflow)
     }
@@ -278,11 +288,40 @@ impl Engine {
         cancel: &CancellationToken,
         on_event: &(dyn Fn(ExecutionEvent) + Sync),
     ) -> Result<GraphReport, EngineError> {
+        self.execute_workflow_with(
+            profile,
+            machine,
+            context,
+            workflow,
+            &std::collections::BTreeMap::new(),
+            cancel,
+            on_event,
+        )
+    }
+
+    /// [`Engine::execute_workflow`] with values for the workflow's inputs,
+    /// e.g. from a trigger. Inputs without a value get their default; a
+    /// required one without a value is an error. Workflows without a graph
+    /// have no inputs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_workflow_with(
+        &self,
+        profile: &Profile,
+        machine: &MachineConfig,
+        context: &mut ActiveProjectContext,
+        workflow: WorkflowId,
+        inputs: &std::collections::BTreeMap<String, String>,
+        cancel: &CancellationToken,
+        on_event: &(dyn Fn(ExecutionEvent) + Sync),
+    ) -> Result<GraphReport, EngineError> {
         let definition = profile
             .workflow(workflow)
             .ok_or(EngineError::UnknownWorkflow(workflow))?;
         if definition.graph.is_some() {
-            self.run_graph(profile, machine, context, workflow, cancel, on_event)
+            let inputs = workflow_inputs(definition, inputs)?;
+            self.run_graph_nested(
+                profile, machine, context, workflow, &inputs, cancel, on_event, 0,
+            )
         } else {
             self.run_steps(profile, machine, context, workflow, cancel, on_event)
         }

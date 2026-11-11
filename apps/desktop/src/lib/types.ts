@@ -102,6 +102,41 @@ export interface Workflow {
   inputs?: WorkflowInput[]
   /** Values the workflow returns to a Sub-workflow node, set by its Output nodes. */
   outputs?: WorkflowOutput[]
+  /** Schedules and lifecycle events that start the workflow in the agent. */
+  triggers?: WorkflowTrigger[]
+  /** None of the triggers starts the workflow. */
+  triggersPaused?: boolean
+}
+
+export type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun"
+
+/** When a scheduled trigger is due; times are local `HH:MM`. */
+export type Schedule =
+  | { every: "interval"; minutes: number }
+  | { every: "daily"; at: string }
+  | { every: "weekly"; days: Weekday[]; at: string }
+
+export type LifecycleEvent =
+  "agentStarted" | "profileActivated" | "projectChanged" | "deviceConnected" | "deviceDisconnected"
+
+/** What a firing knows, offered to workflow inputs. */
+export type EventField =
+  | "firedAt"
+  | "profileName"
+  | "projectKey"
+  | "projectName"
+  | "previousProjectKey"
+  | "deviceId"
+  | "deviceModel"
+
+export type TriggerValue = { type: "fixed"; value: string } | { type: "event"; field: EventField }
+
+/** Something that starts a workflow by itself (crates/deckpilot-core/src/trigger.rs). */
+export type WorkflowTrigger = (
+  { type: "schedule"; schedule: Schedule } | { type: "lifecycle"; event: LifecycleEvent }
+) & {
+  /** Values for the workflow's inputs, by input key. */
+  inputs?: Record<string, TriggerValue>
 }
 
 /**
@@ -397,7 +432,7 @@ export interface NodeReport {
 }
 
 export type ExecutionState = "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
-export type ExecutionTrigger = "app" | "device"
+export type ExecutionTrigger = "app" | "device" | "schedule" | "lifecycle" | "other"
 
 export interface ExecutionSummary {
   id: string
@@ -405,6 +440,8 @@ export interface ExecutionSummary {
   workflowName: string
   profile: string
   trigger: ExecutionTrigger
+  /** For schedules and lifecycle events: which one, e.g. `every 15 min`. */
+  triggerDetail?: string
   state: ExecutionState
   /** Milliseconds since the Unix epoch. */
   startedAt: number

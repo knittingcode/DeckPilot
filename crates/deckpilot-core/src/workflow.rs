@@ -96,6 +96,13 @@ pub struct Workflow {
     /// Output nodes. Graph workflows only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outputs: Vec<crate::graph::WorkflowOutput>,
+    /// Schedules and lifecycle events that start the workflow in the agent
+    /// (see [`crate::trigger`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<crate::trigger::WorkflowTrigger>,
+    /// The triggers are paused: none of them starts the workflow.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub triggers_paused: bool,
 }
 
 impl Workflow {
@@ -109,6 +116,8 @@ impl Workflow {
             project_scope: None,
             inputs: Vec::new(),
             outputs: Vec::new(),
+            triggers: Vec::new(),
+            triggers_paused: false,
         }
     }
 
@@ -147,16 +156,19 @@ impl Workflow {
     }
 
     /// Problems of the workflow's graph in `profile`, with this workflow's
-    /// own (possibly unsaved) inputs and outputs. Empty without a graph.
+    /// own (possibly unsaved) inputs and outputs, and of its triggers.
     pub fn graph_issues(
         &self,
         profile: &Profile,
         registry: &ActionRegistry,
     ) -> Vec<crate::graph::GraphIssue> {
-        self.graph
+        let mut issues = self
+            .graph
             .as_ref()
             .map(|graph| graph.validate_as(self, profile, registry))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        issues.extend(self.trigger_issues(profile, registry));
+        issues
     }
 
     #[must_use]
@@ -171,7 +183,7 @@ impl Workflow {
         if self.name.trim().is_empty() {
             issues.push("workflow name must not be empty".to_owned());
         }
-        if self.graph.is_some() {
+        {
             for issue in self.graph_issues(profile, registry) {
                 if issue.severity == crate::graph::IssueSeverity::Error {
                     issues.push(match issue.node {

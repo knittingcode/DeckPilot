@@ -9,10 +9,12 @@ import type {
   WorkflowGraph,
   WorkflowInput,
   WorkflowOutput,
+  WorkflowTrigger,
 } from "@/lib/types"
 
 import { FLOW_TITLE } from "./catalog"
 import { upstream } from "./graph"
+import { triggersSummary } from "./trigger-model"
 
 export interface Lookup {
   actions: ActionInstance[]
@@ -25,6 +27,9 @@ export interface Lookup {
   inputs?: WorkflowInput[]
   /** The open workflow's declared outputs, set by its Output nodes. */
   outputs?: WorkflowOutput[]
+  /** The open workflow's triggers, shown on its start node. */
+  triggers?: WorkflowTrigger[]
+  triggersPaused?: boolean
 }
 
 /** An output a node provides to later nodes. */
@@ -109,6 +114,11 @@ export function describeNode(node: GraphNode, lookup: Lookup): { title: string; 
         detail: keys.length ? keys.join(", ") : "Sets no outputs",
       }
     }
+    case "trigger":
+      return {
+        title: label || FLOW_TITLE.trigger,
+        detail: triggersSummary(lookup.triggers, lookup.triggersPaused),
+      }
     case "delay":
       return { title: label || "Delay", detail: formatMs(node.ms) }
     default:
