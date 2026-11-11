@@ -245,7 +245,7 @@ impl ExecutionRecord {
 }
 
 /// `report` with what may be shown and stored: outputs the node's action
-/// type declares, and shortened messages.
+/// type declares and does not mark sensitive, and shortened messages.
 pub fn safe_report(
     report: &NodeReport,
     profile: &Profile,
@@ -260,6 +260,7 @@ pub fn safe_report(
                 .node
                 .outputs
                 .iter()
+                .filter(|o| !o.sensitive)
                 .map(|o| o.key.as_str())
                 .collect()
         })
@@ -372,6 +373,7 @@ mod tests {
             code: "action.failed".into(),
             message: "no such file".into(),
             retryable: false,
+            action_code: None,
         });
         record.finish(
             GraphReport {

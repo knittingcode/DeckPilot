@@ -142,6 +142,34 @@ impl<'a> ExecutionContext<'a> {
             .is_none_or(|granted| granted.contains(&capability))
     }
 
+    /// Checks that the module may use `capability`. Modules call this
+    /// before doing what the capability covers (opening a page, sending a
+    /// request); the core's own helpers such as
+    /// [`ExecutionContext::run_process`] check it themselves.
+    pub fn permit(&self, capability: Capability) -> Result<(), CapabilityDenied> {
+        self.require(capability)
+    }
+
+    /// Runs a program to completion with the module's
+    /// [`Capability::ProcessExecution`], stopping it when the run is
+    /// cancelled, when the node's timeout passes or after `timeout`,
+    /// whichever comes first. Output is captured up to `limits`.
+    pub fn run_process(
+        &self,
+        command: std::process::Command,
+        timeout: std::time::Duration,
+        limits: crate::process::ProcessLimits,
+    ) -> Result<crate::process::ProcessOutput, crate::process::ProcessError> {
+        self.require(Capability::ProcessExecution)
+            .map_err(crate::process::ProcessError::NotPermitted)?;
+        let deadline = std::time::Instant::now() + timeout;
+        let token = match self.cancellation() {
+            Some(token) => token.child_with_deadline(deadline),
+            None => crate::CancellationToken::new().child_with_deadline(deadline),
+        };
+        crate::process::run(command, Some(&token), limits)
+    }
+
     fn require(&self, capability: Capability) -> Result<(), CapabilityDenied> {
         if self.allows(capability) {
             Ok(())
@@ -197,7 +225,7 @@ pub struct CapabilityDenied(pub Capability);
 
 impl From<CapabilityDenied> for ActionResult {
     fn from(denied: CapabilityDenied) -> Self {
-        ActionResult::failure(denied.to_string())
+        ActionResult::error("not-permitted", denied.to_string())
     }
 }
 
@@ -232,6 +260,11 @@ pub struct ActionResult {
     /// resource. Keys are camelCase; values are plain text.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub data: BTreeMap<String, String>,
+    /// Why a failed action failed, as a stable code from the module's
+    /// documented list, e.g. `exit-nonzero` or `resource-unbound`. Shown
+    /// with the message and available to workflow conditions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 impl ActionResult {
@@ -241,6 +274,7 @@ impl ActionResult {
             message: message.into(),
             effects: Vec::new(),
             data: BTreeMap::new(),
+            code: None,
         }
     }
 
@@ -250,6 +284,7 @@ impl ActionResult {
             message: message.into(),
             effects: Vec::new(),
             data: BTreeMap::new(),
+            code: None,
         }
     }
 
@@ -259,6 +294,15 @@ impl ActionResult {
             message: message.into(),
             effects: Vec::new(),
             data: BTreeMap::new(),
+            code: None,
+        }
+    }
+
+    /// A failure with a stable error code.
+    pub fn error(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: Some(code.into()),
+            ..Self::failure(message)
         }
     }
 

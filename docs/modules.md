@@ -19,6 +19,10 @@ third-party executables and no remote installation.
 | ---------- | ----- | ------------ |
 | `general`  | — | read profile |
 | `projects` | Projects | read profile, change active project, read machine resources |
+| `system` | — (settings) | read machine resources, open applications/files/pages, run programs, see running programs |
+
+The integration modules and their actions are described in
+[Integration modules](integration-modules.md).
 
 ### Action catalog
 
@@ -84,11 +88,18 @@ parameter's kind; the engine checks references against earlier nodes'
 declared outputs. Resource parameters cannot be mapped.
 
 **Output schema.** `NodeSpec::outputs`: key, label, kind (`text`,
-`integer`, `boolean`, `path`, `url`, `projectKey`) and whether it is always
-present on success. Outputs are the `data` of a successful `ActionResult`.
-Only declared outputs are passed to later nodes' reports, events and
-history (safe output serialization); messages are shortened to 500
-characters. Never put secrets in outputs or messages.
+`integer`, `boolean`, `path`, `url`, `projectKey`), whether it is always
+present on success, and whether it is `sensitive`. Outputs are the `data`
+of a successful `ActionResult`. Only declared outputs are passed to later
+nodes' reports, events and history (safe output serialization); sensitive
+outputs (a program's output, a response body) reach later nodes but never
+events or history. Messages are shortened to 500 characters. Never put
+secrets in outputs or messages. Build outputs with `OutputSpec::new(..)`
+and `.optional()` / `.sensitive()`.
+
+**Effect.** `NodeSpec::effect`: `readOnly` (default), `opens` (opens
+something for the user) or `modifies` (changes state). Shown in the catalog
+and the inspector.
 
 **Execution context.** `ActionHandler::execute(parameters, context)` gets
 an `ExecutionContext`: the profile, the node's project (the run's own
@@ -100,8 +111,13 @@ progress reporter. Handlers do not mutate state; they request changes as
 run's context after checking the module's capability.
 
 **Capability permissions.** The module manifest declares capabilities
-(`ProfileRead`, `ProjectContext`, `MachineResources`); the context refuses
-the rest (`CapabilityDenied`). A node that selects projects declares
+(`ProfileRead`, `ProjectContext`, `MachineResources`, `OpenExternal`,
+`ProcessExecution`, `ProcessInspect`, `Network`, `Notifications`,
+`Credentials`); the context refuses the rest (`CapabilityDenied`). Core
+helpers check them (`resolve`, `run_process`); for the others a handler
+calls `context.permit(capability)` before acting. Actions that are risky
+even for a permitted module, such as running user-chosen commands, are
+additionally off until a machine-specific module setting allows them. A node that selects projects declares
 `changesContext`; it changes the run's context only. Changing DeckPilot's
 active project is never a node's decision: it is the workflow's project
 scope (see [Workflow graphs](workflow-graphs.md#project-context-and-the-active-project)).
@@ -111,7 +127,9 @@ scope (see [Workflow graphs](workflow-graphs.md#project-context-and-the-active-p
 attempt's timeout passes (`CancelReason::Cancelled` /
 `DeadlineExceeded`). Long-running handlers check `context.is_cancelled()`,
 wait with `context.wait(duration)` instead of sleeping, run programs with
-`deckpilot_core::process::run` (which stops the program's process group:
+`context.run_process(command, timeout, limits)` — `deckpilot_core::process::run`
+bounded by the action's own time limit, so a single action started from a
+key is bounded too — (which stops the program's process group:
 `SIGTERM`, `SIGKILL` after a grace period; the process tree on Windows; no
 orphans, nothing outside the group), and return promptly. They declare
 `NodeSpec::cancellable = true`. A handler that cannot be interrupted keeps
@@ -134,8 +152,11 @@ the node's input context.
 as once. Informational for users and future replays.
 
 **Structured errors.** A failed node reports `StepError { code, message,
-retryable }` with stable codes: `action.failed`, `timeout`, `cancelled`,
-`mapping`, `context-conflict`, `unavailable`, `loop.failed`. Cancellation is
+retryable, actionCode }` with stable codes: `action.failed`, `timeout`,
+`cancelled`, `mapping`, `context-conflict`, `unavailable`, `loop.failed`.
+For `action.failed`, `actionCode` is the action's own code
+(`ActionResult::error(code, message)`), documented by its module, e.g.
+`exit-nonzero`. Cancellation is
 never reported as a failure or a timeout, and a timeout never as a
 cancellation.
 

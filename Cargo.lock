@@ -1073,6 +1073,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "deckpilot-module-system"
+version = "0.5.0"
+dependencies = [
+ "deckpilot-core",
+ "sysinfo",
+ "url",
+]
+
+[[package]]
 name = "deckpilot-modules"
 version = "0.5.0"
 dependencies = [
@@ -1080,6 +1089,7 @@ dependencies = [
  "deckpilot-device",
  "deckpilot-module-general",
  "deckpilot-module-projects",
+ "deckpilot-module-system",
 ]
 
 [[package]]

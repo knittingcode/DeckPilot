@@ -762,8 +762,10 @@ fn fresh_installation_has_an_empty_action_library() {
         .iter()
         .map(|m| m["id"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(ids, ["general", "projects"]);
+    assert_eq!(ids, ["general", "projects", "system"]);
     assert_eq!(modules[1]["pages"][0]["id"], "projects");
+    // Modules with risky actions start with them switched off.
+    assert_eq!(modules[2]["configValues"]["allowCommands"]["value"], false);
     let types: Vec<_> = modules[1]["actionTypes"]
         .as_array()
         .unwrap()

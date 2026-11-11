@@ -97,6 +97,23 @@ pub enum Capability {
     ProjectContext,
     /// Read this machine's resource bindings (paths, URLs, commands).
     MachineResources,
+    /// Open applications, files, folders and web pages with the programs
+    /// the operating system chooses for them.
+    OpenExternal,
+    /// Start programs and wait for them, e.g. a command, `git` or
+    /// `docker`. Running user-chosen commands is additionally switched off
+    /// per module until the user allows it on this computer.
+    ProcessExecution,
+    /// See which programs are running, without their command lines or
+    /// environment.
+    ProcessInspect,
+    /// Send requests over the network.
+    Network,
+    /// Show desktop notifications.
+    Notifications,
+    /// Use credentials stored on this computer, by their identifier. The
+    /// secret itself is never part of a workflow or an export.
+    Credentials,
 }
 
 impl Capability {
@@ -105,6 +122,12 @@ impl Capability {
             Self::ProfileRead => "Read the active profile",
             Self::ProjectContext => "Change the active project",
             Self::MachineResources => "Read this computer's resource bindings",
+            Self::OpenExternal => "Open applications, files and web pages",
+            Self::ProcessExecution => "Run programs on this computer",
+            Self::ProcessInspect => "See which programs are running",
+            Self::Network => "Send network requests",
+            Self::Notifications => "Show desktop notifications",
+            Self::Credentials => "Use credentials stored on this computer",
         }
     }
 }

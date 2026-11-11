@@ -98,6 +98,7 @@ fn output(key: &str, label: &str, kind: ValueKind) -> OutputSpec {
         label: label.into(),
         kind,
         always: true,
+        sensitive: false,
     }
 }
 

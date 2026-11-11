@@ -5,6 +5,21 @@ All notable changes to DeckPilot. The format follows
 [Semantic Versioning](https://semver.org/). The section of a version is used
 as the notes of its GitHub release and of the in-app update.
 
+## [0.6.0] - Unreleased
+
+### Added
+
+- System module: open applications, web pages, files and folders, run
+  commands and check whether a program is running. Applications, folders
+  and programs come from resources bound on each computer. Commands run
+  without a shell, with an argument list, a time limit, bounded output and
+  a minimal environment; running them is off until allowed in Settings ›
+  System on this computer. Their output reaches later workflow nodes but is
+  never kept in history.
+- Action types declare what running them does (read-only, opens something,
+  changes things) and failures carry a stable error code; both are shown in
+  the workflow editor.
+
 ## [0.5.0] - Unreleased
 
 ### Added

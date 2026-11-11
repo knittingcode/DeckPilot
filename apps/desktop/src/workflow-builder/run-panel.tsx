@@ -219,6 +219,7 @@ export function NodeRunReport({ run }: { run: NodeRun }) {
             )}
           >
             {report.error.code}
+            {report.error.actionCode && ` · ${report.error.actionCode}`}
           </span>
           <span className="break-words">{report.error.message}</span>
           {report.error.retryable && (

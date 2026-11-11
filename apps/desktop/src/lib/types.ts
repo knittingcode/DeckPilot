@@ -169,14 +169,19 @@ export type ValueKind = "text" | "integer" | "boolean" | "path" | "url" | "proje
 export interface NodeSpec {
   version: number
   icon: string | null
-  outputs: { key: string; label: string; kind: ValueKind; always: boolean }[]
+  /** `sensitive` outputs reach later nodes but are never kept in history. */
+  outputs: { key: string; label: string; kind: ValueKind; always: boolean; sensitive?: boolean }[]
   timeoutMs: number
   retrySafe: boolean
   idempotent: boolean
   changesContext: boolean
   /** The action stops promptly when cancelled or at its timeout. */
   cancellable?: boolean
+  /** What running it does: only reads, opens something, or changes state. */
+  effect?: ActionEffect
 }
+
+export type ActionEffect = "readOnly" | "opens" | "modifies"
 
 export interface Project {
   id: string
@@ -275,6 +280,8 @@ export interface ActionResult {
   message: string
   /** Structured details, e.g. `projectKey`, `resource`, `value`. */
   data?: Record<string, string>
+  /** Why it failed, as the module's stable error code. */
+  code?: string
 }
 
 export interface StepReport {
@@ -296,6 +303,8 @@ export interface StepError {
   code: string
   message: string
   retryable: boolean
+  /** For `action.failed`: the action's own error code, e.g. `exit-nonzero`. */
+  actionCode?: string
 }
 
 export interface NodeReport {
@@ -384,7 +393,16 @@ export interface ResourceCheck {
   usedBy: string[]
 }
 
-export type Capability = "profile-read" | "project-context" | "machine-resources"
+export type Capability =
+  | "profile-read"
+  | "project-context"
+  | "machine-resources"
+  | "open-external"
+  | "process-execution"
+  | "process-inspect"
+  | "network"
+  | "notifications"
+  | "credentials"
 
 export interface ModulePage {
   id: string

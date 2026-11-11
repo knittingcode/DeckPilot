@@ -178,6 +178,19 @@ pub enum ResolveError {
     },
 }
 
+impl ResolveError {
+    /// Stable error code for [`crate::ActionResult::code`].
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::NotPermitted => "not-permitted",
+            Self::NoActiveProject => "no-active-project",
+            Self::RoleNotDefined { .. } => "resource-role-missing",
+            Self::Unbound(_) => "resource-unbound",
+            Self::KindMismatch { .. } => "resource-kind-mismatch",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

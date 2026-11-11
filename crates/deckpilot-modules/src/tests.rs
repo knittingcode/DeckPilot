@@ -42,7 +42,7 @@ fn builtin_modules_register_with_namespaced_action_types() {
     let registry = builtin(Os::Linux);
     let modules = registry.modules();
     let ids: Vec<_> = modules.iter().map(|m| m.manifest.id.to_string()).collect();
-    assert_eq!(ids, ["general", "projects"]);
+    assert_eq!(ids, ["general", "projects", "system"]);
     assert!(modules.iter().all(|m| m.enabled && m.supported));
 
     let types: Vec<_> = modules
@@ -61,7 +61,13 @@ fn builtin_modules_register_with_namespaced_action_types() {
             "projects.active",
             "projects.repository",
             "projects.documentation",
-            "projects.resolve-resource"
+            "projects.resolve-resource",
+            "system.open-app",
+            "system.open-url",
+            "system.open-file",
+            "system.open-directory",
+            "system.run-command",
+            "system.process-status",
         ]
     );
     let executable = registry.action_registry().action_types().count();

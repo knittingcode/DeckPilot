@@ -80,6 +80,10 @@ pub struct StepError {
     pub code: String,
     pub message: String,
     pub retryable: bool,
+    /// For `action.failed`: the action's own error code, e.g.
+    /// `exit-nonzero` (see [`ActionResult::code`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_code: Option<String>,
 }
 
 impl StepError {
@@ -88,6 +92,7 @@ impl StepError {
             code: code.to_owned(),
             message: message.into(),
             retryable,
+            action_code: None,
         }
     }
 }
@@ -933,11 +938,10 @@ fn classify(
         }
         Ok(result) => (
             NodeStatus::Failed,
-            Some(StepError::new(
-                "action.failed",
-                result.message.clone(),
-                retry_safe,
-            )),
+            Some(StepError {
+                action_code: result.code.clone(),
+                ..StepError::new("action.failed", result.message.clone(), retry_safe)
+            }),
             result.message,
             BTreeMap::new(),
         ),

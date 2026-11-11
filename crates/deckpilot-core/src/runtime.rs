@@ -196,6 +196,7 @@ impl Engine {
 
     /// The sequential engine of [`Engine::run_workflow`] with events and
     /// cancellation between steps.
+    #[allow(clippy::too_many_lines)]
     fn run_steps(
         &self,
         profile: &Profile,
@@ -280,6 +281,7 @@ impl Engine {
                         code: "action.failed".into(),
                         message: result.message.clone(),
                         retryable: false,
+                        action_code: result.code.clone(),
                     });
                     failed = true;
                     stopped = step.on_failure == OnFailure::Stop;

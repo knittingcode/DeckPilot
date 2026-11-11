@@ -188,6 +188,7 @@ impl Wait {
                     label: "Waited (ms)".into(),
                     kind: deckpilot_core::graph::ValueKind::Integer,
                     always: true,
+                    sensitive: false,
                 }],
                 // The longest wait plus a margin.
                 timeout_ms: u32::try_from(MAX_WAIT_SECONDS * 1000 + 10_000).unwrap_or(u32::MAX),
@@ -195,6 +196,7 @@ impl Wait {
                 idempotent: true,
                 changes_context: false,
                 cancellable: true,
+                effect: deckpilot_core::graph::ActionEffect::ReadOnly,
             },
         })
     }

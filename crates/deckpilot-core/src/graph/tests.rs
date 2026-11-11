@@ -121,6 +121,7 @@ impl Fixture {
                             label: "Value".into(),
                             kind: ValueKind::Text,
                             always: true,
+                            sensitive: false,
                         }],
                         retry_safe: true,
                         idempotent: true,
