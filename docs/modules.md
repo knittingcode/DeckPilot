@@ -27,6 +27,7 @@ third-party executables and no remote installation.
 | `notifications` | — (settings) | read profile, show notifications |
 | `projects` | Projects | read profile, change active project, read machine resources |
 | `system` | — (settings) | read machine resources, open applications/files/pages, run programs, see running programs |
+| `workspace` | — | read profile, read machine resources, open applications/files/pages |
 
 The integration modules and their actions are described in
 [Integration modules](integration-modules.md).

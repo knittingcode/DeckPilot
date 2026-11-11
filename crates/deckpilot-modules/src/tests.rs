@@ -54,7 +54,8 @@ fn builtin_modules_register_with_namespaced_action_types() {
             "jira",
             "notifications",
             "projects",
-            "system"
+            "system",
+            "workspace"
         ]
     );
     assert!(modules.iter().all(|m| m.enabled && m.supported));
@@ -115,6 +116,9 @@ fn builtin_modules_register_with_namespaced_action_types() {
             "system.open-directory",
             "system.run-command",
             "system.process-status",
+            "workspace.open-in-editor",
+            "workspace.open-urls",
+            "workspace.open-project",
         ]
     );
     let executable = registry.action_registry().action_types().count();

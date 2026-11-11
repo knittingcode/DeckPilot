@@ -1156,6 +1156,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "deckpilot-module-workspace"
+version = "0.6.0"
+dependencies = [
+ "deckpilot-core",
+ "deckpilot-module-system",
+ "url",
+]
+
+[[package]]
 name = "deckpilot-modules"
 version = "0.6.0"
 dependencies = [
@@ -1171,6 +1180,7 @@ dependencies = [
  "deckpilot-module-notifications",
  "deckpilot-module-projects",
  "deckpilot-module-system",
+ "deckpilot-module-workspace",
 ]
 
 [[package]]
