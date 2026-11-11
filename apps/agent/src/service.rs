@@ -34,6 +34,7 @@ use crate::render;
 
 mod executions;
 mod security;
+mod triggers;
 
 pub use security::{AUTO_LOCK_CHECK, Clock, system_clock};
 
@@ -210,6 +211,8 @@ pub struct Agent {
     last_unlock_prompt: Option<std::time::Instant>,
     /// Workflows running in the background, and unsaved history.
     executions: executions::Executions,
+    /// Schedules and lifecycle events that start workflows.
+    triggers: triggers::Triggers,
     handle: AgentHandle,
     commands: mpsc::UnboundedReceiver<Command>,
     signals_tx: mpsc::UnboundedSender<DeviceSignal>,
@@ -298,6 +301,7 @@ impl Agent {
             last_workflow: None,
             last_unlock_prompt: None,
             executions: executions::Executions::default(),
+            triggers: triggers::Triggers::default(),
             handle,
             commands,
             signals_tx,
@@ -343,12 +347,14 @@ impl Agent {
                 _ = auto_lock.tick() => {
                     self.check_auto_lock();
                     self.expire_cancelled_executions();
+                    self.tick_schedules();
                     Flow::Continue
                 }
             };
             if matches!(flow, Flow::Stop) {
                 break;
             }
+            self.observe_lifecycle();
         }
         self.stop().await;
         Ok(())
