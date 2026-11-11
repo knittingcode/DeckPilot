@@ -12,7 +12,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Textarea } from "@/components/ui/textarea"
 import { initialValue } from "@/lib/parameters"
 import type {
   ErrorPolicy,
@@ -20,7 +19,6 @@ import type {
   GraphMapping,
   GraphNode,
   GraphPredicate,
-  GraphReference,
   ParameterSpec,
   Project,
   WorkflowGraph,
@@ -29,7 +27,10 @@ import type {
 import { FLOW_DESCRIPTION, FLOW_TITLE } from "./catalog"
 import type { NodeRun } from "./node-view"
 import { NodeRunReport } from "./run-panel"
-import { type Lookup, actionOf, availableOutputs, formatMs } from "./describe"
+import { type Lookup, actionOf, formatMs } from "./describe"
+import { MappingEditor, OutputSelect } from "./mapping-editor"
+import { VALUE_KIND_LABEL, outputOptions, referenceProblem } from "./mapping"
+import { NodeDocumentation } from "./node-docs"
 import { MAX_DELAY_MS, MAX_LOOP_ITERATIONS, MAX_RETRIES, upstream } from "./graph"
 
 function Field({
@@ -56,7 +57,7 @@ function Field({
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="grid gap-3 border-t px-4 py-3">
+    <section className="grid grid-cols-[minmax(0,1fr)] gap-3 border-t px-4 py-3">
       <h3 className="text-xs font-medium text-muted-foreground uppercase">{title}</h3>
       {children}
     </section>
@@ -87,42 +88,6 @@ export function IssueList({ issues }: { issues: GraphIssue[] }) {
   )
 }
 
-const referenceKey = (r: GraphReference) => `${r.node}.${r.output}`
-
-function ReferenceSelect({
-  id,
-  value,
-  options,
-  onChange,
-}: {
-  id: string
-  value: GraphReference | undefined
-  options: { reference: GraphReference; label: string }[]
-  onChange: (reference: GraphReference) => void
-}) {
-  return (
-    <Select
-      value={value ? referenceKey(value) : undefined}
-      onValueChange={(key) => {
-        const option = options.find((o) => referenceKey(o.reference) === key)
-        if (option) onChange(option.reference)
-      }}
-      disabled={options.length === 0}
-    >
-      <SelectTrigger id={id} className="w-full">
-        <SelectValue placeholder={options.length ? "Choose an output" : "No earlier outputs"} />
-      </SelectTrigger>
-      <SelectContent>
-        {options.map((o) => (
-          <SelectItem key={referenceKey(o.reference)} value={referenceKey(o.reference)}>
-            {o.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  )
-}
-
 type Change = (change: (node: GraphNode) => GraphNode) => void
 
 export interface InspectorProps {
@@ -137,14 +102,16 @@ export interface InspectorProps {
   onDelete: () => void
   /** The node in the run shown on the canvas. */
   run?: NodeRun
+  /** Outputs of the shown run per node, for mapping previews. */
+  values?: Record<string, Record<string, string>>
 }
 
 /** Configuration of the selected node. */
 export function NodeInspector(props: InspectorProps) {
   const { node, issues, onChange, onDelete } = props
   return (
-    <div className="grid">
-      <div className="grid gap-3 px-4 py-3">
+    <div className="grid grid-cols-[minmax(0,1fr)]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-3 px-4 py-3">
         <div className="flex items-start gap-2">
           <div className="grid flex-1 gap-0.5">
             <h2 className="text-sm font-semibold">{FLOW_TITLE[node.type]}</h2>
@@ -279,10 +246,10 @@ function setParameterMode(
   return { ...node, overrides, mappings }
 }
 
-function ActionEditor({ graph, node, lookup, projects, onChange }: InspectorProps) {
+function ActionEditor({ graph, node, lookup, projects, values, onChange }: InspectorProps) {
   if (node.type !== "action") return null
   const { action, type } = actionOf(node, lookup)
-  const outputs = availableOutputs(graph, node.id, lookup)
+  const outputs = outputOptions(graph, node.id, lookup)
   const spec = type?.node
   const policy: ErrorPolicy = node.policy
   const setPolicy = (change: Partial<ErrorPolicy>) => {
@@ -325,7 +292,10 @@ function ActionEditor({ graph, node, lookup, projects, onChange }: InspectorProp
               : { type: "template", template: "" }
             const mapping = node.mappings?.[parameter.key]
             return (
-              <div key={parameter.key} className="grid gap-2 rounded-md border p-2.5">
+              <div
+                key={parameter.key}
+                className="grid grid-cols-[minmax(0,1fr)] gap-2 rounded-md border p-2.5"
+              >
                 <div className="flex items-center gap-2">
                   <span className="flex-1 text-xs font-medium">{parameter.label}</span>
                   <Select
@@ -369,7 +339,10 @@ function ActionEditor({ graph, node, lookup, projects, onChange }: InspectorProp
                   <MappingEditor
                     id={`mapping-${parameter.key}`}
                     mapping={mapping}
+                    parameter={parameter}
                     outputs={outputs}
+                    values={values}
+                    problem={(reference) => referenceProblem(graph, node.id, reference, lookup)}
                     onChange={(next) => {
                       onChange((n) =>
                         n.type === "action"
@@ -474,104 +447,15 @@ function ActionEditor({ graph, node, lookup, projects, onChange }: InspectorProp
             {spec.outputs.map((output) => (
               <li key={output.key} className="flex gap-2">
                 <code className="font-mono">{output.key}</code>
-                <span className="text-muted-foreground">{output.label}</span>
+                <span className="flex-1 text-muted-foreground">{output.label}</span>
+                <span className="text-muted-foreground">{VALUE_KIND_LABEL[output.kind]}</span>
               </li>
             ))}
           </ul>
         </Section>
       )}
+      {type && <NodeDocumentation type={type} lookup={lookup} />}
     </>
-  )
-}
-
-function MappingEditor({
-  id,
-  mapping,
-  outputs,
-  onChange,
-}: {
-  id: string
-  mapping: GraphMapping
-  outputs: { reference: GraphReference; label: string }[]
-  onChange: (mapping: GraphMapping) => void
-}) {
-  return (
-    <div className="grid gap-2">
-      <Select
-        value={mapping.type}
-        onValueChange={(type) => {
-          const first = outputs[0]?.reference
-          if (type === "output" && first) onChange({ type: "output", reference: first })
-          if (type === "template") onChange({ type: "template", template: "" })
-        }}
-      >
-        <SelectTrigger className="h-7 text-xs" aria-label="Mapping">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="output" disabled={outputs.length === 0}>
-            One output
-          </SelectItem>
-          <SelectItem value="template">Text with outputs</SelectItem>
-        </SelectContent>
-      </Select>
-      {mapping.type === "output" ? (
-        <>
-          <ReferenceSelect
-            id={id}
-            value={mapping.reference}
-            options={outputs}
-            onChange={(reference) => {
-              onChange({ ...mapping, reference })
-            }}
-          />
-          <Input
-            aria-label="Default value"
-            placeholder="Default when the output is missing"
-            value={mapping.default ?? ""}
-            onChange={(e) => {
-              onChange({ ...mapping, default: e.target.value || undefined })
-            }}
-          />
-        </>
-      ) : (
-        <>
-          <Textarea
-            id={id}
-            rows={2}
-            className="font-mono text-xs"
-            placeholder="{{ steps.node.output.key }}"
-            value={mapping.template}
-            onChange={(e) => {
-              onChange({ type: "template", template: e.target.value })
-            }}
-          />
-          {outputs.length > 0 && (
-            <Select
-              value=""
-              onValueChange={(key) => {
-                const option = outputs.find((o) => referenceKey(o.reference) === key)
-                if (option) {
-                  const token = `{{ steps.${option.reference.node}.output.${option.reference.output} }}`
-                  onChange({ type: "template", template: `${mapping.template}${token}` })
-                }
-              }}
-            >
-              <SelectTrigger className="h-7 text-xs" aria-label="Insert an output">
-                <SelectValue placeholder="Insert an output…" />
-              </SelectTrigger>
-              <SelectContent>
-                {outputs.map((o) => (
-                  <SelectItem key={referenceKey(o.reference)} value={referenceKey(o.reference)}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-        </>
-      )}
-    </div>
   )
 }
 
@@ -585,7 +469,7 @@ const PREDICATES: { value: GraphPredicate["type"]; label: string }[] = [
 function ConditionEditor({ graph, node, lookup, projects, onChange }: InspectorProps) {
   if (node.type !== "condition") return null
   const predicate = node.predicate
-  const outputs = availableOutputs(graph, node.id, lookup)
+  const outputs = outputOptions(graph, node.id, lookup)
   const earlier = upstream(graph, node.id)
   const set = (next: GraphPredicate) => {
     onChange((n) => (n.type === "condition" ? { ...n, predicate: next } : n))
@@ -648,7 +532,7 @@ function ConditionEditor({ graph, node, lookup, projects, onChange }: InspectorP
       )}
       {(predicate.type === "equals" || predicate.type === "notEmpty") && (
         <Field label="Output" htmlFor="condition-reference">
-          <ReferenceSelect
+          <OutputSelect
             id="condition-reference"
             value={predicate.reference}
             options={outputs}

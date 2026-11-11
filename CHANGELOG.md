@@ -39,6 +39,14 @@ as the notes of its GitHub release and of the in-app update.
 
 ### Changed
 
+- The workflow editor: connections can be moved to another node, refused
+  connections say why, nodes move with the arrow keys, new nodes never cover
+  existing ones, and Arrange keeps branches apart without crossings. Data
+  mappings are built from parts — earlier nodes' outputs with their types,
+  and text — with a preview and warnings for missing references and values
+  that do not fit. The inspector documents each node: module, permissions,
+  behaviour, inputs and outputs. The view and open panels are remembered.
+
 - Cancelling a workflow now reaches running actions: actions that support
   it (such as the new Wait action) stop at once, also when their timeout
   passes, and retries waiting for their next attempt end immediately.

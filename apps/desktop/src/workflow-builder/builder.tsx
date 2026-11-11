@@ -6,6 +6,7 @@ import {
   Controls,
   type Edge,
   type EdgeChange,
+  type FinalConnectionState,
   MarkerType,
   MiniMap,
   type NodeChange,
@@ -55,6 +56,7 @@ import { cn } from "@/lib/utils"
 import { type CatalogEntry, DRAG_TYPE, actionEntry, flowEntries, moduleGroups } from "./catalog"
 import { CatalogPanel } from "./catalog-panel"
 import { type Lookup, describeNode } from "./describe"
+import { type Panels, loadPanels, loadViewport, savePanels, saveViewport } from "./view-state"
 import {
   type Clipboard,
   MAX_NODES,
@@ -65,9 +67,11 @@ import {
   connect,
   connectionProblem,
   copy,
+  freePosition,
   history,
   outputPorts,
   paste,
+  reconnect,
   redo,
   removeEdges,
   removeNodes,
@@ -218,7 +222,14 @@ function Builder({
   const [sizes, setSizes] = useState<Record<string, { width: number; height: number }>>({})
   const [issues, setIssues] = useState<GraphIssue[]>([])
   const [saving, setSaving] = useState(false)
-  const [panels, setPanels] = useState({ catalog: true, inspector: true })
+  const [panels, setPanelState] = useState(() => loadPanels(window.innerWidth))
+  const setPanels = (update: (current: Panels) => Panels) => {
+    setPanelState((current) => {
+      const next = update(current)
+      savePanels(next)
+      return next
+    })
+  }
   const dragOrigin = useRef<WorkflowGraph | null>(null)
   const canvas = useRef<HTMLDivElement>(null)
   // The first view, once the nodes have their sizes.
@@ -228,8 +239,11 @@ function Builder({
   useEffect(() => {
     if (!measured || !ready || fitted.current) return
     fitted.current = true
-    readableFit(flow, canvas.current)
-  }, [measured, ready, flow])
+    // Where the user left this workflow, or a readable first view.
+    const saved = loadViewport(initial.id)
+    if (saved) void flow.setViewport(saved)
+    else readableFit(flow, canvas.current)
+  }, [measured, ready, flow, initial.id])
   const clipboard = useRef<Clipboard | null>(null)
   const actions = view.profile.actions
   const [projectScope, setProjectScope] = useState<ProjectScope>(() =>
@@ -242,8 +256,9 @@ function Builder({
       types,
       workflows: view.profile.workflows,
       projects: view.profile.projects,
+      modules,
     }),
-    [actions, types, view.profile.workflows, view.profile.projects],
+    [actions, types, view.profile.workflows, view.profile.projects, modules],
   )
   const loopTargets = view.profile.workflows
     .filter((w) => w.id !== initial.id)
@@ -350,7 +365,7 @@ function Builder({
             x: window.innerWidth / 2,
             y: window.innerHeight / 2,
           }))
-    const added = addNode(graph, entry.kind, at, entry.name)
+    const added = addNode(graph, entry.kind, freePosition(graph, at), entry.name)
     let next = added.graph
     if (after && !position) {
       const port = outputPorts(after.type).find(
@@ -549,6 +564,7 @@ function Builder({
     let next = graph
     let selection: string[] | null = null
     let settled = false
+    let moved = false
     const measuredNow: Record<string, { width: number; height: number }> = {}
     for (const c of changes) {
       if (c.type === "dimensions" && c.dimensions) measuredNow[c.id] = c.dimensions
@@ -556,6 +572,7 @@ function Builder({
         const position = c.position
         if (c.dragging && !dragOrigin.current) dragOrigin.current = graph
         next = updateNode(next, c.id, (n) => ({ ...n, position }))
+        moved = true
       }
       if (c.type === "position" && c.dragging === false) settled = true
       if (c.type === "select") {
@@ -573,6 +590,11 @@ function Builder({
       return
     }
     if (selection) setSelected(selection)
+    if (moved && !dragOrigin.current) {
+      // Moved without dragging (arrow keys): one undo step per move.
+      change(next)
+      return
+    }
     if (next !== graph) setState((s) => replace(s, next))
     if (settled && dragOrigin.current) {
       const origin = dragOrigin.current
@@ -611,6 +633,21 @@ function Builder({
     if (problem) toast.error(problem)
     else change(connect(graph, edge))
   }
+  // A connection dropped where it cannot go: say why.
+  const onConnectEnd = (_: MouseEvent | TouchEvent, state: FinalConnectionState) => {
+    if (state.isValid !== false || !state.toNode) return
+    const [from, to, port] =
+      state.fromHandle.type === "target"
+        ? [state.toNode.id, state.fromNode.id, state.toHandle?.id ?? "out"]
+        : [state.fromNode.id, state.toNode.id, state.fromHandle.id ?? "out"]
+    const problem = connectionProblem(graph, { from, port: port as GraphPort, to })
+    if (problem) toast.error(problem)
+  }
+  const onReconnect = (old: Edge, connection: Connection) => {
+    const result = reconnect(graph, toEdge(old), toEdge(connection))
+    if (result.problem) toast.error(result.problem)
+    else change(result.graph)
+  }
 
   const onDrop = (event: React.DragEvent) => {
     const key = event.dataTransfer.getData(DRAG_TYPE)
@@ -621,6 +658,12 @@ function Builder({
   }
 
   const node = selected.length === 1 ? graph.nodes.find((n) => n.id === selected[0]) : undefined
+  // Outputs of the shown run, for mapping previews.
+  const runValues = Object.fromEntries(
+    Object.entries(run ?? {}).flatMap(([id, state]) =>
+      state.state === "done" && state.report.output ? [[id, state.report.output]] : [],
+    ),
+  )
 
   return (
     <div className="flex h-[calc(100svh-var(--titlebar-height)-var(--statusbar-height)-3rem)] min-h-[28rem] flex-col overflow-hidden rounded-lg border bg-background">
@@ -706,6 +749,11 @@ function Builder({
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
+            onConnectEnd={onConnectEnd}
+            onReconnect={onReconnect}
+            onMoveEnd={(_, viewport) => {
+              saveViewport(initial.id, viewport)
+            }}
             isValidConnection={(c) => connectionProblem(graph, toEdge(c)) === null}
             onInit={() => {
               setReady(true)
@@ -759,6 +807,7 @@ function Builder({
                   selectOnly([])
                 }}
                 run={run?.[node.id]}
+                values={runValues}
               />
             ) : (
               <div className="grid">

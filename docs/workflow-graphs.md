@@ -255,21 +255,41 @@ Workflows → a workflow opens in the graph editor (`apps/desktop/src/workflow-b
   the module provides, with a button to create a new action of each type.
   The catalog is built from the module registry; the editor has no
   module-specific code. Search filters by name, description and module.
-  Entries are dragged onto the canvas, or clicked to add them after the
-  selected node (connected through its first free output).
+  Entries are dragged onto the canvas (placed where dropped), or added with
+  a click or the keyboard (Enter/Space) after the selected node, connected
+  through its first free output and placed where they cover no other node.
 - **Canvas** (centre): zoom, pan, minimap, typed outputs (*Next*, *On error*,
   *Yes*, *No*). Connections the engine would reject — into the start node,
   a second connection from an output (other than a Parallel node's), a
   second incoming connection (other than a Join's), cycles — are refused
-  while dragging. Undo and redo (⌘Z, ⇧⌘Z), copy and paste (⌘C, ⌘V, with new
-  node ids), delete (⌫), arrange (layered by depth), save (⌘S).
-- **Inspector** (right): the selected node — label, id, problems, and its
-  settings: the action and, per parameter, the action's value, a value for
-  this node, or a value from earlier nodes (one declared output, or text
-  with `{{ steps.<node>.output.<key> }}`); what happens on failure, retries
-  (only for retry-safe actions), timeout; condition, loop and delay
-  settings. Without a selection: the workflow's name and description,
-  graph-wide problems, migration notes, duplicate and delete.
+  while dragging, and dropping one says why. Existing connections can be
+  dragged to another node (reconnect) under the same rules. Nodes move by
+  dragging or with the arrow keys (selected nodes); each move is one undo
+  step. Undo and redo (⌘Z, ⇧⌘Z), copy and paste (⌘C, ⌘V, with new node
+  ids), delete (⌫), save (⌘S).
+- **Arrange** lays the graph out in columns by distance from the start and
+  orders each column to keep branches together and connections from
+  crossing (Yes above No). It only runs when asked for and is undoable;
+  otherwise node positions are always the user's.
+- **View.** A workflow opens where it was left (viewport remembered per
+  workflow in this window); a workflow opened for the first time fits small
+  graphs and starts larger ones at a readable zoom at the start node.
+  Saving keeps the view, selection and panels. Which panels are open is
+  remembered; narrow windows start without the catalog.
+- **Inspector** (right): the selected node — label, id, problems, its run
+  result, and its settings: the action and, per parameter, the action's
+  value, a value for this node, or a value **from earlier nodes**. Mappings
+  are edited as parts: one output (chosen from the declared outputs of
+  nodes that run before, with their types), or text composed of text parts
+  and outputs. The editor shows a preview (with the shown run's values where
+  known), references that are missing or do not run before the node, and
+  whether the value fits the parameter (numbers, yes/no, choices and
+  projects must convert; resources cannot be mapped). Nothing is evaluated
+  in the editor. Then failure handling, retries (only for retry-safe
+  actions), timeout (saying whether the action can be interrupted), and
+  **about this node**: its type id and version, module, the module's
+  permissions, behaviour (retry-safe, idempotent, interruptible, selects a
+  project) and its inputs and outputs with their types.
 - **Validation** is the engine's (`validate_workflow_graph`), run as the
   graph changes. Problems show on the nodes, in the minimap and in the
   status bar. A workflow with errors cannot be saved, so a stored graph
