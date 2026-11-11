@@ -12,6 +12,7 @@ pub use deckpilot_module_git as git;
 pub use deckpilot_module_github as github;
 pub use deckpilot_module_gitlab as gitlab;
 pub use deckpilot_module_http as http;
+pub use deckpilot_module_jira as jira;
 pub use deckpilot_module_notifications as notifications;
 pub use deckpilot_module_projects as projects;
 pub use deckpilot_module_system as system;
@@ -50,6 +51,9 @@ pub fn builtin(os: Os) -> ModuleRegistry {
         .expect("built-in modules do not conflict");
     registry
         .register(Box::new(gitlab::GitlabModule::new()))
+        .expect("built-in modules do not conflict");
+    registry
+        .register(Box::new(jira::JiraModule::new()))
         .expect("built-in modules do not conflict");
     registry
 }
