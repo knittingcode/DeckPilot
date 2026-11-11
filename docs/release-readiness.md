@@ -46,4 +46,34 @@ known about the current one. Publishing itself is described in
 
 ## Report for 0.6.0
 
-See the section at the end of this file.
+State on 2026-11-11, commit `cb222c4` on main (the automated checks on this
+computer ran on `f5d943c`, which differs only in `CHANGELOG.md`). 0.6.0 is
+**not ready to publish**: the signed build, the update path and the manual
+checks below have not been done.
+
+| Area | Status | Evidence |
+| ---- | ------ | -------- |
+| Versions and release notes | verified automatically | `check.sh`: versions are consistent, release notes exist |
+| Rust formatting and lints | verified automatically | `check.sh`; CI on main |
+| Rust tests (SQLCipher, migrations, IPC, updater, modules, redaction) | verified automatically | `check.sh` on macOS; CI Rust on macOS, Linux and Windows, Storage with SQLCipher |
+| Upgrade from a real 0.5.0-2 database | verified automatically | `check.sh` (`upgrade_from_0_5_0`) |
+| IPC peers of earlier protocols | verified automatically | `check.sh` (`peers`) |
+| Compatibility with v0.5.0-2 (real binaries) | verified automatically | `check.sh --with-compat` on macOS; Compatibility workflow on `d4d099c` |
+| Frontend format, lint, types and tests | verified automatically | `check.sh`; CI Frontend |
+| Hardware procedure | verified automatically (simulated MK.2 only) | `check.sh` (`hardware-test --mock`) |
+| Linux packaging (`.deb`) | verified automatically | CI on main: Package check (Linux .deb) |
+| Windows packaging (installers) | verified automatically | CI on main: Package check (Windows installers) |
+| Updater signing keys match | verified automatically | required check on every merged pull request |
+| macOS signing and notarization | not verified | needs a test tag through the Release workflow |
+| Signed update and Keychain continuity | not verified | `update-continuity` workflow and `tools/release-validation/update-test.sh` not run for 0.6.0 |
+| Manual platform checks (macOS, Windows, Linux) | not verified | none done for 0.6.0 |
+| Physical Stream Deck MK.2 | not verified | `deckpilot-dev hardware-test` not run on hardware |
+| GitHub, GitLab and Jira modules against real servers | not verified | tested against local mock servers only |
+
+Known limitation: agents, tests and the compatibility matrix fail with
+"local socket name length exceeds capacity of sun_path" when `TMPDIR` is a
+very long path (macOS limits socket paths to 104 bytes). The default
+temporary folder is short enough.
+
+Before publishing: a signed test release (`v0.6.0-1`, draft only), the
+update path from a 0.5.0 build, and the manual checks above.
