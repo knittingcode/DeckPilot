@@ -72,8 +72,8 @@ A workflow can declare a typed interface (stored as optional `inputs` and
   (`steps.start.output.<key>`), with the same mappings as everywhere else.
 - **Outputs**: `key`, `label`, `kind`, `sensitive`. An **Outputs** node
   (`{"type": "output", "values": {"<key>": <mapping>}}`) sets them from
-  earlier nodes. Several may run (for example one per branch); a later one
-  overrides the keys it sets. Outputs no Output node sets are absent.
+  earlier nodes. Several may run (for example one per branch); the one that
+  finishes later overrides the keys it sets. Outputs no Output node sets are absent.
 
 A **Sub-workflow** node (`{"type": "call", "workflow": "<id>", "inputs":
 {"<key>": <mapping>}, "policy": {...}}`) runs another workflow of the same
@@ -192,10 +192,14 @@ resource actions also the resource, its key, kind and value.
   declared outputs, projects belong to the profile, loops are bounded, and
   no context-changing action runs in a parallel branch. Errors are attached
   to nodes so the editor can show them in place.
-- **Deterministic scheduling.** Nodes run in waves in topological order (ties
-  by id). Only after a Parallel node does a wave hold several nodes; they run
-  concurrently (at most four at a time) and their results are applied in the
-  same fixed order.
+- **Scheduling.** A node starts as soon as all its incoming connections are
+  resolved; nodes ready together start in topological order (ties by id).
+  Only after a Parallel node do several nodes run at once (at most four at a
+  time). Each branch moves on as soon as its node finishes — it does not
+  wait for its sibling branches — and each node is reported and recorded
+  when it finishes. A Join waits for all its incoming branches. What a node
+  sees (earlier outputs, context, variables) depends only on the graph,
+  never on timing.
 - **Branches.** A node runs if its incoming connection was taken; otherwise it
   is skipped along with everything only reachable through it. A Join runs if
   at least one incoming branch was taken, after all of them are resolved.
@@ -280,10 +284,14 @@ Each finished run records what happened (`project`): `unchanged`,
 ## Concurrency and resource safety
 
 - **Bounded.** At most four workflows run at a time, a workflow runs once at
-  a time, and a parallel wave runs at most four nodes at a time; nested Loop
-  runs execute inside their node. A run never holds more than four threads.
-- **Deterministic.** Waves follow topological order with ties broken by node
-  id; parallel results are applied in that order.
+  a time, and a run runs at most four nodes at a time; nested Loop and
+  Sub-workflow runs execute inside their node. A run never holds more than
+  four node threads.
+- **Deterministic inputs.** A node's inputs come only from the nodes on its
+  path and from Joins, which merge by fixed rules, so the order in which
+  parallel branches finish never changes what a node sees. Only the order
+  of reports (finishing order) and which of several parallel Outputs nodes
+  setting the same key is last can depend on timing.
 - **No shared mutable state.** A run works on its own copies of the profile,
   machine configuration and project context. Action handlers receive
   read-only views; resources are resolved against the node's own context, so

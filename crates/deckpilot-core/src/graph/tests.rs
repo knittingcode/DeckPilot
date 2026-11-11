@@ -402,9 +402,14 @@ fn parallel_branches_run_concurrently_and_join_once() {
     );
     assert_eq!(f.ran().last().map(String::as_str), Some("last"));
     assert_eq!(f.ran().iter().filter(|m| *m == "last").count(), 1);
-    // Results are applied in a fixed order, whatever finished first.
+    // Nodes are recorded as they finish: the branches in either order,
+    // the Join after both.
     let order: Vec<_> = report.nodes.iter().map(|r| r.node.as_str()).collect();
-    assert_eq!(order, ["start", "fork", "left", "right", "join", "last"]);
+    assert_eq!(order[..2], ["start", "fork"]);
+    let mut branches = order[2..4].to_vec();
+    branches.sort_unstable();
+    assert_eq!(branches, ["left", "right"]);
+    assert_eq!(order[4..], ["join", "last"]);
 }
 
 fn select_project(f: &mut Fixture, name: &str, key: &str) -> crate::ActionInstanceId {
@@ -2424,7 +2429,10 @@ fn a_finished_branch_moves_on_without_waiting_for_its_siblings() {
     // the Join waits for both branches.
     assert!(at("quick") < at("slow"), "{order:?}");
     assert!(at("next") < at("slow"), "{order:?}");
-    assert!(at("slow") < at("join") && at("join") < at("after"), "{order:?}");
+    assert!(
+        at("slow") < at("join") && at("join") < at("after"),
+        "{order:?}"
+    );
     // The history lists nodes as they finished.
     let reported: Vec<&str> = report.nodes.iter().map(|n| n.node.as_str()).collect();
     assert_eq!(reported, order);
@@ -2449,4 +2457,31 @@ fn cancelling_stops_only_nodes_that_have_not_finished() {
         assert_eq!(status(&report, id), NodeStatus::Cancelled, "{id}");
     }
     assert_eq!(f.ran(), ["quick", "next"]);
+}
+
+#[test]
+fn at_most_four_nodes_run_at_the_same_time() {
+    let mut f = Fixture::new();
+    let mut nodes = vec![
+        node("start", NodeKind::Trigger),
+        node("fork", NodeKind::Parallel),
+        node("join", NodeKind::Join),
+    ];
+    let mut edges = vec![edge("start", Port::Out, "fork")];
+    for index in 0..6 {
+        let id = format!("b{index}");
+        let probe = f.probe(&id, &[("sleep_ms", ParameterValue::Integer(200))]);
+        nodes.push(action(&id, probe));
+        edges.push(edge("fork", Port::Out, &id));
+        edges.push(edge(&id, Port::Out, "join"));
+    }
+    let workflow = f.workflow(graph(nodes, edges));
+    let started = Instant::now();
+    let report = f.run(workflow);
+    let elapsed = started.elapsed();
+    assert_eq!(report.status, RunStatus::Succeeded);
+    // Six branches of 200 ms, four at a time: two rounds.
+    assert!(elapsed >= Duration::from_millis(390), "{elapsed:?}");
+    assert!(elapsed < Duration::from_millis(1_000), "{elapsed:?}");
+    assert_eq!(f.ran().len(), 6);
 }

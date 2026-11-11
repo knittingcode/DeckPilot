@@ -222,6 +222,7 @@ async fn a_combined_workflow_is_cancelled_midway_with_safe_history() {
 
     let run = agent.start_workflow(release.id).await.unwrap();
     agent.wait_for_node(run.id, "slow").await;
+    agent.wait_for_finished_node(run.id, "verified").await;
     // The agent keeps answering while the workflow runs (and the quick
     // branch, the sub-workflow, finishes meanwhile).
     for _ in 0..5 {
@@ -253,12 +254,12 @@ async fn a_combined_workflow_is_cancelled_midway_with_safe_history() {
         server.requests().iter().filter(|p| *p == "/health").count(),
         2
     );
-    for id in ["fetch", "remember", "healthy", "fork", "verify"] {
+    // The quick branch moved on while the long one waited: only nodes that
+    // had not finished are cancelled.
+    for id in ["fetch", "remember", "healthy", "fork", "verify", "verified"] {
         assert_eq!(node(&record, id).status, NodeStatus::Succeeded, "{id}");
     }
-    // Nodes run in waves: the node after the sub-workflow waits for the
-    // whole wave, so the cancellation reaches it before it runs.
-    for id in ["slow", "verified", "join", "finish"] {
+    for id in ["slow", "join", "finish"] {
         assert_eq!(node(&record, id).status, NodeStatus::Cancelled, "{id}");
     }
     assert_eq!(node(&record, "unhealthy").status, NodeStatus::Skipped);
@@ -279,6 +280,7 @@ async fn a_combined_workflow_is_cancelled_midway_with_safe_history() {
         Some("verified")
     );
     assert!(!verify.output.contains_key("echo"));
+    assert_eq!(node(&record, "verified").output["stage"], "verified");
     let stored = agent.store().execution(run.id).unwrap().unwrap();
     let stored_json = serde_json::to_string(&stored).unwrap();
     assert!(!stored_json.contains(SECRET), "{stored_json}");

@@ -617,7 +617,7 @@ fn workflow_inputs(
 }
 
 /// The declared outputs a finished run set: the values of its Output nodes
-/// that succeeded, in the order they ran (a later one overrides).
+/// that succeeded, in the order they finished (a later one overrides).
 fn workflow_outputs(
     graph: &WorkflowGraph,
     report: &GraphReport,
