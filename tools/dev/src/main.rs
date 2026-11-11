@@ -55,6 +55,7 @@ Commands:
                          security.unlock or workflows.execution-summary
   press <serial> <key>   Press a key of a simulated device
   clean [--data]         Remove logs and session files (and dev data)
+  set-version <version>  Set the application version everywhere it is declared
   check-versions [--tag <tag>]
                          Verify that all version numbers match
   package [-- <tauri build args>]
@@ -786,6 +787,14 @@ fn run(args: &[String]) -> Result<(), String> {
         ),
         Some("clean") => clean(&paths, flag("--data")),
         Some(command @ ("window" | "press")) => agent_command(command, &args[1..], &paths),
+        Some("set-version") => {
+            let version = args.get(1).ok_or("usage: set-version <version>")?;
+            versions::set(&paths.root, version)?;
+            println!(
+                "version set to {version} (Cargo.toml, Cargo.lock, package.json, tauri.conf.json)"
+            );
+            Ok(())
+        }
         Some("check-versions") => {
             let version = versions::check(&paths.root, option(args, "--tag").as_deref())?;
             println!("all versions are {version}");
