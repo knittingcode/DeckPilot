@@ -252,3 +252,27 @@ unchanged.
   database.
 - Module tables are versioned separately (`module_schemas`); a module schema
   newer than the installed module is refused the same way.
+- Rollback limitations: there is no in-place downgrade, ever. Restoring a
+  backup discards everything changed after the upgrade (profiles, history,
+  credentials stored since). The backup is encrypted with the key in use at
+  the time; after a later switch between password and system key, the
+  backup still needs the old protection. Schema 7 cannot be opened by
+  0.5.0 (schema 5): the 0.5.0 agent refuses it and changes nothing.
+- A wrong key or password never reinitializes, upgrades or backs up the
+  database; the file stays byte-identical.
+
+Tested with a real database created by the 0.5.0-2 tools
+(`crates/deckpilot-storage/tests/upgrade_from_0_5_0.rs`, fixture in
+`tests/fixtures/v0.5.0-2/`): the upgrade from schema 5 to 7 keeps profiles,
+projects and their resources, actions, step workflows, layouts, the active
+profile and default project, machine bindings and settings; it is preceded
+by an encrypted backup that can be restored; reopening does not upgrade or
+back up again; graph workflows, execution history and credentials added
+afterwards are kept (and secrets are never readable in the file); a wrong
+key changes nothing; a newer schema is refused without changes. The real
+0.5.0-2 agent given a schema 7 database is tested by
+`tools/compat/matrix.sh` ([Compatibility](compatibility.md)).
+Upgrades from schemas 1 to 4 are covered by the storage unit tests
+(`migrates_a_version_one_database_without_losing_data`,
+`upgrades_are_preceded_by_a_verified_encrypted_backup`); no database from a
+public release older than 0.5.0 exists (none was published).

@@ -85,7 +85,18 @@ parameter or an output does not.
 
 **Parameter schema.** `ActionType::parameters`: key, label, description,
 kind (`text`, `integer` with bounds, `boolean`, `choice`, `resource`,
-`project`), required, default. The engine validates and normalizes
+`project`, and the structured text kinds below), required, default.
+
+Structured text kinds are stored as plain text — exactly the format older
+versions stored — and edited with structured controls that every module
+gets from its schema: `lines` (a list, one item per line, items kept as
+typed; e.g. command arguments, Compose services), `pairs` (name/value
+rows, one `name<separator>value` per line, with duplicate and secret-name
+checks; e.g. HTTP headers and query parameters), `code` (e.g. a JSON body
+with a validity hint) and `credential` (the name of a credential stored on
+this computer, chosen from a list; secrets are never loaded). The engine
+validates them the same way when an action is saved and maps workflow
+values into them as text. The engine validates and normalizes
 parameters before a handler runs; handlers receive only valid values.
 
 **Input schema.** A node's inputs are its parameters. Each can be the
@@ -161,7 +172,8 @@ as once. Informational for users and future replays.
 
 **Structured errors.** A failed node reports `StepError { code, message,
 retryable, actionCode }` with stable codes: `action.failed`, `timeout`,
-`cancelled`, `mapping`, `context-conflict`, `unavailable`, `loop.failed`.
+`cancelled`, `mapping`, `context-conflict`, `unavailable`, `loop.failed`,
+`subworkflow.failed`.
 For `action.failed`, `actionCode` is the action's own code
 (`ActionResult::error(code, message)`), documented by its module, e.g.
 `exit-nonzero`. Cancellation is

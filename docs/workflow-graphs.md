@@ -29,11 +29,14 @@ matters (the step before is itself conditional).
 | Parallel | `out` (several) | Starts its branches at the same time |
 | Join | `out` | Waits for all incoming branches |
 | Loop | `out` | Runs another workflow of the profile 1–100 times |
+| Sub-workflow (`call`) | `out`, `error` | Runs another workflow once with inputs; its outputs become the node's |
+| Outputs (`output`) | `out` | Sets the workflow's declared outputs for the node that called it |
 | Delay | `out` | Waits up to 10 minutes; cancellable |
 | Stop | — | Ends the workflow successfully |
 
-Graphs are acyclic; repetition is a Loop node, and a workflow may not loop
-into itself (directly or through others; nesting at most four levels). Only
+Graphs are acyclic; repetition is a Loop node, and a workflow may not run
+itself through Loop or Sub-workflow nodes (directly or through others;
+nesting at most four levels). Only
 Parallel may connect one port to several nodes, and only Join may have
 several incoming connections. At most 200 nodes.
 
@@ -56,6 +59,58 @@ not expanded again. Validation checks that the referenced node runs before
 to the parameter's kind (whole numbers, true/false, project keys of this
 profile); resource parameters cannot be mapped. Mappings refer only to node
 ids and output keys, so they are portable between computers.
+
+### Sub-workflows
+
+A workflow can declare a typed interface (stored as optional `inputs` and
+`outputs` of the workflow; workflows without them are unchanged):
+
+- **Inputs**: `key`, `label`, `kind` (a `ValueKind`: text, whole number,
+  yes/no, path, URL, project key), `required`, `default`, `sensitive`. The
+  workflow's nodes read an input as an output of its start node
+  (`steps.start.output.<key>`), with the same mappings as everywhere else.
+- **Outputs**: `key`, `label`, `kind`, `sensitive`. An **Outputs** node
+  (`{"type": "output", "values": {"<key>": <mapping>}}`) sets them from
+  earlier nodes. Several may run (for example one per branch); a later one
+  overrides the keys it sets. Outputs no Output node sets are absent.
+
+A **Sub-workflow** node (`{"type": "call", "workflow": "<id>", "inputs":
+{"<key>": <mapping>}, "policy": {...}}`) runs another workflow of the same
+profile once:
+
+- **Inputs** are mappings, exactly like action parameters: one earlier
+  output or text with outputs; nothing is evaluated. An input without a
+  mapping gets its default; a required input must be mapped. Values are
+  converted to the input's kind when the node runs (whole numbers and
+  yes/no must parse, project keys must belong to the profile); a value that
+  does not convert fails the node with `mapping` before the callee starts.
+- **Outputs**: the callee's declared outputs become the node's outputs, so
+  later nodes map them as `steps.<node>.output.<key>`. Output values are
+  converted to their kind by the Outputs node that sets them.
+- **Execution.** The callee runs with the node's project context, under a
+  token that is cancelled when the run is cancelled or at the node's
+  timeout (default 10 minutes, at most 10). Its project changes continue
+  after the node, as with a Loop. Its own nodes are not reported; the node
+  reports its status, outputs and error. A failure of the callee fails the
+  node with `subworkflow.failed` ("Greet failed: hello: …"), a timeout
+  with `timeout`, a cancellation is `cancelled`. Failure handling works as
+  for actions (`error` port, *continue*); sub-workflows are never retried.
+- **Running on its own.** A workflow with required inputs cannot be run
+  directly (from the app or a deck); it is meant to be called. Optional
+  inputs take their defaults when it runs on its own.
+- **Validation**: the callee exists in the profile; no recursion, directly
+  or indirectly, through Sub-workflow and Loop nodes alike; at most four
+  levels of nesting; every required input is mapped and only declared
+  inputs are; references to a Sub-workflow node use outputs the callee
+  declares; Outputs nodes set only declared outputs; declared keys are
+  unique and valid and defaults fit their kind. A Loop cannot run a
+  workflow with required inputs.
+- **Sensitive values.** A value that comes from a sensitive output (an
+  action's, a sensitive input, a sensitive sub-workflow output) may only be
+  passed to a sensitive input or set as a sensitive output; validation
+  rejects anything else. History and live events keep only a Sub-workflow
+  or Outputs node's non-sensitive declared outputs, and never the inputs a
+  start node received.
 
 ## Module node SDK
 
@@ -109,7 +164,8 @@ resource actions also the resource, its key, kind and value.
   (handled), through `out` with *continue*, and otherwise fails the workflow:
   nodes already running finish, nothing new starts. Errors have a stable code
   (`action.failed`, `timeout`, `mapping`, `parallel-context`, `loop.failed`,
-  `unavailable`), a message and whether a retry could help.
+  `subworkflow.failed`, `unavailable`), a message and whether a retry could
+  help.
 - **Retries** (retry-safe actions only): up to five, with exponential backoff.
 - **Deadlines.** Each attempt's token is cancelled at its timeout, so
   cooperative actions stop there. A result that arrives after the timeout
@@ -195,8 +251,9 @@ Each finished run records what happened (`project`): `unchanged`,
   two runs on different projects resolve different resources.
 - **Retries and timeouts** each attempt on a fresh copy of the node's input
   context; a failed or late attempt's changes are discarded.
-- **Reentrancy.** A workflow cannot start while it runs; a Loop cannot run
-  its own workflow (validation rejects recursion and limits nesting).
+- **Reentrancy.** A workflow cannot start while it runs; a Loop or
+  Sub-workflow cannot run its own workflow (validation rejects recursion
+  and limits nesting). Nested runs execute inside their node's thread.
 - **One writer.** Only the agent's single task changes runtime state and
   writes execution history; run threads report through a channel.
 - **Shutdown.** Running workflows are recorded as interrupted when the agent
@@ -236,8 +293,10 @@ app, a Stream Deck control or another client; no window has to be open.
   interrupted. A run still marked running when the database is opened (the
   agent crashed or the computer lost power) is marked interrupted then.
 - **Safe outputs.** Reports, events and records only contain the outputs the
-  node's action type declares in its node spec, and messages are shortened to
-  500 characters. Parameters and other action data are never recorded.
+  node's action type declares in its node spec (for Sub-workflow and
+  Outputs nodes: the workflow's declared outputs), never sensitive ones,
+  and messages are shortened to 500 characters. Parameters, workflow inputs
+  and other action data are never recorded.
 - **Profiles.** Lists, details and cancellation are limited to the active
   profile's runs.
 
@@ -250,8 +309,8 @@ progress and a Cancel button.
 
 Workflows → a workflow opens in the graph editor (`apps/desktop/src/workflow-builder`):
 
-- **Catalog** (left): the flow nodes (Condition, Parallel, Join, Loop, Delay,
-  Stop) and, per enabled module, the profile's actions of the action types
+- **Catalog** (left): the flow nodes (Condition, Parallel, Join, Loop,
+  Sub-workflow, Outputs, Delay, Stop) and, per enabled module, the profile's actions of the action types
   the module provides, with a button to create a new action of each type.
   The catalog is built from the module registry; the editor has no
   module-specific code. Search filters by name, description and module.
@@ -289,7 +348,14 @@ Workflows → a workflow opens in the graph editor (`apps/desktop/src/workflow-b
   actions), timeout (saying whether the action can be interrupted), and
   **about this node**: its type id and version, module, the module's
   permissions, behaviour (retry-safe, idempotent, interruptible, selects a
-  project) and its inputs and outputs with their types.
+  project) and its inputs and outputs with their types. A **Sub-workflow**
+  node chooses the workflow, maps each of its inputs (required ones say so;
+  optional ones show their default), sets failure handling and timeout,
+  and lists the outputs it provides. An **Outputs** node maps each of the
+  workflow's declared outputs.
+- **Inputs and outputs** of the open workflow are edited in the workflow
+  panel (nothing selected): key, type, label, required, default and
+  sensitive. The start node then offers the inputs to mappings.
 - **Validation** is the engine's (`validate_workflow_graph`), run as the
   graph changes. Problems show on the nodes, in the minimap and in the
   status bar. A workflow with errors cannot be saved, so a stored graph
@@ -314,6 +380,13 @@ started in the editor, from a Stream Deck or while the app was closed:
   result, attempts, start and duration, its message, a structured error
   (code, message, whether a retry may help) and its outputs — only the
   outputs its action declares.
+- **Run details.** Below the history, the shown run is broken down: total
+  and summed node time with the slowest nodes, failures with error code,
+  action code and whether a retry may help, and a timeline of every node's
+  start and duration relative to the run, with parallel branches marked.
+  Choosing a node shows its retries, failure and declared outputs (shortened
+  previews; sensitive outputs are shown as *not kept*). Retry waits are known
+  only for runs watched live; the history keeps only the final attempt.
 - **History.** Without a selection, the inspector lists the workflow's last
   20 runs with state, trigger (app or Stream Deck), start time and duration;
   a run is shown on the canvas by selecting it. Running entries have
@@ -328,4 +401,5 @@ started in the editor, from a Stream Deck or while the app was closed:
 ## Roadmap
 
 Milestones: the model, SDK and engine; running graphs in the agent; the
-visual editor; watching runs on the graph with their history.
+visual editor; watching runs on the graph with their history; sub-workflows
+with typed inputs and outputs.

@@ -1,0 +1,51 @@
+# Compatibility with the previous release, using its real binaries: each
+# agent with each client, the previous agent given a newer database, and
+# the upgrade of the previous release's database (tools/compat/matrix.sh,
+# docs/compatibility.md). Throwaway data with the development password;
+# no credential store, signing key or release is touched.
+name: Compatibility
+
+on:
+  pull_request:
+    paths:
+      - crates/deckpilot-ipc/**
+      - crates/deckpilot-storage/**
+      - apps/agent/**
+      - tools/compat/**
+      - .github/workflows/compatibility.yml
+  push:
+    branches: [main]
+    paths:
+      - crates/deckpilot-ipc/**
+      - crates/deckpilot-storage/**
+      - apps/agent/**
+      - tools/compat/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compatibility-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  matrix:
+    name: Previous release (v0.5.0-2) with this commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Linux system dependencies
+        run: tools/ci/install-linux-deps.sh
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: compatibility
+          workspaces: |
+            . -> target
+            ${{ runner.temp }}/compat/old-tree -> target
+      - run: tools/compat/matrix.sh v0.5.0-2 "$RUNNER_TEMP/compat"

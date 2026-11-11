@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-agent"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "auto-launch",
  "deckpilot-core",
@@ -952,7 +952,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deckpilot-device",
  "rustix",
@@ -964,7 +964,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-desktop"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deckpilot-agent",
  "deckpilot-core",
@@ -988,7 +988,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-dev"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "ctrlc",
@@ -1009,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-device"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-hid"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deckpilot-device",
  "elgato-streamdeck",
@@ -1028,7 +1028,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-ipc"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deckpilot-core",
  "deckpilot-device",
@@ -1046,7 +1046,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-keystore"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "apple-native-keyring-store",
  "keyring-core",
@@ -1058,7 +1058,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-module-docker"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deckpilot-core",
  "serde",
@@ -1067,14 +1067,14 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-module-general"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deckpilot-core",
 ]
 
 [[package]]
 name = "deckpilot-module-git"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deckpilot-core",
  "thiserror 2.0.21",
@@ -1082,7 +1082,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-module-github"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deckpilot-core",
  "deckpilot-module-http",
@@ -1093,7 +1093,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-module-gitlab"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deckpilot-core",
  "deckpilot-module-http",
@@ -1104,7 +1104,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-module-http"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deckpilot-core",
  "reqwest",
@@ -1116,7 +1116,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-module-jira"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "deckpilot-core",
@@ -1128,14 +1128,14 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-module-notifications"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deckpilot-core",
 ]
 
 [[package]]
 name = "deckpilot-module-projects"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deckpilot-core",
  "deckpilot-device",
@@ -1144,7 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-module-system"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deckpilot-core",
  "sysinfo",
@@ -1162,7 +1162,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-modules"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deckpilot-core",
  "deckpilot-device",
@@ -1181,7 +1181,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-portability"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
@@ -1198,7 +1198,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-presence"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "block2",
  "objc2",
@@ -1212,7 +1212,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-storage"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -1230,7 +1230,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-update"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "minisign",
