@@ -762,7 +762,7 @@ fn fresh_installation_has_an_empty_action_library() {
         .iter()
         .map(|m| m["id"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(ids, ["general", "git", "projects", "system"]);
+    assert_eq!(ids, ["docker", "general", "git", "projects", "system"]);
     let module = |id: &str| {
         modules
             .as_array()

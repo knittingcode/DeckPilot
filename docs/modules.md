@@ -17,9 +17,10 @@ third-party executables and no remote installation.
 
 | Module     | Pages | Capabilities |
 | ---------- | ----- | ------------ |
+| `docker` | — (settings) | read profile, read machine resources, run programs (`docker`) |
 | `general`  | — | read profile |
-| `projects` | Projects | read profile, change active project, read machine resources |
 | `git` | — (settings) | read profile, read machine resources, run programs (`git`), open folders |
+| `projects` | Projects | read profile, change active project, read machine resources |
 | `system` | — (settings) | read machine resources, open applications/files/pages, run programs, see running programs |
 
 The integration modules and their actions are described in

@@ -42,7 +42,7 @@ fn builtin_modules_register_with_namespaced_action_types() {
     let registry = builtin(Os::Linux);
     let modules = registry.modules();
     let ids: Vec<_> = modules.iter().map(|m| m.manifest.id.to_string()).collect();
-    assert_eq!(ids, ["general", "git", "projects", "system"]);
+    assert_eq!(ids, ["docker", "general", "git", "projects", "system"]);
     assert!(modules.iter().all(|m| m.enabled && m.supported));
 
     let types: Vec<_> = modules
@@ -53,6 +53,13 @@ fn builtin_modules_register_with_namespaced_action_types() {
     assert_eq!(
         types,
         [
+            "docker.status",
+            "docker.containers",
+            "docker.compose-status",
+            "docker.compose-up",
+            "docker.compose-down",
+            "docker.compose-restart",
+            "docker.logs",
             "general.log",
             "general.wait",
             "git.status",
