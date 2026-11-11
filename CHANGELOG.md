@@ -9,6 +9,15 @@ as the notes of its GitHub release and of the in-app update.
 
 ### Added
 
+- The app and the agent negotiate their protocol and the capabilities that
+  come with it, so a newer app works with an older agent (and the other way
+  round) for what both support, says which features need an agent restart,
+  and never sends a request the agent cannot understand. Agents too old for
+  this app are reported as needing an update.
+- The agent reports running workflows. Updates wait for them, and
+  restarting the agent from the app asks before interrupting them; nothing
+  ends a workflow silently.
+
 - System module: open applications, web pages, files and folders, run
   commands and check whether a program is running. Applications, folders
   and programs come from resources bound on each computer. Commands run

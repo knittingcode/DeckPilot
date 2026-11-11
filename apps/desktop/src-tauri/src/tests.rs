@@ -2288,3 +2288,66 @@ fn icons_are_imported_shown_previewed_and_deleted() {
     let icons = h.ok("list_icons", json!({ "profileId": profile_id }));
     assert_eq!(icons, json!([]));
 }
+
+#[test]
+fn restarting_the_agent_never_ends_running_workflows_silently() {
+    let h = Harness::new();
+    let profile = h.ok(
+        "create_profile",
+        json!({ "name": "Work", "description": "" }),
+    );
+    let profile_id = profile["id"].as_str().unwrap().to_owned();
+    let wait = h.ok(
+        "create_action",
+        json!({
+            "profileId": profile_id,
+            "action": {
+                "name": "Wait",
+                "actionType": "general.wait",
+                "parameters": { "seconds": { "type": "integer", "value": 60 } }
+            }
+        }),
+    );
+    let workflow = h.ok(
+        "save_workflow",
+        json!({ "profileId": profile_id, "workflow": {
+            "id": deckpilot_core::WorkflowId::new(), "name": "Long", "steps": [],
+            "graph": { "version": 1,
+                "nodes": [
+                    {"id": "start", "type": "trigger"},
+                    {"id": "wait", "type": "action", "action": wait["id"]}
+                ],
+                "edges": [{"from": "start", "to": "wait"}] }
+        } }),
+    );
+    let (_runtime, _mock) = start_agent(&h.paths);
+    h.unlock();
+    wait_for(&h, |s| {
+        s["running"] == true && s["status"]["activeProfile"]["name"] == "Work"
+    });
+    let execution = h.ok(
+        "start_workflow",
+        json!({ "profileId": profile_id, "workflowId": workflow["id"] }),
+    );
+    let status = wait_for(&h, |s| s["status"]["runningExecutions"] == 1);
+    assert_eq!(status["protocol"], deckpilot_ipc::PROTOCOL_VERSION);
+    assert!(
+        status["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("backgroundExecutions"))
+    );
+
+    // Without confirmation the restart is refused and the run goes on.
+    let refused = h.error("restart_agent", json!({}));
+    assert!(refused.contains("1 workflow is running"), "{refused}");
+    wait_for(&h, |s| {
+        s["running"] == true && s["status"]["runningExecutions"] == 1
+    });
+
+    h.ok(
+        "cancel_execution",
+        json!({ "executionId": execution["id"] }),
+    );
+    wait_for(&h, |s| s["status"]["runningExecutions"] == 0);
+}
