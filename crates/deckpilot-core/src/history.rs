@@ -229,6 +229,7 @@ impl ExecutionRecord {
                     output: std::collections::BTreeMap::new(),
                     error: None,
                     action: None,
+                    workflow: None,
                 });
             }
         }
@@ -245,26 +246,42 @@ impl ExecutionRecord {
 }
 
 /// `report` with what may be shown and stored: outputs the node's action
-/// type declares and does not mark sensitive, and shortened messages.
+/// type (or, for sub-workflow and Output nodes, the workflow) declares and
+/// does not mark sensitive, and shortened messages. Anything else, such as
+/// the inputs a start node received, is left out.
 pub fn safe_report(
     report: &NodeReport,
     profile: &Profile,
     registry: &ActionRegistry,
 ) -> NodeReport {
-    let declared: Vec<&str> = report
-        .action
-        .and_then(|action| profile.action(action))
-        .and_then(|instance| registry.definition(&instance.action_type))
-        .map(|definition| {
-            definition
-                .node
-                .outputs
-                .iter()
-                .filter(|o| !o.sensitive)
-                .map(|o| o.key.as_str())
-                .collect()
-        })
-        .unwrap_or_default();
+    let declared: Vec<&str> = if let Some(action) = report.action {
+        profile
+            .action(action)
+            .and_then(|instance| registry.definition(&instance.action_type))
+            .map(|definition| {
+                definition
+                    .node
+                    .outputs
+                    .iter()
+                    .filter(|o| !o.sensitive)
+                    .map(|o| o.key.as_str())
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else if let Some(workflow) = report.workflow {
+        profile
+            .workflow(workflow)
+            .map(|w| {
+                w.outputs
+                    .iter()
+                    .filter(|o| !o.sensitive)
+                    .map(|o| o.key.as_str())
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let mut safe = report.clone();
     safe.message = shorten(&report.message);
     safe.output = report
@@ -327,6 +344,7 @@ mod tests {
             output: BTreeMap::new(),
             error: None,
             action: None,
+            workflow: None,
         }
     }
 
