@@ -333,11 +333,51 @@ export type BindingTarget =
   | { type: "openPage"; page: string }
   | { type: "back" }
 
+/** `#rrggbb`. */
+export type Color = string
+export type FontSize = "small" | "medium" | "large"
+export type TitleAlign = "top" | "middle" | "bottom"
+/** fit: whole icon, aspect kept; fill: stretched; crop: covers the key. */
+export type IconFit = "fit" | "fill" | "crop"
+
+/** How a key looks; every field optional (see docs/data-model.md). */
+export interface KeyAppearance {
+  background?: Color | null
+  textColor?: Color | null
+  fontSize?: FontSize | null
+  /** Default: middle, or bottom when the key has an icon. */
+  titleAlign?: TitleAlign | null
+  /** `false` hides the title and the secondary line. Default: shown. */
+  showTitle?: boolean | null
+  icon?: { id: string; fit?: IconFit } | null
+}
+
+/** An image imported into a profile; `png` is base64. */
+export interface Icon {
+  id: string
+  name: string
+  width: number
+  height: number
+  png: string
+}
+
+/** An icon as `list_icons` / `import_icon` return it. */
+export interface IconInfo {
+  id: string
+  name: string
+  width: number
+  height: number
+  bytes: number
+  dataUrl: string
+  usages: number
+}
+
 export interface ControlBinding {
   control: ControlId
   trigger: Trigger
   target: BindingTarget
   label?: string | null
+  appearance?: KeyAppearance | null
 }
 
 export interface LayoutPage {
@@ -364,6 +404,7 @@ export interface Profile {
   defaultProject?: string | null
   layouts: DeviceLayout[]
   activeLayouts?: Record<string, string>
+  icons?: Icon[]
 }
 
 export type Usage =
@@ -615,11 +656,14 @@ export interface KeyFace {
   indicator?: Indicator | null
   progress?: number | null
   toggle?: boolean | null
+  appearance?: KeyAppearance | null
 }
 
 export interface ControlFace {
   control: ControlId
   face: KeyFace
+  /** With `render`: the key image as a PNG data URL. */
+  image?: string
 }
 
 export type ConnectionState = "connected" | "disconnected"

@@ -2158,6 +2158,139 @@ fn credentials_are_never_read_back_or_exported() {
     assert_eq!(source.ok("list_credentials", json!({})), json!([]));
 }
 
+fn png_base64(width: u32, height: u32, color: [u8; 3]) -> String {
+    use base64::Engine as _;
+    let png = deckpilot_render::frame_png(&deckpilot_device::Frame::filled(width, height, color))
+        .unwrap();
+    base64::engine::general_purpose::STANDARD.encode(png)
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One flow from import to deletion.
+fn icons_are_imported_shown_previewed_and_deleted() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    let action = log_action(&h, &profile_id, "Hello", "hi");
+
+    let icon = h.ok(
+        "import_icon",
+        json!({ "profileId": profile_id, "name": "Logo", "data": png_base64(600, 300, [200, 30, 30]) }),
+    );
+    assert_eq!(
+        (icon["width"].clone(), icon["height"].clone()),
+        (json!(256), json!(128))
+    );
+    assert!(
+        icon["dataUrl"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,")
+    );
+    // The same image again is the same icon.
+    let again = h.ok(
+        "import_icon",
+        json!({ "profileId": profile_id, "name": "Logo 2", "data": png_base64(600, 300, [200, 30, 30]) }),
+    );
+    assert_eq!(again["id"], icon["id"]);
+    // Wrong types, damaged and oversized files are refused.
+    for data in [
+        "R0lGODlhAQABAAAAACw=".to_owned(),
+        "not base64!".to_owned(),
+        "A".repeat(3 * 1024 * 1024),
+    ] {
+        assert!(
+            h.call(
+                "import_icon",
+                json!({ "profileId": profile_id, "name": "x", "data": data }),
+            )
+            .is_err()
+        );
+    }
+    let icons = h.ok("list_icons", json!({ "profileId": profile_id }));
+    assert_eq!(icons.as_array().unwrap().len(), 1);
+
+    let mut layout = h.ok(
+        "create_layout",
+        json!({ "profileId": profile_id, "modelId": "elgato.streamdeck.mk2", "name": "Main", "generate": false }),
+    );
+    let page = layout["homePage"].clone();
+    let binding = |appearance: Value| {
+        json!([{
+            "control": { "kind": "key", "index": 0 },
+            "trigger": { "type": "press" },
+            "target": { "type": "action", "action": action["id"] },
+            "appearance": appearance,
+        }])
+    };
+    // Invalid colours and unknown icons are refused.
+    layout["pages"][0]["bindings"] = binding(json!({ "background": "red" }));
+    assert!(
+        h.call(
+            "save_layout",
+            json!({ "profileId": profile_id, "layout": layout })
+        )
+        .is_err()
+    );
+    layout["pages"][0]["bindings"] =
+        binding(json!({ "icon": { "id": "00000000-0000-4000-8000-000000000000" } }));
+    let error = h
+        .call(
+            "save_layout",
+            json!({ "profileId": profile_id, "layout": layout }),
+        )
+        .unwrap_err();
+    assert!(error.as_str().unwrap().contains("icon"), "{error}");
+
+    layout["pages"][0]["bindings"] = binding(json!({
+        "background": "#102030",
+        "fontSize": "large",
+        "titleAlign": "top",
+        "icon": { "id": icon["id"], "fit": "crop" }
+    }));
+    let saved = h.ok(
+        "save_layout",
+        json!({ "profileId": profile_id, "layout": layout }),
+    );
+    assert_eq!(
+        saved["pages"][0]["bindings"][0]["appearance"]["fontSize"],
+        "large"
+    );
+
+    // The preview carries the appearance, and on request the key image.
+    let args = |render: Value| json!({ "profileId": profile_id, "layout": saved, "pageId": page, "projectId": null, "render": render });
+    let faces = h.ok("preview_layout", args(json!(true)));
+    assert_eq!(faces[0]["face"]["appearance"]["background"], "#102030");
+    let image = faces[0]["image"].as_str().unwrap();
+    assert!(image.starts_with("data:image/png;base64,"));
+    // Empty keys are images too; without `render` there are none.
+    assert!(faces[1]["image"].is_string());
+    let plain = h.ok("preview_layout", args(Value::Null));
+    assert!(plain[0].get("image").is_none());
+
+    // An icon in use stays.
+    assert!(
+        h.call(
+            "delete_icon",
+            json!({ "profileId": profile_id, "iconId": icon["id"] })
+        )
+        .is_err()
+    );
+    let mut cleared = saved.clone();
+    cleared["pages"][0]["bindings"] = binding(json!({}));
+    let saved = h.ok(
+        "save_layout",
+        json!({ "profileId": profile_id, "layout": cleared }),
+    );
+    // A default appearance is not stored.
+    assert!(saved["pages"][0]["bindings"][0].get("appearance").is_none());
+    h.ok(
+        "delete_icon",
+        json!({ "profileId": profile_id, "iconId": icon["id"] }),
+    );
+    let icons = h.ok("list_icons", json!({ "profileId": profile_id }));
+    assert_eq!(icons, json!([]));
+}
+
 #[test]
 fn restarting_the_agent_never_ends_running_workflows_silently() {
     let h = Harness::new();
