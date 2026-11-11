@@ -250,7 +250,7 @@ fn definition(kind: Kind) -> ActionType {
                 browser_parameter(),
             ],
             opens(
-                "layout",
+                "app-window",
                 vec![
                     out("projectKey", "Project", ValueKind::ProjectKey),
                     out("opened", "Opened", ValueKind::Integer),

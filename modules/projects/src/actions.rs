@@ -128,7 +128,7 @@ fn resource_outputs() -> Vec<OutputSpec> {
 /// Switching the active project changes state, so those actions modify.
 fn node(outputs: Vec<OutputSpec>, changes_context: bool, repeatable: bool) -> NodeSpec {
     NodeSpec {
-        icon: Some("folder-kanban".into()),
+        icon: Some("folder".into()),
         outputs,
         timeout_ms: 5_000,
         retry_safe: repeatable,

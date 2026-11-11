@@ -311,6 +311,26 @@ fn renderable(kind: &ParameterKind) -> bool {
     union.contains(&format!("type: \"{}\"", frontend_kind(kind)))
 }
 
+/// The app's icon set for actions; an icon outside it is drawn as the
+/// default icon.
+const FRONTEND_ICONS: &str = include_str!("../../../apps/desktop/src/lib/icons.ts");
+
+/// The names in the app's `ACTION_ICONS` map.
+fn action_icons() -> BTreeSet<String> {
+    let map = FRONTEND_ICONS
+        .split("export const ACTION_ICONS")
+        .nth(1)
+        .and_then(|rest| rest.split_once('{'))
+        .and_then(|(_, body)| body.split_once('}'))
+        .map(|(body, _)| body)
+        .unwrap_or_default();
+    map.lines()
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, _)| name.trim().trim_matches('"').to_owned())
+        .filter(|name| !name.is_empty() && !name.starts_with("//"))
+        .collect()
+}
+
 /// Problems with a parameter's schema and default.
 fn schema_problems(spec: &ParameterSpec) -> Vec<(&'static str, String)> {
     let mut problems = Vec::new();
@@ -564,6 +584,11 @@ fn action_types_are_described() {
 }
 
 fn audit_action_types(subjects: &[Box<dyn FeatureModule>], report: &mut Report) {
+    let icons = action_icons();
+    assert!(
+        icons.len() > 10 && icons.contains("zap"),
+        "the icon set could not be read: {icons:?}"
+    );
     for module in subjects {
         let manifest = module.manifest();
         let processes = manifest
@@ -593,6 +618,14 @@ fn audit_action_types(subjects: &[Box<dyn FeatureModule>], report: &mut Report) 
                 .is_none_or(|i| i.trim().is_empty())
             {
                 report.add(id, "action-icon", "no icon");
+            } else if let Some(icon) = &action.node.icon
+                && !icons.contains(icon.as_str())
+            {
+                report.add(
+                    id,
+                    "action-icon",
+                    format!("icon “{icon}” is not in the app's icon set"),
+                );
             }
             let keys: BTreeSet<_> = action.node.outputs.iter().map(|o| &o.key).collect();
             if keys.len() != action.node.outputs.len()
