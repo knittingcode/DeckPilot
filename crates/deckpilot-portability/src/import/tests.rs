@@ -321,6 +321,7 @@ fn module_settings_follow_the_portability_contract() {
             "github",
             "gitlab",
             "http",
+            "jira",
             "notifications",
             "projects",
             "system"
@@ -334,7 +335,7 @@ fn module_settings_follow_the_portability_contract() {
     assert_eq!(projects.config.text("somethingLocal"), None);
     let system = &stored[&ModuleId::new("system").unwrap()];
     assert_eq!(system.config.boolean("allowCommands"), Some(false));
-    assert_eq!(stored.len(), 8);
+    assert_eq!(stored.len(), 9);
 }
 
 #[test]
