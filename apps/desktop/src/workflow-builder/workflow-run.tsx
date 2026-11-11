@@ -8,7 +8,8 @@ import { useAppContext } from "@/lib/app-context"
 import { ExecutionStore } from "@/lib/executions"
 
 import { type BuilderProps, WorkflowBuilder } from "./builder"
-import { nodeRuns, runSummary } from "./run-model"
+import { RunDebugger } from "./run-debugger"
+import { nodeRuns, runNodeInfo, runSummary } from "./run-model"
 import { RunHistory, StateIcon } from "./run-panel"
 
 const NO_EXECUTIONS = new ExecutionStore()
@@ -84,6 +85,13 @@ export function WorkflowRun(props: Props) {
     )
   }, [missing, executions])
 
+  const info = runNodeInfo(props.graph, {
+    actions: props.view.profile.actions,
+    types: props.types,
+    workflows: props.view.profile.workflows,
+    projects: props.view.profile.projects,
+  })
+
   const cancel = (id: string) => {
     api.cancelExecution(id).catch((e: unknown) => toast.error(errorMessage(e)))
   }
@@ -113,25 +121,28 @@ export function WorkflowRun(props: Props) {
       run={nodeRuns(shown)}
       workflowPanel={
         props.isNew ? undefined : (
-          <RunHistory
-            runs={runs}
-            shown={shownId}
-            now={now}
-            onShow={setChosen}
-            onCancel={cancel}
-            projectKey={(id) =>
-              props.view.profile.projects.find((p) => p.id === id)?.key ?? "no project"
-            }
-            onClear={() => {
-              api
-                .clearExecutionHistory(workflowId)
-                .then(() => {
-                  executions?.forget((r) => r.workflow === workflowId)
-                  setChosen(undefined)
-                })
-                .catch((e: unknown) => toast.error(errorMessage(e)))
-            }}
-          />
+          <>
+            <RunHistory
+              runs={runs}
+              shown={shownId}
+              now={now}
+              onShow={setChosen}
+              onCancel={cancel}
+              projectKey={(id) =>
+                props.view.profile.projects.find((p) => p.id === id)?.key ?? "no project"
+              }
+              onClear={() => {
+                api
+                  .clearExecutionHistory(workflowId)
+                  .then(() => {
+                    executions?.forget((r) => r.workflow === workflowId)
+                    setChosen(undefined)
+                  })
+                  .catch((e: unknown) => toast.error(errorMessage(e)))
+              }}
+            />
+            {shown && <RunDebugger key={shown.id} run={shown} now={now} info={info} />}
+          </>
         )
       }
       canRun={canRun}
