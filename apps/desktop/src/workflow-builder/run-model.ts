@@ -1,8 +1,33 @@
 import { EXECUTION_STATE_LABEL, type LiveExecution, executionDuration } from "@/lib/executions"
 import type { ExecutionSummary, ProjectOutcome } from "@/lib/types"
 
-import { formatMs } from "./describe"
+import type { WorkflowGraph } from "@/lib/types"
+
+import { type Lookup, actionOf, describeNode, formatMs } from "./describe"
 import type { NodeRun } from "./node-view"
+import type { DeclaredOutput } from "./run-debug"
+
+/**
+ * Title and declared outputs of a node, for the run details. Nodes that no
+ * longer exist in the graph keep their id as title.
+ */
+export function runNodeInfo(graph: WorkflowGraph, lookup: Lookup) {
+  return (id: string): { title: string; declared?: DeclaredOutput[] } => {
+    const node = graph.nodes.find((n) => n.id === id)
+    if (!node) return { title: id }
+    const { title } = describeNode(node, lookup)
+    if (node.type !== "action") return { title }
+    const { type } = actionOf(node, lookup)
+    return {
+      title,
+      declared: (type?.node?.outputs ?? []).map(({ key, label, sensitive }) => ({
+        key,
+        label,
+        sensitive,
+      })),
+    }
+  }
+}
 
 /** The run state of every node of `run`, for the canvas. */
 export function nodeRuns(run: LiveExecution | undefined): Record<string, NodeRun> | undefined {
