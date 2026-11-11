@@ -332,8 +332,8 @@ describe("status bar", () => {
     })
     const shown = stores.notifications.getSnapshot()
     expect(shown.map((n) => n.title)).toEqual(["<b>Start work</b>"])
-    expect(shown[0].severity).toBe("info")
-    expect(shown[0].message).toBe("3 succeeded")
+    expect(shown[0]?.severity).toBe("info")
+    expect(shown[0]?.message).toBe("3 succeeded")
   })
 
   it("notifies once when the agent stops and when a device disconnects", () => {
