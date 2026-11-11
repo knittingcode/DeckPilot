@@ -11,6 +11,7 @@
 
 mod actions;
 pub(crate) mod agent;
+mod credentials;
 mod layouts;
 mod logs;
 mod machine;
@@ -68,6 +69,9 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         modules::list_modules,
         modules::set_module_enabled,
         modules::set_module_config,
+        credentials::list_credentials,
+        credentials::set_credential,
+        credentials::delete_credential,
         profiles::list_profiles,
         profiles::get_profile,
         profiles::create_profile,

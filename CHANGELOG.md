@@ -29,6 +29,13 @@ as the notes of its GitHub release and of the in-app update.
   projects come from project resources. Starting and stopping services is
   off until allowed on this computer; down never removes volumes; logs are
   bounded and never followed.
+- HTTP module: requests (GET, POST, PUT, PATCH, DELETE with query,
+  headers and a JSON or text body; typed status, headers and body; a value
+  read by JSON pointer) and health checks. Requests to this computer and
+  private networks are refused unless allowed on this computer; every
+  address and redirect is checked. Credentials are stored on this computer
+  and used by name — never in a workflow or an export, only over https,
+  and never shown. Responses are bounded; TLS verification is always on.
 - Action types declare what running them does (read-only, opens something,
   changes things) and failures carry a stable error code; both are shown in
   the workflow editor.

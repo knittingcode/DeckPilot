@@ -762,7 +762,10 @@ fn fresh_installation_has_an_empty_action_library() {
         .iter()
         .map(|m| m["id"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(ids, ["docker", "general", "git", "projects", "system"]);
+    assert_eq!(
+        ids,
+        ["docker", "general", "git", "http", "projects", "system"]
+    );
     let module = |id: &str| {
         modules
             .as_array()
@@ -2093,4 +2096,53 @@ fn a_failed_import_changes_nothing_and_can_be_retried() {
         json!({ "token": second["token"], "options": { "profiles": [second["preview"]["profiles"][0]["id"]] } }),
     );
     assert_eq!(names(&target), ["Existing", "Imported"]);
+}
+
+#[test]
+fn credentials_are_never_read_back_or_exported() {
+    let source = Harness::new();
+    new_profile(&source, "Work");
+    let listed = source.ok(
+        "set_credential",
+        json!({ "id": "api.token", "description": "Staging API", "secret": "s3cret-value" }),
+    );
+    assert_eq!(listed[0]["id"], "api.token");
+    assert_eq!(listed[0]["description"], "Staging API");
+    assert!(!listed.to_string().contains("s3cret-value"));
+    // A new description keeps the secret; an invalid id is refused.
+    source.ok(
+        "set_credential",
+        json!({ "id": "api.token", "description": "Renamed", "secret": null }),
+    );
+    assert!(
+        source
+            .call(
+                "set_credential",
+                json!({ "id": "Bad Id", "description": "", "secret": "x" })
+            )
+            .is_err()
+    );
+    assert!(
+        !source
+            .ok("list_credentials", json!({}))
+            .to_string()
+            .contains("s3cret-value")
+    );
+
+    let file = source.paths.data_dir.join("credentials.deckpilot");
+    export_to(&source, &file, Some(PASSWORD));
+    let target = Harness::new();
+    let preview = target.ok(
+        "preview_import",
+        json!({ "path": file.display().to_string(), "password": "export secret" }),
+    );
+    let profile = preview["preview"]["profiles"][0]["id"].clone();
+    target.ok(
+        "apply_import",
+        json!({ "token": preview["token"], "options": { "profiles": [profile], "moduleSettings": true, "appSettings": true } }),
+    );
+    assert_eq!(target.ok("list_credentials", json!({})), json!([]));
+
+    source.ok("delete_credential", json!({ "id": "api.token" }));
+    assert_eq!(source.ok("list_credentials", json!({})), json!([]));
 }

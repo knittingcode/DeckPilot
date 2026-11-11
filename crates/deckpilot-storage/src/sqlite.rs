@@ -67,6 +67,7 @@ const MIGRATIONS: &[&str] = &[
     );
 ",
     crate::executions::SCHEMA,
+    crate::credentials::SCHEMA,
 ];
 
 /// Backups kept per database; older ones are removed after a new one is
@@ -358,6 +359,43 @@ impl SqliteStore {
     }
 
     /// Writes (or updates) the record of a workflow run.
+    /// Stored credentials, without their secrets.
+    pub fn credentials(&self) -> Result<Vec<deckpilot_core::CredentialInfo>> {
+        crate::credentials::list(&self.connection)
+    }
+
+    /// Stores or replaces a credential; with `secret: None` only the
+    /// description of an existing one changes.
+    pub fn set_credential(
+        &self,
+        id: &deckpilot_core::CredentialId,
+        description: &str,
+        secret: Option<&deckpilot_core::Secret>,
+    ) -> Result<()> {
+        if let Some(secret) = secret
+            && (secret.expose().is_empty()
+                || secret.expose().len() > crate::credentials::MAX_SECRET_BYTES)
+        {
+            return Err(StorageError::Invalid(format!(
+                "a secret must have 1 to {} bytes",
+                crate::credentials::MAX_SECRET_BYTES
+            )));
+        }
+        if secret.is_none() && !crate::credentials::exists(&self.connection, id)? {
+            return Err(StorageError::Invalid(format!("no credential named `{id}`")));
+        }
+        crate::credentials::set(&self.connection, id, description, secret)
+    }
+
+    pub fn delete_credential(&self, id: &deckpilot_core::CredentialId) -> Result<bool> {
+        crate::credentials::delete(&self.connection, id)
+    }
+
+    /// Every credential with its secret, for the engine.
+    pub fn load_credentials(&self) -> Result<deckpilot_core::MemoryCredentials> {
+        crate::credentials::load(&self.connection)
+    }
+
     pub fn save_execution(&self, record: &ExecutionRecord) -> Result<()> {
         crate::executions::save(&self.connection, record)
     }
@@ -1883,7 +1921,8 @@ mod tests {
                 .connection
                 .execute_batch(
                     "DROP TABLE migration_history; DROP TABLE module_schemas;
-                     DROP TABLE workflow_executions; PRAGMA user_version = 4;",
+                     DROP TABLE workflow_executions; DROP TABLE credentials;
+                     PRAGMA user_version = 4;",
                 )
                 .unwrap();
         }

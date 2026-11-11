@@ -7,6 +7,7 @@ import type {
   ActionType,
   AgentConnection,
   ControlFace,
+  CredentialInfo,
   Conversion,
   GraphIssue,
   ExecutionRecord,
@@ -117,6 +118,13 @@ export const api = {
     invoke<ModuleInfo[]>("set_module_enabled", { moduleId, enabled }),
   setModuleConfig: (moduleId: string, config: ActionParameters) =>
     invoke<ModuleInfo[]>("set_module_config", { moduleId, config }),
+
+  /** Stored credentials, never with their secrets. */
+  listCredentials: () => invoke<CredentialInfo[]>("list_credentials"),
+  /** Without `secret`, only the description of an existing credential changes. */
+  setCredential: (id: string, description: string, secret: string | null) =>
+    invoke<CredentialInfo[]>("set_credential", { id, description, secret }),
+  deleteCredential: (id: string) => invoke<CredentialInfo[]>("delete_credential", { id }),
 
   listProfiles: () => invoke<ProfilesView>("list_profiles"),
   getProfile: (profileId: string) => invoke<ProfileView>("get_profile", { profileId }),

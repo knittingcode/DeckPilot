@@ -31,6 +31,8 @@ pub struct ExecutionContext<'a> {
     capabilities: Option<&'a BTreeSet<Capability>>,
     /// Cancellation and progress, when the action runs in a workflow.
     control: Option<&'a ExecutionControl<'a>>,
+    /// Credentials stored on this computer.
+    credentials: Option<&'a dyn crate::CredentialSource>,
 }
 
 /// Progress a running action reports, shown on its workflow node.
@@ -83,7 +85,31 @@ impl<'a> ExecutionContext<'a> {
             machine,
             capabilities: None,
             control: None,
+            credentials: None,
         }
+    }
+
+    /// The same context with access to stored credentials.
+    #[must_use]
+    pub fn with_credentials(self, credentials: &'a dyn crate::CredentialSource) -> Self {
+        Self {
+            credentials: Some(credentials),
+            ..self
+        }
+    }
+
+    /// The secret of a stored credential, with the module's
+    /// [`Capability::Credentials`]. Use it only for the request it is
+    /// meant for; never put it in a message or an output.
+    pub fn credential(
+        &self,
+        id: &crate::CredentialId,
+    ) -> Result<crate::Secret, crate::CredentialError> {
+        self.require(Capability::Credentials)
+            .map_err(|_| crate::CredentialError::NotPermitted)?;
+        self.credentials
+            .and_then(|source| source.secret(id))
+            .ok_or_else(|| crate::CredentialError::Missing(id.clone()))
     }
 
     /// The same context with cancellation and progress for a workflow node.
