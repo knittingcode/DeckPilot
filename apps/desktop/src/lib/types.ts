@@ -174,6 +174,8 @@ export interface NodeSpec {
   retrySafe: boolean
   idempotent: boolean
   changesContext: boolean
+  /** The action stops promptly when cancelled or at its timeout. */
+  cancellable?: boolean
 }
 
 export interface Project {
@@ -337,10 +339,17 @@ export interface ExecutionRecord extends ExecutionSummary {
   nodes: NodeReport[]
 }
 
+/** Progress a running action reports. */
+export interface NodeProgress {
+  percent?: number
+  message?: string
+}
+
 export type ExecutionEvent =
   | { type: "nodeStarted"; node: string }
   | { type: "retrying"; node: string; attempt: number; waitMs: number }
   | { type: "nodeFinished"; report: NodeReport }
+  | { type: "nodeProgress"; node: string; progress: NodeProgress }
 
 /** Payload of {@link EXECUTION_EVENT}: the agent's execution events. */
 export type AgentExecutionEvent =

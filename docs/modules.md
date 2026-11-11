@@ -29,6 +29,7 @@ and nothing is added to the Action Library automatically.
 | Type | Parameters | Result |
 | ---- | ---------- | ------ |
 | `general.log` | `message` | the rendered message |
+| `general.wait` | `seconds` (1–300) | waits; output `waitedMs`; stops at once when cancelled (the reference workflow node) |
 | `projects.next` / `projects.previous` | — | switches along the project order (respects `wrapAround`) |
 | `projects.select` | `project_id` (optional) | with a project: selects it; without: reports the current project and changes nothing |
 | `projects.active` | — | reports the current project |
@@ -55,6 +56,104 @@ edit, reorder, delete, default project, explicit copy to another profile),
 active project switching (actions, the tray and the app all use
 `switching::step`) and project resources. Its setting `wrapAround` decides
 whether next/previous wrap around at the ends.
+
+## Workflow node contract
+
+Every action type is also a workflow node. This is the contract between a
+module, the Rust engine (the only place actions execute) and the editor
+(which only reads metadata and never runs module code). Contract version 1.
+
+**Identity and versioning.** A node type is its action type id,
+`<module>.<name>` (e.g. `general.wait`); the module id prefix ties it to its
+module and the module's capabilities. `NodeSpec::version` versions the
+node's parameter and output schema. Changing a parameter's meaning or an
+output's key or kind requires a new version and a module migration
+(`ModuleManifest::migrations`) for stored instances; adding an optional
+parameter or an output does not.
+
+**Parameter schema.** `ActionType::parameters`: key, label, description,
+kind (`text`, `integer` with bounds, `boolean`, `choice`, `resource`,
+`project`), required, default. The engine validates and normalizes
+parameters before a handler runs; handlers receive only valid values.
+
+**Input schema.** A node's inputs are its parameters. Each can be the
+action's configured value, a value for this node (`overrides`), or a data
+mapping from earlier nodes' outputs (one output, or text with
+`{{ steps.<node>.output.<key> }}`). Mapped values are converted to the
+parameter's kind; the engine checks references against earlier nodes'
+declared outputs. Resource parameters cannot be mapped.
+
+**Output schema.** `NodeSpec::outputs`: key, label, kind (`text`,
+`integer`, `boolean`, `path`, `url`, `projectKey`) and whether it is always
+present on success. Outputs are the `data` of a successful `ActionResult`.
+Only declared outputs are passed to later nodes' reports, events and
+history (safe output serialization); messages are shortened to 500
+characters. Never put secrets in outputs or messages.
+
+**Execution context.** `ActionHandler::execute(parameters, context)` gets
+an `ExecutionContext`: the profile, the node's project (the run's own
+project context, not necessarily DeckPilot's active project), this
+computer's resource bindings — each available only with the matching
+capability — and, in workflows, the attempt's cancellation token and a
+progress reporter. Handlers do not mutate state; they request changes as
+`ContextEffect`s (e.g. `SelectProject`), which the engine applies to the
+run's context after checking the module's capability.
+
+**Capability permissions.** The module manifest declares capabilities
+(`ProfileRead`, `ProjectContext`, `MachineResources`); the context refuses
+the rest (`CapabilityDenied`). A node that selects projects declares
+`changesContext`; it changes the run's context only. Changing DeckPilot's
+active project is never a node's decision: it is the workflow's project
+scope (see [Workflow graphs](workflow-graphs.md#project-context-and-the-active-project)).
+
+**Cancellation.** In a workflow, every attempt has a token
+(`context.cancellation()`), cancelled when the run is cancelled or the
+attempt's timeout passes (`CancelReason::Cancelled` /
+`DeadlineExceeded`). Long-running handlers check `context.is_cancelled()`,
+wait with `context.wait(duration)` instead of sleeping, run programs with
+`deckpilot_core::process::run` (which stops the program's process group:
+`SIGTERM`, `SIGKILL` after a grace period; the process tree on Windows; no
+orphans, nothing outside the group), and return promptly. They declare
+`NodeSpec::cancellable = true`. A handler that cannot be interrupted keeps
+the default `false`; the editor then says that it finishes before a
+cancellation or timeout takes effect, and nothing claims otherwise. After a
+cancellation the agent waits up to 10 s for the run to stop; a run still
+busy with a non-interruptible action is then recorded as cancelled, and the
+action's late result is discarded.
+
+**Timeout.** `NodeSpec::timeout_ms` (default 30 s; a node may override it,
+at most 10 minutes). Cooperative handlers stop at the deadline; a result
+arriving late is a timeout and its effects are discarded.
+
+**Retryability.** `NodeSpec::retry_safe`: the engine retries a failed
+attempt (up to five times, exponential backoff, cancellable waits) only when
+it is safe; otherwise retry settings are refused. Each attempt starts from
+the node's input context.
+
+**Idempotency.** `NodeSpec::idempotent`: running twice has the same effect
+as once. Informational for users and future replays.
+
+**Structured errors.** A failed node reports `StepError { code, message,
+retryable }` with stable codes: `action.failed`, `timeout`, `cancelled`,
+`mapping`, `context-conflict`, `unavailable`, `loop.failed`. Cancellation is
+never reported as a failure or a timeout, and a timeout never as a
+cancellation.
+
+**Progress events.** `context.report_progress(percent, message)` emits
+`nodeProgress` (percent 0–100 optional, short safe message); the editor
+shows it on the running node. Outside workflows it is ignored. The engine
+emits `nodeStarted`, `retrying` and `nodeFinished` itself.
+
+**Backward compatibility.** Every `NodeSpec` field has a default, so action
+types that predate a field keep working (`cancellable` defaults to `false`,
+the honest value). Stored graphs carry a format version
+(`WorkflowGraph::version`); workflows without a graph run as steps.
+
+**Reference implementation.** `general.wait` (`modules/general/src/lib.rs`)
+implements the whole contract: a bounded integer parameter with a default,
+a declared typed output, its own timeout, `retrySafe`, `idempotent`,
+`cancellable`, cooperative waiting through the context and progress
+reports. Its tests show each part.
 
 ## Where things live
 

@@ -647,6 +647,7 @@ fn start_agent_with(
         open_window: None,
         key_store: keys.map(|keys| -> Arc<dyn deckpilot_keystore::KeyStore> { Arc::new(keys) }),
         auto_lock_check: std::time::Duration::from_millis(50),
+        cancel_grace: std::time::Duration::from_secs(10),
         clock: deckpilot_agent::system_clock(),
         screen_lock: None,
     };

@@ -7,6 +7,7 @@
 //! values are resolved at execution time through [`MachineConfig`].
 
 pub mod action;
+pub mod cancel;
 pub mod device_runtime;
 pub mod execution;
 pub mod face;
@@ -16,6 +17,7 @@ pub mod id;
 pub mod layout;
 pub mod module;
 pub mod platform;
+pub mod process;
 pub mod profile;
 pub mod project;
 pub mod registry;
@@ -30,9 +32,11 @@ pub use action::{
     ActionInstance, ActionParameters, ActionType, ActionTypeId, MAX_LABEL_CHARS, ParameterError,
     ParameterKind, ParameterSpec, ParameterValue, validate_presentation,
 };
+pub use cancel::{CancelReason, CancellationToken};
 pub use device_runtime::{LayoutStatus, Runtime, RuntimeOutcome, page_faces};
 pub use execution::{
     ActionResult, ActionStatus, CapabilityDenied, ContextEffect, ExecutionContext,
+    ExecutionControl, Progress,
 };
 pub use face::{FaceStyle, KeyFace, render_label};
 pub use history::{

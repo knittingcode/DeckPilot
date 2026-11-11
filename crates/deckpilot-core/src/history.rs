@@ -179,7 +179,7 @@ impl ExecutionRecord {
                     self.summary.running_nodes.push(node.clone());
                 }
             }
-            ExecutionEvent::Retrying { .. } => {}
+            ExecutionEvent::Retrying { .. } | ExecutionEvent::NodeProgress { .. } => {}
             ExecutionEvent::NodeFinished { report } => {
                 self.summary.running_nodes.retain(|n| n != &report.node);
                 match self.nodes.iter_mut().find(|n| n.node == report.node) {
@@ -288,6 +288,13 @@ pub fn safe_event(
     match event {
         ExecutionEvent::NodeFinished { report } => ExecutionEvent::NodeFinished {
             report: safe_report(&report, profile, registry),
+        },
+        ExecutionEvent::NodeProgress { node, progress } => ExecutionEvent::NodeProgress {
+            node,
+            progress: crate::Progress {
+                percent: progress.percent.map(|p| p.min(100)),
+                message: shorten(&progress.message),
+            },
         },
         other => other,
     }

@@ -17,14 +17,16 @@ import {
 import { createElement } from "react"
 
 import { ActionIcon } from "@/components/action-icon"
-import type { GraphIssue, GraphPort, NodeReport } from "@/lib/types"
+import type { GraphIssue, GraphPort, NodeProgress, NodeReport } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 import { type NodeType, PORT_LABEL, hasInput, outputPorts } from "./graph"
 import { formatMs } from "./describe"
 
 /** How a node did in the run shown on the canvas. */
-export type NodeRun = { state: "running"; attempt?: number } | { state: "done"; report: NodeReport }
+export type NodeRun =
+  | { state: "running"; attempt?: number; progress?: NodeProgress }
+  | { state: "done"; report: NodeReport }
 
 export interface NodeViewData extends Record<string, unknown> {
   type: NodeType
@@ -65,6 +67,7 @@ function RunBadge({ run }: { run: NodeRun }) {
       <span className="flex items-center gap-1 text-xs text-primary">
         <Loader2 className="size-3.5 animate-spin" aria-hidden />
         {run.attempt && run.attempt > 1 ? `Attempt ${run.attempt}` : "Running"}
+        {run.progress?.message ? ` · ${run.progress.message}` : ""}
       </span>
     )
   }

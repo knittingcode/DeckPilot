@@ -1,6 +1,7 @@
 //! Execution context handed to action handlers and the results they return.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +29,45 @@ pub struct ExecutionContext<'a> {
     machine: &'a MachineConfig,
     /// `None` means unrestricted (the core itself and trusted handlers).
     capabilities: Option<&'a BTreeSet<Capability>>,
+    /// Cancellation and progress, when the action runs in a workflow.
+    control: Option<&'a ExecutionControl<'a>>,
+}
+
+/// Progress a running action reports, shown on its workflow node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Progress {
+    /// 0–100, when the action knows how far it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent: Option<u8>,
+    /// Short and safe to show: no secrets, no raw output.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub message: String,
+}
+
+/// What the engine hands an action that runs as a workflow node: the token
+/// that is cancelled when the run is cancelled or the attempt's timeout
+/// passes, and a way to report progress.
+pub struct ExecutionControl<'a> {
+    cancel: &'a crate::CancellationToken,
+    progress: &'a (dyn Fn(Progress) + Sync),
+}
+
+impl<'a> ExecutionControl<'a> {
+    pub fn new(
+        cancel: &'a crate::CancellationToken,
+        progress: &'a (dyn Fn(Progress) + Sync),
+    ) -> Self {
+        Self { cancel, progress }
+    }
+}
+
+impl fmt::Debug for ExecutionControl<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecutionControl")
+            .field("cancel", self.cancel)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> ExecutionContext<'a> {
@@ -42,6 +82,49 @@ impl<'a> ExecutionContext<'a> {
             project,
             machine,
             capabilities: None,
+            control: None,
+        }
+    }
+
+    /// The same context with cancellation and progress for a workflow node.
+    #[must_use]
+    pub fn with_control(self, control: &'a ExecutionControl<'a>) -> Self {
+        Self {
+            control: Some(control),
+            ..self
+        }
+    }
+
+    /// The token of the running attempt: cancelled when the run is
+    /// cancelled or the attempt's timeout passes. `None` outside workflows
+    /// (a single action started from a key or the app).
+    pub fn cancellation(&self) -> Option<&'a crate::CancellationToken> {
+        self.control.map(|control| control.cancel)
+    }
+
+    /// Whether the action should stop as soon as it can.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancellation()
+            .is_some_and(crate::CancellationToken::is_cancelled)
+    }
+
+    /// Sleeps `duration`, ending early when cancelled; `false` if cancelled.
+    /// Actions wait with this instead of `std::thread::sleep`.
+    pub fn wait(&self, duration: std::time::Duration) -> bool {
+        if let Some(token) = self.cancellation() {
+            return token.wait(duration);
+        }
+        std::thread::sleep(duration);
+        true
+    }
+
+    /// Reports progress of a long-running action. Ignored outside workflows.
+    pub fn report_progress(&self, percent: Option<u8>, message: impl Into<String>) {
+        if let Some(control) = self.control {
+            (control.progress)(Progress {
+                percent: percent.map(|p| p.min(100)),
+                message: message.into(),
+            });
         }
     }
 

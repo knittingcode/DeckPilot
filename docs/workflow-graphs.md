@@ -71,17 +71,19 @@ from the module list and never imports module code.
 | `timeoutMs` | Default deadline (default 30 s) |
 | `retrySafe` | Retrying after a failure is safe; retries are refused otherwise |
 | `idempotent` | Running twice equals running once |
-| `changesContext` | Changes the active project; not allowed in parallel branches |
+| `changesContext` | Selects a project: changes the run's project context for the nodes after it |
+| `cancellable` | Stops promptly when cancelled or at its timeout (default `false`) |
 
 Together with the action type (namespaced id such as `projects.select`,
 name, description, category, parameter schema) and the module manifest
 (module id, capabilities, platforms), this is the complete node contract.
 Outputs are the `data` of a successful `ActionResult`.
 
-Execution uses the existing handler interface:
-`ActionHandler::execute(parameters, context) -> ActionResult`. The context
-is permission-scoped by the module's declared capabilities, carries the
-profile, the active project and this computer's resource bindings.
+Execution uses the handler interface
+`ActionHandler::execute(parameters, context) -> ActionResult`. The complete
+contract — schemas, execution context, capabilities, cancellation, timeouts,
+retries, errors, progress and compatibility — is in
+[Feature modules](modules.md#workflow-node-contract).
 
 The Projects module declares its nodes: `select`, `next`/`previous` change
 the project (next/previous are not retry-safe), `active` and the resource
@@ -109,11 +111,15 @@ resource actions also the resource, its key, kind and value.
   (`action.failed`, `timeout`, `mapping`, `parallel-context`, `loop.failed`,
   `unavailable`), a message and whether a retry could help.
 - **Retries** (retry-safe actions only): up to five, with exponential backoff.
-- **Deadlines.** Handlers are synchronous and cannot be interrupted. A result
-  that arrives after the node's timeout counts as a timeout and its effects
-  (project changes, outputs) are discarded.
-- **Cancellation** is checked before every node and attempt and interrupts
-  delays and retry waits; everything not yet run is reported as cancelled.
+- **Deadlines.** Each attempt's token is cancelled at its timeout, so
+  cooperative actions stop there. A result that arrives after the timeout
+  counts as a timeout and its effects (project changes, outputs) are
+  discarded.
+- **Cancellation** reaches running actions through their token (cooperative
+  actions stop at once), and interrupts delays and retry waits; everything
+  not yet run is reported as cancelled. A node stopped by a cancellation is
+  *cancelled*, never *failed* or *timed out*; an action that finished
+  successfully despite a cancellation keeps its result.
 - **Project context.** Each run has its own project context; see
   [Project context and the active project](#project-context-and-the-active-project).
   Workflows belong to a profile and only ever see that profile's actions,

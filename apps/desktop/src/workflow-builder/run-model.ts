@@ -10,7 +10,11 @@ export function nodeRuns(run: LiveExecution | undefined): Record<string, NodeRun
   const result: Record<string, NodeRun> = {}
   for (const report of run.nodes) result[report.node] = { state: "done", report }
   for (const node of run.runningNodes ?? []) {
-    result[node] = { state: "running", attempt: run.attempts?.[node] }
+    result[node] = {
+      state: "running",
+      attempt: run.attempts?.[node],
+      progress: run.progress?.[node],
+    }
   }
   return result
 }

@@ -39,6 +39,12 @@ as the notes of its GitHub release and of the in-app update.
 
 ### Changed
 
+- Cancelling a workflow now reaches running actions: actions that support
+  it (such as the new Wait action) stop at once, also when their timeout
+  passes, and retries waiting for their next attempt end immediately.
+  Cancelled steps are reported as cancelled, not failed. Actions that cannot
+  be interrupted say so in the editor.
+
 - Workflow runs have their own project context. A project selected in a run
   affects the nodes after it — including in parallel branches, whose changes
   a Join merges or rejects when they disagree — but not DeckPilot's active

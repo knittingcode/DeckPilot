@@ -54,6 +54,7 @@ fn builtin_modules_register_with_namespaced_action_types() {
         types,
         [
             "general.log",
+            "general.wait",
             "projects.next",
             "projects.previous",
             "projects.select",

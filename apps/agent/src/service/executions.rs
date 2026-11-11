@@ -42,6 +42,9 @@ use tracing::{info, warn};
 
 use super::{Agent, Command, WORKFLOW_SUMMARY_WINDOW, engine_error, failed, locked, storage_error};
 
+/// How long a cancelled run may take to stop by default.
+pub(crate) const CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Workflows that may run at the same time.
 pub(crate) const MAX_RUNNING: usize = 4;
 /// Executions listed when a client does not ask for a number.
@@ -79,6 +82,8 @@ struct Running {
     start_project: Option<ProjectId>,
     /// Whether the run may change the active project.
     scope: ProjectScope,
+    /// When cancellation was requested.
+    cancel_requested: Option<std::time::Instant>,
 }
 
 #[derive(Default)]
@@ -219,6 +224,7 @@ impl Agent {
                 engine,
                 start_project,
                 scope,
+                cancel_requested: None,
             },
         ));
         let _ = self.handle.events.send(AgentEvent::ExecutionStarted {
@@ -365,10 +371,12 @@ impl Agent {
 
     pub(super) fn cancel_execution(&mut self, id: ExecutionId) -> Result<(), IpcError> {
         let profile = self.runtime.profile().map(|p| p.id);
-        match self.executions.get(id) {
+        match self.executions.get_mut(id) {
             Some(run) if Some(run.record.summary.profile) == profile => {
                 info!(execution = %id, "cancelling a workflow");
                 run.cancel.cancel();
+                run.cancel_requested
+                    .get_or_insert_with(std::time::Instant::now);
                 Ok(())
             }
             _ => Err(IpcError::new(
@@ -381,9 +389,45 @@ impl Agent {
     /// Cancels every run, e.g. when the configuration is locked. The runs
     /// end shortly after; their records are written once the database is
     /// open again.
-    pub(super) fn cancel_all_executions(&self) {
-        for (_, run) in &self.executions.running {
+    pub(super) fn cancel_all_executions(&mut self) {
+        for (_, run) in &mut self.executions.running {
             run.cancel.cancel();
+            run.cancel_requested
+                .get_or_insert_with(std::time::Instant::now);
+        }
+    }
+
+    /// Records runs that were cancelled more than the grace period ago as
+    /// cancelled, although an action that cannot be interrupted is still
+    /// finishing. Its result arrives later and is discarded; nothing of it
+    /// is applied.
+    pub(super) fn expire_cancelled_executions(&mut self) {
+        let grace = self.options.cancel_grace;
+        let expired: Vec<ExecutionId> = self
+            .executions
+            .running
+            .iter()
+            .filter(|(_, run)| run.cancel_requested.is_some_and(|at| at.elapsed() >= grace))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in expired {
+            let Some(mut run) = self.executions.take(id) else {
+                continue;
+            };
+            let now = self.now_ms();
+            run.record.end(
+                ExecutionState::Cancelled,
+                "cancelled; an action that cannot be interrupted was still running, and its result is discarded",
+                now,
+            );
+            warn!(execution = %id, "a cancelled workflow did not stop in time");
+            for waiter in run.waiters.drain(..) {
+                let _ = waiter.send(Err(failed("the workflow was cancelled".into())));
+            }
+            self.persist_execution(&run.record);
+            let _ = self.handle.events.send(AgentEvent::ExecutionFinished {
+                execution: run.record.summary.clone(),
+            });
         }
     }
 

@@ -175,6 +175,7 @@ export function NodeRunReport({ run }: { run: NodeRun }) {
         <p className="flex items-center gap-1.5 text-xs">
           <Loader2 className="size-3.5 animate-spin text-primary" />
           {run.attempt && run.attempt > 1 ? `Running, attempt ${run.attempt}` : "Running"}
+          {run.progress?.message ? ` · ${run.progress.message}` : ""}
         </p>
       </section>
     )
