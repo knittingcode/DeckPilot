@@ -14,7 +14,7 @@
 
 mod convert;
 pub(crate) mod executor;
-mod mapping;
+pub(crate) mod mapping;
 mod validate;
 
 use std::collections::BTreeMap;

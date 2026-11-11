@@ -37,6 +37,7 @@ publish = false
 
 [workspace.dependencies]
 deckpilot-device = { path = "crates/deckpilot-device" }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 deckpilot-core = { path = "crates/deckpilot-core" }
 deckpilot-storage = { path = "crates/deckpilot-storage" }
 deckpilot-hid = { path = "crates/deckpilot-hid" }

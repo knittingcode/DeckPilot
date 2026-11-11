@@ -93,6 +93,58 @@ impl Engine {
         &self.registry
     }
 
+    /// The refresh policy of the live state of `action` in `profile`, if
+    /// its module provides one.
+    pub fn state_policy(
+        &self,
+        profile: &Profile,
+        action: ActionInstanceId,
+    ) -> Option<crate::RefreshPolicy> {
+        let instance = profile.action(action)?;
+        let handler = self.registry.handler(&instance.action_type)?;
+        let parameters = handler.definition().normalize(&instance.parameters).ok();
+        self.registry.state_policy(
+            &instance.action_type,
+            parameters.as_ref().unwrap_or(&instance.parameters),
+        )
+    }
+
+    /// The live state of a key that runs `action` of `profile` with
+    /// `project` as its project. Runs the module's provider on the calling
+    /// thread, with this engine's credentials, no notifications and
+    /// `cancel` as the cancellation token. `None` if the action has no
+    /// live state.
+    pub fn button_state(
+        &self,
+        profile: &Profile,
+        machine: &MachineConfig,
+        project: Option<&crate::Project>,
+        action: ActionInstanceId,
+        cancel: &CancellationToken,
+    ) -> Option<Result<crate::ButtonState, crate::StateError>> {
+        let instance = profile.action(action)?;
+        let handler = self.registry.handler(&instance.action_type)?;
+        let Ok(parameters) = handler.definition().normalize(&instance.parameters) else {
+            return Some(Err(crate::StateError::new(
+                "invalid-configuration",
+                "the action's configuration is invalid",
+            )));
+        };
+        if handler.definition().requires_project && project.is_none() {
+            return Some(Err(crate::StateError::new(
+                "no-active-project",
+                "this action requires an active project",
+            )));
+        }
+        let ignore = |_: crate::Progress| {};
+        let control = crate::ExecutionControl::new(cancel, &ignore);
+        let context = ExecutionContext::new(profile, project, machine)
+            .with_credentials(self.credentials.as_ref())
+            .with_control(&control);
+        self.registry
+            .button_state(&instance.action_type, &parameters, &context)
+    }
+
     /// Runs one action instance of `profile` and applies its context effects.
     pub fn run_action(
         &self,
@@ -185,11 +237,21 @@ impl Engine {
         profile: &Profile,
         workflow: WorkflowId,
     ) -> Result<(), EngineError> {
+        self.check_runnable_with(profile, workflow, &std::collections::BTreeMap::new())
+    }
+
+    /// [`Engine::check_runnable`] for a run with these input values.
+    pub fn check_runnable_with(
+        &self,
+        profile: &Profile,
+        workflow: WorkflowId,
+        inputs: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), EngineError> {
         let definition = profile
             .workflow(workflow)
             .ok_or(EngineError::UnknownWorkflow(workflow))?;
         if definition.graph.is_some() {
-            workflow_inputs(definition, &std::collections::BTreeMap::new())?;
+            workflow_inputs(definition, inputs)?;
         }
         self.check_graph(profile, workflow)
     }
@@ -226,11 +288,40 @@ impl Engine {
         cancel: &CancellationToken,
         on_event: &(dyn Fn(ExecutionEvent) + Sync),
     ) -> Result<GraphReport, EngineError> {
+        self.execute_workflow_with(
+            profile,
+            machine,
+            context,
+            workflow,
+            &std::collections::BTreeMap::new(),
+            cancel,
+            on_event,
+        )
+    }
+
+    /// [`Engine::execute_workflow`] with values for the workflow's inputs,
+    /// e.g. from a trigger. Inputs without a value get their default; a
+    /// required one without a value is an error. Workflows without a graph
+    /// have no inputs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_workflow_with(
+        &self,
+        profile: &Profile,
+        machine: &MachineConfig,
+        context: &mut ActiveProjectContext,
+        workflow: WorkflowId,
+        inputs: &std::collections::BTreeMap<String, String>,
+        cancel: &CancellationToken,
+        on_event: &(dyn Fn(ExecutionEvent) + Sync),
+    ) -> Result<GraphReport, EngineError> {
         let definition = profile
             .workflow(workflow)
             .ok_or(EngineError::UnknownWorkflow(workflow))?;
         if definition.graph.is_some() {
-            self.run_graph(profile, machine, context, workflow, cancel, on_event)
+            let inputs = workflow_inputs(definition, inputs)?;
+            self.run_graph_nested(
+                profile, machine, context, workflow, &inputs, cancel, on_event, 0,
+            )
         } else {
             self.run_steps(profile, machine, context, workflow, cancel, on_event)
         }
@@ -675,6 +766,32 @@ mod tests {
 
     fn machine() -> MachineConfig {
         MachineConfig::new(Os::current())
+    }
+
+    #[test]
+    fn button_states_of_action_instances() {
+        let f = fixture();
+        let machine = machine();
+        let cms = &f.profile.projects[2];
+        let cancel = CancellationToken::new();
+        assert!(f.engine.state_policy(&f.profile, f.log).is_some());
+        assert!(f.engine.state_policy(&f.profile, f.next).is_none());
+        let state = f
+            .engine
+            .button_state(&f.profile, &machine, Some(cms), f.log, &cancel)
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.label.as_deref(), Some("now on CMS"));
+        assert!(
+            f.engine
+                .button_state(&f.profile, &machine, None, f.next, &cancel)
+                .is_none()
+        );
+        assert!(
+            f.engine
+                .button_state(&f.profile, &machine, None, ActionInstanceId::new(), &cancel)
+                .is_none()
+        );
     }
 
     #[test]

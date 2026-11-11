@@ -7,6 +7,7 @@
 //! values are resolved at execution time through [`MachineConfig`].
 
 pub mod action;
+pub mod button_state;
 pub mod cancel;
 pub mod credentials;
 pub mod device_runtime;
@@ -26,6 +27,7 @@ pub mod project;
 pub mod registry;
 pub mod resource;
 pub mod runtime;
+pub mod trigger;
 pub mod workflow;
 
 #[cfg(test)]
@@ -34,6 +36,10 @@ pub(crate) mod testing;
 pub use action::{
     ActionInstance, ActionParameters, ActionType, ActionTypeId, MAX_LABEL_CHARS, ParameterError,
     ParameterKind, ParameterSpec, ParameterValue, lines_of, looks_secret, validate_presentation,
+};
+pub use button_state::{
+    ButtonState, Indicator, MAX_REFRESH_INTERVAL, MIN_REFRESH_INTERVAL, RefreshPolicy, StateError,
+    StateSnapshot,
 };
 pub use cancel::{CancelReason, CancellationToken};
 pub use credentials::{
@@ -67,6 +73,10 @@ pub use resource::{
     MachineConfig, MachineResourceBinding, ResolveError, ResourceKey, ResourceKind, ResourceRef,
 };
 pub use runtime::{Engine, EngineError, StepReport, WorkflowReport};
+pub use trigger::{
+    EventField, LifecycleEvent, Schedule, Scheduler, TriggerEvent, TriggerKind, TriggerValue,
+    WallTime, WorkflowTrigger,
+};
 pub use workflow::{OnFailure, ProjectScope, StepCondition, Workflow, WorkflowStep};
 
 /// Error returned when a textual identifier does not satisfy its format rules.

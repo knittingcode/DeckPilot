@@ -136,6 +136,12 @@ the index, so reading never writes to the repository; turning off
 program. Credentials in URLs are removed from error messages. Local
 commands are limited to 30 s; actions are cancellable.
 
+**Key state.** Keys running `git.status` show the branch and a green
+(clean), amber (uncommitted changes) or red (conflicts) mark; `git.branch`
+keys show the branch. The repository is read with the same local `git
+status` at most every 30 s while the key is shown (see
+[Button state](modules.md#button-state)).
+
 Error codes: `not-found`, `not-a-repository`, `unsafe-repository`,
 `git-not-found`, `git-failed`, `project-not-in-profile`, `no-commits`,
 `no-remote`, `network-failed`, and the shared codes.
@@ -202,6 +208,13 @@ partway leaves the project as far as Compose got; running the action again
 completes it (both are retry-safe and idempotent). Reading commands are
 limited to 30 s, changes to the module's time limit — in a workflow at most
 10 minutes, the longest any node runs.
+
+**Key state.** Keys show whether Docker is available (`docker.status`),
+how many containers run (`docker.containers`) and how many of a Compose
+project's containers are up (`docker.compose-*`; up and down keys also as a
+toggle), read with `docker version`, `docker ps` or `docker compose ps` at
+most every 30 s while the key is shown. Reading the state never starts or
+stops anything and needs no permission to change containers.
 
 Error codes: `docker-not-found`, `daemon-unavailable`, `permission-denied`,
 `context-not-found`, `compose-unavailable`, `compose-file-not-found`,
