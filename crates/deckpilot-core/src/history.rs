@@ -9,7 +9,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::graph::{ExecutionEvent, GraphReport, NodeId, NodeReport, NodeStatus, RunStatus};
-use crate::{ActionRegistry, ExecutionId, Profile, ProfileId, Workflow, WorkflowId};
+use crate::{
+    ActionRegistry, ExecutionId, Profile, ProfileId, ProjectId, ProjectScope, Workflow, WorkflowId,
+};
 
 /// Longest message kept, in characters.
 pub const MAX_MESSAGE_CHARS: usize = 500;
@@ -64,6 +66,25 @@ pub enum ExecutionTrigger {
     Device,
 }
 
+/// What a finished run did to the application's active project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ProjectOutcome {
+    /// The run ended on the project it started with.
+    Unchanged,
+    /// The run selected `project`; the change stayed in the run (its
+    /// workflow may not change the active project).
+    KeptInRun { project: Option<ProjectId> },
+    /// `project` became the active project.
+    Applied { project: ProjectId },
+    /// The workflow may change the active project, but this change was not
+    /// made, e.g. because the active project changed during the run.
+    NotApplied {
+        project: Option<ProjectId>,
+        reason: String,
+    },
+}
+
 /// A run without its node details, for lists and live updates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,6 +110,15 @@ pub struct ExecutionSummary {
     /// Why the run failed, was cancelled or was interrupted.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub message: String,
+    /// The active project when the run started: the run's initial context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_project: Option<ProjectId>,
+    /// Whether the run could change the active project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_scope: Option<ProjectScope>,
+    /// What the finished run did to the active project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectOutcome>,
 }
 
 /// A run with the report of every resolved node.
@@ -129,6 +159,9 @@ impl ExecutionRecord {
                 completed_nodes: 0,
                 running_nodes: Vec::new(),
                 message: String::new(),
+                initial_project: None,
+                project_scope: None,
+                project: None,
             },
             nodes: Vec::new(),
         }
@@ -339,6 +372,7 @@ mod tests {
                 status: RunStatus::Failed,
                 duration_ms: 9,
                 nodes: vec![report("step_1", NodeStatus::Succeeded), failed],
+                context_conflict: None,
             },
             2_000,
         );

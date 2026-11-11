@@ -119,6 +119,9 @@ export function WorkflowRun(props: Props) {
             now={now}
             onShow={setChosen}
             onCancel={cancel}
+            projectKey={(id) =>
+              props.view.profile.projects.find((p) => p.id === id)?.key ?? "no project"
+            }
             onClear={() => {
               api
                 .clearExecutionHistory(workflowId)

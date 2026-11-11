@@ -76,7 +76,22 @@ export interface Workflow {
   steps: WorkflowStep[]
   /** The visual form; when present it is what runs (crates/deckpilot-core/src/graph). */
   graph?: WorkflowGraph
+  /**
+   * Whether runs may change DeckPilot's active project (`application`) or
+   * keep project changes to themselves (`execution`). Unset for workflows
+   * saved before the setting existed; see `effectiveProjectScope`.
+   */
+  projectScope?: ProjectScope
 }
+
+export type ProjectScope = "execution" | "application"
+
+/** What a finished run did to the active project. */
+export type ProjectOutcome =
+  | { type: "unchanged" }
+  | { type: "keptInRun"; project?: string | null }
+  | { type: "applied"; project: string }
+  | { type: "notApplied"; project?: string | null; reason: string }
 
 export type GraphPort = "out" | "error" | "true" | "false"
 
@@ -312,6 +327,10 @@ export interface ExecutionSummary {
   completedNodes: number
   runningNodes?: string[]
   message?: string
+  /** The active project when the run started: the run's own initial context. */
+  initialProject?: string
+  projectScope?: ProjectScope
+  project?: ProjectOutcome
 }
 
 export interface ExecutionRecord extends ExecutionSummary {

@@ -39,6 +39,14 @@ as the notes of its GitHub release and of the in-app update.
 
 ### Changed
 
+- Workflow runs have their own project context. A project selected in a run
+  affects the nodes after it — including in parallel branches, whose changes
+  a Join merges or rejects when they disagree — but not DeckPilot's active
+  project or other runs. Changing the active project is a permission per
+  workflow ("May change the active project"), applied when the run ends and
+  only if the active project did not change meanwhile. Workflows saved
+  earlier keep their behavior.
+
 - Release validation: test releases (e.g. `v0.5.0-1`) are verified like
   final ones and are marked as pre-releases, so they never become the
   release the app updates to.

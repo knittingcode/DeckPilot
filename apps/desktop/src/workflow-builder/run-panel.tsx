@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils"
 
 import { formatMs } from "./describe"
 import type { NodeRun } from "./node-view"
-import { runSummary } from "./run-model"
+import { projectOutcomeText, runSummary } from "./run-model"
 
 export function StateIcon({ state, className }: { state: ExecutionState; className?: string }) {
   const icon = {
@@ -43,6 +43,7 @@ export function RunHistory({
   onShow,
   onCancel,
   onClear,
+  projectKey,
 }: {
   runs: LiveExecution[]
   shown: string | null
@@ -50,6 +51,8 @@ export function RunHistory({
   onShow: (id: string | null) => void
   onCancel: (id: string) => void
   onClear: () => void
+  /** A project's key by its id. */
+  projectKey: (id: string | null | undefined) => string
 }) {
   return (
     <section className="grid gap-2 border-t px-4 py-3" aria-label="Runs">
@@ -122,6 +125,11 @@ export function RunHistory({
               <span className="text-muted-foreground">
                 {formatTimestamp(Math.floor(run.startedAt / 1000))}
               </span>
+              {projectOutcomeText(run.project, projectKey) && (
+                <span className="text-muted-foreground">
+                  {projectOutcomeText(run.project, projectKey)}
+                </span>
+              )}
               {run.message && (run.state === "failed" || run.state === "interrupted") && (
                 <span className="line-clamp-2 text-muted-foreground">{run.message}</span>
               )}

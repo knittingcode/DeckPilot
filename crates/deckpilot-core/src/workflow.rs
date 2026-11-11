@@ -27,6 +27,23 @@ pub enum StepCondition {
     ActiveProject { project: ProjectId },
 }
 
+/// Whether a workflow may change the application's active project.
+///
+/// A run always has its own project context (see [`crate::graph`]): project
+/// selections inside it affect the nodes after them and nothing else. Only
+/// with [`ProjectScope::Application`] does the project a run ends with
+/// become DeckPilot's active project, and only if nothing else changed the
+/// active project during the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProjectScope {
+    /// Project changes stay in the run. The default for new workflows.
+    Execution,
+    /// The workflow may change DeckPilot's active project: a permission the
+    /// user grants per workflow.
+    Application,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowStep {
@@ -66,6 +83,11 @@ pub struct Workflow {
     /// kept for reference and for the editor's conversion notes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph: Option<crate::graph::WorkflowGraph>,
+    /// Whether the workflow may change the active project. Unset for
+    /// workflows saved before this setting existed; see
+    /// [`Workflow::effective_project_scope`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_scope: Option<ProjectScope>,
 }
 
 impl Workflow {
@@ -76,6 +98,41 @@ impl Workflow {
             description: String::new(),
             steps: Vec::new(),
             graph: None,
+            project_scope: None,
+        }
+    }
+
+    /// The project scope that applies. A workflow saved before the setting
+    /// existed changed the active project whenever one of its actions
+    /// selected a project; it keeps doing so, so that upgrading changes
+    /// nothing. Any other workflow keeps project changes in its runs.
+    pub fn effective_project_scope(
+        &self,
+        profile: &Profile,
+        registry: &ActionRegistry,
+    ) -> ProjectScope {
+        match self.project_scope {
+            Some(scope) => scope,
+            None if self.selects_projects(profile, registry) => ProjectScope::Application,
+            None => ProjectScope::Execution,
+        }
+    }
+
+    /// Whether any of the workflow's actions selects a project (declared by
+    /// its action type's node spec).
+    pub fn selects_projects(&self, profile: &Profile, registry: &ActionRegistry) -> bool {
+        let changes = |action: ActionInstanceId| {
+            profile
+                .action(action)
+                .and_then(|instance| registry.definition(&instance.action_type))
+                .is_some_and(|definition| definition.node.changes_context)
+        };
+        match &self.graph {
+            Some(graph) => graph.nodes.iter().any(|node| match &node.kind {
+                crate::graph::NodeKind::Action { action, .. } => changes(*action),
+                _ => false,
+            }),
+            None => self.steps.iter().any(|step| changes(step.action)),
         }
     }
 
@@ -150,5 +207,68 @@ impl Workflow {
             }
         }
         issues
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{echo_type, registry, select_type, with_projects};
+
+    #[test]
+    fn workflows_without_a_scope_keep_their_earlier_behavior() {
+        let registry = registry();
+        let mut profile = with_projects("Work", &["SHOP", "CMS"]);
+        let select = registry
+            .create_instance("Next", select_type(), &ActionParameters::new())
+            .unwrap();
+        let echo = registry
+            .create_instance(
+                "Echo",
+                echo_type(),
+                &ActionParameters::new().with("message", crate::ParameterValue::Text("hi".into())),
+            )
+            .unwrap();
+        let (select, echo) = (
+            {
+                let id = select.id;
+                profile.actions.push(select);
+                id
+            },
+            {
+                let id = echo.id;
+                profile.actions.push(echo);
+                id
+            },
+        );
+
+        // Saved before the setting: selecting projects changed the active
+        // project, and still does.
+        let old = Workflow::new("Old").step(select, OnFailure::Stop);
+        assert_eq!(
+            old.effective_project_scope(&profile, &registry),
+            ProjectScope::Application
+        );
+        let plain = Workflow::new("Plain").step(echo, OnFailure::Stop);
+        assert_eq!(
+            plain.effective_project_scope(&profile, &registry),
+            ProjectScope::Execution
+        );
+        // An explicit choice wins.
+        let mut chosen = old.clone();
+        chosen.project_scope = Some(ProjectScope::Execution);
+        assert_eq!(
+            chosen.effective_project_scope(&profile, &registry),
+            ProjectScope::Execution
+        );
+        // Stored as camelCase; absent when unset.
+        let json = serde_json::to_value(&chosen).unwrap();
+        assert_eq!(json["projectScope"], "execution");
+        assert!(
+            serde_json::to_value(&old)
+                .unwrap()
+                .get("projectScope")
+                .is_none()
+        );
     }
 }

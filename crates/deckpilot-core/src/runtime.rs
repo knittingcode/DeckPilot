@@ -288,6 +288,7 @@ impl Engine {
             status,
             duration_ms: elapsed(start),
             nodes,
+            context_conflict: None,
         })
     }
 

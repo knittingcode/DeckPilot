@@ -114,13 +114,89 @@ resource actions also the resource, its key, kind and value.
   (project changes, outputs) are discarded.
 - **Cancellation** is checked before every node and attempt and interrupts
   delays and retry waits; everything not yet run is reported as cancelled.
-- **Project context.** The active project is captured when the run starts and
-  changes only through actions, in order. Workflows belong to a profile and
-  only ever see that profile's actions, projects and workflows.
+- **Project context.** Each run has its own project context; see
+  [Project context and the active project](#project-context-and-the-active-project).
+  Workflows belong to a profile and only ever see that profile's actions,
+  projects and workflows.
 
 A run produces a report with, per node, status, attempts, start and duration,
 message, outputs and error, and progress events (`nodeStarted`, `retrying`,
 `nodeFinished`) for visualization.
+
+## Project context and the active project
+
+Three things are kept apart:
+
+- **The active project** of DeckPilot: what the deck and the app show, chosen
+  by the user (project switcher, Stream Deck controls, the app) — explicit
+  operations that change it immediately.
+- **A run's project context**: the project a workflow run works with. It
+  starts as the active project at the moment the run starts (recorded as the
+  run's `initialProject`) and belongs to that run alone.
+- **An explicit change of the active project by a workflow**: allowed only
+  for workflows with the permission described below.
+
+Inside a run:
+
+- A project-selecting action (its node spec declares `changesContext`)
+  changes the context for the nodes after it, along the connections. Nothing
+  else — not the active project, not other runs — sees the change.
+- Parallel branches each carry their own copy, so branches cannot overwrite
+  one another. Project changes in parallel branches are allowed.
+- A **Join** merges the contexts of its taken branches deterministically:
+  every context carries the nodes that changed it; changes all branches share
+  happened before they split. Branches without changes of their own agree
+  with anything. Branches with changes of their own must end on the same
+  project; otherwise the Join fails with `context-conflict` — no branch
+  silently wins.
+- The run's **final context** is that of the nodes it ended with, by the same
+  rule. When they disagree the final context is the initial one and the
+  report says so (`contextConflict`).
+
+The **project scope** of a workflow (`projectScope`) decides whether its runs
+may change the active project:
+
+- `execution` — project changes stay in the run. New workflows use this.
+- `application` — a permission the user grants per workflow ("May change the
+  active project" in the editor). When a run ends on another project than it
+  started with, that project becomes the active project, by
+  **compare-and-set**: only if the active profile and project are still the
+  ones the run started with, and the Projects module is enabled. If the user,
+  a device or another run changed the active project meanwhile, their change
+  stands; the run records that its change was not made and why. With several
+  permitted runs, the first to finish switches and the others are refused.
+
+**Compatibility.** Workflows saved before the setting existed have no
+`projectScope`. They behave as before: a workflow whose actions select
+projects changes the active project (`application`), any other keeps
+changes in its runs (`execution`). The editor shows this derived value and
+stores it explicitly when the workflow is saved again. No stored data is
+rewritten.
+
+Each finished run records what happened (`project`): `unchanged`,
+`keptInRun`, `applied`, or `notApplied` with a reason.
+
+## Concurrency and resource safety
+
+- **Bounded.** At most four workflows run at a time, a workflow runs once at
+  a time, and a parallel wave runs at most four nodes at a time; nested Loop
+  runs execute inside their node. A run never holds more than four threads.
+- **Deterministic.** Waves follow topological order with ties broken by node
+  id; parallel results are applied in that order.
+- **No shared mutable state.** A run works on its own copies of the profile,
+  machine configuration and project context. Action handlers receive
+  read-only views; resources are resolved against the node's own context, so
+  two runs on different projects resolve different resources.
+- **Retries and timeouts** each attempt on a fresh copy of the node's input
+  context; a failed or late attempt's changes are discarded.
+- **Reentrancy.** A workflow cannot start while it runs; a Loop cannot run
+  its own workflow (validation rejects recursion and limits nesting).
+- **One writer.** Only the agent's single task changes runtime state and
+  writes execution history; run threads report through a channel.
+- **Shutdown.** Running workflows are recorded as interrupted when the agent
+  stops; a record still marked running when the database opens (a crash) is
+  marked interrupted then. The agent waits for its IPC connections to close
+  before it reports that it stopped.
 
 ## Running in the agent
 
@@ -134,9 +210,9 @@ app, a Stream Deck control or another client; no window has to be open.
 - **Snapshot.** A run executes on its own thread with a copy of the active
   profile, the machine configuration and the project selection, so the agent
   keeps serving devices and requests, and configuration changes during a run
-  do not affect it. A project change the run makes is applied when it ends,
-  if the same profile is still active (with several runs, the last to finish
-  wins). Workflows without a graph run their steps, reported as nodes
+  do not affect it. What a run's project changes mean for the active project
+  is described below. Workflows without a graph run their steps, reported as
+  nodes
   `step_1`, `step_2`, … — the ids the graph conversion gives them.
 - **Progress.** Subscribers receive `executionStarted`, `executionProgress`
   (a node started, finished or is retried, with resolved and total nodes) and

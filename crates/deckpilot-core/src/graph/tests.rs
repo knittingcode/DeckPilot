@@ -392,33 +392,172 @@ fn parallel_branches_run_concurrently_and_join_once() {
     assert_eq!(order, ["start", "fork", "left", "right", "join", "last"]);
 }
 
+fn select_project(f: &mut Fixture, name: &str, key: &str) -> crate::ActionInstanceId {
+    let project = f
+        .profile
+        .projects
+        .iter()
+        .find(|p| p.key.as_str() == key)
+        .unwrap()
+        .id;
+    f.add(
+        select_type(),
+        name,
+        crate::ActionParameters::new().with("project", crate::ParameterValue::Project(project)),
+    )
+}
+
+fn is_project(id: &str, key: &str) -> Node {
+    node(
+        id,
+        NodeKind::Condition {
+            predicate: Predicate::ActiveProject { key: key.into() },
+        },
+    )
+}
+
+fn project_key(f: &Fixture, context: &ActiveProjectContext) -> String {
+    context
+        .project(&f.profile)
+        .unwrap()
+        .map(|p| p.key.to_string())
+        .unwrap_or_default()
+}
+
 #[test]
-fn project_changes_are_not_allowed_in_parallel_branches() {
+fn parallel_branches_keep_their_own_project_context() {
     let mut f = Fixture::new();
-    let select = f.add(select_type(), "Select", crate::ActionParameters::new());
-    let other = f.probe("other", &[]);
+    let select = select_project(&mut f, "Select CMS", "CMS");
+    let saw_shop = f.probe("other branch saw SHOP", &[]);
+    let after = f.probe("after the join: CMS", &[]);
     let workflow = f.workflow(graph(
         vec![
             node("start", NodeKind::Trigger),
             node("fork", NodeKind::Parallel),
             action("select", select),
-            action("other", other),
+            is_project("check", "SHOP"),
+            action("saw_shop", saw_shop),
             node("join", NodeKind::Join),
+            is_project("check_after", "CMS"),
+            action("after", after),
         ],
         vec![
             edge("start", Port::Out, "fork"),
             edge("fork", Port::Out, "select"),
-            edge("fork", Port::Out, "other"),
+            edge("fork", Port::Out, "check"),
+            edge("check", Port::True, "saw_shop"),
             edge("select", Port::Out, "join"),
-            edge("other", Port::Out, "join"),
+            edge("saw_shop", Port::Out, "join"),
+            edge("join", Port::Out, "check_after"),
+            edge("check_after", Port::True, "after"),
         ],
     ));
-    let issues = f.issues(workflow);
+    // Project changes in parallel branches are allowed now.
+    assert!(WorkflowGraph::is_runnable(&f.issues(workflow)));
+    let (report, _, context) = f.run_with(workflow, &CancellationToken::new());
+    assert_eq!(report.status, RunStatus::Succeeded, "{report:?}");
+    // The other branch kept the initial project; the join took the change.
+    assert_eq!(f.ran(), ["other branch saw SHOP", "after the join: CMS"]);
+    assert_eq!(project_key(&f, &context), "CMS");
+    assert_eq!(report.context_conflict, None);
+}
+
+#[test]
+fn a_join_fails_when_branches_select_different_projects() {
+    let mut f = Fixture::new();
+    let to_cms = select_project(&mut f, "Select CMS", "CMS");
+    let also_cms = select_project(&mut f, "Select CMS too", "CMS");
+    let back = select_project(&mut f, "Back to SHOP", "SHOP");
+    let after = f.probe("after", &[]);
+    let workflow = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            node("fork", NodeKind::Parallel),
+            action("a", to_cms),
+            action("b", also_cms),
+            action("b_back", back),
+            node("join", NodeKind::Join),
+            action("after", after),
+        ],
+        vec![
+            edge("start", Port::Out, "fork"),
+            edge("fork", Port::Out, "a"),
+            edge("fork", Port::Out, "b"),
+            edge("b", Port::Out, "b_back"),
+            edge("a", Port::Out, "join"),
+            edge("b_back", Port::Out, "join"),
+            edge("join", Port::Out, "after"),
+        ],
+    ));
+    let (report, _, context) = f.run_with(workflow, &CancellationToken::new());
+    assert_eq!(report.status, RunStatus::Failed);
+    let join = report.node(&n("join")).unwrap();
+    assert_eq!(join.status, NodeStatus::Failed);
+    let error = join.error.as_ref().unwrap();
+    assert_eq!(error.code, "context-conflict");
+    assert!(error.message.contains("CMS, SHOP"), "{}", error.message);
+    assert_eq!(status(&report, "after"), NodeStatus::Skipped);
+    assert_eq!(f.ran(), Vec::<String>::new());
+    // The run keeps its initial project.
+    assert_eq!(project_key(&f, &context), "SHOP");
+}
+
+#[test]
+fn branches_that_end_apart_on_different_projects_leave_the_context_unchanged() {
+    let mut f = Fixture::new();
+    let to_cms = select_project(&mut f, "Select CMS", "CMS");
+    let also_cms = select_project(&mut f, "Select CMS too", "CMS");
+    let back = select_project(&mut f, "Back to SHOP", "SHOP");
+    let workflow = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            node("fork", NodeKind::Parallel),
+            action("a", to_cms),
+            action("b", also_cms),
+            action("b_back", back),
+        ],
+        vec![
+            edge("start", Port::Out, "fork"),
+            edge("fork", Port::Out, "a"),
+            edge("fork", Port::Out, "b"),
+            edge("b", Port::Out, "b_back"),
+        ],
+    ));
+    let (report, _, context) = f.run_with(workflow, &CancellationToken::new());
+    assert_eq!(report.status, RunStatus::Succeeded);
     assert!(
-        issues.iter().any(|i| i.node == Some(n("select"))
-            && i.message.contains("cannot run in parallel branches"))
+        report
+            .context_conflict
+            .as_deref()
+            .is_some_and(|m| m.contains("different projects"))
     );
-    assert!(!WorkflowGraph::is_runnable(&issues));
+    assert_eq!(project_key(&f, &context), "SHOP");
+}
+
+#[test]
+fn a_project_change_applies_to_the_nodes_after_it() {
+    let mut f = Fixture::new();
+    let to_cms = select_project(&mut f, "Select CMS", "CMS");
+    let saw = f.probe("saw CMS", &[]);
+    let workflow = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            is_project("before", "SHOP"),
+            action("select", to_cms),
+            is_project("check", "CMS"),
+            action("saw", saw),
+        ],
+        vec![
+            edge("start", Port::Out, "before"),
+            edge("before", Port::True, "select"),
+            edge("select", Port::Out, "check"),
+            edge("check", Port::True, "saw"),
+        ],
+    ));
+    let (report, _, context) = f.run_with(workflow, &CancellationToken::new());
+    assert_eq!(report.status, RunStatus::Succeeded);
+    assert_eq!(f.ran(), ["saw CMS"]);
+    assert_eq!(project_key(&f, &context), "CMS");
 }
 
 #[test]

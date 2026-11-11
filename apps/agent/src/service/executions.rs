@@ -7,10 +7,15 @@
 //! the agent task as [`Command::Execution`] and goes out to subscribers as
 //! execution events.
 //!
-//! - **Project selection.** A run starts with the selection of the moment
-//!   and changes only its own copy. When it finishes, a change it made is
-//!   applied to the agent if the same profile is still active; with
-//!   several runs, the last one to finish wins.
+//! - **Project context.** A run starts with the active project of the moment
+//!   as its own context and changes only that (see `deckpilot_core::graph`);
+//!   other runs never see its changes. Only a workflow whose project scope is
+//!   `application` (a permission per workflow) changes the active project,
+//!   when it ends, and only by compare-and-set: if the active profile or
+//!   project changed during the run — by the user, a device or another run —
+//!   the change is not made and the run records why. The Projects module
+//!   must be enabled. What happened is recorded as the run's
+//!   `ProjectOutcome`.
 //! - **Concurrency.** A workflow runs at most once at a time; at most
 //!   [`MAX_RUNNING`] workflows run together.
 //! - **Cancellation** stops a run between nodes (see
@@ -27,7 +32,8 @@ use std::time::UNIX_EPOCH;
 use deckpilot_core::graph::{CancellationToken, ExecutionEvent, GraphReport};
 use deckpilot_core::{
     ActiveProjectContext, Engine, EngineError, ExecutionId, ExecutionRecord, ExecutionState,
-    ExecutionSummary, ExecutionTrigger, Profile, ProjectId, WorkflowId, safe_event, safe_report,
+    ExecutionSummary, ExecutionTrigger, Profile, ProjectId, ProjectOutcome, ProjectScope,
+    WorkflowId, safe_event, safe_report,
 };
 use deckpilot_ipc::{AgentEvent, ErrorCode, IpcError, MAX_EXECUTION_LIST, Response, SecurityState};
 use deckpilot_storage::executions::{ExecutionQuery, Retention};
@@ -71,6 +77,8 @@ struct Running {
     engine: Arc<Engine>,
     /// The project selection when the run started.
     start_project: Option<ProjectId>,
+    /// Whether the run may change the active project.
+    scope: ProjectScope,
 }
 
 #[derive(Default)]
@@ -174,7 +182,8 @@ impl Agent {
             )));
         }
         let id = ExecutionId::new();
-        let record = ExecutionRecord::start(id, definition, profile, trigger, self.now_ms());
+        let scope = definition.effective_project_scope(profile, engine.registry());
+        let mut record = ExecutionRecord::start(id, definition, profile, trigger, self.now_ms());
         let profile = Arc::new(profile.clone());
         let context = self
             .runtime
@@ -182,6 +191,8 @@ impl Agent {
             .cloned()
             .unwrap_or_else(|| ActiveProjectContext::new(&profile));
         let start_project = context.project_id();
+        record.summary.initial_project = start_project;
+        record.summary.project_scope = Some(scope);
         let cancel = CancellationToken::new();
         spawn_run(
             id,
@@ -207,6 +218,7 @@ impl Agent {
                 profile,
                 engine,
                 start_project,
+                scope,
             },
         ));
         let _ = self.handle.events.send(AgentEvent::ExecutionStarted {
@@ -272,8 +284,10 @@ impl Agent {
                     *node = safe_report(node, &run.profile, run.engine.registry());
                 }
                 let steps = report.clone().into_steps();
+                let conflict = report.context_conflict.clone();
                 run.record.finish(report, now);
-                self.apply_run_context(&run, context);
+                run.record.summary.project =
+                    Some(self.settle_project(&run, context, conflict.as_deref()));
                 for step in &steps.steps {
                     self.report_action(step.action, &step.result);
                 }
@@ -307,22 +321,46 @@ impl Agent {
         self.after_change();
     }
 
-    /// Applies the project selection a run ended with, if it changed it and
-    /// its profile is still active.
-    fn apply_run_context(&mut self, run: &Running, context: &ActiveProjectContext) {
-        let same_profile = self
-            .runtime
-            .profile()
-            .is_some_and(|p| p.id == run.profile.id);
+    /// Decides what the project a run ended with means for the active
+    /// project, and makes the change where the run may.
+    fn settle_project(
+        &mut self,
+        run: &Running,
+        context: &ActiveProjectContext,
+        conflict: Option<&str>,
+    ) -> ProjectOutcome {
         let after = context.project_id();
-        if !same_profile || after == run.start_project {
-            return;
+        let not_applied = |project, reason: &str| ProjectOutcome::NotApplied {
+            project,
+            reason: reason.to_owned(),
+        };
+        if after == run.start_project {
+            return match (run.scope, conflict) {
+                (ProjectScope::Application, Some(conflict)) => not_applied(None, conflict),
+                _ => ProjectOutcome::Unchanged,
+            };
         }
-        if let Some(project) = after
-            && let Err(error) = self.runtime.select_project(project)
-        {
-            warn!(%error, "the project chosen by a workflow is no longer available");
+        if run.scope == ProjectScope::Execution {
+            return ProjectOutcome::KeptInRun { project: after };
         }
+        let Some(project) = after else {
+            return not_applied(after, "the run ended without a project");
+        };
+        let outcome = if self.runtime.profile().map(|p| p.id) != Some(run.profile.id) {
+            not_applied(after, "the active profile changed during the run")
+        } else if self.runtime.active_project_id() != run.start_project {
+            // Someone else changed the active project meanwhile: their
+            // change stands.
+            not_applied(after, "the active project changed during the run")
+        } else if self.require_projects().is_err() {
+            not_applied(after, "the Projects module is disabled")
+        } else if self.runtime.select_project(project).is_err() {
+            not_applied(after, "the project no longer exists")
+        } else {
+            ProjectOutcome::Applied { project }
+        };
+        info!(workflow = %run.record.summary.workflow_name, outcome = ?outcome, "project after a workflow");
+        outcome
     }
 
     pub(super) fn cancel_execution(&mut self, id: ExecutionId) -> Result<(), IpcError> {
