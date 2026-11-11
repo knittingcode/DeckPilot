@@ -17,21 +17,27 @@ pub const DOCUMENTATION_ROLE: &str = "docs";
 
 /// The project an action refers to: its `project_id` parameter, or the
 /// active project when unset. An explicit project must belong to the active
-/// profile.
+/// profile. Failures carry `not-permitted`, `project-not-in-profile` or
+/// `no-active-project`.
 pub(crate) fn target_project<'a>(
     parameters: &ActionParameters,
     context: &ExecutionContext<'a>,
-) -> Result<&'a Project, String> {
+) -> Result<&'a Project, ActionResult> {
     match parameters.project(PROJECT_ID) {
         Some(id) => context
             .profile()
-            .map_err(|denied| denied.to_string())?
+            .map_err(ActionResult::from)?
             .project(id)
-            .ok_or_else(|| "the project does not belong to the active profile".to_owned()),
+            .ok_or_else(|| {
+                ActionResult::error(
+                    "project-not-in-profile",
+                    "the project does not belong to the active profile",
+                )
+            }),
         None => context
             .project()
-            .map_err(|denied| denied.to_string())?
-            .ok_or_else(|| "no project is active".to_owned()),
+            .map_err(ActionResult::from)?
+            .ok_or_else(|| ActionResult::error("no-active-project", "no project is active")),
     }
 }
 
@@ -64,11 +70,11 @@ pub(crate) fn resolve(
     role: &str,
 ) -> ActionResult {
     if role.is_empty() {
-        return ActionResult::failure("no resource configured");
+        return ActionResult::error("invalid-parameters", "no resource configured");
     }
     let project = match target_project(parameters, context) {
         Ok(project) => project,
-        Err(message) => return ActionResult::failure(message),
+        Err(failure) => return failure,
     };
     match context.resolve_project_resource(project, role) {
         Ok(binding) => with_project(
@@ -79,7 +85,10 @@ pub(crate) fn resolve(
         .with_data("resourceKey", binding.key.as_str())
         .with_data("kind", kind_name(binding.kind))
         .with_data("value", binding.value.clone()),
-        Err(error) => with_project(ActionResult::failure(error.to_string()), project)
-            .with_data("resource", role),
+        Err(error) => with_project(
+            ActionResult::error(error.code(), error.to_string()),
+            project,
+        )
+        .with_data("resource", role),
     }
 }

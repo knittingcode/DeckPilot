@@ -22,6 +22,7 @@ members = [
     "modules/github",
     "modules/gitlab",
     "modules/jira",
+    "modules/workspace",
     "apps/agent",
     "apps/desktop/src-tauri",
     "tools/dev",
@@ -54,6 +55,7 @@ deckpilot-module-notifications = { path = "modules/notifications" }
 deckpilot-module-github = { path = "modules/github" }
 deckpilot-module-gitlab = { path = "modules/gitlab" }
 deckpilot-module-jira = { path = "modules/jira" }
+deckpilot-module-workspace = { path = "modules/workspace" }
 deckpilot-portability = { path = "crates/deckpilot-portability" }
 deckpilot-keystore = { path = "crates/deckpilot-keystore" }
 deckpilot-presence = { path = "crates/deckpilot-presence" }

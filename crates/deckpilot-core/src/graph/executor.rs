@@ -2,12 +2,14 @@
 //!
 //! # Semantics
 //!
-//! - **Scheduling.** Nodes run in waves. A wave holds every node whose
-//!   incoming connections are all resolved, in topological order (ties by
-//!   node id), so a run is deterministic. A wave has more than one node only
-//!   after a Parallel node; its nodes run concurrently (at most
-//!   [`ExecutionLimits::max_parallel`] at a time) and their results are
-//!   applied in that same order.
+//! - **Scheduling.** A node starts as soon as all its incoming connections
+//!   are resolved; nodes ready at the same time start in topological order
+//!   (ties by node id). Several nodes run at once only after a Parallel
+//!   node, at most [`ExecutionLimits::max_parallel`] at a time, each on its
+//!   own thread. A node is recorded (report, event) when it finishes, and a
+//!   branch moves on without waiting for its sibling branches; a Join waits
+//!   for all of them. What a node sees — outputs of the nodes before it, its
+//!   context and variables — depends only on the graph, not on timing.
 //! - **Activation.** A node runs if its incoming connection was taken: an
 //!   action took `out` or `error`, a condition `true` or `false`. Otherwise
 //!   it is skipped, and so is everything only reachable through it. A Join
@@ -16,7 +18,7 @@
 //! - **Failures.** A failed action continues through `error` when that is
 //!   connected (the failure is handled), through `out` with
 //!   `OnError::Continue`, and otherwise fails the workflow: nodes already
-//!   running in the same wave finish, nothing new starts.
+//!   running finish, nothing new starts.
 //! - **Project context.** A run has its own project context, captured from
 //!   the active project when it starts. It flows along the connections: a
 //!   node sees the context of the node it follows, and an action that
@@ -61,7 +63,7 @@ pub use crate::cancel::{CancelReason, CancellationToken};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExecutionLimits {
-    /// Nodes of a parallel wave that run at the same time.
+    /// Nodes that run at the same time (after a Parallel node).
     pub max_parallel: usize,
 }
 
@@ -300,22 +302,7 @@ impl Executor<'_> {
             failed: false,
             stopped: false,
         };
-        loop {
-            let wave: Vec<NodeId> = order
-                .iter()
-                .filter(|id| !state.taken.contains_key(*id))
-                .filter(|id| {
-                    self.graph
-                        .incoming(id)
-                        .all(|e| state.taken.contains_key(&e.from))
-                })
-                .cloned()
-                .collect();
-            if wave.is_empty() {
-                break;
-            }
-            self.run_wave(&wave, &mut state);
-        }
+        self.schedule(&order, &mut state);
 
         let status = if self.cancel.is_cancelled()
             && state
@@ -346,94 +333,143 @@ impl Executor<'_> {
         })
     }
 
-    /// Resolves one wave: skips what is not activated, runs the rest (in
-    /// parallel when there are several) and records their outcomes.
-    fn run_wave(&self, wave: &[NodeId], state: &mut RunState) {
-        let mut active: Vec<(&NodeId, Carried)> = Vec::new();
-        let mut received_variables: BTreeMap<&NodeId, Variables> = BTreeMap::new();
-        let mut outcomes = Vec::new();
-        for id in wave {
-            let activated = self.activated(id, &state.taken);
-            if !activated || state.failed || state.stopped || self.cancel.is_cancelled() {
-                // After a cancellation nothing else runs: everything left is
-                // reported as cancelled, not as a branch not taken.
-                let status = if self.cancel.is_cancelled() {
-                    NodeStatus::Cancelled
-                } else {
-                    NodeStatus::Skipped
-                };
-                let report = idle(id, status, ms(state.start));
-                (self.on_event)(ExecutionEvent::NodeFinished {
-                    report: report.clone(),
-                });
-                state.reports.push(report);
-                state.taken.insert(id.clone(), BTreeSet::new());
-                continue;
-            }
-            let input = self
-                .input_context(id, &state.taken, &state.contexts)
-                .map_err(|message| ("context-conflict", message))
-                .and_then(|context| {
-                    self.input_variables(id, state)
-                        .map(|variables| (context, variables))
-                        .map_err(|message| ("variable-conflict", message))
-                });
-            match input {
-                Ok((context, variables)) => {
-                    active.push((id, context));
-                    received_variables.insert(id, variables);
-                }
-                Err((code, message)) => {
-                    (self.on_event)(ExecutionEvent::NodeStarted { node: id.clone() });
-                    let mut report = idle(id, NodeStatus::Failed, ms(state.start));
-                    report.error = Some(StepError::new(code, message, false));
-                    let mut outcome = finished(report, vec![]);
-                    outcome.fails_workflow = true;
-                    outcomes.push(outcome);
-                }
-            }
-        }
-        // What each node reads: earlier outputs, and the variables on its
-        // path as the outputs of `vars`.
-        let runnable: Vec<(&NodeId, ActiveProjectContext, Outputs)> = active
-            .iter()
-            .map(|(id, (input, _))| {
-                let mut outputs = state.outputs.clone();
-                if let (Some(variables), Ok(node)) = (
-                    received_variables.get(id),
-                    NodeId::new(super::VARIABLES_NODE),
-                ) && !state.initial_variables.is_empty()
-                {
-                    outputs.insert(
-                        node,
-                        variables
-                            .iter()
-                            .filter_map(|(key, (value, _))| Some((key.clone(), value.clone()?)))
-                            .collect(),
-                    );
-                }
-                (
-                    *id,
-                    input.clone().unwrap_or_else(|| state.initial.clone()),
-                    outputs,
-                )
-            })
-            .collect();
-        if runnable.len() > 1 {
-            outcomes.extend(self.run_concurrently(&runnable, state.start));
-        } else {
-            outcomes.extend(
-                runnable
+    /// Runs the graph: starts every node as soon as its incoming connections
+    /// are resolved — on its own thread when other nodes run or may run
+    /// alongside it, at most `max_parallel` at a time — and records each node
+    /// when it finishes.
+    fn schedule(&self, order: &[NodeId], state: &mut RunState) {
+        std::thread::scope(|scope| {
+            let (done, results) = std::sync::mpsc::channel::<Outcome>();
+            // Nodes running on their own thread, with what they received.
+            let mut running: BTreeMap<NodeId, (Carried, Variables)> = BTreeMap::new();
+            loop {
+                let ready: Vec<NodeId> = order
                     .iter()
-                    .map(|(id, input, outputs)| self.node(id, input, outputs, state.start)),
+                    .filter(|id| !state.taken.contains_key(*id) && !running.contains_key(*id))
+                    .filter(|id| {
+                        self.graph
+                            .incoming(id)
+                            .all(|e| state.taken.contains_key(&e.from))
+                    })
+                    .cloned()
+                    .collect();
+                let mut progressed = false;
+                for id in &ready {
+                    let Some(prepared) = self.prepare(id, state) else {
+                        progressed = true;
+                        continue;
+                    };
+                    let (input, outputs, carried, variables) = prepared;
+                    if running.is_empty() && ready.len() == 1 {
+                        // Nothing can run alongside it: no thread needed.
+                        let outcome = self.node(id, &input, &outputs, state.start);
+                        self.record(outcome, Some(carried), Some(variables), state);
+                        progressed = true;
+                    } else if running.len() < self.limits.max_parallel.max(1) {
+                        let (done, node, start) = (done.clone(), id.clone(), state.start);
+                        scope.spawn(move || {
+                            let outcome =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    self.node(&node, &input, &outputs, start)
+                                }))
+                                .unwrap_or_else(|_| {
+                                    // A panicking node fails, and the run
+                                    // records it instead of waiting forever.
+                                    let mut report = idle(&node, NodeStatus::Failed, ms(start));
+                                    report.error = Some(StepError::new(
+                                        "action.failed",
+                                        "the node stopped unexpectedly",
+                                        false,
+                                    ));
+                                    let mut outcome = finished(report, vec![]);
+                                    outcome.fails_workflow = true;
+                                    outcome
+                                });
+                            let _ = done.send(outcome);
+                        });
+                        running.insert(id.clone(), (carried, variables));
+                    }
+                    // Otherwise it starts when a running node finishes.
+                }
+                if progressed {
+                    continue;
+                }
+                if running.is_empty() {
+                    break;
+                }
+                let Ok(outcome) = results.recv() else {
+                    break;
+                };
+                let received = running.remove(&outcome.report.node);
+                let (carried, variables) =
+                    received.map_or((None, None), |(c, v)| (Some(c), Some(v)));
+                self.record(outcome, carried, variables, state);
+            }
+        });
+    }
+
+    /// Prepares a node whose incoming connections are resolved. A node that
+    /// does not run — its branch was not taken, the run failed, stopped or
+    /// was cancelled — or whose branches conflict is recorded at once
+    /// (`None`). Otherwise: its context, what it reads (earlier outputs and
+    /// the variables on its path as the outputs of `vars`), and what it
+    /// received, for recording it.
+    fn prepare(
+        &self,
+        id: &NodeId,
+        state: &mut RunState,
+    ) -> Option<(ActiveProjectContext, Outputs, Carried, Variables)> {
+        let activated = self.activated(id, &state.taken);
+        if !activated || state.failed || state.stopped || self.cancel.is_cancelled() {
+            // After a cancellation nothing else runs: everything left is
+            // reported as cancelled, not as a branch not taken.
+            let status = if self.cancel.is_cancelled() {
+                NodeStatus::Cancelled
+            } else {
+                NodeStatus::Skipped
+            };
+            let report = idle(id, status, ms(state.start));
+            (self.on_event)(ExecutionEvent::NodeFinished {
+                report: report.clone(),
+            });
+            state.reports.push(report);
+            state.taken.insert(id.clone(), BTreeSet::new());
+            return None;
+        }
+        let input = self
+            .input_context(id, &state.taken, &state.contexts)
+            .map_err(|message| ("context-conflict", message))
+            .and_then(|context| {
+                self.input_variables(id, state)
+                    .map(|variables| (context, variables))
+                    .map_err(|message| ("variable-conflict", message))
+            });
+        let (carried, variables) = match input {
+            Ok(input) => input,
+            Err((code, message)) => {
+                (self.on_event)(ExecutionEvent::NodeStarted { node: id.clone() });
+                let mut report = idle(id, NodeStatus::Failed, ms(state.start));
+                report.error = Some(StepError::new(code, message, false));
+                let mut outcome = finished(report, vec![]);
+                outcome.fails_workflow = true;
+                self.record(outcome, None, None, state);
+                return None;
+            }
+        };
+        let mut outputs = state.outputs.clone();
+        if !state.initial_variables.is_empty()
+            && let Ok(node) = NodeId::new(super::VARIABLES_NODE)
+        {
+            outputs.insert(
+                node,
+                variables
+                    .iter()
+                    .filter_map(|(key, (value, _))| Some((key.clone(), value.clone()?)))
+                    .collect(),
             );
         }
-        let carried: BTreeMap<&NodeId, Carried> = active.into_iter().collect();
-        for outcome in outcomes {
-            let received = carried.get(&outcome.report.node).cloned();
-            let variables = received_variables.remove(&outcome.report.node);
-            self.record(outcome, received, variables, state);
-        }
+        let context = carried.0.clone().unwrap_or_else(|| state.initial.clone());
+        Some((context, outputs, carried, variables))
     }
 
     /// The variables when the run starts: every declared variable, with its
@@ -679,32 +715,6 @@ impl Executor<'_> {
             "branches selected different projects ({}); a Join continues only when they agree",
             keys.join(", ")
         ))
-    }
-
-    /// Runs the nodes of a parallel wave, at most `max_parallel` at a time,
-    /// each with its own context. Outcomes keep the order of `active`.
-    fn run_concurrently(
-        &self,
-        active: &[(&NodeId, ActiveProjectContext, Outputs)],
-        start: Instant,
-    ) -> Vec<Outcome> {
-        let mut outcomes = Vec::with_capacity(active.len());
-        for chunk in active.chunks(self.limits.max_parallel.max(1)) {
-            let results: Vec<Outcome> = std::thread::scope(|scope| {
-                let handles: Vec<_> = chunk
-                    .iter()
-                    .map(|(id, input, outputs)| {
-                        scope.spawn(move || self.node(id, input, outputs, start))
-                    })
-                    .collect();
-                handles
-                    .into_iter()
-                    .map(|h| h.join().expect("a workflow node panicked"))
-                    .collect()
-            });
-            outcomes.extend(results);
-        }
-        outcomes
     }
 
     fn activated(&self, id: &NodeId, taken: &BTreeMap<NodeId, BTreeSet<Port>>) -> bool {
@@ -1117,8 +1127,7 @@ impl Executor<'_> {
             }
         };
         let spec = definition.map(|d| d.node.clone()).unwrap_or_default();
-        let timeout =
-            Duration::from_millis(u64::from(policy.timeout_ms.unwrap_or(spec.timeout_ms)));
+        let timeout = node_timeout(policy.timeout_ms, spec.timeout_ms);
         let attempts = 1 + if spec.retry_safe {
             policy.retry.attempts.min(super::MAX_RETRIES)
         } else {
@@ -1403,4 +1412,15 @@ fn classify(
             BTreeMap::new(),
         ),
     }
+}
+
+/// A node's time limit: its override, else its action type's own, and never
+/// more than [`super::MAX_TIMEOUT_MS`]. Longer limits of an action (a
+/// command's or Compose's) apply only when it runs outside a workflow.
+pub(crate) fn node_timeout(override_ms: Option<u32>, declared_ms: u32) -> Duration {
+    Duration::from_millis(u64::from(
+        override_ms
+            .unwrap_or(declared_ms)
+            .min(super::MAX_TIMEOUT_MS),
+    ))
 }

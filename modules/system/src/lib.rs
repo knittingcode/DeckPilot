@@ -21,7 +21,7 @@
 //! Error codes are listed in [`codes`].
 
 pub mod actions;
-mod support;
+pub mod support;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

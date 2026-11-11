@@ -16,6 +16,7 @@ pub use deckpilot_module_jira as jira;
 pub use deckpilot_module_notifications as notifications;
 pub use deckpilot_module_projects as projects;
 pub use deckpilot_module_system as system;
+pub use deckpilot_module_workspace as workspace;
 
 /// A registry with every built-in module in its default state.
 ///
@@ -54,6 +55,9 @@ pub fn builtin(os: Os) -> ModuleRegistry {
         .expect("built-in modules do not conflict");
     registry
         .register(Box::new(jira::JiraModule::new()))
+        .expect("built-in modules do not conflict");
+    registry
+        .register(Box::new(workspace::WorkspaceModule::new()))
         .expect("built-in modules do not conflict");
     registry
 }

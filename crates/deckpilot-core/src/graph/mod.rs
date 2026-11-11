@@ -241,8 +241,8 @@ pub enum NodeKind {
         values: BTreeMap<String, Mapping>,
     },
     /// Sets this workflow's declared outputs from earlier nodes, for the
-    /// node that called it. Several may run; a later one overrides the
-    /// keys it sets.
+    /// node that called it. Several may run; the one that finishes later
+    /// overrides the keys it sets.
     Output {
         /// Values of the workflow's outputs, by output key.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

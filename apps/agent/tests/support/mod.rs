@@ -299,6 +299,24 @@ impl TestAgent {
         }
     }
 
+    /// Waits until the node `node` of the run has finished (is in its
+    /// record), while the run may still go on.
+    pub async fn wait_for_finished_node(&self, execution: ExecutionId, node: &str) {
+        let deadline = tokio::time::Instant::now() + TIMEOUT;
+        loop {
+            let record = self.execution(execution).await;
+            if record.nodes.iter().any(|n| n.node.as_str() == node) {
+                return;
+            }
+            assert!(
+                record.summary.state == ExecutionState::Running
+                    && tokio::time::Instant::now() < deadline,
+                "`{node}` did not finish: {record:#?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     /// Asks the agent to stop and waits until it has.
     pub async fn shutdown(mut self) {
         self.request(Request::Shutdown).await.unwrap();
