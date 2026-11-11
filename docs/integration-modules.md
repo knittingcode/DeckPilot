@@ -359,6 +359,83 @@ module's network codes (`blocked-address`, `dns-failed`,
 `too-many-redirects`, `insecure-redirect`, `request-failed`), and the
 shared codes.
 
+## GitLab (`gitlab`)
+
+Reads the signed-in user, projects, open merge requests, review requests
+and pipelines from GitLab.com or a self-managed GitLab, and opens GitLab
+pages. It is read-only: only `GET` requests are sent, and there are no
+actions that comment, approve, merge, run pipelines or change anything.
+
+Capabilities: send network requests, use stored credentials, open pages.
+
+Settings: **API URL** (`apiUrl`, `https://gitlab.com/api/v4`; for a
+self-managed GitLab `https://<host>/api/v4`, also under a path such as
+`https://<host>/gitlab/api/v4`; machine-specific), **Token credential**
+(`credential`, the *name* of a stored credential, default `gitlab.token`;
+portable), **Time limit** (`timeoutSeconds`, 1–120, 20; for all requests of
+one action) and **API host may be on a private network**
+(`allowPrivateHost`, off; machine-specific).
+
+**Token.** Store a GitLab personal, project or group access token with the
+`read_api` scope as a credential in Settings › HTTP › Credentials and name
+it in the module's settings, or per action in `credential`. It is read
+through the credential store only, sent in the `PRIVATE-TOKEN` header to
+the API host, and never appears in parameters, settings, exports, outputs,
+messages or logs; every result is also checked for it and any appearance
+is replaced by `[redacted]`.
+
+| Action type | Effect | Parameters | Outputs |
+| ----------- | ------ | ---------- | ------- |
+| `gitlab.current-user` | read-only | — | `username`, `name`, `url`, `rateLimitRemaining` |
+| `gitlab.project` | read-only | `project` (`group/project` with any subgroups, or the numeric id) | `path`, `description`*, `defaultBranch`, `visibility`, `archived`, `openIssues`, `stars`, `forks`, `url`, `lastActivityAt` |
+| `gitlab.merge-requests` | read-only | `project` (optional), `filter` (`all`, `author-me`, `review-requested`; `all` needs a project), `limit` (1–100, 20) | `count`, `countExact`, `listed`, `items`*, `truncated`, `firstUrl` |
+| `gitlab.review-requests` | read-only | `project` (optional), `limit` (1–100, 20) | same as `gitlab.merge-requests` |
+| `gitlab.pipeline` | read-only | `project`, `ref` (branch, tag or commit) or `mergeRequest` (the number after `!`) | `state` (`ok`, `failing`, `pending`, `none`), `status` (GitLab's), `pipelineId`, `sha`, `total`, `passed`, `failed`, `pending`, `skipped`, `failing` (job names, one per line), `truncated`, `url` |
+| `gitlab.open` | opens | `url`, or `project` (path) with optional `mergeRequest` | `url` |
+
+Every reading action also takes `credential` (a stored credential's name;
+empty uses the module's). \* sensitive: available to later nodes, not kept.
+
+**Merge requests** are open ones, most recently updated first; `author-me`
+and `review-requested` (and `gitlab.review-requests`) first read your user
+id and filter by `author_id` or `reviewer_id`, across all projects you can
+see when no project is given. `count` comes from GitLab's `X-Total`; when
+GitLab leaves it out (very large lists), up to 5 pages of 100 are counted
+and `countExact` is false if there were more. `items` lists at most
+`limit`, one per line as `group/project!12 Title (@author)` (with
+`[draft]`), titles reduced to one plain line. Messages give counts only.
+
+**Pipelines.** With `ref`, the newest pipeline of that branch or tag (or
+commit, for a 40-character SHA); with `mergeRequest`, its head pipeline.
+`state` follows the pipeline's status: `success` is `ok`; `failed` and
+`canceled` are `failing`; `skipped` is `none`; everything else (created,
+pending, running, manual, scheduled, …) is `pending`; no pipeline is `none`.
+Jobs are counted from the pipeline's latest jobs: success passes, a failure
+that is allowed passes, failed and canceled fail, skipped and manual are
+`skipped`, the rest are pending.
+
+**Opening** accepts only `https` pages on the GitLab web address that
+belongs to the API (the API URL without `/api/v4`, including any path it is
+installed under); other hosts, paths, schemes and URLs with user names fail
+with `url-not-allowed`. A project is opened by its path.
+
+**Network and limits** are those of the GitHub module: the HTTP module's
+client and network policy, the token only over `https` (or to this
+computer) and never to another origin, next pages only on the API itself,
+answers up to 4 MiB, jobs for at most 5 pages of 100 (`truncated`), one time
+limit for the whole action, and cancellation at once.
+
+**Failures.** `unauthorized` (401), `forbidden` (403, e.g. a token without
+`read_api`), `not-found` (404, also for private projects the token cannot
+see), `rate-limited` (429; `retryAfterSeconds` from `Retry-After` or
+`RateLimit-Reset`), `gitlab-error` (another status, with GitLab's message),
+and `credential-missing` when no token is stored under the name.
+
+Error codes: `invalid-api-url`, `invalid-project`, `invalid-ref`,
+`unauthorized`, `forbidden`, `not-found`, `rate-limited`, `gitlab-error`,
+`invalid-response`, `url-not-allowed`, `credential-missing`, the HTTP
+module's network codes, and the shared codes.
+
 ## Notifications (`notifications`)
 
 Shows notifications from workflows: as native desktop notifications and in

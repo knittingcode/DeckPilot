@@ -21,6 +21,7 @@ third-party executables and no remote installation.
 | `general`  | — | read profile |
 | `git` | — (settings) | read profile, read machine resources, run programs (`git`), open folders |
 | `github` | — (settings) | send network requests, use stored credentials, open pages |
+| `gitlab` | — (settings) | send network requests, use stored credentials, open pages |
 | `http` | — (settings with credentials) | send network requests, use stored credentials |
 | `notifications` | — (settings) | read profile, show notifications |
 | `projects` | Projects | read profile, change active project, read machine resources |
