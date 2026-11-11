@@ -57,6 +57,10 @@ impl From<RunStatus> for ExecutionState {
 }
 
 /// What started a run.
+///
+/// Stored and sent as a camelCase string. Kinds added later read as
+/// [`ExecutionTrigger::Other`], so history written by a newer agent stays
+/// readable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ExecutionTrigger {
@@ -64,6 +68,13 @@ pub enum ExecutionTrigger {
     App,
     /// A Stream Deck control.
     Device,
+    /// A schedule of the workflow (see [`crate::trigger`]).
+    Schedule,
+    /// A lifecycle event, such as a device connecting.
+    Lifecycle,
+    /// A kind this version does not know.
+    #[serde(other)]
+    Other,
 }
 
 /// What a finished run did to the application's active project.
@@ -95,6 +106,10 @@ pub struct ExecutionSummary {
     pub workflow_name: String,
     pub profile: ProfileId,
     pub trigger: ExecutionTrigger,
+    /// For schedules and lifecycle events: which one, e.g. `every 15 min`
+    /// or `deviceConnected`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_detail: Option<String>,
     pub state: ExecutionState,
     /// Milliseconds since the Unix epoch.
     pub started_at: u64,
@@ -152,6 +167,7 @@ impl ExecutionRecord {
                 workflow_name: shorten(&workflow.name),
                 profile: profile.id,
                 trigger,
+                trigger_detail: None,
                 state: ExecutionState::Running,
                 started_at: now_ms,
                 finished_at: None,
