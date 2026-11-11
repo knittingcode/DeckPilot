@@ -69,6 +69,7 @@ fn press(control: ControlId, target: BindingTarget) -> ControlBinding {
         trigger: Trigger::Press,
         target,
         label: None,
+        appearance: None,
     }
 }
 
@@ -286,6 +287,7 @@ fn mk2_layout(ids: &WorkIds) -> DeviceLayout {
     ];
     let folder = ControlBinding {
         label: Some("Tools".into()),
+        appearance: None,
         ..press(key(14), BindingTarget::OpenPage { page: tools.id })
     };
     main.pages[0].bindings = vec![
@@ -342,6 +344,7 @@ fn plus_layout(ids: &WorkIds) -> DeviceLayout {
         trigger,
         target,
         label: label.map(str::to_owned),
+        appearance: None,
     };
     let mut dials = DeviceLayout::new("Dials", models::stream_deck_plus().id);
     dials.pages[0].bindings = vec![

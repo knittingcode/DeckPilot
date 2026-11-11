@@ -769,6 +769,7 @@ async fn configuration_reload_updates_the_device_without_restart() {
             trigger: deckpilot_core::Trigger::Press,
             target: deckpilot_core::BindingTarget::Action { action },
             label: Some("{project.name}".into()),
+            appearance: None,
         });
     agent.store().save_profile(&profile).unwrap();
     agent
@@ -1919,6 +1920,7 @@ async fn device_bound_workflows_run_in_the_background() {
                 workflow: workflow_id,
             },
             label: None,
+            appearance: None,
         });
     agent.store().save_profile(&profile).unwrap();
     let mut events = agent.client().await;
@@ -2815,6 +2817,7 @@ async fn running_workflows_mark_and_redraw_only_their_keys() {
                 workflow: workflow_id,
             },
             label: Some("Wait".into()),
+            appearance: None,
         });
     agent.store().save_profile(&profile).unwrap();
     let mut events = agent.client().await;
@@ -2922,6 +2925,7 @@ async fn module_states_are_shown_and_not_refreshed_more_often_than_allowed() {
             trigger: deckpilot_core::Trigger::Press,
             target: deckpilot_core::BindingTarget::Action { action: status.id },
             label: None,
+            appearance: None,
         });
     profile.actions.push(status);
     agent.store().save_profile(&profile).unwrap();
@@ -2958,6 +2962,71 @@ async fn module_states_are_shown_and_not_refreshed_more_often_than_allowed() {
     assert_eq!(count(), 1);
     assert_eq!(agent.mock.image_writes(&agent.device), writes);
     assert_eq!(agent.mock.frames(&agent.device)[&key], ready);
+    agent.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn keys_show_their_appearance_and_icons() {
+    use deckpilot_core::{Color, FaceStyle, IconFit, IconRef, KeyAppearance, KeyFace, TitleAlign};
+
+    let agent = setup().await;
+    assert!(agent.frames_shown());
+    let before = agent.mock.frames(&agent.device);
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let png = deckpilot_render::frame_png(&deckpilot_device::Frame::filled(48, 24, [250, 200, 0]))
+        .unwrap();
+    let icon = profile
+        .add_icon(deckpilot_render::icons::import("Sun", &png).unwrap())
+        .unwrap();
+    let look = KeyAppearance {
+        background: Some(Color([20, 40, 60])),
+        text_color: Some(Color([255, 255, 0])),
+        title_align: Some(TitleAlign::Bottom),
+        icon: Some(IconRef {
+            id: icon,
+            fit: IconFit::Fit,
+        }),
+        ..KeyAppearance::default()
+    };
+    // Key 1 runs the log action ("Announce").
+    profile.layouts[0].pages[0].bindings[1].appearance = Some(look.clone());
+    agent.store().save_profile(&profile).unwrap();
+    agent
+        .client()
+        .await
+        .request(Request::ReloadConfiguration)
+        .await
+        .unwrap();
+
+    let key = ControlId::Key { index: 1 };
+    let face = KeyFace::new(FaceStyle::Action, "Announce").with_appearance(Some(&look));
+    let spec = models::stream_deck_mk2()
+        .capabilities
+        .keys
+        .and_then(|keys| keys.image)
+        .unwrap();
+    let expected = deckpilot_agent::render::render_with(
+        &face,
+        spec.width,
+        spec.height,
+        &deckpilot_agent::render::Icons::from_profile(&profile),
+    );
+    assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
+        frames.get(&key) == Some(&expected)
+    }));
+    // The icon is on the key: its yellow in the middle, the background at
+    // the corner.
+    assert_eq!(
+        expected.pixel(spec.width / 2, spec.height / 2 - 4),
+        Some([250, 200, 0])
+    );
+    assert_eq!(expected.pixel(0, 0), Some([20, 40, 60]));
+    // Other keys are unchanged.
+    let after = agent.mock.frames(&agent.device);
+    assert_eq!(
+        after[&ControlId::Key { index: 0 }],
+        before[&ControlId::Key { index: 0 }]
+    );
     agent.shutdown().await;
 }
 

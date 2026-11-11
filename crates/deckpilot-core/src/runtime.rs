@@ -364,6 +364,7 @@ impl Engine {
                 error: None,
                 action: Some(step.action),
                 workflow: None,
+                sets_variables: false,
             };
             let run = match step.condition {
                 StepCondition::Always => true,
