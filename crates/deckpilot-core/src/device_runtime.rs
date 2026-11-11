@@ -333,6 +333,32 @@ impl Runtime {
         )
     }
 
+    /// The binding target behind each face of [`Runtime::faces`] that has
+    /// one, for decorating faces with live state. Empty without a profile
+    /// or layout.
+    pub fn shown_targets(&self, device: &DeviceId) -> Vec<(ControlId, BindingTarget)> {
+        let (Some(layout), Some(page)) =
+            (self.layout_for(&device.model), self.current_page(device))
+        else {
+            return Vec::new();
+        };
+        let Some(page) = layout.page(page) else {
+            return Vec::new();
+        };
+        let Some(model) = self.catalog.get(&device.model) else {
+            return Vec::new();
+        };
+        model
+            .capabilities
+            .controls()
+            .into_iter()
+            .filter(|control| model.capabilities.has_display(*control))
+            .filter_map(|control| {
+                shown_binding(page, control).map(|binding| (control, binding.target))
+            })
+            .collect()
+    }
+
     pub fn handle_event(&mut self, event: &DeviceEvent) -> Result<RuntimeOutcome, EngineError> {
         let ignored = |reason: &str| {
             Ok(RuntimeOutcome::Ignored {
@@ -450,17 +476,21 @@ pub fn page_faces(
     controls
         .iter()
         .map(|control| {
-            let binding = page
-                .bindings
-                .iter()
-                .filter(|binding| binding.control == *control)
-                .min_by_key(|binding| binding.trigger != Trigger::Press);
+            let binding = shown_binding(page, *control);
             let face = binding.map_or_else(KeyFace::empty, |binding| {
                 face_for(registry, binding, layout, profile, project)
             });
             (*control, face)
         })
         .collect()
+}
+
+/// The binding a control's face shows: its press binding, else any.
+fn shown_binding(page: &crate::LayoutPage, control: ControlId) -> Option<&ControlBinding> {
+    page.bindings
+        .iter()
+        .filter(|binding| binding.control == control)
+        .min_by_key(|binding| binding.trigger != Trigger::Press)
 }
 
 fn face_for(
@@ -712,6 +742,31 @@ mod tests {
         let faces = runtime.faces(&device());
         assert_eq!(faces[0].1.detail.as_deref(), Some("CMS"));
         assert!(faces[2].1.highlighted);
+    }
+
+    #[test]
+    fn shown_targets_follow_the_visible_page() {
+        let f = fixture();
+        let mut runtime = runtime();
+        runtime
+            .handle_event(&DeviceEvent::Connected { device: device() })
+            .unwrap();
+        assert_eq!(runtime.shown_targets(&device()), []);
+        runtime.set_profile(Some(f.profile), None);
+        let targets = runtime.shown_targets(&device());
+        assert_eq!(targets.len(), 3);
+        assert_eq!(
+            targets[0],
+            (
+                ControlId::Key { index: 0 },
+                BindingTarget::Action { action: f.next }
+            )
+        );
+        runtime.handle_event(&press(1)).unwrap();
+        assert_eq!(
+            runtime.shown_targets(&device()),
+            [(ControlId::Key { index: 1 }, BindingTarget::Back)]
+        );
     }
 
     #[test]

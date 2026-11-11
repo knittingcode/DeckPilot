@@ -201,6 +201,8 @@ reports. Its tests show each part.
 | Part | Location |
 | ---- | -------- |
 | `ModuleManifest`, `FeatureModule`, `ModuleRegistry`, `Capability` | `crates/deckpilot-core/src/module.rs` |
+| Button state types (`ButtonState`, `RefreshPolicy`, `StateError`) | `crates/deckpilot-core/src/button_state.rs` |
+| Scheduling and caching of button states in the agent | `apps/agent/src/service/states.rs` |
 | Action dispatch and capability checks | `crates/deckpilot-core/src/registry.rs` |
 | Module crates | `modules/general`, `modules/projects` |
 | List of built-in modules | `crates/deckpilot-modules` (the only place that names them) |
@@ -231,7 +233,129 @@ reports. Its tests show each part.
   refuses to save such actions and the engine refuses to run them.
 - **Key faces.** `ActionHandler::decorate_face` lets a module add context to
   a key, such as the active project below a *Next project* key or the
-  highlight of a *Select project* key.
+  highlight of a *Select project* key. It runs on every redraw and must not
+  do any work; live state that needs work (running a program, reading a
+  file) is a [button state](#button-state).
+
+## Button state
+
+A module can show live state on keys that run its actions: a repository's
+branch, whether a Compose project is up. The contract
+(`crates/deckpilot-core/src/button_state.rs`, `ActionHandler` in
+`registry.rs`):
+
+```rust
+pub trait ActionHandler {
+    // ...
+    /// `None` (the default): no live state; `button_state` is never called.
+    fn state_policy(&self, parameters: &ActionParameters) -> Option<RefreshPolicy>;
+    fn button_state(
+        &self,
+        parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> Result<ButtonState, StateError>;
+}
+
+pub struct ButtonState {
+    pub label: Option<String>,     // replaces the key's title
+    pub detail: Option<String>,    // replaces its secondary line
+    pub indicator: Option<Indicator>, // ok | warning | error | running | unknown | loading
+    pub progress: Option<u8>,      // 0–100, bar along the bottom edge
+    pub toggle: Option<bool>,      // on/off mark along the top edge
+}
+
+pub enum RefreshPolicy {
+    OnEvents { min_interval: Duration }, // only after something happened
+    Every { interval: Duration },        // polled while shown, and on events
+}
+
+pub struct StateError { pub code: String, pub message: String }
+```
+
+**Who decides what.** The module decides *what* the state is; the core
+decides *when* it is asked and *how* it looks. The renderer only knows
+`ButtonState` and draws the indicator as a dot in the top-right corner, a
+ring while loading, the progress bar and the toggle mark. It knows nothing
+about Git, Docker or any other module.
+
+**When providers run.** The agent asks for a key's state only while the key
+is shown on a device, off the device loop, on its own threads:
+
+- at most once per `RefreshPolicy::min_interval()` for the same key
+  (action instance and project), measured between starts, whatever happens
+  in between; declared intervals are bounded to 1 s – 24 h;
+- never while a call for that key is still running, and at most four calls
+  at a time;
+- `OnEvents`: again only after an event — a key press, a project switch, a
+  configuration reload or a finished workflow — once the interval allows;
+- `Every`: again every interval while shown, and after events once the
+  interval allows.
+
+Nothing polls per frame: the agent sleeps until the next state is due.
+States are cached per key; a key shown again shows its last state at once
+while a fresh one is fetched, and states of keys not shown for 10 minutes
+are dropped. Reloading the configuration, switching profiles, locking and
+shutting down cancel running calls (their results are discarded) and clear
+the cache.
+
+**What a provider gets.** The same `ExecutionContext` as `execute`,
+restricted to the module's capabilities, with the key's project as the
+project (the active one), stored credentials when the module declares
+`credentials`, no notifications, and a cancellation token that is cancelled
+on reload and shutdown and after 20 s. Run programs with
+`context.run_process`, which honours the token. `parameters` are the
+instance's normalized parameters.
+
+**Rules for providers.**
+
+- Read only. A provider never changes anything, whatever the action does
+  when pressed (the Docker *Compose up* key shows whether the project is
+  up; it does not start it).
+- Be cheap and bounded: one short command or request, its own time limit.
+  Declare the longest interval that is still useful; polled providers that
+  run programs should use at least 30 s.
+- Failures are values. Return `StateError` with a stable code from the
+  module's documented list; the key shows an error mark and `Error` as its
+  secondary line. A panic is caught and shown the same way. Only the code
+  is logged, once when a key turns to an error, never the message — still,
+  never put secrets in it.
+- Texts are shortened by the core to 32 characters (control characters
+  removed), error messages to 120, progress to 100.
+
+**States the agent sets itself.** `Loading` (a grey ring) until the first
+answer arrives, `Error` on failure, and `Running` with the run's progress
+(finished nodes in percent) on keys bound to a workflow while it runs.
+
+**Rendering.** Faces (`KeyFace`, including the state fields) are compared
+per key, and only keys whose face changed are redrawn and sent to the
+device. Rendered images are cached by face and size, so a state that flips
+back does not draw its image again.
+
+**Built-in providers.**
+
+| Action types | State | Interval |
+| ------------ | ----- | -------- |
+| `git.status` | branch as detail; green clean, amber uncommitted changes, red conflicts | 30 s |
+| `git.branch` | branch as detail (`@<commit>` when detached) | 30 s |
+| `docker.status` | green when the engine answers, red (`Unavailable`) otherwise | 30 s |
+| `docker.containers` | `N running`; green when any runs, grey otherwise | 30 s |
+| `docker.compose-status`, `-up`, `-down`, `-restart` | `running/total up`; green all, amber some, grey none; up and down keys also toggle (on when all run) | 30 s |
+
+Each reads with the module's existing read-only command (`git status`
+without optional locks; `docker version`, `docker ps`, `docker compose
+ps`).
+
+**Testing a provider.** Call `ActionHandler::button_state` with an
+`ExecutionContext`, or `ActionRegistry::button_state` to include the
+capability limits; use a fake program for external tools (see the Git and
+Docker module tests). The agent's scheduler is tested with explicit times
+in `apps/agent/src/service/states.rs`.
+
+**Previewing states in the app.** `KeyFace` carries `indicator`,
+`progress` and `toggle` as optional fields (omitted when unset), so stored
+data and the IPC protocol are unchanged. The configuration app does not
+run providers; a preview would apply a sample `ButtonState` to a face with
+`KeyFace::with_state`.
 
 ## Security boundary
 

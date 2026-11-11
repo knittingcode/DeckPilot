@@ -12,8 +12,8 @@ use thiserror::Error;
 
 use crate::{
     ActionInstance, ActionInstanceId, ActionParameters, ActionResult, ActionType, ActionTypeId,
-    Capability, ContextEffect, ExecutionContext, KeyFace, ModuleId, ParameterError, Profile,
-    Project,
+    ButtonState, Capability, ContextEffect, ExecutionContext, KeyFace, ModuleId, ParameterError,
+    Profile, Project, RefreshPolicy, StateError,
 };
 
 /// Implementation of one action type.
@@ -45,6 +45,28 @@ pub trait ActionHandler: Send + Sync {
         _project: Option<&Project>,
     ) -> KeyFace {
         face
+    }
+
+    /// Whether keys running this action show a live [`ButtonState`], and
+    /// how often it may be refreshed. `None` (the default): no live state,
+    /// and [`ActionHandler::button_state`] is never called.
+    fn state_policy(&self, _parameters: &ActionParameters) -> Option<RefreshPolicy> {
+        None
+    }
+
+    /// The live state of a key that runs this action with `parameters`
+    /// (normalized). Called by the agent off the device loop, at most as
+    /// often as [`ActionHandler::state_policy`] allows, with a context
+    /// limited to the module's capabilities and a cancellation token
+    /// (cancelled on reload, shutdown and after a time limit), so programs
+    /// must be run with [`ExecutionContext::run_process`]. Must not change
+    /// anything; failures are shown as an error mark on the key.
+    fn button_state(
+        &self,
+        _parameters: &ActionParameters,
+        _context: &ExecutionContext<'_>,
+    ) -> Result<ButtonState, StateError> {
+        Ok(ButtonState::default())
     }
 }
 
@@ -208,6 +230,44 @@ impl ActionRegistry {
         let handler = self.handler(action_type)?;
         let project = project.filter(|_| self.allows(action_type, Capability::ProfileRead));
         Some(handler.decorate_face(face, parameters, template, project))
+    }
+
+    /// The refresh policy of `action_type`'s live state, if it has one.
+    pub fn state_policy(
+        &self,
+        action_type: &ActionTypeId,
+        parameters: &ActionParameters,
+    ) -> Option<RefreshPolicy> {
+        self.handler(action_type)?.state_policy(parameters)
+    }
+
+    /// The live state of a key running `action_type`, from its module,
+    /// with the same capability limits as [`ActionRegistry::dispatch`]. The
+    /// result is sanitized (short texts, progress at most 100). `None` if
+    /// the type cannot run or provides no state.
+    pub fn button_state(
+        &self,
+        action_type: &ActionTypeId,
+        parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> Option<Result<ButtonState, StateError>> {
+        let entry = self.handlers.get(action_type)?;
+        entry.handler.state_policy(parameters)?;
+        let restricted;
+        let context = match &entry.capabilities {
+            Some(granted) => {
+                restricted = context.restricted(granted);
+                &restricted
+            }
+            None => context,
+        };
+        Some(
+            entry
+                .handler
+                .button_state(parameters, context)
+                .map(ButtonState::sanitized)
+                .map_err(StateError::sanitized),
+        )
     }
 
     /// The module that provides `id`, if it was registered by a module.
@@ -397,6 +457,69 @@ mod tests {
             result.message,
             "this action is unavailable: the Test module is disabled"
         );
+    }
+
+    #[test]
+    fn button_states_come_from_providers_within_capabilities() {
+        let mut profile = Profile::new("Work");
+        profile
+            .projects
+            .push(Project::new(ProjectKey::new("SHOP").unwrap(), "Shop"));
+        let machine = MachineConfig::new(Os::Linux);
+        let context = ExecutionContext::new(&profile, Some(&profile.projects[0]), &machine);
+        let message =
+            |text: &str| ActionParameters::new().with("message", ParameterValue::Text(text.into()));
+
+        let registry = registry();
+        assert!(registry.state_policy(&echo_type(), &message("x")).is_some());
+        let state = registry
+            .button_state(&echo_type(), &message("Git {project.key}"), &context)
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.label.as_deref(), Some("Git SHOP"));
+        // Texts are shortened by the core, whatever the module returns.
+        let long = registry
+            .button_state(&echo_type(), &message(&"x".repeat(100)), &context)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            long.label.unwrap().len(),
+            crate::button_state::MAX_STATE_TEXT
+        );
+        let failed = registry
+            .button_state(&echo_type(), &message("fail"), &context)
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(failed.code, "failed");
+
+        // Types without a provider have no state; unknown types neither.
+        let mut with_select = ActionRegistry::default();
+        with_select.register(Box::new(Select::new())).unwrap();
+        assert_eq!(
+            with_select.state_policy(&select_type(), &ActionParameters::new()),
+            None
+        );
+        assert!(
+            with_select
+                .button_state(&select_type(), &ActionParameters::new(), &context)
+                .is_none()
+        );
+        assert!(
+            with_select
+                .button_state(&echo_type(), &message("x"), &context)
+                .is_none()
+        );
+
+        // A module's provider sees only what its manifest declares.
+        let mut blind = ActionRegistry::default();
+        blind
+            .register_for_module(ModuleId::new("test").unwrap(), &[], Box::new(Echo::new()))
+            .unwrap();
+        let denied = blind
+            .button_state(&echo_type(), &message("x"), &context)
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(denied.code, "not-permitted");
     }
 
     #[test]
