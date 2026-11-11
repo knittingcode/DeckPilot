@@ -380,8 +380,17 @@ fn page_lists_are_checked_before_anything_opens() {
         urls(Some(" \n ")).unwrap_err().code.as_deref(),
         Some(codes::NO_URLS)
     );
+    // Too many are refused when saved (a list of at most ten) and when run.
     let eleven = "https://example.com/\n".repeat(MAX_URLS + 1);
-    assert_eq!(run(&eleven).code.as_deref(), Some(codes::TOO_MANY_URLS));
+    let open = handler(OPEN_URLS, &launcher);
+    let parameters = ActionParameters::new().with("urls", text(&eleven));
+    assert!(open.definition().normalize(&parameters).is_err());
+    assert_eq!(
+        open.execute(&parameters, &fixture.context())
+            .code
+            .as_deref(),
+        Some(codes::TOO_MANY_URLS)
+    );
     assert_eq!(launcher.plans().len(), 0);
 
     let failing = Arc::new(RecordingLauncher::failing());

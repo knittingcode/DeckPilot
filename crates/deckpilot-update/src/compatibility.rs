@@ -27,6 +27,13 @@ pub enum AgentCompatibility {
         agent: String,
         app: String,
     },
+    /// The agent speaks a protocol this application cannot work with at all
+    /// (from DeckPilot 0.3 or earlier). It can only be stopped and replaced
+    /// by the agent of this application.
+    UpdateRequired {
+        agent: String,
+        app: String,
+    },
 }
 
 pub fn check(app_version: &str, agent_version: &str) -> AgentCompatibility {

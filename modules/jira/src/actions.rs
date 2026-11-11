@@ -88,7 +88,7 @@ fn credential_parameter() -> ParameterSpec {
     parameter(
         "credential",
         "Credential",
-        text(64),
+        ParameterKind::Credential,
         "The name of a stored credential. Empty: the module's (Settings › Modules › Jira). \
          Never the secret itself.",
     )

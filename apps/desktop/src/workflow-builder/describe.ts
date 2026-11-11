@@ -4,8 +4,11 @@ import type {
   GraphNode,
   GraphPredicate,
   ModuleInfo,
+  ValueKind,
   Workflow,
   WorkflowGraph,
+  WorkflowInput,
+  WorkflowOutput,
 } from "@/lib/types"
 
 import { FLOW_TITLE } from "./catalog"
@@ -18,6 +21,38 @@ export interface Lookup {
   projects: { key: string; name: string }[]
   /** The module registry, for node documentation. */
   modules?: ModuleInfo[]
+  /** The open workflow's declared inputs: outputs of its start node. */
+  inputs?: WorkflowInput[]
+  /** The open workflow's declared outputs, set by its Output nodes. */
+  outputs?: WorkflowOutput[]
+}
+
+/** An output a node provides to later nodes. */
+export interface NodeOutput {
+  key: string
+  label: string
+  kind: ValueKind
+  sensitive?: boolean
+}
+
+/**
+ * What a node provides to later nodes, mirroring the engine's validation:
+ * an action its type's declared outputs, the start node the workflow's
+ * inputs, a sub-workflow the called workflow's declared outputs.
+ */
+export function nodeOutputs(node: GraphNode, lookup: Lookup): NodeOutput[] {
+  const named = (values: { key: string; label?: string; kind: ValueKind; sensitive?: boolean }[]) =>
+    values.map((v) => ({ ...v, label: v.label || v.key }))
+  switch (node.type) {
+    case "action":
+      return actionOf(node, lookup).type?.node?.outputs ?? []
+    case "trigger":
+      return named(lookup.inputs ?? [])
+    case "call":
+      return named(lookup.workflows.find((w) => w.id === node.workflow)?.outputs ?? [])
+    default:
+      return []
+  }
 }
 
 export function actionOf(node: GraphNode, lookup: Lookup) {
@@ -60,6 +95,20 @@ export function describeNode(node: GraphNode, lookup: Lookup): { title: string; 
         detail: `${workflow?.name ?? "Missing workflow"} × ${node.times}`,
       }
     }
+    case "call": {
+      const workflow = lookup.workflows.find((w) => w.id === node.workflow)
+      return {
+        title: label || workflow?.name || "Sub-workflow",
+        detail: workflow ? "Sub-workflow" : "Missing workflow",
+      }
+    }
+    case "output": {
+      const keys = Object.keys(node.values ?? {})
+      return {
+        title: label || "Outputs",
+        detail: keys.length ? keys.join(", ") : "Sets no outputs",
+      }
+    }
     case "delay":
       return { title: label || "Delay", detail: formatMs(node.ms) }
     default:
@@ -81,8 +130,7 @@ export function availableOutputs(graph: WorkflowGraph, id: string, lookup: Looku
   return upstream(graph, id).flatMap((nodeId) => {
     const node = graph.nodes.find((n) => n.id === nodeId)
     if (!node) return []
-    const { type } = actionOf(node, lookup)
-    return (type?.node?.outputs ?? []).map((output) => ({
+    return nodeOutputs(node, lookup).map((output) => ({
       reference: { node: nodeId, output: output.key },
       label: `${node.label || nodeId} · ${output.label}`,
     }))

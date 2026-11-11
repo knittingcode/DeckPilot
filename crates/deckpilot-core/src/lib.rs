@@ -33,7 +33,7 @@ pub(crate) mod testing;
 
 pub use action::{
     ActionInstance, ActionParameters, ActionType, ActionTypeId, MAX_LABEL_CHARS, ParameterError,
-    ParameterKind, ParameterSpec, ParameterValue, validate_presentation,
+    ParameterKind, ParameterSpec, ParameterValue, lines_of, looks_secret, validate_presentation,
 };
 pub use cancel::{CancelReason, CancellationToken};
 pub use credentials::{
