@@ -18,6 +18,12 @@ use std::path::Path;
 use interprocess::local_socket::tokio::{Listener, Stream, prelude::*};
 use interprocess::local_socket::{ListenerOptions, Name};
 
+/// Attempts to create the Windows pipe while a previous instance closes.
+#[cfg(windows)]
+const LISTEN_RETRIES: u32 = 40;
+#[cfg(windows)]
+const LISTEN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
     #[cfg(unix)]
@@ -102,10 +108,29 @@ impl Endpoint {
         #[cfg(windows)]
         {
             use interprocess::os::windows::local_socket::ListenerOptionsExt;
-            ListenerOptions::new()
-                .name(self.name()?)
-                .security_descriptor(windows::owner_only()?)
-                .create_tokio()
+            // The pipe is created as the first instance of its name, which
+            // fails while an instance of a previous agent still exists. When
+            // a listener is dropped during `accept`, the pending connect is
+            // cancelled asynchronously and its instance closes a moment
+            // later, so an agent restarted right away retries briefly. A name
+            // that stays taken still fails.
+            let mut attempt = 0;
+            loop {
+                let result = ListenerOptions::new()
+                    .name(self.name()?)
+                    .security_descriptor(windows::owner_only()?)
+                    .create_tokio();
+                match result {
+                    Err(error)
+                        if error.kind() == io::ErrorKind::PermissionDenied
+                            && attempt < LISTEN_RETRIES =>
+                    {
+                        attempt += 1;
+                        std::thread::sleep(LISTEN_RETRY_DELAY);
+                    }
+                    other => return other,
+                }
+            }
         }
     }
 
