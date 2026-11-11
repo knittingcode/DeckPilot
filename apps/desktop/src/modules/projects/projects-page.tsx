@@ -589,7 +589,12 @@ function ProjectForm({
       <div className="grid gap-2">
         <Label>Resources</Label>
         {rows.map((row, index) => (
-          <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+          <div
+            key={index}
+            role="group"
+            aria-label={`Resource ${index + 1}`}
+            className="grid grid-cols-[1fr_1fr_auto] gap-2"
+          >
             <Input
               aria-label="Role"
               value={row.role}
