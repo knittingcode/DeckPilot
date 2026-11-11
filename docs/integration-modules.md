@@ -70,7 +70,8 @@ path or a name found on `PATH` — so an imported workflow cannot choose what
 runs. Arguments are passed as they are, one per line: nothing is split on
 spaces, quoted or expanded. Output is kept up to 64 KiB per stream
 (`outputTruncated` tells when more was produced). The node is cancellable
-and not retry-safe.
+and not retry-safe. In a workflow a node runs at most 10 minutes, so a
+longer `timeoutSeconds` only applies when the action runs from a key.
 
 Error codes: `invalid-url`, `invalid-path`, `invalid-arguments`,
 `not-found`, `commands-disabled`, `exit-nonzero`, `unsupported-target`,
@@ -163,7 +164,8 @@ cannot turn it on), **Compose resource** (`composeRole`, default
 **Contexts.** Every command is `docker --context <name> …`: the action's
 `context`, else the module's, else the context `docker context show`
 reports. The name is part of every result (`context`), so it is visible
-which engine was used; remote contexts (`ssh://`, TCP with TLS) work like
+which engine was used — except a `docker.status` that found no Docker and
+no context was chosen, since then no current context can be asked; remote contexts (`ssh://`, TCP with TLS) work like
 the local one. `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`, TLS
 variables and `SSH_AUTH_SOCK` are passed on.
 
@@ -204,7 +206,8 @@ never read into results. There are no Swarm operations.
 is stopped with its process group. Cancelling `compose up` or `down`
 partway leaves the project as far as Compose got; running the action again
 completes it (both are retry-safe and idempotent). Reading commands are
-limited to 30 s, changes to the module's time limit.
+limited to 30 s, changes to the module's time limit — in a workflow at most
+10 minutes, the longest any node runs.
 
 **Key state.** Keys show whether Docker is available (`docker.status`),
 how many containers run (`docker.containers`) and how many of a Compose
@@ -517,6 +520,65 @@ Error codes: `invalid-site-url`, `invalid-issue-key`, `invalid-project`,
 `unauthorized`, `forbidden`, `not-found`, `rate-limited`, `jira-error`,
 `invalid-response`, `url-not-allowed`, `credential-missing`, the HTTP
 module's network codes, and the shared codes.
+
+## Workspace (`workspace`)
+
+Opens a project's working set: the repository, or a file in it at a line,
+in an editor, and web pages in the browser. It only opens things — there is
+no shell, nothing runs in a terminal and nothing is changed. Editors and
+browsers are application resources bound on each computer, never program
+names written into a workflow.
+
+Capabilities: read profile, machine resources, open applications, files and
+pages. No settings.
+
+| Action type | Effect | Parameters | Outputs |
+| ----------- | ------ | ---------- | ------- |
+| `workspace.open-in-editor` | opens | `application` (the editor, an application resource), `editor` (`vscode`, `cursor`, `jetbrains`, `zed`, `sublime`, `other`; `other`), `location` (folder resource; empty: the project's `repository`), `path` (relative file or folder), `line`, `column` (1–10 000 000) | `path`, `application`, `located` |
+| `workspace.open-urls` | opens | `urls` (one http/https address per line, at most 10), `browser` (optional application resource) | `opened`, `failed`, `urls`* |
+| `workspace.open-project` | opens | `editor`, `editorRole` (`editor`), `repositoryRole` (`repository`), `docsRole` (`docs`), `urlRoles` (resource names, one per line, at most 10), `browser` | `projectKey`, `opened`, `openedRoles`, `missingCount`, `missing` |
+
+\* sensitive: available to later nodes, not kept (addresses may carry
+tokens). `urls` and `urlRoles` are lists (edited item by item, stored one per line).
+
+**Editors.** Without a line the folder or file is opened with the editor
+(`open -a <editor> <path>` on macOS, `<editor> <path>` elsewhere). With a
+line, known editors get their own arguments: Visual Studio Code and Cursor
+`--goto <file>:<line>[:<column>]`, JetBrains IDEs `--line N [--column M]
+<file>`, Zed and Sublime Text `<file>:<line>[:<column>]`; `other` opens the
+file without the line (`located` is false). A line needs a file, and a
+column needs a line. When the editor resource is a command-line tool (a
+path such as `/usr/local/bin/code`, `idea`, `zed` or `subl`), it is started
+directly with these arguments on every system, so the line also reaches an
+editor that is already running; with a macOS application bundle the
+arguments go through `open -a … --args`, which only reaches an editor that
+is not running yet. A tool given by path must exist.
+
+**Paths** follow the System module's rules: relative to the folder, no
+`..`, no absolute paths or drive letters, and the file or folder must exist
+(`invalid-path`, `not-found`).
+
+**Pages** follow the System module's URL rules, limited to `http` and
+`https` (no `mailto`, `file`, `javascript:` or application schemes:
+`invalid-url`). Every address is checked before any is opened. They open in
+the default browser, or in the `browser` resource (`open -a <browser> <url>`
+on macOS, `<browser> <url>` elsewhere). If some pages cannot be opened the
+node still succeeds with `failed`; it fails only when none opened.
+
+**Project workspace.** `workspace.open-project` uses the run's current
+project: it opens the `repositoryRole` folder in the `editorRole`
+application, the `docsRole` resource (a page in the browser, or a folder in
+the file manager) and each resource in `urlRoles` as a page. Empty role
+names are skipped. Resources the project does not define, that are not
+bound on this computer, are of the wrong kind or are not valid pages are
+listed in `missing` (`<role>: <reason>`, one per line) and do not stop the
+others; the node fails with `nothing-opened` only when nothing could be
+opened.
+
+Error codes: `invalid-position`, `no-urls`, `too-many-urls`,
+`nothing-opened`, the System module's `invalid-url`, `invalid-path` and
+`not-found`, the launch codes (`unsupported-target`, `program-not-found`,
+`spawn-failed`, `open-failed`), and the shared codes.
 
 ## Notifications (`notifications`)
 

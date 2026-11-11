@@ -775,7 +775,8 @@ fn fresh_installation_has_an_empty_action_library() {
             "jira",
             "notifications",
             "projects",
-            "system"
+            "system",
+            "workspace"
         ]
     );
     let module = |id: &str| {
@@ -2290,6 +2291,138 @@ fn icons_are_imported_shown_previewed_and_deleted() {
     );
     let icons = h.ok("list_icons", json!({ "profileId": profile_id }));
     assert_eq!(icons, json!([]));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One flow through the page commands.
+fn pages_are_ordered_moved_and_copied() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    let create = |name: &str| {
+        h.ok(
+            "create_layout",
+            json!({ "profileId": profile_id, "modelId": "elgato.streamdeck.mk2", "name": name, "generate": false }),
+        )
+    };
+    let mut main = create("Main");
+    let second = create("Second");
+    let home = main["homePage"].clone();
+    let (tools, git) = (
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+    );
+    // An old-style layout: folders only through openPage bindings, and Git
+    // has no Back key.
+    main["pages"][0]["bindings"] = json!([
+        { "control": { "kind": "key", "index": 1 }, "trigger": { "type": "press" }, "target": { "type": "openPage", "page": tools } }
+    ]);
+    main["pages"].as_array_mut().unwrap().extend([
+        json!({ "id": tools, "name": "Tools", "bindings": [
+            { "control": { "kind": "key", "index": 0 }, "trigger": { "type": "press" }, "target": { "type": "back" } },
+            { "control": { "kind": "key", "index": 1 }, "trigger": { "type": "press" }, "target": { "type": "openPage", "page": git } }
+        ]}),
+        json!({ "id": git, "name": "Git", "bindings": [] }),
+    ]);
+    let saved = h.ok(
+        "save_layout",
+        json!({ "profileId": profile_id, "layout": main }),
+    );
+    // Saved without edits: no parents are added.
+    assert!(!saved.to_string().contains("parent"));
+    assert!(saved.get("explicitTree").is_none());
+
+    let tree = h.ok("page_tree", json!({ "layout": saved }));
+    let node = |id: &str| {
+        tree["pages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(node(tools)["parent"], home);
+    assert_eq!(node(git)["parent"], tools);
+    assert_eq!(node(git)["depth"], 2);
+    assert_eq!(node(git)["stored"], false);
+    assert_eq!(node(git)["automaticBack"]["index"], 0);
+    assert_eq!(tree["warnings"].as_array().unwrap().len(), 1);
+
+    let layout_id = saved["id"].clone();
+    // Reordering needs every page once and stores the tree.
+    assert!(
+        h.call(
+            "reorder_pages",
+            json!({ "profileId": profile_id, "layoutId": layout_id, "order": [home, git] }),
+        )
+        .is_err()
+    );
+    let reordered = h.ok(
+        "reorder_pages",
+        json!({ "profileId": profile_id, "layoutId": layout_id, "order": [git, home, tools] }),
+    );
+    assert_eq!(reordered["pages"][0]["id"], git);
+    assert_eq!(reordered["explicitTree"], true);
+    assert_eq!(reordered["pages"][0]["parent"], tools);
+
+    // A cycle is refused, also through save_layout.
+    assert!(
+        h.call(
+            "move_page",
+            json!({ "profileId": profile_id, "layoutId": layout_id, "pageId": tools, "parentId": git }),
+        )
+        .is_err()
+    );
+    let mut cyclic = reordered.clone();
+    cyclic["pages"][2]["parent"] = json!(git);
+    assert!(
+        h.call(
+            "save_layout",
+            json!({ "profileId": profile_id, "layout": cyclic })
+        )
+        .is_err()
+    );
+
+    // Copy Tools (with Git) to the other layout.
+    let copied = h.ok(
+        "copy_page",
+        json!({ "profileId": profile_id, "layoutId": layout_id, "pageId": tools, "targetLayoutId": second["id"] }),
+    );
+    assert_ne!(copied["page"], tools);
+    let target = copied["layouts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == second["id"])
+        .unwrap()
+        .clone();
+    assert_eq!(target["pages"].as_array().unwrap().len(), 3);
+
+    // Move Tools within its layout to the top level, then to the other
+    // layout: the key that opened it goes with it.
+    let moved = h.ok(
+        "move_page",
+        json!({ "profileId": profile_id, "layoutId": layout_id, "pageId": tools }),
+    );
+    assert_eq!(moved["removedKeys"], 0);
+    let moved = h.ok(
+        "move_page",
+        json!({ "profileId": profile_id, "layoutId": layout_id, "pageId": tools, "targetLayoutId": second["id"] }),
+    );
+    assert_eq!(moved["page"], tools);
+    assert_eq!(moved["removedKeys"], 1);
+    let view = h.ok("get_profile", json!({ "profileId": profile_id }));
+    let layouts = view["profile"]["layouts"].as_array().unwrap();
+    assert_eq!(layouts[0]["pages"].as_array().unwrap().len(), 1);
+    assert_eq!(layouts[1]["pages"].as_array().unwrap().len(), 5);
+    // The home page stays.
+    assert!(
+        h.call(
+            "move_page",
+            json!({ "profileId": profile_id, "layoutId": layout_id, "pageId": home, "targetLayoutId": second["id"] }),
+        )
+        .is_err()
+    );
 }
 
 #[test]

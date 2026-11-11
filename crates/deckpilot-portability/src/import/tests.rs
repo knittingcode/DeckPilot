@@ -324,7 +324,8 @@ fn module_settings_follow_the_portability_contract() {
             "jira",
             "notifications",
             "projects",
-            "system"
+            "system",
+            "workspace"
         ]
     );
     assert_eq!(status("system").skipped_settings, ["allowCommands"]);
@@ -335,7 +336,7 @@ fn module_settings_follow_the_portability_contract() {
     assert_eq!(projects.config.text("somethingLocal"), None);
     let system = &stored[&ModuleId::new("system").unwrap()];
     assert_eq!(system.config.boolean("allowCommands"), Some(false));
-    assert_eq!(stored.len(), 9);
+    assert_eq!(stored.len(), 10);
 }
 
 #[test]

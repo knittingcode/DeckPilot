@@ -10,7 +10,7 @@
 //! [`ContextEffect::SelectProject`]; the engine applies it only after checking
 //! that the project belongs to the active profile.
 
-use deckpilot_core::graph::{NodeSpec, OutputSpec, ValueKind};
+use deckpilot_core::graph::{ActionEffect, NodeSpec, OutputSpec, ValueKind};
 use deckpilot_core::{
     ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, ContextEffect,
     CycleDirection, ExecutionContext, KeyFace, ParameterKind, ParameterSpec, Profile, Project,
@@ -125,14 +125,20 @@ fn resource_outputs() -> Vec<OutputSpec> {
 
 /// Node behaviour of the project actions: which outputs they provide,
 /// whether they switch the project, and whether repeating them is safe.
+/// Switching the active project changes state, so those actions modify.
 fn node(outputs: Vec<OutputSpec>, changes_context: bool, repeatable: bool) -> NodeSpec {
     NodeSpec {
-        icon: Some("folder-kanban".into()),
+        icon: Some("folder".into()),
         outputs,
         timeout_ms: 5_000,
         retry_safe: repeatable,
         idempotent: repeatable,
         changes_context,
+        effect: if changes_context {
+            ActionEffect::Modifies
+        } else {
+            ActionEffect::ReadOnly
+        },
         ..NodeSpec::default()
     }
 }
@@ -226,7 +232,7 @@ impl ActionHandler for Step {
             self.wrap_around,
         ) {
             Ok(target) => target,
-            Err(error) => return ActionResult::failure(error.to_string()),
+            Err(error) => return ActionResult::error(error.code(), error.to_string()),
         };
         match profile.project(target) {
             Some(next) => resources::with_project(
@@ -234,7 +240,7 @@ impl ActionHandler for Step {
                 next,
             )
             .with_effect(ContextEffect::SelectProject { project: target }),
-            None => ActionResult::failure("this profile has no projects"),
+            None => ActionResult::error("no-projects", "this profile has no projects"),
         }
     }
 
@@ -285,7 +291,7 @@ impl ActionHandler for Select {
     ) -> ActionResult {
         let project = match resources::target_project(parameters, context) {
             Ok(project) => project,
-            Err(message) => return ActionResult::failure(message),
+            Err(failure) => return failure,
         };
         match parameters.project(PROJECT_ID) {
             Some(id) => resources::with_project(
@@ -353,7 +359,7 @@ impl ActionHandler for Active {
                 ActionResult::success(format!("{} ({})", project.key, project.name)),
                 project,
             ),
-            Ok(None) => ActionResult::failure("no project is active"),
+            Ok(None) => ActionResult::error("no-active-project", "no project is active"),
         }
     }
 
@@ -553,6 +559,19 @@ mod tests {
     }
 
     #[test]
+    fn switching_actions_modify_and_reading_ones_do_not() {
+        for handler in handlers(true) {
+            let node = &handler.definition().node;
+            let expected = if node.changes_context {
+                ActionEffect::Modifies
+            } else {
+                ActionEffect::ReadOnly
+            };
+            assert_eq!(node.effect, expected, "{}", handler.definition().id);
+        }
+    }
+
+    #[test]
     fn the_catalog_is_generic() {
         let ids: Vec<_> = handlers(true)
             .iter()
@@ -596,8 +615,10 @@ mod tests {
         let previous = Step::new(CycleDirection::Previous, false);
         let result = run(&next, &ActionParameters::new(), Some(2));
         assert_eq!(result.message, "already at the last project");
+        assert_eq!(result.code.as_deref(), Some("at-last-project"));
         assert_eq!(result.effects, Vec::new());
-        assert!(!run(&previous, &ActionParameters::new(), Some(0)).is_success());
+        let first = run(&previous, &ActionParameters::new(), Some(0));
+        assert_eq!(first.code.as_deref(), Some("at-first-project"));
         assert_eq!(switched_to(&next, Some(1)).as_deref(), Some("CMS"));
     }
 
@@ -608,6 +629,7 @@ mod tests {
         let next = Step::new(CycleDirection::Next, true);
         let result = run_in(&profile, &machine, &next, &ActionParameters::new(), None);
         assert_eq!(result.message, "this profile has no projects");
+        assert_eq!(result.code.as_deref(), Some("no-projects"));
     }
 
     #[test]
@@ -620,6 +642,7 @@ mod tests {
 
         let none = run(&Select::new(), &ActionParameters::new(), None);
         assert_eq!(none.message, "no project is active");
+        assert_eq!(none.code.as_deref(), Some("no-active-project"));
     }
 
     #[test]
@@ -646,6 +669,7 @@ mod tests {
             result.message,
             "the project does not belong to the active profile"
         );
+        assert_eq!(result.code.as_deref(), Some("project-not-in-profile"));
         assert_eq!(result.effects, Vec::new());
     }
 
@@ -728,6 +752,7 @@ mod tests {
             "{}",
             unbound.message
         );
+        assert_eq!(unbound.code.as_deref(), Some("resource-unbound"));
         // CMS has no documentation resource at all.
         let undefined = run(
             &ProjectResource::documentation(),
@@ -739,12 +764,14 @@ mod tests {
             "{}",
             undefined.message
         );
+        assert_eq!(undefined.code.as_deref(), Some("resource-role-missing"));
         let no_project = run(
             &ProjectResource::repository(),
             &ActionParameters::new(),
             None,
         );
         assert_eq!(no_project.message, "no project is active");
+        assert_eq!(no_project.code.as_deref(), Some("no-active-project"));
 
         let (profile, machine) = fixture();
         let (other, _) = fixture();
@@ -771,6 +798,7 @@ mod tests {
         let result = ProjectResource::repository().execute(&ActionParameters::new(), &context);
         assert!(!result.is_success());
         assert!(result.message.contains("not allowed"), "{}", result.message);
+        assert_eq!(result.code.as_deref(), Some("not-permitted"));
     }
 
     #[test]

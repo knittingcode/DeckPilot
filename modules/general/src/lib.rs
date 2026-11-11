@@ -111,7 +111,13 @@ impl LogMessage {
                 default: None,
             }],
             requires_project: false,
-            node: deckpilot_core::graph::NodeSpec::default(),
+            // Only produces a message from its inputs: safe to repeat.
+            node: deckpilot_core::graph::NodeSpec {
+                icon: Some("message-square".into()),
+                retry_safe: true,
+                idempotent: true,
+                ..deckpilot_core::graph::NodeSpec::default()
+            },
         })
     }
 }
@@ -140,7 +146,8 @@ impl ActionHandler for LogMessage {
         let mut output = template.replace("{profile}", &profile.name);
         if output.contains("{project.") {
             let Some(project) = project else {
-                return ActionResult::failure(
+                return ActionResult::error(
+                    "no-active-project",
                     "message refers to the active project, but none is active",
                 );
             };
