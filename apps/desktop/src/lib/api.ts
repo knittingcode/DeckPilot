@@ -7,6 +7,8 @@ import type {
   ActionType,
   AgentConnection,
   ControlFace,
+  Conversion,
+  GraphIssue,
   ExecutionRecord,
   ExecutionSummary,
   DeviceLayout,
@@ -146,6 +148,10 @@ export const api = {
     invoke<Workflow>("duplicate_workflow", { profileId, workflowId, name }),
   deleteWorkflow: (profileId: string, workflowId: string) =>
     invoke<null>("delete_workflow", { profileId, workflowId }),
+  validateWorkflowGraph: (profileId: string, workflow: Workflow) =>
+    invoke<GraphIssue[]>("validate_workflow_graph", { profileId, workflow }),
+  convertWorkflow: (profileId: string, workflow: Workflow) =>
+    invoke<Conversion>("convert_workflow", { profileId, workflow }),
   startWorkflow: (profileId: string, workflowId: string) =>
     invoke<ExecutionSummary>("start_workflow", { profileId, workflowId }),
   cancelExecution: (executionId: string) => invoke<null>("cancel_execution", { executionId }),

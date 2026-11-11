@@ -22,8 +22,12 @@ as the notes of its GitHub release and of the in-app update.
   update downloads and workflow runs, and notifications.
 - Workflow graphs (engine): conditions, parallel branches with joins,
   bounded loops, delays, retries, timeouts, cancellation and data passed
-  between steps. Existing workflows keep running unchanged. The visual
-  editor follows.
+  between steps. Existing workflows keep running unchanged.
+- A visual workflow editor: a searchable catalog of flow nodes and module
+  actions, drag and drop, typed connections, a node inspector with data
+  mapping, retries and timeouts, undo and redo, copy and paste, automatic
+  arrangement, a minimap, and the engine's validation shown on the nodes.
+  Step-based workflows can be opened in the editor; their steps are kept.
 - Workflows run in the background agent, also while the app is closed, with
   live progress, cancellation and an execution history kept in the
   encrypted database. Runs interrupted by an agent restart are marked as
