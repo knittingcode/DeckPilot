@@ -186,6 +186,23 @@ mod tests {
     }
 
     #[test]
+    fn responses_that_are_not_manifests_are_errors() {
+        // What arrives offline, behind a captive portal or after an
+        // interrupted download: never an update.
+        for body in [
+            "",
+            "<html><body>Sign in to the network</body></html>",
+            r#"{"version": "1.0.0", "platforms": {"linux-x86_64": {"signature": "#,
+            r#"{"version": "1.0.0"}"#,
+        ] {
+            assert!(
+                matches!(Manifest::parse(body), Err(ManifestError::Json(_))),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
     fn rejects_untrusted_or_incomplete_manifests() {
         let current = Version::parse("0.3.0").unwrap();
         for bad in [
