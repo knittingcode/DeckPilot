@@ -929,6 +929,7 @@ name = "deckpilot-agent"
 version = "0.6.0"
 dependencies = [
  "auto-launch",
+ "chrono",
  "deckpilot-core",
  "deckpilot-device",
  "deckpilot-hid",
