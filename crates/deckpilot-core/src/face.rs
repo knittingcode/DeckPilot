@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::Project;
+use crate::{ButtonState, Indicator, Project, StateSnapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +32,16 @@ pub struct KeyFace {
     /// Marks a key whose target is currently active.
     #[serde(default)]
     pub highlighted: bool,
+    /// Live status mark from the key's [`ButtonState`] (or the agent, e.g.
+    /// a running workflow).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indicator: Option<Indicator>,
+    /// 0–100, drawn as a bar along the bottom edge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<u8>,
+    /// On/off state of a toggle-like action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toggle: Option<bool>,
 }
 
 impl KeyFace {
@@ -41,6 +51,9 @@ impl KeyFace {
             title: String::new(),
             detail: None,
             highlighted: false,
+            indicator: None,
+            progress: None,
+            toggle: None,
         }
     }
 
@@ -50,6 +63,9 @@ impl KeyFace {
             title: title.into(),
             detail: None,
             highlighted: false,
+            indicator: None,
+            progress: None,
+            toggle: None,
         }
     }
 
@@ -65,8 +81,62 @@ impl KeyFace {
         self
     }
 
+    #[must_use]
+    pub fn with_indicator(mut self, indicator: Indicator) -> Self {
+        self.indicator = Some(indicator);
+        self
+    }
+
+    #[must_use]
+    pub fn with_progress(mut self, percent: Option<u8>) -> Self {
+        self.progress = percent.map(|p| p.min(100));
+        self
+    }
+
     pub fn is_empty(&self) -> bool {
         self.style == FaceStyle::Empty
+    }
+
+    /// The face with a module-provided state applied: its label and detail
+    /// replace the title and secondary line, and its indicator, progress
+    /// and toggle are added. Empty and notice faces stay as they are.
+    #[must_use]
+    pub fn with_state(mut self, state: &ButtonState) -> Self {
+        if matches!(self.style, FaceStyle::Empty | FaceStyle::Notice) {
+            return self;
+        }
+        if let Some(label) = &state.label {
+            self.title.clone_from(label);
+        }
+        if let Some(detail) = &state.detail {
+            self.detail = Some(detail.clone());
+        }
+        self.indicator = state.indicator.or(self.indicator);
+        self.progress = state.progress.map(|p| p.min(100)).or(self.progress);
+        self.toggle = state.toggle.or(self.toggle);
+        self
+    }
+
+    /// The face for what the agent knows about the key's state: a loading
+    /// mark while the first state is pending, the state once it arrived, an
+    /// error mark (and `Error` as the secondary line, unless the face has
+    /// one) when it could not be determined.
+    #[must_use]
+    pub fn with_snapshot(self, snapshot: &StateSnapshot) -> Self {
+        if matches!(self.style, FaceStyle::Empty | FaceStyle::Notice) {
+            return self;
+        }
+        match snapshot {
+            StateSnapshot::Loading => self.with_indicator(Indicator::Loading),
+            StateSnapshot::Ready { state } => self.with_state(state),
+            StateSnapshot::Failed { .. } => {
+                let mut face = self.with_indicator(Indicator::Error);
+                if face.detail.is_none() {
+                    face.detail = Some("Error".into());
+                }
+                face
+            }
+        }
     }
 }
 
@@ -101,5 +171,49 @@ mod tests {
             "Work: -"
         );
         assert_eq!(render_label("Plain", "Work", None), "Plain");
+    }
+
+    #[test]
+    fn states_decorate_faces() {
+        let face = KeyFace::new(FaceStyle::Action, "Repo").with_detail("SHOP");
+        let ready = face.clone().with_snapshot(&StateSnapshot::Ready {
+            state: ButtonState::new()
+                .with_label("main")
+                .with_indicator(Indicator::Warning)
+                .with_progress(150)
+                .with_toggle(true),
+        });
+        assert_eq!(ready.title, "main");
+        assert_eq!(ready.detail.as_deref(), Some("SHOP"));
+        assert_eq!(ready.indicator, Some(Indicator::Warning));
+        assert_eq!(ready.progress, Some(100));
+        assert_eq!(ready.toggle, Some(true));
+
+        let loading = face.clone().with_snapshot(&StateSnapshot::Loading);
+        assert_eq!(loading.indicator, Some(Indicator::Loading));
+        assert_eq!(loading.title, "Repo");
+
+        let failed =
+            KeyFace::new(FaceStyle::Action, "Repo").with_snapshot(&StateSnapshot::Failed {
+                error: crate::StateError::new("x", "broken"),
+            });
+        assert_eq!(failed.indicator, Some(Indicator::Error));
+        assert_eq!(failed.detail.as_deref(), Some("Error"));
+
+        let notice =
+            KeyFace::new(FaceStyle::Notice, "Locked").with_snapshot(&StateSnapshot::Loading);
+        assert_eq!(notice.indicator, None);
+    }
+
+    #[test]
+    fn faces_without_state_serialize_as_before() {
+        let face = KeyFace::new(FaceStyle::Action, "A");
+        assert_eq!(
+            serde_json::to_value(&face).unwrap(),
+            serde_json::json!({"style": "action", "title": "A", "highlighted": false})
+        );
+        let old: KeyFace =
+            serde_json::from_value(serde_json::json!({"style": "action", "title": "A"})).unwrap();
+        assert_eq!(old, face);
     }
 }
