@@ -34,6 +34,7 @@ use crate::render;
 
 mod executions;
 mod security;
+mod states;
 mod triggers;
 
 pub use security::{AUTO_LOCK_CHECK, Clock, system_clock};
@@ -42,6 +43,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_BRIGHTNESS: u8 = 60;
 /// How long stopping waits for the IPC server to close its connections.
 const SERVER_STOP: Duration = Duration::from_secs(2);
+/// Rendered key images kept for reuse (about 15 KB each at 72 x 72).
+const FRAME_CACHE: usize = 256;
 
 /// Opens the configuration application.
 pub type DesktopOpener = Box<dyn Fn() -> Result<(), String> + Send>;
@@ -130,6 +133,8 @@ pub(crate) enum Command {
     RetrySystemKey,
     /// Progress or the end of a workflow running in the background.
     Execution(executions::ExecutionUpdate),
+    /// A module's answer for a key's live state.
+    ButtonState(states::StateUpdate),
 }
 
 /// Cloneable access to a running agent.
@@ -213,6 +218,10 @@ pub struct Agent {
     executions: executions::Executions,
     /// Schedules and lifecycle events that start workflows.
     triggers: triggers::Triggers,
+    /// Live key states from module providers.
+    states: states::ButtonStates,
+    /// Rendered key images by face and size.
+    frames: render::FrameCache,
     handle: AgentHandle,
     commands: mpsc::UnboundedReceiver<Command>,
     signals_tx: mpsc::UnboundedSender<DeviceSignal>,
@@ -302,6 +311,8 @@ impl Agent {
             last_unlock_prompt: None,
             executions: executions::Executions::default(),
             triggers: triggers::Triggers::default(),
+            states: states::ButtonStates::default(),
+            frames: render::FrameCache::new(FRAME_CACHE),
             handle,
             commands,
             signals_tx,
@@ -333,6 +344,12 @@ impl Agent {
         auto_lock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         auto_lock.reset();
         loop {
+            // Sleeps until the next key state is due; nothing polls per
+            // frame.
+            let state_due = self.next_state_due().map_or_else(
+                || tokio::time::Instant::now() + Duration::from_secs(3600),
+                tokio::time::Instant::from_std,
+            );
             let flow = tokio::select! {
                 () = &mut shutdown => Flow::Stop,
                 Some(command) = self.commands.recv() => self.handle_command(command),
@@ -350,6 +367,10 @@ impl Agent {
                     self.tick_schedules();
                     Flow::Continue
                 }
+                () = tokio::time::sleep_until(state_due) => {
+                    self.refresh_states();
+                    Flow::Continue
+                }
             };
             if matches!(flow, Flow::Stop) {
                 break;
@@ -362,6 +383,7 @@ impl Agent {
 
     async fn stop(mut self) {
         info!("agent shutting down");
+        self.states.reset();
         self.interrupt_executions();
         let _ = self.handle.events.send(AgentEvent::ShuttingDown);
         let _ = self.shutdown_tx.send(true);
@@ -402,6 +424,10 @@ impl Agent {
             }
             Command::Execution(update) => {
                 self.handle_execution(update);
+                Flow::Continue
+            }
+            Command::ButtonState(update) => {
+                self.handle_button_state(update);
                 Flow::Continue
             }
             Command::Request {
@@ -737,6 +763,7 @@ impl Agent {
             .map_err(|e| storage_error(&e))?;
         let project = store.active_project(id).map_err(|e| storage_error(&e))?;
         info!(profile = %profile.name, "profile activated");
+        self.states.reset();
         self.runtime.set_profile(Some(profile), project);
         self.persisted_project = self.runtime.active_project_id();
         self.after_change();
@@ -803,6 +830,9 @@ impl Agent {
                 .with_credentials(std::sync::Arc::new(credentials))
                 .with_notifier(std::sync::Arc::new(notifier)),
         );
+        // Actions, their modules or bindings may have changed: running
+        // state calls are cancelled and cached states dropped.
+        self.states.reset();
         match profile {
             Some(profile) if self.runtime.profile().is_some_and(|p| p.id == profile.id) => {
                 self.runtime.reload_profile(profile);
@@ -830,11 +860,21 @@ impl Agent {
                 Err(error) => warn!(%error, "cannot persist the active project"),
             }
         }
+        // Something happened: live states may refresh once their
+        // interval allows.
+        self.states.invalidate();
+        self.render_all();
+        self.publish();
+    }
+
+    /// Redraws the keys of every device whose face changed and starts the
+    /// key state calls that are due.
+    fn render_all(&mut self) {
         let devices: Vec<DeviceId> = self.sessions.keys().cloned().collect();
         for device in devices {
             self.render(&device, false);
         }
-        self.publish();
+        self.refresh_states();
     }
 
     fn report_action(&self, action: ActionInstanceId, result: &ActionResult) {
@@ -920,6 +960,7 @@ impl Agent {
         for device in devices {
             self.render(&device, true);
         }
+        self.refresh_states();
         self.publish();
     }
 
@@ -984,6 +1025,7 @@ impl Agent {
         });
         info!(%device, "device connected");
         self.render(&device, true);
+        self.refresh_states();
         self.publish();
     }
 
@@ -991,6 +1033,7 @@ impl Agent {
         if let Some(session) = self.sessions.remove(device) {
             session.io.close(Vec::new());
         }
+        self.states.forget_device(device);
         let _ = self.runtime.handle_event(&DeviceEvent::Disconnected {
             device: device.clone(),
         });
@@ -998,9 +1041,14 @@ impl Agent {
         self.publish();
     }
 
-    /// Sends images for every control whose face changed (or all, if `force`).
+    /// Sends images for every control whose face changed (or all, if
+    /// `force`). Faces include live states; images come from the frame
+    /// cache, so only new faces are drawn.
     fn render(&mut self, device: &DeviceId, force: bool) {
-        let faces = self.runtime.faces(device);
+        let mut faces = self.runtime.faces(device);
+        if self.sessions.contains_key(device) {
+            self.decorate_faces(device, &mut faces, std::time::Instant::now());
+        }
         let Some(model) = self.runtime.catalog().get(&device.model) else {
             return;
         };
@@ -1019,7 +1067,8 @@ impl Agent {
                 ControlId::Encoder { .. } => None,
             };
             let Some(spec) = size else { continue };
-            let frame = (!face.is_empty()).then(|| render::render(&face, spec.width, spec.height));
+            let frame =
+                (!face.is_empty()).then(|| self.frames.frame(&face, spec.width, spec.height));
             updates.push((control, frame));
             session.rendered.insert(control, face);
         }

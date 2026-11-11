@@ -18,6 +18,7 @@
 pub mod actions;
 pub mod porcelain;
 pub mod repo;
+pub mod state;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

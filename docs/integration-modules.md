@@ -135,6 +135,12 @@ the index, so reading never writes to the repository; turning off
 program. Credentials in URLs are removed from error messages. Local
 commands are limited to 30 s; actions are cancellable.
 
+**Key state.** Keys running `git.status` show the branch and a green
+(clean), amber (uncommitted changes) or red (conflicts) mark; `git.branch`
+keys show the branch. The repository is read with the same local `git
+status` at most every 30 s while the key is shown (see
+[Button state](modules.md#button-state)).
+
 Error codes: `not-found`, `not-a-repository`, `unsafe-repository`,
 `git-not-found`, `git-failed`, `project-not-in-profile`, `no-commits`,
 `no-remote`, `network-failed`, and the shared codes.
@@ -199,6 +205,13 @@ is stopped with its process group. Cancelling `compose up` or `down`
 partway leaves the project as far as Compose got; running the action again
 completes it (both are retry-safe and idempotent). Reading commands are
 limited to 30 s, changes to the module's time limit.
+
+**Key state.** Keys show whether Docker is available (`docker.status`),
+how many containers run (`docker.containers`) and how many of a Compose
+project's containers are up (`docker.compose-*`; up and down keys also as a
+toggle), read with `docker version`, `docker ps` or `docker compose ps` at
+most every 30 s while the key is shown. Reading the state never starts or
+stops anything and needs no permission to change containers.
 
 Error codes: `docker-not-found`, `daemon-unavailable`, `permission-denied`,
 `context-not-found`, `compose-unavailable`, `compose-file-not-found`,
@@ -271,6 +284,93 @@ Error codes: `invalid-url`, `credentials-in-url`, `invalid-header`,
 `insecure-redirect`, `insecure-credentials`, `request-failed`,
 `http-status`, `invalid-response`, `unhealthy`, `credential-missing`, and
 the shared codes.
+
+## GitHub (`github`)
+
+Reads the signed-in user, repositories, open pull requests, review requests
+and checks from GitHub or GitHub Enterprise, and opens GitHub pages. It is
+read-only: only `GET` requests are sent, and there are no actions that
+comment, approve, merge or change anything.
+
+Capabilities: send network requests, use stored credentials, open pages.
+
+Settings: **API URL** (`apiUrl`, `https://api.github.com`; for GitHub
+Enterprise Server `https://<host>/api/v3`; machine-specific), **Token
+credential** (`credential`, the *name* of a stored credential, default
+`github.token`; portable), **Time limit** (`timeoutSeconds`, 1–120, 20; for
+all requests of one action) and **API host may be on a private network**
+(`allowPrivateHost`, off; machine-specific).
+
+**Token.** Store a GitHub token (a fine-grained token with read access is
+enough) as a credential in Settings › HTTP › Credentials and name it in the
+module's settings, or per action in `credential`. The token is read through
+the credential store only, sent as `Authorization: Bearer` to the API host,
+and never appears in parameters, settings, exports, outputs, messages or
+logs; every result is also checked for it and any appearance is replaced by
+`[redacted]` (even when a server repeats it).
+
+| Action type | Effect | Parameters | Outputs |
+| ----------- | ------ | ---------- | ------- |
+| `github.current-user` | read-only | — | `login`, `name`, `url`, `rateLimitRemaining` |
+| `github.repository` | read-only | `repository` (owner/name) | `fullName`, `description`*, `defaultBranch`, `private`, `archived`, `openIssues` (issues and pull requests), `stars`, `forks`, `url`, `pushedAt` |
+| `github.pull-requests` | read-only | `repository` (optional), `filter` (`all`, `author-me`, `review-requested`; `all` needs a repository), `limit` (1–100, 20) | `count`, `listed`, `items`*, `truncated`, `firstUrl` |
+| `github.review-requests` | read-only | `repository` (optional), `limit` (1–100, 20) | same as `github.pull-requests` |
+| `github.checks` | read-only | `repository`, `ref` (branch, tag or commit) or `pullRequest` (number) | `state` (`ok`, `failing`, `pending`, `none`), `sha`, `total`, `passed`, `failed`, `pending`, `failing` (names, one per line), `truncated`, `url` |
+| `github.open` | opens | `url`, or `repository` with optional `pullRequest` | `url` |
+
+Every reading action also takes `credential` (a stored credential's name;
+empty uses the module's). \* sensitive: available to later nodes, not kept.
+
+**Pull requests** come from GitHub's search (`is:pr is:open`, with
+`repo:`, `author:@me` or `review-requested:@me`; across repositories
+archived ones are left out). `count` is GitHub's total; `items` lists at
+most `limit` of them, most recently updated first, one per line as
+`owner/name#12 Title (@author)` (with `[draft]`), titles reduced to one
+plain line. Messages give counts only, never titles. Review requests
+include requests to your teams.
+
+**Checks** combine the commit's check runs (latest per check) and commit
+statuses. A check run passes when it succeeded, was neutral or skipped,
+is pending until completed, and fails otherwise (failure, cancelled, timed
+out, action required, stale); a status passes on success, is pending on
+pending and fails on failure or error. `state` is `failing` when anything
+failed, else `pending` when anything is pending, else `ok`, or `none` when
+the commit has no checks. With `pullRequest`, the pull request's latest
+commit is checked and `url` is the pull request's page.
+
+**Opening** accepts only `https` pages on the GitHub web host that belongs
+to the API (`github.com` for `api.github.com`, `<x>.ghe.com` for
+`api.<x>.ghe.com`, the same host for GitHub Enterprise Server); other hosts,
+schemes and URLs with user names fail with `url-not-allowed`.
+
+**Network.** Requests go through the HTTP module's client and network
+policy: the API host's addresses are checked before connecting and
+redirects hop by hop; the token is sent only over `https` (or to this
+computer), never to another origin. A host on a private network (GitHub
+Enterprise Server inside a company network) needs **API host may be on a
+private network**, which allows only that host. Pages of a list are
+followed only on the API itself.
+
+**Limits.** Each answer is read up to 4 MiB; check runs and statuses are
+read for at most 5 pages of 100 (`truncated` tells when there were more).
+The time limit covers all requests of one action; cancelling the run stops
+the request at once.
+
+**Failures.** `unauthorized` (401: the token is wrong, expired or revoked),
+`forbidden` (403: e.g. a missing permission or SSO), `not-found` (404, which
+GitHub also answers for private repositories the token cannot see),
+`rate-limited` (primary or secondary rate limit; the result's data has
+`retryAfterSeconds`, from `Retry-After` or the limit's reset time),
+`github-error` (another status, with GitHub's message), and
+`credential-missing` when no token is stored under the name.
+
+Error codes: `invalid-api-url`, `invalid-repository`, `invalid-ref`,
+`unauthorized`, `forbidden`, `not-found`, `rate-limited`, `github-error`,
+`invalid-response`, `url-not-allowed`, `credential-missing`, the HTTP
+module's network codes (`blocked-address`, `dns-failed`,
+`connection-failed`, `tls-failed`, `insecure-credentials`,
+`too-many-redirects`, `insecure-redirect`, `request-failed`), and the
+shared codes.
 
 ## Notifications (`notifications`)
 
