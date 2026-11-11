@@ -168,7 +168,8 @@ as once. Informational for users and future replays.
 
 **Structured errors.** A failed node reports `StepError { code, message,
 retryable, actionCode }` with stable codes: `action.failed`, `timeout`,
-`cancelled`, `mapping`, `context-conflict`, `unavailable`, `loop.failed`.
+`cancelled`, `mapping`, `context-conflict`, `unavailable`, `loop.failed`,
+`subworkflow.failed`.
 For `action.failed`, `actionCode` is the action's own code
 (`ActionResult::error(code, message)`), documented by its module, e.g.
 `exit-nonzero`. Cancellation is
