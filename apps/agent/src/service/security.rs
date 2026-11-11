@@ -307,6 +307,7 @@ impl Agent {
     pub(super) fn lock(&mut self, reason: LockReason) {
         // Workflows do not keep running on a locked configuration.
         self.cancel_all_executions();
+        self.states.reset();
         self.store = None;
         self.key = None;
         self.security =
