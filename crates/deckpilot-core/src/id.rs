@@ -70,6 +70,10 @@ entity_id!(
     /// Identifies a page (or folder) within a layout.
     PageId
 );
+entity_id!(
+    /// Identifies one run of a workflow.
+    ExecutionId
+);
 
 /// Validates a dotted, lowercase identifier such as `deckpilot.core.log`.
 pub(crate) fn validate_dotted(

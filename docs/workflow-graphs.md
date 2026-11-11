@@ -122,9 +122,50 @@ A run produces a report with, per node, status, attempts, start and duration,
 message, outputs and error, and progress events (`nodeStarted`, `retrying`,
 `nodeFinished`) for visualization.
 
+## Running in the agent
+
+Workflows run in the background agent, whether they are started from the
+app, a Stream Deck control or another client; no window has to be open.
+
+- **Executions.** Every run gets an execution id. `startWorkflow` answers
+  immediately; `runWorkflow` (older clients) answers when the run ends. A
+  workflow runs at most once at a time, and at most four workflows run
+  together.
+- **Snapshot.** A run executes on its own thread with a copy of the active
+  profile, the machine configuration and the project selection, so the agent
+  keeps serving devices and requests, and configuration changes during a run
+  do not affect it. A project change the run makes is applied when it ends,
+  if the same profile is still active (with several runs, the last to finish
+  wins). Workflows without a graph run their steps, reported as nodes
+  `step_1`, `step_2`, … — the ids the graph conversion gives them.
+- **Progress.** Subscribers receive `executionStarted`, `executionProgress`
+  (a node started, finished or is retried, with resolved and total nodes) and
+  `executionFinished`. Progress is the share of resolved nodes, never an
+  estimate of time.
+- **Cancellation** (`cancelExecution`) stops a run before its next node or
+  attempt and interrupts delays and retry waits; an action already running
+  finishes. Locking the configuration cancels every run.
+- **History.** Runs are recorded in the encrypted database when they start
+  and when they end: state, trigger, times, progress and the report of every
+  node. The newest 50 runs per workflow and 500 per profile are kept;
+  `clearExecutionHistory` deletes them, and deleting a profile deletes its
+  history. Records are runtime state and are not exported.
+- **Interruption.** When the agent stops, running workflows are recorded as
+  interrupted. A run still marked running when the database is opened (the
+  agent crashed or the computer lost power) is marked interrupted then.
+- **Safe outputs.** Reports, events and records only contain the outputs the
+  node's action type declares in its node spec, and messages are shortened to
+  500 characters. Parameters and other action data are never recorded.
+- **Profiles.** Lists, details and cancellation are limited to the active
+  profile's runs.
+
+The configuration app reads the agent's list when it opens or the agent
+reconnects, so runs started from the deck or before the app restarted appear
+with their real progress; running workflows show in the status bar with
+progress and a Cancel button.
+
 ## Roadmap
 
-This is the first milestone (model, SDK, validation, conversion, engine).
-Next: running graphs in the agent with live progress, cancellation and a
-bounded execution history over IPC; the visual editor; execution
-visualization and status bar integration.
+This is the second milestone: the model, SDK and engine (first), and running
+graphs in the agent (second). Next: the visual editor, then execution
+visualization on the graph and a history view.

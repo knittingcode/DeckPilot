@@ -93,7 +93,7 @@ async fn authenticate(
     reader: &mut BufReader<SharedStream>,
     writer: &mut SharedStream,
     token: &str,
-) -> Option<ClientKind> {
+) -> Option<(ClientKind, u32)> {
     let hello = tokio::time::timeout(HELLO_TIMEOUT, read_message::<_, ClientMessage>(reader));
     let rejection = match hello.await {
         Ok(Ok(Some(ClientMessage::Hello {
@@ -114,7 +114,7 @@ async fn authenticate(
                     protocol: PROTOCOL_VERSION,
                     agent_version: VERSION.into(),
                 };
-                return send(writer, &welcome).await.then_some(client);
+                return send(writer, &welcome).await.then_some((client, protocol));
             }
         }
         Ok(Ok(Some(ClientMessage::Request { id, .. }))) => {
@@ -139,7 +139,7 @@ async fn serve(
     let mut reader = BufReader::new(stream.clone());
     let mut writer = stream;
 
-    let Some(client) = authenticate(&mut reader, &mut writer, &token).await else {
+    let Some((client, protocol)) = authenticate(&mut reader, &mut writer, &token).await else {
         return;
     };
 
@@ -166,6 +166,8 @@ async fn serve(
                 }
             }
             event = next_event(&mut events) => match event {
+                // Clients of an older protocol do not know newer events.
+                Ok(event) if event.since_protocol() > protocol => {}
                 Ok(event) => {
                     if !send(&mut writer, &ServerMessage::Event { event }).await {
                         break;
@@ -179,6 +181,9 @@ async fn serve(
                 // Deliver the final notifications before closing.
                 if let Some(events) = events.as_mut() {
                     while let Ok(event) = events.try_recv() {
+                        if event.since_protocol() > protocol {
+                            continue;
+                        }
                         send(&mut writer, &ServerMessage::Event { event }).await;
                     }
                 }

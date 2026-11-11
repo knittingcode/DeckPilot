@@ -16,6 +16,10 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 /// Event emitted to the frontend whenever the agent's state is known to change.
 pub const STATUS_EVENT: &str = "agent-status";
+/// Event with the progress of workflows running in the agent: the agent's
+/// execution events as they are (`executionStarted`, `executionProgress`,
+/// `executionFinished`).
+pub const EXECUTION_EVENT: &str = "workflow-execution";
 
 /// Overrides the agent executable.
 const AGENT_BIN_ENV: &str = "DECKPILOT_AGENT_BIN";
@@ -275,6 +279,11 @@ async fn subscribe<R: Runtime>(app: &AppHandle<R>, paths: &AgentPaths) -> Result
             }
             AgentEvent::ShuttingDown => return Ok(()),
             AgentEvent::ActionCompleted { .. } => {}
+            event @ (AgentEvent::ExecutionStarted { .. }
+            | AgentEvent::ExecutionProgress { .. }
+            | AgentEvent::ExecutionFinished { .. }) => {
+                let _ = app.emit(EXECUTION_EVENT, event);
+            }
         }
     }
 }

@@ -37,21 +37,18 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useAsync } from "@/hooks/use-async"
+import { useExecutions } from "@/hooks/use-executions"
 import { useEditingProfile } from "@/hooks/use-profile"
 import { api, errorMessage } from "@/lib/api"
-import { useStatus } from "@/hooks/use-status"
+import { useSnapshot } from "@/hooks/use-status"
+import { EXECUTION_STATE_LABEL, ExecutionStore } from "@/lib/executions"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { useAppContext } from "@/lib/app-context"
 import { ActionIcon } from "@/components/action-icon"
 import { initialValue } from "@/lib/parameters"
-import type {
-  ActionType,
-  ProfileView,
-  StepCondition,
-  Workflow,
-  WorkflowReport,
-  WorkflowStep,
-} from "@/lib/types"
+import type { ActionType, ProfileView, StepCondition, Workflow, WorkflowStep } from "@/lib/types"
+
+const NO_EXECUTIONS = new ExecutionStore()
 import { cn } from "@/lib/utils"
 import {
   conditionAllowed,
@@ -195,15 +192,18 @@ function WorkflowEditor({
   const [workflow, setWorkflow] = useState<Workflow>(initial)
   const [addAction, setAddAction] = useState("")
   const [errors, setErrors] = useState<string[]>([])
-  const [report, setReport] = useState<WorkflowReport | null>(null)
+  const executions = useExecutions()
+  const runs = useSnapshot(executions ?? NO_EXECUTIONS)
+  // The newest run of this workflow, wherever it was started.
+  const lastRun = ExecutionStore.ofProfile(runs, profileId).find((r) => r.workflow === workflow.id)
+  const running = lastRun?.state === "running"
+  const [starting, setStarting] = useState(false)
   const actions = view.profile.actions
   const actionIds = new Set(actions.map((a) => a.id))
   const dirty = JSON.stringify(workflow) !== JSON.stringify(initial)
   const canRun =
     !isNew && !dirty && Boolean(agent?.running) && profiles.activeProfileId === profileId
   const usages = view.workflowUsages[workflow.id] ?? []
-  const [running, setRunning] = useState(false)
-  const status = useStatus()
   // Runs the saved workflow of the editor; shown in the titlebar.
   useTitlebar({
     actions: isNew
@@ -214,43 +214,23 @@ function WorkflowEditor({
             label: "Run workflow",
             icon: Play,
             placement: "primary",
-            disabled: !canRun || running,
-            busy: running,
+            disabled: !canRun || running || starting,
+            busy: running || starting,
             hint: canRun
               ? `Run “${initial.name}”`
               : "Save first; runs in the agent for the active profile",
+            // Runs in the agent in the background; progress and the
+            // result arrive as execution events (status bar, below).
             onSelect: () => {
-              setRunning(true)
-              const operation = `workflow:${workflow.id}`
-              status?.operations.start({
-                id: operation,
-                kind: "workflow",
-                title: `Running “${initial.name}”`,
-              })
+              setStarting(true)
               api
-                .runWorkflow(profileId, workflow.id)
-                .then((result) => {
-                  setReport(result)
-                  const failed = result.status === "failed"
-                  status?.operations.finish(
-                    operation,
-                    failed ? { error: "A step failed; see the report" } : {},
-                  )
-                  if (failed) {
-                    status?.notifications.notify({
-                      key: `workflow.${workflow.id}.failed`,
-                      severity: "error",
-                      title: `Workflow “${initial.name}” failed`,
-                      message: "Open Workflows to see which step failed.",
-                    })
-                  }
-                })
+                .startWorkflow(profileId, workflow.id)
+                .then((execution) => executions?.apply({ type: "executionStarted", execution }))
                 .catch((e: unknown) => {
-                  status?.operations.finish(operation, { error: "Could not run the workflow" })
                   toast.error(errorMessage(e))
                 })
                 .finally(() => {
-                  setRunning(false)
+                  setStarting(false)
                 })
             },
           },
@@ -420,14 +400,18 @@ function WorkflowEditor({
           )}
         </div>
 
-        {report && (
+        {lastRun && (
           <div className="grid gap-1 rounded-md bg-muted p-3 text-xs" role="status">
-            <p className="font-medium">Result: {report.status}</p>
+            <p className="font-medium">
+              Last run: {EXECUTION_STATE_LABEL[lastRun.state]}
+              {lastRun.state === "running" && ` (${lastRun.completedNodes}/${lastRun.totalNodes})`}
+              {lastRun.message ? ` — ${lastRun.message}` : ""}
+            </p>
             <ol className="grid gap-0.5 font-mono">
-              {report.steps.map((step, index) => (
-                <li key={index}>
-                  {index + 1}. {actions.find((a) => a.id === step.action)?.name ?? "?"} —{" "}
-                  {step.result.status}: {step.result.message}
+              {lastRun.nodes.map((node) => (
+                <li key={node.node}>
+                  {actions.find((a) => a.id === node.action)?.name ?? node.node} — {node.status}
+                  {node.message ? `: ${node.message}` : ""}
                 </li>
               ))}
             </ol>

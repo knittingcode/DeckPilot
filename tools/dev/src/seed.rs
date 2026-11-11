@@ -197,6 +197,9 @@ fn work_actions(b: &mut Builder<'_>) -> Result<WorkIds> {
     };
     let start_id = start.id;
     b.profile.workflows.push(start);
+    b.profile
+        .workflows
+        .push(check_workflow(announce, repository, docs));
     Ok(WorkIds {
         next,
         previous,
@@ -207,6 +210,42 @@ fn work_actions(b: &mut Builder<'_>) -> Result<WorkIds> {
         shop_repository,
         start: start_id,
     })
+}
+
+/// A graph workflow: announce, resolve repository and documentation in
+/// parallel, then wait a few seconds, long enough to watch it run.
+fn check_workflow(
+    announce: ActionInstanceId,
+    repository: ActionInstanceId,
+    docs: ActionInstanceId,
+) -> Workflow {
+    let nodes = serde_json::json!([
+        {"id": "start", "type": "trigger", "position": {"x": 0, "y": 140}},
+        {"id": "announce", "type": "action", "action": announce, "position": {"x": 260, "y": 140}},
+        {"id": "fork", "type": "parallel", "position": {"x": 520, "y": 140}},
+        {"id": "repository", "type": "action", "action": repository, "position": {"x": 780, "y": 40},
+         "policy": {"onError": "continue"}},
+        {"id": "docs", "type": "action", "action": docs, "position": {"x": 780, "y": 240},
+         "policy": {"onError": "continue"}},
+        {"id": "both", "type": "join", "position": {"x": 1040, "y": 140}},
+        {"id": "settle", "type": "delay", "ms": 8000, "label": "Settle", "position": {"x": 1300, "y": 140}},
+    ]);
+    let edges = serde_json::json!([
+        {"from": "start", "to": "announce"},
+        {"from": "announce", "to": "fork"},
+        {"from": "fork", "to": "repository"},
+        {"from": "fork", "to": "docs"},
+        {"from": "repository", "to": "both"},
+        {"from": "docs", "to": "both"},
+        {"from": "both", "to": "settle"},
+    ]);
+    let mut workflow = Workflow::new("Project check");
+    workflow.description = "Announce, resolve resources in parallel, then wait".into();
+    workflow.graph = Some(
+        serde_json::from_value(serde_json::json!({"version": 1, "nodes": nodes, "edges": edges}))
+            .expect("the demonstration graph is valid"),
+    );
+    workflow
 }
 
 /// MK.2: project switcher, selectors, workflow and a folder.
@@ -559,6 +598,15 @@ mod tests {
             work.validate(&catalog)
         );
         assert_eq!(personal.validate(&catalog), Vec::new());
+        // The graph workflow runs: no validation errors.
+        let check = work
+            .workflows
+            .iter()
+            .find(|w| w.graph.is_some())
+            .expect("a graph workflow");
+        let engine = deckpilot_core::Engine::new(registry);
+        assert_eq!(engine.check_runnable(&work, check.id), Ok(()));
+        let registry = engine.registry();
         assert_eq!(work.layouts.len(), 3);
         assert_eq!(work.workflows[0].name, personal.workflows[0].name);
         assert_ne!(work.workflows[0].id, personal.workflows[0].id);

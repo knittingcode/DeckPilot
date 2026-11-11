@@ -60,7 +60,7 @@ function appearance(value: unknown) {
 }
 
 /** Keyed values with change notification; the base of the stores below. */
-class Store<T> {
+export class Store<T> {
   protected values = new Map<string, T>()
   private listeners = new Set<Listener>()
   private snapshot: T[] = []
@@ -107,7 +107,7 @@ export class StatusItemStore extends Store<StatusItem> {
   }
 }
 
-export type OperationStatus = "running" | "succeeded" | "failed"
+export type OperationStatus = "running" | "succeeded" | "failed" | "cancelled"
 
 export interface Operation {
   /** Stable for the operation, e.g. `update.download`, `workflow:<id>`. */
@@ -138,12 +138,14 @@ export class OperationStore extends Store<Operation> {
     this.now = now
   }
 
-  start(operation: Omit<Operation, "status" | "startedAt">) {
+  /** Starts (or updates) an operation; `startedAt` defaults to now. */
+  start(operation: Omit<Operation, "status" | "startedAt"> & { startedAt?: number }) {
     const previous = this.get(operation.id)
     this.put(operation.id, {
       ...operation,
       status: "running",
-      startedAt: previous?.status === "running" ? previous.startedAt : this.now(),
+      startedAt:
+        operation.startedAt ?? (previous?.status === "running" ? previous.startedAt : this.now()),
     })
   }
 
@@ -155,12 +157,12 @@ export class OperationStore extends Store<Operation> {
     if (current?.status === "running") this.put(id, { ...current, ...change })
   }
 
-  finish(id: string, result: { error?: string } = {}) {
+  finish(id: string, result: { error?: string; cancelled?: boolean } = {}) {
     const current = this.get(id)
     if (!current) return
     this.put(id, {
       ...current,
-      status: result.error ? "failed" : "succeeded",
+      status: result.cancelled ? "cancelled" : result.error ? "failed" : "succeeded",
       error: result.error,
       finishedAt: this.now(),
       cancel: undefined,

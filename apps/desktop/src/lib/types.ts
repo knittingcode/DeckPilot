@@ -258,6 +258,70 @@ export interface WorkflowReport {
   steps: StepReport[]
 }
 
+export type NodeStatus = "succeeded" | "failed" | "skipped" | "cancelled"
+
+/** A failure, safe to show: no secrets, no raw output. */
+export interface StepError {
+  /** `action.failed`, `timeout`, `cancelled`, `mapping`, `parallel-context`, `unavailable`, `loop.failed`. */
+  code: string
+  message: string
+  retryable: boolean
+}
+
+export interface NodeReport {
+  node: string
+  status: NodeStatus
+  attempts: number
+  /** Milliseconds after the start of the run. */
+  startedMs: number
+  durationMs: number
+  message?: string
+  /** Outputs the node's action type declares; nothing else is reported. */
+  output?: Record<string, string>
+  error?: StepError
+  action?: string
+}
+
+export type ExecutionState = "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
+export type ExecutionTrigger = "app" | "device"
+
+export interface ExecutionSummary {
+  id: string
+  workflow: string
+  workflowName: string
+  profile: string
+  trigger: ExecutionTrigger
+  state: ExecutionState
+  /** Milliseconds since the Unix epoch. */
+  startedAt: number
+  finishedAt?: number
+  totalNodes: number
+  completedNodes: number
+  runningNodes?: string[]
+  message?: string
+}
+
+export interface ExecutionRecord extends ExecutionSummary {
+  nodes: NodeReport[]
+}
+
+export type ExecutionEvent =
+  | { type: "nodeStarted"; node: string }
+  | { type: "retrying"; node: string; attempt: number; waitMs: number }
+  | { type: "nodeFinished"; report: NodeReport }
+
+/** Payload of {@link EXECUTION_EVENT}: the agent's execution events. */
+export type AgentExecutionEvent =
+  | { type: "executionStarted"; execution: ExecutionSummary }
+  | {
+      type: "executionProgress"
+      execution: string
+      event: ExecutionEvent
+      completed: number
+      total: number
+    }
+  | { type: "executionFinished"; execution: ExecutionSummary }
+
 export interface MachineResourceBinding {
   key: string
   kind: ResourceKind

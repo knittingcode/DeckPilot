@@ -305,6 +305,8 @@ impl Agent {
 
     /// Closes the database and forgets the key. Devices show "Locked".
     pub(super) fn lock(&mut self, reason: LockReason) {
+        // Workflows do not keep running on a locked configuration.
+        self.cancel_all_executions();
         self.store = None;
         self.key = None;
         self.security =

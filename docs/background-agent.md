@@ -158,17 +158,24 @@ Requests (`crates/deckpilot-ipc/src/protocol.rs`):
 | `reloadConfiguration`   | Re-read configuration after the app changed it       |
 | `setBrightness`         | 0–100                                                |
 | `getAutostart` / `setAutostart` | Start at login                               |
-| `runWorkflow`           | Run a workflow of the active profile (protocol 2)    |
+| `runWorkflow`           | Run a workflow and answer when it ends (protocol 2)  |
+| `startWorkflow`         | Start a workflow in the background (protocol 5)      |
+| `cancelExecution`       | Stop a running workflow between nodes (protocol 5)   |
+| `listExecutions` / `getExecution` | Running and recorded runs (protocol 5)     |
+| `clearExecutionHistory` | Delete recorded runs of the profile (protocol 5)     |
 | `prepareForUpdate`      | Release devices and exit for an update (protocol 2)  |
-| `subscribe`             | Receive `state`, `actionCompleted`, `showWindow`, `shuttingDown` events |
+| `subscribe`             | Receive `state`, `actionCompleted`, `showWindow`, `openWindow`, `shuttingDown` and `execution*` events |
 | `showWindow`            | Bring the configuration window to the front          |
 | `shutdown`              | Stop the agent gracefully                            |
 | `simulateInput`         | Inject input into a simulated device (`--mock-devices` only) |
 
-The current protocol is 3: action results only carry `selectProject`
-effects, and action types use module namespaces (`projects.next`). Project
-switching requests are refused while the projects module is disabled. The
-agent also accepts protocol 1 and 2 clients
+The current protocol is 5: workflows run in the background (see
+[Workflow graphs](workflow-graphs.md#running-in-the-agent)). Protocol 4 added
+the encrypted database; protocol 3 made action results only carry
+`selectProject` effects, with action types in module namespaces
+(`projects.next`). Project switching requests are refused while the projects
+module is disabled. Events are only sent to clients whose protocol has them.
+The agent also accepts protocol 1 and 2 clients
 (DeckPilot 0.2), so a newer configuration app can always stop an older agent
 during an update. The agent status includes the time of the last device input,
 which automatic updates use to wait until the deck is idle.

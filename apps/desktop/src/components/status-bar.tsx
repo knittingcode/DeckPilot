@@ -3,6 +3,7 @@ import {
   BellDot,
   CircleAlert,
   CircleCheck,
+  CircleSlash,
   Ellipsis,
   Info,
   Loader2,
@@ -225,6 +226,7 @@ function MiniProgress({ percent }: { percent: number }) {
 function operationText(operation: Operation) {
   if (operation.status === "failed") return `${operation.title} failed`
   if (operation.status === "succeeded") return `${operation.title} finished`
+  if (operation.status === "cancelled") return `${operation.title} cancelled`
   if (operation.total !== undefined && operation.completed !== undefined) {
     return `${operation.title} (${operation.completed}/${operation.total})`
   }
@@ -235,6 +237,7 @@ function OperationIcon({ operation }: { operation: Operation }) {
   if (operation.status === "failed") return <CircleAlert className="text-destructive" />
   if (operation.status === "succeeded")
     return <CircleCheck className="text-emerald-600 dark:text-emerald-400" />
+  if (operation.status === "cancelled") return <CircleSlash className="text-muted-foreground" />
   return <Loader2 className="animate-spin" />
 }
 

@@ -1689,3 +1689,344 @@ async fn a_missing_database_is_reported_not_replaced() {
     assert_eq!(keys.ids().len(), 1);
     stop_agent(&paths, running).await;
 }
+
+/// A graph workflow that waits `ms` and then announces the project.
+fn waiting_workflow(profile: &Profile, ms: u32) -> deckpilot_core::Workflow {
+    let mut workflow = deckpilot_core::Workflow::new("Wait and announce");
+    workflow.graph = Some(
+        serde_json::from_value(json!({
+            "version": 1,
+            "nodes": [
+                {"id": "start", "type": "trigger"},
+                {"id": "wait", "type": "delay", "ms": ms},
+                {"id": "announce", "type": "action", "action": profile.actions[1].id},
+            ],
+            "edges": [
+                {"from": "start", "to": "wait"},
+                {"from": "wait", "to": "announce"},
+            ],
+        }))
+        .unwrap(),
+    );
+    workflow
+}
+
+/// Adds `workflow` to the agent's profile and reloads it.
+async fn add_workflow(agent: &TestAgent, workflow: deckpilot_core::Workflow) {
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    profile.workflows.push(workflow);
+    agent.store().save_profile(&profile).unwrap();
+    agent
+        .client()
+        .await
+        .request(Request::ReloadConfiguration)
+        .await
+        .unwrap();
+}
+
+/// Events of one execution until it finished.
+async fn execution_events(
+    client: &mut AgentClient,
+    id: deckpilot_core::ExecutionId,
+) -> (Vec<AgentEvent>, deckpilot_core::ExecutionSummary) {
+    let mut events = Vec::new();
+    loop {
+        let event = tokio::time::timeout(TIMEOUT, client.next_event())
+            .await
+            .expect("execution events in time")
+            .unwrap();
+        match event {
+            AgentEvent::ExecutionFinished { execution } if execution.id == id => {
+                return (events, execution);
+            }
+            AgentEvent::ExecutionProgress { execution, .. } if execution == id => {
+                events.push(event);
+            }
+            _ => {}
+        }
+    }
+}
+
+async fn start_workflow(
+    client: &mut AgentClient,
+    workflow: deckpilot_core::WorkflowId,
+) -> deckpilot_core::ExecutionSummary {
+    match client
+        .request(Request::StartWorkflow { workflow })
+        .await
+        .unwrap()
+    {
+        Response::ExecutionStarted { execution } => execution,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runs_workflows_in_the_background_with_progress_and_history() {
+    let agent = setup().await;
+    let workflow = deckpilot_core::Workflow::new("Switch and announce")
+        .step(agent.work.actions[0].id, deckpilot_core::OnFailure::Stop)
+        .step(agent.work.actions[1].id, deckpilot_core::OnFailure::Stop);
+    let workflow_id = workflow.id;
+    add_workflow(&agent, workflow).await;
+
+    let mut events = agent.client().await;
+    events.subscribe().await.unwrap();
+    let mut client = agent.client().await;
+    let started = start_workflow(&mut client, workflow_id).await;
+    assert_eq!(started.state, deckpilot_core::ExecutionState::Running);
+    assert_eq!(started.total_nodes, 2);
+    assert_eq!(started.trigger, deckpilot_core::ExecutionTrigger::App);
+
+    let (progress, finished) = execution_events(&mut events, started.id).await;
+    // Started and finished per step, with real counts.
+    assert_eq!(progress.len(), 4);
+    let Some(AgentEvent::ExecutionProgress {
+        completed, total, ..
+    }) = progress.last()
+    else {
+        panic!("expected progress")
+    };
+    assert_eq!((*completed, *total), (2, 2));
+    assert_eq!(finished.state, deckpilot_core::ExecutionState::Succeeded);
+    assert_eq!(finished.completed_nodes, 2);
+    assert!(finished.finished_at.is_some());
+    // The workflow's project switch reached the agent.
+    agent
+        .wait_for_status(|s| active_key(s) == Some("CMR"))
+        .await;
+
+    let Response::Execution { execution } = client
+        .request(Request::GetExecution {
+            execution: started.id,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected an execution")
+    };
+    let nodes: Vec<_> = execution.nodes.iter().map(|n| n.node.to_string()).collect();
+    assert_eq!(nodes, ["step_1", "step_2"]);
+    assert_eq!(execution.nodes[1].message, "CMR");
+
+    // Recorded in the encrypted database.
+    let stored = agent.store().execution(started.id).unwrap().unwrap();
+    assert_eq!(
+        stored.summary.state,
+        deckpilot_core::ExecutionState::Succeeded
+    );
+    let Response::Executions { executions } = client
+        .request(Request::ListExecutions {
+            workflow: Some(workflow_id),
+            limit: None,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected executions")
+    };
+    assert_eq!(executions.len(), 1);
+
+    client
+        .request(Request::ClearExecutionHistory { workflow: None })
+        .await
+        .unwrap();
+    assert!(agent.store().execution(started.id).unwrap().is_none());
+    agent.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn running_workflows_can_be_cancelled_and_do_not_block_the_agent() {
+    let agent = setup().await;
+    let workflow = waiting_workflow(&agent.work, 60_000);
+    let workflow_id = workflow.id;
+    add_workflow(&agent, workflow).await;
+
+    let mut events = agent.client().await;
+    events.subscribe().await.unwrap();
+    let mut client = agent.client().await;
+    let started = start_workflow(&mut client, workflow_id).await;
+
+    // The agent keeps answering while the workflow waits.
+    let begun = std::time::Instant::now();
+    agent.status().await;
+    assert!(begun.elapsed() < Duration::from_secs(5));
+    // A workflow runs once at a time.
+    let again = client
+        .request(Request::StartWorkflow {
+            workflow: workflow_id,
+        })
+        .await;
+    assert!(matches!(again, Err(ClientError::Agent(e)) if e.message.contains("already running")));
+    let Response::Executions { executions } = client
+        .request(Request::ListExecutions {
+            workflow: None,
+            limit: Some(10),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected executions")
+    };
+    assert_eq!(executions[0].state, deckpilot_core::ExecutionState::Running);
+
+    client
+        .request(Request::CancelExecution {
+            execution: started.id,
+        })
+        .await
+        .unwrap();
+    let (_, finished) = execution_events(&mut events, started.id).await;
+    assert_eq!(finished.state, deckpilot_core::ExecutionState::Cancelled);
+    let record = agent.store().execution(started.id).unwrap().unwrap();
+    assert!(
+        record.nodes.iter().all(|n| n.node.as_str() == "start"
+            || n.status == deckpilot_core::graph::NodeStatus::Cancelled),
+        "{:?}",
+        record.nodes
+    );
+    let unknown = client
+        .request(Request::CancelExecution {
+            execution: started.id,
+        })
+        .await;
+    assert!(matches!(unknown, Err(ClientError::Agent(e)) if e.code == ErrorCode::NotFound));
+    agent.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn device_bound_workflows_run_in_the_background() {
+    let agent = setup().await;
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let workflow = waiting_workflow(&profile, 10);
+    let workflow_id = workflow.id;
+    profile.workflows.push(workflow);
+    profile.layouts[0].pages[0]
+        .bindings
+        .push(deckpilot_core::ControlBinding {
+            control: ControlId::Key { index: 5 },
+            trigger: deckpilot_core::Trigger::Press,
+            target: deckpilot_core::BindingTarget::Workflow {
+                workflow: workflow_id,
+            },
+            label: None,
+        });
+    agent.store().save_profile(&profile).unwrap();
+    let mut events = agent.client().await;
+    events.subscribe().await.unwrap();
+    let mut client = agent.client().await;
+    client.request(Request::ReloadConfiguration).await.unwrap();
+    client
+        .request(Request::SimulateInput {
+            device: agent.device.clone(),
+            control: ControlId::Key { index: 5 },
+            input: ControlInput::Press,
+        })
+        .await
+        .unwrap();
+    let started = loop {
+        if let AgentEvent::ExecutionStarted { execution } =
+            tokio::time::timeout(TIMEOUT, events.next_event())
+                .await
+                .unwrap()
+                .unwrap()
+        {
+            break execution;
+        }
+    };
+    assert_eq!(started.workflow, workflow_id);
+    assert_eq!(started.trigger, deckpilot_core::ExecutionTrigger::Device);
+    let (_, finished) = execution_events(&mut events, started.id).await;
+    assert_eq!(finished.state, deckpilot_core::ExecutionState::Succeeded);
+    agent.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runs_of_a_stopped_agent_are_recorded_as_interrupted() {
+    let agent = setup().await;
+    let workflow = waiting_workflow(&agent.work, 60_000);
+    let workflow_id = workflow.id;
+    add_workflow(&agent, workflow).await;
+    let mut client = agent.client().await;
+    let started = start_workflow(&mut client, workflow_id).await;
+    assert_eq!(
+        agent
+            .store()
+            .execution(started.id)
+            .unwrap()
+            .unwrap()
+            .summary
+            .state,
+        deckpilot_core::ExecutionState::Running
+    );
+
+    // A record left running by an agent that crashed is marked when the
+    // database is opened.
+    let profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let crashed = deckpilot_core::ExecutionRecord::start(
+        deckpilot_core::ExecutionId::new(),
+        profile.workflow(workflow_id).unwrap(),
+        &profile,
+        deckpilot_core::ExecutionTrigger::Device,
+        1,
+    );
+    agent.store().save_execution(&crashed).unwrap();
+
+    let (paths, key, mock) = (agent.paths.clone(), agent.key.clone(), agent.mock.clone());
+    // Stopping the agent interrupts the run that is still waiting.
+    agent.shutdown().await;
+    let record = SqliteStore::open(&paths.database, &Encryption::Key(key.clone()))
+        .unwrap()
+        .execution(started.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        record.summary.state,
+        deckpilot_core::ExecutionState::Interrupted
+    );
+
+    let running = start_agent(paths.clone(), mock).unwrap();
+    unlock_agent(&paths, &key).await;
+    wait_for(&paths, unlocked).await;
+    let record = SqliteStore::open(&paths.database, &Encryption::Key(key))
+        .unwrap()
+        .execution(crashed.summary.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        record.summary.state,
+        deckpilot_core::ExecutionState::Interrupted
+    );
+    stop_agent(&paths, running).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn older_clients_do_not_receive_execution_events() {
+    let agent = setup().await;
+    let workflow = waiting_workflow(&agent.work, 10);
+    let workflow_id = workflow.id;
+    add_workflow(&agent, workflow).await;
+    let mut old = AgentClient::connect_with_protocol(&agent.paths, ClientKind::Other, 4)
+        .await
+        .unwrap();
+    old.subscribe().await.unwrap();
+    let mut client = agent.client().await;
+    // `runWorkflow` still answers with the report when the run ends.
+    let Response::WorkflowReport { report } = client
+        .request(Request::RunWorkflow {
+            workflow: workflow_id,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected a report")
+    };
+    assert_eq!(report.status, ActionStatus::Succeeded);
+    // Only events of protocol 4 arrived.
+    while let Ok(Ok(event)) =
+        tokio::time::timeout(Duration::from_millis(300), old.next_event()).await
+    {
+        assert!(event.since_protocol() <= 4, "{event:?}");
+    }
+    agent.shutdown().await;
+}

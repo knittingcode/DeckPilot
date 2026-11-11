@@ -11,6 +11,7 @@ pub mod device_runtime;
 pub mod execution;
 pub mod face;
 pub mod graph;
+pub mod history;
 pub mod id;
 pub mod layout;
 pub mod module;
@@ -34,7 +35,10 @@ pub use execution::{
     ActionResult, ActionStatus, CapabilityDenied, ContextEffect, ExecutionContext,
 };
 pub use face::{FaceStyle, KeyFace, render_label};
-pub use id::{ActionInstanceId, LayoutId, PageId, ProfileId, ProjectId, WorkflowId};
+pub use history::{
+    ExecutionRecord, ExecutionState, ExecutionSummary, ExecutionTrigger, safe_event, safe_report,
+};
+pub use id::{ActionInstanceId, ExecutionId, LayoutId, PageId, ProfileId, ProjectId, WorkflowId};
 pub use layout::{BindingTarget, ControlBinding, DeviceLayout, LayoutIssue, LayoutPage, Trigger};
 pub use module::{
     Availability, Capability, FeatureModule, ModuleError, ModuleId, ModuleInfo, ModuleManifest,
