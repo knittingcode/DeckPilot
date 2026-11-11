@@ -39,6 +39,8 @@ pub use security::{AUTO_LOCK_CHECK, Clock, system_clock};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_BRIGHTNESS: u8 = 60;
+/// How long stopping waits for the IPC server to close its connections.
+const SERVER_STOP: Duration = Duration::from_secs(2);
 
 /// Opens the configuration application.
 pub type DesktopOpener = Box<dyn Fn() -> Result<(), String> + Send>;
@@ -353,11 +355,16 @@ impl Agent {
             let controls = session.rendered.keys().copied().collect();
             session.io.close(controls);
         }
-        // Wait until the listener is closed, so that an agent started right
-        // after (an update, a restart) can create the endpoint again; on
-        // Windows a pipe name stays taken while a listener holds it.
-        self.server.abort();
-        let _ = (&mut self.server).await;
+        // Wait until the listener and every connection are closed, so that
+        // an agent started right after (an update, a restart) can create
+        // the endpoint again. The server closes them on the shutdown signal.
+        if tokio::time::timeout(SERVER_STOP, &mut self.server)
+            .await
+            .is_err()
+        {
+            self.server.abort();
+            let _ = (&mut self.server).await;
+        }
         let _ = std::fs::remove_file(&self.options.paths.token_file);
     }
 
