@@ -6,10 +6,11 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use deckpilot_core::{
-    MachineConfig, ModuleId, ModuleMigration, ModuleSettings, ModuleStates, Profile, ProfileId,
-    Project, ProjectId, ProjectKey,
+    ExecutionId, ExecutionRecord, MachineConfig, ModuleId, ModuleMigration, ModuleSettings,
+    ModuleStates, Profile, ProfileId, Project, ProjectId, ProjectKey,
 };
 
+use crate::executions::{ExecutionQuery, Retention};
 use crate::{
     ConfigStore, DOCUMENT_VERSION, LaunchInfo, MigrationNote, ProfileSummary, Result, StorageError,
 };
@@ -65,6 +66,7 @@ const MIGRATIONS: &[&str] = &[
         updated_at INTEGER NOT NULL
     );
 ",
+    crate::executions::SCHEMA,
 ];
 
 /// Backups kept per database; older ones are removed after a new one is
@@ -355,6 +357,40 @@ impl SqliteStore {
             .unwrap_or(0))
     }
 
+    /// Writes (or updates) the record of a workflow run.
+    pub fn save_execution(&self, record: &ExecutionRecord) -> Result<()> {
+        crate::executions::save(&self.connection, record)
+    }
+
+    pub fn execution(&self, id: ExecutionId) -> Result<Option<ExecutionRecord>> {
+        crate::executions::get(&self.connection, id)
+    }
+
+    /// Records of a profile's runs, newest first.
+    pub fn executions(&self, query: ExecutionQuery) -> Result<Vec<ExecutionRecord>> {
+        crate::executions::list(&self.connection, query)
+    }
+
+    /// Marks runs left running by an agent that stopped, other than
+    /// `except`, as interrupted.
+    pub fn interrupt_stale_executions(&self, except: &[ExecutionId], now_ms: u64) -> Result<usize> {
+        crate::executions::interrupt_stale(&self.connection, except, now_ms)
+    }
+
+    /// Removes the oldest finished records beyond `retention`.
+    pub fn prune_executions(&self, retention: Retention) -> Result<()> {
+        crate::executions::prune(&self.connection, retention)
+    }
+
+    /// Deletes the finished records of a profile, or of one of its workflows.
+    pub fn clear_executions(
+        &self,
+        profile: ProfileId,
+        workflow: Option<deckpilot_core::WorkflowId>,
+    ) -> Result<usize> {
+        crate::executions::clear(&self.connection, profile, workflow)
+    }
+
     /// Applies `changes` in one transaction: everything or nothing.
     pub fn apply_changes(&self, changes: &ConfigChanges) -> Result<()> {
         let tx = rusqlite::Transaction::new_unchecked(
@@ -363,6 +399,10 @@ impl SqliteStore {
         )?;
         for id in &changes.delete_profiles {
             tx.execute("DELETE FROM profiles WHERE id = ?1", [id.to_string()])?;
+            tx.execute(
+                "DELETE FROM workflow_executions WHERE profile_id = ?1",
+                [id.to_string()],
+            )?;
             tx.execute(
                 "DELETE FROM settings WHERE key = ?1 AND value = ?2",
                 params![ACTIVE_PROFILE, id.to_string()],
@@ -779,6 +819,10 @@ impl ConfigStore for SqliteStore {
     fn delete_profile(&self, id: ProfileId) -> Result<bool> {
         let tx = self.write_transaction()?;
         let deleted = tx.execute("DELETE FROM profiles WHERE id = ?1", [id.to_string()])? > 0;
+        tx.execute(
+            "DELETE FROM workflow_executions WHERE profile_id = ?1",
+            [id.to_string()],
+        )?;
         tx.execute(
             "DELETE FROM settings WHERE key = ?1 AND value = ?2",
             params![ACTIVE_PROFILE, id.to_string()],
@@ -1839,7 +1883,7 @@ mod tests {
                 .connection
                 .execute_batch(
                     "DROP TABLE migration_history; DROP TABLE module_schemas;
-                     PRAGMA user_version = 4;",
+                     DROP TABLE workflow_executions; PRAGMA user_version = 4;",
                 )
                 .unwrap();
         }
@@ -1852,7 +1896,10 @@ mod tests {
 
         let history = store.migration_history().unwrap();
         assert_eq!(history.len(), 1);
-        assert_eq!((history[0].from_version, history[0].to_version), (4, 5));
+        assert_eq!(
+            (history[0].from_version, history[0].to_version),
+            (4, SqliteStore::supported_schema_version())
+        );
         assert_eq!(history[0].result, "ok");
         let backup = std::path::PathBuf::from(history[0].backup.clone().unwrap());
         assert!(backup.starts_with(backup_dir(&path)));

@@ -24,6 +24,10 @@ as the notes of its GitHub release and of the in-app update.
   bounded loops, delays, retries, timeouts, cancellation and data passed
   between steps. Existing workflows keep running unchanged. The visual
   editor follows.
+- Workflows run in the background agent, also while the app is closed, with
+  live progress, cancellation and an execution history kept in the
+  encrypted database. Runs interrupted by an agent restart are marked as
+  such, and the app picks up running workflows when it opens.
 
 ### Changed
 

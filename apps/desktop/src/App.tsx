@@ -6,6 +6,7 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { AppTitlebar } from "@/components/app-titlebar"
 import { SettingsSidebar } from "@/components/settings-sidebar"
 import { AppStatusBar } from "@/components/status-bar"
+import { ExecutionSync } from "@/components/execution-sync"
 import { CoreStatusItems } from "@/components/status-sources"
 import { SecurityGate } from "@/components/security-gate"
 import { ErrorNotice, Loading } from "@/components/page"
@@ -14,6 +15,7 @@ import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useAsync } from "@/hooks/use-async"
 import { useNavigation } from "@/hooks/use-navigation"
+import { ExecutionsContext } from "@/hooks/use-executions"
 import { StatusContext, createStatusStores } from "@/hooks/use-status"
 import { TitlebarContext, useTitlebar } from "@/hooks/use-titlebar"
 import { useWindowChrome } from "@/hooks/use-window-chrome"
@@ -27,6 +29,7 @@ import {
 import { AppContext, type AppContextValue, type CorePageId, type PageId } from "@/lib/app-context"
 import { ThemeProvider } from "@/components/theme-provider"
 import { type Location, locationOf } from "@/lib/navigation"
+import { ExecutionStore } from "@/lib/executions"
 import { TitlebarStore } from "@/lib/titlebar"
 import type { AgentConnection, ModuleInfo, UpdateState } from "@/lib/types"
 import { MODULE_VIEWS, isModulePageAvailable, moduleStatusItems } from "@/modules"
@@ -99,6 +102,7 @@ function Studio() {
   const navigation = useNavigation(exists)
   const [titlebar] = useState(() => new TitlebarStore())
   const [status] = useState(createStatusStores)
+  const [executions] = useState(() => new ExecutionStore())
   const chrome = useWindowChrome()
   const { go } = navigation
 
@@ -227,46 +231,49 @@ function Studio() {
     <AppContext value={context}>
       <TitlebarContext value={titlebar}>
         <StatusContext value={status}>
-          <SidebarProvider
-            className="h-svh min-h-0 flex-col overflow-hidden"
-            style={{ "--statusbar-height": "var(--statusbar-size)" } as React.CSSProperties}
-          >
-            <AppTitlebar
-              store={titlebar}
-              chrome={chrome}
-              history={context.history}
-              fallbackTitle={fallbackTitle}
-              indicator={
-                <AgentIndicator
-                  onOpen={() => {
-                    context.openSettings("agent")
-                  }}
-                />
-              }
-            />
-            <div className="flex min-h-0 flex-1">
-              {location.mode === "settings" ? (
-                <SettingsSidebar current={page} />
-              ) : (
-                <AppSidebar current={page as PageId} onNavigate={context.navigate} />
-              )}
-              <SidebarInset className="min-h-0 overflow-y-auto">
-                <Suspense fallback={<PageLoading />}>
-                  {location.mode === "settings" ? (
-                    <SettingsView key={page} id={page} />
-                  ) : (
-                    // Remount on profile change: open editors never write to another profile.
-                    <View key={context.editingProfileId ?? "none"} />
-                  )}
-                </Suspense>
-              </SidebarInset>
-            </div>
-            <AppStatusBar stores={status} />
-            <CoreStatusItems />
-            {moduleStatusItems(context.modules).map(({ key, component: Item }) => (
-              <Item key={key} />
-            ))}
-          </SidebarProvider>
+          <ExecutionsContext value={executions}>
+            <SidebarProvider
+              className="h-svh min-h-0 flex-col overflow-hidden"
+              style={{ "--statusbar-height": "var(--statusbar-size)" } as React.CSSProperties}
+            >
+              <AppTitlebar
+                store={titlebar}
+                chrome={chrome}
+                history={context.history}
+                fallbackTitle={fallbackTitle}
+                indicator={
+                  <AgentIndicator
+                    onOpen={() => {
+                      context.openSettings("agent")
+                    }}
+                  />
+                }
+              />
+              <div className="flex min-h-0 flex-1">
+                {location.mode === "settings" ? (
+                  <SettingsSidebar current={page} />
+                ) : (
+                  <AppSidebar current={page as PageId} onNavigate={context.navigate} />
+                )}
+                <SidebarInset className="min-h-0 overflow-y-auto">
+                  <Suspense fallback={<PageLoading />}>
+                    {location.mode === "settings" ? (
+                      <SettingsView key={page} id={page} />
+                    ) : (
+                      // Remount on profile change: open editors never write to another profile.
+                      <View key={context.editingProfileId ?? "none"} />
+                    )}
+                  </Suspense>
+                </SidebarInset>
+              </div>
+              <AppStatusBar stores={status} />
+              <CoreStatusItems />
+              <ExecutionSync />
+              {moduleStatusItems(context.modules).map(({ key, component: Item }) => (
+                <Item key={key} />
+              ))}
+            </SidebarProvider>
+          </ExecutionsContext>
         </StatusContext>
       </TitlebarContext>
     </AppContext>

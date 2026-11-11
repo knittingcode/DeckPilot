@@ -10,9 +10,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use deckpilot_core::graph::ExecutionEvent;
 use deckpilot_core::{
-    ActionInstanceId, ActionResult, ActionStatus, CycleDirection, LayoutStatus, ProfileId, Project,
-    ProjectId, WorkflowId, WorkflowReport,
+    ActionInstanceId, ActionResult, ActionStatus, CycleDirection, ExecutionId, ExecutionRecord,
+    ExecutionSummary, LayoutStatus, ProfileId, Project, ProjectId, WorkflowId, WorkflowReport,
 };
 use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId};
 
@@ -25,7 +26,14 @@ use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId};
 /// Version 4: the encrypted database. The agent starts locked and is
 /// unlocked with the database key (`unlock`, `lock`, `getDatabaseKey`); the
 /// status reports the [`SecurityState`].
-pub const PROTOCOL_VERSION: u32 = 4;
+///
+/// Version 5: workflows run in the background. `startWorkflow` returns an
+/// execution that reports progress as events; runs can be cancelled, listed
+/// and inspected afterwards (execution history).
+pub const PROTOCOL_VERSION: u32 = 5;
+
+/// Most executions returned by one `listExecutions`.
+pub const MAX_EXECUTION_LIST: u32 = 200;
 
 /// A window identifier: `<namespace>.<name>`, lowercase ASCII letters,
 /// digits, `-` and `.`, at most 64 characters.
@@ -158,9 +166,41 @@ pub enum Request {
     RunAction {
         action: ActionInstanceId,
     },
-    /// Runs a workflow of the active profile. Since protocol 2.
+    /// Runs a workflow of the active profile and answers when it finished.
+    /// Since protocol 2. The run is an execution like one started with
+    /// `startWorkflow`.
     RunWorkflow {
         workflow: WorkflowId,
+    },
+    /// Starts a workflow of the active profile in the background and
+    /// answers right away. Progress arrives as execution events. Since
+    /// protocol 5.
+    StartWorkflow {
+        workflow: WorkflowId,
+    },
+    /// Asks a running execution to stop. Running actions finish; nothing
+    /// new starts. Since protocol 5.
+    CancelExecution {
+        execution: ExecutionId,
+    },
+    /// Running and recorded executions of the active profile, newest first.
+    /// Since protocol 5.
+    ListExecutions {
+        #[serde(default)]
+        workflow: Option<WorkflowId>,
+        #[serde(default)]
+        limit: Option<u32>,
+    },
+    /// One execution of the active profile with its node reports. Since
+    /// protocol 5.
+    GetExecution {
+        execution: ExecutionId,
+    },
+    /// Deletes the recorded (finished) executions of the active profile, or
+    /// of one of its workflows. Since protocol 5.
+    ClearExecutionHistory {
+        #[serde(default)]
+        workflow: Option<WorkflowId>,
     },
     /// Rescans for devices and redraws every connected device.
     RefreshDevices,
@@ -237,6 +277,11 @@ impl Request {
             }
             Self::RequestWindow { window } if !is_window_id(window) => {
                 Err(format!("invalid window identifier `{window}`"))
+            }
+            Self::ListExecutions {
+                limit: Some(limit), ..
+            } if *limit == 0 || *limit > MAX_EXECUTION_LIST => {
+                Err(format!("limit must be between 1 and {MAX_EXECUTION_LIST}"))
             }
             _ => Ok(()),
         }
@@ -322,6 +367,18 @@ pub enum Response {
     LastWorkflow {
         report: Option<WorkflowReport>,
     },
+    /// Answer to `startWorkflow`. Since protocol 5.
+    ExecutionStarted {
+        execution: ExecutionSummary,
+    },
+    /// Answer to `listExecutions`. Since protocol 5.
+    Executions {
+        executions: Vec<ExecutionSummary>,
+    },
+    /// Answer to `getExecution`. Since protocol 5.
+    Execution {
+        execution: Box<ExecutionRecord>,
+    },
     /// Answer to `getDatabaseKey`. Since protocol 4.
     DatabaseKey {
         key: KeyMaterial,
@@ -354,6 +411,40 @@ pub enum AgentEvent {
     OpenWindow {
         window: String,
     },
+    /// A workflow started. Since protocol 5.
+    ExecutionStarted {
+        execution: ExecutionSummary,
+    },
+    /// A node of a running workflow started or finished, or is retried.
+    /// `completed` of `total` nodes are resolved. Since protocol 5.
+    ExecutionProgress {
+        execution: ExecutionId,
+        event: ExecutionEvent,
+        completed: u32,
+        total: u32,
+    },
+    /// A workflow finished, failed, was cancelled or interrupted. Since
+    /// protocol 5.
+    ExecutionFinished {
+        execution: ExecutionSummary,
+    },
+}
+
+impl AgentEvent {
+    /// The first protocol that has this event; clients that speak an older
+    /// one do not receive it.
+    pub fn since_protocol(&self) -> u32 {
+        match self {
+            Self::ExecutionStarted { .. }
+            | Self::ExecutionProgress { .. }
+            | Self::ExecutionFinished { .. } => 5,
+            Self::OpenWindow { .. } => 4,
+            Self::State { .. }
+            | Self::ActionCompleted { .. }
+            | Self::ShowWindow
+            | Self::ShuttingDown => 1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -482,5 +573,30 @@ mod tests {
         assert!(Request::SetBrightness { percent: 101 }.validate().is_err());
         assert!(Request::SetBrightness { percent: 100 }.validate().is_ok());
         assert!(Request::GetStatus.validate().is_ok());
+        let list = |limit| Request::ListExecutions {
+            workflow: None,
+            limit,
+        };
+        assert!(list(None).validate().is_ok());
+        assert!(list(Some(MAX_EXECUTION_LIST)).validate().is_ok());
+        assert!(list(Some(0)).validate().is_err());
+        assert!(list(Some(MAX_EXECUTION_LIST + 1)).validate().is_err());
+    }
+
+    #[test]
+    fn execution_events_need_protocol_5() {
+        let event = AgentEvent::ExecutionProgress {
+            execution: ExecutionId::new(),
+            event: ExecutionEvent::NodeStarted {
+                node: deckpilot_core::graph::NodeId::new("build").unwrap(),
+            },
+            completed: 0,
+            total: 3,
+        };
+        assert_eq!(event.since_protocol(), 5);
+        assert_eq!(AgentEvent::ShowWindow.since_protocol(), 1);
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "executionProgress");
+        assert_eq!(json["event"]["type"], "nodeStarted");
     }
 }

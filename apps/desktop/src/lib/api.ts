@@ -7,6 +7,8 @@ import type {
   ActionType,
   AgentConnection,
   ControlFace,
+  ExecutionRecord,
+  ExecutionSummary,
   DeviceLayout,
   DeviceModel,
   ExportResult,
@@ -144,6 +146,14 @@ export const api = {
     invoke<Workflow>("duplicate_workflow", { profileId, workflowId, name }),
   deleteWorkflow: (profileId: string, workflowId: string) =>
     invoke<null>("delete_workflow", { profileId, workflowId }),
+  startWorkflow: (profileId: string, workflowId: string) =>
+    invoke<ExecutionSummary>("start_workflow", { profileId, workflowId }),
+  cancelExecution: (executionId: string) => invoke<null>("cancel_execution", { executionId }),
+  listExecutions: (workflowId?: string, limit?: number) =>
+    invoke<ExecutionSummary[]>("list_executions", { workflowId, limit }),
+  getExecution: (executionId: string) => invoke<ExecutionRecord>("get_execution", { executionId }),
+  clearExecutionHistory: (workflowId?: string) =>
+    invoke<null>("clear_execution_history", { workflowId }),
   runWorkflow: (profileId: string, workflowId: string) =>
     invoke<WorkflowReport>("run_workflow", { profileId, workflowId }),
 
@@ -218,6 +228,8 @@ export const NAVIGATE_EVENT = "deckpilot://navigate"
 /** Sent to every window when the configuration was locked or unlocked. */
 export const SECURITY_CHANGED_EVENT = "deckpilot://security-changed"
 export const AGENT_STATUS_EVENT = "agent-status"
+/** Backend event with an {@link AgentExecutionEvent}. */
+export const EXECUTION_EVENT = "workflow-execution"
 /** Backend event carrying the latest {@link UpdateState}. */
 export const UPDATE_STATE_EVENT = "update-state"
 

@@ -7,6 +7,7 @@
 //! hardware.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -61,8 +62,12 @@ pub enum RuntimeOutcome {
         action: ActionInstanceId,
         result: ActionResult,
     },
-    Workflow {
-        report: WorkflowReport,
+    /// A control is bound to this workflow. Workflows can run for a long
+    /// time, so the runtime does not run them itself: the caller starts
+    /// the run, e.g. in the background (see [`Runtime::run_workflow`] for
+    /// running one in place).
+    WorkflowRequested {
+        workflow: WorkflowId,
     },
 }
 
@@ -74,7 +79,7 @@ struct Session {
 
 #[derive(Debug)]
 pub struct Runtime {
-    engine: Engine,
+    engine: Arc<Engine>,
     catalog: ModelCatalog,
     machine: MachineConfig,
     session: Option<Session>,
@@ -89,7 +94,7 @@ pub struct Runtime {
 impl Runtime {
     pub fn new(engine: Engine, catalog: ModelCatalog, machine: MachineConfig) -> Self {
         Self {
-            engine,
+            engine: Arc::new(engine),
             catalog,
             machine,
             session: None,
@@ -111,7 +116,17 @@ impl Runtime {
     /// Replaces the engine, e.g. after feature modules were enabled or
     /// disabled. The profile, project context and pages are kept.
     pub fn set_engine(&mut self, engine: Engine) {
-        self.engine = engine;
+        self.engine = Arc::new(engine);
+    }
+
+    /// The engine, to run work on another thread.
+    pub fn shared_engine(&self) -> Arc<Engine> {
+        self.engine.clone()
+    }
+
+    /// The project selection of the active profile.
+    pub fn project_context(&self) -> Option<&ActiveProjectContext> {
+        self.session.as_ref().map(|session| &session.projects)
     }
 
     pub fn catalog(&self) -> &ModelCatalog {
@@ -384,8 +399,10 @@ impl Runtime {
                 Ok(RuntimeOutcome::Action { action, result })
             }
             BindingTarget::Workflow { workflow } => {
-                let report = self.run_workflow(workflow)?;
-                Ok(RuntimeOutcome::Workflow { report })
+                if self.profile().and_then(|p| p.workflow(workflow)).is_none() {
+                    return Err(EngineError::UnknownWorkflow(workflow));
+                }
+                Ok(RuntimeOutcome::WorkflowRequested { workflow })
             }
             BindingTarget::OpenPage { page } => {
                 let stack = self.navigation.entry(device.clone()).or_default();

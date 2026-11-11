@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use deckpilot_core::{
-    ActionInstanceId, ActionResult, CycleDirection, Engine, EngineError, KeyFace, MachineConfig,
-    ModuleRegistry, Os, ProfileId, ProjectId, Runtime, RuntimeOutcome,
+    ActionInstanceId, ActionResult, CycleDirection, Engine, EngineError, ExecutionTrigger, KeyFace,
+    MachineConfig, ModuleRegistry, Os, ProfileId, ProjectId, Runtime, RuntimeOutcome,
 };
 use deckpilot_device::{
     CombinedBackend, ControlId, ControlInput, DeviceBackend, DeviceEvent, DeviceId, DeviceModel,
@@ -32,12 +32,15 @@ use crate::devices::{DeviceIo, DeviceSignal};
 use crate::instance::{InstanceLock, LockError};
 use crate::render;
 
+mod executions;
 mod security;
 
 pub use security::{AUTO_LOCK_CHECK, Clock, system_clock};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_BRIGHTNESS: u8 = 60;
+/// How long stopping waits for the IPC server to close its connections.
+const SERVER_STOP: Duration = Duration::from_secs(2);
 
 /// Opens the configuration application.
 pub type DesktopOpener = Box<dyn Fn() -> Result<(), String> + Send>;
@@ -90,6 +93,10 @@ pub enum AgentError {
     Storage(#[from] StorageError),
     #[error("{0}")]
     Io(#[from] std::io::Error),
+    #[error("cannot write the client token: {0}")]
+    Token(#[source] std::io::Error),
+    #[error("cannot listen for clients: {0}")]
+    Endpoint(#[source] std::io::Error),
 }
 
 /// Commands issued by the tray menu.
@@ -113,6 +120,8 @@ pub(crate) enum Command {
     SystemKey(security::KeyOutcome),
     /// Try to read the system key again after the store was unreachable.
     RetrySystemKey,
+    /// Progress or the end of a workflow running in the background.
+    Execution(executions::ExecutionUpdate),
 }
 
 /// Cloneable access to a running agent.
@@ -192,6 +201,8 @@ pub struct Agent {
     /// Report of the last workflow, for the summary window.
     last_workflow: Option<deckpilot_core::WorkflowReport>,
     last_unlock_prompt: Option<std::time::Instant>,
+    /// Workflows running in the background, and unsaved history.
+    executions: executions::Executions,
     handle: AgentHandle,
     commands: mpsc::UnboundedReceiver<Command>,
     signals_tx: mpsc::UnboundedSender<DeviceSignal>,
@@ -232,12 +243,13 @@ impl Agent {
         runtime.set_placeholder(Some("Locked"));
 
         let endpoint = paths.endpoint();
-        let token = token::create(&paths.token_file)?;
-        let listener = endpoint.listen()?;
+        let token = token::create(&paths.token_file).map_err(AgentError::Token)?;
+        let listener = endpoint.listen().map_err(AgentError::Endpoint)?;
 
         let (commands_tx, commands) = mpsc::unbounded_channel();
         let (signals_tx, signals) = mpsc::unbounded_channel();
-        let (events, _) = broadcast::channel(64);
+        // Room for the node events of several running workflows.
+        let (events, _) = broadcast::channel(512);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let handle = AgentHandle {
             commands: commands_tx,
@@ -278,6 +290,7 @@ impl Agent {
             last_input_at: None,
             last_workflow: None,
             last_unlock_prompt: None,
+            executions: executions::Executions::default(),
             handle,
             commands,
             signals_tx,
@@ -329,19 +342,29 @@ impl Agent {
                 break;
             }
         }
-        self.stop();
+        self.stop().await;
         Ok(())
     }
 
-    fn stop(mut self) {
+    async fn stop(mut self) {
         info!("agent shutting down");
+        self.interrupt_executions();
         let _ = self.handle.events.send(AgentEvent::ShuttingDown);
         let _ = self.shutdown_tx.send(true);
         for (_, session) in std::mem::take(&mut self.sessions) {
             let controls = session.rendered.keys().copied().collect();
             session.io.close(controls);
         }
-        self.server.abort();
+        // Wait until the listener and every connection are closed, so that
+        // an agent started right after (an update, a restart) can create
+        // the endpoint again. The server closes them on the shutdown signal.
+        if tokio::time::timeout(SERVER_STOP, &mut self.server)
+            .await
+            .is_err()
+        {
+            self.server.abort();
+            let _ = (&mut self.server).await;
+        }
         let _ = std::fs::remove_file(&self.options.paths.token_file);
     }
 
@@ -361,6 +384,19 @@ impl Agent {
             }
             Command::RetrySystemKey => {
                 self.open_automatically(None);
+                Flow::Continue
+            }
+            Command::Execution(update) => {
+                self.handle_execution(update);
+                Flow::Continue
+            }
+            Command::Request {
+                request: Request::RunWorkflow { workflow },
+                reply,
+            } => {
+                // Answered when the run ends; the agent keeps working.
+                self.last_activity = self.now_seconds();
+                self.run_execution(workflow, reply);
                 Flow::Continue
             }
             Command::Request { request, reply } => {
@@ -477,17 +513,22 @@ impl Agent {
                 self.after_change();
                 Ok(Response::ActionResult { result })
             }
-            Request::RunWorkflow { workflow } => {
-                let report = self
-                    .runtime
-                    .run_workflow(workflow)
-                    .map_err(|e| engine_error(&e))?;
-                for step in &report.steps {
-                    self.report_action(step.action, &step.result);
-                }
-                self.last_workflow = Some(report.clone());
-                self.after_change();
-                Ok(Response::WorkflowReport { report })
+            Request::StartWorkflow { workflow } => Ok(Response::ExecutionStarted {
+                execution: self.start_execution(workflow, ExecutionTrigger::App)?,
+            }),
+            Request::CancelExecution { execution } => {
+                self.cancel_execution(execution)?;
+                Ok(Response::Ok)
+            }
+            Request::ListExecutions { workflow, limit } => Ok(Response::Executions {
+                executions: self.list_executions(workflow, limit)?,
+            }),
+            Request::GetExecution { execution } => Ok(Response::Execution {
+                execution: Box::new(self.execution(execution)?),
+            }),
+            Request::ClearExecutionHistory { workflow } => {
+                self.clear_execution_history(workflow)?;
+                Ok(Response::Ok)
             }
             Request::RefreshDevices => {
                 self.refresh_devices();
@@ -530,6 +571,7 @@ impl Agent {
             | Request::Subscribe
             | Request::Shutdown
             | Request::PrepareForUpdate => self.handle_request(request),
+            Request::RunWorkflow { .. } => unreachable!("handled by handle_command"),
             Request::Unlock { .. }
             | Request::Lock
             | Request::GetDatabaseKey
@@ -557,6 +599,7 @@ impl Agent {
         };
         let brightness = store.device_brightness()?.unwrap_or(DEFAULT_BRIGHTNESS);
         self.runtime.set_machine(machine);
+        self.recover_executions();
         if brightness != self.brightness {
             self.brightness = brightness;
             for session in self.sessions.values() {
@@ -813,16 +856,10 @@ impl Agent {
                     Ok(RuntimeOutcome::Action { action, result }) => {
                         self.report_action(action, &result);
                     }
-                    Ok(RuntimeOutcome::Workflow { report }) => {
-                        for step in &report.steps {
-                            self.report_action(step.action, &step.result);
-                        }
-                        // A workflow started from the deck has no window of
-                        // its own; show what failed.
-                        let failed = report.status == deckpilot_core::ActionStatus::Failed;
-                        self.last_workflow = Some(report);
-                        if failed && let Err(error) = self.request_window(WORKFLOW_SUMMARY_WINDOW) {
-                            warn!(%error, "cannot show the workflow summary");
+                    Ok(RuntimeOutcome::WorkflowRequested { workflow }) => {
+                        if let Err(error) = self.start_execution(workflow, ExecutionTrigger::Device)
+                        {
+                            warn!(%error, "cannot start the workflow");
                         }
                     }
                     Ok(RuntimeOutcome::Ignored { reason }) => {

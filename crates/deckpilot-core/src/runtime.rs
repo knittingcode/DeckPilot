@@ -146,6 +146,151 @@ impl Engine {
         Ok(report)
     }
 
+    /// Checks that `workflow` exists and can run, without running it: a
+    /// graph must have no errors. Lets a caller reject a run before
+    /// starting it in the background.
+    pub fn check_runnable(
+        &self,
+        profile: &Profile,
+        workflow: WorkflowId,
+    ) -> Result<(), EngineError> {
+        let definition = profile
+            .workflow(workflow)
+            .ok_or(EngineError::UnknownWorkflow(workflow))?;
+        if let Some(graph) = &definition.graph {
+            let issues = graph.validate(workflow, profile, &self.registry);
+            if !WorkflowGraph::is_runnable(&issues) {
+                let first = issues
+                    .iter()
+                    .find(|i| i.severity == IssueSeverity::Error)
+                    .map(|i| i.message.clone())
+                    .unwrap_or_default();
+                return Err(EngineError::InvalidWorkflow(first));
+            }
+        }
+        Ok(())
+    }
+
+    /// Runs `workflow` with progress events and cancellation: its graph if it
+    /// has one, otherwise its steps. Steps are reported as nodes named
+    /// `step_<n>`, the names [`crate::graph::from_steps`] gives them, so a
+    /// run can be shown on the converted graph.
+    pub fn execute_workflow(
+        &self,
+        profile: &Profile,
+        machine: &MachineConfig,
+        context: &mut ActiveProjectContext,
+        workflow: WorkflowId,
+        cancel: &CancellationToken,
+        on_event: &(dyn Fn(ExecutionEvent) + Sync),
+    ) -> Result<GraphReport, EngineError> {
+        let definition = profile
+            .workflow(workflow)
+            .ok_or(EngineError::UnknownWorkflow(workflow))?;
+        if definition.graph.is_some() {
+            self.run_graph(profile, machine, context, workflow, cancel, on_event)
+        } else {
+            self.run_steps(profile, machine, context, workflow, cancel, on_event)
+        }
+    }
+
+    /// The sequential engine of [`Engine::run_workflow`] with events and
+    /// cancellation between steps.
+    fn run_steps(
+        &self,
+        profile: &Profile,
+        machine: &MachineConfig,
+        context: &mut ActiveProjectContext,
+        workflow: WorkflowId,
+        cancel: &CancellationToken,
+        on_event: &(dyn Fn(ExecutionEvent) + Sync),
+    ) -> Result<GraphReport, EngineError> {
+        use crate::graph::{NodeId, NodeReport, NodeStatus, StepError};
+        let definition = profile
+            .workflow(workflow)
+            .ok_or(EngineError::UnknownWorkflow(workflow))?;
+        let start = std::time::Instant::now();
+        let elapsed = |since: std::time::Instant| {
+            u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
+        };
+        let mut nodes = Vec::with_capacity(definition.steps.len());
+        let mut failed = false;
+        let mut stopped = false;
+        let mut previous: Option<bool> = None;
+        for (index, step) in definition.steps.iter().enumerate() {
+            let node = NodeId::new(format!("step_{}", index + 1)).expect("step ids are valid");
+            let mut report = NodeReport {
+                node: node.clone(),
+                status: NodeStatus::Skipped,
+                attempts: 0,
+                started_ms: elapsed(start),
+                duration_ms: 0,
+                message: String::new(),
+                output: std::collections::BTreeMap::new(),
+                error: None,
+                action: Some(step.action),
+            };
+            let run = match step.condition {
+                StepCondition::Always => true,
+                StepCondition::PreviousSucceeded => previous == Some(true),
+                StepCondition::PreviousFailed => previous == Some(false),
+                StepCondition::ActiveProject { project } => context.project_id() == Some(project),
+            };
+            if cancel.is_cancelled() {
+                report.status = NodeStatus::Cancelled;
+            } else if stopped {
+                "not run".clone_into(&mut report.message);
+            } else if !run {
+                "condition not met".clone_into(&mut report.message);
+            } else {
+                on_event(ExecutionEvent::NodeStarted { node: node.clone() });
+                let begun = std::time::Instant::now();
+                let result = match profile.action(step.action) {
+                    Some(instance) => {
+                        let overrides = (!step.overrides.is_empty()).then_some(&step.overrides);
+                        self.execute(profile, machine, context, instance, overrides)?
+                    }
+                    None => ActionResult::failure("action no longer exists"),
+                };
+                report.attempts = 1;
+                report.duration_ms = elapsed(begun);
+                let succeeded = result.is_success();
+                previous = Some(succeeded);
+                if succeeded {
+                    report.status = NodeStatus::Succeeded;
+                    report.output = result.data;
+                } else {
+                    report.status = NodeStatus::Failed;
+                    report.error = Some(StepError {
+                        code: "action.failed".into(),
+                        message: result.message.clone(),
+                        retryable: false,
+                    });
+                    failed = true;
+                    stopped = step.on_failure == OnFailure::Stop;
+                }
+                report.message = result.message;
+            }
+            on_event(ExecutionEvent::NodeFinished {
+                report: report.clone(),
+            });
+            nodes.push(report);
+        }
+        let status = if nodes.iter().any(|n| n.status == NodeStatus::Cancelled) {
+            RunStatus::Cancelled
+        } else if failed {
+            RunStatus::Failed
+        } else {
+            RunStatus::Succeeded
+        };
+        Ok(GraphReport {
+            workflow,
+            status,
+            duration_ms: elapsed(start),
+            nodes,
+        })
+    }
+
     /// Runs the graph of `workflow`. The graph is validated first; a graph
     /// with errors does not run. See [`crate::graph`] for the semantics.
     pub fn run_graph(
@@ -178,15 +323,7 @@ impl Engine {
             .graph
             .as_ref()
             .ok_or_else(|| EngineError::InvalidWorkflow("the workflow has no graph".into()))?;
-        let issues = graph.validate(workflow, profile, &self.registry);
-        if !WorkflowGraph::is_runnable(&issues) {
-            let first = issues
-                .iter()
-                .find(|i| i.severity == IssueSeverity::Error)
-                .map(|i| i.message.clone())
-                .unwrap_or_default();
-            return Err(EngineError::InvalidWorkflow(first));
-        }
+        self.check_runnable(profile, workflow)?;
         if depth > MAX_NESTING {
             return Err(EngineError::InvalidWorkflow(
                 "workflows are nested too deeply".into(),
@@ -320,9 +457,11 @@ impl GraphReport {
                     crate::graph::NodeStatus::Failed => {
                         ActionResult::failure(node.error.map(|e| e.message).unwrap_or(node.message))
                     }
-                    crate::graph::NodeStatus::Skipped | crate::graph::NodeStatus::Cancelled => {
-                        ActionResult::skipped("not run")
+                    crate::graph::NodeStatus::Skipped if !node.message.is_empty() => {
+                        ActionResult::skipped(node.message)
                     }
+                    crate::graph::NodeStatus::Skipped => ActionResult::skipped("not run"),
+                    crate::graph::NodeStatus::Cancelled => ActionResult::skipped("cancelled"),
                 };
                 Some(StepReport { action, result })
             })
@@ -395,6 +534,72 @@ mod tests {
             .unwrap();
         assert_eq!(report.status, ActionStatus::Succeeded);
         assert_eq!(report.steps[1].result.message, "now on CMR");
+    }
+
+    #[test]
+    fn observed_step_runs_report_nodes_and_events() {
+        let mut f = fixture();
+        let workflow = Workflow::new("Switch and announce")
+            .step(f.next, OnFailure::Stop)
+            .step(f.log, OnFailure::Stop);
+        let workflow_id = workflow.id;
+        f.profile.workflows.push(workflow);
+
+        let events = std::sync::Mutex::new(Vec::new());
+        let mut context = ActiveProjectContext::new(&f.profile);
+        let report = f
+            .engine
+            .execute_workflow(
+                &f.profile,
+                &machine(),
+                &mut context,
+                workflow_id,
+                &CancellationToken::new(),
+                &|event| events.lock().unwrap().push(event),
+            )
+            .unwrap();
+        assert_eq!(report.status, RunStatus::Succeeded);
+        let ids: Vec<_> = report.nodes.iter().map(|n| n.node.to_string()).collect();
+        assert_eq!(ids, ["step_1", "step_2"]);
+        assert_eq!(report.nodes[1].message, "now on CMR");
+        // Started and finished for each step, in order.
+        assert_eq!(events.lock().unwrap().len(), 4);
+        // The effect reached the caller's context.
+        assert_eq!(
+            context.project(&f.profile).unwrap().unwrap().key.as_str(),
+            "CMR"
+        );
+    }
+
+    #[test]
+    fn cancelled_step_runs_stop_before_the_next_step() {
+        let mut f = fixture();
+        let workflow = Workflow::new("Two")
+            .step(f.log, OnFailure::Stop)
+            .step(f.log, OnFailure::Stop);
+        let workflow_id = workflow.id;
+        f.profile.workflows.push(workflow);
+        let cancel = CancellationToken::new();
+        let mut context = ActiveProjectContext::new(&f.profile);
+        let report = f
+            .engine
+            .execute_workflow(
+                &f.profile,
+                &machine(),
+                &mut context,
+                workflow_id,
+                &cancel,
+                &|event| {
+                    if matches!(event, ExecutionEvent::NodeFinished { .. }) {
+                        cancel.cancel();
+                    }
+                },
+            )
+            .unwrap();
+        assert_eq!(report.status, RunStatus::Cancelled);
+        assert_eq!(report.nodes[0].status, crate::graph::NodeStatus::Succeeded);
+        assert_eq!(report.nodes[1].status, crate::graph::NodeStatus::Cancelled);
+        assert_eq!(report.into_steps().status, ActionStatus::Failed);
     }
 
     #[test]

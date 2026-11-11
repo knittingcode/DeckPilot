@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use tauri::State;
 
-use deckpilot_core::{ActionInstanceId, ActionResult, ProfileId, WorkflowId, WorkflowReport};
+use deckpilot_core::{
+    ActionInstanceId, ActionResult, ExecutionId, ExecutionRecord, ExecutionSummary, ProfileId,
+    WorkflowId, WorkflowReport,
+};
 use deckpilot_ipc::{ClientError, Request, Response};
 use deckpilot_storage::ConfigStore;
 
@@ -149,6 +152,113 @@ pub async fn run_workflow(
     .map_err(agent_required)?
     {
         Response::WorkflowReport { report } => Ok(report),
+        other => Err(unexpected(&other)),
+    }
+}
+
+/// Starts a workflow of the active profile in the agent. It keeps running
+/// when the app closes; progress arrives as execution events.
+#[tauri::command]
+pub async fn start_workflow(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+    workflow_id: WorkflowId,
+) -> CommandResult<ExecutionSummary> {
+    ensure_active(&state, profile_id)?;
+    match agent::request(
+        &state.paths,
+        Request::StartWorkflow {
+            workflow: workflow_id,
+        },
+    )
+    .await
+    .map_err(agent_required)?
+    {
+        Response::ExecutionStarted { execution } => Ok(execution),
+        other => Err(unexpected(&other)),
+    }
+}
+
+#[tauri::command]
+pub async fn cancel_execution(
+    state: State<'_, AppState>,
+    execution_id: ExecutionId,
+) -> CommandResult<()> {
+    match agent::request(
+        &state.paths,
+        Request::CancelExecution {
+            execution: execution_id,
+        },
+    )
+    .await
+    .map_err(agent_required)?
+    {
+        Response::Ok => Ok(()),
+        other => Err(unexpected(&other)),
+    }
+}
+
+/// Running and recorded runs of the active profile, newest first. Empty
+/// while the agent is not running.
+#[tauri::command]
+pub async fn list_executions(
+    state: State<'_, AppState>,
+    workflow_id: Option<WorkflowId>,
+    limit: Option<u32>,
+) -> CommandResult<Vec<ExecutionSummary>> {
+    state.store()?;
+    match agent::request(
+        &state.paths,
+        Request::ListExecutions {
+            workflow: workflow_id,
+            limit,
+        },
+    )
+    .await
+    {
+        Ok(Response::Executions { executions }) => Ok(executions),
+        Ok(other) => Err(unexpected(&other)),
+        Err(ClientError::NotRunning) => Ok(Vec::new()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[tauri::command]
+pub async fn get_execution(
+    state: State<'_, AppState>,
+    execution_id: ExecutionId,
+) -> CommandResult<ExecutionRecord> {
+    state.store()?;
+    match agent::request(
+        &state.paths,
+        Request::GetExecution {
+            execution: execution_id,
+        },
+    )
+    .await
+    .map_err(agent_required)?
+    {
+        Response::Execution { execution } => Ok(*execution),
+        other => Err(unexpected(&other)),
+    }
+}
+
+#[tauri::command]
+pub async fn clear_execution_history(
+    state: State<'_, AppState>,
+    workflow_id: Option<WorkflowId>,
+) -> CommandResult<()> {
+    state.store()?;
+    match agent::request(
+        &state.paths,
+        Request::ClearExecutionHistory {
+            workflow: workflow_id,
+        },
+    )
+    .await
+    .map_err(agent_required)?
+    {
+        Response::Ok => Ok(()),
         other => Err(unexpected(&other)),
     }
 }
