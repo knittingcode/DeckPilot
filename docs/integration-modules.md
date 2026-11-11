@@ -138,3 +138,69 @@ commands are limited to 30 s; actions are cancellable.
 Error codes: `not-found`, `not-a-repository`, `unsafe-repository`,
 `git-not-found`, `git-failed`, `project-not-in-profile`, `no-commits`,
 `no-remote`, `network-failed`, and the shared codes.
+
+## Docker (`docker`)
+
+Docker availability, containers, Compose projects and bounded logs. Uses
+the Docker CLI with Compose v2 (`docker compose`).
+
+Capabilities: read profile, machine resources, run programs (`docker`).
+
+Settings: **Docker program** (`dockerExecutable`, machine-specific),
+**Docker context** (`context`, machine-specific; empty uses Docker's
+current context), **Allow starting and stopping services**
+(`allowStateChanges`, off; machine-specific: never exported, an import
+cannot turn it on), **Compose resource** (`composeRole`, default
+`compose`), **Time limit for Compose changes** (`timeoutSeconds`, 10–1800,
+300).
+
+**Contexts.** Every command is `docker --context <name> …`: the action's
+`context`, else the module's, else the context `docker context show`
+reports. The name is part of every result (`context`), so it is visible
+which engine was used; remote contexts (`ssh://`, TCP with TLS) work like
+the local one. `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`, TLS
+variables and `SSH_AUTH_SOCK` are passed on.
+
+**Compose projects** come from a resource bound to the Compose file or its
+folder: the action's `compose` resource, else the `compose` resource of an
+explicitly chosen project of the same profile, else of the workflow's
+current project. `projectName` is passed as `-p` when set; the context and
+the Compose project are named in every message.
+
+| Action type | Effect | Parameters | Outputs |
+| ----------- | ------ | ---------- | ------- |
+| `docker.status` | read-only | `context` | `available`, `reason`, `clientVersion`, `serverVersion`, `serverOs`, `composeVersion`, `context` |
+| `docker.containers` | read-only | `all` (off), `name` (filter), `context` | `count`, `running`, `names`, `containers` (name, state, image, status per line), `context` |
+| `docker.compose-status` | read-only | compose target | `services`, `running`, `stopped`, `allRunning`, `containers`, `project`, `projectKey`, `context` |
+| `docker.compose-up` | modifies | compose target, `services` (one per line) | `output`*, `project`, `projectKey`, `context` |
+| `docker.compose-down` | modifies | compose target, `removeOrphans` (off) | same |
+| `docker.compose-restart` | modifies | compose target, `services` | same |
+| `docker.logs` | read-only | `container`, or `service` with a compose target; `lines` (1–2000, 100), `since` | `logs`*, `lineCount`, `truncated`, `context` |
+
+The compose target is `compose`, `project_id`, `projectName` and `context`.
+\* sensitive: available to later nodes, not kept.
+
+`docker.status` succeeds when Docker cannot be used — that is its answer:
+`available` is false and `reason` is `docker-not-found`,
+`daemon-unavailable` or `permission-denied`. Other actions fail with
+those codes.
+
+**Safety.** The three Compose changes are refused with `changes-disabled`
+until allowed on this computer. `compose up` runs `up --detach`;
+`compose down` runs `down` and never removes volumes (`-v`) or images
+(`--rmi`); `--remove-orphans` is added only when asked for. Contexts,
+containers, services and project names are validated, so none can be
+taken for an option, and services follow `--`. Logs are never followed:
+the last lines up to 64 KiB. Labels and environments of containers are
+never read into results. There are no Swarm operations.
+
+**Cancellation and timeouts.** All actions are cancellable: the Docker CLI
+is stopped with its process group. Cancelling `compose up` or `down`
+partway leaves the project as far as Compose got; running the action again
+completes it (both are retry-safe and idempotent). Reading commands are
+limited to 30 s, changes to the module's time limit.
+
+Error codes: `docker-not-found`, `daemon-unavailable`, `permission-denied`,
+`context-not-found`, `compose-unavailable`, `compose-file-not-found`,
+`not-found`, `invalid-name`, `changes-disabled`, `project-not-in-profile`,
+`docker-failed`, and the shared codes.

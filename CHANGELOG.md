@@ -23,6 +23,12 @@ as the notes of its GitHub release and of the in-app update.
   last fetched unless a refresh is asked for (`git ls-remote`, which
   changes nothing locally). Detached HEADs, branches without commits and
   missing remotes are reported as such.
+- Docker module: Docker availability, containers, Compose project status,
+  Compose up, down and restart, and container or service logs. Every
+  command names its Docker context (remote contexts work too) and Compose
+  projects come from project resources. Starting and stopping services is
+  off until allowed on this computer; down never removes volumes; logs are
+  bounded and never followed.
 - Action types declare what running them does (read-only, opens something,
   changes things) and failures carry a stable error code; both are shown in
   the workflow editor.

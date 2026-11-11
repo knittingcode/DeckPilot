@@ -1057,6 +1057,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "deckpilot-module-docker"
+version = "0.5.0"
+dependencies = [
+ "deckpilot-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "deckpilot-module-general"
 version = "0.5.0"
 dependencies = [
@@ -1095,6 +1104,7 @@ version = "0.5.0"
 dependencies = [
  "deckpilot-core",
  "deckpilot-device",
+ "deckpilot-module-docker",
  "deckpilot-module-general",
  "deckpilot-module-git",
  "deckpilot-module-projects",
