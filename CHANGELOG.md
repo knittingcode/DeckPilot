@@ -75,6 +75,54 @@ below.
 - Action types declare what running them does (read-only, opens something,
   changes things) and failures carry a stable error code; both are shown in
   the workflow editor.
+- GitHub, GitLab and Jira modules (read-only): the signed-in account,
+  repositories and projects, pull and merge requests with review requests,
+  checks and pipelines, Jira issues and saved filters, and opening their
+  pages. Tokens are stored credentials used by name, sent only to the
+  configured server over https and scrubbed from every result; rate limits
+  are reported with the time to wait. Searches are built from fixed
+  templates, never from free text.
+- Sub-workflows: a workflow can declare typed inputs and outputs and be
+  called from another workflow's *Call* node. Recursion is refused, nesting
+  is limited, and sensitive inputs and outputs are never kept in history.
+- Workflow triggers: workflows can start on a schedule (every few minutes,
+  daily or weekly at a local time) or when the agent starts, a profile is
+  activated, the project changes or a device connects or disconnects.
+  Missed times are skipped, never caught up; a trigger never starts a
+  second run of a workflow that is still running, and triggers can be
+  paused per workflow.
+- Workflow variables: typed variables local to one run, set with a *Set
+  variable* node and read like any other output. Parallel branches must
+  agree on a value before they join; sensitive values stay in sensitive
+  variables.
+- Live key state: actions can show a state on their key (an indicator,
+  a short detail, progress, on/off). Git keys show the branch and whether
+  it is clean, Docker keys show what is running, and workflow keys show
+  progress while their workflow runs. States refresh only for keys that
+  are shown, at most four at a time, and only changed keys are redrawn.
+- Key appearance: background and text colour, font size, title position
+  and custom icons per key. Icons are imported from PNG or JPEG, scaled to
+  at most 256 px and re-encoded, which drops embedded metadata. The app and
+  the agent draw keys with the same renderer.
+- Layout editor: multiple selection, keyboard navigation, copy, cut, paste
+  and duplicate (also across pages), undo and redo, drag and drop from the
+  library and between keys, a context menu per key, and page navigation
+  with a breadcrumb.
+- Run details in the workflow builder: a timeline of the run with parallel
+  nodes on their own lanes, the slowest nodes, retries with their waits,
+  failure details with what the error code means, and previews of declared
+  outputs (sensitive ones are never shown).
+- New step workflows can be created from the workflow switcher and the
+  title bar.
+
+### Fixed
+
+- Duplicating a workflow no longer briefly shows an empty editor.
+- On Windows, the agent no longer fails to start when the previous
+  instance is still closing its connection, and opening the configuration
+  no longer fails while another process is writing to it.
+- On Linux, starting a program that was written a moment earlier (for
+  example by an installer) no longer fails with "Text file busy".
 
 ## [0.5.0] - Not released (draft prereleases 0.5.0-1 and 0.5.0-2 only)
 
