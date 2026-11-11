@@ -261,6 +261,71 @@ Each finished run records what happened (`project`): `unchanged`,
   marked interrupted then. The agent waits for its IPC connections to close
   before it reports that it stopped.
 
+## Triggers
+
+A workflow can start by itself: its optional `triggers` (stored with the
+workflow; workflows without them are unchanged) are schedules and lifecycle
+events, and `triggersPaused` pauses all of them.
+
+```json
+"triggers": [
+  { "type": "schedule", "schedule": { "every": "interval", "minutes": 15 } },
+  { "type": "schedule", "schedule": { "every": "weekly", "days": ["mon", "fri"], "at": "09:00" } },
+  { "type": "lifecycle", "event": "deviceConnected",
+    "inputs": { "serial": { "type": "event", "field": "deviceId" } } }
+]
+```
+
+- **Schedules**: every *n* minutes (1 minute to 7 days), every day at a
+  local time, or on chosen weekdays at a local time (`HH:MM`).
+- **Lifecycle events**: `agentStarted` (once per agent start, when the
+  configuration is first unlocked), `profileActivated`, `projectChanged`
+  (within the active profile), `deviceConnected`, `deviceDisconnected`.
+- **Inputs.** A trigger gives the workflow's inputs a fixed value or a
+  field of the event: `firedAt` (local `YYYY-MM-DD HH:MM`), `profileName`,
+  `projectKey`, `projectName`, `previousProjectKey` (project changed),
+  `deviceId` (the serial) and `deviceModel` (device events). Values are
+  converted to the input's kind as for sub-workflows; a field fits a text
+  input or one of its own kind (project keys). Inputs without a value get
+  their default.
+- **Validation**: intervals of at least one minute, valid times and
+  weekdays, only declared inputs, fields the event has, fixed values of the
+  input's kind, a value for every required input, and no self-triggering:
+  a workflow started by project changes may not change the active project
+  (its project scope must be `execution`), or it would start itself again.
+
+**When triggers fire.** The agent runs one scheduler and watches its own
+state after every event it handles (active profile, active project,
+connected devices):
+
+- only for the **active profile**, and only while the configuration is
+  **unlocked** — nothing that happened while locked is replayed; unlocking
+  takes the current state as the starting point, and devices connected
+  while locked do not count as connected;
+- a firing is **skipped** while the previous run of the workflow still
+  runs, while its triggers are paused, and when four workflows already run;
+- runs are recorded in history with the trigger kind (`schedule`,
+  `lifecycle`) and which one (`every 15 min`, `deviceConnected`).
+
+**Time.** The scheduler is checked every few seconds:
+
+- An interval counts real time from when the trigger was first seen (agent
+  started and unlocked, profile activated, workflow saved or resumed).
+- Daily and weekly times are local wall-clock times in the computer's time
+  zone and fire at most once per local date.
+- **No catch-up.** A firing may be up to two minutes late; one that is
+  later — the computer slept, the agent did not run, the configuration was
+  locked — is skipped and never made up. An interval then continues with
+  its next due time; a time first seen within its minute waits for the
+  next day.
+- **Daylight saving time.** A local time that does not exist on a day
+  (clocks go forward) does not fire that day; a time that occurs twice
+  (clocks go back) fires once. Intervals are not affected.
+
+In the editor, triggers are edited in the workflow panel (nothing
+selected): add a schedule or an event, choose values for the workflow's
+inputs, pause them. The start node shows them.
+
 ## Running in the agent
 
 Workflows run in the background agent, whether they are started from the
@@ -383,7 +448,8 @@ started in the editor, from a Stream Deck or while the app was closed:
 - **History.** Without a selection, the inspector lists the workflow's last
   20 runs with state, trigger (app or Stream Deck), start time and duration;
   a run is shown on the canvas by selecting it. Running entries have
-  progress and Cancel. The history can be cleared.
+  progress and Cancel. The history can be cleared. Runs started by a
+  schedule or an event show which one.
 - **Reconnection.** The list is read again when the window opens or the
   agent reconnects, and node reports of finished runs are loaded on demand,
   so closing and reopening the app loses nothing.

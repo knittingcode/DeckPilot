@@ -4,6 +4,8 @@ import type { ExecutionSummary, ProjectOutcome } from "@/lib/types"
 import { formatMs } from "./describe"
 import type { NodeRun } from "./node-view"
 
+export { triggerText } from "./trigger-model"
+
 /** The run state of every node of `run`, for the canvas. */
 export function nodeRuns(run: LiveExecution | undefined): Record<string, NodeRun> | undefined {
   if (!run) return undefined
