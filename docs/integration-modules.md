@@ -449,6 +449,75 @@ Error codes: `invalid-api-url`, `invalid-project`, `invalid-ref`,
 `invalid-response`, `url-not-allowed`, `credential-missing`, the HTTP
 module's network codes, and the shared codes.
 
+## Jira (`jira`)
+
+Reads the signed-in user, single issues, and the issues assigned to you or
+in a saved filter from Jira Cloud or Jira Data Center, and opens Jira pages.
+It is read-only: only `GET` requests are sent, and there are no actions
+that create, transition, assign, comment on or change anything.
+
+Capabilities: send network requests, use stored credentials, open pages.
+
+Settings: **Site** (`siteUrl`, e.g. `https://your-team.atlassian.net` or a
+Data Center address, also under a path such as `https://<host>/jira`; no
+default; machine-specific), **Jira** (`deployment`: `cloud` or
+`data-center`, `cloud`; machine-specific), **Credential** (`credential`, the
+*name* of a stored credential, default `jira.token`; portable), **Time
+limit** (`timeoutSeconds`, 1–120, 20; for all requests of one action) and
+**Site may be on a private network** (`allowPrivateHost`, off;
+machine-specific).
+
+**Credential.** Stored in Settings › HTTP › Credentials: for Jira Cloud
+`email:api-token` (an Atlassian API token, sent as Basic authentication to
+REST API 3); for Data Center a personal access token (sent as Bearer to REST
+API 2). It is read through the credential store only and never appears in
+parameters, settings, exports, outputs, messages or logs; every result is
+also checked for the whole credential, its token part and its Basic
+encoding, and any appearance is replaced by `[redacted]`.
+
+| Action type | Effect | Parameters | Outputs |
+| ----------- | ------ | ---------- | ------- |
+| `jira.myself` | read-only | — | `displayName`, `account` (Cloud account id or Data Center user name), `timeZone` |
+| `jira.issue` | read-only | `issue` (key such as `ABC-123`) | `key`, `summary`*, `status`, `statusCategory` (`todo`, `in-progress`, `done`, `unknown`), `type`, `priority`, `assignee`, `updated`, `url` |
+| `jira.issues` | read-only | `source` (`assigned-to-me`, `filter`), `filterId` (the saved filter's number), `project` (key, optional), `includeDone` (off), `limit` (1–100, 20) | `count`, `countExact`, `listed`, `items`*, `truncated`, `firstKey`, `firstUrl` |
+| `jira.open` | opens | `url`, or `issue` | `url` |
+
+Every reading action also takes `credential` (a stored credential's name;
+empty uses the module's). \* sensitive: available to later nodes, not kept.
+The e-mail address of the account is never an output.
+
+**Searches** are built from fixed templates only — `assignee =
+currentUser()` or `filter = <number>`, optionally `AND project = "<KEY>"`
+(project keys are checked to be letters, digits and `_`), `AND
+statusCategory != Done` unless `includeDone`, ordered by last update — so
+no search text from a workflow reaches Jira. On Data Center `count` is
+Jira's `total`; Jira Cloud's search gives no total, so up to 5 pages of 100
+keys are counted and `countExact` is false if there were more. `items`
+lists at most `limit`, one per line as `ABC-1 Summary [Status] (@Assignee)`
+(or `(unassigned)`), summaries reduced to one plain line. Messages give
+keys, statuses and counts only, never summaries.
+
+**Opening** accepts only `https` pages on the configured site (including
+its path); an issue opens at `<site>/browse/<KEY>`. Other hosts, paths,
+schemes and URLs with user names fail with `url-not-allowed`.
+
+**Network and limits** are those of the GitHub and GitLab modules: the
+HTTP module's client and network policy, the credential only over `https`
+(or to this computer) and never to another origin, answers up to 4 MiB, one
+time limit for the whole action, and cancellation at once.
+
+**Failures.** `unauthorized` (401), `forbidden` (403), `not-found` (404,
+also for issues the account may not see), `rate-limited` (429;
+`retryAfterSeconds` from `Retry-After`), `jira-error` (another status, with
+Jira's first error message, e.g. a filter that does not exist), and
+`credential-missing` when nothing is stored under the name or a Cloud
+credential is not `email:api-token`.
+
+Error codes: `invalid-site-url`, `invalid-issue-key`, `invalid-project`,
+`unauthorized`, `forbidden`, `not-found`, `rate-limited`, `jira-error`,
+`invalid-response`, `url-not-allowed`, `credential-missing`, the HTTP
+module's network codes, and the shared codes.
+
 ## Notifications (`notifications`)
 
 Shows notifications from workflows: as native desktop notifications and in
