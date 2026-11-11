@@ -1,0 +1,16 @@
+[package]
+name = "deckpilot-module-git"
+description = "DeckPilot Git feature module: read-only repository status"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+deckpilot-core.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

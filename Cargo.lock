@@ -1064,6 +1064,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "deckpilot-module-git"
+version = "0.5.0"
+dependencies = [
+ "deckpilot-core",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "deckpilot-module-projects"
 version = "0.5.0"
 dependencies = [
@@ -1088,6 +1096,7 @@ dependencies = [
  "deckpilot-core",
  "deckpilot-device",
  "deckpilot-module-general",
+ "deckpilot-module-git",
  "deckpilot-module-projects",
  "deckpilot-module-system",
 ]

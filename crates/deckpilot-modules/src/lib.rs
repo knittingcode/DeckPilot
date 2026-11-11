@@ -7,6 +7,7 @@
 use deckpilot_core::{ModuleRegistry, ModuleStates, Os};
 
 pub use deckpilot_module_general as general;
+pub use deckpilot_module_git as git;
 pub use deckpilot_module_projects as projects;
 pub use deckpilot_module_system as system;
 
@@ -26,6 +27,9 @@ pub fn builtin(os: Os) -> ModuleRegistry {
         .expect("built-in modules do not conflict");
     registry
         .register(Box::new(system::SystemModule::new()))
+        .expect("built-in modules do not conflict");
+    registry
+        .register(Box::new(git::GitModule::new()))
         .expect("built-in modules do not conflict");
     registry
 }

@@ -79,3 +79,62 @@ Error codes: `invalid-url`, `invalid-path`, `invalid-arguments`,
 Opening cannot detect whether the opened program then shows what was
 asked (a launcher reports only that it started); a launcher still running
 after 10 s counts as success.
+
+## Git (`git`)
+
+Reads the state of project repositories and opens them. It never changes a
+repository: there are no commit, reset, clean, checkout or push actions.
+
+Capabilities: read profile, machine resources, run programs (`git`), open
+folders.
+
+Settings: **Git program** (`gitExecutable`; empty uses `git` on `PATH`;
+machine-specific), **Repository resource** (`repositoryRole`, default
+`repository`), **Network time limit** (`networkTimeoutSeconds`, 5–120, 20).
+
+**Which repository.** Every action takes an optional `repository` (a folder
+resource) and an optional `project_id`. Without a repository, the action
+uses the `repository` resource of the chosen project, or of the workflow's
+current project — the run's own project context, so parallel runs on
+different projects each read their own repository. An explicit project must
+belong to the action's profile (checked when saving and when running).
+Choosing a project never changes DeckPilot's active project.
+
+| Action type | Effect | Extra parameters | Outputs |
+| ----------- | ------ | ---------------- | ------- |
+| `git.status` | read-only | — | `branch`, `head`, `detached`, `unborn`, `upstream`, `clean`, `staged`, `unstaged`, `untracked`, `conflicts`, `ahead`, `behind` |
+| `git.branch` | read-only | — | `branch`, `head`, `detached`, `unborn`, `upstream` |
+| `git.changes` | read-only | `limit` (1–500, 100) | `changed`, `staged`, `unstaged`, `untracked`, `conflicts`, `files` (one `XY path` per line, as `git status --short`), `truncated` |
+| `git.last-commit` | read-only | — | `hash`, `shortHash`, `author` (name only), `date` (ISO 8601), `subject` |
+| `git.remote-status` | read-only | `refresh` (off) | `hasUpstream`, `source` (`cached`/`network`), `branch`, `upstream`, `remote`, `ahead`, `behind`, `trackingHead`, `remoteHead`, `stale` |
+| `git.open-repository` | opens | `application` (optional application resource) | — |
+
+Every action also outputs `repository` (the folder) and `projectKey` when
+the repository came from a project.
+
+**Detached HEAD, unborn branches, missing remotes.** A detached HEAD has
+`detached` set and no `branch`; a branch without commits has `unborn` set
+and no `head` (`git.last-commit` fails with `no-commits`). Without an
+upstream, `git.remote-status` succeeds with `hasUpstream` false; when the
+branch tracks a remote that is no longer configured, a refresh fails with
+`no-remote`.
+
+**Cached and fresh remote state.** By default `git.remote-status` reports
+what was last fetched (`source: cached`): ahead/behind against the
+tracking branch, without the network. With `refresh`, it also asks the
+remote for its branch with `git ls-remote` (`source: network`), which
+changes nothing locally: `remoteHead` is the remote's commit and `stale`
+says whether it moved since the last fetch. Fetching itself is not done.
+
+**Safety.** Git runs as `git -C <repository> --no-pager --no-optional-locks
+-c core.fsmonitor=false …`, without a shell, with `GIT_TERMINAL_PROMPT=0`
+(so credentials are never asked for) and the minimal environment plus
+`SSH_AUTH_SOCK`. `--no-optional-locks` keeps `git status` from refreshing
+the index, so reading never writes to the repository; turning off
+`core.fsmonitor` keeps a repository's configuration from starting a
+program. Credentials in URLs are removed from error messages. Local
+commands are limited to 30 s; actions are cancellable.
+
+Error codes: `not-found`, `not-a-repository`, `unsafe-repository`,
+`git-not-found`, `git-failed`, `project-not-in-profile`, `no-commits`,
+`no-remote`, `network-failed`, and the shared codes.

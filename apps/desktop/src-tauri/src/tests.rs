@@ -762,11 +762,23 @@ fn fresh_installation_has_an_empty_action_library() {
         .iter()
         .map(|m| m["id"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(ids, ["general", "projects", "system"]);
-    assert_eq!(modules[1]["pages"][0]["id"], "projects");
+    assert_eq!(ids, ["general", "git", "projects", "system"]);
+    let module = |id: &str| {
+        modules
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(module("projects")["pages"][0]["id"], "projects");
     // Modules with risky actions start with them switched off.
-    assert_eq!(modules[2]["configValues"]["allowCommands"]["value"], false);
-    let types: Vec<_> = modules[1]["actionTypes"]
+    assert_eq!(
+        module("system")["configValues"]["allowCommands"]["value"],
+        false
+    );
+    let types: Vec<_> = module("projects")["actionTypes"]
         .as_array()
         .unwrap()
         .iter()
@@ -803,7 +815,13 @@ fn disabled_modules_hide_types_but_keep_saved_actions() {
         "set_module_enabled",
         json!({ "moduleId": "projects", "enabled": false }),
     );
-    assert_eq!(modules[1]["enabled"], false);
+    let projects = modules
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "projects")
+        .unwrap();
+    assert_eq!(projects["enabled"], false);
     let types = h.ok("list_action_types", json!({}));
     assert!(
         types
@@ -858,7 +876,13 @@ fn disabled_modules_hide_types_but_keep_saved_actions() {
         "set_module_config",
         json!({ "moduleId": "projects", "config": { "wrapAround": { "type": "boolean", "value": false } } }),
     );
-    assert_eq!(configured[1]["configValues"]["wrapAround"]["value"], false);
+    let projects = configured
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "projects")
+        .unwrap();
+    assert_eq!(projects["configValues"]["wrapAround"]["value"], false);
 }
 
 #[test]
