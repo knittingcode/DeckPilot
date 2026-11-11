@@ -16,6 +16,8 @@ import { cn } from "@/lib/utils"
 interface CanvasProps {
   model: DeviceModel
   faces?: Map<string, KeyFace>
+  /** Rendered key images (PNG data URLs); shown instead of the drawn face. */
+  images?: Map<string, string>
   icons?: Map<string, string | null | undefined>
   /** Text for controls without a display (dials). */
   captions?: Map<string, string>
@@ -71,6 +73,7 @@ function Control({
   const selected = props.selection?.some((c) => sameControl(c, control)) ?? false
   const interactive = Boolean(props.onSelect)
   const face = props.faces?.get(key)
+  const image = props.images?.get(key)
   const summary = props.summaries?.get(key) ?? (shape === "dial" ? props.captions?.get(key) : "")
   // Only pointer dragging: Enter and Space keep selecting the control.
   const onPointerDown = props.draggable
@@ -111,6 +114,16 @@ function Control({
             {(props.captions?.get(key) ?? "").split(" · ")[0]?.replace(/^[^:]*: /, "")}
           </span>
         </div>
+      ) : image ? (
+        // The key as the device draws it; the button carries the name.
+        <img
+          src={image}
+          alt=""
+          className={cn(
+            "size-full bg-black object-cover",
+            shape === "zone" ? "rounded-md" : "rounded-lg",
+          )}
+        />
       ) : (
         <FaceTile
           face={face}
