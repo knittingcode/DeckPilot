@@ -13,7 +13,7 @@ import {
 import type { AgentCompatibility } from "@/lib/types"
 import { api, resetApi } from "@/test/api-mock"
 import { installDomStubs } from "@/test/dom"
-import { agentConnection } from "@/test/fixtures"
+import { agentConnection, agentStatus } from "@/test/fixtures"
 import { renderWithApp } from "@/test/render"
 import { resetToasts, toast } from "@/test/toast"
 
@@ -30,15 +30,11 @@ afterEach(cleanup)
 const versions = { agent: "0.4.0", app: "0.5.0" }
 
 describe("agent compatibility notice", () => {
-  it.each<[string, AgentCompatibility, RegExp]>([
-    [
-      "outdated",
-      { type: "agentOutdated", ...versions },
-      /agent \(0\.4\.0\) is older than this app/,
-    ],
-    ["newer", { type: "agentNewer", agent: "0.6.0", app: "0.5.0" }, /\(0\.6\.0\) is newer/],
-    ["unknown", { type: "unknown", ...versions }, /could not be compared/],
-  ])("explains an %s agent and offers a restart", async (_, compatibility, text) => {
+  it.each<[string, AgentCompatibility]>([
+    ["outdated", { type: "agentOutdated", ...versions }],
+    ["newer", { type: "agentNewer", agent: "0.6.0", app: "0.5.0" }],
+    ["unknown", { type: "unknown", ...versions }],
+  ])("explains an %s agent and restarts it at once when nothing runs", async (_, compatibility) => {
     const restarted = agentConnection()
     api.restartAgent.mockResolvedValue(restarted)
     const { user, context } = renderWithApp(<AgentCompatibilityNotice />, {
@@ -46,13 +42,60 @@ describe("agent compatibility notice", () => {
     })
     const alert = screen.getByRole("alert")
     expect(alert).toHaveTextContent("The running agent does not match this app")
-    expect(alert).toHaveTextContent(text)
+    expect(alert).toHaveTextContent(
+      `Agent ${compatibility.type === "compatible" ? "" : compatibility.agent}, app 0.5.0.`,
+    )
+    expect(alert).toHaveTextContent("Restart the agent so both run the same version.")
     await user.click(screen.getByRole("button", { name: "Restart agent" }))
-    expect(api.restartAgent).toHaveBeenCalled()
+    expect(api.restartAgent).toHaveBeenCalledWith(false)
     await waitFor(() => {
       expect(context.setAgent).toHaveBeenCalledWith(restarted)
     })
     expect(toast.success).toHaveBeenCalledWith("The agent was restarted")
+  })
+
+  it("says when the agent must be replaced and which features are missing", () => {
+    renderWithApp(<AgentCompatibilityNotice />, {
+      agent: agentConnection({
+        compatibility: { type: "updateRequired", agent: "0.2.0", app: "0.5.0" },
+        capabilities: ["workflows", "notifications"],
+      }),
+    })
+    const alert = screen.getByRole("alert")
+    expect(alert).toHaveTextContent("The running agent is too old for this app")
+    expect(alert).toHaveTextContent("Nothing can be configured until it is replaced")
+    expect(alert).toHaveTextContent(
+      "Until then these are unavailable: the encrypted configuration, background workflow runs and their history.",
+    )
+    expect(alert).not.toHaveTextContent("workflow notifications")
+  })
+
+  it("lists no missing features while the capabilities are unknown", () => {
+    renderWithApp(<AgentCompatibilityNotice />, {
+      agent: agentConnection({ compatibility: { type: "agentOutdated", ...versions } }),
+    })
+    expect(screen.getByRole("alert")).not.toHaveTextContent("unavailable")
+  })
+
+  it("asks before interrupting running workflows", async () => {
+    api.restartAgent.mockResolvedValue(agentConnection())
+    const { user } = renderWithApp(<AgentCompatibilityNotice />, {
+      agent: agentConnection({
+        compatibility: { type: "agentOutdated", ...versions },
+        status: agentStatus({ runningExecutions: 2 }),
+      }),
+    })
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "2 workflows are running in the agent. Restarting now interrupts them",
+    )
+    await user.click(screen.getByRole("button", { name: "Restart agent…" }))
+    expect(api.restartAgent).not.toHaveBeenCalled()
+    await user.click(screen.getByRole("button", { name: "Wait for them" }))
+    expect(screen.queryByRole("button", { name: "Interrupt workflows and restart" })).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: "Restart agent…" }))
+    await user.click(screen.getByRole("button", { name: "Interrupt workflows and restart" }))
+    expect(api.restartAgent).toHaveBeenCalledWith(true)
   })
 
   it.each([

@@ -8,8 +8,9 @@ use tokio::io::BufReader;
 
 use crate::framing::{FrameError, read_message, write_message};
 use crate::{
-    AgentEvent, AgentPaths, ClientKind, ClientMessage, IpcError, PROTOCOL_VERSION, Request,
-    Response, ServerMessage, SharedStream, token,
+    AgentEvent, AgentPaths, Capability, ClientKind, ClientMessage, ErrorCode, IpcError,
+    MIN_COMPATIBLE_AGENT_PROTOCOL, PROTOCOL_VERSION, Request, Response, ServerMessage,
+    SharedStream, negotiate, token,
 };
 
 /// How long the agent has to answer a new connection's `hello`.
@@ -27,6 +28,18 @@ pub enum ClientError {
     Protocol(String),
     #[error(transparent)]
     Agent(#[from] IpcError),
+    /// The request is newer than the protocol the agent speaks; it was not
+    /// sent. The agent is from an older release and needs to be updated
+    /// (restarted with the agent of this release) for it.
+    #[error(
+        "the running agent ({agent}) is too old for `{request}` (it needs protocol {needs}, the agent speaks {protocol}); restart the agent"
+    )]
+    Unsupported {
+        request: String,
+        needs: u32,
+        protocol: u32,
+        agent: String,
+    },
 }
 
 impl From<FrameError> for ClientError {
@@ -61,14 +74,38 @@ pub struct AgentClient {
     writer: SharedStream,
     next_id: u64,
     agent_version: String,
+    /// The newest protocol the agent speaks.
+    agent_protocol: u32,
+    /// The protocol of this connection: the lower of the client's and the
+    /// agent's.
+    protocol: u32,
+    capabilities: Vec<Capability>,
     events: VecDeque<AgentEvent>,
 }
 
 impl AgentClient {
-    /// Connects and authenticates. Returns [`ClientError::NotRunning`] when no
-    /// agent listens for this data directory.
+    /// Connects and authenticates with the newest protocol the agent
+    /// accepts, from [`PROTOCOL_VERSION`] down to
+    /// [`MIN_COMPATIBLE_AGENT_PROTOCOL`]. Agents before protocol 6 reject a
+    /// newer `hello`, so the client steps down until one is accepted; the
+    /// connection then only offers what that protocol has
+    /// ([`AgentClient::capabilities`]). Returns [`ClientError::NotRunning`]
+    /// when no agent listens for this data directory, and the agent's
+    /// [`ErrorCode::UnsupportedProtocol`] error for an agent too old for
+    /// this app.
     pub async fn connect(paths: &AgentPaths, client: ClientKind) -> Result<Self, ClientError> {
-        Self::connect_with_protocol(paths, client, PROTOCOL_VERSION).await
+        let mut protocol = PROTOCOL_VERSION;
+        loop {
+            match Self::connect_with_protocol(paths, client, protocol).await {
+                Err(ClientError::Agent(error))
+                    if error.code == ErrorCode::UnsupportedProtocol
+                        && protocol > MIN_COMPATIBLE_AGENT_PROTOCOL =>
+                {
+                    protocol -= 1;
+                }
+                other => return other,
+            }
+        }
     }
 
     /// Connects speaking an older protocol version. Used to talk to an agent
@@ -98,6 +135,9 @@ impl AgentClient {
             writer: stream,
             next_id: 1,
             agent_version: String::new(),
+            agent_protocol: protocol,
+            protocol,
+            capabilities: Vec::new(),
             events: VecDeque::new(),
         };
         let hello = ClientMessage::Hello {
@@ -119,8 +159,26 @@ impl AgentClient {
             ))
         })??;
         match welcome {
-            ServerMessage::Welcome { agent_version, .. } => {
+            ServerMessage::Welcome {
+                agent_version,
+                protocol: agent_protocol,
+                capabilities,
+            } => {
                 connection.agent_version = agent_version;
+                connection.agent_protocol = agent_protocol;
+                connection.protocol = negotiate(protocol, agent_protocol);
+                // Agents before protocol 6 do not list capabilities; theirs
+                // follow from the protocol. An agent never gets credit for
+                // more than the negotiated protocol has.
+                let derived = Capability::of_protocol(connection.protocol);
+                connection.capabilities = if capabilities.is_empty() {
+                    derived
+                } else {
+                    capabilities
+                        .into_iter()
+                        .filter(|c| derived.contains(c))
+                        .collect()
+                };
                 Ok(connection)
             }
             ServerMessage::Error { error, .. } => Err(ClientError::Agent(error)),
@@ -132,6 +190,24 @@ impl AgentClient {
         &self.agent_version
     }
 
+    /// The protocol of this connection.
+    pub fn protocol(&self) -> u32 {
+        self.protocol
+    }
+
+    /// The newest protocol the agent speaks.
+    pub fn agent_protocol(&self) -> u32 {
+        self.agent_protocol
+    }
+
+    pub fn capabilities(&self) -> &[Capability] {
+        &self.capabilities
+    }
+
+    pub fn supports(&self, capability: Capability) -> bool {
+        self.capabilities.contains(&capability)
+    }
+
     async fn receive(&mut self) -> Result<ServerMessage, ClientError> {
         read_message(&mut self.reader)
             .await?
@@ -141,6 +217,15 @@ impl AgentClient {
     /// Sends a request and waits for its response. Events that arrive in the
     /// meantime are kept for [`AgentClient::next_event`].
     pub async fn request(&mut self, request: Request) -> Result<Response, ClientError> {
+        let needs = request.since_protocol();
+        if needs > self.protocol {
+            return Err(ClientError::Unsupported {
+                request: request.name(),
+                needs,
+                protocol: self.protocol,
+                agent: self.agent_version.clone(),
+            });
+        }
         let id = self.next_id;
         self.next_id += 1;
         write_message(&mut self.writer, &ClientMessage::Request { id, request }).await?;

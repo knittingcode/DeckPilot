@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { api, errorMessage } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
 import { describeLayout } from "@/lib/format"
-import type { DeviceInfo } from "@/lib/types"
+import type { AgentCapability, DeviceInfo } from "@/lib/types"
 
 export function AgentBadge() {
   const { agent } = useAppContext()
@@ -59,16 +59,25 @@ export function AgentStopped() {
   )
 }
 
+/** Features the running agent's protocol does not have, as the user knows them. */
+const MISSING_FEATURES: Partial<Record<AgentCapability, string>> = {
+  encryptedDatabase: "the encrypted configuration",
+  backgroundExecutions: "background workflow runs and their history",
+  notifications: "workflow notifications",
+}
+
 /** Shown when the running agent is not the one shipped with this app. */
 export function AgentCompatibilityNotice() {
   const { agent, setAgent } = useAppContext()
   const [busy, setBusy] = useState(false)
+  const [confirming, setConfirming] = useState(false)
   const compatibility = agent?.compatibility
   if (!agent?.running || !compatibility || compatibility.type === "compatible") return null
-  const restart = async () => {
+  const running = agent.status?.runningExecutions ?? 0
+  const restart = async (interruptRunning: boolean) => {
     setBusy(true)
     try {
-      setAgent(await api.restartAgent())
+      setAgent(await api.restartAgent(interruptRunning))
       toast.success("The agent was restarted")
     } catch (e) {
       toast.error(errorMessage(e))
@@ -76,22 +85,69 @@ export function AgentCompatibilityNotice() {
       setBusy(false)
     }
   }
+  const missing =
+    agent.capabilities === undefined
+      ? []
+      : Object.entries(MISSING_FEATURES)
+          .filter(([capability]) => !agent.capabilities?.includes(capability as AgentCapability))
+          .map(([, label]) => label)
+  const required = compatibility.type === "updateRequired"
   return (
-    <Alert>
+    <Alert variant={required ? "destructive" : "default"}>
       <TriangleAlert />
-      <AlertTitle>The running agent does not match this app</AlertTitle>
+      <AlertTitle>
+        {required
+          ? "The running agent is too old for this app"
+          : "The running agent does not match this app"}
+      </AlertTitle>
       <AlertDescription>
         <p>
-          {compatibility.type === "agentOutdated"
-            ? `The agent (${compatibility.agent}) is older than this app (${compatibility.app}).`
-            : compatibility.type === "agentNewer"
-              ? `The agent (${compatibility.agent}) is newer than this app (${compatibility.app}).`
-              : `The agent's version (${compatibility.agent}) could not be compared with this app (${compatibility.app}).`}{" "}
-          Restart the agent so both run the same version.
+          Agent {compatibility.agent}, app {compatibility.app}.{" "}
+          {required
+            ? "Nothing can be configured until it is replaced by the agent of this app."
+            : "Restart the agent so both run the same version."}
         </p>
-        <Button className="mt-2" size="sm" disabled={busy} onClick={() => void restart()}>
-          <RotateCw /> Restart agent
-        </Button>
+        {missing.length > 0 && <p>Until then these are unavailable: {missing.join(", ")}.</p>}
+        {running > 0 && (
+          <p>
+            {running === 1 ? "A workflow is" : `${running} workflows are`} running in the agent.
+            Restarting now interrupts {running === 1 ? "it" : "them"}; the history records that.
+          </p>
+        )}
+        <div className="mt-2 flex gap-2">
+          {running > 0 && !confirming ? (
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                setConfirming(true)
+              }}
+            >
+              <RotateCw /> Restart agent…
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant={running > 0 ? "destructive" : "default"}
+              disabled={busy}
+              onClick={() => void restart(running > 0)}
+            >
+              <RotateCw /> {running > 0 ? "Interrupt workflows and restart" : "Restart agent"}
+            </Button>
+          )}
+          {confirming && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                setConfirming(false)
+              }}
+            >
+              Wait for them
+            </Button>
+          )}
+        </div>
       </AlertDescription>
     </Alert>
   )
