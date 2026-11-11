@@ -314,6 +314,13 @@ started in the editor, from a Stream Deck or while the app was closed:
   result, attempts, start and duration, its message, a structured error
   (code, message, whether a retry may help) and its outputs — only the
   outputs its action declares.
+- **Run details.** Below the history, the shown run is broken down: total
+  and summed node time with the slowest nodes, failures with error code,
+  action code and whether a retry may help, and a timeline of every node's
+  start and duration relative to the run, with parallel branches marked.
+  Choosing a node shows its retries, failure and declared outputs (shortened
+  previews; sensitive outputs are shown as *not kept*). Retry waits are known
+  only for runs watched live; the history keeps only the final attempt.
 - **History.** Without a selection, the inspector lists the workflow's last
   20 runs with state, trigger (app or Stream Deck), start time and duration;
   a run is shown on the canvas by selecting it. Running entries have
