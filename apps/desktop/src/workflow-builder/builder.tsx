@@ -737,6 +737,7 @@ function Builder({
                   change(removeNodes(graph, [node.id]))
                   selectOnly([])
                 }}
+                run={run?.[node.id]}
               />
             ) : (
               <div className="grid">

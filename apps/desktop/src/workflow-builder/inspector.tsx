@@ -27,6 +27,8 @@ import type {
 } from "@/lib/types"
 
 import { FLOW_DESCRIPTION, FLOW_TITLE } from "./catalog"
+import type { NodeRun } from "./node-view"
+import { NodeRunReport } from "./run-panel"
 import { type Lookup, actionOf, availableOutputs, formatMs } from "./describe"
 import { MAX_DELAY_MS, MAX_LOOP_ITERATIONS, MAX_RETRIES, upstream } from "./graph"
 
@@ -133,6 +135,8 @@ export interface InspectorProps {
   loopTargets: { id: string; name: string }[]
   onChange: Change
   onDelete: () => void
+  /** The node in the run shown on the canvas. */
+  run?: NodeRun
 }
 
 /** Configuration of the selected node. */
@@ -174,6 +178,7 @@ export function NodeInspector(props: InspectorProps) {
         </Field>
         <IssueList issues={issues} />
       </div>
+      {props.run && <NodeRunReport run={props.run} />}
       <KindEditor {...props} />
     </div>
   )

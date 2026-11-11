@@ -55,6 +55,14 @@ describe("ExecutionStore", () => {
     expect(store.get("e1")?.nodes).toHaveLength(1)
   })
 
+  it("keeps progress that arrived before the run's start", () => {
+    const store = new ExecutionStore()
+    store.load({ ...summary({ completedNodes: 2 }), nodes: [node("a"), node("b")] })
+    store.apply({ type: "executionStarted", execution: summary() })
+    expect(store.get("e1")?.completedNodes).toBe(2)
+    expect(store.get("e1")?.nodes).toHaveLength(2)
+  })
+
   it("asks for runs it has not seen start", () => {
     const store = new ExecutionStore()
     expect(

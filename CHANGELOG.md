@@ -28,6 +28,10 @@ as the notes of its GitHub release and of the in-app update.
   mapping, retries and timeouts, undo and redo, copy and paste, automatic
   arrangement, a minimap, and the engine's validation shown on the nodes.
   Step-based workflows can be opened in the editor; their steps are kept.
+- Runs show on the workflow graph as they happen — running, succeeded,
+  failed, skipped and cancelled nodes with durations, real progress, node
+  results and declared outputs — with a run history per workflow, also for
+  runs started from a Stream Deck or while the app was closed.
 - Workflows run in the background agent, also while the app is closed, with
   live progress, cancellation and an execution history kept in the
   encrypted database. Runs interrupted by an agent restart are marked as
