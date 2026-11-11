@@ -10,11 +10,15 @@ import {
   connect,
   connectionProblem,
   copy,
+  crossings,
   emptyGraph,
+  freePosition,
   history,
   isNodeId,
+  layoutOrder,
   nodeId,
   paste,
+  reconnect,
   redo,
   removeNodes,
   replace,
@@ -134,5 +138,71 @@ describe("history", () => {
     state = settle(state, before)
     expect(state.past).toHaveLength(1)
     expect(undo(state).present).toEqual(before)
+  })
+})
+
+describe("reconnecting and placing", () => {
+  it("moves an edge only to a valid connection", () => {
+    let graph = chain()
+    graph = addNode(graph, { type: "delay", ms: 10 }, { x: 3, y: 0 }, "Wait").graph
+    const old = { from: "build", port: "out" as const, to: "check" }
+    const moved = reconnect(graph, old, { from: "build", port: "out", to: "wait" })
+    expect(moved.problem).toBeNull()
+    expect(moved.graph.edges).toContainEqual({ from: "build", port: "out", to: "wait" })
+    expect(moved.graph.edges).not.toContainEqual(old)
+    // A cycle is refused and nothing changes.
+    const refused = reconnect(graph, old, { from: "build", port: "out", to: "start" })
+    expect(refused.problem).toMatch(/start/)
+    expect(refused.graph).toBe(graph)
+  })
+
+  it("places new nodes where they cover nothing", () => {
+    const graph = chain()
+    const taken = graph.nodes[1]?.position ?? { x: 0, y: 0 }
+    const free = freePosition(graph, taken)
+    expect(free.x).toBe(taken.x)
+    expect(free.y).toBeGreaterThan(taken.y)
+    expect(freePosition(graph, { x: 5000, y: 0 })).toEqual({ x: 5000, y: 0 })
+  })
+})
+
+describe("auto layout", () => {
+  /** start → check; Yes → a1 → a2 → join; No → b1 → join, drawn crossed. */
+  function branches(): WorkflowGraph {
+    let graph = emptyGraph()
+    const add = (kind: Parameters<typeof addNode>[1], y: number, name: string) => {
+      graph = addNode(graph, kind, { x: 0, y }, name).graph
+    }
+    add({ type: "condition", predicate: { type: "succeeded", node: "start" } }, 0, "Check")
+    add({ type: "delay", ms: 1 }, 300, "A1")
+    add({ type: "delay", ms: 1 }, 300, "A2")
+    add({ type: "delay", ms: 1 }, -300, "B1")
+    add({ type: "join" }, 0, "Join")
+    for (const edge of [
+      { from: "start", port: "out" as const, to: "check" },
+      { from: "check", port: "true" as const, to: "a1" },
+      { from: "a1", port: "out" as const, to: "a2" },
+      { from: "check", port: "false" as const, to: "b1" },
+      { from: "a2", port: "out" as const, to: "join" },
+      { from: "b1", port: "out" as const, to: "join" },
+    ]) {
+      graph = connect(graph, edge)
+    }
+    return graph
+  }
+
+  it("keeps branches apart, Yes above No, without crossings", () => {
+    const graph = autoLayout(branches())
+    const y = Object.fromEntries(graph.nodes.map((n) => [n.id, n.position.y]))
+    expect(y.a1).toBeLessThan(y.b1 ?? 0)
+    expect(crossings(graph, layoutOrder(graph))).toBe(0)
+    // Every node has its own place.
+    const places = new Set(graph.nodes.map((n) => `${n.position.x},${n.position.y}`))
+    expect(places.size).toBe(graph.nodes.length)
+  })
+
+  it("is stable: arranging twice changes nothing", () => {
+    const once = autoLayout(branches())
+    expect(autoLayout(once)).toEqual(once)
   })
 })

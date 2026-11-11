@@ -1185,3 +1185,21 @@ fn actions_that_finish_despite_a_cancellation_keep_their_result() {
     assert_eq!(status(&report, "after"), NodeStatus::Cancelled);
     assert_eq!(report.status, RunStatus::Cancelled);
 }
+
+#[test]
+fn saving_and_loading_keeps_positions_exactly() {
+    let mut f = Fixture::new();
+    let probe = f.probe("p", &[]);
+    let mut stored = graph(
+        vec![node("start", NodeKind::Trigger), action("p", probe)],
+        vec![edge("start", Port::Out, "p")],
+    );
+    stored.nodes[1].position = Position {
+        x: 412.5,
+        y: -87.25,
+    };
+    let json = serde_json::to_string(&stored).unwrap();
+    let loaded: WorkflowGraph = serde_json::from_str(&json).unwrap();
+    assert_eq!(loaded, stored);
+    assert_eq!(loaded.nodes[1].position.x, 412.5);
+}

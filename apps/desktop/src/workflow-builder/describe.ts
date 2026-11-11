@@ -3,6 +3,7 @@ import type {
   ActionType,
   GraphNode,
   GraphPredicate,
+  ModuleInfo,
   Workflow,
   WorkflowGraph,
 } from "@/lib/types"
@@ -15,6 +16,8 @@ export interface Lookup {
   types: ActionType[]
   workflows: Workflow[]
   projects: { key: string; name: string }[]
+  /** The module registry, for node documentation. */
+  modules?: ModuleInfo[]
 }
 
 export function actionOf(node: GraphNode, lookup: Lookup) {

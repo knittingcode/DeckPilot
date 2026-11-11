@@ -232,55 +232,171 @@ export function paste(
 
 const COLUMN = 280
 const ROW = 140
+/** A node's footprint on the canvas, for overlap checks. */
+const NODE_WIDTH = 224
+const NODE_HEIGHT = 96
+
+/** Replaces `old` with `edge`, if the engine's rules allow the new one. */
+export function reconnect(
+  graph: WorkflowGraph,
+  old: GraphEdge,
+  edge: GraphEdge,
+): { graph: WorkflowGraph; problem: string | null } {
+  const without = removeEdges(graph, [old])
+  const problem = connectionProblem(without, edge)
+  if (problem) return { graph, problem }
+  return { graph: { ...without, edges: [...without.edges, edge] }, problem: null }
+}
+
+function overlaps(a: { x: number; y: number }, b: { x: number; y: number }) {
+  return Math.abs(a.x - b.x) < NODE_WIDTH && Math.abs(a.y - b.y) < NODE_HEIGHT
+}
 
 /**
- * Arranges nodes in columns by their longest distance from the start; the
- * nodes of a column keep their vertical order. Unconnected nodes go into a
- * last column.
+ * The nearest position at or below `wanted` where a new node covers no
+ * existing one, so adding nodes never moves or hides what the user placed.
  */
-export function autoLayout(graph: WorkflowGraph): WorkflowGraph {
+export function freePosition(
+  graph: WorkflowGraph,
+  wanted: { x: number; y: number },
+): { x: number; y: number } {
+  let position = wanted
+  for (let step = 0; step < MAX_NODES; step++) {
+    if (!graph.nodes.some((node) => overlaps(node.position, position))) return position
+    position = { x: wanted.x, y: wanted.y + (step + 1) * (NODE_HEIGHT + 24) }
+  }
+  return position
+}
+
+/** Where on its source a connection leaves, so Yes runs above No. */
+const PORT_OFFSET: Record<GraphPort, number> = { out: 0, true: -0.3, false: 0.3, error: 0.4 }
+
+/** Columns by longest distance from the start; unreachable nodes last. */
+function columns(graph: WorkflowGraph): Map<string, number> {
   const depth = new Map<string, number>()
   const indegree = new Map(graph.nodes.map((n) => [n.id, 0]))
   for (const edge of graph.edges) indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1)
   const queue = graph.nodes.filter((n) => indegree.get(n.id) === 0).map((n) => n.id)
-  for (const id of queue)
+  for (const id of queue) {
     if (graph.nodes.find((n) => n.id === id)?.type === "trigger") depth.set(id, 0)
-  // Kahn's algorithm with the longest path as depth.
+  }
   const remaining = new Map(indegree)
-  const order: string[] = []
   while (queue.length > 0) {
     const id = queue.shift() as string
-    order.push(id)
     for (const edge of graph.edges.filter((e) => e.from === id)) {
-      if (depth.has(id))
+      if (depth.has(id)) {
         depth.set(edge.to, Math.max(depth.get(edge.to) ?? 0, (depth.get(id) ?? 0) + 1))
+      }
       const left = (remaining.get(edge.to) ?? 1) - 1
       remaining.set(edge.to, left)
       if (left === 0) queue.push(edge.to)
     }
   }
   const last = Math.max(0, ...depth.values()) + 1
-  const columns = new Map<number, GraphNode[]>()
-  for (const node of graph.nodes) {
-    const column = depth.get(node.id) ?? last
-    columns.set(column, [...(columns.get(column) ?? []), node])
+  return new Map(graph.nodes.map((n) => [n.id, depth.get(n.id) ?? last]))
+}
+
+/** Connections that cross between neighbouring columns of `order`. */
+export function crossings(graph: WorkflowGraph, order: Map<string, number>): number {
+  const column = columns(graph)
+  const spans = graph.edges
+    .filter((e) => (column.get(e.to) ?? 0) === (column.get(e.from) ?? 0) + 1)
+    .map((e) => ({
+      column: column.get(e.from) ?? 0,
+      from: (order.get(e.from) ?? 0) + PORT_OFFSET[e.port],
+      to: order.get(e.to) ?? 0,
+    }))
+  let count = 0
+  for (let i = 0; i < spans.length; i++) {
+    for (let j = i + 1; j < spans.length; j++) {
+      const [a, b] = [spans[i], spans[j]]
+      if (a && b && a.column === b.column && (a.from - b.from) * (a.to - b.to) < 0) count++
+    }
   }
-  const positions = new Map<string, { x: number; y: number }>()
-  for (const [column, nodes] of columns) {
-    const sorted = [...nodes].sort(
-      (a, b) => a.position.y - b.position.y || a.id.localeCompare(b.id),
-    )
-    sorted.forEach((node, index) => {
-      positions.set(node.id, {
-        x: column * COLUMN,
-        y: (index - (sorted.length - 1) / 2) * ROW,
-      })
-    })
+  return count
+}
+
+/** The vertical order of nodes within each column. */
+function layerOrder(graph: WorkflowGraph): Map<string, number> {
+  const column = columns(graph)
+  const layers = new Map<number, string[]>()
+  const byPosition = [...graph.nodes].sort(
+    (a, b) => a.position.y - b.position.y || a.id.localeCompare(b.id),
+  )
+  for (const node of byPosition) {
+    const c = column.get(node.id) ?? 0
+    layers.set(c, [...(layers.get(c) ?? []), node.id])
+  }
+  const order = new Map<string, number>()
+  const index = () => {
+    for (const ids of layers.values()) ids.forEach((id, i) => order.set(id, i))
+  }
+  index()
+  const sorted = [...layers.keys()].sort((a, b) => a - b)
+  // Barycenter sweeps: order each column by the mean position of its
+  // neighbours in the previous (forward) or next (backward) column.
+  const sweep = (from: number[], neighbours: (id: string) => number[]) => {
+    for (const c of from) {
+      const ids = layers.get(c) ?? []
+      const key = new Map(
+        ids.map((id) => {
+          const values = neighbours(id)
+          const mean = values.length
+            ? values.reduce((sum, v) => sum + v, 0) / values.length
+            : (order.get(id) ?? 0)
+          return [id, mean]
+        }),
+      )
+      ids.sort((a, b) => (key.get(a) ?? 0) - (key.get(b) ?? 0) || a.localeCompare(b))
+      index()
+    }
+  }
+  const previous = (id: string) =>
+    graph.edges
+      .filter((e) => e.to === id && (column.get(e.from) ?? 0) < (column.get(id) ?? 0))
+      .map((e) => (order.get(e.from) ?? 0) + PORT_OFFSET[e.port])
+  const next = (id: string) =>
+    graph.edges
+      .filter((e) => e.from === id && (column.get(e.to) ?? 0) > (column.get(id) ?? 0))
+      .map((e) => (order.get(e.to) ?? 0) - PORT_OFFSET[e.port])
+  for (let pass = 0; pass < 4; pass++) {
+    sweep(sorted.slice(1), previous)
+    sweep(sorted.slice(0, -1).reverse(), next)
+  }
+  sweep(sorted.slice(1), previous)
+  return order
+}
+
+/**
+ * Arranges nodes in columns by their longest distance from the start, and
+ * orders each column to keep branches together and connections from
+ * crossing (Yes above No). Columns are centred on the start's row.
+ * Unconnected nodes go into a last column. Only runs when asked for.
+ */
+export function autoLayout(graph: WorkflowGraph): WorkflowGraph {
+  const column = columns(graph)
+  const order = layerOrder(graph)
+  const sizes = new Map<number, number>()
+  for (const id of order.keys()) {
+    const c = column.get(id) ?? 0
+    sizes.set(c, (sizes.get(c) ?? 0) + 1)
   }
   return {
     ...graph,
-    nodes: graph.nodes.map((n) => ({ ...n, position: positions.get(n.id) ?? n.position })),
+    nodes: graph.nodes.map((n) => {
+      const c = column.get(n.id) ?? 0
+      const size = sizes.get(c) ?? 1
+      return {
+        ...n,
+        position: { x: c * COLUMN, y: ((order.get(n.id) ?? 0) - (size - 1) / 2) * ROW },
+      }
+    }),
   }
+}
+
+/** The order of nodes in the layout, for tests and crossing counts. */
+export function layoutOrder(graph: WorkflowGraph): Map<string, number> {
+  return layerOrder(graph)
 }
 
 /** Undo and redo of committed changes. */
