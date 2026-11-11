@@ -194,7 +194,12 @@ export function NodeRunReport({ run }: { run: NodeRun }) {
         {report.attempts > 0 && (
           <>
             <dt className="text-muted-foreground">Attempts</dt>
-            <dd>{report.attempts}</dd>
+            <dd>
+              {report.attempts}
+              {report.attempts > 1 && (
+                <span className="text-muted-foreground"> · retry waits under Run details</span>
+              )}
+            </dd>
           </>
         )}
         <dt className="text-muted-foreground">Started</dt>

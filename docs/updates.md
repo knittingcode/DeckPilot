@@ -58,13 +58,17 @@ The agent ships inside the application bundle, so an update replaces both
 executables. The configuration app coordinates the installation:
 
 1. download and verify the update;
-2. send `prepareForUpdate` to the agent. The agent finishes the request it is
-   processing (actions and workflows are never interrupted), blanks and
+2. wait while workflows run in the agent (`runningExecutions` in its
+   status): automatic installation tries again later, and installing by hand
+   says why it waits, so an update never ends a workflow silently. Agents
+   before protocol 6 cannot report running workflows;
+3. send `prepareForUpdate` to the agent. The agent finishes the request it is
+   processing, blanks and
    releases the devices and exits. An agent from an older release that does
    not know this request is stopped with `shutdown` over protocol 1;
-3. install. If installing fails, the previous agent is started again and the
+4. install. If installing fails, the previous agent is started again and the
    error is shown;
-4. restart the application, which starts the new agent.
+5. restart the application, which starts the new agent.
 
 A running executable is never overwritten. After any restart the app compares
 its version with the agent's (`AgentCompatibility`) and offers to restart a
@@ -74,9 +78,9 @@ Only one check, download or installation runs at a time; a second attempt
 is refused while one is in progress. A failed installation is reported as a
 failure, the downloaded update stays ready to retry, and the agent is
 started again (it opens a system-managed configuration by itself, or is
-unlocked by the app). The agent processes requests one
-at a time, so a running workflow finishes before the agent stops for an
-update.
+unlocked by the app). Restarting the agent from the app is refused while
+workflows run unless the user confirms interrupting them; interrupted runs
+are recorded as such in the history.
 
 ## First launch after an update
 
@@ -92,6 +96,17 @@ A newer database is never opened by an older DeckPilot (see
 never installs an older version than the running one.
 
 ## Verification status
+
+| What | How | Status |
+| ---- | --- | ------ |
+| Manifest parsing, channel (no pre-releases, no downgrades), trusted URLs | `deckpilot-update` unit tests | automated |
+| Non-manifest responses (offline captive portal, empty, truncated JSON) | unit tests | automated |
+| Signature verification: valid accepted; tampered, truncated, extended, zeroed, empty package rejected; signature by another key rejected; signed version bound to the announced one | unit tests with throwaway keys | automated |
+| Install decisions: modes, idle device, running workflows (`agent_busy`) | policy unit tests | automated |
+| Tampered update served to an installed build is rejected; the real update installs, replaces app and agent, restarts, and opens the same encrypted configuration | `tools/release-validation/update-test.sh` (local builds, throwaway updater key, loopback endpoint) | manual run on macOS |
+| Keychain access kept across an update between two Developer ID signed builds | `update-continuity` workflow (CI signing identity, no notarization, throwaway updater key) | automated on demand |
+| Interrupted download, retry | the updater plugin returns an error; the app shows it, the update stays offered and can be downloaded again | by code review; not tested end to end |
+| Update between two published releases | needs two public releases | not verified |
 
 - Update discovery, manifest validation, signature verification, policy
   decisions and the agent stop/restart sequence are covered by automated

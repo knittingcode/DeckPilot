@@ -155,7 +155,23 @@ export function compatibility(
 ): Compatibility {
   switch (parameter.type) {
     case "text":
+    case "code":
       return { level: "ok" }
+    case "lines":
+      return {
+        level: "warning",
+        message: "Each line of the value becomes one item; nothing is split on spaces.",
+      }
+    case "pairs":
+      return {
+        level: "warning",
+        message: `Each line must be a name and a value separated by “${parameter.separator}”.`,
+      }
+    case "credential":
+      return {
+        level: "warning",
+        message: "The value must be the name of a credential stored on this computer.",
+      }
     case "integer":
       return kind === "integer"
         ? { level: "ok" }

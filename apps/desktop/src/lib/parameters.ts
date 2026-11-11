@@ -5,6 +5,10 @@ export function initialValue(spec: ParameterSpec): ParameterValue {
   if (spec.default) return spec.default
   switch (spec.kind.type) {
     case "text":
+    case "lines":
+    case "pairs":
+    case "code":
+    case "credential":
       return { type: "text", value: "" }
     case "integer":
       return { type: "integer", value: spec.kind.min ?? 0 }
