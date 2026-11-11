@@ -2,7 +2,8 @@ use serde::Serialize;
 use tauri::State;
 
 use deckpilot_core::{
-    ActiveProjectContext, DeviceLayout, KeyFace, LayoutId, PageId, ProfileId, ProjectId, page_faces,
+    ActiveProjectContext, DeviceLayout, KeyFace, LayoutId, PageDestination, PageId, ProfileId,
+    ProjectId, page_faces,
 };
 use deckpilot_device::{ControlId, DeviceModelId};
 use deckpilot_storage::ConfigStore;
@@ -203,5 +204,177 @@ pub fn preview_layout(
                 }
             })
             .collect(),
+    )
+}
+
+/// One page of a layout's page tree.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageNode {
+    id: PageId,
+    name: String,
+    /// The folder it is in (stored or inferred); `None`: top level.
+    parent: Option<PageId>,
+    /// Whether `parent` is stored rather than inferred.
+    stored: bool,
+    /// 0 for top-level pages.
+    depth: usize,
+    /// The key the runtime adds as Back because the page has none.
+    automatic_back: Option<ControlId>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageTree {
+    /// In layout order.
+    pages: Vec<PageNode>,
+    /// Problems that do not prevent saving, e.g. folders without Back.
+    warnings: Vec<String>,
+}
+
+/// The page tree of a (possibly unsaved) layout, with inferred folders for
+/// layouts that do not store them, and its warnings.
+#[tauri::command]
+pub fn page_tree(state: State<'_, AppState>, layout: DeviceLayout) -> PageTree {
+    let controls: Vec<ControlId> = state
+        .catalog
+        .get(&layout.model)
+        .map(|model| {
+            model
+                .capabilities
+                .controls()
+                .into_iter()
+                .filter(|c| model.capabilities.has_display(*c))
+                .collect()
+        })
+        .unwrap_or_default();
+    let parents = layout.page_parents();
+    PageTree {
+        pages: layout
+            .pages
+            .iter()
+            .map(|page| PageNode {
+                id: page.id,
+                name: page.name.clone(),
+                parent: parents.get(&page.id).copied(),
+                stored: page.parent.is_some() || layout.explicit_tree,
+                depth: layout.ancestors(page.id).len(),
+                automatic_back: layout.automatic_back(page.id, &controls),
+            })
+            .collect(),
+        warnings: layout.warnings().iter().map(ToString::to_string).collect(),
+    }
+}
+
+/// Puts the pages of a saved layout in `order` (every page once). The page
+/// tree is stored explicitly.
+#[tauri::command]
+pub fn reorder_pages(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+    layout_id: LayoutId,
+    order: Vec<PageId>,
+) -> CommandResult<DeviceLayout> {
+    modify_profile(&state, profile_id, |profile| {
+        let layout = profile
+            .layouts
+            .iter_mut()
+            .find(|l| l.id == layout_id)
+            .ok_or(CommandError::NotFound("layout"))?;
+        layout.reorder_pages(&order)?;
+        Ok(layout.clone())
+    })
+}
+
+/// The result of moving or copying a page.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageChange {
+    /// The page's id in the destination (new for copies).
+    page: PageId,
+    /// Keys removed from the old layout because they opened moved pages.
+    removed_keys: usize,
+    /// Every layout that changed, as saved.
+    layouts: Vec<DeviceLayout>,
+}
+
+fn change_page(
+    state: &AppState,
+    profile_id: ProfileId,
+    layout_id: LayoutId,
+    target_layout_id: Option<LayoutId>,
+    change: impl FnOnce(&mut deckpilot_core::Profile, PageDestination) -> CommandResult<(PageId, usize)>,
+    parent_id: Option<PageId>,
+) -> CommandResult<PageChange> {
+    let destination = PageDestination {
+        layout: target_layout_id.unwrap_or(layout_id),
+        parent: parent_id,
+    };
+    modify_profile(state, profile_id, |profile| {
+        let (page, removed_keys) = change(profile, destination)?;
+        let layouts = profile
+            .layouts
+            .iter()
+            .filter(|l| l.id == layout_id || l.id == destination.layout)
+            .cloned()
+            .collect();
+        Ok(PageChange {
+            page,
+            removed_keys,
+            layouts,
+        })
+    })
+}
+
+/// Moves a page with everything inside it: into another folder of the same
+/// layout (`targetLayoutId` empty), or to another layout whose model
+/// supports its keys. `parentId` empty: top level within a layout, the
+/// home page of another layout.
+#[tauri::command]
+pub fn move_page(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+    layout_id: LayoutId,
+    page_id: PageId,
+    target_layout_id: Option<LayoutId>,
+    parent_id: Option<PageId>,
+) -> CommandResult<PageChange> {
+    let catalog = state.catalog.clone();
+    change_page(
+        &state,
+        profile_id,
+        layout_id,
+        target_layout_id,
+        |profile, destination| {
+            let removed = profile.move_page(layout_id, page_id, destination, &catalog)?;
+            Ok((page_id, removed))
+        },
+        parent_id,
+    )
+}
+
+/// Copies a page with everything inside it (new identifiers). `parentId`
+/// empty: next to the original within a layout, the home page of another
+/// layout.
+#[tauri::command]
+pub fn copy_page(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+    layout_id: LayoutId,
+    page_id: PageId,
+    target_layout_id: Option<LayoutId>,
+    parent_id: Option<PageId>,
+) -> CommandResult<PageChange> {
+    let catalog = state.catalog.clone();
+    change_page(
+        &state,
+        profile_id,
+        layout_id,
+        target_layout_id,
+        |profile, destination| {
+            let copy = profile.copy_page(layout_id, page_id, destination, &catalog)?;
+            Ok((copy, 0))
+        },
+        parent_id,
     )
 }

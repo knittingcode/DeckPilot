@@ -8,6 +8,8 @@ import type {
   AgentConnection,
   ControlFace,
   IconInfo,
+  PageChange,
+  PageTree,
   CredentialInfo,
   Conversion,
   GraphIssue,
@@ -211,6 +213,24 @@ export const api = {
     render?: boolean,
   ) =>
     invoke<ControlFace[]>("preview_layout", { profileId, layout, pageId, projectId, render }),
+  pageTree: (layout: DeviceLayout) => invoke<PageTree>("page_tree", { layout }),
+  reorderPages: (profileId: string, layoutId: string, order: string[]) =>
+    invoke<DeviceLayout>("reorder_pages", { profileId, layoutId, order }),
+  /** Without a target layout: into another folder (null parent: top level). */
+  movePage: (
+    profileId: string,
+    layoutId: string,
+    pageId: string,
+    targetLayoutId?: string | null,
+    parentId?: string | null,
+  ) => invoke<PageChange>("move_page", { profileId, layoutId, pageId, targetLayoutId, parentId }),
+  copyPage: (
+    profileId: string,
+    layoutId: string,
+    pageId: string,
+    targetLayoutId?: string | null,
+    parentId?: string | null,
+  ) => invoke<PageChange>("copy_page", { profileId, layoutId, pageId, targetLayoutId, parentId }),
   listIcons: (profileId: string) => invoke<IconInfo[]>("list_icons", { profileId }),
   /** `data`: the PNG or JPEG file as base64 (at most 2 MiB). */
   importIcon: (profileId: string, name: string, data: string) =>

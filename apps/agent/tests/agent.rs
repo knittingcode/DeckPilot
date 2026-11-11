@@ -3029,3 +3029,69 @@ async fn keys_show_their_appearance_and_icons() {
     );
     agent.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn folders_go_back_to_their_parent_with_an_automatic_back_key() {
+    use deckpilot_core::{FaceStyle, KeyFace, LayoutPage};
+
+    let agent = setup().await;
+    assert!(agent.frames_shown());
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    // Home key 5 opens "Folder"; "Folder" key 5 opens "Inner"; neither has
+    // a Back key (an older layout).
+    let folder = LayoutPage::new("Folder");
+    let inner = LayoutPage::new("Inner");
+    let (folder_id, inner_id) = (folder.id, inner.id);
+    let open = |page| {
+        deckpilot_core::ControlBinding::new(
+            ControlId::Key { index: 5 },
+            deckpilot_core::Trigger::Press,
+            deckpilot_core::BindingTarget::OpenPage { page },
+        )
+    };
+    let mut folder = folder;
+    folder.bindings.push(open(inner_id));
+    profile.layouts[0].pages[0].bindings.push(open(folder_id));
+    profile.layouts[0].pages.extend([folder, inner]);
+    agent.store().save_profile(&profile).unwrap();
+    let mut client = agent.client().await;
+    client.request(Request::ReloadConfiguration).await.unwrap();
+
+    let key = |index| ControlId::Key { index };
+    let folder_face = key_image(&KeyFace::new(FaceStyle::Folder, "Folder"));
+    let back = key_image(&KeyFace::new(FaceStyle::Back, "Back"));
+    assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
+        frames.get(&key(5)) == Some(&folder_face)
+    }));
+    let home_frames = agent.mock.frames(&agent.device);
+    let page = |status: &AgentStatus| status.devices[0].page.clone();
+
+    agent.mock.tap(&agent.device, key(5));
+    agent
+        .wait_for_status(|s| page(s).as_deref() == Some("Folder"))
+        .await;
+    agent.mock.tap(&agent.device, key(5));
+    agent
+        .wait_for_status(|s| page(s).as_deref() == Some("Inner"))
+        .await;
+    // The first free key is an automatic Back.
+    assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
+        frames.get(&key(0)) == Some(&back)
+    }));
+    // Back goes to the parent folder, then home.
+    agent.mock.tap(&agent.device, key(0));
+    agent
+        .wait_for_status(|s| page(s).as_deref() == Some("Folder"))
+        .await;
+    agent.mock.tap(&agent.device, key(0));
+    agent
+        .wait_for_status(|s| page(s).as_deref() == Some("Home"))
+        .await;
+    assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
+        *frames == home_frames
+    }));
+    // The stored layout was not rewritten by any of this.
+    let stored = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    assert_eq!(stored, profile);
+    agent.shutdown().await;
+}

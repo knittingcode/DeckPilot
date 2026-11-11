@@ -97,6 +97,12 @@ impl ControlBinding {
 pub struct LayoutPage {
     pub id: PageId,
     pub name: String,
+    /// The folder this page belongs to: Back returns there. `None`: a
+    /// top-level page, or (in layouts from before parents were stored) a
+    /// parent inferred from the bindings that open the page (see
+    /// [`DeviceLayout::page_parents`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<PageId>,
     #[serde(default)]
     pub bindings: Vec<ControlBinding>,
 }
@@ -106,6 +112,7 @@ impl LayoutPage {
         Self {
             id: PageId::new(),
             name: name.into(),
+            parent: None,
             bindings: Vec::new(),
         }
     }
@@ -125,6 +132,11 @@ pub struct DeviceLayout {
     pub model: DeviceModelId,
     pub home_page: PageId,
     pub pages: Vec<LayoutPage>,
+    /// The page tree is stored: [`LayoutPage::parent`] is the whole truth
+    /// and `None` means top level. Without it (layouts from before page
+    /// parents), parents that are not stored are inferred.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub explicit_tree: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -151,6 +163,16 @@ pub enum LayoutIssue {
     DanglingTarget { page: String, control: ControlId },
     #[error("page `{page}`: {control} shows an icon that is not in the profile")]
     MissingIcon { page: String, control: ControlId },
+    #[error("page `{page}` belongs to a folder that does not exist")]
+    UnknownParent { page: String },
+    #[error("page `{page}` is inside itself (its folders form a cycle)")]
+    ParentCycle { page: String },
+    #[error("the home page cannot be inside a folder")]
+    HomeHasParent,
+    /// A warning ([`DeviceLayout::warnings`]): the runtime shows an
+    /// automatic Back key on the page's first free key.
+    #[error("page `{page}` has no Back key; an automatic one is shown on its first free key")]
+    MissingBack { page: String },
 }
 
 impl DeviceLayout {
@@ -163,6 +185,7 @@ impl DeviceLayout {
             model,
             home_page: home.id,
             pages: vec![home],
+            explicit_tree: false,
         }
     }
 
@@ -268,6 +291,7 @@ impl DeviceLayout {
         for page in &self.pages {
             self.validate_page(page, &model.capabilities, profile, &mut issues);
         }
+        self.validate_parents(&mut issues);
         issues
     }
 

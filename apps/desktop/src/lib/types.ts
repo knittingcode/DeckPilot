@@ -277,6 +277,8 @@ export interface ControlBinding {
 export interface LayoutPage {
   id: string
   name: string
+  /** The folder the page is in; Back returns there. See `explicitTree`. */
+  parent?: string | null
   bindings: ControlBinding[]
 }
 
@@ -286,6 +288,41 @@ export interface DeviceLayout {
   model: string
   homePage: string
   pages: LayoutPage[]
+  /**
+   * The page tree is stored: `parent` is the whole truth and a missing
+   * parent means top level. Without it, missing parents are inferred from
+   * openPage bindings (use `page_tree`). Set it when editing parents.
+   */
+  explicitTree?: boolean
+}
+
+/** One page of `page_tree`. */
+export interface PageNode {
+  id: string
+  name: string
+  /** Stored or inferred folder; null: top level. */
+  parent: string | null
+  /** Whether `parent` is stored rather than inferred. */
+  stored: boolean
+  depth: number
+  /** The key the runtime adds as Back because the page has none. */
+  automaticBack: ControlId | null
+}
+
+export interface PageTree {
+  pages: PageNode[]
+  /** Problems that do not prevent saving, e.g. folders without Back. */
+  warnings: string[]
+}
+
+/** Result of `move_page` / `copy_page`. */
+export interface PageChange {
+  /** The page in the destination (new id for copies). */
+  page: string
+  /** Keys removed from the old layout because they opened moved pages. */
+  removedKeys: number
+  /** Every changed layout, as saved. */
+  layouts: DeviceLayout[]
 }
 
 export interface Profile {
