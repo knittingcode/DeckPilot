@@ -1,3 +1,4 @@
+import { CodeField, CredentialField, ListField, PairsField } from "@/components/structured-fields"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -124,6 +125,62 @@ function Control({
         projects={projects}
         onChange={(project) => {
           onChange({ type: "project", value: project })
+        }}
+      />
+    )
+  }
+  if (kind.type === "lines" && value.type === "text") {
+    return (
+      <ListField
+        id={id}
+        value={value.value}
+        itemLabel={kind.itemLabel}
+        maxItems={kind.maxItems}
+        maxLength={kind.maxLength}
+        onChange={(text) => {
+          onChange({ type: "text", value: text })
+        }}
+      />
+    )
+  }
+  if (kind.type === "pairs" && value.type === "text") {
+    return (
+      <PairsField
+        id={id}
+        value={value.value}
+        separator={kind.separator}
+        nameLabel={kind.nameLabel}
+        valueLabel={kind.valueLabel}
+        maxItems={kind.maxItems}
+        caseInsensitive={kind.caseInsensitive}
+        noSecrets={kind.noSecrets}
+        onChange={(text) => {
+          onChange({ type: "text", value: text })
+        }}
+      />
+    )
+  }
+  if (kind.type === "code" && value.type === "text") {
+    return (
+      <CodeField
+        id={id}
+        value={value.value}
+        language={kind.language}
+        maxLength={kind.maxLength}
+        onChange={(text) => {
+          onChange({ type: "text", value: text })
+        }}
+      />
+    )
+  }
+  if (kind.type === "credential" && value.type === "text") {
+    return (
+      <CredentialField
+        id={id}
+        value={value.value}
+        optional={!spec.required}
+        onChange={(text) => {
+          onChange({ type: "text", value: text })
         }}
       />
     )
