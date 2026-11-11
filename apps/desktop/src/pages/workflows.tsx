@@ -1,4 +1,4 @@
-import { Plus, Workflow as WorkflowIcon } from "lucide-react"
+import { ListOrdered, Plus, Workflow as WorkflowIcon } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
@@ -19,6 +19,7 @@ import { useTitlebar } from "@/hooks/use-titlebar"
 import { api, errorMessage } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
 import type { ActionType, Conversion, ProfileView, Workflow } from "@/lib/types"
+import { type WorkflowSelection, shownWorkflow } from "@/lib/workflow-model"
 import { StepEditor } from "@/pages/workflow-steps"
 import { emptyGraph } from "@/workflow-builder/graph"
 import { WorkflowRun } from "@/workflow-builder/workflow-run"
@@ -44,6 +45,7 @@ function Workflows() {
 }
 
 const NEW = "new"
+const NEW_STEPS = "new-steps"
 
 function newWorkflow(): Workflow {
   // New workflows keep project changes to their runs.
@@ -81,6 +83,7 @@ function WorkflowSwitcher({
         ))}
         {workflows.length > 0 && <SelectSeparator />}
         <SelectItem value={NEW}>New workflow</SelectItem>
+        <SelectItem value={NEW_STEPS}>New step workflow</SelectItem>
       </SelectContent>
     </Select>
   )
@@ -99,18 +102,24 @@ function WorkflowsView({
 }) {
   const { refresh, modules } = useAppContext()
   const workflows = view.profile.workflows
-  const [selected, setSelected] = useState<string>(workflows[0]?.id ?? NEW)
+  const [selection, setSelection] = useState<WorkflowSelection>({ id: workflows[0]?.id ?? NEW })
   // A new workflow gets a fresh id each time "New workflow" is chosen.
   const [draft, setDraft] = useState(newWorkflow)
   const select = (id: string) => {
-    if (id === NEW) setDraft(newWorkflow())
-    setSelected(id)
+    if (id === NEW || id === NEW_STEPS) setDraft(newWorkflow())
+    setSelection({ id })
   }
   // Step workflows opened in the graph editor; stored only when saved.
   const [conversions, setConversions] = useState<Record<string, Conversion>>({})
-  const current = workflows.find((w) => w.id === selected)
+  const shown = shownWorkflow(selection, workflows, view, [NEW, NEW_STEPS])
+  const current = workflows.find((w) => w.id === shown)
+  // After a change the requested workflow may only arrive with the reload;
+  // until then the editor keeps what it shows.
   const changed = (id?: string) => {
-    setSelected(id ?? workflows.find((w) => w.id !== selected)?.id ?? NEW)
+    setSelection({
+      id: id ?? workflows.find((w) => w.id !== shown)?.id ?? NEW,
+      waiting: { data: view, shown },
+    })
     void reload()
     refresh()
   }
@@ -126,11 +135,47 @@ function WorkflowsView({
           select(NEW)
         },
       },
+      {
+        id: "workflows.new-steps",
+        label: "New step workflow",
+        icon: ListOrdered,
+        placement: "overflow",
+        order: 11,
+        onSelect: () => {
+          select(NEW_STEPS)
+        },
+      },
     ],
   })
   const switcher = (
-    <WorkflowSwitcher workflows={workflows} value={current ? current.id : NEW} onChange={select} />
+    <WorkflowSwitcher
+      workflows={workflows}
+      value={current ? current.id : shown === NEW_STEPS ? NEW_STEPS : NEW}
+      onChange={select}
+    />
   )
+
+  if (!current && shown === NEW_STEPS) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/40 p-3">
+          {switcher}
+          <p className="flex-1 text-sm text-muted-foreground">
+            A step workflow runs its actions in order. It can be opened in the graph editor later.
+          </p>
+        </div>
+        <StepEditor
+          key={draft.id}
+          view={view}
+          types={types}
+          profileId={profileId}
+          initial={draft}
+          isNew
+          onChanged={changed}
+        />
+      </div>
+    )
+  }
 
   if (current && !current.graph && !conversions[current.id]) {
     return (

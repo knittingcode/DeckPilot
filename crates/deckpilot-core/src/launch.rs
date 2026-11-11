@@ -228,10 +228,11 @@ impl Launcher for SystemLauncher {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        let mut child = command.spawn().map_err(|source| LaunchError::Spawn {
-            program: plan.program.clone(),
-            source,
-        })?;
+        let mut child =
+            crate::process::spawn(&mut command).map_err(|source| LaunchError::Spawn {
+                program: plan.program.clone(),
+                source,
+            })?;
         if plan.wait {
             let until = Instant::now() + LAUNCHER_WAIT;
             while Instant::now() < until {

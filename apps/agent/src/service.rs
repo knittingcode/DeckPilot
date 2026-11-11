@@ -1098,6 +1098,9 @@ impl Agent {
             security_problem: self.security_problem.clone(),
             waiting_for_key_store: self.key_pending,
             screen_lock_detection: self.options.screen_lock.is_some(),
+            running_executions: Some(
+                u32::try_from(self.executions.running_count()).unwrap_or(u32::MAX),
+            ),
         }
     }
 
