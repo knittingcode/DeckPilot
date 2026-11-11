@@ -21,6 +21,7 @@ pub mod launch;
 pub mod layout;
 pub mod module;
 pub mod notify;
+pub mod pages;
 pub mod platform;
 pub mod process;
 pub mod profile;
@@ -70,6 +71,7 @@ pub use module::{
     ModuleMigration, ModulePage, ModuleRegistry, ModuleSettings, ModuleStates, ModuleWindow,
     Portability, SettingScope, WindowSize,
 };
+pub use pages::PageDestination;
 pub use platform::Os;
 pub use profile::{Profile, ProfileIssue, Usage};
 pub use project::{
