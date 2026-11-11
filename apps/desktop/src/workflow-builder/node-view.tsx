@@ -14,6 +14,7 @@ import {
   Split,
   Timer,
   TriangleAlert,
+  Variable,
   Workflow as WorkflowIcon,
 } from "lucide-react"
 import { createElement } from "react"
@@ -49,6 +50,7 @@ const FLOW_ICONS = {
   loop: Repeat,
   call: WorkflowIcon,
   output: LogOut,
+  setVariable: Variable,
   delay: Timer,
   stop: OctagonX,
 } as const

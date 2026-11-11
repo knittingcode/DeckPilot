@@ -74,6 +74,10 @@ entity_id!(
     /// Identifies one run of a workflow.
     ExecutionId
 );
+entity_id!(
+    /// Identifies an [`Icon`](crate::Icon) within a profile.
+    IconId
+);
 
 /// Validates a dotted, lowercase identifier such as `deckpilot.core.log`.
 pub(crate) fn validate_dotted(

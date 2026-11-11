@@ -1969,3 +1969,416 @@ fn workflows_with_inputs_and_new_nodes_round_trip() {
     let plain = serde_json::to_value(Workflow::new("Plain")).unwrap();
     assert!(plain.get("inputs").is_none() && plain.get("outputs").is_none());
 }
+
+// Variables ------------------------------------------------------------------
+
+fn set_var(id: &str, values: &[(&str, &str)]) -> Node {
+    node(
+        id,
+        NodeKind::SetVariable {
+            values: templates(values),
+        },
+    )
+}
+
+fn var(key: &str, kind: ValueKind, initial: Option<&str>) -> WorkflowVariable {
+    WorkflowVariable {
+        initial: initial.map(str::to_owned),
+        ..WorkflowVariable::new(key, kind)
+    }
+}
+
+impl Fixture {
+    fn with_variables(
+        &mut self,
+        graph: WorkflowGraph,
+        variables: Vec<WorkflowVariable>,
+    ) -> WorkflowId {
+        let id = self.workflow(graph);
+        self.workflow_mut(id).variables = variables;
+        id
+    }
+}
+
+#[test]
+fn variables_are_set_and_read_along_the_path() {
+    let mut f = Fixture::new();
+    let first = f.probe("first", &[]);
+    let say = f.probe("say", &[]);
+    let workflow = f.with_variables(
+        graph(
+            vec![
+                node("start", NodeKind::Trigger),
+                mapped(
+                    action("before", say),
+                    "message",
+                    "count={{ steps.vars.output.count }}",
+                ),
+                action("first", first),
+                set_var(
+                    "remember",
+                    &[("name", "{{ steps.first.output.value }}"), ("count", " 7 ")],
+                ),
+                mapped(
+                    action("after", say),
+                    "message",
+                    "{{ steps.vars.output.name }} count={{ steps.vars.output.count }}",
+                ),
+            ],
+            vec![
+                edge("start", Port::Out, "before"),
+                edge("before", Port::Out, "first"),
+                edge("first", Port::Out, "remember"),
+                edge("remember", Port::Out, "after"),
+            ],
+        ),
+        vec![
+            var("name", ValueKind::Text, None),
+            var("count", ValueKind::Integer, Some("1")),
+        ],
+    );
+    assert!(f.issues(workflow).is_empty(), "{:?}", f.issues(workflow));
+    let report = f.run(workflow);
+    assert_eq!(report.status, RunStatus::Succeeded, "{report:?}");
+    // The initial value before, the set (and converted) value after.
+    assert_eq!(f.ran(), ["count=1", "first", "first count=7"]);
+    let set = report.node(&n("remember")).unwrap();
+    assert!(set.sets_variables);
+    assert_eq!(set.workflow, Some(workflow));
+    // Every run starts with the initial values again.
+    let again = f.run(workflow);
+    assert_eq!(again.status, RunStatus::Succeeded);
+    assert_eq!(f.ran()[3], "count=1");
+}
+
+#[test]
+fn values_that_do_not_fit_the_variable_fail_the_node() {
+    let mut f = Fixture::new();
+    let workflow = f.with_variables(
+        graph(
+            vec![
+                node("start", NodeKind::Trigger),
+                set_var("set", &[("count", "many")]),
+            ],
+            vec![edge("start", Port::Out, "set")],
+        ),
+        vec![var("count", ValueKind::Integer, None)],
+    );
+    let report = f.run(workflow);
+    assert_eq!(report.status, RunStatus::Failed);
+    let error = report.node(&n("set")).unwrap().error.clone().unwrap();
+    assert_eq!(error.code, "mapping");
+    assert!(error.message.contains("whole number"), "{}", error.message);
+}
+
+#[test]
+fn branches_set_variables_and_joins_merge_them_deterministically() {
+    let mut f = Fixture::new();
+    let say = f.probe("say", &[]);
+    let yes = f.probe("yes", &[]);
+    // A condition: only one branch runs, the Join takes its value.
+    let chosen = f.with_variables(
+        graph(
+            vec![
+                node("start", NodeKind::Trigger),
+                action("check", yes),
+                node(
+                    "is_yes",
+                    NodeKind::Condition {
+                        predicate: Predicate::Equals {
+                            reference: Reference::parse("steps.check.output.value").unwrap(),
+                            value: "yes".into(),
+                        },
+                    },
+                ),
+                set_var("set_yes", &[("answer", "Y")]),
+                set_var("set_no", &[("answer", "N")]),
+                node("join", NodeKind::Join),
+                mapped(
+                    action("say", say),
+                    "message",
+                    "{{ steps.vars.output.answer }}",
+                ),
+            ],
+            vec![
+                edge("start", Port::Out, "check"),
+                edge("check", Port::Out, "is_yes"),
+                edge("is_yes", Port::True, "set_yes"),
+                edge("is_yes", Port::False, "set_no"),
+                edge("set_yes", Port::Out, "join"),
+                edge("set_no", Port::Out, "join"),
+                edge("join", Port::Out, "say"),
+            ],
+        ),
+        vec![var("answer", ValueKind::Text, Some("?"))],
+    );
+    assert!(f.issues(chosen).is_empty(), "{:?}", f.issues(chosen));
+    assert_eq!(f.run(chosen).status, RunStatus::Succeeded);
+    assert_eq!(f.ran(), ["yes", "Y"]);
+
+    // Parallel branches: agreeing values merge, a branch that does not set
+    // the variable agrees with anything, different values fail the Join.
+    let parallel = |f: &mut Fixture, left: &str, right: Option<&str>| {
+        let mut nodes = vec![
+            node("start", NodeKind::Trigger),
+            node("fork", NodeKind::Parallel),
+            set_var("left", &[("answer", left)]),
+            node("join", NodeKind::Join),
+            mapped(
+                action("say", say),
+                "message",
+                "{{ steps.vars.output.answer }}",
+            ),
+        ];
+        let mut edges = vec![
+            edge("start", Port::Out, "fork"),
+            edge("fork", Port::Out, "left"),
+            edge("fork", Port::Out, "right"),
+            edge("left", Port::Out, "join"),
+            edge("right", Port::Out, "join"),
+            edge("join", Port::Out, "say"),
+        ];
+        match right {
+            Some(value) => nodes.push(set_var("right", &[("answer", value)])),
+            None => nodes.push(node("right", NodeKind::Delay { ms: 1 })),
+        }
+        edges.sort_by(|a, b| a.to.cmp(&b.to));
+        f.with_variables(
+            graph(nodes, edges),
+            vec![var("answer", ValueKind::Text, Some("?"))],
+        )
+    };
+    let same = parallel(&mut f, "A", Some("A"));
+    let warnings = f.issues(same);
+    assert!(
+        warnings
+            .iter()
+            .any(|i| i.severity == IssueSeverity::Warning && i.message.contains("parallel branch")),
+        "{warnings:?}"
+    );
+    assert!(WorkflowGraph::is_runnable(&warnings));
+    assert_eq!(f.run(same).status, RunStatus::Succeeded);
+    let one_side = parallel(&mut f, "B", None);
+    assert!(
+        f.issues(one_side)
+            .iter()
+            .all(|i| !i.message.contains("parallel branch"))
+    );
+    assert_eq!(f.run(one_side).status, RunStatus::Succeeded);
+    let different = parallel(&mut f, "A", Some("Z"));
+    let report = f.run(different);
+    assert_eq!(report.status, RunStatus::Failed);
+    let join = report.node(&n("join")).unwrap();
+    assert_eq!(join.error.as_ref().unwrap().code, "variable-conflict");
+    assert_eq!(status(&report, "say"), NodeStatus::Skipped);
+    assert_eq!(f.ran(), ["yes", "Y", "A", "B"]);
+}
+
+#[test]
+fn variables_are_not_shared_with_sub_workflows() {
+    let mut f = Fixture::new();
+    // The callee has its own `x` and returns it, plus what it was given.
+    let callee = f.declared(
+        "Inner",
+        graph(
+            vec![
+                node("start", NodeKind::Trigger),
+                output_node(
+                    "out",
+                    &[
+                        ("own", "{{ steps.vars.output.x }}"),
+                        ("given", "{{ steps.start.output.value }}"),
+                    ],
+                ),
+            ],
+            vec![edge("start", Port::Out, "out")],
+        ),
+        vec![WorkflowInput::new("value", ValueKind::Text)],
+        vec![
+            WorkflowOutput::new("own", ValueKind::Text),
+            WorkflowOutput::new("given", ValueKind::Text),
+        ],
+    );
+    f.workflow_mut(callee).variables = vec![var("x", ValueKind::Text, Some("inner"))];
+    let say = f.probe("say", &[]);
+    let outer = f.with_variables(
+        graph(
+            vec![
+                node("start", NodeKind::Trigger),
+                set_var("set", &[("x", "outer")]),
+                call("sub", callee, &[("value", "{{ steps.vars.output.x }}")]),
+                mapped(
+                    action("say", say),
+                    "message",
+                    "{{ steps.sub.output.own }}/{{ steps.sub.output.given }}/{{ steps.vars.output.x }}",
+                ),
+            ],
+            vec![
+                edge("start", Port::Out, "set"),
+                edge("set", Port::Out, "sub"),
+                edge("sub", Port::Out, "say"),
+            ],
+        ),
+        vec![var("x", ValueKind::Text, None)],
+    );
+    assert!(f.issues(callee).is_empty(), "{:?}", f.issues(callee));
+    assert!(f.issues(outer).is_empty(), "{:?}", f.issues(outer));
+    assert_eq!(f.run(outer).status, RunStatus::Succeeded);
+    assert_eq!(f.ran(), ["inner/outer/outer"]);
+}
+
+#[test]
+fn variable_validation() {
+    let mut f = Fixture::new();
+    let say = f.probe("say", &[]);
+    let workflow = f.with_variables(
+        graph(
+            vec![
+                node("start", NodeKind::Trigger),
+                set_var("set", &[("nope", "1"), ("count", "1")]),
+                mapped(
+                    action("vars", say),
+                    "message",
+                    "{{ steps.vars.output.other }}",
+                ),
+            ],
+            vec![
+                edge("start", Port::Out, "set"),
+                edge("set", Port::Out, "vars"),
+            ],
+        ),
+        vec![
+            var("count", ValueKind::Integer, Some("ten")),
+            var("count", ValueKind::Integer, None),
+            var("bad key", ValueKind::Text, None),
+        ],
+    );
+    let errors = f.errors(workflow);
+    let has = |text: &str| errors.iter().any(|e| e.contains(text));
+    assert!(has("`nope` is not a variable"), "{errors:?}");
+    assert!(has("no variable `other`"), "{errors:?}");
+    assert!(has("`vars` is reserved for variables"), "{errors:?}");
+    assert!(
+        has("initial value of the variable `count` expects a whole number"),
+        "{errors:?}"
+    );
+    assert!(has("declared twice"), "{errors:?}");
+    assert!(has("not a valid variable key"), "{errors:?}");
+
+    // Without variables, `vars` is an ordinary node id, as before.
+    let plain = f.workflow(graph(
+        vec![node("start", NodeKind::Trigger), action("vars", say)],
+        vec![edge("start", Port::Out, "vars")],
+    ));
+    assert_eq!(f.errors(plain), Vec::<String>::new());
+}
+
+#[test]
+fn sensitive_variables_stay_sensitive_and_out_of_history() {
+    let mut f = Fixture::new();
+    let token = WorkflowInput {
+        sensitive: true,
+        ..WorkflowInput::new("token", ValueKind::Text)
+    };
+    let graph_with = || {
+        graph(
+            vec![
+                node("start", NodeKind::Trigger),
+                set_var(
+                    "set",
+                    &[
+                        ("secret", "{{ steps.start.output.token }}"),
+                        ("note", "visible"),
+                    ],
+                ),
+                output_node("out", &[("echo", "{{ steps.vars.output.secret }}")]),
+            ],
+            vec![
+                edge("start", Port::Out, "set"),
+                edge("set", Port::Out, "out"),
+            ],
+        )
+    };
+    // A sensitive value into a variable that is not sensitive, and a
+    // sensitive variable into an output that is not: both rejected.
+    let leaky = f.declared(
+        "Leaky",
+        graph_with(),
+        vec![token.clone()],
+        vec![WorkflowOutput::new("echo", ValueKind::Text)],
+    );
+    f.workflow_mut(leaky).variables = vec![
+        var("secret", ValueKind::Text, None),
+        var("note", ValueKind::Text, None),
+    ];
+    let errors = f.errors(leaky);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("mark the variable sensitive")),
+        "{errors:?}"
+    );
+    f.workflow_mut(leaky).variables[0].sensitive = true;
+    let errors = f.errors(leaky);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("mark the output sensitive")),
+        "{errors:?}"
+    );
+    f.workflow_mut(leaky).outputs[0].sensitive = true;
+    assert_eq!(f.errors(leaky), Vec::<String>::new());
+
+    let caller = f.workflow(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            call("sub", leaky, &[("token", "hunter2")]),
+        ],
+        vec![edge("start", Port::Out, "sub")],
+    ));
+    assert_eq!(f.run(caller).status, RunStatus::Succeeded);
+    // Run the callee itself to see its Set variable node in history.
+    f.workflow_mut(leaky).inputs[0].default = Some("hunter2".into());
+    let (report, events, _) = f.run_with(leaky, &CancellationToken::new());
+    assert_eq!(report.status, RunStatus::Succeeded);
+    let set = report.node(&n("set")).unwrap();
+    assert_eq!(set.output["secret"], "hunter2");
+    let safe = crate::safe_report(set, &f.profile, f.engine.registry());
+    assert_eq!(
+        safe.output,
+        BTreeMap::from([("note".to_owned(), "visible".to_owned())])
+    );
+    for event in events {
+        let text =
+            serde_json::to_string(&crate::safe_event(event, &f.profile, f.engine.registry()))
+                .unwrap();
+        assert!(!text.contains("hunter2"), "{text}");
+    }
+}
+
+#[test]
+fn variables_and_set_variable_nodes_round_trip() {
+    let mut workflow = Workflow::new("Vars");
+    workflow.variables = vec![WorkflowVariable {
+        sensitive: true,
+        ..var("count", ValueKind::Integer, Some("1"))
+    }];
+    workflow.graph = Some(graph(
+        vec![
+            node("start", NodeKind::Trigger),
+            set_var("set", &[("count", "2")]),
+        ],
+        vec![edge("start", Port::Out, "set")],
+    ));
+    let json = serde_json::to_value(&workflow).unwrap();
+    assert_eq!(json["variables"][0]["initial"], "1");
+    assert_eq!(json["variables"][0]["sensitive"], true);
+    assert_eq!(json["graph"]["nodes"][1]["type"], "setVariable");
+    assert_eq!(serde_json::from_value::<Workflow>(json).unwrap(), workflow);
+    assert!(
+        serde_json::to_value(Workflow::new("Plain"))
+            .unwrap()
+            .get("variables")
+            .is_none()
+    );
+}

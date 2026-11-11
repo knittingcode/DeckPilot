@@ -10,7 +10,7 @@ use super::mapping::{convert, is_value_key, references_in};
 use super::{
     ErrorPolicy, GRAPH_VERSION, MAX_DELAY_MS, MAX_LOOP_ITERATIONS, MAX_NESTING, MAX_NODES,
     MAX_RETRIES, MAX_TIMEOUT_MS, MAX_WORKFLOW_VALUES, Mapping, NodeId, NodeKind, Port, Predicate,
-    Reference, WorkflowGraph, WorkflowInput, WorkflowOutput,
+    Reference, VARIABLES_NODE, WorkflowGraph, WorkflowInput, WorkflowOutput, WorkflowVariable,
 };
 use crate::{ActionRegistry, Profile, Workflow, WorkflowId};
 
@@ -62,6 +62,7 @@ struct Checker<'a> {
     /// The owning workflow's declared inputs and outputs.
     inputs: &'a [WorkflowInput],
     outputs: &'a [WorkflowOutput],
+    variables: &'a [WorkflowVariable],
 }
 
 /// What a referenced node provides under an output key.
@@ -84,11 +85,17 @@ impl WorkflowGraph {
         profile: &Profile,
         registry: &ActionRegistry,
     ) -> Vec<GraphIssue> {
-        let (inputs, outputs) = profile
+        let (inputs, outputs, variables) = profile
             .workflow(owner)
-            .map(|w| (w.inputs.as_slice(), w.outputs.as_slice()))
+            .map(|w| {
+                (
+                    w.inputs.as_slice(),
+                    w.outputs.as_slice(),
+                    w.variables.as_slice(),
+                )
+            })
             .unwrap_or_default();
-        self.check(owner, inputs, outputs, profile, registry)
+        self.check(owner, (inputs, outputs, variables), profile, registry)
     }
 
     /// Every problem of this graph as the graph of `workflow`, which need
@@ -101,8 +108,7 @@ impl WorkflowGraph {
     ) -> Vec<GraphIssue> {
         self.check(
             workflow.id,
-            &workflow.inputs,
-            &workflow.outputs,
+            (&workflow.inputs, &workflow.outputs, &workflow.variables),
             profile,
             registry,
         )
@@ -111,8 +117,7 @@ impl WorkflowGraph {
     fn check(
         &self,
         owner: WorkflowId,
-        inputs: &[WorkflowInput],
-        outputs: &[WorkflowOutput],
+        (inputs, outputs, variables): (&[WorkflowInput], &[WorkflowOutput], &[WorkflowVariable]),
         profile: &Profile,
         registry: &ActionRegistry,
     ) -> Vec<GraphIssue> {
@@ -124,13 +129,16 @@ impl WorkflowGraph {
             ancestors: BTreeMap::new(),
             inputs,
             outputs,
+            variables,
         };
         checker.declarations();
+        checker.variable_declarations();
         // Semantic checks need an acyclic graph whose connections all refer
         // to existing nodes; other structural problems do not hide them.
         if checker.structure() {
             checker.compute_ancestors();
             checker.nodes(owner);
+            checker.parallel_writes();
         }
         checker.issues
     }
@@ -313,6 +321,20 @@ impl Checker<'_> {
     /// Checks that `reference` can be resolved at `node`; `true` if the
     /// value it refers to is sensitive.
     fn check_reference(&mut self, node: &NodeId, reference: &Reference) -> bool {
+        if self.is_variable(reference) {
+            // A variable: readable anywhere, with the value on the path.
+            if let Some(variable) = self.variables.iter().find(|v| v.key == reference.output) {
+                return variable.sensitive;
+            }
+            self.issues.push(GraphIssue::error(
+                Some(node),
+                format!(
+                    "{reference}: this workflow has no variable `{}`",
+                    reference.output
+                ),
+            ));
+            return false;
+        }
         if !self.is_ancestor(&reference.node, node) {
             self.issues.push(GraphIssue::error(
                 Some(node),
@@ -406,6 +428,143 @@ impl Checker<'_> {
                 false
             }
         }
+    }
+
+    /// Whether `reference` reads a variable (`steps.vars.output.<key>` in a
+    /// workflow that declares variables).
+    fn is_variable(&self, reference: &Reference) -> bool {
+        !self.variables.is_empty() && reference.node.as_str() == VARIABLES_NODE
+    }
+
+    /// The declared variables: valid, unique keys, initial values of their
+    /// kind, and the `vars` node id reserved.
+    fn variable_declarations(&mut self) {
+        if self.variables.is_empty() {
+            return;
+        }
+        if self.variables.len() > MAX_WORKFLOW_VALUES {
+            self.issues.push(GraphIssue::error(
+                None,
+                format!("a workflow can have at most {MAX_WORKFLOW_VALUES} variables"),
+            ));
+        }
+        let mut seen = BTreeSet::new();
+        for variable in self.variables {
+            let key = &variable.key;
+            if !is_value_key(key) {
+                self.issues.push(GraphIssue::error(
+                    None,
+                    format!(
+                        "`{key}` is not a valid variable key: use 1–64 letters, digits and `_`"
+                    ),
+                ));
+            } else if !seen.insert(key) {
+                self.issues.push(GraphIssue::error(
+                    None,
+                    format!("the variable `{key}` is declared twice"),
+                ));
+            }
+            if let Some(initial) = &variable.initial
+                && let Err(error) = convert(variable.kind, initial, self.profile)
+            {
+                self.issues.push(GraphIssue::error(
+                    None,
+                    format!("the initial value of the variable `{key}` {error}"),
+                ));
+            }
+            let set = self.graph.nodes.iter().any(
+                |n| matches!(&n.kind, NodeKind::SetVariable { values } if values.contains_key(key)),
+            );
+            if !set && variable.initial.is_none() {
+                self.issues.push(GraphIssue::warning(
+                    None,
+                    format!("the variable `{key}` has no initial value and no node sets it"),
+                ));
+            }
+        }
+        for node in &self.graph.nodes {
+            if node.id.as_str() == VARIABLES_NODE {
+                self.issues.push(GraphIssue::error(
+                    Some(&node.id),
+                    format!(
+                        "the node id `{VARIABLES_NODE}` is reserved for variables; rename this node"
+                    ),
+                ));
+            }
+        }
+    }
+
+    /// A Set variable node sets declared variables; sensitive values only
+    /// sensitive ones.
+    fn set_variable_node(&mut self, id: &NodeId, values: &BTreeMap<String, Mapping>) {
+        if values.is_empty() {
+            self.issues
+                .push(GraphIssue::warning(Some(id), "this node sets no variables"));
+        }
+        for (key, mapping) in values {
+            let sensitive = self.check_mapping(id, mapping);
+            match self.variables.iter().find(|v| &v.key == key) {
+                None => self.issues.push(GraphIssue::error(
+                    Some(id),
+                    format!("`{key}` is not a variable of this workflow; declare it first"),
+                )),
+                Some(variable) if sensitive && !variable.sensitive => {
+                    self.issues.push(GraphIssue::error(
+                        Some(id),
+                        format!(
+                            "`{key}` gets a sensitive value; mark the variable sensitive so it stays out of history"
+                        ),
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+    }
+
+    /// Set variable nodes in different branches of a Parallel node that set
+    /// the same variable: the Join after them fails at run time unless they
+    /// set the same value.
+    fn parallel_writes(&mut self) {
+        let graph = self.graph;
+        let writers: Vec<(&NodeId, &String)> = graph
+            .nodes
+            .iter()
+            .filter_map(|n| match &n.kind {
+                NodeKind::SetVariable { values } => Some(values.keys().map(move |k| (&n.id, k))),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let in_branch =
+            |start: &NodeId, node: &NodeId| start == node || self.is_ancestor(start, node);
+        let mut warned = BTreeSet::new();
+        let mut issues = Vec::new();
+        for parallel in graph
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, NodeKind::Parallel))
+        {
+            let branches: Vec<&NodeId> = graph.outgoing(&parallel.id).map(|e| &e.to).collect();
+            for (i, (a, key)) in writers.iter().enumerate() {
+                for (b, other) in writers.iter().skip(i + 1) {
+                    if key != other || a == b || self.is_ancestor(a, b) || self.is_ancestor(b, a) {
+                        continue;
+                    }
+                    let apart = branches.iter().any(|x| {
+                        in_branch(x, a) && branches.iter().any(|y| y != x && in_branch(y, b))
+                    });
+                    if apart && warned.insert(((*a).clone(), (*b).clone(), (*key).clone())) {
+                        issues.push(GraphIssue::warning(
+                            Some(b),
+                            format!(
+                                "`{a}` sets the variable `{key}` in a parallel branch too; the Join fails if they set different values"
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+        self.issues.extend(issues);
     }
 
     /// The workflow's declared inputs and outputs: valid, unique keys,
@@ -645,6 +804,7 @@ impl Checker<'_> {
                     policy,
                 } => self.call_node(id, owner, *workflow, inputs, *policy),
                 NodeKind::Output { values } => self.output_node(id, values),
+                NodeKind::SetVariable { values } => self.set_variable_node(id, values),
                 NodeKind::Delay { ms } => {
                     if *ms > MAX_DELAY_MS {
                         self.issues

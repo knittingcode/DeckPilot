@@ -13,7 +13,7 @@ import type {
 } from "@/lib/types"
 
 import { type Lookup, actionOf, nodeOutputs } from "./describe"
-import { upstream } from "./graph"
+import { VARIABLES_NODE, upstream } from "./graph"
 
 export type Segment = { type: "text"; text: string } | { type: "output"; reference: GraphReference }
 
@@ -61,6 +61,17 @@ export interface OutputOption {
 
 /** Declared outputs of the nodes that run before `id`. */
 export function outputOptions(graph: WorkflowGraph, id: string, lookup: Lookup): OutputOption[] {
+  // Variables hold the value on the node's path; readable anywhere.
+  const variables: OutputOption[] = (lookup.variables ?? []).map((variable) => ({
+    reference: { node: VARIABLES_NODE, output: variable.key },
+    label: `Variable · ${variable.label || variable.key}`,
+    kind: variable.kind,
+    sensitive: variable.sensitive,
+  }))
+  return [...outputsBefore(graph, id, lookup), ...variables]
+}
+
+function outputsBefore(graph: WorkflowGraph, id: string, lookup: Lookup): OutputOption[] {
   return upstream(graph, id).flatMap((nodeId) => {
     const node = graph.nodes.find((n) => n.id === nodeId)
     if (!node) return []
@@ -85,6 +96,11 @@ export function referenceProblem(
   reference: GraphReference,
   lookup: Lookup,
 ): string | null {
+  if (reference.node === VARIABLES_NODE && lookup.variables?.length) {
+    return lookup.variables.some((v) => v.key === reference.output)
+      ? null
+      : `there is no variable “${reference.output}”`
+  }
   const node = graph.nodes.find((n) => n.id === reference.node)
   if (!node) return `there is no node “${reference.node}”`
   if (!upstream(graph, id).includes(reference.node)) {
