@@ -14,6 +14,9 @@ as the notes of its GitHub release and of the in-app update.
   round) for what both support, says which features need an agent restart,
   and never sends a request the agent cannot understand. Agents too old for
   this app are reported as needing an update.
+- Upgrading a 0.5.0 configuration is tested with a real database created
+  by 0.5.0-2: everything is kept, the encrypted backup is restorable, and a
+  wrong key or a newer schema leaves the file untouched.
 - The agent reports running workflows. Updates wait for them, and
   restarting the agent from the app asks before interrupting them; nothing
   ends a workflow silently.
