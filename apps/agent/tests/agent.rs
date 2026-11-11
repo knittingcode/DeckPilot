@@ -688,6 +688,10 @@ async fn single_instance_shutdown_and_client_reconnect() {
         }
     }
     assert!(saw_shutdown);
+    // A client that has seen the shutdown lets go of its connection, as the
+    // app does. On Windows a connection that is still open keeps the old
+    // pipe instance, and with it the name, from being reused.
+    drop(subscriber);
     assert!(!paths.token_file.exists(), "token is removed on shutdown");
     assert!(
         agent
@@ -1974,6 +1978,9 @@ async fn runs_of_a_stopped_agent_are_recorded_as_interrupted() {
     agent.store().save_execution(&crashed).unwrap();
 
     let (paths, key, mock) = (agent.paths.clone(), agent.key.clone(), agent.mock.clone());
+    // Clients close their connections before the agent is restarted (see
+    // `single_instance_shutdown_and_client_reconnect`).
+    drop(client);
     // Stopping the agent interrupts the run that is still waiting.
     agent.shutdown().await;
     let record = SqliteStore::open(&paths.database, &Encryption::Key(key.clone()))

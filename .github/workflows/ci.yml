@@ -40,6 +40,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # A hung test fails the job instead of holding it for the default 6 hours.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux system dependencies
@@ -67,6 +69,7 @@ jobs:
         run: cargo run --locked -p deckpilot-dev -- check-versions
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+        timeout-minutes: 25
       # The guided hardware test, run against a simulated MK.2 with the real
       # agent: checks the procedure (not hardware).
       - name: Hardware test procedure (simulated device)
