@@ -775,7 +775,8 @@ fn fresh_installation_has_an_empty_action_library() {
             "jira",
             "notifications",
             "projects",
-            "system"
+            "system",
+            "workspace"
         ]
     );
     let module = |id: &str| {
