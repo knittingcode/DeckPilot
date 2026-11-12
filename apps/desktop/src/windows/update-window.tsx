@@ -4,7 +4,8 @@ import { useEffect, useState } from "react"
 
 import { ModalShell } from "@/components/modal-shell"
 import { Progress } from "@/components/ui/progress"
-import { UPDATE_STATE_EVENT, api, errorMessage } from "@/lib/api"
+import { UPDATE_STATE_EVENT, api } from "@/lib/api"
+import { failureMessage } from "@/lib/failure"
 import type { UpdateState } from "@/lib/types"
 
 import { useWindow } from "./window-context"
@@ -29,7 +30,7 @@ export function UpdateWindow() {
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     api.updateState().then(setState, (e: unknown) => {
-      setError(errorMessage(e))
+      setError(failureMessage("The update status could not be read", e))
     })
     const stop = listen<UpdateState>(UPDATE_STATE_EVENT, (event) => {
       setState(event.payload)
@@ -40,14 +41,14 @@ export function UpdateWindow() {
       })
     }
   }, [])
-  const run = (operation: () => Promise<unknown>) => {
+  const run = (operation: () => Promise<unknown>, failed: string, next?: string) => {
     setBusy(true)
     setError(null)
     operation()
       .then(() => api.updateState())
       .then(setState)
       .catch((e: unknown) => {
-        setError(errorMessage(e))
+        setError(failureMessage(failed, e, next))
       })
       .finally(() => {
         setBusy(false)
@@ -68,7 +69,11 @@ export function UpdateWindow() {
           loadingLabel: "Checking…",
           loading: busy || phase === "checking",
           onClick: () => {
-            run(() => api.checkForUpdates())
+            run(
+              () => api.checkForUpdates(),
+              "Checking for updates failed",
+              "Check your internet connection and try again",
+            )
           },
         }
       : phase === "ready" || phase === "installing"
@@ -77,7 +82,7 @@ export function UpdateWindow() {
             loadingLabel: "Installing…",
             loading: busy || phase === "installing",
             onClick: () => {
-              run(() => api.installUpdate())
+              run(() => api.installUpdate(), "The update was not installed")
             },
           }
         : {
@@ -85,7 +90,11 @@ export function UpdateWindow() {
             loadingLabel: "Downloading…",
             loading: busy || phase === "downloading",
             onClick: () => {
-              run(() => api.downloadUpdate())
+              run(
+                () => api.downloadUpdate(),
+                "The update was not downloaded",
+                "Check your internet connection and try again",
+              )
             },
           }
   return (

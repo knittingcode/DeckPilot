@@ -6,7 +6,8 @@ import { ErrorNotice, Loading } from "@/components/page"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { useAsync } from "@/hooks/use-async"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
 import { diagnosticsReport } from "@/lib/diagnostics"
 
@@ -29,7 +30,9 @@ export function DiagnosticsSettings() {
             variant="outline"
             className="justify-self-start"
             onClick={() => {
-              api.openWindow("app.logs").catch((e: unknown) => toast.error(errorMessage(e)))
+              api.openWindow("app.logs").catch((e: unknown) => {
+                toastFailure("The log window did not open", e)
+              })
             }}
           >
             <ScrollText /> Show log…
@@ -57,7 +60,13 @@ export function DiagnosticsSettings() {
               onClick={() => {
                 navigator.clipboard.writeText(diagnosticsReport(state.data, agent)).then(
                   () => toast.success("Diagnostics copied"),
-                  (e: unknown) => toast.error(errorMessage(e)),
+                  (e: unknown) => {
+                    toastFailure(
+                      "The diagnostics were not copied",
+                      e,
+                      "Select the report and copy it by hand",
+                    )
+                  },
                 )
               }}
             >

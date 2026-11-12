@@ -1,6 +1,5 @@
 import { ArrowRight, Download, Info } from "lucide-react"
 import { Suspense } from "react"
-import { toast } from "sonner"
 
 import { AgentBadge, AgentCompatibilityNotice, AgentStopped, DeviceRow } from "@/components/agent"
 import { EmptyState, ErrorNotice, Loading, Page } from "@/components/page"
@@ -15,7 +14,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useAsync } from "@/hooks/use-async"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { toastFailure } from "@/lib/failure"
 import { type PageId, useAppContext } from "@/lib/app-context"
 import { dashboardCards } from "@/modules"
 
@@ -33,7 +33,9 @@ export function DashboardPage() {
   ).state
 
   const activate = (id: string) => {
-    api.setActiveProfile(id).then(refresh, (e: unknown) => toast.error(errorMessage(e)))
+    api.setActiveProfile(id).then(refresh, (e: unknown) => {
+      toastFailure("The profile was not activated", e)
+    })
   }
 
   return (

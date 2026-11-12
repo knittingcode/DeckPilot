@@ -1,9 +1,9 @@
 import { ArrowRightLeft, Download, Upload } from "lucide-react"
-import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { toastFailure } from "@/lib/failure"
 
 /**
  * Encrypted export and import of the portable configuration. Both run in
@@ -11,7 +11,9 @@ import { api, errorMessage } from "@/lib/api"
  */
 export function PortabilityCard() {
   const open = (id: string) => {
-    api.openWindow(id).catch((e: unknown) => toast.error(errorMessage(e)))
+    api.openWindow(id).catch((e: unknown) => {
+      toastFailure("The window did not open", e)
+    })
   }
   return (
     <Card>

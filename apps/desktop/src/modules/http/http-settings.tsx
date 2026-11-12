@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
 import type { CredentialInfo } from "@/lib/types"
 import { ModuleSettingsForm } from "@/settings/pages/module-settings"
@@ -31,7 +32,11 @@ function Credentials() {
   const [credentials, setCredentials] = useState<CredentialInfo[] | null>(null)
   useEffect(() => {
     api.listCredentials().then(setCredentials, (e: unknown) => {
-      toast.error(errorMessage(e))
+      toastFailure(
+        "The credentials could not be loaded",
+        e,
+        "Unlock DeckPilot and reopen this page",
+      )
       setCredentials([])
     })
   }, [])
@@ -101,7 +106,7 @@ function CredentialRow({
           description="Requests that use it will fail until a credential with this name is stored again."
           onConfirm={() => {
             api.deleteCredential(credential.id).then(onChange, (e: unknown) => {
-              toast.error(errorMessage(e))
+              toastFailure(`${credential.id} was not deleted`, e)
             })
           }}
         />
@@ -118,7 +123,9 @@ function CredentialRow({
                 onChange(next)
                 toast.success(`${credential.id} replaced`)
               },
-              (e: unknown) => toast.error(errorMessage(e)),
+              (e: unknown) => {
+                toastFailure(`${credential.id} was not replaced`, e)
+              },
             )
           }}
         >
@@ -165,7 +172,9 @@ function NewCredential({
             setSecret("")
             toast.success(`${id} stored`)
           },
-          (e: unknown) => toast.error(errorMessage(e)),
+          (e: unknown) => {
+            toastFailure(`${id} was not stored`, e)
+          },
         )
       }}
     >

@@ -5,7 +5,8 @@ import { toast } from "sonner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
 import { describeLayout } from "@/lib/format"
 import type { AgentCapability, DeviceInfo } from "@/lib/types"
@@ -32,7 +33,7 @@ export function AgentStopped() {
       setAgent(connection)
       if (!connection.running) toast.error("The agent did not start. Check its log for details.")
     } catch (e) {
-      toast.error(errorMessage(e))
+      toastFailure("The agent did not start", e, "Check its log in Settings › Diagnostics")
     } finally {
       setBusy(false)
     }
@@ -80,7 +81,7 @@ export function AgentCompatibilityNotice() {
       setAgent(await api.restartAgent(interruptRunning))
       toast.success("The agent was restarted")
     } catch (e) {
-      toast.error(errorMessage(e))
+      toastFailure("The agent was not restarted", e, "Check its log in Settings › Diagnostics")
     } finally {
       setBusy(false)
     }
@@ -161,7 +162,9 @@ export function RefreshDevicesButton() {
       onClick={() => {
         api.refreshDevices().then(
           () => toast.success("Devices refreshed"),
-          (e: unknown) => toast.error(errorMessage(e)),
+          (e: unknown) => {
+            toastFailure("The devices were not refreshed", e, "Check that the agent is running")
+          },
         )
       }}
     >

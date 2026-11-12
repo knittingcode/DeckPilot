@@ -2,7 +2,8 @@ import { ScrollText } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { ModalShell } from "@/components/modal-shell"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { failureMessage } from "@/lib/failure"
 import type { LogView } from "@/lib/types"
 
 import { useWindow } from "./window-context"
@@ -29,7 +30,13 @@ export function LogsWindow() {
           setError(null)
         },
         (e: unknown) => {
-          setError(errorMessage(e))
+          setError(
+            failureMessage(
+              "The agent log could not be read",
+              e,
+              "The agent may not have written a log yet; start it and try again",
+            ),
+          )
         },
       ),
     [],

@@ -27,7 +27,8 @@ import {
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { useEditingProfile } from "@/hooks/use-profile"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { failureMessage, toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
 import { formatTimestamp } from "@/lib/format"
 import type { ProfileSummary } from "@/lib/types"
@@ -43,13 +44,15 @@ export function ProfilesPage() {
   const [dialog, setDialog] = useState<DialogState>(null)
   const { state } = useEditingProfile()
 
-  const run = (operation: () => Promise<unknown>, message: string) => {
+  const run = (operation: () => Promise<unknown>, message: string, failed: string) => {
     operation().then(
       () => {
         toast.success(message)
         refresh()
       },
-      (e: unknown) => toast.error(errorMessage(e)),
+      (e: unknown) => {
+        toastFailure(failed, e)
+      },
     )
   }
 
@@ -122,6 +125,7 @@ export function ProfilesPage() {
                               run(
                                 () => api.setActiveProfile(profile.id),
                                 `${profile.name} is active`,
+                                `${profile.name} was not activated`,
                               )
                             }}
                           >
@@ -141,7 +145,9 @@ export function ProfilesPage() {
                                     description: view.profile.description,
                                   })
                                 })
-                                .catch((e: unknown) => toast.error(errorMessage(e)))
+                                .catch((e: unknown) => {
+                                  toastFailure(`${profile.name} could not be opened for editing`, e)
+                                })
                             }}
                           >
                             <Pencil />
@@ -173,7 +179,11 @@ export function ProfilesPage() {
                                 : "Its actions, workflows, projects and layouts are deleted. This cannot be undone."
                             }
                             onConfirm={() => {
-                              run(() => api.deleteProfile(profile.id), "Profile deleted")
+                              run(
+                                () => api.deleteProfile(profile.id),
+                                "Profile deleted",
+                                `${profile.name} was not deleted`,
+                              )
                             }}
                           />
                         </div>
@@ -282,7 +292,12 @@ function ProfileForm({
       }
       toast.success("Saved")
     } catch (e) {
-      setError(errorMessage(e))
+      const failed = {
+        create: "The profile was not created",
+        rename: "The profile was not saved",
+        duplicate: "The profile was not duplicated",
+      }
+      setError(failureMessage(failed[state.mode], e))
     }
   }
 
