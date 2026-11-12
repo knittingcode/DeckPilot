@@ -18,6 +18,11 @@ on:
   # main, so it must report on every pull request, not only on changes to
   # release code.
   pull_request:
+  # And every commit of main: the release gate requires it to have passed
+  # on the exact tagged commit, and a squash merge is a new commit
+  # (tools/release-pipeline/validate-tag.sh).
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       notarize:
@@ -33,7 +38,7 @@ jobs:
     name: Updater signing keys match
     runs-on: ubuntu-latest
     # Secrets are not available to pull requests from forks.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -68,7 +73,8 @@ jobs:
   apple:
     name: Developer ID and notarization credentials
     runs-on: macos-latest
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    # Not on pushes to main: not a required check, and macOS minutes.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
     steps:
       - uses: actions/checkout@v4
       - name: The certificate provides the configured Developer ID identity

@@ -19,6 +19,11 @@
 # Without them the release is blocked, unless vars.DECKPILOT_ALLOW_UNSIGNED_MACOS
 # is "true": unsigned macOS builds work, but macOS asks for the login keychain
 # password after every update (see docs/security.md).
+#
+# Every job depends on the "validate-tag" job (directly or through another
+# job's `needs`), which is the authoritative gate: the trigger's "v*" is only
+# a preliminary filter. tools/release-pipeline/test.sh checks the dependency
+# graph on every pull request that changes this file.
 name: Release
 
 on:
@@ -27,11 +32,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag to build, e.g. v0.3.0
+        description: Existing release tag to build, e.g. v0.6.0-alpha.1
         required: true
 
+# Jobs that need more ask for it themselves.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.event.inputs.tag || github.ref_name }}
@@ -42,8 +48,43 @@ env:
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
+  # The release gate (tools/release-pipeline/validate-tag.sh): the tag is
+  # exactly vX.Y.Z or vX.Y.Z-(alpha|beta|rc).N, its commit (annotated tags
+  # dereferenced) is on the protected main branch, every version matches it,
+  # and the required checks passed on exactly that commit. Later jobs build
+  # that commit (outputs.sha), not whatever the tag points to by then.
+  validate-tag:
+    name: Validate the release tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      version: ${{ steps.gate.outputs.version }}
+      channel: ${{ steps.gate.outputs.channel }}
+      sha: ${{ steps.gate.outputs.sha }}
+      prerelease: ${{ steps.gate.outputs.prerelease }}
+      msi_version: ${{ steps.gate.outputs.msi_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch the protected main branch
+        run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Tag, commit, versions and required checks
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: tools/release-pipeline/validate-tag.sh "$TAG"
+
   prepare:
-    name: Check versions and configuration
+    name: Check configuration and release notes
+    needs: validate-tag
     runs-on: ubuntu-latest
     # Reads only; the release is created by the build jobs.
     permissions:
@@ -54,11 +95,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.validate-tag.outputs.sha }}
       - name: Install Rust toolchain
         run: rustup toolchain install
-      - name: Version of the tag, the app and the agent must match
-        run: cargo run --locked -p deckpilot-dev -- check-versions --tag "$TAG"
       - name: Signing configuration is present
         env:
           KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -110,7 +149,7 @@ jobs:
 
   build:
     name: Build (${{ matrix.target }})
-    needs: prepare
+    needs: [validate-tag, prepare]
     strategy:
       fail-fast: false
       matrix:
@@ -132,7 +171,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.validate-tag.outputs.sha }}
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: tools/ci/install-linux-deps.sh
@@ -171,12 +210,17 @@ jobs:
              "apps/desktop/src-tauri/binaries/deckpilot-agent-${{ matrix.target }}${suffix}"
       # The bundler checks the updater artifacts against the public key in
       # the configuration (empty in tauri.conf.json; the app compiles it in).
-      - name: Updater public key for the bundler
+      # And the numeric MSI version: Windows Installer refuses
+      # "0.6.0-alpha.1" (deckpilot-dev release-tag computes it; see
+      # docs/releasing.md).
+      - name: Updater public key and MSI version for the bundler
         shell: bash
         env:
           DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
+          MSI_VERSION: ${{ needs.validate-tag.outputs.msi_version }}
         run: |
-          jq -n --arg key "$DECKPILOT_UPDATER_PUBKEY" '{plugins: {updater: {pubkey: $key}}}' \
+          jq -n --arg key "$DECKPILOT_UPDATER_PUBKEY" --arg msi "$MSI_VERSION" \
+            '{plugins: {updater: {pubkey: $key}}, bundle: {windows: {wix: {version: $msi}}}}' \
             > apps/desktop/src-tauri/tauri.updater.conf.json
       # Developer ID signing (application and the bundled agent, with the
       # hardened runtime) and notarization by the Tauri bundler. A stable
@@ -217,18 +261,18 @@ jobs:
           releaseName: DeckPilot ${{ env.TAG }}
           releaseBody: ${{ needs.prepare.outputs.notes }}
           releaseDraft: true
-          # Test tags (e.g. v0.5.0-1) become pre-releases: even if published,
+          # alpha, beta and rc tags become pre-releases: even if published,
           # they never become "latest", the channel the app reads.
-          prerelease: ${{ contains(env.TAG, '-') }}
+          prerelease: ${{ needs.validate-tag.outputs.prerelease == 'true' }}
           # latest.json is assembled once, after all builds, by the manifest
           # job: four jobs merging into it concurrently can lose entries.
           includeUpdaterJson: false
-          # RPM does not allow "-" in versions: test releases (pre-release
-          # versions) build .deb and AppImage on Linux; final releases all.
+          # RPM does not allow "-" in versions: pre-releases build .deb and
+          # AppImage on Linux; stable releases all three.
           args: >-
             --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
             --config src-tauri/tauri.updater.conf.json
-            ${{ (runner.os == 'Linux' && contains(env.TAG, '-')) && '--bundles deb,appimage' || '' }}
+            ${{ (runner.os == 'Linux' && needs.validate-tag.outputs.prerelease == 'true') && '--bundles deb,appimage' || '' }}
       # Later steps need no certificate: remove it from their environment.
       - name: Disable macOS signing for the remaining steps
         if: runner.os == 'macOS' && needs.prepare.outputs.macos-signing == 'true'
@@ -328,12 +372,15 @@ jobs:
   # tools/ci/test-latest-json.sh).
   manifest:
     name: Assemble latest.json
-    needs: [prepare, build]
+    needs: [validate-tag, prepare, build]
     runs-on: ubuntu-latest
+    # Attaches latest.json to the draft.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.validate-tag.outputs.sha }}
       - name: Download the updater manifest fragments
         uses: actions/download-artifact@v4
         with:
@@ -356,12 +403,15 @@ jobs:
 
   verify:
     name: Verify artifacts and publish checksums
-    needs: manifest
+    needs: [validate-tag, manifest]
     runs-on: ubuntu-latest
+    # Attaches SHA256SUMS to the draft.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.validate-tag.outputs.sha }}
       - name: Install Rust toolchain
         run: rustup toolchain install
       - name: Download the draft release
@@ -376,14 +426,16 @@ jobs:
       # failed to (or overwrote another's entry) would leave installations
       # of that platform or package type without updates, silently.
       - name: Every platform and package type is in latest.json
+        env:
+          PRERELEASE: ${{ needs.validate-tag.outputs.prerelease }}
         run: |
           required="darwin-aarch64 darwin-aarch64-app darwin-x86_64 darwin-x86_64-app
             linux-x86_64 linux-x86_64-appimage linux-x86_64-deb
             windows-x86_64 windows-x86_64-msi windows-x86_64-nsis"
-          # Final releases also build the .rpm (see the build job).
-          case "$TAG" in *-*) ;; *) required="$required linux-x86_64-rpm" ;; esac
+          # Stable releases also build the .rpm (see the build job).
+          [ "$PRERELEASE" = true ] || required="$required linux-x86_64-rpm"
           listed=$(jq -r '.platforms | keys[]' release-files/latest.json)
-          echo "latest.json lists: $(echo $listed)"
+          echo "latest.json lists: $(tr '\n' ' ' <<< "$listed")"
           missing=""
           for target in $required; do
             echo "$listed" | grep -q -x -F "$target" || missing="$missing $target"
