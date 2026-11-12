@@ -142,6 +142,16 @@ pub struct ConfigChanges {
     pub module_states: Vec<(ModuleId, ModuleSettings)>,
     /// Application settings (`key`, `value`) written with the rest.
     pub settings: Vec<(String, String)>,
+    /// Shared variables to create (as imported) when no variable with the
+    /// key exists; an existing definition is kept as it is.
+    pub variables: Vec<deckpilot_core::variables::VariableDefinition>,
+    /// Shared variable values to set, after the profiles and variables
+    /// above; each is checked against its definition.
+    pub variable_values: Vec<(
+        deckpilot_core::variables::VariableKey,
+        deckpilot_core::variables::ScopeKey,
+        deckpilot_core::variables::VariableValue,
+    )>,
 }
 
 impl SqliteStore {
@@ -563,6 +573,14 @@ impl SqliteStore {
                  ON CONFLICT (key) DO UPDATE SET value = excluded.value",
                 params![key, value],
             )?;
+        }
+        for definition in &changes.variables {
+            if crate::variables::get(&tx, &definition.key)?.is_none() {
+                crate::variables::save(&tx, definition, crate::variables::VariableOrigin::Import)?;
+            }
+        }
+        for (key, scope, value) in &changes.variable_values {
+            crate::variables::set_value(&tx, key, scope, value)?;
         }
         tx.commit()?;
         Ok(())
@@ -2435,6 +2453,7 @@ mod tests {
             save_profiles: vec![fresh.clone(), thief],
             module_states: Vec::new(),
             settings: Vec::new(),
+            ..ConfigChanges::default()
         };
         // The deletion makes the project free again, so this succeeds…
         store.apply_changes(&changes).unwrap();
@@ -2454,6 +2473,7 @@ mod tests {
                 },
             )],
             settings: vec![("update.preferences".into(), "{}".into())],
+            ..ConfigChanges::default()
         };
         assert!(store.apply_changes(&failing).is_err());
         assert_eq!(store.load_profile(other.id).unwrap(), None);

@@ -390,6 +390,12 @@ a run and are never stored.
   execution > project > profile > global > default and resolves a
   `projectId`/`profileId` naming another profile as missing. A value changed
   later is seen by the next snapshot.
+- Exports (payload version 2) carry the user's definitions and the values
+  of the exported profiles and their projects; global values only with the
+  application settings; values and defaults of sensitive variables never
+  (decision D5, see [security.md](security.md#encrypted-exports)). An import
+  creates missing definitions (origin `import`), keeps existing ones, and
+  sets values in the same transaction as the profiles.
 
 ### Provenance
 
