@@ -2721,3 +2721,87 @@ fn referenced_actions_are_replaced_or_unbound_before_they_are_deleted() {
         .clone();
     assert_eq!(page["bindings"], json!([]));
 }
+
+#[test]
+fn the_variable_picker_reads_catalog_and_previews_from_the_agent() {
+    let h = Harness::new();
+    let profile = h.ok(
+        "create_profile",
+        json!({ "name": "Work", "description": "" }),
+    );
+    let context = json!({ "profile": profile["id"] });
+    let items = json!([
+        { "reference": "system.profile.current.name" },
+        { "reference": "shared.nothing.here" },
+        { "reference": "not a reference" },
+    ]);
+
+    // Without an agent there are no values; the picker shows metadata only.
+    for (cmd, args) in [
+        (
+            "list_variables",
+            json!({ "context": context, "filter": {} }),
+        ),
+        (
+            "preview_references",
+            json!({ "context": context, "items": items }),
+        ),
+    ] {
+        let error = h.error(cmd, args);
+        assert!(error.starts_with("not supported"), "{cmd}: {error}");
+    }
+
+    let (_runtime, _mock) = start_agent(&h.paths);
+    h.unlock();
+    wait_for(&h, |s| s["running"] == true);
+
+    let entries = h.ok(
+        "list_variables",
+        json!({ "context": context, "filter": { "groups": ["system"] } }),
+    );
+    let entries = entries.as_array().unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["reference"] == "system.platform" && e.get("value").is_none()),
+        "{entries:?}"
+    );
+    assert!(entries.iter().all(|e| e["group"] == "system"));
+    // The filter is optional.
+    assert!(
+        h.ok("list_variables", json!({ "context": context }))
+            .as_array()
+            .is_some()
+    );
+
+    let previews = h.ok(
+        "preview_references",
+        json!({ "context": context, "items": items }),
+    );
+    let previews = previews.as_array().unwrap();
+    assert_eq!(previews.len(), 3);
+    assert_eq!(previews[0]["reference"], "system.profile.current.name");
+    assert_eq!(previews[0]["status"]["status"], "resolved");
+    assert_eq!(previews[0]["status"]["value"]["value"], "Work");
+    assert_eq!(previews[1]["status"]["status"], "missing");
+    assert_eq!(previews[2]["status"]["status"], "invalid");
+
+    assert_eq!(
+        h.ok(
+            "preview_references",
+            json!({ "context": context, "items": [] })
+        ),
+        json!([])
+    );
+    let many: Vec<Value> = (0..=deckpilot_ipc::MAX_PREVIEW_ITEMS)
+        .map(|_| json!({ "reference": "system.platform" }))
+        .collect();
+    let error = h.error(
+        "preview_references",
+        json!({ "context": context, "items": many }),
+    );
+    assert!(error.contains("at most"), "{error}");
+
+    h.ok("stop_agent", json!({}));
+    wait_for(&h, |s| s["running"] == false);
+}
