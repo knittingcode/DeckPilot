@@ -986,6 +986,7 @@ mod reference_tests {
                 ),
             ],
             requires_project: false,
+            deprecated: false,
             node: crate::graph::NodeSpec::default(),
         }
     }
