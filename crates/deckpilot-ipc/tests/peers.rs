@@ -124,7 +124,7 @@ async fn a_protocol_4_agent_is_used_with_protocol_4_only() {
         .await
         .unwrap();
     // The client stepped down from its own protocol until accepted.
-    assert_eq!(*peer.hellos.lock().unwrap(), [6, 5, 4]);
+    assert_eq!(*peer.hellos.lock().unwrap(), [7, 6, 5, 4]);
     assert_eq!(client.protocol(), 4);
     assert_eq!(client.agent_protocol(), 4);
     assert_eq!(client.agent_version(), "0.5.0-2");
@@ -183,7 +183,7 @@ async fn agents_older_than_protocol_4_need_replacing() {
         "{refused:?}"
     );
     // It never went below the oldest protocol the app works with.
-    assert_eq!(*peer.hellos.lock().unwrap(), [6, 5, 4]);
+    assert_eq!(*peer.hellos.lock().unwrap(), [7, 6, 5, 4]);
     // Protocol 1 still works for stopping it during an update.
     let mut stopper = AgentClient::connect_with_protocol(&peer.paths, ClientKind::Desktop, 1)
         .await
@@ -196,6 +196,41 @@ async fn agents_older_than_protocol_4_need_replacing() {
     ));
 }
 
+/// An agent that is stopping accepts a connection and closes it before it
+/// answers the `hello` (on Windows the pipe of a stopped agent can still be
+/// opened for a moment). Clients are told that no agent runs, quickly.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_that_closes_before_answering_is_not_running() {
+    let dir = std::env::temp_dir().join(format!(
+        "deckpilot-ipc-closing-{}-{}",
+        std::process::id(),
+        getrandom_suffix()
+    ));
+    let paths = AgentPaths::in_dir(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    token::create(&paths.token_file).unwrap();
+    let listener = paths.endpoint().listen().unwrap();
+    let closing = tokio::spawn(async move {
+        for _ in 0..2 {
+            let Ok(stream) = listener.accept().await else {
+                return;
+            };
+            drop(stream);
+        }
+    });
+    let started = std::time::Instant::now();
+    for _ in 0..2 {
+        let refused = AgentClient::connect(&paths, ClientKind::Desktop).await;
+        assert!(
+            matches!(refused, Err(ClientError::NotRunning)),
+            "{refused:?}"
+        );
+    }
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    closing.await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_protocol_5_agent_has_no_notifications() {
     let peer = peer(5, "0.5.0-dev");
@@ -205,4 +240,43 @@ async fn a_protocol_5_agent_has_no_notifications() {
     assert_eq!(client.protocol(), 5);
     assert!(client.supports(Capability::BackgroundExecutions));
     assert!(!client.supports(Capability::Notifications));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_protocol_6_agent_is_never_asked_about_variables() {
+    let peer = peer(6, "0.6.0");
+    let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    assert_eq!(*peer.hellos.lock().unwrap(), [7, 6]);
+    assert_eq!(client.protocol(), 6);
+    assert!(client.supports(Capability::Notifications));
+    assert!(!client.supports(Capability::Variables));
+    let context =
+        deckpilot_core::variables::ResolutionContext::preview(deckpilot_core::ProfileId::new());
+    for request in [
+        Request::ListVariables {
+            context: Box::new(context.clone()),
+            filter: Box::default(),
+        },
+        Request::PreviewReferences {
+            context: Box::new(context.clone()),
+            items: Vec::new(),
+        },
+    ] {
+        let refused = client.request(request).await;
+        assert!(
+            matches!(
+                &refused,
+                Err(ClientError::Unsupported {
+                    needs: 7,
+                    protocol: 6,
+                    ..
+                })
+            ),
+            "{refused:?}"
+        );
+    }
+    // Refused before anything was sent.
+    assert_eq!(peer.received.lock().unwrap().len(), 0);
 }

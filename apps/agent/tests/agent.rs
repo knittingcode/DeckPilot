@@ -26,10 +26,23 @@ use serde_json::{Value, json};
 use tokio::io::BufReader;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use watchdog::{Watchdog, within};
+
+#[path = "support/watchdog.rs"]
+mod watchdog;
 
 /// Upper bound for conditions to be reached; generous for slow CI runners
 /// (passing tests continue as soon as the condition holds).
 const TIMEOUT: Duration = Duration::from_secs(20);
+/// A single request in a polling loop: one that gets no answer is given
+/// up and tried again instead of blocking the loop.
+const ATTEMPT: Duration = Duration::from_secs(5);
+/// Lifecycle tests (start, stop, restart) that take longer than this hang:
+/// the test binary is ended with a message.
+const HANG: Duration = Duration::from_secs(120);
+/// Like the agent binary, a test agent waits briefly for the lock of one
+/// that is still stopping.
+const LOCK_WAIT: Duration = Duration::from_secs(2);
 
 /// The agent task and the sender that stops it.
 type Running = (JoinHandle<Result<(), AgentError>>, oneshot::Sender<()>);
@@ -42,6 +55,13 @@ struct TestAgent {
     key: DatabaseKey,
     task: Option<JoinHandle<Result<(), AgentError>>>,
     stop: Option<oneshot::Sender<()>>,
+    /// Ends the test binary if the test hangs.
+    watchdog: Watchdog,
+}
+
+/// A watchdog for the running test (libtest names its thread after it).
+fn watch() -> Watchdog {
+    Watchdog::new(std::thread::current().name().unwrap_or("a test"), HANG)
 }
 
 impl Drop for TestAgent {
@@ -73,15 +93,18 @@ fn create_database(paths: &AgentPaths) -> (SqliteStore, DatabaseKey) {
 
 /// Unlocks a running agent the way the configuration app does.
 async fn unlock_agent(paths: &AgentPaths, key: &DatabaseKey) {
-    let mut client = AgentClient::connect(paths, ClientKind::Desktop)
-        .await
-        .unwrap();
-    client
-        .request(Request::Unlock {
-            key: KeyMaterial::new(key.to_hex()),
-        })
-        .await
-        .unwrap();
+    within("unlocking the agent", TIMEOUT, async {
+        let mut client = AgentClient::connect(paths, ClientKind::Desktop)
+            .await
+            .unwrap();
+        client
+            .request(Request::Unlock {
+                key: KeyMaterial::new(key.to_hex()),
+            })
+            .await
+            .unwrap();
+    })
+    .await;
 }
 
 fn seed(paths: &AgentPaths) -> (Profile, DatabaseKey) {
@@ -134,6 +157,8 @@ struct Extras {
     screen: Option<std::sync::Arc<ScriptedScreenLock>>,
     /// Native notifications; never real ones in tests.
     notifier: Option<std::sync::Arc<deckpilot_core::notify::RecordingNotifier>>,
+    /// How long a cancelled run may take to stop (default 10 s).
+    cancel_grace: Option<Duration>,
 }
 
 /// Windows the agent asked to open by starting the app.
@@ -150,8 +175,9 @@ fn start_agent_with(
         clock,
         screen,
         notifier,
+        cancel_grace,
     } = extras;
-    let lock = InstanceLock::acquire(&paths.lock_file)?;
+    let lock = InstanceLock::acquire_waiting(&paths.lock_file, LOCK_WAIT)?;
     let options = AgentOptions {
         paths,
         backend: Box::new(mock.clone()),
@@ -169,7 +195,7 @@ fn start_agent_with(
             std::sync::Arc::new(keys)
         }),
         auto_lock_check: Duration::from_millis(50),
-        cancel_grace: Duration::from_secs(10),
+        cancel_grace: cancel_grace.unwrap_or(Duration::from_secs(10)),
         clock: clock.unwrap_or_else(deckpilot_agent::system_clock),
         notifier: notifier.map(|n| -> std::sync::Arc<dyn deckpilot_core::notify::Notifier> { n }),
         screen_lock: screen.map(|screen| -> std::sync::Arc<dyn ScreenLockMonitor> { screen }),
@@ -183,11 +209,16 @@ fn start_agent_with(
 }
 
 async fn setup() -> TestAgent {
+    setup_with(Extras::default()).await
+}
+
+async fn setup_with(extras: Extras) -> TestAgent {
+    let watchdog = watch();
     let paths = temp_paths();
     let (work, key) = seed(&paths);
     let mock = MockBackend::new();
     let device = mock.plug(&models::stream_deck_mk2(), "TEST-0001");
-    let (task, stop) = start_agent(paths.clone(), mock.clone()).unwrap();
+    let (task, stop) = start_agent_with(paths.clone(), mock.clone(), extras).unwrap();
     unlock_agent(&paths, &key).await;
     let agent = TestAgent {
         paths,
@@ -197,6 +228,7 @@ async fn setup() -> TestAgent {
         key,
         task: Some(task),
         stop: Some(stop),
+        watchdog,
     };
     agent
         .wait_for_status(|s| {
@@ -210,18 +242,24 @@ async fn setup() -> TestAgent {
 
 impl TestAgent {
     async fn client(&self) -> AgentClient {
-        AgentClient::connect(&self.paths, ClientKind::Other)
-            .await
-            .unwrap()
+        within(
+            "connecting to the agent",
+            TIMEOUT,
+            AgentClient::connect(&self.paths, ClientKind::Other),
+        )
+        .await
+        .unwrap()
     }
 
     async fn status(&self) -> AgentStatus {
-        match self
-            .client()
-            .await
-            .request(Request::GetStatus)
-            .await
-            .unwrap()
+        let mut client = self.client().await;
+        match within(
+            "the status request",
+            TIMEOUT,
+            client.request(Request::GetStatus),
+        )
+        .await
+        .unwrap()
         {
             Response::Status { status } => *status,
             other => panic!("unexpected {other:?}"),
@@ -231,8 +269,18 @@ impl TestAgent {
     async fn wait_for_status(&self, predicate: impl Fn(&AgentStatus) -> bool) -> AgentStatus {
         let deadline = tokio::time::Instant::now() + TIMEOUT;
         loop {
-            if let Ok(mut client) = AgentClient::connect(&self.paths, ClientKind::Other).await
-                && let Ok(Response::Status { status }) = client.request(Request::GetStatus).await
+            // Each attempt is bounded: a connection that is never answered
+            // must not keep the loop from reaching its deadline.
+            let attempt = tokio::time::timeout(ATTEMPT, async {
+                let mut client = AgentClient::connect(&self.paths, ClientKind::Other)
+                    .await
+                    .ok()?;
+                match client.request(Request::GetStatus).await {
+                    Ok(Response::Status { status }) => Some(status),
+                    _ => None,
+                }
+            });
+            if let Ok(Some(status)) = attempt.await
                 && predicate(&status)
             {
                 return *status;
@@ -257,11 +305,14 @@ impl TestAgent {
     }
 
     async fn shutdown(mut self) {
-        self.client()
-            .await
-            .request(Request::Shutdown)
-            .await
-            .unwrap();
+        let mut client = self.client().await;
+        within(
+            "the shutdown request",
+            TIMEOUT,
+            client.request(Request::Shutdown),
+        )
+        .await
+        .unwrap();
         let task = self.task.take().unwrap();
         tokio::time::timeout(TIMEOUT, task)
             .await
@@ -657,6 +708,7 @@ async fn rejects_unauthenticated_and_invalid_messages() {
 async fn single_instance_shutdown_and_client_reconnect() {
     let mut agent = setup().await;
     let paths = agent.paths.clone();
+    agent.watchdog.step("a second instance is refused");
     assert!(matches!(
         InstanceLock::acquire(&paths.lock_file),
         Err(LockError::AlreadyRunning)
@@ -666,24 +718,32 @@ async fn single_instance_shutdown_and_client_reconnect() {
         Err(AgentError::Lock(LockError::AlreadyRunning))
     ));
 
+    agent.watchdog.step("subscribing");
     let mut subscriber = agent.client().await;
-    subscriber.subscribe().await.unwrap();
-    assert!(agent.frames_shown());
-
-    agent
-        .client()
-        .await
-        .request(Request::Shutdown)
+    within("subscribing", TIMEOUT, subscriber.subscribe())
         .await
         .unwrap();
+    assert!(agent.frames_shown());
+
+    agent.watchdog.step("the shutdown request");
+    let mut client = agent.client().await;
+    within(
+        "the shutdown request",
+        TIMEOUT,
+        client.request(Request::Shutdown),
+    )
+    .await
+    .unwrap();
+    drop(client);
+    agent.watchdog.step("waiting for the agent task to end");
     let task = agent.task.take().unwrap();
-    tokio::time::timeout(TIMEOUT, task)
+    within("the agent task after shutdown", TIMEOUT, task)
         .await
-        .unwrap()
         .unwrap()
         .unwrap();
 
     // Subscribers are told before the connection closes.
+    agent.watchdog.step("the subscriber's shutdown event");
     let mut saw_shutdown = false;
     while let Ok(Ok(event)) = tokio::time::timeout(TIMEOUT, subscriber.next_event()).await {
         if event == AgentEvent::ShuttingDown {
@@ -697,29 +757,42 @@ async fn single_instance_shutdown_and_client_reconnect() {
     // pipe instance, and with it the name, from being reused.
     drop(subscriber);
     assert!(!paths.token_file.exists(), "token is removed on shutdown");
+    agent.watchdog.step("keys blanked after shutdown");
     assert!(
         agent
             .mock
             .wait_for(&agent.device, TIMEOUT, |frames, _| frames.is_empty()),
         "keys are blanked"
     );
-    assert!(matches!(
-        AgentClient::connect(&paths, ClientKind::Other).await,
-        Err(ClientError::NotRunning)
-    ));
+    agent.watchdog.step("connecting to the stopped agent");
+    let stopped = within(
+        "connecting to the stopped agent",
+        TIMEOUT,
+        AgentClient::connect(&paths, ClientKind::Other),
+    )
+    .await;
+    assert!(
+        matches!(stopped, Err(ClientError::NotRunning)),
+        "connecting to the stopped agent: {:?}",
+        stopped.map(|_| "connected")
+    );
 
     // A restarted agent accepts clients again and restores the selection.
     // It starts locked, like after a reboot, until the app unlocks it.
+    agent.watchdog.step("restarting the agent");
     let (task, stop) = start_agent(paths.clone(), agent.mock.clone()).unwrap();
     agent.task = Some(task);
     agent.stop = Some(stop);
+    agent.watchdog.step("the restarted agent's status");
     let locked = agent.wait_for_status(|s| !s.devices.is_empty()).await;
     assert_eq!(locked.security, SecurityState::Locked);
+    agent.watchdog.step("unlocking the restarted agent");
     unlock_agent(&paths, &agent.key).await;
     let status = agent
         .wait_for_status(|s| s.security == SecurityState::Unlocked)
         .await;
     assert_eq!(status.active_profile.unwrap().id, agent.work.id);
+    agent.watchdog.step("stopping the restarted agent");
     agent.shutdown().await;
 }
 
@@ -987,6 +1060,7 @@ async fn profiles_keep_their_own_projects_and_selection() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn starts_locked_and_unlocks_only_with_the_right_key() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let (work, key) = seed(&paths);
     let mock = MockBackend::new();
@@ -1111,6 +1185,7 @@ async fn reports_missing_and_legacy_databases_without_opening_them() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn requests_windows_from_the_app_instead_of_drawing_them() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let (work, key) = seed(&paths);
     let mock = MockBackend::new();
@@ -1242,11 +1317,15 @@ async fn wait_for(paths: &AgentPaths, predicate: impl Fn(&AgentStatus) -> bool) 
 }
 
 async fn request(paths: &AgentPaths, request: Request) -> Result<Response, ClientError> {
-    AgentClient::connect(paths, ClientKind::Desktop)
-        .await
-        .unwrap()
-        .request(request)
-        .await
+    let what = format!("the {} request", request.name());
+    within(&what, TIMEOUT, async {
+        AgentClient::connect(paths, ClientKind::Desktop)
+            .await
+            .unwrap()
+            .request(request)
+            .await
+    })
+    .await
 }
 
 async fn stop_agent(paths: &AgentPaths, (task, stop): Running) {
@@ -1279,6 +1358,7 @@ fn unlocked(status: &AgentStatus) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_fresh_install_opens_without_a_password_and_after_restarts() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     let running = start_agent_with(paths.clone(), MockBackend::new(), with_keys(&keys)).unwrap();
@@ -1310,6 +1390,7 @@ async fn a_fresh_install_opens_without_a_password_and_after_restarts() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unavailable_credential_store_is_a_clear_locked_state() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     let running = start_agent_with(paths.clone(), MockBackend::new(), with_keys(&keys)).unwrap();
@@ -1349,6 +1430,7 @@ async fn an_unavailable_credential_store_is_a_clear_locked_state() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn retrying_after_the_store_becomes_available_unlocks() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     let running = start_agent_with(paths.clone(), MockBackend::new(), with_keys(&keys)).unwrap();
@@ -1370,6 +1452,7 @@ async fn retrying_after_the_store_becomes_available_unlocks() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn no_credential_store_on_first_run_creates_nothing() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     keys.set_unavailable(true);
@@ -1388,6 +1471,7 @@ async fn no_credential_store_on_first_run_creates_nothing() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_password_database_switches_to_a_system_key() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let (profile, key) = seed(&paths);
     let keys = MemoryKeyStore::new();
@@ -1429,6 +1513,7 @@ async fn a_password_database_switches_to_a_system_key() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_switch_leaves_the_password_protection() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let (_, key) = seed(&paths);
     let keys = MemoryKeyStore::new();
@@ -1459,6 +1544,7 @@ async fn locks_after_inactivity_and_sleep_when_configured() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     let offset = Arc::new(AtomicU64::new(0));
@@ -1514,6 +1600,7 @@ async fn locks_after_inactivity_and_sleep_when_configured() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_legacy_database_is_encrypted_with_a_system_key() {
+    let _watchdog = watch();
     let paths = temp_paths();
     {
         let store = SqliteStore::open(&paths.database, &Encryption::None).unwrap();
@@ -1567,6 +1654,7 @@ fn restored(status: &AgentStatus, profile: &Profile, project: &ProjectKey) -> bo
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unlocking_restores_profile_project_and_layouts() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     let (profile, project) = system_configuration(&paths, &keys);
@@ -1588,6 +1676,7 @@ async fn unlocking_restores_profile_project_and_layouts() {
 async fn locks_when_the_screen_locks_where_it_can_be_detected() {
     use deckpilot_storage::policy::{AutoLock, SecurityPolicy, set_security_policy};
 
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     let screen = std::sync::Arc::new(ScriptedScreenLock::default());
@@ -1642,6 +1731,7 @@ async fn locks_when_the_screen_locks_where_it_can_be_detected() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unreachable_store_is_retried_but_a_refusal_is_not() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     let running = start_agent_with(paths.clone(), MockBackend::new(), with_keys(&keys)).unwrap();
@@ -1686,6 +1776,7 @@ async fn an_unreachable_store_is_retried_but_a_refusal_is_not() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_missing_database_is_reported_not_replaced() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     system_configuration(&paths, &keys);
@@ -1954,6 +2045,7 @@ async fn device_bound_workflows_run_in_the_background() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn runs_of_a_stopped_agent_are_recorded_as_interrupted() {
+    let _watchdog = watch();
     let agent = setup().await;
     let workflow = waiting_workflow(&agent.work, 60_000);
     let workflow_id = workflow.id;
@@ -2180,6 +2272,17 @@ async fn only_permitted_runs_change_the_active_project_and_never_over_a_newer_ch
     );
     let workflow_id = workflow.id;
     profile.workflows.push(workflow);
+    // The same, waiting long enough that the user's choice below certainly
+    // arrives while it runs, also on a slow runner.
+    let mut slow = select_wait_announce(
+        &mut profile,
+        "CMR",
+        3000,
+        deckpilot_core::ProjectScope::Application,
+    );
+    slow.name = "Work on CMR slowly".into();
+    let slow_id = slow.id;
+    profile.workflows.push(slow);
     agent.store().save_profile(&profile).unwrap();
     let mut events = agent.client().await;
     events.subscribe().await.unwrap();
@@ -2193,10 +2296,13 @@ async fn only_permitted_runs_change_the_active_project_and_never_over_a_newer_ch
         Some(deckpilot_core::ProjectScope::Application)
     );
     let (_, done) = execution_events(&mut events, run.id).await;
-    assert!(matches!(
-        done.project,
-        Some(deckpilot_core::ProjectOutcome::Applied { .. })
-    ));
+    assert!(
+        matches!(
+            done.project,
+            Some(deckpilot_core::ProjectOutcome::Applied { .. })
+        ),
+        "{done:?}"
+    );
     agent
         .wait_for_status(|s| active_key(s) == Some("CMR"))
         .await;
@@ -2214,17 +2320,44 @@ async fn only_permitted_runs_change_the_active_project_and_never_over_a_newer_ch
         .request(Request::SelectProject { project: shop })
         .await
         .unwrap();
-    let run = start_workflow(&mut client, workflow_id).await;
+    let run = start_workflow(&mut client, slow_id).await;
+    // The run is waiting (its project already selected in its own
+    // context) when the user picks another one.
+    let mut early = Vec::new();
+    loop {
+        let event = within("the run's wait to begin", TIMEOUT, events.next_event())
+            .await
+            .unwrap();
+        let waiting = matches!(
+            &event,
+            AgentEvent::ExecutionProgress {
+                execution,
+                event: deckpilot_core::graph::ExecutionEvent::NodeStarted { node },
+                ..
+            } if *execution == run.id && node.as_str() == "wait"
+        );
+        assert!(
+            !matches!(&event, AgentEvent::ExecutionFinished { execution } if execution.id == run.id),
+            "the run ended before it waited: {event:?}"
+        );
+        early.push(event);
+        if waiting {
+            break;
+        }
+    }
     client
         .request(Request::SelectProject { project: cms })
         .await
         .unwrap();
-    let (_, done) = execution_events(&mut events, run.id).await;
-    match done.project {
+    let (later, done) = execution_events(&mut events, run.id).await;
+    match &done.project {
         Some(deckpilot_core::ProjectOutcome::NotApplied { reason, .. }) => {
             assert!(reason.contains("changed during the run"), "{reason}");
         }
-        other => panic!("unexpected {other:?}"),
+        other => panic!(
+            "expected the run not to change the user's newer choice, got {other:?}; \
+             run: {done:?}; events: {early:?} {later:?}"
+        ),
     }
     assert_eq!(active_key(&agent.status().await), Some("CMS"));
     agent.shutdown().await;
@@ -2719,6 +2852,7 @@ async fn notifications_reach_the_status_bar_and_the_desktop() {
         key,
         task: Some(task),
         stop: Some(stop),
+        watchdog: watch(),
     };
     let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
     let summary = registry()
@@ -3150,4 +3284,232 @@ async fn connections_offer_only_what_their_protocol_has() {
     assert_eq!(status["response"]["status"]["runningExecutions"], 0);
     drop((reader, writer, current));
     agent.shutdown().await;
+}
+
+/// A cancelled run whose action does not stop within the cancel grace is
+/// recorded as cancelled at the end of the grace. Subscribers then learn
+/// at once that nothing runs any more (the tray, the app, keys showing
+/// progress), and the result the action delivers later changes nothing.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_run_that_outlives_its_cancel_grace_ends_for_everyone() {
+    let agent = setup_with(Extras {
+        cancel_grace: Some(Duration::from_millis(300)),
+        ..Extras::default()
+    })
+    .await;
+    set_system(&agent, true, true);
+    // Ignores the polite stop; it is killed only after the process grace
+    // (2 s), well after the agent's cancel grace.
+    let workflow = command_workflow(&agent, "trap '' TERM; sleep 4");
+    let mut client = agent.client().await;
+    client.subscribe().await.unwrap();
+    client.request(Request::ReloadConfiguration).await.unwrap();
+
+    let run = start_workflow(&mut client, workflow).await;
+    agent
+        .wait_for_status(|s| s.running_executions == Some(1))
+        .await;
+    // Let the shell install its trap before it is asked to stop.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    client
+        .request(Request::CancelExecution { execution: run.id })
+        .await
+        .unwrap();
+    let (_, finished) = execution_events(&mut client, run.id).await;
+    assert_eq!(finished.state, deckpilot_core::ExecutionState::Cancelled);
+    assert!(
+        finished.message.contains("cannot be interrupted"),
+        "{}",
+        finished.message
+    );
+    // A state update follows right away, not only with the next change.
+    let status = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if let AgentEvent::State { status } = client.next_event().await.unwrap() {
+                break status;
+            }
+        }
+    })
+    .await
+    .expect("a state update after the run ended");
+    assert_eq!(status.running_executions, Some(0));
+
+    // The command is killed after its grace; its late result is discarded.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let record = agent.store().execution(run.id).unwrap().unwrap();
+    assert_eq!(
+        record.summary.state,
+        deckpilot_core::ExecutionState::Cancelled
+    );
+    assert_eq!(agent.status().await.running_executions, Some(0));
+    // The workflow can run again.
+    let again = start_workflow(&mut client, workflow).await;
+    client
+        .request(Request::CancelExecution {
+            execution: again.id,
+        })
+        .await
+        .unwrap();
+    agent.shutdown().await;
+}
+
+/// At most four workflows run together; a fifth is refused with a reason
+/// and recorded nowhere, and starts once one of the four has ended.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn at_most_four_workflows_run_together() {
+    let agent = setup().await;
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let wait = registry()
+        .create_instance(
+            "Wait a while",
+            general::wait_id(),
+            &ActionParameters::new().with("seconds", deckpilot_core::ParameterValue::Integer(300)),
+        )
+        .unwrap();
+    let wait_id = wait.id;
+    profile.actions.push(wait);
+    let workflows: Vec<deckpilot_core::WorkflowId> = (0..5)
+        .map(|n| {
+            let mut workflow = deckpilot_core::Workflow::new(format!("Wait {n}"));
+            workflow.graph = Some(
+                serde_json::from_value(json!({
+                    "version": 1,
+                    "nodes": [
+                        {"id": "start", "type": "trigger"},
+                        {"id": "wait", "type": "action", "action": wait_id},
+                    ],
+                    "edges": [{"from": "start", "to": "wait"}],
+                }))
+                .unwrap(),
+            );
+            let id = workflow.id;
+            profile.workflows.push(workflow);
+            id
+        })
+        .collect();
+    agent.store().save_profile(&profile).unwrap();
+    let mut client = agent.client().await;
+    client.subscribe().await.unwrap();
+    client.request(Request::ReloadConfiguration).await.unwrap();
+
+    let mut runs = Vec::new();
+    for workflow in &workflows[..4] {
+        runs.push(start_workflow(&mut client, *workflow).await);
+    }
+    let refused = client
+        .request(Request::StartWorkflow {
+            workflow: workflows[4],
+        })
+        .await;
+    assert!(
+        matches!(&refused, Err(ClientError::Agent(e)) if e.message.contains("4 workflows are already running")),
+        "{refused:?}"
+    );
+    assert_eq!(agent.status().await.running_executions, Some(4));
+    let listed = |executions: &[deckpilot_core::ExecutionSummary]| {
+        executions
+            .iter()
+            .filter(|e| e.workflow == workflows[4])
+            .count()
+    };
+    let Response::Executions { executions } = client
+        .request(Request::ListExecutions {
+            workflow: None,
+            limit: Some(50),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("executions expected");
+    };
+    assert_eq!(executions.len(), 4);
+    assert_eq!(listed(&executions), 0, "a refused start leaves no record");
+
+    // One ends: the fifth starts.
+    client
+        .request(Request::CancelExecution {
+            execution: runs[0].id,
+        })
+        .await
+        .unwrap();
+    let (_, finished) = execution_events(&mut client, runs[0].id).await;
+    assert_eq!(finished.state, deckpilot_core::ExecutionState::Cancelled);
+    let fifth = start_workflow(&mut client, workflows[4]).await;
+    assert_eq!(agent.status().await.running_executions, Some(4));
+
+    // Each run has its own record; stopping the agent ends the others as
+    // interrupted.
+    let store = agent.store();
+    agent.shutdown().await;
+    let state = |id| store.execution(id).unwrap().unwrap().summary.state;
+    assert_eq!(state(runs[0].id), deckpilot_core::ExecutionState::Cancelled);
+    for run in runs[1..].iter().chain([&fifth]) {
+        assert_eq!(state(run.id), deckpilot_core::ExecutionState::Interrupted);
+    }
+}
+
+/// A test that blocks its thread (which `tokio::time::timeout` cannot
+/// interrupt), or that panics and then hangs while its runtime shuts down,
+/// ends the test binary with a message naming the step, instead of hanging
+/// the CI job. Runs itself in child processes, with the harness capturing
+/// output as in CI.
+#[test]
+fn a_hanging_test_ends_the_test_binary_with_its_step() {
+    const CHILD: &str = "DECKPILOT_WATCHDOG_TEST_CHILD";
+    match std::env::var(CHILD).as_deref() {
+        Ok("block") => {
+            let watchdog = Watchdog::new("the hanging test", Duration::from_millis(300));
+            watchdog.step("blocking forever");
+            std::thread::sleep(Duration::from_secs(30));
+            return;
+        }
+        Ok("panic") => {
+            // A worker that never returns keeps the runtime from shutting
+            // down after the test panics.
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .build()
+                .unwrap();
+            runtime.spawn(async { std::thread::sleep(Duration::from_secs(30)) });
+            // Long enough for the panic to be reported and unwound before
+            // the limit, also on a slow runner (Windows CI took over 250 ms).
+            let watchdog = Watchdog::new("the hanging test", Duration::from_secs(3));
+            watchdog.step("asserting");
+            panic!("the assertion failed");
+        }
+        _ => {}
+    }
+    for (mode, step) in [
+        ("block", "`blocking forever`"),
+        (
+            "panic",
+            "`panicked, then did not finish, after: asserting; the panic: panicked at",
+        ),
+    ] {
+        let started = std::time::Instant::now();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "a_hanging_test_ends_the_test_binary_with_its_step",
+                "--exact",
+            ])
+            .env(CHILD, mode)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(101), "{mode}: {stderr}");
+        assert!(
+            stderr.contains("the hanging test hung") && stderr.contains(step),
+            "{mode}: {stderr}"
+        );
+        if mode == "panic" {
+            // What panicked is shown, although the harness captured the
+            // test's output and never printed it.
+            assert!(
+                stderr.contains("[panic in") && stderr.contains("the assertion failed"),
+                "{stderr}"
+            );
+        }
+        assert!(started.elapsed() < Duration::from_secs(20), "{mode}");
+    }
 }

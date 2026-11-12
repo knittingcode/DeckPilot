@@ -250,6 +250,65 @@ describe("LayoutEditor", () => {
     ])
   })
 
+  it("leaves undo, copy and paste in text fields to the field", async () => {
+    const user = renderEditor()
+    await user.click(control("Key 1"))
+    await user.keyboard("{Delete}")
+    await user.click(control("Key 2"))
+    await user.keyboard("{Control>}c{/Control}")
+
+    const name = screen.getByRole("textbox", { name: "Layout name" })
+    await user.click(name)
+    for (const key of ["z", "y", "c", "x", "v", "d"]) {
+      const event = new KeyboardEvent("keydown", { key, ctrlKey: true, bubbles: true })
+      name.dispatchEvent(event)
+      // Not taken: the native Edit menu (macOS) or the field handles it.
+      expect(event.defaultPrevented).toBe(false)
+    }
+    expect(describes("Key 1")).toBe("Key 1")
+    expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled()
+  })
+
+  it("leaves copying selected page text to the browser", async () => {
+    const user = renderEditor()
+    await user.click(control("Key 1"))
+    const range = document.createRange()
+    range.selectNodeContents(screen.getByText("Page 1 of 2"))
+    window.getSelection()?.removeAllRanges()
+    window.getSelection()?.addRange(range)
+    const event = new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true })
+    control("Key 1").dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(false)
+    window.getSelection()?.removeAllRanges()
+
+    // Nothing was copied: pasting onto another key does not change it.
+    await user.click(control("Key 6"))
+    await user.keyboard("{Control>}v{/Control}")
+    expect(describes("Key 6")).toBe("Key 6")
+  })
+
+  it("does not undo behind an open menu", async () => {
+    const user = renderEditor()
+    await user.click(control("Key 1"))
+    await user.keyboard("{Delete}")
+    fireEvent.contextMenu(control("Key 2"))
+    await screen.findByRole("menu")
+    await user.keyboard("{Control>}z{/Control}")
+    const key = screen.getByRole("button", { name: "Key 1", hidden: true })
+    expect(key).toHaveAttribute("title", "Key 1")
+  })
+
+  it("saves with Cmd/Ctrl+S, also from a text field", async () => {
+    const user = renderEditor()
+    await user.keyboard("{Control>}s{/Control}")
+    expect(saveLayout).not.toHaveBeenCalled()
+    const name = screen.getByRole("textbox", { name: "Layout name" })
+    await user.type(name, " 2")
+    await user.keyboard("{Control>}s{/Control}")
+    const [, saved] = saveLayout.mock.calls[0] as [string, DeviceLayout]
+    expect(saved.name).toBe("Main 2")
+  })
+
   it("saves the edited layout", async () => {
     const user = renderEditor()
     await user.click(control("Key 1"))

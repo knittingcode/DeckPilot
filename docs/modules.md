@@ -42,12 +42,49 @@ and nothing is added to the Action Library automatically.
 | ---- | ---------- | ------ |
 | `general.log` | `message` | the rendered message |
 | `general.wait` | `seconds` (1–300) | waits; output `waitedMs`; stops at once when cancelled (the reference workflow node) |
-| `projects.next` / `projects.previous` | — | switches along the project order (respects `wrapAround`) |
+| `projects.cycle` | `direction` (`next` \| `previous`, default `next`) | switches along the project order (respects `wrapAround`) |
 | `projects.select` | `project_id` (optional) | with a project: selects it; without: reports the current project and changes nothing |
-| `projects.active` | — | reports the current project |
+| `projects.current` | — | reports the current project: `projectId`, `projectKey`, `projectName`, `profileId` |
 | `projects.repository` | `project_id` (optional) | resolves the project's `repository` resource |
 | `projects.documentation` | `project_id` (optional) | resolves the project's `docs` resource |
 | `projects.resolve-resource` | `project_id` (optional), `resource` (name) | resolves any named resource of the project |
+| `projects.next` / `projects.previous` | — | *deprecated*: `projects.cycle` with that direction |
+| `projects.active` | — | *deprecated*: `projects.current` without `profileId` |
+
+A type marked `deprecated` (`ActionType.deprecated`, sent to the app only
+when true) is replaced by another one. Saved actions, workflow nodes and
+keys of that type keep working and can still be edited, but the Action
+Library and the workflow builder no longer offer it for new ones.
+
+### Cycling projects
+
+`projects.cycle` is one action for both directions. The handler reports the
+project it leads to and requests a `ContextEffect::CycleProject`; the engine
+applies it against the project that is active *when it applies it*, and
+reports the applied effect as the `SelectProject` it resulted in. The agent
+handles key presses, IPC requests and tray commands one at a time, so N
+presses — however quickly they arrive, from the device or several clients —
+move exactly N projects on.
+
+- No projects: fails with `no-projects`, nothing changes.
+- One project: succeeds without a change (`"<KEY> is the only project"`),
+  also without `wrapAround`.
+- Without `wrapAround` the ends fail with `at-last-project` /
+  `at-first-project`.
+- The order is the profile's current order, so a reorder takes effect on
+  the next press.
+- The active project was deleted: when the agent reloads the profile, its
+  default (or first) project becomes active; the next press continues from
+  there. A context still naming a deleted project starts from the first
+  (next) or last (previous) project.
+- Each profile keeps its own active project: after a profile change, presses
+  cycle the new profile's projects, and coming back shows and continues from
+  the project the first profile had.
+- On a key press the change goes to the global active project: the agent
+  persists it, redraws the keys that show the project at once and sends a
+  `state` event with the new `activeProject`. Inside a workflow it changes
+  the run's project, and the workflow's `projectScope` decides whether it
+  becomes the active project when the run ends.
 
 `project_id` is a stable project id. Unset (absent or `null`) means *the
 current project*, decided when the action runs; the editor's "Current
@@ -67,15 +104,18 @@ Failures carry the shared codes `no-active-project`, `not-permitted`,
 `resource-role-missing`, `resource-unbound`, `resource-kind-mismatch` and
 `invalid-parameters`, plus `project-not-in-profile` (an explicit project of
 another profile), `no-projects`, `at-last-project` and `at-first-project`
-(next/previous without `wrapAround`). `projects.next`, `projects.previous`
-and `projects.select` are declared as modifying, since switching the active
-project changes state; the resource types and `projects.active` only read.
+(cycling without `wrapAround`). `projects.cycle`, `projects.next`,
+`projects.previous` and `projects.select` are declared as modifying, since
+switching the active project changes state; cycling is neither idempotent
+nor retry-safe. The resource types, `projects.current` and
+`projects.active` only read.
 
 The projects module owns the Projects page, project management (create,
 edit, reorder, delete, default project, explicit copy to another profile),
-active project switching (actions, the tray and the app all use
-`switching::step`) and project resources. Its setting `wrapAround` decides
-whether next/previous wrap around at the ends.
+active project switching (actions, the tray and the app all step with
+`ProjectSwitcher::step`, through `switching::step` outside the engine) and
+project resources. Its setting `wrapAround` decides whether cycling wraps
+around at the ends.
 
 ## Workflow node contract
 
