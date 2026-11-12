@@ -312,6 +312,7 @@ fn definition(kind: Kind) -> ActionType {
         category: "GitLab".into(),
         parameters,
         requires_project: false,
+        deprecated: false,
         node,
     }
 }

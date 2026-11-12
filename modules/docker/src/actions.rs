@@ -405,6 +405,7 @@ fn definition(kind: Kind) -> ActionType {
         category: "Docker".into(),
         parameters,
         requires_project: false,
+        deprecated: false,
         node: spec,
     }
 }
