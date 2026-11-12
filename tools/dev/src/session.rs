@@ -18,21 +18,46 @@ pub struct DevPaths {
     pub workspace: PathBuf,
     pub session: PathBuf,
     pub stop_request: PathBuf,
+    /// Asks the supervisor to start the app again (`open-ui`).
+    pub ui_request: PathBuf,
 }
+
+/// Moves the development directory (default `.dev` in the repository), for
+/// a session on a fresh data directory next to the regular one.
+pub const DEV_DIR_ENV: &str = "DECKPILOT_DEV_DIR";
 
 impl DevPaths {
     pub fn new() -> Self {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let root = root.canonicalize().unwrap_or(root);
-        let dev = root.join(".dev");
+        let dev = std::env::var_os(DEV_DIR_ENV)
+            .filter(|dir| !dir.is_empty())
+            .map_or_else(
+                || root.join(".dev"),
+                |dir| {
+                    let dir = PathBuf::from(dir);
+                    std::path::absolute(&dir).unwrap_or(dir)
+                },
+            );
+        Self::in_dev_dir(root, &dev)
+    }
+
+    /// The layout of a development directory (`.dev`).
+    pub fn in_dev_dir(root: PathBuf, dev: &Path) -> Self {
         Self {
             data: dev.join("data"),
             logs: dev.join("logs"),
             workspace: dev.join("workspace"),
             session: dev.join("session.json"),
             stop_request: dev.join("stop-requested"),
+            ui_request: dev.join("ui-requested"),
             root,
         }
+    }
+
+    /// The development directory holding the session (see [`Self::in_dev_dir`]).
+    pub fn dev_dir(&self) -> &Path {
+        self.session.parent().unwrap_or(&self.root)
     }
 
     /// Paths for an isolated data directory outside `.dev`, e.g. for the
@@ -45,6 +70,7 @@ impl DevPaths {
             workspace: dir.join("workspace"),
             session: dir.join("session.json"),
             stop_request: dir.join("stop-requested"),
+            ui_request: dir.join("ui-requested"),
             root: dev.root,
         }
     }
@@ -111,6 +137,7 @@ impl Session {
     pub fn remove(paths: &DevPaths) {
         let _ = std::fs::remove_file(&paths.session);
         let _ = std::fs::remove_file(&paths.stop_request);
+        let _ = std::fs::remove_file(&paths.ui_request);
     }
 
     pub fn supervisor_alive(&self) -> bool {
@@ -119,5 +146,11 @@ impl Session {
 
     pub fn process(&self, role: &str) -> Option<&OwnedProcess> {
         self.processes.iter().find(|p| p.role == role)
+    }
+
+    /// Records `owned`, replacing an earlier process of the same role.
+    pub fn replace_process(&mut self, owned: OwnedProcess) {
+        self.processes.retain(|p| p.role != owned.role);
+        self.processes.push(owned);
     }
 }
