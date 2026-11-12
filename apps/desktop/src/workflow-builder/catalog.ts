@@ -4,6 +4,7 @@
  * Module nodes come from the module registry (`ModuleInfo.actionTypes`) and
  * the profile's actions of those types; the editor knows no module.
  */
+import { creatableTypes } from "@/lib/modules"
 import type { ActionInstance, ActionType, GraphNodeKind, ModuleInfo } from "@/lib/types"
 
 import { DEFAULT_POLICY, type NodeType } from "./graph"
@@ -105,7 +106,9 @@ export function moduleGroups(modules: ModuleInfo[], actions: ActionInstance[]): 
         entries: actions
           .filter((a) => types.has(a.actionType))
           .map((a) => actionEntry(a, types.get(a.actionType))),
-        types: module.actionTypes,
+        // Saved actions of deprecated types stay listed above; new nodes
+        // are made from the types that replace them.
+        types: creatableTypes(module.actionTypes),
       }
     })
 }

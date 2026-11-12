@@ -89,7 +89,7 @@ The same steps by hand, with DeckPilot installed (or `make up` with
 | 2 | Activate a profile with an MK.2 layout | Key images appear within a second; the active page is shown |
 | 3 | Press and release a key bound to an action | The action runs once; a workflow summary appears for failures |
 | 4 | Switch profiles (app and tray) | Layout and images change; no restart |
-| 5 | Switch projects (key bound to `projects.next`) | The active project changes and persists after a restart |
+| 5 | Switch projects (key bound to `projects.cycle`) | The active project changes, the key shows it at once, and it persists after a restart |
 | 6 | Change brightness in the app | The device follows immediately and keeps it after reconnecting |
 | 7 | Unplug, wait, plug in again | "Disconnected", then the same layout and page again within ~2 s |
 | 8 | Restart the agent (tray → Quit, start DeckPilot) | Images return; profile, project and brightness are restored |
@@ -143,6 +143,8 @@ signature. Manual checks on real machines:
 | App/agent compatibility | By design, tested | Same version required: the app detects a mismatching agent and offers to restart it with the bundled one; the update stops the agent before replacing files and starts the new one (update test) |
 | SQLCipher migrations | Tested | A newer schema is refused; upgrades run after a verified encrypted backup, in one transaction (storage tests) |
 | Failed updates | Tested | A rejected or failed update leaves the installed version and its agent running (update test); the downloaded update stays ready to retry |
+| Interrupted and stalled downloads | Tested | Connection closed early, stalled (60 s read timeout), server errors: the download fails, nothing partial is kept, the next attempt starts over; a stalled check or download no longer blocks the updater (desktop `updates_tests.rs`, loopback server, throwaway keys) |
+| Failure diagnostics | Tested | Each failure says what happened, the state of the installation and what to do; it is shown and appended to `updates.log` in the log directory (no key material) |
 | Release artifact integrity | Verified | Draft-only releases; checksums verified in the release workflow; attestations (`gh attestation verify`) |
 | Certificate expiry | Checked | The signing check fails on an expired Developer ID certificate and warns 60 days ahead. Shipped apps keep working after expiry: signatures carry a secure timestamp and the notarization ticket is stapled |
 | Updater key | Not rotated | The minisign key has no expiry; losing it means installations cannot verify updates (keep the offline backup, see [releasing.md](releasing.md)) |

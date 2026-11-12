@@ -30,6 +30,7 @@ pub mod registry;
 pub mod resource;
 pub mod runtime;
 pub mod trigger;
+pub mod variables;
 pub mod workflow;
 
 #[cfg(test)]
@@ -75,7 +76,8 @@ pub use pages::PageDestination;
 pub use platform::Os;
 pub use profile::{Profile, ProfileIssue, Usage};
 pub use project::{
-    ActiveProjectContext, CycleDirection, Project, ProjectContextError, ProjectKey, ProjectSwitcher,
+    ActiveProjectContext, CycleDirection, Project, ProjectContextError, ProjectKey,
+    ProjectStepError, ProjectSwitcher,
 };
 pub use registry::{ActionHandler, ActionRegistry, RegistryError};
 pub use resource::{

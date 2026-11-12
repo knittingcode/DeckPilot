@@ -196,6 +196,41 @@ async fn agents_older_than_protocol_4_need_replacing() {
     ));
 }
 
+/// An agent that is stopping accepts a connection and closes it before it
+/// answers the `hello` (on Windows the pipe of a stopped agent can still be
+/// opened for a moment). Clients are told that no agent runs, quickly.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_that_closes_before_answering_is_not_running() {
+    let dir = std::env::temp_dir().join(format!(
+        "deckpilot-ipc-closing-{}-{}",
+        std::process::id(),
+        getrandom_suffix()
+    ));
+    let paths = AgentPaths::in_dir(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    token::create(&paths.token_file).unwrap();
+    let listener = paths.endpoint().listen().unwrap();
+    let closing = tokio::spawn(async move {
+        for _ in 0..2 {
+            let Ok(stream) = listener.accept().await else {
+                return;
+            };
+            drop(stream);
+        }
+    });
+    let started = std::time::Instant::now();
+    for _ in 0..2 {
+        let refused = AgentClient::connect(&paths, ClientKind::Desktop).await;
+        assert!(
+            matches!(refused, Err(ClientError::NotRunning)),
+            "{refused:?}"
+        );
+    }
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    closing.await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_protocol_5_agent_has_no_notifications() {
     let peer = peer(5, "0.5.0-dev");
