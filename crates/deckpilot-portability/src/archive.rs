@@ -191,8 +191,10 @@ mod tests {
         assert_eq!(plaintext.as_slice(), b"{\"hello\":1}");
         assert_eq!(header.format, FORMAT);
         assert_eq!(header.kdf.algorithm, "argon2id");
-        // Nothing of the content is visible.
-        assert!(!archive.windows(5).any(|w| w == b"hello"));
+        // Nothing of the content is visible. The needle has quotes, which
+        // base64 text never contains, so it cannot match by chance (a bare
+        // word like `hello` could).
+        assert!(!archive.windows(7).any(|w| w == b"\"hello\""));
         // Every archive has its own salt and nonce.
         assert_ne!(sealed(b"same").as_slice(), sealed(b"same").as_slice());
     }
