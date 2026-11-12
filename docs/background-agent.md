@@ -66,8 +66,14 @@ closed and reopened at any time without interrupting devices.
 ### Tray menu
 
 - **Open DeckPilot**: focuses the configuration window if it is connected,
-  otherwise starts the configuration app found next to the agent (or
-  `DECKPILOT_DESKTOP_BIN`)
+  otherwise starts the configuration app found next to the agent
+  (`deckpilot-desktop` in a build directory or Linux package, `DeckPilot` in
+  the macOS `.app` and on Windows; inside an AppImage the AppImage itself),
+  or `DECKPILOT_DESKTOP_BIN`. While an app it started is still starting (up
+  to 20 seconds, until it connects), further clicks start no second one. In
+  a development session `DECKPILOT_DESKTOP_BIN` is `deckpilot-dev`, which
+  restarts the session's `tauri dev` with its Vite server (see
+  [development](development.md#live-development))
 - **Active Profile**: lists profiles; selecting one switches immediately and
   redraws all devices
 - **Project**: shows the active project (informational)

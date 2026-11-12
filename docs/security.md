@@ -271,6 +271,19 @@ copy-on-write file systems (APFS, Btrfs) and in backups or snapshots
 - On SSDs, rely on full-disk encryption (or the drive's secure-erase
   function when retiring the drive) rather than overwriting tools.
 
+## Shared variables
+
+Shared variables (schema 8) are stored in the encrypted database like the
+rest of the configuration. They never hold secrets: a `secretRef` variable
+stores the *name* of a credential, and the secret stays in `credentials`,
+readable only by an action with the credentials capability through its
+execution. A variable marked `sensitive` is stored like any other value in
+the encrypted database, but is only ever shown redacted (previews, errors,
+events, history, exports). Values of one profile are never visible to
+another profile: the snapshot the agent resolves from contains only the
+global values and those of the profile and its projects. Values are never
+expanded again, so a stored value cannot pull in another variable.
+
 ## Backups and schema upgrades
 
 Before a schema upgrade, DeckPilot checks the database's integrity, writes an
