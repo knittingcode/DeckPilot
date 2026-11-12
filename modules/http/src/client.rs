@@ -367,3 +367,89 @@ async fn run(
         });
     }
 }
+
+/// Seconds to wait from a `Retry-After` value: a number of seconds, or an
+/// HTTP date (`Sun, 06 Nov 1994 08:49:37 GMT`) counted from `now` (Unix
+/// seconds; a date in the past is 0). `None` when it is neither.
+pub fn retry_after(value: &str, now: u64) -> Option<u64> {
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(seconds);
+    }
+    http_date(value).map(|at| at.saturating_sub(now))
+}
+
+/// An IMF-fixdate (RFC 9110 §5.6.7) as Unix seconds.
+fn http_date(value: &str) -> Option<u64> {
+    // "Sun, 06 Nov 1994 08:49:37 GMT"
+    let (_, rest) = value.split_once(", ")?;
+    let parts: Vec<&str> = rest.split(' ').collect();
+    let [day, month, year, time, "GMT"] = parts.as_slice() else {
+        return None;
+    };
+    let day: u64 = day.parse().ok().filter(|d| (1..=31).contains(d))?;
+    let month = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
+    .iter()
+    .position(|m| m == month)?;
+    let year: u64 = year.parse().ok().filter(|y| *y >= 1970 && *y < 10_000)?;
+    let clock: Vec<u64> = time
+        .split(':')
+        .map(|p| p.parse().ok())
+        .collect::<Option<_>>()?;
+    let [hour, minute, second] = clock.as_slice() else {
+        return None;
+    };
+    if *hour > 23 || *minute > 59 || *second > 60 {
+        return None;
+    }
+    let leap = |y: u64| (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400);
+    let days_before_month = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    let mut days: u64 = (1970..year).map(|y| if leap(y) { 366 } else { 365 }).sum();
+    days += days_before_month[month];
+    if month > 1 && leap(year) {
+        days += 1;
+    }
+    days += day - 1;
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_after_is_seconds_or_a_date() {
+        assert_eq!(retry_after(" 120 ", 0), Some(120));
+        assert_eq!(
+            http_date("Sun, 06 Nov 1994 08:49:37 GMT"),
+            Some(784_111_777)
+        );
+        assert_eq!(http_date("Thu, 01 Jan 1970 00:00:00 GMT"), Some(0));
+        assert_eq!(
+            http_date("Thu, 29 Feb 2024 12:00:00 GMT"),
+            Some(1_709_208_000)
+        );
+        assert_eq!(
+            http_date("Wed, 12 Nov 2026 07:00:00 GMT"),
+            Some(1_794_466_800)
+        );
+        let now = 1_794_466_800;
+        assert_eq!(retry_after("Wed, 12 Nov 2026 07:01:30 GMT", now), Some(90));
+        assert_eq!(retry_after("Wed, 12 Nov 2026 06:00:00 GMT", now), Some(0));
+        for bad in [
+            "",
+            "-5",
+            "soon",
+            "Wed, 12 Nov 2026 07:01:30 UTC",
+            "Wed, 32 Nov 2026 07:01:30 GMT",
+            "Wed, 12 Foo 2026 07:01:30 GMT",
+            "Wed, 12 Nov 2026 25:01:30 GMT",
+            "Wednesday, 12-Nov-26 07:01:30 GMT",
+            "Wed Nov 12 07:01:30 2026",
+        ] {
+            assert_eq!(retry_after(bad, now), None, "{bad}");
+        }
+    }
+}
