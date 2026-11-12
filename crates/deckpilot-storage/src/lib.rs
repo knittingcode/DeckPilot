@@ -54,7 +54,8 @@ pub use variables::{SharedVariables, StoredValue, StoredVariable, VariableOrigin
 /// Version 5 marks documents that may contain the shapes of the action
 /// architecture (references and templates in parameters, inline
 /// invocations, graph version 2) and of gestures (`click`, `doubleClick` and
-/// `longPress` triggers, page `gestures` timings, binding `overrides`);
+/// `longPress` triggers, page `gestures` timings, binding `overrides`,
+/// `stateful` targets);
 /// version 4 documents decode unchanged, and a DeckPilot that reads at most
 /// version 4 refuses them.
 pub const DOCUMENT_VERSION: u32 = 5;

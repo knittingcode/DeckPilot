@@ -35,6 +35,7 @@ use crate::render;
 mod executions;
 mod gestures;
 mod security;
+mod stateful;
 mod states;
 mod triggers;
 pub mod variables;
@@ -299,6 +300,8 @@ pub struct Agent {
     states: states::ButtonStates,
     /// Pending key gestures.
     gestures: gestures::Gestures,
+    /// Press-time states and hints of stateful keys.
+    stateful: stateful::StatefulKeys,
     /// Rendered key images by face and size.
     frames: render::FrameCache,
     /// Decoded icons of the active profile.
@@ -404,6 +407,7 @@ impl Agent {
             triggers: triggers::Triggers::default(),
             states: states::ButtonStates::default(),
             gestures: gestures::Gestures::default(),
+            stateful: stateful::StatefulKeys::default(),
             frames: render::FrameCache::new(FRAME_CACHE),
             icons: render::Icons::default(),
             variables: Arc::default(),

@@ -71,16 +71,8 @@ pub const CLOCK_BACK: Duration = Duration::from_secs(2);
 pub const NO_VERIFICATION: &str = "no verification configured";
 
 /// The operations of the `workSession` machine that a key binding can ask
-/// for (§4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WorkSessionOperation {
-    Start,
-    CancelStart,
-    Verify,
-    CancelVerification,
-    Finish,
-    ContinueWorking,
-}
+/// for (§4); declared with the machine's rules in the core.
+pub use deckpilot_core::stateful::WorkSessionOperation;
 
 /// The work session as the key saw it when it was pressed. The binding's
 /// rule was picked from `state`; the operation is refused if the session
@@ -349,26 +341,12 @@ impl Agent {
     }
 
     /// The work session as published.
-    #[cfg_attr(
-        not(feature = "test-hooks"),
-        allow(
-            dead_code,
-            reason = "read by work session key faces once they land (W4)"
-        )
-    )]
     pub(crate) fn work_session_snapshot(&self) -> WorkSessionSnapshot {
         self.work.snapshot()
     }
 
-    /// The entry point of key gestures (G2/G4) and tests: applies one
-    /// operation, guarded by the state at the press.
-    #[cfg_attr(
-        not(feature = "test-hooks"),
-        allow(
-            dead_code,
-            reason = "called by stateful key bindings once they land (G4)"
-        )
-    )]
+    /// The entry point of stateful keys (`service/stateful.rs`) and tests:
+    /// applies one operation, guarded by the state at the press.
     pub(crate) fn work_session_operation(
         &mut self,
         request: &WorkSessionRequest,

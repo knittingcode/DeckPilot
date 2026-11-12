@@ -358,6 +358,8 @@ export type BindingTarget =
   | { type: "workflow"; workflow: string }
   | { type: "openPage"; page: string }
   | { type: "back" }
+  /** Asks a state machine for the operation its rules pick (see `StatefulBinding`). */
+  | ({ type: "stateful" } & StatefulBinding)
 
 /** `#rrggbb`. */
 export type Color = string
@@ -1170,6 +1172,31 @@ export interface WorkSessionSnapshot {
   verification?: VerificationRecord
   approval?: string
   notices?: WorkSessionNotice[]
+}
+
+/** Operations a work session key can ask for (deckpilot_core::stateful). */
+export type WorkSessionOperation =
+  "start" | "cancelStart" | "verify" | "cancelVerification" | "finish" | "continueWorking"
+
+/** In `state`, `gesture` asks for `operation`. */
+export interface StatefulRule<S, O> {
+  state: S
+  gesture: Gesture
+  operation: O
+}
+
+/**
+ * What a stateful key follows. Without `rules`, the machine's default
+ * table applies: idle click → start; starting long press → cancelStart;
+ * working click and long press → verify (the agent lets through the one
+ * that fits the settings); verifyingEnd long press → cancelVerification;
+ * readyToFinish click → finish, long press → continueWorking.
+ * Only on click, double click or long press bindings; `finish` only on
+ * click; every stateful binding of a key has the same machine and rules.
+ */
+export type StatefulBinding = {
+  machine: "workSession"
+  rules?: StatefulRule<WorkSessionState, WorkSessionOperation>[]
 }
 
 /** Read-only variables of the active work session (proposed paths). */
