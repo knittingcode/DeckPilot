@@ -156,6 +156,28 @@ fn status(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// `running <dir>`: number of running workflow executions of the active
+/// profile (0 when the configuration is locked). Used by the integration
+/// preview's refresh script (preview/integration only).
+fn running(dir: &Path) -> Result<(), String> {
+    let response = runtime().block_on(request(
+        dir,
+        Request::ListExecutions {
+            workflow: None,
+            limit: Some(50),
+        },
+    ))?;
+    let count = match response {
+        Response::Executions { executions } => executions
+            .iter()
+            .filter(|e| e.state == deckpilot_core::history::ExecutionState::Running)
+            .count(),
+        _ => 0,
+    };
+    println!("{count}");
+    Ok(())
+}
+
 pub fn command(args: &[String]) -> Result<(), String> {
     let (name, rest) = args
         .split_first()
@@ -167,6 +189,7 @@ pub fn command(args: &[String]) -> Result<(), String> {
         "inventory" => inventory(&dir),
         "unlock" => unlock(&dir),
         "status" => status(&dir),
+        "running" => running(&dir),
         other => Err(format!("unknown validation command `{other}`")),
     }
 }

@@ -1,0 +1,32 @@
+{
+  "productName": "DeckPilot Preview",
+  "identifier": "io.github.knittingcode.deckpilot.preview",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1430"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "create": false,
+        "visible": false,
+        "title": "DeckPilot — Integration Preview",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 26
+        },
+        "width": 1120,
+        "height": 740,
+        "minWidth": 860,
+        "minHeight": 560
+      }
+    ]
+  },
+  "bundle": {
+    "active": false,
+    "createUpdaterArtifacts": false
+  }
+}

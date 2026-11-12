@@ -1,0 +1,23 @@
+# Integration preview: pull requests merged into preview/integration, in order.
+# `refresh.sh` re-reads the open pull requests; open ones not listed here are
+# appended to the includes unless they conflict. Excluded ones stay excluded.
+# include <number> <branch>
+# exclude <number> <reason>
+include 59 test/integration-failure-modes
+include 82 fix/retry-after-http-date
+include 63 test/live-smoke-harness
+include 68 test/workspace-missing-resources
+include 80 test/agent-fd-inheritance
+include 75 test/mock-agent-e2e
+include 69 fix/schedule-dst
+include 67 fix/render-audit
+include 76 docs/mk2-physical-checklist
+include 57 quality/editor-shortcuts
+include 71 quality/run-errors
+include 74 quality/errors-settings
+include 77 quality/errors-security
+include 78 quality/page-commands
+include 65 quality/page-tree
+exclude 55 draft: hand-written MK.2 HID driver, never validated on a physical device
+exclude 87 release workflow (CI) only, nothing to see in the app
+exclude 89 documentation only

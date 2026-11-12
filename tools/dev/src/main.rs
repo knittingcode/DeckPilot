@@ -455,6 +455,11 @@ fn supervise(
 
     let mut ui_command = Command::new(program("pnpm"));
     ui_command.args(UI_ARGS);
+    // Integration preview (preview/integration only): an extra Tauri config
+    // with its own identifier, window title and dev server port.
+    if let Some(config) = std::env::var_os("DECKPILOT_TAURI_CONFIG").filter(|v| !v.is_empty()) {
+        ui_command.arg("--config").arg(config);
+    }
     dev_env(&mut ui_command, paths);
     let mut ui = spawn_logged(&mut ui_command, "ui", paths, foreground)?;
     if let Some(owned) = process::record("ui", ui.id()) {
