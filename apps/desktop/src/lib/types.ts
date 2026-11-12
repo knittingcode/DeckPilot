@@ -60,6 +60,11 @@ export interface ActionType {
   requiresProject: boolean
   /** Always sent by the backend; optional for fixtures. */
   node?: NodeSpec
+  /**
+   * Replaced by another type: saved actions of this type keep working, but
+   * it is not offered for new ones. Omitted when false.
+   */
+  deprecated?: boolean
 }
 
 export interface ActionInstance {
@@ -446,6 +451,14 @@ export interface Profile {
 
 export type Usage =
   | { type: "workflowStep"; workflow: string; workflowName: string; position: number }
+  /** A node of a workflow graph (`NodeKind::Action`). */
+  | {
+      type: "workflowNode"
+      workflow: string
+      workflowName: string
+      node: string
+      nodeLabel?: string
+    }
   | {
       type: "layoutBinding"
       layout: string
@@ -454,6 +467,18 @@ export type Usage =
       pageName: string
       control: ControlId
     }
+
+/** What happens to one reference of an action that is about to be deleted. */
+export type ReferenceChange =
+  /** Point the key, step or node at another saved action. */
+  | { type: "replace"; action: string }
+  /** Remove the key binding, the workflow step or the workflow node. */
+  | { type: "unbind" }
+
+export interface ActionReferenceChange {
+  usage: Usage
+  change: ReferenceChange
+}
 
 export interface ProfileSummary {
   id: string

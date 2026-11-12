@@ -46,9 +46,14 @@ export function describeLayout(status: LayoutStatus): string {
 }
 
 export function describeUsage(usage: Usage): string {
-  return usage.type === "workflowStep"
-    ? `Workflow “${usage.workflowName}”, step ${usage.position}`
-    : `Layout “${usage.layoutName}”, page “${usage.pageName}”, ${controlLabel(usage.control)}`
+  switch (usage.type) {
+    case "workflowStep":
+      return `Workflow “${usage.workflowName}”, step ${usage.position}`
+    case "workflowNode":
+      return `Workflow “${usage.workflowName}”, node “${usage.nodeLabel ?? usage.node}”`
+    case "layoutBinding":
+      return `Layout “${usage.layoutName}”, page “${usage.pageName}”, ${controlLabel(usage.control)}`
+  }
 }
 
 export const SUPPORT: Record<DeviceModel["support"], { label: string; detail: string }> = {

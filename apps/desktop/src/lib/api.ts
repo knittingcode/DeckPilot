@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core"
 
 import type {
   ActionInstance,
+  ActionReferenceChange,
   ActionParameters,
   ActionResult,
   ActionType,
@@ -39,6 +40,7 @@ import type {
   UpdateInfo,
   UpdatePreferences,
   UpdateState,
+  Usage,
   Workflow,
   WorkflowReport,
 } from "./types"
@@ -152,6 +154,13 @@ export const api = {
     invoke<null>("delete_action", { profileId, actionId }),
   runAction: (profileId: string, actionId: string) =>
     invoke<ActionResult>("run_action", { profileId, actionId }),
+  /**
+   * Replaces or unbinds references to an action in one change, so that it
+   * can be deleted; returns the references that remain. Usages name the
+   * places as `actionUsages` reported them before the change.
+   */
+  changeActionReferences: (profileId: string, actionId: string, changes: ActionReferenceChange[]) =>
+    invoke<Usage[]>("change_action_references", { profileId, actionId, changes }),
 
   saveWorkflow: (profileId: string, workflow: Workflow) =>
     invoke<Workflow>("save_workflow", { profileId, workflow }),

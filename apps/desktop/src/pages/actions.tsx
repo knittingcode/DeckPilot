@@ -2,9 +2,11 @@ import { Plus, Search } from "lucide-react"
 import { useMemo, useRef, useState } from "react"
 
 import { ActionEditor } from "@/components/action-editor"
+import { ActionTypeChooser } from "@/components/action-type-chooser"
 import { EmptyState, ErrorNotice, Loading, Page } from "@/components/page"
 import { RequireProfile } from "@/components/require-profile"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import {
@@ -16,10 +18,12 @@ import {
 } from "@/components/ui/select"
 import { useEditingProfile } from "@/hooks/use-profile"
 import { useTitlebar } from "@/hooks/use-titlebar"
+import { actionReferences, usageTarget } from "@/lib/action-references"
 import { useAppContext } from "@/lib/app-context"
+import { requestFocus } from "@/lib/focus"
 import { moduleOf } from "@/lib/modules"
 import { ActionIcon } from "@/components/action-icon"
-import type { ActionInstance, ActionType, ProfileView } from "@/lib/types"
+import type { ActionInstance, ActionType, ProfileView, Usage } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 export function ActionsPage() {
@@ -44,7 +48,9 @@ function ActionLibrary() {
 
 /**
  * The actions the user configured in this profile. Modules provide action
- * types; nothing appears here until the user creates an action.
+ * types; nothing appears here until the user creates an action: there are
+ * no generated actions. A new action starts with its type, then its name
+ * and parameters.
  */
 function Library({
   view,
@@ -55,10 +61,16 @@ function Library({
   profileId: string
   reload: () => void
 }) {
-  const { profiles, agent, refresh, modules } = useAppContext()
+  const { profiles, agent, refresh, modules, navigate, openSettings } = useAppContext()
   const [query, setQuery] = useState("")
   const [category, setCategory] = useState("all")
-  const [selected, setSelected] = useState<string | null>(view.profile.actions[0]?.id ?? "new")
+  const [selected, setSelected] = useState<string | null>(view.profile.actions[0]?.id ?? null)
+  // For a new action: the type chosen in the first step.
+  const [newType, setNewType] = useState<string | null>(null)
+  const startNew = () => {
+    setSelected("new")
+    setNewType(null)
+  }
   const searchRef = useRef<HTMLInputElement>(null)
   useTitlebar({
     actions: [
@@ -67,9 +79,7 @@ function Library({
         label: "New action",
         icon: Plus,
         placement: "primary",
-        onSelect: () => {
-          setSelected("new")
-        },
+        onSelect: startNew,
       },
       {
         id: "actions.search",
@@ -110,6 +120,12 @@ function Library({
 
   const current =
     selected && selected !== "new" ? view.profile.actions.find((a) => a.id === selected) : null
+  const creating = selected === "new"
+  const openUsage = (usage: Usage) => {
+    const target = usageTarget(usage)
+    requestFocus(target.focus)
+    navigate(target.page)
+  }
   const canRun = Boolean(agent?.running) && profiles.activeProfileId === profileId
   const changed = (action?: ActionInstance) => {
     if (action) setSelected(action.id)
@@ -152,8 +168,7 @@ function Library({
         <CardContent className="grid gap-4 xl:overflow-y-auto">
           {view.profile.actions.length === 0 && (
             <EmptyState title="No actions yet">
-              Click New, choose a module and an action type, and configure it. Saved actions can
-              then be used in workflows and on device keys.
+              Actions you create appear here, ready for workflows and device keys.
             </EmptyState>
           )}
           {view.profile.actions.length > 0 && groups.length === 0 && (
@@ -163,7 +178,7 @@ function Library({
             <section key={group} className="grid min-w-0 gap-1" aria-label={group}>
               <h3 className="px-2 text-xs font-medium text-muted-foreground uppercase">{group}</h3>
               {actions.map((action) => {
-                const used = view.actionUsages[action.id]?.length ?? 0
+                const used = actionReferences(view, action.id).length
                 return (
                   <button
                     key={action.id}
@@ -201,32 +216,103 @@ function Library({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>{current ? current.name : "New action"}</CardTitle>
-          <CardDescription>
-            {current
-              ? (typeOf(current.actionType)?.name ?? current.actionType)
-              : "Choose a module and an action type, then configure it"}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ActionEditor
-            key={current?.id ?? "new"}
-            profileId={profileId}
-            modules={modules}
-            projects={view.profile.projects}
-            action={current ?? null}
-            usages={current ? (view.actionUsages[current.id] ?? []) : []}
-            canRun={canRun}
-            onSaved={changed}
-            onDeleted={() => {
-              setSelected(null)
-              changed()
-            }}
-          />
-        </CardContent>
-      </Card>
+      {current ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>{current.name}</CardTitle>
+            <CardDescription>
+              {typeOf(current.actionType)?.name ?? current.actionType}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ActionEditor
+              key={current.id}
+              profileId={profileId}
+              modules={modules}
+              projects={view.profile.projects}
+              action={current}
+              usages={actionReferences(view, current.id)}
+              workflows={view.profile.workflows}
+              candidates={view.profile.actions}
+              canRun={canRun}
+              onSaved={changed}
+              onDeleted={() => {
+                setSelected(null)
+                changed()
+              }}
+              onOpenUsage={openUsage}
+            />
+          </CardContent>
+        </Card>
+      ) : creating && newType ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>New action</CardTitle>
+            <CardDescription>Step 2 of 2: name it and set its parameters</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ActionEditor
+              key={`new:${newType}`}
+              profileId={profileId}
+              modules={modules}
+              projects={view.profile.projects}
+              action={null}
+              initialType={newType}
+              usages={[]}
+              canRun={false}
+              onSaved={(action) => {
+                setNewType(null)
+                changed(action)
+              }}
+              onDeleted={() => {
+                setSelected(null)
+              }}
+              onChangeType={() => {
+                setNewType(null)
+              }}
+            />
+          </CardContent>
+        </Card>
+      ) : creating ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>New action</CardTitle>
+            <CardDescription>Step 1 of 2: choose what the action does</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ActionTypeChooser
+              modules={modules}
+              onChoose={(type) => {
+                setNewType(type.id)
+              }}
+              onOpenModules={() => {
+                openSettings("modules")
+              }}
+            />
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardContent>
+            {view.profile.actions.length === 0 ? (
+              <EmptyState title="Create your first action">
+                <p>
+                  An action is one thing DeckPilot does, such as running a command or opening a URL.
+                  Choose a type from your modules, give it a name and set its parameters. Then put
+                  it on a device key or into a workflow.
+                </p>
+                <Button type="button" className="mt-3" onClick={startNew}>
+                  <Plus /> Create action
+                </Button>
+              </EmptyState>
+            ) : (
+              <EmptyState title="No action selected">
+                Choose an action on the left, or create a new one.
+              </EmptyState>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }
