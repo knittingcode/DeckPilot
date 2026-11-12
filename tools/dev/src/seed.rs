@@ -14,6 +14,7 @@ use deckpilot_device::{ControlId, TouchGesture, models};
 use deckpilot_modules::general;
 use deckpilot_modules::projects::{ProjectCatalog, actions};
 use deckpilot_storage::crypto::Password;
+use deckpilot_storage::provenance::{Provenance, ProvenanceEntity};
 use deckpilot_storage::vault::{DatabaseState, Vault};
 use deckpilot_storage::{ConfigStore, DatabaseKey, Encryption, SqliteStore};
 
@@ -61,6 +62,14 @@ impl Builder<'_> {
 
 fn text(value: &str) -> ParameterValue {
     ParameterValue::Text(value.to_owned())
+}
+
+/// Parameters of `projects.cycle` in `direction`.
+fn cycle(direction: &str) -> ActionParameters {
+    ActionParameters::new().with(
+        actions::DIRECTION,
+        ParameterValue::Choice(direction.to_owned()),
+    )
 }
 
 fn press(control: ControlId, target: BindingTarget) -> ControlBinding {
@@ -135,15 +144,15 @@ struct WorkIds {
 fn work_actions(b: &mut Builder<'_>) -> Result<WorkIds> {
     let next = b.action(
         "Next project",
-        actions::next_id(),
-        &ActionParameters::new(),
+        actions::cycle_id(),
+        &cycle(actions::NEXT_DIRECTION),
         "chevron-right",
         Some("{project.key}"),
     )?;
     let previous = b.action(
         "Previous project",
-        actions::previous_id(),
-        &ActionParameters::new(),
+        actions::cycle_id(),
+        &cycle(actions::PREVIOUS_DIRECTION),
         "chevron-left",
         Some("Previous"),
     )?;
@@ -420,8 +429,8 @@ fn personal_profile(registry: &ActionRegistry) -> Result<Profile> {
     )?;
     b.action(
         "Next project",
-        actions::next_id(),
-        &ActionParameters::new(),
+        actions::cycle_id(),
+        &cycle(actions::NEXT_DIRECTION),
         "chevron-right",
         Some("{project.key}"),
     )?;
@@ -640,10 +649,97 @@ pub fn seed_with_key(paths: &DevPaths, key: DatabaseKey) -> Result<bool> {
         }
         store.save_profile(profile)?;
     }
+    let rows = [(&work, "work"), (&personal, "personal"), (&empty, "empty")]
+        .into_iter()
+        .map(|(profile, name)| provenance(profile, name))
+        .collect::<Result<Vec<_>>>()?;
+    store.record_provenance(&rows.concat())?;
     store.set_active_profile(Some(work.id))?;
     store.set_setting(SEEDED, "demo")?;
     store.save_machine_config(&machine(paths)?)?;
     Ok(true)
+}
+
+/// Catalog and version recorded as the provenance of seeded items.
+const CATALOG: &str = "dev-seed";
+const SEED_VERSION: u32 = 1;
+
+/// A stable seed key part from a display name: `Next project` →
+/// `next-project`.
+fn slug(name: &str) -> String {
+    let mut slug = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.ends_with('-') && !slug.is_empty() {
+            slug.push('-');
+        }
+    }
+    slug.trim_end_matches('-').to_owned()
+}
+
+/// A provenance row for every action, workflow, layout and project of a
+/// seeded profile, keyed `<profile>.<kind>.<name>` (`work.action.next-project`).
+/// Items with the same name get `-2`, `-3`, … in seed order.
+fn provenance(profile: &Profile, name: &str) -> Result<Vec<Provenance>> {
+    let mut items: Vec<(ProvenanceEntity, String, String, serde_json::Value)> = Vec::new();
+    for item in &profile.actions {
+        let value = serde_json::to_value(item)?;
+        items.push((
+            ProvenanceEntity::Action,
+            item.id.to_string(),
+            item.name.clone(),
+            value,
+        ));
+    }
+    for item in &profile.workflows {
+        let value = serde_json::to_value(item)?;
+        items.push((
+            ProvenanceEntity::Workflow,
+            item.id.to_string(),
+            item.name.clone(),
+            value,
+        ));
+    }
+    for item in &profile.layouts {
+        let value = serde_json::to_value(item)?;
+        items.push((
+            ProvenanceEntity::Layout,
+            item.id.to_string(),
+            item.name.clone(),
+            value,
+        ));
+    }
+    for item in &profile.projects {
+        let value = serde_json::to_value(item)?;
+        items.push((
+            ProvenanceEntity::Project,
+            item.id.to_string(),
+            item.key.to_string(),
+            value,
+        ));
+    }
+    let mut taken = std::collections::BTreeSet::new();
+    let mut rows = Vec::new();
+    for (entity, id, item_name, value) in items {
+        let base = format!("{name}.{}.{}", entity.as_str(), slug(&item_name));
+        let mut key = base.clone();
+        let mut n = 2;
+        while !taken.insert(key.clone()) {
+            key = format!("{base}-{n}");
+            n += 1;
+        }
+        rows.push(Provenance::seeded(
+            profile.id,
+            entity,
+            id,
+            &value,
+            CATALOG,
+            key,
+            SEED_VERSION,
+        )?);
+    }
+    Ok(rows)
 }
 
 /// Setting the configuration app uses to ask for the password once after
@@ -653,6 +749,46 @@ const CONFIRMED_VERSION: &str = "security.confirmedVersion";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_seeded_item_has_provenance_and_none_is_edited() {
+        let dir = std::env::temp_dir().join(format!(
+            "deckpilot-seed-test-{}",
+            deckpilot_core::ProfileId::new()
+        ));
+        let paths = DevPaths::isolated(&dir);
+        paths.create().unwrap();
+        let key = DatabaseKey::random().unwrap();
+        assert!(seed_with_key(&paths, key.clone()).unwrap());
+        let store = SqliteStore::open(vault(&paths).database(), &Encryption::Key(key)).unwrap();
+        let mut keys = std::collections::BTreeSet::new();
+        for summary in store.list_profiles().unwrap() {
+            let profile = store.load_profile(summary.id).unwrap().unwrap();
+            let statuses = store.provenance_status(profile.id).unwrap();
+            let items = profile.actions.len()
+                + profile.workflows.len()
+                + profile.layouts.len()
+                + profile.projects.len();
+            assert_eq!(statuses.len(), items, "{}", profile.name);
+            for status in statuses {
+                assert!(status.exists && !status.edited, "{status:?}");
+                assert_eq!(status.provenance.catalog.as_deref(), Some(CATALOG));
+                assert!(keys.insert(status.provenance.seed_key.unwrap()));
+            }
+        }
+        assert!(keys.contains("work.action.next-project"));
+        // The seed uses the current catalog: no deprecated types.
+        let registry = deckpilot_modules::builtin(Os::current()).action_registry();
+        for summary in store.list_profiles().unwrap() {
+            let profile = store.load_profile(summary.id).unwrap().unwrap();
+            for action in &profile.actions {
+                let definition = registry.definition(&action.action_type).unwrap();
+                assert!(!definition.deprecated, "{}", action.action_type);
+            }
+        }
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn demonstration_profiles_are_valid_and_independent() {
