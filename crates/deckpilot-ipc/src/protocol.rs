@@ -592,7 +592,8 @@ pub enum AgentEvent {
         profile: ProfileId,
     },
     /// Definitions or values of these shared variables changed. Keys only,
-    /// never values. Since protocol 7.
+    /// never values. Also names the `system.work.session.…` paths whose
+    /// value changed with a work session transition. Since protocol 7.
     SharedVariablesChanged {
         keys: Vec<String>,
     },

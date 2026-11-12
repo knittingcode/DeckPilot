@@ -1160,7 +1160,7 @@ export interface WorkSessionSnapshot {
   notices?: WorkSessionNotice[]
 }
 
-/** Read-only variables of the active work session (proposed paths). */
+/** Read-only system variables of the active work session (`missing` without one). */
 export type WorkSessionVariable =
   | "system.work.session.id"
   | "system.work.session.state"

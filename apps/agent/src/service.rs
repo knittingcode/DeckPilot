@@ -356,6 +356,9 @@ impl Agent {
         let (events, _) = broadcast::channel(512);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (work, work_session) = work_session::WorkSessions::new((options.clock)());
+        let variables = Arc::new(variables::VariableStore::with_work_session(
+            variables::WorkSessionSource::new(work_session.clone(), options.clock.clone()),
+        ));
         let handle = AgentHandle {
             commands: commands_tx,
             events,
@@ -401,7 +404,7 @@ impl Agent {
             states: states::ButtonStates::default(),
             frames: render::FrameCache::new(FRAME_CACHE),
             icons: render::Icons::default(),
-            variables: Arc::default(),
+            variables,
             active_projects: Arc::default(),
             context_watch: variables::ContextWatch::default(),
             work,
