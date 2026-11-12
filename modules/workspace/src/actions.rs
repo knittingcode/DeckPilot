@@ -409,8 +409,7 @@ impl WorkspaceAction {
             "folder",
         )?;
         let relative = optional(parameters, "path");
-        let path = support::join_inside(&base, relative)?;
-        let path = support::existing(path, relative.is_none())?;
+        let path = support::existing_inside(&base, relative, relative.is_none())?;
         if position.is_some() && path.is_dir() {
             return Err(fail(
                 codes::INVALID_POSITION,
