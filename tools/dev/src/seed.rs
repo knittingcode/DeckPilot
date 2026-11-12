@@ -562,18 +562,39 @@ pub fn encrypt_legacy(paths: &DevPaths) -> Result<()> {
     Ok(())
 }
 
+/// What [`seed`] does when the development database does not exist yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingDatabase {
+    /// Leave it to the agent, which creates it with a system-managed key
+    /// like a fresh installation (seeded through the agent then).
+    LeaveToAgent,
+    /// Create it protected by the development-only [`DEV_PASSWORD`].
+    CreateWithDevPassword,
+}
+
+impl MissingDatabase {
+    /// `--password` on the command line: [`Self::CreateWithDevPassword`].
+    pub fn from_password_flag(flag: bool) -> Self {
+        if flag {
+            Self::CreateWithDevPassword
+        } else {
+            Self::LeaveToAgent
+        }
+    }
+}
+
 /// Seeds a password-protected development database once per data
-/// directory. A missing database is left to the agent, which creates it
-/// with a system-managed key like a fresh installation; it is seeded through
-/// the agent then ([`seed_with_key`]). `password`: create a missing database
-/// protected by [`DEV_PASSWORD`] instead. An unencrypted database from an
-/// earlier version is left alone so that the migration can be tried.
-/// Returns whether data was written.
-pub fn seed(paths: &DevPaths, password: bool) -> Result<bool> {
+/// directory. A missing database is handled as `missing` says; it is seeded
+/// through the agent ([`seed_with_key`]) when the agent creates it. An
+/// unencrypted database from an earlier version is left alone so that the
+/// migration can be tried. Returns whether data was written.
+pub fn seed(paths: &DevPaths, missing: MissingDatabase) -> Result<bool> {
     paths.create()?;
     let vault = vault(paths);
     let key = match vault.state()? {
-        DatabaseState::Missing if password => vault.initialize(&Password::new(DEV_PASSWORD))?,
+        DatabaseState::Missing if missing == MissingDatabase::CreateWithDevPassword => {
+            vault.initialize(&Password::new(DEV_PASSWORD))?
+        }
         DatabaseState::Missing => return Ok(false),
         DatabaseState::Plaintext => {
             println!(
