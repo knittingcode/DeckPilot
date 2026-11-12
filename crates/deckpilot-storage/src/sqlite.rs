@@ -245,7 +245,7 @@ impl SqliteStore {
             });
         }
         if current == supported {
-            return Ok(());
+            return self.verify_unverified_upgrade();
         }
         let backup = if current > 0 {
             self.check_integrity()?;
@@ -278,24 +278,70 @@ impl SqliteStore {
             failpoint(Failpoint::Migration(version + 1))?;
         }
         tx.pragma_update(None, "user_version", supported)?;
-        if current < supported {
+        // Recorded as unverified until the committed result has passed the
+        // integrity check below; a database whose check failed, or was
+        // never run because the process stopped, is checked again on every
+        // start until it passes (`verify_unverified_upgrade`).
+        let upgrade = if current < supported {
             tx.execute(
                 "INSERT INTO migration_history (from_version, to_version, backup, result, applied_at)
-                 VALUES (?1, ?2, ?3, 'ok', ?4)",
-                params![current, supported, backup_name, now()],
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![current, supported, backup_name, UNVERIFIED, now()],
             )?;
-        }
+            Some(tx.last_insert_rowid())
+        } else {
+            None
+        };
         failpoint(Failpoint::Commit)?;
         tx.commit()?;
-        // A failed check after commit is reported with the verified backup,
-        // which still holds the previous consistent state.
-        if let Err(error) = self.check_integrity() {
+        match upgrade {
+            Some(id) => self.verify_upgrade(id, backup_name),
+            // Another process upgraded meanwhile and verifies its upgrade.
+            None => Ok(()),
+        }
+    }
+
+    /// Checks the integrity of the database after the upgrade recorded as
+    /// row `id`, and records the result as `ok` only if it passes.
+    ///
+    /// A failure is reported with the verified backup, which still holds
+    /// the previous consistent state; the database is left as it is (it is
+    /// already upgraded) and stays unverified, so it is never used until a
+    /// later check passes or the user restores the backup.
+    fn verify_upgrade(&self, id: i64, backup: Option<String>) -> Result<()> {
+        let checked = failpoint(Failpoint::Verify).and_then(|()| self.check_integrity());
+        if let Err(error) = checked {
             return Err(StorageError::MigrationFailed {
                 reason: error.to_string(),
-                backup: backup_name,
+                backup,
             });
         }
-        Ok(())
+        retry_busy(|| {
+            self.connection
+                .execute(
+                    "UPDATE migration_history SET result = 'ok' WHERE id = ?1 AND result = ?2",
+                    params![id, UNVERIFIED],
+                )
+                .map(drop)
+        })
+    }
+
+    /// Repeats the verification of an upgrade that was committed but not
+    /// verified (the check failed, or the process stopped before it).
+    fn verify_unverified_upgrade(&self) -> Result<()> {
+        let pending: Option<(i64, Option<String>)> = self
+            .connection
+            .query_row(
+                "SELECT id, backup FROM migration_history WHERE result = ?1
+                 ORDER BY id DESC LIMIT 1",
+                [UNVERIFIED],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        match pending {
+            Some((id, backup)) => self.verify_upgrade(id, backup),
+            None => Ok(()),
+        }
     }
 
     /// Writes an encrypted backup of the current state before an upgrade
@@ -532,6 +578,10 @@ fn now_millis() -> u128 {
         .unwrap_or_default()
 }
 
+/// `migration_history.result` of an upgrade that is committed but has not
+/// passed its integrity check yet.
+const UNVERIFIED: &str = "unverified";
+
 /// Points of an upgrade where tests make it fail or kill the process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Failpoint {
@@ -541,6 +591,8 @@ pub(crate) enum Failpoint {
     Migration(u32),
     /// Everything ran; the transaction is about to be committed.
     Commit,
+    /// The upgrade is committed; its integrity check fails.
+    Verify,
 }
 
 #[cfg(test)]
