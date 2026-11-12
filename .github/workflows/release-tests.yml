@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       # deckpilot-dev links the device and storage crates.
@@ -38,9 +38,13 @@ jobs:
         run: tools/ci/install-linux-deps.sh
       - name: Install Rust toolchain
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      # Restores main's cache when one exists, but pull requests never save
+      # one: they would fill the cache quota and evict main's caches. This
+      # workflow does not run on main, so its builds are cold.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: release-tests
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: shellcheck
         run: shellcheck tools/release-pipeline/*.sh
       - name: Release commands of deckpilot-dev and the channel rules
