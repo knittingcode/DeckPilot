@@ -330,10 +330,16 @@ XChaCha20-Poly1305 (`RustCrypto` `chacha20poly1305`), so any change to it
 or to the ciphertext is detected. A wrong password and a modified file are
 reported the same way.
 
-The payload (version 1) contains profiles (with projects, actions,
-workflows, layouts and their bindings), the portable settings of feature
-modules, portable application settings (how updates are checked and
-applied) and the logical resource keys the profiles use with their kinds.
+The payload (version 2; version 1 exports still import) contains profiles
+(with projects, actions, workflows, layouts and their bindings), the
+portable settings of feature modules, portable application settings (how
+updates are checked and applied), the logical resource keys the profiles use
+with their kinds, and shared variables: the user's definitions and the
+values of the exported profiles and their projects; global values only when
+the application settings are exported. Values of sensitive variables, and
+their defaults, are never exported; a `secretRef` value is only a
+credential's name. A DeckPilot that reads only payload version 1 refuses a
+version 2 export instead of dropping what it does not know.
 It never contains machine paths or application locations, the database key
 or anything from the credential store, passwords, IPC tokens, the security
 policy (importing it could weaken another computer's protection), runtime
@@ -353,7 +359,10 @@ which not even profile names are readable). It also checks that importing
 never adds or replaces a credential, even from a crafted export, that
 exporting one profile contains nothing of the others, and that imported
 copies get their own identifiers, so projects and active-project selections
-never cross profiles.
+never cross profiles. `tests/shared_variables.rs` does the same for shared
+variables: sensitive values and defaults, credential secrets and values of
+profiles not selected never appear in the payload or archive, and global
+values only with the application settings.
 
 A secret the user types into an ordinary text parameter of an action is
 configuration like any other text and is exported with its profile. The
@@ -372,6 +381,55 @@ profiles. The import is written in one transaction. Imported workflows do
 not run, imported profiles are not activated, and this computer's resource
 bindings are never overwritten. No module code runs during an import:
 module settings are checked against the module's declared contract.
+Shared variables are validated too: user definitions only (a definition
+claiming to be a module's is refused), each key and value slot once, values
+only for exported profiles and their own projects, of the declared type and
+an allowed scope, never of a run. Local definitions are never replaced;
+values that do not fit the local definition are skipped and reported, and
+values of an imported copy follow its new profile and project ids.
+
+## Known dependency advisories
+
+Advisories that affect a dependency but cannot be fixed by an update yet,
+with the reason they are accepted. Each one is re-checked when Tauri, wry,
+tao or webkit2gtk is updated.
+
+### glib 0.18: `VariantStrIter` unsoundness (GHSA-wrw7-89jp-8q8g, RUSTSEC-2024-0429)
+
+- **Advisory.** In `glib` 0.15 to 0.19, the `Iterator` and
+  `DoubleEndedIterator` implementations of `glib::VariantStrIter` pass an
+  out-pointer as `&p` instead of `&mut p` to the variadic
+  `g_variant_get_child`; optimized builds can ignore the write and then
+  dereference a null pointer (a crash). Fixed in `glib` 0.20.
+- **How DeckPilot gets it.** Linux only: `glib` 0.18.5 comes with the GTK 3
+  stack of Tauri — `gtk` 0.18 and `webkit2gtk` 2.0.2, used by `tauri`,
+  `tauri-runtime-wry`, `wry`, `tao` (also in the agent, for the tray),
+  `muda`, `tray-icon` and `libappindicator`
+  (`cargo tree -i glib --target all`). No DeckPilot crate depends on
+  `glib` directly.
+- **Why it is not updated.** Every current release of that stack requires
+  `glib` 0.18: `webkit2gtk` 2.0.2 (pinned as `=2.0.2` by `wry` 0.57.2)
+  requires `glib ^0.18`, and `tauri` 2.12.5, `tao` 0.37.2, `wry` 0.57.2,
+  `muda` and `tray-icon` require `gtk ^0.18`. `glib` 0.18 has no patched
+  release (0.18.5 is the last), and the `gtk` 0.19 bindings (which use
+  `glib` 0.22) are not used by any `webkit2gtk` release. Reaching a fixed
+  `glib` needs a new WebKitGTK binding upstream, not a change here.
+- **Reachability.** The faulty code runs only through
+  `glib::Variant::array_iter_str()`, which creates the iterator. Neither
+  DeckPilot nor any crate in `Cargo.lock` calls it outside `glib`'s own
+  tests (searched in the sources of every locked crate, including `gtk`,
+  `gio`, `webkit2gtk`, `wry`, `tao`, `muda`, `tray-icon` and
+  `libappindicator`). DeckPilot does not use GLib variants itself.
+- **Assessment.** Accepted: not reachable in DeckPilot. The bug is
+  undefined behaviour whose observed effect is a null-pointer crash; no
+  attacker-controlled input reaches it. New code must not call
+  `Variant::array_iter_str()` (or iterate a `VariantStrIter`) while
+  `glib` 0.18 is in the lockfile. To re-check:
+
+  ```sh
+  cargo tree -i glib --target all --depth 0
+  grep -rln 'array_iter_str\|VariantStrIter' crates apps tools
+  ```
 
 ## Reporting a vulnerability
 

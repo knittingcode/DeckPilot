@@ -22,6 +22,7 @@ mod profiles;
 pub(crate) mod security;
 mod shared_variables;
 mod system;
+mod variables;
 pub(crate) mod windows;
 mod workflows;
 
@@ -106,6 +107,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         projects::copy_project,
         projects::cycle_project,
         projects::select_project,
+        variables::list_variables,
+        variables::preview_references,
         machine::get_machine_config,
         machine::set_resource_binding,
         machine::remove_resource_binding,

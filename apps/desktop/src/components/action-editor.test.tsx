@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest"
 
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -85,11 +85,9 @@ function renderEditor(
       modules={modules}
       projects={projects}
       action={action}
-      usages={Array.from({ length: usages }, (_, i) => ({
-        type: "workflowStep" as const,
-        workflow: "w",
-        workflowName: "Start Work",
-        position: i + 1,
+      references={Array.from({ length: usages }, (_, index) => ({
+        site: { type: "step" as const, workflow: "w", index },
+        ownerName: "Start Work",
       }))}
       canRun={false}
       onSaved={onSaved}
@@ -136,7 +134,7 @@ describe("ActionEditor", () => {
     expect(onSaved).toHaveBeenCalledWith(created)
   })
 
-  it("keeps the identifier when editing and blocks deleting used actions", async () => {
+  it("keeps the identifier when editing and asks about references before deleting", async () => {
     const user = userEvent.setup()
     const action: ActionInstance = {
       id: "a1",
@@ -147,8 +145,15 @@ describe("ActionEditor", () => {
     updateAction.mockResolvedValue(action)
     renderEditor(action, 2)
 
-    expect(screen.getByRole("button", { name: /delete/i })).toBeDisabled()
     expect(screen.getByText("Workflow “Start Work”, step 2")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: /delete/i }))
+    const dialog = screen.getByRole("dialog", { name: "Delete “Greet”?" })
+    // Nothing is deleted while a reference has no decision.
+    expect(within(dialog).getByRole("button", { name: "Apply and delete" })).toBeDisabled()
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
+    expect(api.deleteAction).not.toHaveBeenCalled()
+    expect(api.replaceActionReferences).not.toHaveBeenCalled()
+    expect(api.unbindActionReferences).not.toHaveBeenCalled()
 
     const name = screen.getByLabelText("Name")
     await user.clear(name)

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core"
 
 import type {
   ActionInstance,
+  ActionReference,
   ActionParameters,
   ActionResult,
   ActionType,
@@ -40,6 +41,8 @@ import type {
   SharedVariable,
   UpdateInfo,
   UpdatePreferences,
+  ReferenceChangeResult,
+  ReferenceSelection,
   UpdateState,
   VariableDefinition,
   VariableValue,
@@ -172,6 +175,25 @@ export const api = {
     invoke<null>("delete_action", { profileId, actionId }),
   runAction: (profileId: string, actionId: string) =>
     invoke<ActionResult>("run_action", { profileId, actionId }),
+  /** Every place that uses an action, triggers of workflows that run it included. */
+  actionReferences: (profileId: string, actionId: string) =>
+    invoke<ActionReference[]>("action_references", { profileId, actionId }),
+  /** Points the selected uses of an action at `replacement`. */
+  replaceActionReferences: (
+    profileId: string,
+    actionId: string,
+    replacement: string,
+    selection: ReferenceSelection,
+  ) =>
+    invoke<ReferenceChangeResult>("replace_action_references", {
+      profileId,
+      actionId,
+      replacement,
+      selection,
+    }),
+  /** Clears the selected key bindings and removes the selected steps; refuses graph nodes. */
+  unbindActionReferences: (profileId: string, actionId: string, selection: ReferenceSelection) =>
+    invoke<ReferenceChangeResult>("unbind_action_references", { profileId, actionId, selection }),
 
   saveWorkflow: (profileId: string, workflow: Workflow) =>
     invoke<Workflow>("save_workflow", { profileId, workflow }),
