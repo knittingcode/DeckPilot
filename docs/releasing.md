@@ -451,9 +451,9 @@ are typed or piped from the offline copies, never echoed or logged.
 | What failed | State | What to do |
 | ----------- | ----- | ---------- |
 | The tag gate | nothing created | Fix the cause (wait for CI, tag a commit on `main`, fix the version) and push a **new** tag; delete a wrong tag only if no release exists for it: `git push origin :refs/tags/<tag>` |
-| Stage A (a build, signing, notarization, manifest, checksums) | a draft, possibly incomplete | Re-run the failed jobs (`gh run rerun <run-id> --failed`): the draft of the same commit is reused and its assets replaced. For a clean retry, discard the draft and run again: `tools/release-pipeline/discard-draft.sh <tag>` (refuses published releases; keeps the tag), then `gh workflow run release.yml -f tag=<tag>` |
+| Stage A (a build, signing, notarization, manifest, checksums) | a draft, possibly incomplete | Re-run the failed jobs (`gh run rerun <run-id> --failed`): the draft of the same commit is reused and its assets replaced. For a clean retry, discard the draft and run again: `tools/release-pipeline/discard-draft.sh <tag>` (refuses published releases; keeps the tag), then `gh workflow run release.yml --ref <tag>` |
 | Publication gate | a complete draft | Create or protect the `production-release` environment (above), then `gh run rerun <run-id> --failed` |
-| Stage B before publishing | a complete draft, unpublished | Re-run the failed jobs, or `gh workflow run release.yml -f tag=<tag> -f publish_only=true` (skips stage A, publishes the existing draft after the same checks). Every check runs again; nothing is published until all pass |
+| Stage B before publishing | a complete draft, unpublished | Re-run the failed jobs, or `gh workflow run release.yml --ref <tag> -f publish_only=true` (skips stage A, publishes the existing draft after the same checks). Every check runs again; nothing is published until all pass |
 | Stage B after publishing (verification of the public release) | published | Never delete a published release. Find the cause (for example an asset removed by hand), fix it without replacing published assets, and re-run: for an already published release of the same commit `publish.sh` changes nothing and only verifies again. If the release itself is wrong, publish a new version |
 
 All of this is tested without GitHub by `tools/release-pipeline/test-publication.sh`
@@ -482,6 +482,29 @@ gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId -
 # Approve "prepare" and the builds (production-release), review the draft,
 # then approve "Publish and verify" in the run (stage B).
 ```
+
+### Workflow hardening
+
+- **Runs on tags only.** A push of a `v*` tag, or a manual run *on the
+  tag* (`gh workflow run release.yml --ref <tag>`). Started on a branch,
+  the gate refuses it (`RELEASE_REF` must be `refs/tags/<tag>`) before any
+  job that holds a secret, and the environment's deployment rule allows
+  tags `v*` only.
+- **Pinned actions.** Every action is pinned to a commit SHA (with its
+  version as a comment); update the SHA, not the comment, when upgrading.
+- **No foreign caches next to secrets.** The jobs in `production-release`
+  restore no cache (no Rust cache, no pnpm store cache): caches are written
+  by other workflows, pull requests included, and must not feed a signed
+  build. Release builds are therefore slower.
+- **Timeouts** on every job.
+- The Tauri bundler, which signs, runs the frontend build of the tagged
+  commit's locked dependencies in the build job; that is inherent to
+  signing during bundling. The lockfile is frozen and the commit is
+  reviewed and on `main`.
+
+`tools/release-pipeline/check-workflow-gate.py` enforces the timeouts, the
+pins and the absence of caches in the environment's jobs, next to the
+dependency and permission rules.
 
 ### Dependency on the packaging workflow
 
