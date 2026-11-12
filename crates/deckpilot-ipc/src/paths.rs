@@ -136,6 +136,9 @@ mod tests {
         assert_eq!(paths.log_dir, Path::new("/data/deckpilot/logs"));
     }
 
+    // AppImages exist on Linux; the Unix paths below are not absolute on
+    // Windows.
+    #[cfg(unix)]
     #[test]
     fn the_appimage_is_used_only_for_programs_running_from_it() {
         let some = |p: &str| Some(PathBuf::from(p));
