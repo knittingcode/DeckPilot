@@ -40,6 +40,7 @@ use deckpilot_storage::executions::{ExecutionQuery, Retention};
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
+use super::work_session::{RunEnd, RunPurpose};
 use super::{Agent, Command, WORKFLOW_SUMMARY_WINDOW, engine_error, failed, locked, storage_error};
 
 /// How long a cancelled run may take to stop by default.
@@ -84,6 +85,9 @@ struct Running {
     scope: ProjectScope,
     /// When cancellation was requested.
     cancel_requested: Option<std::time::Instant>,
+    /// What a work session started the run for; its end is handed to the
+    /// work session service.
+    purpose: Option<RunPurpose>,
 }
 
 #[derive(Default)]
@@ -236,6 +240,7 @@ impl Agent {
         record.summary.initial_project = start_project;
         record.summary.project_scope = Some(scope);
         let cancel = CancellationToken::new();
+        let purpose = launch.purpose;
         spawn_run(
             id,
             workflow,
@@ -263,6 +268,7 @@ impl Agent {
                 start_project,
                 scope,
                 cancel_requested: None,
+                purpose,
             },
         ));
         let _ = self.handle.events.send(AgentEvent::ExecutionStarted {
@@ -327,6 +333,17 @@ impl Agent {
             return;
         };
         let now = self.now_ms();
+        // A work session reads the declared outputs before the report is
+        // made safe for history.
+        let ended = run.purpose.map(|purpose| {
+            let end = match &outcome {
+                Ok(report) => {
+                    RunEnd::from_report(run.profile.workflow(run.record.summary.workflow), report)
+                }
+                Err(error) => RunEnd::failed(error.message.clone()),
+            };
+            (purpose, end)
+        });
         let answer = match outcome {
             Ok(mut report) => {
                 for node in &mut report.nodes {
@@ -368,6 +385,9 @@ impl Agent {
             .events
             .send(AgentEvent::ExecutionFinished { execution: summary });
         self.publish_execution_context(execution, context.project_id());
+        if let Some((purpose, end)) = ended {
+            self.work_session_run_ended(purpose, &end);
+        }
         self.after_change();
     }
 
@@ -430,6 +450,22 @@ impl Agent {
         }
     }
 
+    /// Cancels the runs started by a work session for which `matches`
+    /// holds. Returns whether there was one.
+    pub(super) fn cancel_tagged_runs(&mut self, matches: impl Fn(&RunPurpose) -> bool) -> bool {
+        let mut found = false;
+        for (id, run) in &mut self.executions.running {
+            if run.purpose.as_ref().is_some_and(&matches) {
+                info!(execution = %id, "cancelling a work session workflow");
+                run.cancel.cancel();
+                run.cancel_requested
+                    .get_or_insert_with(std::time::Instant::now);
+                found = true;
+            }
+        }
+        found
+    }
+
     /// Cancels every run, e.g. when the configuration is locked. The runs
     /// end shortly after; their records are written once the database is
     /// open again.
@@ -475,6 +511,9 @@ impl Agent {
             let _ = self.handle.events.send(AgentEvent::ExecutionFinished {
                 execution: run.record.summary.clone(),
             });
+            if let Some(purpose) = run.purpose {
+                self.work_session_run_ended(purpose, &RunEnd::cancelled());
+            }
         }
         // Like a run that finished: keys bound to the workflow stop showing
         // progress and subscribers see the new running count.
