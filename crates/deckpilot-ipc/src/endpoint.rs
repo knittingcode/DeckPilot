@@ -30,6 +30,9 @@ use interprocess::local_socket::{ConnectOptions, ListenerOptions, Name};
 /// previous agent's instance can take more than 2 s to go away.
 #[cfg(windows)]
 const LISTEN_RETRIES: u32 = 100;
+/// Between attempts to open a pipe whose instances are all busy.
+#[cfg(windows)]
+const CONNECT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
 #[cfg(windows)]
 const LISTEN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 /// How long a connect waits for a busy endpoint. On Windows a pipe whose
@@ -148,26 +151,72 @@ impl Endpoint {
     }
 
     /// Connects, waiting at most [`CONNECT_WAIT`] for a busy endpoint. A
-    /// timeout is reported as [`io::ErrorKind::TimedOut`].
+    /// timeout is reported as [`io::ErrorKind::TimedOut`]; no agent
+    /// listening as [`io::ErrorKind::NotFound`] (or `ConnectionRefused`).
     pub async fn connect(&self) -> io::Result<Stream> {
-        // The token is sent right after connecting, so the socket must be in
-        // a directory only this user controls. A missing directory means no
-        // agent is running (`NotFound`).
         #[cfg(unix)]
-        unix::verify_private_dir(self.path.parent().unwrap_or(Path::new("/")))?;
-        let options = ConnectOptions::new()
-            .name(self.name()?)
-            .wait_mode(ConnectWaitMode::Timeout(CONNECT_WAIT));
-        match tokio::time::timeout(CONNECT_WAIT * 2, options.connect_tokio()).await {
-            Ok(Ok(stream)) => Ok(stream),
-            Ok(Err(error)) if error.kind() == io::ErrorKind::WouldBlock => {
-                Err(io::Error::new(io::ErrorKind::TimedOut, error))
+        {
+            // The token is sent right after connecting, so the socket must
+            // be in a directory only this user controls. A missing directory
+            // means no agent is running (`NotFound`).
+            unix::verify_private_dir(self.path.parent().unwrap_or(Path::new("/")))?;
+            let options = ConnectOptions::new()
+                .name(self.name()?)
+                .wait_mode(ConnectWaitMode::Timeout(CONNECT_WAIT));
+            match tokio::time::timeout(CONNECT_WAIT * 2, options.connect_tokio()).await {
+                Ok(Ok(stream)) => Ok(stream),
+                Ok(Err(error)) if error.kind() == io::ErrorKind::WouldBlock => {
+                    Err(io::Error::new(io::ErrorKind::TimedOut, error))
+                }
+                Ok(Err(error)) => Err(error),
+                Err(_) => Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "the agent endpoint did not accept the connection",
+                )),
             }
-            Ok(Err(error)) => Err(error),
-            Err(_) => Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "the agent endpoint did not accept the connection",
-            )),
+        }
+        #[cfg(windows)]
+        {
+            self.connect_pipe().await
+        }
+    }
+
+    /// Windows: tries to open the pipe without waiting, and retries on the
+    /// runtime's timer while all its instances are busy.
+    ///
+    /// The crate's own wait (`ConnectWaitMode::Timeout`) runs
+    /// `WaitNamedPipeW` on Tokio's blocking pool. A runtime that shuts down
+    /// waits for its blocking tasks without a limit, and a wait on the pipe
+    /// of an agent that is going away kept the runtime (the app's, a test's)
+    /// from shutting down. With a zero wait the crate only calls
+    /// `CreateFileW`, which does not block: it opens an instance, or fails
+    /// at once with "not found" (no agent) or "busy".
+    #[cfg(windows)]
+    async fn connect_pipe(&self) -> io::Result<Stream> {
+        let deadline = tokio::time::Instant::now() + CONNECT_WAIT;
+        loop {
+            let options = ConnectOptions::new()
+                .name(self.name()?)
+                .wait_mode(ConnectWaitMode::Timeout(std::time::Duration::ZERO));
+            match options.connect_tokio().await {
+                Ok(stream) => return Ok(stream),
+                // All instances busy (the crate reports it as a timeout).
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "the agent endpoint did not accept the connection",
+                        ));
+                    }
+                    tokio::time::sleep(CONNECT_RETRY_DELAY).await;
+                }
+                Err(error) => return Err(error),
+            }
         }
     }
 }
