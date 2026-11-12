@@ -218,11 +218,19 @@ updater artifacts signed by a throwaway key, and checks them
 above, it runs on pushes to `main` that change anything under
 `apps/desktop/src-tauri/`, `apps/agent/`, `packaging/` or `tools/ci/`, the
 Cargo manifests or `apps/desktop/package.json` (so plain source changes are
-packaged after they merge), nightly, for version
-tags, by hand (Actions → Packaging → Run workflow) and when another workflow
-calls it (`uses: ./.github/workflows/packaging.yml`; output `version`, the
-checked version). A release should only be made from a commit with a green
-Packaging run.
+packaged after they merge), nightly, by hand (Actions → Packaging → Run
+workflow) and when another workflow calls it
+(`uses: ./.github/workflows/packaging.yml`; output `version`, the checked
+version). The release workflow calls it before drafting a release, so tags do
+not start it on their own.
+
+Pre-release versions (`X.Y.Z-alpha.N`, `-beta.N`, `-rc.N`) build no .rpm
+(RPM does not allow "-" in versions), and the MSI gets a numeric version
+(WiX accepts only numbers): `alpha.N` → `X.Y.Z.N`, `beta.N` →
+`X.Y.Z.(20000+N)`, `rc.N` → `X.Y.Z.(40000+N)` (`tools/ci/msi-version.sh`).
+Callers may pass both as inputs (`prerelease`, `msi-version`); otherwise they
+are derived from the version. `tools/ci/test-check-packages.sh` tests this on
+fake packages in the "Release manifest assembly" job.
 
 Runs and caches:
 

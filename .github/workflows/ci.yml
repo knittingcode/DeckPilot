@@ -197,3 +197,7 @@ jobs:
         run: shellcheck tools/ci/*.sh
       - name: Assemble and verify latest.json from fixture builds
         run: tools/ci/test-latest-json.sh "$RUNNER_TEMP/latest-json-test"
+      # Pre-release handling of the Packaging workflow (no .rpm, MSI
+      # version mapping), on fake packages.
+      - name: Package checks for pre-release versions
+        run: tools/ci/test-check-packages.sh "$RUNNER_TEMP/check-packages-test"

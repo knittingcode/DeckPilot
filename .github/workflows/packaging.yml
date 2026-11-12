@@ -8,19 +8,25 @@
 # - on pull requests, only when packaging-relevant paths change
 #   (tools/ci/changed-paths.sh, group `packaging`); otherwise the jobs
 #   report as skipped;
-# - on pushes to main that change those paths, nightly, for version tags,
-#   by hand (workflow_dispatch), and when called by another workflow
-#   (workflow_call; the release workflow can require a green run).
+# - on pushes to main that change those paths, nightly, by hand
+#   (workflow_dispatch), and when called by another workflow (workflow_call):
+#   the release workflow calls it before drafting a release, so version tags
+#   do not trigger it directly.
 #
-# Reusable: `uses: ./.github/workflows/packaging.yml`. Output `version`: the
-# version whose packages were built and checked.
+# Reusable: `uses: ./.github/workflows/packaging.yml`.
+#   Inputs (both optional; derived from the version when not given):
+#   - prerelease (boolean): a pre-release version (X.Y.Z-alpha.N etc.); no
+#     .rpm is built or expected, as RPM does not allow "-" in versions;
+#   - msi-version (string): the numeric version for the MSI (WiX accepts
+#     only numbers), passed as bundle.windows.wix.version; see
+#     tools/ci/msi-version.sh for the mapping.
+#   Output `version`: the version whose packages were built and checked.
 name: Packaging
 
 on:
   pull_request:
   push:
     branches: [main]
-    tags: ["v*"]
     paths:
       - apps/desktop/src-tauri/**
       - apps/agent/**
@@ -34,7 +40,25 @@ on:
     # Nightly, 03:17 UTC (off the hour, when runners are less busy).
     - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      prerelease:
+        description: Pre-release version (no .rpm); derived from the version when unset
+        type: boolean
+        default: false
+      msi-version:
+        description: Numeric MSI version (WiX); derived from the version when empty
+        type: string
+        default: ""
   workflow_call:
+    inputs:
+      prerelease:
+        description: Pre-release version (no .rpm); derived from the version when false
+        type: boolean
+        default: false
+      msi-version:
+        description: Numeric MSI version (bundle.windows.wix.version); derived from the version when empty
+        type: string
+        default: ""
     outputs:
       version:
         description: The version whose packages were built and checked
@@ -44,7 +68,7 @@ permissions:
   contents: read
 
 # Pull requests: a new push cancels the obsolete run. Every other run (main,
-# tags, nightly, manual, called) has a group of its own and runs to the end.
+# nightly, manual, called) has a group of its own and runs to the end.
 # (In a called workflow, github.workflow and github.run_id are the caller's.)
 concurrency:
   group: packaging-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
@@ -52,6 +76,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Empty for events without inputs (pull requests, pushes, nightly).
+  PRERELEASE_INPUT: ${{ inputs.prerelease && 'true' || 'false' }}
+  MSI_VERSION_INPUT: ${{ inputs.msi-version }}
   RUST_CACHE_SAVE: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:
@@ -102,9 +129,19 @@ jobs:
           cargo build --release --locked -p deckpilot-agent
           mkdir -p apps/desktop/src-tauri/binaries
           cp target/release/deckpilot-agent "apps/desktop/src-tauri/binaries/deckpilot-agent-$(rustc -vV | sed -n 's/^host: //p')"
-      - name: Build the .deb and .rpm
+      # A pre-release version (input, or a "-" in the version) builds no
+      # .rpm: RPM does not allow "-" in versions.
+      - name: Pre-release or final version
+        run: |
+          version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
+          prerelease="$PRERELEASE_INPUT"
+          case "$version" in *-*) prerelease=true ;; esac
+          echo "PRERELEASE=$prerelease" >> "$GITHUB_ENV"
+          echo "version $version, pre-release: $prerelease"
+      - name: Build the .deb (and .rpm for final versions)
         run: >
-          pnpm --filter @deckpilot/desktop tauri build --bundles deb,rpm
+          pnpm --filter @deckpilot/desktop tauri build
+          --bundles "$([ "$PRERELEASE" = true ] && echo deb || echo deb,rpm)"
           --config src-tauri/tauri.release.conf.json
           --config "$THROWAWAY_UPDATER_CONFIG"
       - name: Names, versions, app, agent, udev rule and updater signatures
@@ -150,12 +187,27 @@ jobs:
           cargo build --release --locked -p deckpilot-agent
           mkdir -p apps/desktop/src-tauri/binaries
           cp target/release/deckpilot-agent.exe "apps/desktop/src-tauri/binaries/deckpilot-agent-$(rustc -vV | sed -n 's/^host: //p').exe"
+      # WiX accepts only numeric versions: a pre-release gets the MSI
+      # version from the input or tools/ci/msi-version.sh.
+      - name: Pre-release or final version, MSI version
+        shell: bash
+        run: |
+          version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
+          prerelease="$PRERELEASE_INPUT"
+          case "$version" in *-*) prerelease=true ;; esac
+          msi="${MSI_VERSION_INPUT:-$(tools/ci/msi-version.sh "$version")}"
+          [[ "$msi" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] \
+            || { echo "::error::msi-version '$msi' is not numeric (X.Y.Z or X.Y.Z.N)"; exit 1; }
+          jq -n --arg v "$msi" '{bundle: {windows: {wix: {version: $v}}}}' > "$RUNNER_TEMP/msi-version.conf.json"
+          { echo "PRERELEASE=$prerelease"; echo "MSI_CONFIG=$RUNNER_TEMP/msi-version.conf.json"; } >> "$GITHUB_ENV"
+          echo "version $version, pre-release: $prerelease, MSI version: $msi"
       - name: Build the installers
         shell: bash
         run: >
           pnpm --filter @deckpilot/desktop tauri build --bundles nsis,msi
           --config src-tauri/tauri.release.conf.json
           --config "$THROWAWAY_UPDATER_CONFIG"
+          --config "$MSI_CONFIG"
       - name: Extract the installers
         shell: pwsh
         run: |
