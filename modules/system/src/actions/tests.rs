@@ -477,3 +477,62 @@ fn process_status_finds_running_programs() {
             .any(|pid| pid == child.id().to_string())
     );
 }
+
+/// A link at `link` to `target`; false where links cannot be made
+/// (Windows without the privilege).
+fn make_link(target: &std::path::Path, link: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    let made = if target.is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
+    made.is_ok()
+}
+
+#[test]
+fn links_out_of_the_resource_are_not_opened() {
+    let fixture = fixture();
+    let outside = fixture.dir.with_extension("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("secret.txt"), "out").unwrap();
+    let made = make_link(&outside.join("secret.txt"), &fixture.dir.join("leak.txt"))
+        && make_link(&outside, &fixture.dir.join("leak-dir"))
+        && make_link(&fixture.dir.join("docs"), &fixture.dir.join("manual"));
+    if !made {
+        eprintln!("links cannot be made here; skipped");
+        let _ = std::fs::remove_dir_all(&outside);
+        return;
+    }
+    let launcher = Arc::new(RecordingLauncher::new());
+    let folder = OpenDirectory::new(launcher.clone());
+    let file = OpenFile::new(launcher.clone());
+    let at = |path: &str| {
+        ActionParameters::new()
+            .with("location", role("repository"))
+            .with("path", text(path))
+    };
+    for (handler, path) in [
+        (&file as &dyn ActionHandler, "leak.txt"),
+        (&file, "leak-dir/secret.txt"),
+        (&folder, "leak-dir"),
+    ] {
+        let result = run(handler, at(path), &fixture.context());
+        assert_eq!(
+            code(&result),
+            Some(crate::codes::INVALID_PATH),
+            "{path}: {}",
+            result.message
+        );
+    }
+    assert_eq!(launcher.plans().len(), 0);
+    // A link that stays inside opens.
+    let inside = run(&file, at("manual/README.md"), &fixture.context());
+    assert!(inside.is_success(), "{}", inside.message);
+    let inside = run(&folder, at("manual"), &fixture.context());
+    assert!(inside.is_success(), "{}", inside.message);
+    assert_eq!(launcher.plans().len(), 2);
+    let _ = std::fs::remove_dir_all(&outside);
+}

@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use deckpilot_ipc::client::request_once;
+use deckpilot_ipc::paths::RUN_AGENT_ARG;
 use deckpilot_ipc::{
     AgentClient, AgentEvent, AgentPaths, AgentStatus, Capability, ClientError, ClientKind,
     ErrorCode, KeyMaterial, Request, Response, SecurityState,
@@ -23,6 +24,11 @@ pub const EXECUTION_EVENT: &str = "workflow-execution";
 /// Event with a notification an action asked the agent to show, for the
 /// status bar.
 pub const NOTIFICATION_EVENT: &str = "agent-notification";
+/// Event with the agent's context changes as they are (`projectChanged`,
+/// `profileChanged`, `sharedVariablesChanged`, `resourceBindingsChanged`,
+/// `deviceContextChanged`, `executionContextChanged`), so the variable
+/// picker refreshes its previews. Agents before protocol 7 send none.
+pub const VARIABLES_EVENT: &str = "agent-variables";
 
 /// Overrides the agent executable.
 const AGENT_BIN_ENV: &str = "DECKPILOT_AGENT_BIN";
@@ -232,12 +238,56 @@ pub fn agent_executable() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// How to start the agent: inside an AppImage through the AppImage file
+/// with [`RUN_AGENT_ARG`], so the agent runs as that AppImage's main process
+/// and its files stay mounted as long as it runs (the mount of this app goes
+/// away when the app closes); otherwise the executable itself.
+fn agent_command(appimage: Option<PathBuf>, executable: PathBuf) -> (PathBuf, Vec<&'static str>) {
+    match appimage {
+        Some(file) => (file, vec![RUN_AGENT_ARG]),
+        None => (executable, Vec::new()),
+    }
+}
+
+/// Started as `<app> --agent` (by an AppImage's autostart entry, or by
+/// [`start_agent`] inside an AppImage): runs the bundled agent in this
+/// process's place with the remaining arguments, and does not return.
+/// Returns at once for any other start.
+pub fn run_agent_if_requested() {
+    let mut args = std::env::args_os().skip(1);
+    if args.next().as_deref() != Some(std::ffi::OsStr::new(RUN_AGENT_ARG)) {
+        return;
+    }
+    let Some(path) = agent_executable() else {
+        eprintln!("the DeckPilot agent executable was not found");
+        std::process::exit(1);
+    };
+    let mut command = Command::new(&path);
+    command.args(args);
+    #[cfg(unix)]
+    {
+        // The same process (and so the same AppImage mount) becomes the
+        // agent.
+        use std::os::unix::process::CommandExt;
+        let error = command.exec();
+        eprintln!("cannot start {}: {error}", path.display());
+        std::process::exit(1);
+    }
+    #[cfg(not(unix))]
+    {
+        let code = command.status().ok().and_then(|s| s.code()).unwrap_or(1);
+        std::process::exit(code);
+    }
+}
+
 /// Starts the agent detached from this process, so closing the window does
 /// not stop it. The agent itself refuses to run twice.
 pub fn start_agent() -> Result<(), String> {
-    let path = agent_executable().ok_or("the DeckPilot agent executable was not found")?;
+    let executable = agent_executable().ok_or("the DeckPilot agent executable was not found")?;
+    let (path, args) = agent_command(deckpilot_ipc::paths::appimage(), executable);
     let mut command = Command::new(&path);
     command
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -331,6 +381,14 @@ async fn subscribe<R: Runtime>(app: &AppHandle<R>, paths: &AgentPaths) -> Result
             AgentEvent::Notification { notification } => {
                 let _ = app.emit(NOTIFICATION_EVENT, notification);
             }
+            event @ (AgentEvent::ProjectChanged { .. }
+            | AgentEvent::ProfileChanged { .. }
+            | AgentEvent::SharedVariablesChanged { .. }
+            | AgentEvent::ResourceBindingsChanged
+            | AgentEvent::DeviceContextChanged { .. }
+            | AgentEvent::ExecutionContextChanged { .. }) => {
+                let _ = app.emit(VARIABLES_EVENT, event);
+            }
         }
     }
 }
@@ -395,5 +453,24 @@ fn show_window<R: Runtime>(app: &AppHandle<R>) {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+    }
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::*;
+
+    #[test]
+    fn inside_an_appimage_the_agent_is_started_through_the_appimage() {
+        let (program, args) = agent_command(
+            Some(PathBuf::from("/home/u/Apps/DeckPilot.AppImage")),
+            PathBuf::from("/tmp/.mount_X/usr/bin/deckpilot-agent"),
+        );
+        assert_eq!(program, PathBuf::from("/home/u/Apps/DeckPilot.AppImage"));
+        assert_eq!(args, [RUN_AGENT_ARG]);
+        // Installed packages (.deb, .rpm: /usr/bin) start the executable.
+        let (program, args) = agent_command(None, PathBuf::from("/usr/bin/deckpilot-agent"));
+        assert_eq!(program, PathBuf::from("/usr/bin/deckpilot-agent"));
+        assert_eq!(args, Vec::<&str>::new());
     }
 }

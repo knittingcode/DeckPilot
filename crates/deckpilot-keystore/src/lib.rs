@@ -125,6 +125,10 @@ impl Scope {
     }
 }
 
+/// Prefix of the service names that tests may use in the real credential
+/// store ([`SystemKeyStore::open_for_tests`]).
+pub const TEST_SERVICE_PREFIX: &str = "DeckPilot Test ";
+
 /// A store for database keys.
 pub trait KeyStore: Send + Sync + fmt::Debug {
     /// Human-readable name, e.g. "macOS Keychain".
@@ -155,14 +159,16 @@ pub fn platform_store_name() -> &'static str {
 /// late at login) is picked up.
 pub struct SystemKeyStore {
     store: Mutex<Option<Arc<keyring_core::CredentialStore>>>,
-    scope: Scope,
+    /// The service name of the entries: [`Scope::service`], or a
+    /// throwaway name in tests.
+    service: String,
 }
 
 impl fmt::Debug for SystemKeyStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SystemKeyStore")
             .field("store", &platform_store_name())
-            .field("scope", &self.scope)
+            .field("service", &self.service)
             .finish()
     }
 }
@@ -179,8 +185,24 @@ impl SystemKeyStore {
         }
         Ok(Self {
             store: Mutex::new(None),
-            scope,
+            service: scope.service().to_owned(),
         })
+    }
+
+    /// The store of this platform under a throwaway service name, for tests
+    /// that use the real credential store. The name must start with
+    /// [`TEST_SERVICE_PREFIX`], so that a test can never reach the entries of
+    /// an installed or a development DeckPilot.
+    #[doc(hidden)]
+    pub fn open_for_tests(service: &str) -> Result<Self, KeyStoreError> {
+        if !service.starts_with(TEST_SERVICE_PREFIX) || service.len() <= TEST_SERVICE_PREFIX.len() {
+            return Err(KeyStoreError::Failed(format!(
+                "a test service name must start with `{TEST_SERVICE_PREFIX}`"
+            )));
+        }
+        let mut store = Self::open(Scope::Development)?;
+        service.clone_into(&mut store.service);
+        Ok(store)
     }
 
     fn connection(&self) -> Result<Arc<keyring_core::CredentialStore>, KeyStoreError> {
@@ -204,17 +226,17 @@ impl SystemKeyStore {
             // Local persistence: the key stays on this computer and is not
             // copied to other machines with a roaming profile.
             let modifiers = std::collections::HashMap::from([("persistence", "Local")]);
-            store.build(self.scope.service(), &account, Some(&modifiers))
+            store.build(self.service.as_str(), &account, Some(&modifiers))
         };
         #[cfg(target_os = "linux")]
         let entry = {
             // The label shown in Seahorse or KWallet.
-            let label = format!("{} database key", self.scope.service());
+            let label = format!("{} database key", self.service.as_str());
             let modifiers = std::collections::HashMap::from([("label", label.as_str())]);
-            store.build(self.scope.service(), &account, Some(&modifiers))
+            store.build(self.service.as_str(), &account, Some(&modifiers))
         };
         #[cfg(not(any(target_os = "windows", target_os = "linux")))]
-        let entry = store.build(self.scope.service(), &account, None);
+        let entry = store.build(self.service.as_str(), &account, None);
         entry.map_err(|error| failure(&error))
     }
 }
@@ -466,5 +488,32 @@ mod tests {
     #[test]
     fn scopes_are_isolated() {
         assert_ne!(Scope::Production.service(), Scope::Development.service());
+        for scope in [Scope::Production, Scope::Development] {
+            assert!(!scope.service().starts_with(TEST_SERVICE_PREFIX));
+        }
+    }
+
+    /// The entry of a key is found by service and account name only. An
+    /// update that changed either would no longer find the key that
+    /// protects an existing database (which survives the update), so the
+    /// names are fixed.
+    #[test]
+    fn entry_names_never_change_between_versions() {
+        assert_eq!(Scope::Production.service(), "DeckPilot");
+        assert_eq!(Scope::Development.service(), "DeckPilot Development");
+        assert_eq!(
+            id("0123456789abcdef0123456789abcdef").account(),
+            "database-key-0123456789abcdef0123456789abcdef"
+        );
+    }
+
+    #[test]
+    fn tests_cannot_use_the_names_of_real_entries() {
+        for service in ["DeckPilot", "DeckPilot Development", "DeckPilot Test ", "x"] {
+            assert!(
+                SystemKeyStore::open_for_tests(service).is_err(),
+                "{service}"
+            );
+        }
     }
 }

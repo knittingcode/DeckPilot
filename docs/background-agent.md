@@ -66,8 +66,14 @@ closed and reopened at any time without interrupting devices.
 ### Tray menu
 
 - **Open DeckPilot**: focuses the configuration window if it is connected,
-  otherwise starts the configuration app found next to the agent (or
-  `DECKPILOT_DESKTOP_BIN`)
+  otherwise starts the configuration app found next to the agent
+  (`deckpilot-desktop` in a build directory or Linux package, `DeckPilot` in
+  the macOS `.app` and on Windows; inside an AppImage the AppImage itself),
+  or `DECKPILOT_DESKTOP_BIN`. While an app it started is still starting (up
+  to 20 seconds, until it connects), further clicks start no second one. In
+  a development session `DECKPILOT_DESKTOP_BIN` is `deckpilot-dev`, which
+  restarts the session's `tauri dev` with its Vite server (see
+  [development](development.md#live-development))
 - **Active Profile**: lists profiles; selecting one switches immediately and
   redraws all devices
 - **Project**: shows the active project (informational)
@@ -82,7 +88,7 @@ exist yet.
 
 | Situation                        | Behaviour                                                        |
 | -------------------------------- | ---------------------------------------------------------------- |
-| Agent starts                     | Takes an exclusive lock on `agent.lock`; a second instance exits |
+| Agent starts                     | Takes an exclusive lock on `agent.lock`; a second instance exits (after waiting up to 5 s, see below) |
 | Configuration app starts         | Connects to the running agent, or starts it if it is not running |
 | Configuration app closes         | Agent keeps running                                              |
 | Device unplugged                 | Device marked disconnected; agent keeps running                  |
@@ -90,7 +96,12 @@ exist yet.
 | Quit (tray), `Shutdown` request, Ctrl+C, SIGTERM | Keys blanked, IPC closed, token removed, lock released |
 
 The lock is an OS file lock, so it is released automatically if the process
-crashes.
+crashes. A starting agent waits up to 5 seconds for the lock before it
+concludes that another agent is running: a stopping agent closes its
+endpoint before it has finished and released the lock, and a restart (the
+app's "restart agent", an update) starts the next agent as soon as the
+endpoint is gone. After a crash the new agent replaces the stale socket
+file and token; the old token is no longer accepted.
 
 ### Start at login
 
@@ -102,6 +113,22 @@ only (no system services):
 - Windows: the `HKEY_CURRENT_USER\…\Run` registry key
 
 Use the checkbox in Settings, or `deckpilot-agent autostart enable|disable|status`.
+
+The entry runs the agent's executable, which is at a fixed path for the
+macOS app, the Windows installers and the Linux `.deb`/`.rpm`
+(`/usr/bin/deckpilot-agent`). An AppImage instead mounts its contents at a
+new temporary path on every run (`/tmp/.mount_…`) and unmounts it when its
+main process ends. So when the agent runs from an AppImage (`$APPIMAGE` is
+set and the agent lies inside `$APPDIR`):
+
+- the autostart entry runs `<the .AppImage file> --agent`; the app's
+  executable, started with `--agent`, replaces itself with the bundled
+  agent, so the agent is the AppImage's main process and its files stay
+  mounted as long as it runs;
+- the app starts the agent the same way, and the agent starts the app
+  through the `.AppImage` file, so neither depends on the other's mount;
+- an enabled entry is rewritten when the agent starts, which repairs
+  entries that earlier versions recorded with a path inside the mount.
 
 ## Storage ownership
 
@@ -119,11 +146,19 @@ with a busy timeout).
 
 Transport:
 
-- **Linux/macOS**: Unix domain socket in a per-user directory
-  (`$XDG_RUNTIME_DIR/deckpilot-<uid>` or the per-user temporary directory)
-  with mode `0700`. The agent verifies the directory's owner and permissions.
-  On Linux the socket file additionally has mode `0600`. Abstract sockets are
-  never used.
+- **Linux/macOS**: Unix domain socket `agent-<hash>.sock` in a per-user
+  directory `deckpilot-<uid>` with mode `0700`, located in
+  `$XDG_RUNTIME_DIR` or, without it, the temporary directory (`$TMPDIR`).
+  Socket paths are limited to 104 bytes on macOS and 108 on Linux; when the
+  path there would be longer (a long `TMPDIR`), the directory is
+  `/tmp/deckpilot-<uid>` instead. The choice depends only on the
+  environment and the data directory, so the agent and a client started
+  with the same environment agree. The agent creates the directory with
+  mode `0700`; both the agent and every client refuse it if it is a symlink,
+  belongs to another user or is accessible to group or others (it is not
+  repaired, since another user may already have placed a socket in it), so
+  the token is never sent to a socket someone else controls. On Linux the
+  socket file additionally has mode `0600`. Abstract sockets are never used.
 - **Windows**: a named pipe with a security descriptor that grants access only
   to the owner and SYSTEM; remote clients are rejected.
 
@@ -184,7 +219,9 @@ Protocol 5 runs workflows in the background (see
 [Workflow graphs](workflow-graphs.md#running-in-the-agent)). Protocol 4 added
 the encrypted database; protocol 3 made action results only carry
 `selectProject` effects, with action types in module namespaces
-(`projects.next`). Project switching requests are refused while the projects
+(`projects.next`); a `cycleProject` requested by `projects.cycle` is applied
+by the engine and reported as the `selectProject` it made, so it never
+reaches a client. Project switching requests are refused while the projects
 module is disabled. Events are only sent to clients whose protocol has them.
 Clients negotiate the protocol (stepping down until an older agent accepts
 their `hello`) and never send a request newer than the connection's
@@ -268,6 +305,11 @@ Automated tests never need hardware:
   IPC: rendering, button routing, project cycling and persistence, profile
   switching, unplug/replug, brightness, authentication, request validation,
   single instance, shutdown and client reconnection.
+- `apps/agent/tests/hardware.rs` covers the device lifecycle with simulated
+  MK.2s: a replugged device gets its page, brightness and images back (also
+  when unplugged while keys are redrawn), several devices keep their own
+  pages and connections, keys are blanked when the agent stops and stale
+  images are replaced when it starts.
 - `apps/desktop/src-tauri/src/tests.rs` drives the configuration app's
   commands against a running agent.
 

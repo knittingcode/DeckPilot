@@ -803,14 +803,34 @@ fn fresh_installation_has_an_empty_action_library() {
     assert_eq!(
         types,
         [
-            "projects.next",
-            "projects.previous",
+            "projects.cycle",
             "projects.select",
-            "projects.active",
+            "projects.current",
             "projects.repository",
             "projects.documentation",
-            "projects.resolve-resource"
+            "projects.resolve-resource",
+            "projects.next",
+            "projects.previous",
+            "projects.active",
         ]
+    );
+    // Replaced types are marked, so the app does not offer them for new
+    // actions; the flag is left out for every other type.
+    let deprecated: Vec<_> = module("projects")["actionTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["deprecated"] == true)
+        .map(|t| t["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        deprecated,
+        ["projects.next", "projects.previous", "projects.active"]
+    );
+    assert!(
+        module("projects")["actionTypes"][0]
+            .get("deprecated")
+            .is_none()
     );
     assert_eq!(h.ok("migration_notes", json!({})), json!([]));
 }
@@ -1321,6 +1341,58 @@ fn legacy_databases_are_encrypted_on_request() {
     assert_eq!(status["legacyCopies"], json!([]));
 }
 
+/// The export file reveals nothing of its content: neither the plaintext
+/// header nor the (base64-decoded) ciphertext contains the serialized
+/// profile, and machine values are not even in the decrypted payload.
+///
+/// The needles are long, structured strings taken from the plaintext, so
+/// a random match is practically impossible (searching for a short word
+/// such as "Work" in base64 text matches by chance now and then).
+fn assert_export_hides_its_content(bytes: &[u8], password: &str) {
+    use base64::Engine as _;
+    let contains = |haystack: &[u8], needle: &str| {
+        haystack
+            .windows(needle.len())
+            .any(|w| w == needle.as_bytes())
+    };
+
+    let envelope: Value = serde_json::from_slice(bytes).unwrap();
+    let mut fields: Vec<&str> = envelope
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    fields.sort_unstable();
+    assert_eq!(fields, ["ciphertext", "header"]);
+    let header = envelope["header"].as_str().unwrap();
+    let ciphertext = base64::engine::general_purpose::STANDARD
+        .decode(envelope["ciphertext"].as_str().unwrap())
+        .unwrap();
+
+    let payload = deckpilot_portability::payload::open(
+        bytes,
+        &deckpilot_storage::crypto::Password::new(password),
+    )
+    .unwrap();
+    let plaintext = serde_json::to_string(&payload).unwrap();
+    let hidden = [r#""name":"Work""#, r#""key":"SHOP""#, "shop.repository"];
+    for needle in hidden {
+        // Meaningful: the payload holds exactly this text.
+        assert!(plaintext.contains(needle), "{needle} is not in the payload");
+        assert!(!header.contains(needle), "the header shows {needle}");
+        assert!(
+            !contains(&ciphertext, needle),
+            "the ciphertext shows {needle}"
+        );
+        assert!(!contains(bytes, needle), "the file shows {needle}");
+    }
+    // Machine values are never exported at all.
+    let machine = "/private/machine/path";
+    assert!(!plaintext.contains(machine));
+    assert!(!contains(bytes, machine));
+}
+
 #[test]
 fn configuration_round_trips_through_an_encrypted_export() {
     let h = Harness::new();
@@ -1342,9 +1414,7 @@ fn configuration_round_trips_through_an_encrypted_export() {
     );
     assert_eq!(result["profiles"], 1);
     let bytes = std::fs::read(&file).unwrap();
-    for visible in [&b"Work"[..], b"SHOP", b"/private/machine/path"] {
-        assert!(!bytes.windows(visible.len()).any(|w| w == visible));
-    }
+    assert_export_hides_its_content(&bytes, "export secret");
 
     assert!(
         h.error(
@@ -2486,4 +2556,138 @@ fn restarting_the_agent_never_ends_running_workflows_silently() {
         json!({ "executionId": execution["id"] }),
     );
     wait_for(&h, |s| s["status"]["runningExecutions"] == 0);
+}
+
+// One scenario through every step of the safe deletion.
+#[allow(clippy::too_many_lines)]
+#[test]
+fn referenced_actions_are_replaced_or_unbound_before_they_are_deleted() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    let hello = log_action(&h, &profile_id, "Hello", "hi");
+    let other = log_action(&h, &profile_id, "Other", "ho");
+    let ids = json!({ "profileId": profile_id, "actionId": hello["id"] });
+
+    // Used on a key, in a step workflow and in a graph node of a workflow
+    // with a trigger.
+    let mut layout = h.ok(
+        "create_layout",
+        json!({ "profileId": profile_id, "modelId": "elgato.streamdeck.mk2", "name": "Main", "generate": false }),
+    );
+    layout["pages"][0]["bindings"] = json!([{
+        "control": { "kind": "key", "index": 0 },
+        "trigger": { "type": "press" },
+        "target": { "type": "action", "action": hello["id"] }
+    }]);
+    let layout = h.ok(
+        "save_layout",
+        json!({ "profileId": profile_id, "layout": layout }),
+    );
+    h.ok(
+        "save_workflow",
+        json!({
+            "profileId": profile_id,
+            "workflow": {
+                "id": "00000000-0000-4000-8000-000000000001",
+                "name": "Steps",
+                "steps": [{ "action": hello["id"], "onFailure": "stop" }]
+            }
+        }),
+    );
+    let policy = json!({ "onError": "stop", "retry": { "attempts": 0, "backoffMs": 0 } });
+    h.ok(
+        "save_workflow",
+        json!({
+            "profileId": profile_id,
+            "workflow": {
+                "id": "00000000-0000-4000-8000-000000000002",
+                "name": "Morning",
+                "steps": [],
+                "triggers": [{ "type": "schedule", "schedule": { "every": "daily", "at": "09:00" } }],
+                "graph": {
+                    "version": 1,
+                    "nodes": [
+                        { "id": "start", "type": "trigger", "position": { "x": 0, "y": 0 } },
+                        { "id": "say", "label": "Say hello", "type": "action", "action": hello["id"],
+                          "policy": policy, "position": { "x": 200, "y": 0 } }
+                    ],
+                    "edges": [{ "from": "start", "port": "out", "to": "say" }]
+                }
+            }
+        }),
+    );
+
+    let references = h.ok("action_references", ids.clone());
+    let sites: Vec<&Value> = references
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| &r["site"])
+        .collect();
+    let kinds: Vec<&str> = sites.iter().map(|s| s["type"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["binding", "step", "node", "trigger"]);
+    assert_eq!(references[0]["ownerName"], "Main");
+    assert_eq!(references[2]["detail"], "Say hello");
+    let (binding, step, node, trigger) = (sites[0], sites[1], sites[2], sites[3]);
+
+    // Deleting is refused while anything uses it, and changes nothing.
+    let refused = h.error("delete_action", ids.clone());
+    assert!(refused.contains("still used in 4 place(s)"), "{refused}");
+    assert_eq!(h.ok("action_references", ids.clone()), references);
+
+    // A graph node cannot be unbound; a trigger is never changed itself.
+    let sites_of = |list: &[&Value]| json!({ "type": "sites", "sites": list });
+    let error = h.error(
+        "unbind_action_references",
+        json!({ "profileId": profile_id, "actionId": hello["id"], "selection": sites_of(&[node]) }),
+    );
+    assert!(error.contains("cannot be unbound"), "{error}");
+    let error = h.error(
+        "replace_action_references",
+        json!({ "profileId": profile_id, "actionId": hello["id"], "replacement": other["id"],
+                "selection": sites_of(&[trigger]) }),
+    );
+    assert!(error.contains("trigger"), "{error}");
+    assert_eq!(h.ok("action_references", ids.clone()), references);
+
+    // Replace the step and the node, unbind the key.
+    let change = h.ok(
+        "replace_action_references",
+        json!({ "profileId": profile_id, "actionId": hello["id"], "replacement": other["id"],
+                "selection": sites_of(&[step, node]) }),
+    );
+    assert_eq!(change["changed"], json!([step, node]));
+    // Same action type: nothing was cleared.
+    assert_eq!(change["clearedSettings"], json!([]));
+    let change = h.ok(
+        "unbind_action_references",
+        json!({ "profileId": profile_id, "actionId": hello["id"], "selection": sites_of(&[binding]) }),
+    );
+    assert_eq!(change["changed"], json!([binding]));
+
+    assert_eq!(h.ok("action_references", ids.clone()), json!([]));
+    h.ok("delete_action", ids);
+
+    // The other action now has the step, the node and with it the trigger;
+    // the key is empty.
+    let moved = h.ok(
+        "action_references",
+        json!({ "profileId": profile_id, "actionId": other["id"] }),
+    );
+    let kinds: Vec<&str> = moved
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["site"]["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["step", "node", "trigger"]);
+    let view = h.ok("get_profile", json!({ "profileId": profile_id }));
+    let page = view["profile"]["layouts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == layout["id"])
+        .unwrap()["pages"][0]
+        .clone();
+    assert_eq!(page["bindings"], json!([]));
 }
