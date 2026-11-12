@@ -838,7 +838,7 @@ async fn configuration_reload_updates_the_device_without_restart() {
         .push(deckpilot_core::ControlBinding {
             control: ControlId::Key { index: 5 },
             trigger: deckpilot_core::Trigger::Press,
-            target: deckpilot_core::BindingTarget::Action { action },
+            target: deckpilot_core::BindingTarget::action(action),
             label: Some("{project.name}".into()),
             appearance: None,
         });
@@ -3055,7 +3055,7 @@ async fn module_states_are_shown_and_not_refreshed_more_often_than_allowed() {
         .push(deckpilot_core::ControlBinding {
             control: key,
             trigger: deckpilot_core::Trigger::Press,
-            target: deckpilot_core::BindingTarget::Action { action: status.id },
+            target: deckpilot_core::BindingTarget::action(status.id),
             label: None,
             appearance: None,
         });

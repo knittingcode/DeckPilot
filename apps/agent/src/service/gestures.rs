@@ -5,9 +5,13 @@
 //! [`GestureEngine`](deckpilot_core::gesture::GestureEngine), with the time
 //! the device thread read it:
 //!
-//! - **Raw mode.** Keys without gesture bindings (every key until layouts
-//!   can bind gestures) get their edges back unchanged and at once, and are
-//!   dispatched as before.
+//! - **Raw mode.** Keys without gesture bindings (`click`, `doubleClick`,
+//!   `longPress` triggers) on the page shown, which includes every key of
+//!   layouts from before gestures, get their edges back unchanged and at
+//!   once, and are dispatched as before.
+//! - **Gesture mode.** The bound gestures and the key's timings are read
+//!   from the page when a sequence starts; a recognized gesture runs its
+//!   binding through [`deckpilot_core::Runtime::dispatch_gesture`].
 //! - **Timing.** Inputs carry the instant they were read, so a slow action
 //!   on this task never turns a click into a long press.
 //! - **Timers.** The run loop sleeps until the engine's next deadline;
@@ -36,14 +40,12 @@ use super::Agent;
 /// waits for the next loop turn, which keeps the loop responsive.
 const DRAIN_LIMIT: usize = 256;
 
-/// Supplies gesture bindings and observes recognized gestures.
+/// Test hooks: supply gesture bindings and observe recognized gestures.
 ///
-/// Layouts cannot bind gestures yet, so without hooks every key is in raw
-/// mode. Tests (and later the layout model) use this to put keys in
-/// gesture mode.
+/// Without hooks, the bindings come from the page the device shows.
 pub trait GestureHooks: Send + Sync {
     /// The gestures bound to `control` on `page` of `device`, with the
-    /// key's timings. `None`: raw mode.
+    /// key's timings, in place of the page's. `None`: the page's.
     fn bindings(
         &self,
         device: &DeviceId,
@@ -53,6 +55,10 @@ pub trait GestureHooks: Send + Sync {
 
     /// Called on the service task for every gesture that is dispatched.
     fn fired(&self, fired: &GestureFired);
+
+    /// Called on the service task with what a dispatched gesture's binding
+    /// did.
+    fn dispatched(&self, _fired: &GestureFired, _outcome: &RuntimeOutcome) {}
 }
 
 #[derive(Default)]
@@ -166,7 +172,20 @@ impl Agent {
             control,
             input,
         };
-        match self.runtime.handle_event(&event) {
+        let outcome = self.runtime.handle_event(&event);
+        self.handle_outcome(device, control, outcome);
+    }
+
+    /// What a binding did, from a raw edge or a gesture: report an action,
+    /// start a workflow in the background, or drop the device's pending
+    /// gestures after it navigated.
+    fn handle_outcome(
+        &mut self,
+        device: &DeviceId,
+        control: ControlId,
+        outcome: Result<RuntimeOutcome, deckpilot_core::EngineError>,
+    ) {
+        match outcome {
             Ok(RuntimeOutcome::Action { action, result }) => {
                 self.report_action(action, &result);
             }
@@ -204,8 +223,13 @@ impl Agent {
         if let Some(hooks) = &self.gestures.hooks {
             hooks.fired(fired);
         }
-        // TODO(G2): `Runtime::dispatch_gesture` runs the bound target here,
-        // cancelling the device's gestures when it navigates.
+        let outcome = self
+            .runtime
+            .dispatch_gesture(&fired.device, fired.control, fired.gesture);
+        if let (Some(hooks), Ok(outcome)) = (&self.gestures.hooks, &outcome) {
+            hooks.dispatched(fired, outcome);
+        }
+        self.handle_outcome(&fired.device, fired.control, outcome);
     }
 }
 
@@ -218,8 +242,10 @@ fn key_context(
     control: ControlId,
 ) -> KeyContext {
     let page = runtime.current_page(device);
-    // TODO(G2): read the bound gestures and timings from the page.
-    match hooks.and_then(|hooks| hooks.bindings(device, page, control)) {
+    let bound = hooks
+        .and_then(|hooks| hooks.bindings(device, page, control))
+        .or_else(|| runtime.key_gestures(device, control));
+    match bound {
         Some((bound, timings)) => KeyContext {
             bound,
             timings,

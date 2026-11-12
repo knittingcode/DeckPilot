@@ -76,8 +76,10 @@ pub fn save_layout(
             .take()
             .and_then(deckpilot_core::KeyAppearance::normalized);
     }
+    let registry = state.actions();
     modify_profile(&state, profile_id, |profile| {
-        let issues = layout.validate(&state.catalog, profile);
+        let mut issues = layout.validate(&state.catalog, profile);
+        issues.extend(layout.check_overrides(&registry, profile));
         if !issues.is_empty() {
             let messages: Vec<String> = issues.iter().map(ToString::to_string).collect();
             return Err(CommandError::Invalid(messages.join("\n")));

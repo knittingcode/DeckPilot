@@ -203,7 +203,8 @@ impl Profile {
     }
 
     /// Places that refer to a project: workflow step conditions and
-    /// project parameters of actions and step overrides.
+    /// project parameters of actions, step overrides and binding
+    /// overrides.
     pub fn project_references(&self, id: ProjectId) -> usize {
         let conditions = self
             .workflows
@@ -224,7 +225,19 @@ impl Profile {
             .flat_map(|action| action.parameters.projects())
             .filter(|project| *project == id)
             .count();
-        conditions + overrides + parameters
+        let bindings = self
+            .layouts
+            .iter()
+            .flat_map(|l| &l.pages)
+            .flat_map(|p| &p.bindings)
+            .filter_map(|b| match &b.target {
+                BindingTarget::Action { overrides, .. } => Some(overrides),
+                _ => None,
+            })
+            .flat_map(crate::ActionParameters::projects)
+            .filter(|project| *project == id)
+            .count();
+        conditions + overrides + parameters + bindings
     }
 
     fn target_usages(&self, matches: impl Fn(&BindingTarget) -> bool) -> Vec<Usage> {
@@ -263,7 +276,9 @@ impl Profile {
                     })
             })
             .collect();
-        usages.extend(self.target_usages(|t| *t == BindingTarget::Action { action: id }));
+        // Every binding of a control counts: press, release and each
+        // gesture (click, double click, long press).
+        usages.extend(self.target_usages(|t| t.action_id() == Some(id)));
         usages
     }
 
@@ -423,6 +438,11 @@ impl Profile {
                 .collect();
             let id = layouts[&layout.id];
             remap_layout(layout, id, &pages, &actions, &workflows);
+            for binding in layout.pages.iter_mut().flat_map(|p| &mut p.bindings) {
+                if let BindingTarget::Action { overrides, .. } = &mut binding.target {
+                    remap_projects(overrides);
+                }
+            }
         }
         copy.active_layouts = copy
             .active_layouts
@@ -523,7 +543,7 @@ fn remap_layout(
         }
         for binding in &mut page.bindings {
             match &mut binding.target {
-                BindingTarget::Action { action } => {
+                BindingTarget::Action { action, .. } => {
                     if let Some(new) = actions.get(action) {
                         *action = *new;
                     }
@@ -863,5 +883,51 @@ mod tests {
             .push(Project::new(ProjectKey::new("SHOP").unwrap(), "Shop"));
         let json = serde_json::to_string(&profile).unwrap();
         assert_eq!(serde_json::from_str::<Profile>(&json).unwrap(), profile);
+    }
+
+    #[test]
+    fn gesture_bindings_count_as_uses_and_their_overrides_follow_copies() {
+        use crate::{ControlBinding, Trigger};
+        use deckpilot_device::models;
+
+        let mut profile = Profile::new("Work");
+        profile
+            .projects
+            .push(Project::new(ProjectKey::new("SHOP").unwrap(), "Shop"));
+        let shop = profile.projects[0].id;
+        let mut select = action("Select");
+        select.action_type = select_type();
+        let id = select.id;
+        profile.actions.push(select);
+        let mut layout = DeviceLayout::new("Main", DeviceModelId::new(models::STREAM_DECK_MK2_ID));
+        let key = ControlId::Key { index: 4 };
+        layout.pages[0].bindings.push(ControlBinding::new(
+            key,
+            Trigger::LongPress,
+            BindingTarget::Action {
+                action: id,
+                overrides: ActionParameters::new().with("project", ParameterValue::Project(shop)),
+            },
+        ));
+        profile.layouts.push(layout);
+
+        // Only the long press uses the action: deleting it is refused.
+        assert!(matches!(
+            &profile.action_usages(id)[..],
+            [Usage::LayoutBinding { control, .. }] if *control == key
+        ));
+        assert_eq!(profile.delete_action(id), Err(ProfileIssue::InUse(1)));
+        assert_eq!(profile.project_references(shop), 1);
+        assert_eq!(profile.validate(&ModelCatalog::builtin()), Vec::new());
+
+        let copy = profile.duplicate("Home");
+        let BindingTarget::Action { action, overrides } =
+            &copy.layouts[0].pages[0].bindings[0].target
+        else {
+            panic!("the binding runs an action");
+        };
+        assert_eq!(*action, copy.actions[0].id);
+        assert_eq!(overrides.project("project"), Some(copy.projects[0].id));
+        assert_eq!(copy.validate(&ModelCatalog::builtin()), Vec::new());
     }
 }

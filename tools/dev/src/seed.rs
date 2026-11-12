@@ -272,18 +272,8 @@ fn mk2_layout(ids: &WorkIds) -> DeviceLayout {
     let mut tools = LayoutPage::new("Tools");
     tools.bindings = vec![
         press(key(0), BindingTarget::Back),
-        press(
-            key(1),
-            BindingTarget::Action {
-                action: ids.announce,
-            },
-        ),
-        press(
-            key(2),
-            BindingTarget::Action {
-                action: ids.shop_repository,
-            },
-        ),
+        press(key(1), BindingTarget::action(ids.announce)),
+        press(key(2), BindingTarget::action(ids.shop_repository)),
     ];
     let folder = ControlBinding {
         label: Some("Tools".into()),
@@ -291,44 +281,19 @@ fn mk2_layout(ids: &WorkIds) -> DeviceLayout {
         ..press(key(14), BindingTarget::OpenPage { page: tools.id })
     };
     main.pages[0].bindings = vec![
-        press(key(0), BindingTarget::Action { action: ids.next }),
-        press(
-            key(1),
-            BindingTarget::Action {
-                action: ids.previous,
-            },
-        ),
-        press(
-            key(2),
-            BindingTarget::Action {
-                action: ids.selectors[0],
-            },
-        ),
-        press(
-            key(3),
-            BindingTarget::Action {
-                action: ids.selectors[1],
-            },
-        ),
-        press(
-            key(4),
-            BindingTarget::Action {
-                action: ids.selectors[2],
-            },
-        ),
+        press(key(0), BindingTarget::action(ids.next)),
+        press(key(1), BindingTarget::action(ids.previous)),
+        press(key(2), BindingTarget::action(ids.selectors[0])),
+        press(key(3), BindingTarget::action(ids.selectors[1])),
+        press(key(4), BindingTarget::action(ids.selectors[2])),
         press(
             key(5),
             BindingTarget::Workflow {
                 workflow: ids.start,
             },
         ),
-        press(
-            key(6),
-            BindingTarget::Action {
-                action: ids.repository,
-            },
-        ),
-        press(key(7), BindingTarget::Action { action: ids.docs }),
+        press(key(6), BindingTarget::action(ids.repository)),
+        press(key(7), BindingTarget::action(ids.docs)),
         press(key(8), BindingTarget::Workflow { workflow: ids.end }),
         folder,
     ];
@@ -348,24 +313,9 @@ fn plus_layout(ids: &WorkIds) -> DeviceLayout {
     };
     let mut dials = DeviceLayout::new("Dials", models::stream_deck_plus().id);
     dials.pages[0].bindings = vec![
-        press(
-            key(0),
-            BindingTarget::Action {
-                action: ids.selectors[0],
-            },
-        ),
-        press(
-            key(1),
-            BindingTarget::Action {
-                action: ids.selectors[1],
-            },
-        ),
-        press(
-            key(2),
-            BindingTarget::Action {
-                action: ids.selectors[2],
-            },
-        ),
+        press(key(0), BindingTarget::action(ids.selectors[0])),
+        press(key(1), BindingTarget::action(ids.selectors[1])),
+        press(key(2), BindingTarget::action(ids.selectors[2])),
         press(
             key(3),
             BindingTarget::Workflow {
@@ -375,15 +325,13 @@ fn plus_layout(ids: &WorkIds) -> DeviceLayout {
         bind(
             dial,
             Trigger::RotateClockwise,
-            BindingTarget::Action { action: ids.next },
+            BindingTarget::action(ids.next),
             Some("{project.key}"),
         ),
         bind(
             dial,
             Trigger::RotateCounterClockwise,
-            BindingTarget::Action {
-                action: ids.previous,
-            },
+            BindingTarget::action(ids.previous),
             None,
         ),
         press(
@@ -397,9 +345,7 @@ fn plus_layout(ids: &WorkIds) -> DeviceLayout {
             Trigger::Touch {
                 gesture: TouchGesture::Tap,
             },
-            BindingTarget::Action {
-                action: ids.announce,
-            },
+            BindingTarget::action(ids.announce),
             None,
         ),
     ];
