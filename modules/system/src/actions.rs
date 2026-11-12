@@ -300,8 +300,7 @@ fn resolve_location(
         directory.then_some(ResourceKind::Directory),
         "location",
     )?;
-    let path = support::join_inside(&base, parameters.text("path"))?;
-    support::existing(path, directory)
+    support::existing_inside(&base, parameters.text("path"), directory)
 }
 
 /// `system.open-file`: opens a file with its default application or a

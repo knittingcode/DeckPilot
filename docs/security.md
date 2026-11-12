@@ -103,6 +103,18 @@ file and creates the encrypted database. No password is involved.
   this computer only. It does not move to another computer, and if the user
   account, the keychain or the computer is reset or lost, the configuration
   cannot be opened. **Keep an encrypted export** as the backup (see below).
+- **Tested against the real stores.** `crates/deckpilot-keystore/tests/
+  system_store.rs` stores a key in the platform store and reads it back from
+  a new connection and from a new process, as after a restart or an update.
+  It also checks that the entry is never overwritten, is invisible under
+  another service name and is gone after deletion. It runs only with
+  `DECKPILOT_TEST_SYSTEM_KEYSTORE=1` and uses throwaway service names
+  (`DeckPilot Test <random>`, enforced) that it deletes again. CI runs it
+  on macOS, Windows and Linux (GNOME Keyring in a D-Bus session). A unit
+  test fixes the service and account names, which an update must never
+  change. Continuity across an update of a Developer ID-signed agent on
+  macOS (same code identity, no prompt) cannot be tested this way and needs
+  the signed release builds.
 
 ### Password
 
@@ -267,7 +279,9 @@ verifies it, and only then upgrades in a single transaction. The result is
 recorded in `migration_history`. The newest five backups are kept. A copy
 is written under a temporary name (`….db.partial`) and gets its backup name
 only once verified, so an interrupted backup never replaces a good one; an
-interrupted upgrade leaves the database as it was. See
+interrupted upgrade leaves the database as it was. An upgraded database that
+fails the integrity check after the commit is refused, naming the backup, at
+every start until a check passes. See
 [data-model.md](data-model.md#compatibility-between-versions) for the
 version policy.
 
@@ -297,8 +311,28 @@ applied) and the logical resource keys the profiles use with their kinds.
 It never contains machine paths or application locations, the database key
 or anything from the credential store, passwords, IPC tokens, the security
 policy (importing it could weaken another computer's protection), runtime
-state (such as the time of the last update check) or caches. Exporting works
-the same in both protection modes and asks for authentication first.
+state (such as the time of the last update check) or caches. Stored
+credentials (the secrets modules use by name) are not exported, secrets or
+descriptions: a module setting such as GitHub's `credential` carries only the
+credential's *name*, and each computer stores its own secret. Module settings
+a module declares machine-specific or sensitive are never exported, and are
+dropped when a (hand-made) export carries them anyway. Exporting works the
+same in both protection modes and asks for authentication first.
+
+`crates/deckpilot-portability/tests/no_secrets_in_exports.rs` checks this
+with marked values. It fills a store with credentials, machine-specific
+module settings, machine paths, security settings and runtime state, then
+asserts that none of them appear in the payload or the sealed archive (in
+which not even profile names are readable). It also checks that importing
+never adds or replaces a credential, even from a crafted export, that
+exporting one profile contains nothing of the others, and that imported
+copies get their own identifiers, so projects and active-project selections
+never cross profiles.
+
+A secret the user types into an ordinary text parameter of an action is
+configuration like any other text and is exported with its profile. The
+HTTP module refuses secret headers and query parameters written into a
+workflow for this reason; credentials are the place for secrets.
 
 ### Importing
 

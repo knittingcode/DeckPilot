@@ -286,6 +286,28 @@ fn child_upgrade() {
     panic!("the failpoint was not reached: {opened:?}");
 }
 
+/// Upgrades `copy` in a child process that aborts at `point`.
+fn kill_upgrade_at(copy: &Copy, point: Failpoint) {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "upgrade_tests::child_upgrade",
+            "--ignored",
+            "--test-threads=1",
+        ])
+        .env(ABORT_AT_ENV, format!("{point:?}"))
+        .env(CHILD_DATABASE_ENV, copy.database())
+        .output()
+        .unwrap();
+    // Aborted, not finished and not a failed assertion (exit code 101).
+    assert!(
+        !output.status.success() && output.status.code() != Some(101),
+        "{point:?}: {:?}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
 #[test]
 fn a_killed_upgrade_is_rolled_back() {
     for point in [
@@ -295,24 +317,7 @@ fn a_killed_upgrade_is_rolled_back() {
     ] {
         let copy = copy();
         let original = dump(&raw(&copy.database(), &copy.key));
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "upgrade_tests::child_upgrade",
-                "--ignored",
-                "--test-threads=1",
-            ])
-            .env(ABORT_AT_ENV, format!("{point:?}"))
-            .env(CHILD_DATABASE_ENV, copy.database())
-            .output()
-            .unwrap();
-        // Aborted, not finished and not a failed assertion (exit code 101).
-        assert!(
-            !output.status.success() && output.status.code() != Some(101),
-            "{point:?}: {:?}\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout)
-        );
+        kill_upgrade_at(&copy, point);
 
         assert_untouched(&copy, &original);
         let backups = copy.backup_files();
@@ -331,4 +336,108 @@ fn a_killed_upgrade_is_rolled_back() {
         let expected = if point == Failpoint::Backup { 1 } else { 2 };
         assert_eq!(copy.backup_files().len(), expected, "{point:?}");
     }
+}
+
+/// `result` of the newest `migration_history` row, read without opening the
+/// database through DeckPilot.
+fn last_result(copy: &Copy) -> String {
+    raw(&copy.database(), &copy.key)
+        .query_row(
+            "SELECT result FROM migration_history ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+/// The upgrade was committed, but the integrity check that follows failed.
+/// The database stays upgraded and marked unverified; every start checks it
+/// again and refuses it, naming the backup, until a check passes. It is
+/// never used unchecked, and nothing is upgraded or backed up again.
+#[test]
+fn a_failed_check_after_the_commit_refuses_the_database_until_it_passes() {
+    let copy = copy();
+    let original = dump(&raw(&copy.database(), &copy.key));
+    let failed = failing_at(Failpoint::Verify, || copy.open());
+    let Err(StorageError::MigrationFailed {
+        backup: Some(backup),
+        ..
+    }) = failed
+    else {
+        panic!("{failed:?}");
+    };
+    let backups = copy.backup_files();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(copy.backup(&backups[0]).display().to_string(), backup);
+    assert_backup_of(&copy, &backups[0], &original);
+    let upgraded = dump(&raw(&copy.database(), &copy.key));
+    assert_eq!(upgraded.version, 7);
+    assert_eq!(last_result(&copy), "unverified");
+
+    // The next start checks again; while the check fails, the database is
+    // refused the same way and left exactly as it is.
+    for _ in 0..2 {
+        let refused = failing_at(Failpoint::Verify, || copy.open());
+        assert!(
+            matches!(&refused, Err(StorageError::MigrationFailed { backup: Some(b), .. }) if *b == backup),
+            "{refused:?}"
+        );
+        assert!(
+            dump(&raw(&copy.database(), &copy.key)) == upgraded,
+            "a refused start changed the database"
+        );
+        assert_eq!(copy.backup_files(), backups);
+    }
+
+    // Once a check passes, the upgrade is recorded as verified, without
+    // upgrading or backing up again.
+    let store = copy.open().unwrap();
+    let history = store.migration_history().unwrap();
+    assert_eq!(
+        history.len(),
+        original.tables["migration_history"].1.len() + 1
+    );
+    let last = history.last().unwrap();
+    assert_eq!((last.from_version, last.to_version), (5, 7));
+    assert_eq!(last.result, "ok");
+    drop(store);
+    assert_eq!(copy.backup_files(), backups);
+    copy.open().unwrap();
+}
+
+#[test]
+fn the_backup_named_by_a_failed_check_restores_the_previous_state() {
+    let copy = copy();
+    let original = dump(&raw(&copy.database(), &copy.key));
+    let failed = failing_at(Failpoint::Verify, || copy.open());
+    let Err(StorageError::MigrationFailed {
+        backup: Some(backup),
+        ..
+    }) = failed
+    else {
+        panic!("{failed:?}");
+    };
+    // Restoring, as documented: the backup replaces the database and its
+    // side files, which belong to the upgraded database.
+    std::fs::copy(&backup, copy.database()).unwrap();
+    for side in ["deckpilot.db-wal", "deckpilot.db-shm"] {
+        let _ = std::fs::remove_file(copy.dir.join(side));
+    }
+    let restored = dump(&raw(&copy.database(), &copy.key));
+    assert!(restored == original, "the restored database differs");
+    assert_next_start_upgrades(&copy);
+}
+
+#[test]
+fn a_process_killed_before_the_check_is_verified_on_the_next_start() {
+    let copy = copy();
+    kill_upgrade_at(&copy, Failpoint::Verify);
+    // Committed, but never checked.
+    assert_eq!(dump(&raw(&copy.database(), &copy.key)).version, 7);
+    assert_eq!(last_result(&copy), "unverified");
+    assert_eq!(copy.backup_files().len(), 1);
+
+    assert_next_start_upgrades(&copy);
+    assert_eq!(last_result(&copy), "ok");
+    assert_eq!(copy.backup_files().len(), 1);
 }
