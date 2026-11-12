@@ -17,6 +17,12 @@ mkdir -p "$work"
 work="$(cd "$work" && pwd)"
 tools="$root/tools/ci"
 version=$(jq -r .version "$root/apps/desktop/src-tauri/tauri.conf.json")
+# The manifest of this version's channel: latest.json for a stable version,
+# prerelease.json for a pre-release (deckpilot-dev release-tag).
+manifest=$(cargo run --manifest-path "$root/Cargo.toml" --locked -q -p deckpilot-dev -- \
+  release-tag "v$version" | sed -n 's/^manifest=//p')
+[ -n "$manifest" ] || { echo "v$version is not a release tag"; exit 1; }
+stable_version="${version%%-*}"
 failures=0
 ok() { echo "ok   $*"; }
 bad() {
@@ -76,7 +82,7 @@ export REPOSITORY=knittingcode/DeckPilot VERSION="$version" NOTES_FILE="$work/no
 assemble() { TAG="$1" "$tools/assemble-latest-json.sh" "$2" "$3" > "$work/assemble.log" 2>&1; }
 
 echo "== complete release"
-if assemble "v$version" "$fragments" "$release/latest.json"; then
+if assemble "v$version" "$fragments" "$release/$manifest"; then
   ok "assembled"
 else
   bad "assembling a complete release: $(cat "$work/assemble.log")"
@@ -85,7 +91,7 @@ fi
 same() {
   if [ "$1" = "$2" ]; then ok "$3"; else bad "$3: got '$1', expected '$2'"; fi
 }
-manifest_value() { jq -r "$1" "$release/latest.json" 2>/dev/null | tr '\n' '|' || true; }
+manifest_value() { jq -r "$1" "$release/$manifest" 2>/dev/null | tr '\n' '|' || true; }
 same "$(manifest_value '.platforms | keys | join(" ")')" \
   "darwin-aarch64 darwin-aarch64-app darwin-x86_64 darwin-x86_64-app linux-x86_64 linux-x86_64-appimage linux-x86_64-deb linux-x86_64-rpm windows-x86_64 windows-x86_64-msi windows-x86_64-nsis|" \
   "every target key once"
@@ -132,11 +138,11 @@ expect_failure "two builds provide the same key" "several builds provide: darwin
 
 dir=$(variant no-rpm)
 jq 'del(.platforms["linux-x86_64-rpm"])' "$fragments/x86_64-unknown-linux-gnu.json" > "$dir/x86_64-unknown-linux-gnu.json"
-expect_failure "a final release without the .rpm" "no update for: linux-x86_64-rpm" "v$version" "$dir"
-if assemble "v$version-1" "$dir" "$work/prerelease.json"; then
-  ok "a test release needs no .rpm"
+expect_failure "a stable release without the .rpm" "no update for: linux-x86_64-rpm" "v$stable_version" "$dir"
+if assemble "v$stable_version-alpha.1" "$dir" "$work/prerelease.json"; then
+  ok "a pre-release needs no .rpm"
 else
-  bad "test release without .rpm: $(cat "$work/assemble.log")"
+  bad "pre-release without .rpm: $(cat "$work/assemble.log")"
 fi
 
 grep -v -x -F "DeckPilot_${version}_amd64.deb.sig" "$work/assets.txt" > "$work/assets-without-sig.txt"
@@ -165,7 +171,7 @@ fi
 package "$windows/nsis/DeckPilot_${version}_x64-setup.exe" 0.0.1
 cp "$windows/nsis/DeckPilot_${version}_x64-setup.exe".sig "$release/"
 "$tools/updater-fragment.sh" x86_64-pc-windows-msvc "$windows" "$fragments/x86_64-pc-windows-msvc.json" > /dev/null
-assemble "v$version" "$fragments" "$release/latest.json" || bad "reassembling: $(cat "$work/assemble.log")"
+assemble "v$version" "$fragments" "$release/$manifest" || bad "reassembling: $(cat "$work/assemble.log")"
 if DECKPILOT_UPDATER_PUBKEY="$public" cargo run --manifest-path "$root/Cargo.toml" --locked -q -p deckpilot-dev -- \
   verify-release "$release" > "$work/verify.log" 2>&1; then
   bad "a package signed for another version: verify-release accepted it"
