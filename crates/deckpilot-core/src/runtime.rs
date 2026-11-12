@@ -817,6 +817,16 @@ impl Engine {
             Ok(resolved) => resolved,
             Err(failure) => return Ok(failure.into_result()),
         };
+        if let Some((key, reference)) = parameters.references().next() {
+            // Resolution is not wired in yet: a handler must never see an
+            // unresolved value, so the action does not run.
+            return Ok(ActionResult::error(
+                "reference-unavailable",
+                format!(
+                    "parameter `{key}`: {{{{ {reference} }}}} cannot be resolved by this version"
+                ),
+            ));
+        }
         let problems = self
             .registry
             .check_parameters(&instance.action_type, &parameters, profile);
