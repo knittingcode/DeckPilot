@@ -851,19 +851,70 @@ impl Engine {
             .dispatch(&instance.action_type, &parameters, &execution);
         let mut result = redactor.redact_result(result);
         if result.is_success() {
-            for effect in &result.effects {
-                // Selection is validated against the active profile, so an
-                // action can never activate another profile's project.
-                let applied = match effect {
-                    ContextEffect::SelectProject { project } => context.select(profile, *project),
-                };
-                if let Err(error) = applied {
-                    result = ActionResult::failure(error.to_string());
-                    break;
+            let requested = std::mem::take(&mut result.effects);
+            for effect in &requested {
+                match apply_effect(profile, context, effect, &mut result) {
+                    Ok(applied) => result.effects.push(applied),
+                    Err(failure) => {
+                        result = failure;
+                        break;
+                    }
                 }
             }
         }
         Ok(result)
+    }
+}
+
+/// Applies `effect` to `context` and returns it as applied. Selection is
+/// validated against the active profile, so an action can never activate
+/// another profile's project.
+///
+/// A cycle steps from the project active *now*: effects are applied one
+/// at a time by whoever owns `context`, so several cycles requested in a
+/// row each move one project on. It is reported as the selection it made,
+/// and `result`'s project data is set to that project.
+fn apply_effect(
+    profile: &Profile,
+    context: &mut ActiveProjectContext,
+    effect: &ContextEffect,
+    result: &mut ActionResult,
+) -> Result<ContextEffect, ActionResult> {
+    match *effect {
+        ContextEffect::SelectProject { project } => context
+            .select(profile, project)
+            .map(|()| ContextEffect::SelectProject { project })
+            .map_err(|error| ActionResult::failure(error.to_string())),
+        ContextEffect::CycleProject {
+            direction,
+            wrap_around,
+        } => {
+            let current = context
+                .project(profile)
+                .map_err(|error| ActionResult::failure(error.to_string()))?
+                .map(|p| p.id);
+            let target =
+                crate::ProjectSwitcher::step(&profile.projects, current, direction, wrap_around)
+                    .map_err(|error| ActionResult::error(error.code(), error.to_string()))?;
+            context
+                .select(profile, target)
+                .map_err(|error| ActionResult::failure(error.to_string()))?;
+            if let Some(project) = profile.project(target) {
+                let id = project.id.to_string();
+                if result.data.get("projectId").is_some_and(|seen| *seen != id) {
+                    // The handler saw another project than the one active now.
+                    result.message = format!("switched to {}", project.key);
+                }
+                result.data.insert("projectId".into(), id);
+                result
+                    .data
+                    .insert("projectKey".into(), project.key.to_string());
+                result
+                    .data
+                    .insert("projectName".into(), project.name.clone());
+            }
+            Ok(ContextEffect::SelectProject { project: target })
+        }
     }
 }
 
@@ -994,6 +1045,53 @@ mod tests {
 
     fn machine() -> MachineConfig {
         MachineConfig::new(Os::current())
+    }
+
+    #[test]
+    fn a_cycle_steps_from_the_project_active_when_it_is_applied() {
+        let profile = with_projects("Work", &["SHOP", "CMR", "CMS"]);
+        let (cmr, cms) = (profile.projects[1].id, profile.projects[2].id);
+        let cycle = |direction, wrap_around| ContextEffect::CycleProject {
+            direction,
+            wrap_around,
+        };
+        let next = cycle(crate::CycleDirection::Next, true);
+        // The handler saw SHOP and expected CMR, but CMR became active
+        // before the effect was applied: the cycle moves on from CMR.
+        let mut context = ActiveProjectContext::new(&profile);
+        context.select(&profile, cmr).unwrap();
+        let mut result = ActionResult::success("switched to CMR")
+            .with_data("projectId", cmr.to_string())
+            .with_data("projectKey", "CMR");
+        let applied = apply_effect(&profile, &mut context, &next, &mut result).unwrap();
+        assert_eq!(applied, ContextEffect::SelectProject { project: cms });
+        assert_eq!(context.project_id(), Some(cms));
+        assert_eq!(result.data["projectKey"], "CMS");
+        assert_eq!(result.data["projectId"], cms.to_string());
+        assert_eq!(result.message, "switched to CMS");
+
+        // Without wrap-around the end fails with its code and changes nothing.
+        let failure = apply_effect(
+            &profile,
+            &mut context,
+            &cycle(crate::CycleDirection::Next, false),
+            &mut ActionResult::success(""),
+        )
+        .unwrap_err();
+        assert_eq!(failure.code.as_deref(), Some("at-last-project"));
+        assert_eq!(context.project_id(), Some(cms));
+
+        // A context of another profile (the profile changed between the
+        // press and the effect) is never changed.
+        let home = with_projects("Home", &["BLOG"]);
+        assert!(apply_effect(&home, &mut context, &next, &mut ActionResult::success("")).is_err());
+        assert_eq!(context.project_id(), Some(cms));
+
+        let empty = with_projects("Empty", &[]);
+        let mut none = ActiveProjectContext::new(&empty);
+        let failure =
+            apply_effect(&empty, &mut none, &next, &mut ActionResult::success("")).unwrap_err();
+        assert_eq!(failure.code.as_deref(), Some("no-projects"));
     }
 
     #[test]

@@ -89,7 +89,7 @@ The same steps by hand, with DeckPilot installed (or `make up` with
 | 2 | Activate a profile with an MK.2 layout | Key images appear within a second; the active page is shown |
 | 3 | Press and release a key bound to an action | The action runs once; a workflow summary appears for failures |
 | 4 | Switch profiles (app and tray) | Layout and images change; no restart |
-| 5 | Switch projects (key bound to `projects.next`) | The active project changes and persists after a restart |
+| 5 | Switch projects (key bound to `projects.cycle`) | The active project changes, the key shows it at once, and it persists after a restart |
 | 6 | Change brightness in the app | The device follows immediately and keeps it after reconnecting |
 | 7 | Unplug, wait, plug in again | "Disconnected", then the same layout and page again within ~2 s |
 | 8 | Restart the agent (tray → Quit, start DeckPilot) | Images return; profile, project and brightness are restored |
