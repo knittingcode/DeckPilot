@@ -192,7 +192,8 @@ fn values_keep_their_native_type_and_assignability_matches_conversion() {
             assert_eq!(
                 value.value_type().assignable_to(kind),
                 value.to_parameter(kind).is_some(),
-                "{value:?} -> {kind:?}"
+                "{:?} -> {kind:?}",
+                value.value_type()
             );
         }
     }
@@ -760,4 +761,21 @@ fn the_frontend_mirrors_every_variant() {
             "types.ts lacks \"{name}\""
         );
     }
+}
+
+#[test]
+fn status_fields_use_the_frontend_names() {
+    let redacted = ReferenceStatus::Redacted {
+        value_type: VariableType::String,
+        source: ValueSource::Default,
+    };
+    let json = serde_json::to_value(&redacted).unwrap();
+    assert_eq!(
+        json,
+        json!({"status": "redacted", "valueType": {"type": "string"}, "source": {"type": "default"}})
+    );
+    assert_eq!(
+        serde_json::from_value::<ReferenceStatus>(json).unwrap(),
+        redacted
+    );
 }

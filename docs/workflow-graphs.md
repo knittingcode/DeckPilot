@@ -47,19 +47,56 @@ The stored format has a `version` (currently 1) for future migrations.
 
 ### Data mapping
 
-An action node's parameter can take its value from an earlier node:
+An action node's parameter can take its value from an earlier node or a
+variable:
 
 - **Output**: the whole value of `steps.<node>.output.<key>`, with an
   optional default when the output is missing;
-- **Template**: text with `{{ steps.<node>.output.<key> }}` placeholders.
+- **Template**: text with `{{ … }}` placeholders: node outputs
+  (`steps.<node>.output.<key>`), shared variables (`shared.<namespace>.<name>`)
+  and system variables (`system.project.current.key`, `workflow.execution.id`,
+  …; see `docs/action-architecture.md` §5–6);
+- **Variable** (`{ "type": "variable", "reference": "shared.projects.favorite",
+  "default": {…} }`): the whole value of a reference with any root, keeping
+  its native type — a project id fills a project parameter, an integer an
+  integer one, a resource a resource one. The optional default is a typed
+  value used when the reference has no value.
 
 Substitution is plain text. There are no expressions, filters or code; values
 are never evaluated or passed to a shell, and placeholders inside values are
 not expanded again. Validation checks that the referenced node runs before
-(is an ancestor) and declares that output. At run time values are converted
-to the parameter's kind (whole numbers, true/false, project keys of this
-profile); resource parameters cannot be mapped. Mappings refer only to node
-ids and output keys, so they are portable between computers.
+(is an ancestor) and declares that output. At run time node outputs are
+converted to the parameter's kind (whole numbers, true/false, project keys of
+this profile); resource parameters cannot take a node output. Mappings refer
+only to node ids, output keys and variable keys, so they are portable between
+computers. The same mappings fill Sub-workflow inputs, Outputs and Set
+variable values (as text, converted to the declared kind).
+
+**Checks before the run.** Besides node references, validation checks the
+type of every reference whose type is known: system variables always, shared
+variables when the caller passes their definitions
+(`WorkflowGraph::validate_with_variables`) — unknown variables, values that
+cannot fill their parameter (a project id into a whole number), defaults of
+the wrong type, credential names or resources inside a template, and
+sensitive variables flowing into outputs, variables or inputs that are not
+marked sensitive. A node output whose declared kind can never fit its
+parameter is a warning, so graphs accepted before keep running. Stored
+graphs, including `steps.` templates, load and run exactly as before; the
+format version stays 1.
+
+**Resolution at run time.** References other than node outputs are resolved
+through the run's injected resolver (`RunServices`; the agent's resolver
+comes with the variable store, until then such references fail with
+`reference-unavailable`). Each node resolves in its own context: the run's
+project as it is at that node — after a project selection earlier on its
+path, and per parallel branch — never the application's active project; the
+running workflow; and the run's execution id. Mappings are resolved once per
+node, before its first attempt; retries reuse the values. A reference
+without a value fails the node with `reference-missing`, `reference-type`,
+`reference-denied` or `reference-unavailable` (routed through `error` like
+any failure); messages name the parameter and the reference, never a value.
+A sensitive value reaching an output, variable or input that is not marked
+sensitive fails the node (`mapping`).
 
 ### Sub-workflows
 
