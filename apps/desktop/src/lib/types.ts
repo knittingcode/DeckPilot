@@ -39,6 +39,17 @@ export type ParameterValue =
   | { type: "choice"; value: string }
   | { type: "resource"; value: ResourceRef }
   | { type: "project"; value: string }
+  /**
+   * The whole value from one reference, without braces, e.g.
+   * `shared.projects.favorite`; keeps the native type. Resolved by the agent
+   * when the action runs.
+   */
+  | { type: "reference"; value: string }
+  /**
+   * Text with `{{ … }}` references, for text kinds only. Literal `text`
+   * values are never parsed for `{{`.
+   */
+  | { type: "template"; value: string }
 
 export type ActionParameters = Record<string, ParameterValue>
 
@@ -460,6 +471,46 @@ export type Usage =
       control: ControlId
     }
 
+// Safe deletion of actions (deckpilot_storage::references, workstream E).
+
+/** One place that uses an action. */
+export type ReferenceSite =
+  /** A key, dial or touch binding of a layout page. */
+  | { type: "binding"; layout: string; page: string; control: ControlId; trigger: Trigger }
+  /** A step of a step-list workflow (index from 0). */
+  | { type: "step"; workflow: string; index: number }
+  /** An action node of a graph workflow. */
+  | { type: "node"; workflow: string; node: string }
+  /**
+   * A trigger of a workflow that runs the action. Indirect: it follows the
+   * workflow and is never changed by replacing or unbinding.
+   */
+  | { type: "trigger"; workflow: string; index: number }
+
+export type TriggerKind =
+  { type: "schedule"; schedule: Schedule } | { type: "lifecycle"; event: LifecycleEvent }
+
+/** A use of an action, with names for display. */
+export interface ActionReference {
+  site: ReferenceSite
+  /** The layout or workflow name. */
+  ownerName: string
+  /** The page name of a binding, the node label of a node, "paused" for paused triggers. */
+  detail?: string
+  /** The trigger of a `trigger` site. */
+  trigger?: TriggerKind
+}
+
+/** Which uses a replace or unbind acts on. */
+export type ReferenceSelection = { type: "all" } | { type: "sites"; sites: ReferenceSite[] }
+
+/** What a replace or unbind changed. */
+export interface ReferenceChangeResult {
+  changed: ReferenceSite[]
+  /** Steps and nodes whose overrides and mappings were removed: the replacement has another type. */
+  clearedSettings: ReferenceSite[]
+}
+
 export interface ProfileSummary {
   id: string
   name: string
@@ -535,7 +586,7 @@ export interface NodeReport {
 }
 
 export type ExecutionState = "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
-export type ExecutionTrigger = "app" | "device" | "schedule" | "lifecycle" | "other"
+export type ExecutionTrigger = "app" | "device" | "schedule" | "lifecycle" | "workSession" | "other"
 
 export interface ExecutionSummary {
   id: string
@@ -618,6 +669,7 @@ export type Capability =
   | "network"
   | "notifications"
   | "credentials"
+  | "variables-read"
 
 export interface ModulePage {
   id: string
@@ -771,6 +823,7 @@ export type AgentCapability =
   | "encryptedDatabase"
   | "backgroundExecutions"
   | "notifications"
+  | "variables"
 
 export interface AgentConnection {
   running: boolean
@@ -785,11 +838,15 @@ export interface AgentConnection {
 
 export type UpdateMode = "notifyOnly" | "downloadAndAsk" | "installWhenIdle"
 
+/** Stable releases only (default), or also alpha, beta and rc builds. */
+export type UpdateChannel = "stable" | "prerelease"
+
 export interface UpdatePreferences {
   mode: UpdateMode
   automaticChecks: boolean
   checkIntervalHours: number
   lastCheck: number | null
+  channel: UpdateChannel
 }
 
 export interface UpdateInfo {
@@ -1084,3 +1141,74 @@ export interface CatalogFilter {
   compatibleWith?: ParameterKind
   includeUnavailable?: boolean
 }
+
+// Gestures and work sessions (deckpilot_core::gesture, ::work_session).
+// Contract only: nothing sends or receives these yet. See
+// docs/gestures-and-work-session.md.
+
+export type Gesture = "click" | "doubleClick" | "longPress"
+
+export interface GestureTimings {
+  doubleClickMs: number
+  longPressMs: number
+}
+
+/** Timings of one key of a page; unset values use the defaults. */
+export interface KeyGestureSettings {
+  control: ControlId
+  doubleClickMs?: number
+  longPressMs?: number
+}
+
+export type WorkSessionState =
+  "idle" | "starting" | "working" | "verifyingEnd" | "readyToFinish" | "stopping"
+
+export type WorkSessionProblem =
+  | "startFailed"
+  | "startInterrupted"
+  | "verificationFailed"
+  | "verificationInterrupted"
+  | "notReady"
+  | "approvalExpired"
+  | "approvalInvalidated"
+  | "needsReview"
+
+export interface WorkSessionNotice {
+  problem: WorkSessionProblem
+  message: string
+  atMs: number
+}
+
+export interface VerificationOutcome {
+  canFinish: boolean
+  details?: string
+}
+
+export interface VerificationRecord {
+  id: string
+  outcome?: VerificationOutcome
+  atMs: number
+}
+
+/** Elapsed time at `asOfMs`; while the timer runs, add the time since. */
+export interface WorkSessionSnapshot {
+  state: WorkSessionState
+  session?: string
+  profile?: string
+  project?: string
+  startedAtMs?: number
+  elapsedMs: number
+  asOfMs: number
+  verification?: VerificationRecord
+  approval?: string
+  notices?: WorkSessionNotice[]
+}
+
+/** Read-only variables of the active work session (proposed paths). */
+export type WorkSessionVariable =
+  | "system.work.session.id"
+  | "system.work.session.state"
+  | "system.work.session.startedAt"
+  | "system.work.session.elapsedSeconds"
+  | "system.work.session.projectId"
+  | "system.work.session.canFinish"

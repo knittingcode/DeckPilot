@@ -60,3 +60,24 @@ describe("describeValue", () => {
     ).toBe("active project › repository")
   })
 })
+
+describe("references", () => {
+  it("are described without being resolved", () => {
+    expect(describeValue({ type: "reference", value: "shared.projects.favorite" })).toBe(
+      "{{ shared.projects.favorite }}",
+    )
+    expect(describeValue({ type: "template", value: "cd {{ shared.paths.root }}" })).toBe(
+      "cd {{ shared.paths.root }}",
+    )
+  })
+
+  it("count as values of required parameters", () => {
+    const values = {
+      message: { type: "template", value: "{{ system.project.current.key }}" },
+      note: { type: "reference", value: "" },
+    } as const
+    expect(buildParameters([text, optionalText], values)).toEqual({
+      message: { type: "template", value: "{{ system.project.current.key }}" },
+    })
+  })
+})

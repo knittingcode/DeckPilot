@@ -271,6 +271,19 @@ copy-on-write file systems (APFS, Btrfs) and in backups or snapshots
 - On SSDs, rely on full-disk encryption (or the drive's secure-erase
   function when retiring the drive) rather than overwriting tools.
 
+## Shared variables
+
+Shared variables (schema 8) are stored in the encrypted database like the
+rest of the configuration. They never hold secrets: a `secretRef` variable
+stores the *name* of a credential, and the secret stays in `credentials`,
+readable only by an action with the credentials capability through its
+execution. A variable marked `sensitive` is stored like any other value in
+the encrypted database, but is only ever shown redacted (previews, errors,
+events, history, exports). Values of one profile are never visible to
+another profile: the snapshot the agent resolves from contains only the
+global values and those of the profile and its projects. Values are never
+expanded again, so a stored value cannot pull in another variable.
+
 ## Backups and schema upgrades
 
 Before a schema upgrade, DeckPilot checks the database's integrity, writes an
@@ -284,6 +297,19 @@ fails the integrity check after the commit is refused, naming the backup, at
 every start until a check passes. See
 [data-model.md](data-model.md#compatibility-between-versions) for the
 version policy.
+
+Every connection is opened through one place that first initializes
+SQLite once per process and then checks the connection itself: `PRAGMA
+cipher_version` must answer (plain SQLite linked by mistake is refused
+before anything is read, encrypted, backed up or migrated) and SQLCipher's
+`sqlcipher_export()` must be present. SQLCipher registers that function at
+the end of SQLite's first initialization, after SQLite already counts as
+initialized; a connection opened by another thread in that moment would
+lack it for good, and the backup before an upgrade would fail. Such a
+connection is replaced by a new one, and the open is refused
+(`SqlCipherIncomplete`) if that does not help. The export used for
+backups, re-encryption and the migration of an unencrypted database checks
+the same before it touches the target.
 
 ## Encrypted exports
 
