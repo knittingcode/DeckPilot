@@ -6,7 +6,6 @@ mod support;
 
 use std::time::Duration;
 
-use deckpilot_agent::SharedVariables;
 use deckpilot_core::variables::{
     CatalogFilter, PreviewItem, ProjectSource, ReferenceAvailability, ResolutionContext, ScopeKey,
     VariableDefinition, VariableKey, VariableScope, VariableType, VariableValue,
@@ -17,11 +16,12 @@ use deckpilot_core::{
 };
 use deckpilot_device::mock::MockBackend;
 use deckpilot_device::models;
+use deckpilot_ipc::AgentPaths;
 use deckpilot_ipc::{
     AgentClient, AgentEvent, Capability, ClientError, ClientKind, ErrorCode, Request, Response,
 };
 use deckpilot_modules::general;
-use deckpilot_storage::ConfigStore;
+use deckpilot_storage::{ConfigStore, DatabaseKey, SqliteStore};
 use serde_json::{Value, json};
 use support::{TIMEOUT, TempDir, TestAgent, data_dir, registry};
 
@@ -51,83 +51,100 @@ fn log(profile: &mut Profile, name: &str, message: ParameterValue) -> ActionInst
     id
 }
 
-fn variables(work: &Profile) -> SharedVariables {
+/// The shared variables of the tests, written to the database as the
+/// configuration app does.
+fn store_variables(store: &SqliteStore, work: &Profile) {
     let shop = work.projects[0].id;
-    let mut variables = SharedVariables::new();
-    variables
-        .define(VariableDefinition::new(
-            key("team.name"),
+    let define = |definition: VariableDefinition| store.save_shared_variable(&definition).unwrap();
+    let set = |name: &str, scope: ScopeKey, value: VariableValue| {
+        store
+            .set_shared_variable_value(&key(name), &scope, &value)
+            .unwrap();
+    };
+    define(VariableDefinition::new(
+        key("team.name"),
+        VariableType::String,
+        &[VariableScope::Global, VariableScope::Project],
+    ));
+    set(
+        "team.name",
+        ScopeKey::Global,
+        VariableValue::String("crew".into()),
+    );
+    set(
+        "team.name",
+        ScopeKey::Project {
+            profile: work.id,
+            project: shop,
+        },
+        VariableValue::String("shop crew".into()),
+    );
+    define(VariableDefinition {
+        default: Some(VariableValue::Integer(4)),
+        ..VariableDefinition::new(
+            key("team.size"),
+            VariableType::Integer,
+            &[VariableScope::Global],
+        )
+    });
+    define(VariableDefinition {
+        sensitive: true,
+        label: "Vault PIN".into(),
+        ..VariableDefinition::new(
+            key("vault.pin"),
             VariableType::String,
-            &[VariableScope::Global, VariableScope::Project],
-        ))
-        .unwrap();
-    variables
-        .set(
-            &key("team.name"),
-            ScopeKey::Global,
-            VariableValue::String("crew".into()),
+            &[VariableScope::Global],
+        )
+    });
+    set(
+        "vault.pin",
+        ScopeKey::Global,
+        VariableValue::String("s3cr3t".into()),
+    );
+    define(VariableDefinition {
+        default: Some(VariableValue::ProjectId(shop)),
+        ..VariableDefinition::new(
+            key("projects.favorite"),
+            VariableType::ProjectId,
+            &[VariableScope::Profile],
+        )
+    });
+    // Declared by the Docker module, which is disabled.
+    let conflicts = store
+        .declare_module_variables(
+            &ModuleId::new("docker").unwrap(),
+            &[VariableDefinition {
+                default: Some(VariableValue::Boolean(true)),
+                ..VariableDefinition::new(
+                    key("docker.flag"),
+                    VariableType::Boolean,
+                    &[VariableScope::Global],
+                )
+            }],
         )
         .unwrap();
-    variables
-        .set(
-            &key("team.name"),
-            ScopeKey::Project {
-                profile: work.id,
-                project: shop,
+    assert!(conflicts.is_empty(), "{conflicts:?}");
+}
+
+/// A data directory with `work` active, `home` beside it, the test
+/// variables and the Docker module disabled.
+fn prepare(dir: &TempDir, work: &Profile, home: Option<&Profile>) -> (AgentPaths, DatabaseKey) {
+    let (paths, db_key) = data_dir(dir, work, &[]);
+    let store = support::open_store(&paths, &db_key);
+    if let Some(home) = home {
+        store.save_profile(home).unwrap();
+    }
+    store
+        .set_module_state(
+            &ModuleId::new("docker").unwrap(),
+            &ModuleSettings {
+                enabled: false,
+                config: ActionParameters::new(),
             },
-            VariableValue::String("shop crew".into()),
         )
         .unwrap();
-    variables
-        .define(VariableDefinition {
-            default: Some(VariableValue::Integer(4)),
-            ..VariableDefinition::new(
-                key("team.size"),
-                VariableType::Integer,
-                &[VariableScope::Global],
-            )
-        })
-        .unwrap();
-    variables
-        .define(VariableDefinition {
-            sensitive: true,
-            label: "Vault PIN".into(),
-            ..VariableDefinition::new(
-                key("vault.pin"),
-                VariableType::String,
-                &[VariableScope::Global],
-            )
-        })
-        .unwrap();
-    variables
-        .set(
-            &key("vault.pin"),
-            ScopeKey::Global,
-            VariableValue::String("s3cr3t".into()),
-        )
-        .unwrap();
-    variables
-        .define(VariableDefinition {
-            module: Some(ModuleId::new("docker").unwrap()),
-            default: Some(VariableValue::Boolean(true)),
-            ..VariableDefinition::new(
-                key("docker.flag"),
-                VariableType::Boolean,
-                &[VariableScope::Global],
-            )
-        })
-        .unwrap();
-    variables
-        .define(VariableDefinition {
-            default: Some(VariableValue::ProjectId(shop)),
-            ..VariableDefinition::new(
-                key("projects.favorite"),
-                VariableType::ProjectId,
-                &[VariableScope::Profile],
-            )
-        })
-        .unwrap();
-    variables
+    store_variables(&store, work);
+    (paths, db_key)
 }
 
 async fn setup() -> Setup {
@@ -154,25 +171,10 @@ async fn setup() -> Setup {
     let mut home = Profile::new("Home");
     home.projects
         .push(Project::new(ProjectKey::new("GARDEN").unwrap(), "Garden"));
-    let (paths, db_key) = data_dir(&dir, &work, &[]);
-    {
-        let store = support::open_store(&paths, &db_key);
-        store.save_profile(&home).unwrap();
-        store
-            .set_module_state(
-                &ModuleId::new("docker").unwrap(),
-                &ModuleSettings {
-                    enabled: false,
-                    config: ActionParameters::new(),
-                },
-            )
-            .unwrap();
-    }
+    let (paths, db_key) = prepare(&dir, &work, Some(&home));
     let mock = MockBackend::new();
     mock.plug(&models::stream_deck_mk2(), "VARIABLES-1");
-    let agent =
-        TestAgent::start_with_variables(&paths, &db_key, &mock, None, Some(variables(&work)));
-    agent.unlock().await;
+    let agent = TestAgent::start_unlocked(&paths, &db_key, &mock, None).await;
     Setup {
         agent,
         work,
@@ -408,6 +410,65 @@ async fn actions_resolve_references_when_they_run() {
     s.agent.shutdown().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_changed_value_is_used_by_the_next_run_and_announced() {
+    let s = setup().await;
+    assert_eq!(s.run(s.greet).await, "hi shop crew on SHOP");
+    let mut events = s.agent.events().await;
+    // The configuration app writes the database, then asks for a reload.
+    s.agent
+        .store()
+        .set_shared_variable_value(
+            &key("team.name"),
+            &ScopeKey::Project {
+                profile: s.work.id,
+                project: s.work.projects[0].id,
+            },
+            &VariableValue::String("night shift".into()),
+        )
+        .unwrap();
+    s.agent.request(Request::ReloadConfiguration).await.unwrap();
+    let changed = next_matching(&mut events, "sharedVariablesChanged", |e| {
+        matches!(e, AgentEvent::SharedVariablesChanged { .. })
+    })
+    .await;
+    assert_eq!(
+        changed,
+        AgentEvent::SharedVariablesChanged {
+            keys: vec!["team.name".into()]
+        }
+    );
+    assert_eq!(s.run(s.greet).await, "hi night shift on SHOP");
+    // Previews read the database too, and a reload without changes
+    // announces nothing.
+    let previews = s
+        .preview(
+            s.context(0, ProjectSource::Explicit),
+            &[("shared.team.name", None)],
+        )
+        .await;
+    assert_eq!(previews[0]["status"]["value"]["value"], "night shift");
+    s.agent.request(Request::ReloadConfiguration).await.unwrap();
+    s.agent
+        .request(Request::SelectProject {
+            project: s.work.projects[1].id,
+        })
+        .await
+        .unwrap();
+    let next = next_matching(&mut events, "projectChanged", |e| {
+        matches!(
+            e,
+            AgentEvent::SharedVariablesChanged { .. } | AgentEvent::ProjectChanged { .. }
+        )
+    })
+    .await;
+    assert!(
+        matches!(next, AgentEvent::ProjectChanged { .. }),
+        "{next:?}"
+    );
+    s.agent.shutdown().await;
+}
+
 async fn next_matching(
     events: &mut AgentClient,
     what: &str,
@@ -577,11 +638,9 @@ async fn graph_runs_resolve_mappings_and_instance_references() {
     }];
     let workflow_id = workflow.id;
     work.workflows.push(workflow);
-    let (paths, db_key) = data_dir(&dir, &work, &[]);
+    let (paths, db_key) = prepare(&dir, &work, None);
     let mock = MockBackend::new();
-    let agent =
-        TestAgent::start_with_variables(&paths, &db_key, &mock, None, Some(variables(&work)));
-    agent.unlock().await;
+    let agent = TestAgent::start_unlocked(&paths, &db_key, &mock, None).await;
     let execution = match agent
         .request(Request::StartWorkflow {
             workflow: workflow_id,
