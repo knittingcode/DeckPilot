@@ -166,6 +166,14 @@ impl SqliteStore {
         apply_key(&connection, encryption)?;
         connection.busy_timeout(BUSY_TIMEOUT)?;
         connection.pragma_update(None, "foreign_keys", true)?;
+        // A database written by a newer DeckPilot is refused before anything
+        // could write to it: switching the journal mode below rewrites the
+        // file header. `migrate` checks again inside its transaction.
+        let found: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        let supported = Self::supported_schema_version();
+        if found > supported {
+            return Err(StorageError::UnsupportedSchema { found, supported });
+        }
         // Changing the journal mode needs a lock that SQLite may refuse at
         // once (without the busy handler) while another connection — the
         // agent or the app — writes. The mode persists in the file, so it is
@@ -669,12 +677,27 @@ pub(crate) fn apply_key(connection: &Connection, encryption: &Encryption) -> Res
         // A raw key: SQLCipher skips its own passphrase derivation.
         let literal = raw_key_literal(key);
         connection.pragma_update(None, "key", literal.as_str())?;
-        // Reading the schema fails if the key is wrong.
+        // Reading the schema fails if the key is wrong: the first page does
+        // not authenticate, which SQLite reports as "not a database". A file
+        // whose first page authenticates but whose schema cannot be read
+        // (truncated, damaged pages) was opened with the right key and is
+        // reported as damaged, not as a wrong password.
         connection
             .query_row("SELECT count(*) FROM sqlite_master", [], |row| {
                 row.get::<_, i64>(0)
             })
-            .map_err(|_| StorageError::InvalidKey)?;
+            .map_err(|error| match &error {
+                rusqlite::Error::SqliteFailure(failure, message)
+                    if failure.code == rusqlite::ErrorCode::DatabaseCorrupt =>
+                {
+                    StorageError::Corrupt(
+                        message
+                            .clone()
+                            .unwrap_or_else(|| "the database file is damaged".into()),
+                    )
+                }
+                _ => StorageError::InvalidKey,
+            })?;
     }
     Ok(())
 }
