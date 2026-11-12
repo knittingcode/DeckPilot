@@ -152,8 +152,14 @@ Without building or publishing anything:
    - builds the agent and the app for Linux (x86_64), macOS (Apple silicon
      and Intel) and Windows (x86_64), bundling the agent as an external
      binary;
-   - signs updater artifacts and uploads everything plus `latest.json` to
-     the draft release;
+   - signs updater artifacts and uploads everything to the draft release;
+     each build also hands its `latest.json` entries (target keys, asset
+     names, signatures) to a single job that assembles `latest.json` once,
+     after all builds, and attaches it: concurrent merges by the builds
+     could lose entries. It fails if a platform or package type is missing,
+     if two builds claim the same entry or if an asset is not in the draft
+     (`tools/ci/assemble-latest-json.sh`, tested on every pull request with
+     fake signed packages by `tools/ci/test-latest-json.sh`);
    - checks that the built app embeds the configured updater public key;
    - on macOS, verifies code signature, agent identity and notarization when
      signing is configured. The Developer ID certificate is put into the
