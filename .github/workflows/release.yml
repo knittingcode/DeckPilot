@@ -1,6 +1,25 @@
-# Builds signed installers and updater artifacts for a version tag and
-# attaches them to a *draft* GitHub release. Nothing becomes visible to users
-# or to the in-app updater until a maintainer publishes the draft.
+# Releases a version tag in two stages (docs/releasing.md):
+#
+#   Stage A  builds, signs and notarizes, assembles the update manifest, the
+#            signing record and SHA256SUMS into a *draft* release, and checks
+#            all of it. Nothing is visible to users.
+#   Stage B  waits for approval in the "production-release" environment
+#            (required reviewers; fails closed if the environment is missing
+#            or has none), checks the draft's assets again, publishes it in one
+#            update — as a pre-release for alpha/beta/rc, as latest only for
+#            the newest stable release — and verifies what users download.
+#
+# A failed stage B can be re-run (re-run failed jobs, or dispatch with
+# publish_only); it never changes a published release. A failed stage A
+# leaves a draft that can be discarded (tools/release-pipeline/discard-draft.sh)
+# and built again.
+#
+# The signing secrets are read only by the jobs that run in the
+# "production-release" environment (prepare and build; publish needs none).
+# They work with repository-level secrets as well as with environment
+# secrets, so the secrets can move into the environment without a workflow
+# change (docs/releasing.md, "Moving the signing secrets"). No other job may
+# reference them (tools/release-pipeline/check-workflow-gate.py).
 #
 # Required repository configuration (see docs/releasing.md):
 #   secrets.TAURI_SIGNING_PRIVATE_KEY          updater signing key (minisign)
@@ -32,8 +51,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to build, e.g. v0.6.0-alpha.1
+        description: Existing release tag, e.g. v0.6.0-alpha.1
         required: true
+      publish_only:
+        description: Skip stage A and run stage B (publish and verify) on the existing draft or published release
+        type: boolean
+        default: false
 
 # Jobs that need more ask for it themselves.
 permissions:
@@ -87,7 +110,9 @@ jobs:
     name: Check configuration and release notes
     needs: validate-tag
     runs-on: ubuntu-latest
-    # Reads only; the release is created by the build jobs.
+    # Reads the signing secrets (presence and form only).
+    environment: production-release
+    # Reads only; the draft is created by the draft job.
     permissions:
       contents: read
     outputs:
@@ -148,9 +173,62 @@ jobs:
             exit 1
           fi
 
+  # Database migration and IPC compatibility with the previous release's
+  # real binaries (tools/compat/matrix.sh, as the Compatibility workflow),
+  # for the tagged commit itself.
+  compatibility:
+    name: Compatibility with the previous release
+    needs: validate-tag
+    if: ${{ !inputs.publish_only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-tag.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Linux system dependencies
+        run: tools/ci/install-linux-deps.sh
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - run: tools/compat/matrix.sh "$(cat tools/release-pipeline/compat-baseline)" "$RUNNER_TEMP/compat"
+
+  # Stage A: the one draft release the builds upload to. Refuses a published
+  # release and a draft of another commit (a moved or reused tag).
+  draft:
+    name: Create the draft release
+    needs: [validate-tag, prepare]
+    if: ${{ !inputs.publish_only }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release-id: ${{ steps.draft.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-tag.outputs.sha }}
+          persist-credentials: false
+      - name: Draft release for the tagged commit
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ needs.validate-tag.outputs.sha }}
+          PRERELEASE: ${{ needs.validate-tag.outputs.prerelease }}
+          NOTES: ${{ needs.prepare.outputs.notes }}
+        run: |
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          NOTES_FILE="$RUNNER_TEMP/notes.md" tools/release-pipeline/create-draft.sh "$TAG"
+
   build:
     name: Build (${{ matrix.target }})
-    needs: [validate-tag, prepare]
+    needs: [validate-tag, prepare, draft]
+    # Signs (updater key, Developer ID) and notarizes.
+    environment: production-release
     strategy:
       fail-fast: false
       matrix:
@@ -258,13 +336,8 @@ jobs:
           DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
         with:
           projectPath: apps/desktop
-          tagName: ${{ env.TAG }}
-          releaseName: DeckPilot ${{ env.TAG }}
-          releaseBody: ${{ needs.prepare.outputs.notes }}
-          releaseDraft: true
-          # alpha, beta and rc tags become pre-releases: even if published,
-          # they never become "latest", the channel the app reads.
-          prerelease: ${{ needs.validate-tag.outputs.prerelease == 'true' }}
+          # The draft of the draft job; the builds never create a release.
+          releaseId: ${{ needs.draft.outputs.release-id }}
           # The update manifest (latest.json or prerelease.json) is
           # assembled once, after all builds, by the manifest
           # job: four jobs merging into it concurrently can lose entries.
@@ -346,12 +419,57 @@ jobs:
           hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$(find "$bundle/dmg" -maxdepth 1 -name '*.dmg' | head -n 1)" >/dev/null
           .github/scripts/verify-macos-app.sh "$(find "$mount" -maxdepth 1 -name '*.app' | head -n 1)"
           hdiutil detach "$mount" >/dev/null
-      - name: Note unsigned platform builds
-        if: runner.os == 'Windows' || (runner.os == 'macOS' && needs.prepare.outputs.macos-signing != 'true')
-        shell: bash
+      # What this build's installers actually carry, measured on the files,
+      # for release-meta.json and the release notes
+      # (tools/release-pipeline/release-meta.sh): nothing is claimed that
+      # was not checked here.
+      - name: Signing record (macOS)
+        if: runner.os == 'macOS'
         run: |
-          echo "### ${{ matrix.target }}: not code-signed" >> "$GITHUB_STEP_SUMMARY"
-          echo "Installers carry no platform code signature (updater artifacts are signed). See docs/releasing.md." >> "$GITHUB_STEP_SUMMARY"
+          bundle="target/${{ matrix.target }}/release/bundle"
+          app=$(find "$bundle/macos" -maxdepth 1 -name '*.app' | head -n 1)
+          dmg=$(find "$bundle/dmg" -maxdepth 1 -name '*.dmg' | head -n 1)
+          codesign=unsigned notarized=false
+          if codesign --verify --strict "$app" 2> /dev/null \
+            && codesign -dvv "$app" 2>&1 | grep -q '^Authority=Developer ID Application:'; then
+            codesign=developer-id
+          fi
+          if xcrun stapler validate "$app" > /dev/null 2>&1 && xcrun stapler validate "$dmg" > /dev/null 2>&1; then
+            notarized=true
+          fi
+          mkdir -p "$RUNNER_TEMP/signing"
+          jq -n --arg target "${{ matrix.target }}" --arg codesign "$codesign" --argjson notarized "$notarized" \
+            '{target: $target, codesign: $codesign, notarized: $notarized}' > "$RUNNER_TEMP/signing/${{ matrix.target }}.json"
+          echo "### ${{ matrix.target }}: code signature $codesign, notarized $notarized" >> "$GITHUB_STEP_SUMMARY"
+      - name: Signing record (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bundle = "target/${{ matrix.target }}/release/bundle"
+          $files = @(Get-ChildItem "$bundle/msi/*.msi") + @(Get-ChildItem "$bundle/nsis/*-setup.exe")
+          $valid = $files.Count -gt 0
+          foreach ($file in $files) {
+            if ((Get-AuthenticodeSignature $file.FullName).Status -ne 'Valid') { $valid = $false }
+          }
+          $codesign = if ($valid) { 'authenticode' } else { 'unsigned' }
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/signing" | Out-Null
+          @{ target = '${{ matrix.target }}'; codesign = $codesign; notarized = $null } | ConvertTo-Json |
+            Out-File -Encoding utf8 "$env:RUNNER_TEMP/signing/${{ matrix.target }}.json"
+          "### ${{ matrix.target }}: code signature $codesign" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+      - name: Signing record (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p "$RUNNER_TEMP/signing"
+          jq -n --arg target "${{ matrix.target }}" '{target: $target, codesign: "unsigned", notarized: null}' \
+            > "$RUNNER_TEMP/signing/${{ matrix.target }}.json"
+          echo "### ${{ matrix.target }}: packages carry no code signature (updater artifacts are signed)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the signing record
+        uses: actions/upload-artifact@v4
+        with:
+          name: signing-${{ matrix.target }}
+          path: ${{ runner.temp }}/signing/${{ matrix.target }}.json
+          if-no-files-found: error
+          overwrite: true
       # Signed statement that these files were built by this workflow from
       # this tag; verify with `gh attestation verify <file> --repo <owner/repo>`.
       - name: Attest build provenance
@@ -408,10 +526,10 @@ jobs:
           gh release upload "$TAG" "$RUNNER_TEMP/$MANIFEST" --repo "$GITHUB_REPOSITORY" --clobber
 
   verify:
-    name: Verify artifacts and publish checksums
-    needs: [validate-tag, manifest]
+    name: Verify the draft and attach checksums
+    needs: [validate-tag, prepare, draft, compatibility, manifest]
     runs-on: ubuntu-latest
-    # Attaches SHA256SUMS to the draft.
+    # Attaches release-meta.json, the notes and SHA256SUMS to the draft.
     permissions:
       contents: write
     steps:
@@ -449,6 +567,30 @@ jobs:
             echo "$listed" | grep -q -x -F "$target" || missing="$missing $target"
           done
           [ -z "$missing" ] || { echo "::error::$MANIFEST has no update for:$missing"; exit 1; }
+      - name: Download the signing records
+        uses: actions/download-artifact@v4
+        with:
+          pattern: signing-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/signing
+      # Fails on a failed signing or notarization; records "unsigned"
+      # wherever a build carries no platform signature.
+      - name: Signing record and release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+          CHANNEL: ${{ needs.validate-tag.outputs.channel }}
+          SHA: ${{ needs.validate-tag.outputs.sha }}
+          MANIFEST: ${{ needs.validate-tag.outputs.manifest }}
+          MACOS_SIGNING: ${{ needs.prepare.outputs.macos-signing }}
+          NOTES: ${{ needs.prepare.outputs.notes }}
+          RELEASE_ID: ${{ needs.draft.outputs.release-id }}
+        run: |
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          NOTES_FILE="$RUNNER_TEMP/notes.md" tools/release-pipeline/release-meta.sh \
+            "$RUNNER_TEMP/signing" release-files/release-meta.json "$RUNNER_TEMP/release-notes.md"
+          gh release upload "$TAG" release-files/release-meta.json --repo "$GITHUB_REPOSITORY" --clobber
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F body=@"$RUNNER_TEMP/release-notes.md" > /dev/null
       - name: Attach checksums
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -458,3 +600,66 @@ jobs:
           sha256sum -- * > SHA256SUMS
           sha256sum --check SHA256SUMS
           gh release upload "$TAG" SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+      # The draft as stage B will see it: every required asset, no asset of
+      # the other channel.
+      - name: The draft is complete
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+          PRERELEASE: ${{ needs.validate-tag.outputs.prerelease }}
+          MANIFEST: ${{ needs.validate-tag.outputs.manifest }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' > "$RUNNER_TEMP/assets.txt"
+          tools/release-pipeline/check-assets.sh "$RUNNER_TEMP/assets.txt" --final
+
+  # Stage B precondition: publication needs the "production-release"
+  # environment with at least one required reviewer. Without it this job
+  # fails and nothing is published. (GitHub creates a named environment,
+  # unprotected, when a job first refers to it — stage A's prepare job may
+  # have done so — so its existence alone proves nothing.)
+  publish-gate:
+    name: Publication gate
+    needs: [validate-tag, verify]
+    if: ${{ always() && needs.validate-tag.result == 'success' && (needs.verify.result == 'success' || (inputs.publish_only && needs.verify.result == 'skipped')) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-tag.outputs.sha }}
+          persist-credentials: false
+      - name: The production-release environment requires a reviewer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: tools/release-pipeline/check-environment.sh production-release
+
+  # Stage B: after approval, checks the draft's assets again, publishes it
+  # in one update and verifies the published release. The only job that
+  # publishes; re-runnable.
+  publish:
+    name: Publish and verify
+    needs: [validate-tag, publish-gate]
+    runs-on: ubuntu-latest
+    environment: production-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-tag.outputs.sha }}
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Publish the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
+          SHA: ${{ needs.validate-tag.outputs.sha }}
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+          CHANNEL: ${{ needs.validate-tag.outputs.channel }}
+          MANIFEST: ${{ needs.validate-tag.outputs.manifest }}
+          PRERELEASE: ${{ needs.validate-tag.outputs.prerelease }}
+        run: WORK="$RUNNER_TEMP/publish" tools/release-pipeline/publish.sh "$TAG"

@@ -9,15 +9,31 @@ Fails unless:
   * every other job reaches `validate-tag` through `needs` (directly or
     through other jobs) -- an `if:` condition does not count;
   * the workflow-level permissions grant no write access, so only jobs that
-    ask for it explicitly can write.
+    ask for it explicitly can write; every job declares its permissions and
+    only the draft, build, manifest, verify and publish jobs may write;
+  * the protected environment is `production-release`: `publish` runs in
+    it, behind `publish-gate`; besides it only the jobs that need the
+    signing secrets (prepare, build) do, and every job that references a
+    signing secret (APPLE_*, TAURI_SIGNING_*) runs in it.
 """
 
+import re
 import sys
 
 import yaml
 
 GATE = "validate-tag"
 READ_ONLY = {"contents", "checks", "actions"}
+PUBLISHER = "publish"
+PUBLISH_GATE = "publish-gate"
+ENVIRONMENT = "production-release"
+# Jobs that may run in the environment: those that need the signing
+# secrets, and publication.
+ENVIRONMENT_JOBS = {"prepare", "build", PUBLISHER}
+SIGNING_SECRET = re.compile(r"secrets\.(APPLE_|TAURI_SIGNING_)")
+# Jobs that may write to the repository: the draft and its assets (stage
+# A), and publication (stage B).
+WRITERS = {"draft", "build", "manifest", "verify", PUBLISHER}
 
 
 def needs_of(job):
@@ -59,6 +75,29 @@ def check(path):
             return False
         seen.add(name)
         return any(reaches_gate(n, seen) for n in needs_of(jobs[name]))
+
+    # Stage B: `publish` publishes, in the protected environment, behind the
+    # job that checks that environment. Signing secrets only in jobs that run
+    # in the environment (they keep working from repository secrets until
+    # the secrets move into it).
+    if jobs.get(PUBLISHER, {}).get("environment") != ENVIRONMENT:
+        problems.append(f"{PUBLISHER} must run in the environment '{ENVIRONMENT}'")
+    if PUBLISH_GATE not in needs_of(jobs.get(PUBLISHER, {})):
+        problems.append(f"{PUBLISHER} must need {PUBLISH_GATE}")
+    for name, job in jobs.items():
+        environment = job.get("environment")
+        if environment is not None and (environment != ENVIRONMENT or name not in ENVIRONMENT_JOBS):
+            problems.append(f"job {name} may not use the environment {environment!r}")
+        if SIGNING_SECRET.search(yaml.safe_dump(job)) and environment != ENVIRONMENT:
+            problems.append(f"job {name} uses signing secrets outside the environment '{ENVIRONMENT}'")
+    for name, job in jobs.items():
+        permissions = job.get("permissions")
+        if not isinstance(permissions, dict):
+            problems.append(f"job {name} must declare its permissions")
+            continue
+        for scope, level in permissions.items():
+            if level == "write" and scope == "contents" and name not in WRITERS:
+                problems.append(f"job {name} may not have contents: write")
 
     for name, job in jobs.items():
         if name == GATE:
