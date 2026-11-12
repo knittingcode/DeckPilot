@@ -284,7 +284,7 @@ App commands (Tauri):
 | `delete_icon` | `profileId`, `iconId` | — (refused while in use) |
 | `preview_layout` | as before, plus optional `render` | `ControlFace[]`; with `render: true` each also has `image`, the key as the device shows it (PNG `data:` URL at the model's image size) |
 
-## Storage schema (version 7)
+## Storage schema (version 8)
 
 Migrations run in a transaction each; a failed migration leaves the database
 unchanged.
@@ -304,6 +304,10 @@ unchanged.
   (e.g. an HTTP request's `credential`). They are machine-local: not part of
   profiles, machine configuration or module settings, never exported, and
   never sent to the configuration app after saving.
+- **Migration 8** adds `shared_variables`, `shared_variable_values` and
+  `provenance` (see [Shared variables](#shared-variables) and
+  [Provenance](#provenance)). It is additive: no profile document is
+  rewritten, and no provenance or variable is created for existing data.
 
 Since version 0.4 the database is encrypted with SQLCipher; see
 [security.md](security.md). Every upgrade of an existing database is
@@ -333,6 +337,9 @@ again. Restoring the named backup returns to the previous state.
 | `module_schemas`   | Schema version of each module's own tables            |
 | `workflow_executions` | Execution history: summary and safe node reports     |
 | `credentials`      | Named secrets with a description; this computer only  |
+| `shared_variables` | Shared variable definitions: key, type, allowed scopes, default, `sensitive`, declaring module, origin |
+| `shared_variable_values` | Values per scope key: global, a profile, or a project of that profile |
+| `provenance`       | Where seeded or imported items came from, with a snapshot as created |
 
 Constraints keep projects inside their profile:
 
@@ -344,6 +351,61 @@ Constraints keep projects inside their profile:
   disappear with the project.
 - Saving a profile whose project id belongs to another profile fails
   (`ProjectOfAnotherProfile`) and writes nothing.
+
+### Shared variables
+
+Definitions are database-wide (`shared_variables`, keyed by the variable key
+without `shared.`, e.g. `projects.favorite`); values live in
+`shared_variable_values`, at most one per scope key (unique index over key,
+scope, profile and project). Values of the execution scope exist only during
+a run and are never stored.
+
+- Every write is checked with `VariableDefinition::check_value`: the value's
+  type and that the definition allows the scope. A definition without scopes
+  or with a default of the wrong type is refused.
+- A profile value needs an existing profile. A project value references
+  `projects (profile_id, id)` with a composite foreign key, so it can only
+  name a project of its own profile, and disappears with the project or the
+  profile. `projectId`/`profileId` values of a profile or project must name
+  that profile's own data.
+- Keys follow `VariableKey` (2–4 segments, lowercase start); the reserved
+  roots `steps`, `system` and `workflow` cannot be keys at all, also not
+  through a crafted row (unreadable rows are ignored). Keys a module
+  declares (`declare_module_variables`, `module_id` set) belong to the
+  module: a user variable cannot take, change or delete them, and a module
+  cannot take a key a user variable or another module holds (reported, the
+  holder is left alone). Users may use a module's group for other keys
+  (`projects.favorite`).
+- Changing a definition so that stored values would no longer fit (another
+  type, a scope removed) is refused (`VariableValuesConflict`); values are
+  never dropped silently. Deleting a variable deletes its values.
+- A `secretRef` value is the name of a credential, never the secret, which
+  stays in `credentials`. `sensitive` marks values that are only ever shown
+  redacted.
+- Values are literals and are never expanded again: `"{{ shared.a.b }}"`
+  stored as a value is that text, so values cannot form cycles.
+- `SqliteStore::shared_variables_for(profile)` returns a snapshot of the
+  definitions, the global values and the values of that profile and its
+  projects (never another profile's); its `resolve` applies the precedence
+  execution > project > profile > global > default and resolves a
+  `projectId`/`profileId` naming another profile as missing. A value changed
+  later is seen by the next snapshot.
+
+### Provenance
+
+`provenance` records items the user did not create: `(profile_id, entity,
+entity_id)` with `entity` one of `action`, `workflow`, `layout`, `project`,
+`variable`, the `origin` (`seed`, `import`, `migration`), the catalog and a
+stable `seed_key`, and `snapshot`, the canonical JSON of the item without
+its id (keys sorted) as created. No row means the user created the item;
+profile documents are not changed. An item is *edited* when its canonical
+JSON differs from the snapshot (`provenance_status`). Rows go away with the
+item (saving a profile without it) and with the profile.
+
+Only newly created data gets provenance. Data from before schema 8 —
+including seeded data of development databases, such as the
+`v0.5.0-2` fixture — has none and is treated as the user's: nothing removes
+it automatically.
 
 ### Migration 3
 
@@ -410,7 +472,13 @@ unchanged.
   credentials stored since). The backup is encrypted with the key in use at
   the time; after a later switch between password and system key, the
   backup still needs the old protection. Schema 7 cannot be opened by
-  0.5.0 (schema 5): the 0.5.0 agent refuses it and changes nothing.
+  0.5.0 (schema 5): the 0.5.0 agent refuses it and changes nothing; schema
+  8 cannot be opened by 0.6.0 (schema 7) in the same way. Going back from
+  schema 8 means restoring the `deckpilot-schema7-…` backup; shared
+  variables and everything else changed after the upgrade are lost.
+- Profile documents are written in document version 5 from schema 8 on.
+  Version 4 documents (and older) are read unchanged and are not rewritten
+  by the upgrade.
 - A wrong key or password never reinitializes, upgrades or backs up the
   database; the file stays byte-identical.
 - A newer schema is refused before anything is written to the file — the
@@ -423,7 +491,7 @@ unchanged.
 
 Tested with a real database created by the 0.5.0-2 tools
 (`crates/deckpilot-storage/tests/upgrade_from_0_5_0.rs`, fixture in
-`tests/fixtures/v0.5.0-2/`): the upgrade from schema 5 to 7 keeps profiles,
+`tests/fixtures/v0.5.0-2/`): the upgrade from schema 5 to 8 keeps profiles,
 projects and their resources, actions, step workflows, layouts, the active
 profile and default project, machine bindings and settings; it is preceded
 by an encrypted backup that can be restored; reopening does not upgrade or
@@ -436,17 +504,18 @@ and left byte-identical, without side files or backups. The real
 `tools/compat/matrix.sh` ([Compatibility](compatibility.md)).
 The storage unit tests in `src/upgrade_tests.rs` compare the same fixture row
 by row: every row and table definition of schema 5 is unchanged after the
-upgrade, which only adds `workflow_executions` and `credentials` and one
-`migration_history` row, and opening the upgraded database again changes
-nothing. They also make the upgrade fail at injected points (after migration
-6, after migration 7, just before the commit, and while the backup is
+upgrade, which only adds `workflow_executions`, `credentials`,
+`shared_variables`, `shared_variable_values` and `provenance` (all empty)
+and one `migration_history` row, and opening the upgraded database again
+changes nothing. They also make the upgrade fail at injected points (after
+migrations 6, 7 and 8, just before the commit, and while the backup is
 written) and kill a child process at the same points with the transaction
 open: in every case the database is still the schema 5 fixture row for row,
 the backup made before the upgrade is complete and holds that state, an
 unverified backup copy is never left under a backup's name (it is written as
 `….db.partial` and renamed once verified), and the next start upgrades
 normally. A failed integrity check after the commit (injected) leaves the
-database at schema 7 marked `unverified` and refused, row for row
+database at schema 8 marked `unverified` and refused, row for row
 unchanged by each refused start, with the backup intact; it is accepted and
 marked `ok` once a check passes, and restoring the named backup returns to
 the fixture row for row. A process killed between the commit and the check

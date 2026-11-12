@@ -161,10 +161,10 @@ fn assert_backup_of(copy: &Copy, name: &str, original: &Dump) {
 /// The next start upgrades normally.
 fn assert_next_start_upgrades(copy: &Copy) {
     let store = copy.open().unwrap();
-    assert_eq!(store.schema_version().unwrap(), 7);
+    assert_eq!(store.schema_version().unwrap(), 8);
     store.check_integrity().unwrap();
     let last = store.migration_history().unwrap().pop().unwrap();
-    assert_eq!((last.from_version, last.to_version), (5, 7));
+    assert_eq!((last.from_version, last.to_version), (5, 8));
     assert_eq!(last.result, "ok");
     assert!(Path::new(&last.backup.unwrap()).exists());
     // Only complete backups remain.
@@ -196,7 +196,7 @@ fn every_row_of_every_table_is_kept_and_reopening_changes_nothing() {
 
     let store = copy.open().unwrap();
     let upgraded = dump(store.connection_for_tests());
-    assert_eq!(upgraded.version, 7);
+    assert_eq!(upgraded.version, 8);
     for (table, (sql, rows)) in &original.tables {
         let (new_sql, new_rows) = &upgraded.tables[table];
         assert_eq!(new_sql, sql, "the definition of {table} changed");
@@ -216,8 +216,19 @@ fn every_row_of_every_table_is_kept_and_reopening_changes_nothing() {
         .collect();
     assert_eq!(
         added,
-        BTreeSet::from(["credentials", "workflow_executions"])
+        BTreeSet::from([
+            "credentials",
+            "provenance",
+            "shared_variable_values",
+            "shared_variables",
+            "workflow_executions"
+        ])
     );
+    // The new tables start empty: no provenance is invented for existing
+    // (seeded) data, and no variable is created.
+    for table in ["provenance", "shared_variable_values", "shared_variables"] {
+        assert!(upgraded.tables[table].1.is_empty(), "{table}");
+    }
     drop(store);
 
     // Opening again (the agent and the app, every start) writes nothing.
@@ -236,6 +247,7 @@ fn a_failed_upgrade_changes_nothing_and_the_next_start_succeeds() {
     for point in [
         Failpoint::Migration(6),
         Failpoint::Migration(7),
+        Failpoint::Migration(8),
         Failpoint::Commit,
     ] {
         let copy = copy();
@@ -313,6 +325,7 @@ fn a_killed_upgrade_is_rolled_back() {
     for point in [
         Failpoint::Backup,
         Failpoint::Migration(7),
+        Failpoint::Migration(8),
         Failpoint::Commit,
     ] {
         let copy = copy();
@@ -371,7 +384,7 @@ fn a_failed_check_after_the_commit_refuses_the_database_until_it_passes() {
     assert_eq!(copy.backup(&backups[0]).display().to_string(), backup);
     assert_backup_of(&copy, &backups[0], &original);
     let upgraded = dump(&raw(&copy.database(), &copy.key));
-    assert_eq!(upgraded.version, 7);
+    assert_eq!(upgraded.version, 8);
     assert_eq!(last_result(&copy), "unverified");
 
     // The next start checks again; while the check fails, the database is
@@ -398,7 +411,7 @@ fn a_failed_check_after_the_commit_refuses_the_database_until_it_passes() {
         original.tables["migration_history"].1.len() + 1
     );
     let last = history.last().unwrap();
-    assert_eq!((last.from_version, last.to_version), (5, 7));
+    assert_eq!((last.from_version, last.to_version), (5, 8));
     assert_eq!(last.result, "ok");
     drop(store);
     assert_eq!(copy.backup_files(), backups);
@@ -433,7 +446,7 @@ fn a_process_killed_before_the_check_is_verified_on_the_next_start() {
     let copy = copy();
     kill_upgrade_at(&copy, Failpoint::Verify);
     // Committed, but never checked.
-    assert_eq!(dump(&raw(&copy.database(), &copy.key)).version, 7);
+    assert_eq!(dump(&raw(&copy.database(), &copy.key)).version, 8);
     assert_eq!(last_result(&copy), "unverified");
     assert_eq!(copy.backup_files().len(), 1);
 
