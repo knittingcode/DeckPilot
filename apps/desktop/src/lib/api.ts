@@ -7,6 +7,8 @@ import type {
   ActionResult,
   ActionType,
   AgentConnection,
+  CatalogEntry,
+  CatalogFilter,
   ControlFace,
   IconInfo,
   PageChange,
@@ -34,7 +36,10 @@ import type {
   ProfileSummary,
   ProfilesView,
   ProfileView,
+  PreviewItem,
   Project,
+  ReferencePreview,
+  ResolutionContext,
   ResourceCheck,
   ResourceKind,
   UpdateInfo,
@@ -210,6 +215,20 @@ export const api = {
     invoke<string | null>("cycle_project", { profileId, direction }),
   selectProject: (profileId: string, projectId: string) =>
     invoke<null>("select_project", { profileId, projectId }),
+
+  /**
+   * References the variable picker can insert in `context`: metadata only,
+   * never values. Forwarded to the agent (protocol 7); rejects with "not
+   * supported" for an older agent.
+   */
+  listVariables: (context: ResolutionContext, filter: CatalogFilter) =>
+    invoke<CatalogEntry[]>("list_variables", { context, filter }),
+  /**
+   * What the agent's resolver makes of each reference in `context`. The only
+   * source of variable values in the app; sensitive values come back redacted.
+   */
+  previewReferences: (context: ResolutionContext, items: PreviewItem[]) =>
+    invoke<ReferencePreview[]>("preview_references", { context, items }),
 
   getMachineConfig: () => invoke<MachineConfig>("get_machine_config"),
   setResourceBinding: (key: string, kind: ResourceKind, value: string) =>
