@@ -610,6 +610,16 @@ impl Engine {
                 )));
             }
         };
+        if let Some((key, reference)) = parameters.references().next() {
+            // Resolution is not wired in yet: a handler must never see an
+            // unresolved value, so the action does not run.
+            return Ok(ActionResult::error(
+                "reference-unavailable",
+                format!(
+                    "parameter `{key}`: {{{{ {reference} }}}} cannot be resolved by this version"
+                ),
+            ));
+        }
         let problems = self
             .registry
             .check_parameters(&instance.action_type, &parameters, profile);
@@ -1104,5 +1114,31 @@ mod tests {
                 .run_action(&f.profile, &machine(), &mut context, f.log),
             Err(EngineError::Context(_))
         ));
+    }
+
+    #[test]
+    fn unresolved_references_never_reach_a_handler() {
+        let mut f = fixture();
+        let reference = crate::variables::VariableRef::parse("shared.team.greeting").unwrap();
+        let instance = f
+            .engine
+            .registry()
+            .create_instance(
+                "Greet",
+                echo_type(),
+                &ActionParameters::new().with("message", ParameterValue::Reference(reference)),
+            )
+            .unwrap();
+        let id = instance.id;
+        f.profile.actions.push(instance);
+        let mut context = ActiveProjectContext::new(&f.profile);
+        let result = f
+            .engine
+            .run_action(&f.profile, &machine(), &mut context, id)
+            .unwrap();
+        assert!(!result.is_success());
+        assert_eq!(result.code.as_deref(), Some("reference-unavailable"));
+        assert!(result.message.contains("parameter `message`"));
+        assert!(result.message.contains("{{ shared.team.greeting }}"));
     }
 }
