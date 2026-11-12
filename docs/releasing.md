@@ -224,14 +224,46 @@ Without building or publishing anything:
 
   (`read -rs "VAR?prompt"` is zsh; in bash use `read -rsp "Password: " VAR`.)
 
+## Version management
+
+The version in `[workspace.package]` of the root `Cargo.toml` is the one
+authoritative source: every crate, including the agent, inherits it.
+`apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json` (the
+version the updater artifacts are signed for) and the workspace's entries
+in `Cargo.lock` repeat it; `deckpilot-dev set-version <version>` writes all
+of them and `deckpilot-dev check-versions [--tag <tag>]` refuses any
+difference (CI runs it; the tag gate runs it with the tag).
+
+Notes go into `CHANGELOG.md`, either under `## [Unreleased]` or directly
+into the section of the version being developed (`## [X.Y.Z] - Unreleased`).
+A pre-release uses the notes of its `X.Y.Z` section.
+
+`deckpilot-dev prepare-release <version>` prepares a release as a pull
+request and **never creates a tag**:
+
+1. refuses a malformed version (the tag grammar above, and the MSI limits),
+   an existing tag, a version not newer than every existing `v*` tag (local
+   or on `origin`), an existing branch, and uncommitted changes;
+2. creates `release/prepare-v<version>` from `origin/main`;
+3. moves the `## [Unreleased]` notes into the `X.Y.Z` section (a stable
+   release dates it, `## [X.Y.Z] - YYYY-MM-DD`; a pre-release keeps
+   `- Unreleased`) and refuses a release without notes;
+4. `set-version <version>`, then `check-versions --tag v<version>`, as the
+   tag gate will check it;
+5. commits only the five version files, pushes the branch and opens the
+   pull request (`gh pr create`). `--local` stops after the commit.
+
+After the pull request is merged and the required checks have passed on
+the merge commit, a maintainer tags **that commit** by hand and pushes the
+tag; that push starts the release workflow.
+
 ## Release steps
 
-1. Update the version in `Cargo.toml` (`[workspace.package]`),
-   `apps/desktop/package.json` and `apps/desktop/src-tauri/tauri.conf.json`.
-   `cargo run -p deckpilot-dev -- check-versions` confirms they match; CI
-   checks it too.
-2. Merge to `main`, wait until the required checks have passed on the merge
-   commit, then tag that commit:
+1. `cargo run -p deckpilot-dev -- prepare-release <version>` (see
+   [version management](#version-management)), review and merge the pull
+   request.
+2. Wait until the required checks have passed on the merge commit, then tag
+   that commit:
    `git tag -s v0.6.0-alpha.1 <sha> -m "DeckPilot 0.6.0-alpha.1" && git push origin v0.6.0-alpha.1`.
 3. **Stage A** (automatic, no user can see anything yet):
    - validates the tag (see [the tag gate](#release-tags-and-the-tag-gate));
@@ -357,6 +389,24 @@ draft creation and tag reuse, failed signing and notarization, missing
 artifacts and manifests, channel isolation, the publication gate,
 pre-release versus stable and latest, every check that keeps a draft
 unpublished, idempotent re-runs and recovery.
+
+### The first pre-release, command by command
+
+Once: create the `release` environment ([publication gate](#publication-gate-repository-setting-to-be-done-once)).
+Then, from an up-to-date, clean checkout of `main`:
+
+```sh
+cargo run -p deckpilot-dev -- prepare-release 0.6.0-alpha.1   # branch, commit, PR; no tag
+gh pr checks --watch <pr-number>                                # then merge the PR (squash)
+git fetch origin
+sha=$(git rev-parse origin/main)                                # the merge commit
+gh api "repos/knittingcode/DeckPilot/commits/$sha/check-runs" \
+  --jq '.check_runs[] | "\(.name): \(.status) \(.conclusion)"'  # required checks passed?
+git tag -s v0.6.0-alpha.1 "$sha" -m "DeckPilot 0.6.0-alpha.1"
+git push origin v0.6.0-alpha.1                                  # starts stage A
+gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+# Review the draft, then approve "Publish and verify" in the run (stage B).
+```
 
 ### Dependency on the packaging workflow
 

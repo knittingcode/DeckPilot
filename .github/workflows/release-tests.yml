@@ -14,6 +14,7 @@ on:
       - tools/release-pipeline/**
       - tools/dev/src/release.rs
       - tools/dev/src/versions.rs
+      - tools/dev/src/prepare.rs
       - crates/deckpilot-update/**
   workflow_dispatch:
 
