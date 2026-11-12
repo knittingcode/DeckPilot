@@ -450,6 +450,15 @@ impl Engine {
         let invocation = invocation.clone().with_workflow(workflow);
         if definition.graph.is_some() {
             let inputs = workflow_inputs(definition, inputs)?;
+            // Mappings resolve through the same resolver as the actions'
+            // own parameters: this engine's shared variables, system
+            // variables from the run.
+            let resolver = self.resolver(profile, machine, None);
+            let services = RunServices {
+                variables: Some(&resolver),
+                device: invocation.device.as_ref(),
+                execution: invocation.execution,
+            };
             self.run_graph_nested(
                 profile,
                 machine,
@@ -458,7 +467,7 @@ impl Engine {
                 &inputs,
                 cancel,
                 on_event,
-                (0, RunServices::default()),
+                (0, services),
                 &invocation,
             )
         } else {
@@ -608,6 +617,11 @@ impl Engine {
             .workflow(workflow)
             .ok_or(EngineError::UnknownWorkflow(workflow))?;
         let inputs = workflow_inputs(definition, &std::collections::BTreeMap::new())?;
+        let resolver = self.resolver(profile, machine, None);
+        let services = RunServices {
+            variables: Some(&resolver),
+            ..RunServices::default()
+        };
         self.run_graph_nested(
             profile,
             machine,
@@ -616,7 +630,7 @@ impl Engine {
             &inputs,
             cancel,
             on_event,
-            (0, RunServices::default()),
+            (0, services),
             &Invocation::default().with_workflow(workflow),
         )
     }
@@ -658,7 +672,7 @@ impl Engine {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn run_graph_nested(
         &self,
         profile: &Profile,
@@ -687,12 +701,12 @@ impl Engine {
         let run_action = |instance: &ActionInstance,
                           overrides: &ActionParameters,
                           context: &mut ActiveProjectContext,
-                          control: &crate::ExecutionControl<'_>| {
+                          control: &crate::ExecutionControl<'_>,
+                          outputs: &crate::graph::mapping::Outputs| {
             let overrides = (!overrides.is_empty()).then_some(overrides);
-            // Node outputs for `steps.` references in the instance's own
-            // parameters are supplied once the executor passes them
-            // (workstream C); mapped values arrive as literals already.
-            self.execute(
+            // The run's node outputs so far, for `steps.` references in the
+            // instance's own parameters; mapped values arrive as literals.
+            self.execute_with_outputs(
                 profile,
                 machine,
                 context,
@@ -700,6 +714,7 @@ impl Engine {
                 overrides,
                 Some(control),
                 invocation,
+                Some(outputs),
             )
         };
         // Nested workflows report their progress as part of the Loop or
@@ -992,6 +1007,20 @@ fn workflow_inputs(
         }
     }
     Ok(values)
+}
+
+/// The declared outputs a top-level run of `definition` set, read from its
+/// report before it is made safe for history (sensitive values included):
+/// empty unless it is a graph workflow whose run succeeded. A nested run
+/// hands its outputs to the calling node the same way.
+pub fn declared_outputs(
+    definition: &crate::Workflow,
+    report: &GraphReport,
+) -> std::collections::BTreeMap<String, String> {
+    match &definition.graph {
+        Some(graph) if report.status == RunStatus::Succeeded => workflow_outputs(graph, report),
+        _ => std::collections::BTreeMap::new(),
+    }
 }
 
 /// The declared outputs a finished run set: the values of its Output nodes
@@ -1406,5 +1435,80 @@ mod tests {
         assert_eq!(result.code.as_deref(), Some("reference-missing"));
         assert!(result.message.contains("parameter `message`"));
         assert!(result.message.contains("{{ shared.team.greeting }}"));
+    }
+
+    #[test]
+    fn a_top_level_run_hands_over_its_declared_outputs() {
+        use crate::graph::{ValueKind, WorkflowOutput};
+        let mut f = fixture();
+        let failing = f
+            .engine
+            .registry()
+            .create_instance(
+                "Fail",
+                echo_type(),
+                &ActionParameters::new().with("message", ParameterValue::Text("fail".into())),
+            )
+            .unwrap();
+        let failing_id = failing.id;
+        f.profile.actions.push(failing);
+        let graph = |can_finish: &str, fail: bool| {
+            let mut nodes = vec![
+                serde_json::json!({"id": "start", "type": "trigger"}),
+                serde_json::json!({"id": "out", "type": "output", "values": {
+                    "canFinish": {"type": "template", "template": can_finish},
+                    "details": {"type": "template", "template": "all checks pass"},
+                }}),
+            ];
+            let mut edges = vec![serde_json::json!({"from": "start", "to": "out"})];
+            if fail {
+                nodes.push(serde_json::json!({
+                    "id": "broken", "type": "action", "action": failing_id
+                }));
+                edges.push(serde_json::json!({"from": "out", "to": "broken"}));
+            }
+            serde_json::from_value(serde_json::json!({
+                "version": 1, "nodes": nodes, "edges": edges
+            }))
+            .unwrap()
+        };
+        let mut run = |can_finish: &str, fail: bool| {
+            let mut workflow = Workflow::new("Check");
+            workflow.outputs = vec![
+                WorkflowOutput::new("canFinish", ValueKind::Boolean),
+                WorkflowOutput::new("details", ValueKind::Text),
+            ];
+            workflow.graph = Some(graph(can_finish, fail));
+            let id = workflow.id;
+            f.profile.workflows.push(workflow);
+            let mut context = ActiveProjectContext::new(&f.profile);
+            let report = f
+                .engine
+                .execute_workflow(
+                    &f.profile,
+                    &machine(),
+                    &mut context,
+                    id,
+                    &CancellationToken::new(),
+                    &|_| {},
+                )
+                .unwrap();
+            declared_outputs(f.profile.workflow(id).unwrap(), &report)
+        };
+        let outputs = run("true", false);
+        assert_eq!(outputs.get("canFinish").map(String::as_str), Some("true"));
+        assert!(outputs.contains_key("details"));
+        // A run that failed hands over nothing, even outputs it had set.
+        assert!(run("false", true).is_empty());
+        // Workflows without a graph have no outputs.
+        let steps = Workflow::new("Steps").step(f.log, OnFailure::Stop);
+        let report = GraphReport {
+            workflow: steps.id,
+            status: RunStatus::Succeeded,
+            duration_ms: 0,
+            nodes: Vec::new(),
+            context_conflict: None,
+        };
+        assert!(declared_outputs(&steps, &report).is_empty());
     }
 }

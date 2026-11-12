@@ -16,7 +16,9 @@ pub mod tray;
 
 pub use instance::{InstanceLock, LockError, STARTUP_LOCK_WAIT};
 pub use service::{
-    AUTO_LOCK_CHECK, Agent, AgentError, AgentHandle, AgentOptions, Clock, SharedVariables,
-    TrayCommand, UNLOCK_WINDOW, WORKFLOW_SUMMARY_WINDOW, WindowOpener, default_options,
-    system_clock,
+    AUTO_LOCK_CHECK, Agent, AgentError, AgentHandle, AgentOptions, Clock, TrayCommand,
+    UNLOCK_WINDOW, WORKFLOW_SUMMARY_WINDOW, WindowOpener, default_options, system_clock,
+};
+pub use service::{
+    Ignored, PressContext, WorkSessionOperation, WorkSessionOutcome, WorkSessionRequest,
 };

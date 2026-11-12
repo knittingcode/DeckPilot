@@ -546,7 +546,7 @@ export interface NodeReport {
 }
 
 export type ExecutionState = "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
-export type ExecutionTrigger = "app" | "device" | "schedule" | "lifecycle" | "other"
+export type ExecutionTrigger = "app" | "device" | "schedule" | "lifecycle" | "workSession" | "other"
 
 export interface ExecutionSummary {
   id: string
@@ -798,11 +798,15 @@ export interface AgentConnection {
 
 export type UpdateMode = "notifyOnly" | "downloadAndAsk" | "installWhenIdle"
 
+/** Stable releases only (default), or also alpha, beta and rc builds. */
+export type UpdateChannel = "stable" | "prerelease"
+
 export interface UpdatePreferences {
   mode: UpdateMode
   automaticChecks: boolean
   checkIntervalHours: number
   lastCheck: number | null
+  channel: UpdateChannel
 }
 
 export interface UpdateInfo {
@@ -1097,3 +1101,74 @@ export interface CatalogFilter {
   compatibleWith?: ParameterKind
   includeUnavailable?: boolean
 }
+
+// Gestures and work sessions (deckpilot_core::gesture, ::work_session).
+// Contract only: nothing sends or receives these yet. See
+// docs/gestures-and-work-session.md.
+
+export type Gesture = "click" | "doubleClick" | "longPress"
+
+export interface GestureTimings {
+  doubleClickMs: number
+  longPressMs: number
+}
+
+/** Timings of one key of a page; unset values use the defaults. */
+export interface KeyGestureSettings {
+  control: ControlId
+  doubleClickMs?: number
+  longPressMs?: number
+}
+
+export type WorkSessionState =
+  "idle" | "starting" | "working" | "verifyingEnd" | "readyToFinish" | "stopping"
+
+export type WorkSessionProblem =
+  | "startFailed"
+  | "startInterrupted"
+  | "verificationFailed"
+  | "verificationInterrupted"
+  | "notReady"
+  | "approvalExpired"
+  | "approvalInvalidated"
+  | "needsReview"
+
+export interface WorkSessionNotice {
+  problem: WorkSessionProblem
+  message: string
+  atMs: number
+}
+
+export interface VerificationOutcome {
+  canFinish: boolean
+  details?: string
+}
+
+export interface VerificationRecord {
+  id: string
+  outcome?: VerificationOutcome
+  atMs: number
+}
+
+/** Elapsed time at `asOfMs`; while the timer runs, add the time since. */
+export interface WorkSessionSnapshot {
+  state: WorkSessionState
+  session?: string
+  profile?: string
+  project?: string
+  startedAtMs?: number
+  elapsedMs: number
+  asOfMs: number
+  verification?: VerificationRecord
+  approval?: string
+  notices?: WorkSessionNotice[]
+}
+
+/** Read-only variables of the active work session (proposed paths). */
+export type WorkSessionVariable =
+  | "system.work.session.id"
+  | "system.work.session.state"
+  | "system.work.session.startedAt"
+  | "system.work.session.elapsedSeconds"
+  | "system.work.session.projectId"
+  | "system.work.session.canFinish"

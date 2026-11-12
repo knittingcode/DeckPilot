@@ -1,8 +1,10 @@
 //! Action types of the projects module.
 //!
 //! Every type is generic: it works for any project of the profile, chosen
-//! through the optional `project_id` parameter (a stable project id). Leaving
-//! it unset means "the current project", resolved when the action runs. The
+//! through the optional `project_id` parameter (a stable project id, or a
+//! reference to a `projectId` variable such as `shared.projects.favorite`,
+//! which the engine resolves before the handler runs). Leaving it unset
+//! means "the current project", resolved when the action runs. The
 //! module never creates action types or action instances for individual
 //! projects or resources.
 //!

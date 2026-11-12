@@ -17,6 +17,29 @@ impl SharedStream {
     pub fn new(stream: Stream) -> Self {
         Self(Arc::new(stream))
     }
+
+    /// Makes the connection close as soon as it is dropped, without waiting
+    /// until the other end has read everything written to it.
+    ///
+    /// Windows: interprocess hands a named pipe that was written to and is
+    /// then dropped to a "linger" thread, which flushes it
+    /// (`FlushFileBuffers`, waiting until the peer has read everything)
+    /// before closing it. That thread handles one pipe at a time. When both
+    /// ends of a connection are in the same process (tests) and the agent's
+    /// end lingers first, waiting for the client to read, while the
+    /// client's end waits behind it in the same queue, neither ever closes:
+    /// the stopped agent's pipe instance stays open and busy, and every pipe
+    /// dropped later lingers forever too. A client has nothing left to
+    /// deliver once it lets go of a connection (its requests were answered
+    /// or abandoned), so its end is closed at once. Elsewhere this is a
+    /// no-op: a socket closes when it is dropped.
+    pub fn skip_flush_on_close(&self) {
+        #[cfg(windows)]
+        {
+            let Stream::NamedPipe(pipe) = &*self.0;
+            pipe.inner().assume_flushed();
+        }
+    }
 }
 
 impl AsyncRead for SharedStream {
