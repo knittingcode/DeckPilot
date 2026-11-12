@@ -211,6 +211,19 @@ its rules first (`tools/ci/test-changed-paths.sh`). If the changed files
 cannot be determined, every optional job runs. A skipped job can always be
 run locally with the commands of its steps in `ci.yml`.
 
+Runs and caches:
+
+- A new push to a pull request cancels its obsolete run. Runs for commits on
+  `main` (after a merge) are never cancelled; each commit has its own
+  concurrency group, so they queue for runners.
+- Only runs on `main` save Rust build caches; pull requests restore the cache
+  of `main`. Per-branch caches of about 0.8–1.2 GB each pushed the cache of
+  `main` out of the repository's 10 GB cache storage.
+- CI builds with `CARGO_PROFILE_DEV_DEBUG=line-tables-only` (and the same for
+  the test profile): backtraces keep file and line numbers, while builds,
+  links and caches are smaller. `rust-cache` already sets
+  `CARGO_INCREMENTAL=0`.
+
 ## Conventions
 
 - Clippy runs with `pedantic` lints; CI treats warnings as errors.
