@@ -66,8 +66,8 @@ executables. The configuration app coordinates the installation:
    processing, blanks and
    releases the devices and exits. An agent from an older release that does
    not know this request is stopped with `shutdown` over protocol 1;
-4. install. If installing fails, the previous agent is started again and the
-   error is shown;
+4. install. If installing fails, the previous version stays installed, the
+   previous agent is started again and the error is shown;
 5. restart the application, which starts the new agent.
 
 A running executable is never overwritten. After any restart the app compares
@@ -81,6 +81,39 @@ started again (it opens a system-managed configuration by itself, or is
 unlocked by the app). Restarting the agent from the app is refused while
 workflows run unless the user confirms interrupting them; interrupted runs
 are recorded as such in the history.
+
+## When an update fails
+
+Every failure says what failed, what state the installation is in and what
+to do, followed by the updater's own detail, for example:
+
+- *signature verification*: the package was discarded and nothing was
+  installed. It is not retried from the cache; the next attempt downloads
+  it again. Never install DeckPilot from another source because of it;
+- *connection stopped responding* or *GitHub Releases could not be reached*:
+  nothing was installed; a connection that sends no data for 60 seconds
+  (30 seconds to connect) ends the check or download instead of keeping
+  the updater busy;
+- *installation failed*: the previous version is kept and the downloaded
+  update stays ready to retry; an agent that was running is started again,
+  and if that is not possible the message says to restart DeckPilot. If the
+  updater could not put the previous version back (macOS), the message names
+  the path of the kept copy;
+- *administrator authorization was cancelled* (Linux packages, or an app in a
+  folder that needs it): nothing changed.
+- on Windows the system installer takes over and the app exits before it
+  runs; if the installer is cancelled or fails, the installed version stays
+  (Windows Installer rolls a failed installation back; not covered by the
+  tests) and DeckPilot starts as before when opened again.
+
+The phase always returns to idle or ready after a failure, so a new attempt
+is possible right away. Every check result, download, installation and
+failure is also appended to `updates.log` in the log directory (next to the
+agent's logs; the logs window shows the directory), with the time and the
+running version, so the cause of a failed update survives the restart. The
+file holds versions, URLs, paths and error texts only, never keys or
+configuration; it is kept below about 256 KiB (`updates.log.1` holds the
+previous part).
 
 ## First launch after an update
 
@@ -105,7 +138,10 @@ never installs an older version than the running one.
 | Install decisions: modes, idle device, running workflows (`agent_busy`) | policy unit tests | automated |
 | Tampered update served to an installed build is rejected; the real update installs, replaces app and agent, restarts, and opens the same encrypted configuration | `tools/release-validation/update-test.sh` (local builds, throwaway updater key, loopback endpoint) | manual run on macOS |
 | Keychain access kept across an update between two Developer ID signed builds | `update-continuity` workflow (CI signing identity, no notarization, throwaway updater key) | automated on demand |
-| Interrupted download, retry | the updater plugin returns an error; the app shows it, the update stays offered and can be downloaded again | by code review; not tested end to end |
+| Update flow of the app against a loopback server with throwaway keys: a correctly signed update is downloaded; tampered, truncated, empty, foreign-key, malformed-signature and older-release-as-newer packages are rejected and discarded | `updates_tests.rs` in the desktop crate (real Tauri updater) | automated |
+| Interrupted download (connection closed early, stalled connection, server error): fails within the read timeout, nothing partial is kept, the update stays offered and the next attempt starts over and succeeds | `updates_tests.rs` | automated |
+| Failed check (captive portal, server error, stalled connection) leaves the updater usable | `updates_tests.rs` | automated |
+| Installation into a throwaway installed copy (macOS app bundle, Linux AppImage): a running agent is stopped first, app and agent are replaced together; a signed but uninstallable package leaves the previous version untouched, the update ready to retry and says how to recover the agent | `updates_tests.rs` | automated on macOS and Linux; Windows installs through the system installer and is not run in tests |
 | Update between two published releases | needs two public releases | not verified |
 
 - Update discovery, manifest validation, signature verification, policy

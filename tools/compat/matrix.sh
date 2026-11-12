@@ -20,6 +20,17 @@ ROOT=$(git rev-parse --show-toplevel)
 OLD_TREE=${OLD_TREE:-"$WORK/old-tree"}
 mkdir -p "$WORK"
 
+# Agents up to 0.6.0 put their socket in $TMPDIR and cannot start when that
+# path exceeds sun_path (104 bytes on macOS); newer ones fall back to /tmp.
+# With a long TMPDIR every binary here gets the same short private one, so
+# old and new agents and clients still compute the same socket path.
+SOCKET_TMP=
+inherited_tmp=${TMPDIR:-}
+if [ "${#inherited_tmp}" -gt 50 ]; then
+  SOCKET_TMP=$(mktemp -d /tmp/deckpilot-compat.XXXXXX)
+  export TMPDIR="$SOCKET_TMP"
+fi
+
 log() { printf '%s\n' "$*" >&2; }
 failures=0
 result() {
@@ -56,7 +67,7 @@ cleanup() {
   for pid in ${pids[@]+"${pids[@]}"}; do kill "$pid" 2>/dev/null || true; done
   wait 2>/dev/null || true
 }
-trap cleanup EXIT
+trap 'cleanup; if [ -n "$SOCKET_TMP" ]; then rm -rf "$SOCKET_TMP"; fi' EXIT
 
 # start_agent <bin dir> <data dir>: runs a headless agent with a simulated
 # MK.2 and waits until it accepts connections.
