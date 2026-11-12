@@ -45,6 +45,9 @@ jobs:
   prepare:
     name: Check versions and configuration
     runs-on: ubuntu-latest
+    # Reads only; the release is created by the build jobs.
+    permissions:
+      contents: read
     outputs:
       macos-signing: ${{ steps.macos.outputs.signing }}
       notes: ${{ steps.notes.outputs.notes }}
@@ -141,28 +144,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
-      # Developer ID signing (application and the bundled agent, with the
-      # hardened runtime) and notarization by the Tauri bundler. A stable
-      # signature keeps the agent's Keychain access across updates.
-      - name: Enable macOS signing and notarization
-        if: runner.os == 'macOS' && needs.prepare.outputs.macos-signing == 'true'
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
-          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
-        run: |
-          # The private key goes to a file (APPLE_API_KEY_PATH); the bundler
-          # reads the key *ID* from APPLE_API_KEY. Delimited values: a
-          # certificate may span several lines.
-          .github/scripts/apple-api-key.sh
-          export APPLE_API_KEY="$APPLE_API_KEY_ID"
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_ISSUER; do
-            delimiter="value-$(openssl rand -hex 8)"
-            { echo "$name<<$delimiter"; echo "${!name}"; echo "$delimiter"; } >> "$GITHUB_ENV"
-          done
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -197,6 +178,32 @@ jobs:
         run: |
           jq -n --arg key "$DECKPILOT_UPDATER_PUBKEY" '{plugins: {updater: {pubkey: $key}}}' \
             > apps/desktop/src-tauri/tauri.updater.conf.json
+      # Developer ID signing (application and the bundled agent, with the
+      # hardened runtime) and notarization by the Tauri bundler. A stable
+      # signature keeps the agent's Keychain access across updates.
+      # Enabled only now, right before the bundler needs them: the
+      # certificate and its password are not in the environment of the
+      # dependency installation (package lifecycle scripts) or of the agent
+      # build.
+      - name: Enable macOS signing and notarization
+        if: runner.os == 'macOS' && needs.prepare.outputs.macos-signing == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
+        run: |
+          # The private key goes to a file (APPLE_API_KEY_PATH); the bundler
+          # reads the key *ID* from APPLE_API_KEY. Delimited values: a
+          # certificate may span several lines.
+          .github/scripts/apple-api-key.sh
+          export APPLE_API_KEY="$APPLE_API_KEY_ID"
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_ISSUER; do
+            delimiter="value-$(openssl rand -hex 8)"
+            { echo "$name<<$delimiter"; echo "${!name}"; echo "$delimiter"; } >> "$GITHUB_ENV"
+          done
       - name: Build and upload the application
         uses: tauri-apps/tauri-action@v0
         env:
@@ -213,13 +220,37 @@ jobs:
           # Test tags (e.g. v0.5.0-1) become pre-releases: even if published,
           # they never become "latest", the channel the app reads.
           prerelease: ${{ contains(env.TAG, '-') }}
-          includeUpdaterJson: true
+          # latest.json is assembled once, after all builds, by the manifest
+          # job: four jobs merging into it concurrently can lose entries.
+          includeUpdaterJson: false
           # RPM does not allow "-" in versions: test releases (pre-release
           # versions) build .deb and AppImage on Linux; final releases all.
           args: >-
             --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
             --config src-tauri/tauri.updater.conf.json
             ${{ (runner.os == 'Linux' && contains(env.TAG, '-')) && '--bundles deb,appimage' || '' }}
+      # Later steps need no certificate: remove it from their environment.
+      - name: Disable macOS signing for the remaining steps
+        if: runner.os == 'macOS' && needs.prepare.outputs.macos-signing == 'true'
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD; do
+            echo "$name=" >> "$GITHUB_ENV"
+          done
+      # This build's entries of latest.json (target keys, asset names and
+      # signatures), for the manifest job.
+      - name: Updater manifest fragment
+        shell: bash
+        run: >
+          tools/ci/updater-fragment.sh "${{ matrix.target }}"
+          "target/${{ matrix.target }}/release/bundle"
+          "$RUNNER_TEMP/updater-fragment/${{ matrix.target }}.json"
+      - name: Upload the updater manifest fragment
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-fragment-${{ matrix.target }}
+          path: ${{ runner.temp }}/updater-fragment/${{ matrix.target }}.json
+          if-no-files-found: error
+          overwrite: true
       # The updater key compiled into the app must be the configured one;
       # otherwise installations could not verify (or would trust other) updates.
       - name: Embedded updater key matches DECKPILOT_UPDATER_PUBKEY
@@ -290,9 +321,42 @@ jobs:
             target/${{ matrix.target }}/release/bundle/**/*.exe
             target/${{ matrix.target }}/release/bundle/**/*.sig
 
+  # Writes latest.json once, from the fragments of all builds, and attaches
+  # it to the draft. Fails if a platform or package type is missing, if two
+  # builds claim the same entry, or if a referenced asset is not in the
+  # draft (tools/ci/assemble-latest-json.sh, tested on every pull request by
+  # tools/ci/test-latest-json.sh).
+  manifest:
+    name: Assemble latest.json
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Download the updater manifest fragments
+        uses: actions/download-artifact@v4
+        with:
+          pattern: updater-fragment-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/updater-fragments
+      - name: Assemble latest.json and attach it to the draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTES: ${{ needs.prepare.outputs.notes }}
+        run: |
+          version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' \
+            > "$RUNNER_TEMP/assets.txt"
+          REPOSITORY="$GITHUB_REPOSITORY" VERSION="$version" NOTES_FILE="$RUNNER_TEMP/notes.md" \
+            ASSETS_FILE="$RUNNER_TEMP/assets.txt" \
+            tools/ci/assemble-latest-json.sh "$RUNNER_TEMP/updater-fragments" "$RUNNER_TEMP/latest.json"
+          gh release upload "$TAG" "$RUNNER_TEMP/latest.json" --repo "$GITHUB_REPOSITORY" --clobber
+
   verify:
     name: Verify artifacts and publish checksums
-    needs: build
+    needs: manifest
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -308,6 +372,23 @@ jobs:
         env:
           DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
         run: cargo run --locked -p deckpilot-dev -- verify-release release-files
+      # Each build job merges its platforms into latest.json; a job that
+      # failed to (or overwrote another's entry) would leave installations
+      # of that platform or package type without updates, silently.
+      - name: Every platform and package type is in latest.json
+        run: |
+          required="darwin-aarch64 darwin-aarch64-app darwin-x86_64 darwin-x86_64-app
+            linux-x86_64 linux-x86_64-appimage linux-x86_64-deb
+            windows-x86_64 windows-x86_64-msi windows-x86_64-nsis"
+          # Final releases also build the .rpm (see the build job).
+          case "$TAG" in *-*) ;; *) required="$required linux-x86_64-rpm" ;; esac
+          listed=$(jq -r '.platforms | keys[]' release-files/latest.json)
+          echo "latest.json lists: $(echo $listed)"
+          missing=""
+          for target in $required; do
+            echo "$listed" | grep -q -x -F "$target" || missing="$missing $target"
+          done
+          [ -z "$missing" ] || { echo "::error::latest.json has no update for:$missing"; exit 1; }
       - name: Attach checksums
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

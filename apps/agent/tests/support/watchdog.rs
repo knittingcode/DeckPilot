@@ -21,9 +21,37 @@ pub struct Watchdog {
     step: Arc<Mutex<String>>,
 }
 
+thread_local! {
+    /// The last panic on this thread, as the panic hook saw it.
+    static LAST_PANIC: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Writes every panic (message and location) straight to stderr, so it is
+/// seen even if the test then hangs and its captured output is never
+/// printed, and remembers it for the watchdog's message.
+fn install_panic_hook() {
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let thread = std::thread::current();
+            let text = format!("{info}");
+            let _ = writeln!(
+                std::io::stderr(),
+                "\n[panic in {}] {text}",
+                thread.name().unwrap_or("a thread")
+            );
+            let _ = LAST_PANIC.try_with(|last| *last.borrow_mut() = Some(text));
+            previous(info);
+        }));
+    });
+}
+
 impl Watchdog {
     /// Watches the test `name` for at most `limit`.
     pub fn new(name: impl Into<String>, limit: Duration) -> Self {
+        install_panic_hook();
         let name = name.into();
         let (done, finished) = mpsc::channel::<()>();
         let step = Arc::new(Mutex::new("starting".to_owned()));
@@ -67,6 +95,10 @@ impl Drop for Watchdog {
             // test that panicked may still hang while it shuts down.
             if let Ok(mut step) = self.step.lock() {
                 step.insert_str(0, "panicked, then did not finish, after: ");
+                if let Ok(Some(panic)) = LAST_PANIC.try_with(|last| last.borrow_mut().take()) {
+                    step.push_str("; the panic: ");
+                    step.push_str(&panic);
+                }
             }
             if let Some(done) = self.done.take() {
                 let _ = PANICKED.try_with(|kept| kept.borrow_mut().push(done));

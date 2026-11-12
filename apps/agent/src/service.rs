@@ -28,7 +28,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tracing::{debug, info, warn};
 
 use crate::autostart::Autostart;
-use crate::devices::{DeviceIo, DeviceSignal};
+use crate::devices::{CLOSE_TIMEOUT, DeviceIo, DeviceSignal};
 use crate::instance::{InstanceLock, LockError};
 use crate::render;
 
@@ -390,9 +390,17 @@ impl Agent {
         self.interrupt_executions();
         let _ = self.handle.events.send(AgentEvent::ShuttingDown);
         let _ = self.shutdown_tx.send(true);
-        for (_, session) in std::mem::take(&mut self.sessions) {
-            let controls = session.rendered.keys().copied().collect();
-            session.io.close(controls);
+        // Every device thread blanks its keys at the same time; together
+        // they may take at most CLOSE_TIMEOUT.
+        let sessions = std::mem::take(&mut self.sessions);
+        for session in sessions.values() {
+            session
+                .io
+                .request_close(session.rendered.keys().copied().collect());
+        }
+        let deadline = std::time::Instant::now() + CLOSE_TIMEOUT;
+        for session in sessions.into_values() {
+            session.io.finish(deadline);
         }
         // Wait until the listener and every connection are closed, so that
         // an agent started right after (an update, a restart) can create
@@ -1047,7 +1055,7 @@ impl Agent {
 
     fn disconnect(&mut self, device: &DeviceId) {
         if let Some(session) = self.sessions.remove(device) {
-            session.io.close(Vec::new());
+            session.io.close(Vec::new(), CLOSE_TIMEOUT);
         }
         self.states.forget_device(device);
         let _ = self.runtime.handle_event(&DeviceEvent::Disconnected {
@@ -1268,7 +1276,12 @@ pub fn default_options(paths: AgentPaths, mock_models: &[DeviceModel]) -> AgentO
         backend = backend.with(Box::new(mock.clone()));
     }
     let autostart = match Autostart::for_current_exe() {
-        Ok(autostart) => Some(autostart),
+        Ok(autostart) => {
+            if let Err(error) = autostart.repair() {
+                warn!(%error, "cannot update the autostart entry");
+            }
+            Some(autostart)
+        }
         Err(error) => {
             warn!(%error, "autostart is unavailable");
             None
