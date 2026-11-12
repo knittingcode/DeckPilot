@@ -1009,6 +1009,20 @@ fn workflow_inputs(
     Ok(values)
 }
 
+/// The declared outputs a top-level run of `definition` set, read from its
+/// report before it is made safe for history (sensitive values included):
+/// empty unless it is a graph workflow whose run succeeded. A nested run
+/// hands its outputs to the calling node the same way.
+pub fn declared_outputs(
+    definition: &crate::Workflow,
+    report: &GraphReport,
+) -> std::collections::BTreeMap<String, String> {
+    match &definition.graph {
+        Some(graph) if report.status == RunStatus::Succeeded => workflow_outputs(graph, report),
+        _ => std::collections::BTreeMap::new(),
+    }
+}
+
 /// The declared outputs a finished run set: the values of its Output nodes
 /// that succeeded, in the order they finished (a later one overrides).
 fn workflow_outputs(
@@ -1421,5 +1435,80 @@ mod tests {
         assert_eq!(result.code.as_deref(), Some("reference-missing"));
         assert!(result.message.contains("parameter `message`"));
         assert!(result.message.contains("{{ shared.team.greeting }}"));
+    }
+
+    #[test]
+    fn a_top_level_run_hands_over_its_declared_outputs() {
+        use crate::graph::{ValueKind, WorkflowOutput};
+        let mut f = fixture();
+        let failing = f
+            .engine
+            .registry()
+            .create_instance(
+                "Fail",
+                echo_type(),
+                &ActionParameters::new().with("message", ParameterValue::Text("fail".into())),
+            )
+            .unwrap();
+        let failing_id = failing.id;
+        f.profile.actions.push(failing);
+        let graph = |can_finish: &str, fail: bool| {
+            let mut nodes = vec![
+                serde_json::json!({"id": "start", "type": "trigger"}),
+                serde_json::json!({"id": "out", "type": "output", "values": {
+                    "canFinish": {"type": "template", "template": can_finish},
+                    "details": {"type": "template", "template": "all checks pass"},
+                }}),
+            ];
+            let mut edges = vec![serde_json::json!({"from": "start", "to": "out"})];
+            if fail {
+                nodes.push(serde_json::json!({
+                    "id": "broken", "type": "action", "action": failing_id
+                }));
+                edges.push(serde_json::json!({"from": "out", "to": "broken"}));
+            }
+            serde_json::from_value(serde_json::json!({
+                "version": 1, "nodes": nodes, "edges": edges
+            }))
+            .unwrap()
+        };
+        let mut run = |can_finish: &str, fail: bool| {
+            let mut workflow = Workflow::new("Check");
+            workflow.outputs = vec![
+                WorkflowOutput::new("canFinish", ValueKind::Boolean),
+                WorkflowOutput::new("details", ValueKind::Text),
+            ];
+            workflow.graph = Some(graph(can_finish, fail));
+            let id = workflow.id;
+            f.profile.workflows.push(workflow);
+            let mut context = ActiveProjectContext::new(&f.profile);
+            let report = f
+                .engine
+                .execute_workflow(
+                    &f.profile,
+                    &machine(),
+                    &mut context,
+                    id,
+                    &CancellationToken::new(),
+                    &|_| {},
+                )
+                .unwrap();
+            declared_outputs(f.profile.workflow(id).unwrap(), &report)
+        };
+        let outputs = run("true", false);
+        assert_eq!(outputs.get("canFinish").map(String::as_str), Some("true"));
+        assert!(outputs.contains_key("details"));
+        // A run that failed hands over nothing, even outputs it had set.
+        assert!(run("false", true).is_empty());
+        // Workflows without a graph have no outputs.
+        let steps = Workflow::new("Steps").step(f.log, OnFailure::Stop);
+        let report = GraphReport {
+            workflow: steps.id,
+            status: RunStatus::Succeeded,
+            duration_ms: 0,
+            nodes: Vec::new(),
+            context_conflict: None,
+        };
+        assert!(declared_outputs(&steps, &report).is_empty());
     }
 }
