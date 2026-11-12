@@ -124,11 +124,19 @@ with a busy timeout).
 
 Transport:
 
-- **Linux/macOS**: Unix domain socket in a per-user directory
-  (`$XDG_RUNTIME_DIR/deckpilot-<uid>` or the per-user temporary directory)
-  with mode `0700`. The agent verifies the directory's owner and permissions.
-  On Linux the socket file additionally has mode `0600`. Abstract sockets are
-  never used.
+- **Linux/macOS**: Unix domain socket `agent-<hash>.sock` in a per-user
+  directory `deckpilot-<uid>` with mode `0700`, located in
+  `$XDG_RUNTIME_DIR` or, without it, the temporary directory (`$TMPDIR`).
+  Socket paths are limited to 104 bytes on macOS and 108 on Linux; when the
+  path there would be longer (a long `TMPDIR`), the directory is
+  `/tmp/deckpilot-<uid>` instead. The choice depends only on the
+  environment and the data directory, so the agent and a client started
+  with the same environment agree. The agent creates the directory with
+  mode `0700`; both the agent and every client refuse it if it is a symlink,
+  belongs to another user or is accessible to group or others (it is not
+  repaired, since another user may already have placed a socket in it), so
+  the token is never sent to a socket someone else controls. On Linux the
+  socket file additionally has mode `0600`. Abstract sockets are never used.
 - **Windows**: a named pipe with a security descriptor that grants access only
   to the owner and SYSTEM; remote clients are rejected.
 

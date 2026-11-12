@@ -14,6 +14,7 @@ import { moduleInfo } from "@/lib/test-fixtures"
 import type { ModuleInfo } from "@/lib/types"
 import { ModulesSettings } from "@/settings/pages/modules"
 import { groupedSettings, settingsPages } from "@/settings/registry"
+import { appContext } from "@/test/render"
 
 const api = { setModuleEnabled: vi.fn() }
 
@@ -40,24 +41,12 @@ const general = moduleInfo({ id: "general", name: "General", capabilities: ["pro
 const timer = moduleInfo({ id: "timer", name: "Timer", dependencies: ["general"] })
 
 function context(modules: ModuleInfo[], overrides: Partial<AppContextValue> = {}): AppContextValue {
-  return {
+  return appContext({
     profiles: { profiles: [], activeProfileId: null },
     editingProfileId: null,
-    setEditingProfileId: vi.fn(),
-    refresh: vi.fn(),
-    revision: 0,
-    agent: null,
-    setAgent: vi.fn(),
-    updates: null,
-    setUpdates: vi.fn(),
-    navigate: vi.fn(),
-    openSettings: vi.fn(),
-    closeSettings: vi.fn(),
-    history: { canGoBack: false, canGoForward: false, back: vi.fn(), forward: vi.fn() },
     modules,
-    setModules: vi.fn(),
     ...overrides,
-  }
+  })
 }
 
 function renderWith(value: AppContextValue, ui: React.ReactNode) {
