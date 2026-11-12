@@ -1321,6 +1321,58 @@ fn legacy_databases_are_encrypted_on_request() {
     assert_eq!(status["legacyCopies"], json!([]));
 }
 
+/// The export file reveals nothing of its content: neither the plaintext
+/// header nor the (base64-decoded) ciphertext contains the serialized
+/// profile, and machine values are not even in the decrypted payload.
+///
+/// The needles are long, structured strings taken from the plaintext, so
+/// a random match is practically impossible (searching for a short word
+/// such as "Work" in base64 text matches by chance now and then).
+fn assert_export_hides_its_content(bytes: &[u8], password: &str) {
+    use base64::Engine as _;
+    let contains = |haystack: &[u8], needle: &str| {
+        haystack
+            .windows(needle.len())
+            .any(|w| w == needle.as_bytes())
+    };
+
+    let envelope: Value = serde_json::from_slice(bytes).unwrap();
+    let mut fields: Vec<&str> = envelope
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    fields.sort_unstable();
+    assert_eq!(fields, ["ciphertext", "header"]);
+    let header = envelope["header"].as_str().unwrap();
+    let ciphertext = base64::engine::general_purpose::STANDARD
+        .decode(envelope["ciphertext"].as_str().unwrap())
+        .unwrap();
+
+    let payload = deckpilot_portability::payload::open(
+        bytes,
+        &deckpilot_storage::crypto::Password::new(password),
+    )
+    .unwrap();
+    let plaintext = serde_json::to_string(&payload).unwrap();
+    let hidden = [r#""name":"Work""#, r#""key":"SHOP""#, "shop.repository"];
+    for needle in hidden {
+        // Meaningful: the payload holds exactly this text.
+        assert!(plaintext.contains(needle), "{needle} is not in the payload");
+        assert!(!header.contains(needle), "the header shows {needle}");
+        assert!(
+            !contains(&ciphertext, needle),
+            "the ciphertext shows {needle}"
+        );
+        assert!(!contains(bytes, needle), "the file shows {needle}");
+    }
+    // Machine values are never exported at all.
+    let machine = "/private/machine/path";
+    assert!(!plaintext.contains(machine));
+    assert!(!contains(bytes, machine));
+}
+
 #[test]
 fn configuration_round_trips_through_an_encrypted_export() {
     let h = Harness::new();
@@ -1342,9 +1394,7 @@ fn configuration_round_trips_through_an_encrypted_export() {
     );
     assert_eq!(result["profiles"], 1);
     let bytes = std::fs::read(&file).unwrap();
-    for visible in [&b"Work"[..], b"SHOP", b"/private/machine/path"] {
-        assert!(!bytes.windows(visible.len()).any(|w| w == visible));
-    }
+    assert_export_hides_its_content(&bytes, "export secret");
 
     assert!(
         h.error(

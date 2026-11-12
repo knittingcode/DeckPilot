@@ -452,6 +452,9 @@ impl Agent {
             .filter(|(_, run)| run.cancel_requested.is_some_and(|at| at.elapsed() >= grace))
             .map(|(id, _)| *id)
             .collect();
+        if expired.is_empty() {
+            return;
+        }
         for id in expired {
             let Some(mut run) = self.executions.take(id) else {
                 continue;
@@ -471,6 +474,9 @@ impl Agent {
                 execution: run.record.summary.clone(),
             });
         }
+        // Like a run that finished: keys bound to the workflow stop showing
+        // progress and subscribers see the new running count.
+        self.after_change();
     }
 
     /// The agent stops: runs still going are recorded as interrupted.

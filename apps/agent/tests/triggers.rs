@@ -80,7 +80,7 @@ fn start(clock: Clock, build: impl FnOnce(&Profile) -> Vec<Workflow>) -> Harness
     let mock = MockBackend::new();
     // Connected while the agent is locked: not an event.
     mock.plug(&models::stream_deck_mk2(), "SIM-0001");
-    let lock = InstanceLock::acquire(&paths.lock_file).unwrap();
+    let lock = InstanceLock::acquire_waiting(&paths.lock_file, Duration::from_secs(2)).unwrap();
     let options = AgentOptions {
         paths: paths.clone(),
         backend: Box::new(mock.clone()),

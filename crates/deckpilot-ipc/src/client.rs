@@ -57,13 +57,33 @@ impl ClientError {
     /// macOS and Windows, but often a reset on Linux when the agent exits while
     /// a request is in flight.
     fn from_io(error: io::Error) -> Self {
+        // Windows: `ERROR_PIPE_NOT_CONNECTED`, the server end of the pipe
+        // was closed.
+        #[cfg(windows)]
+        if error.raw_os_error() == Some(233) {
+            return Self::Closed;
+        }
         match error.kind() {
             io::ErrorKind::ConnectionReset
             | io::ErrorKind::ConnectionAborted
             | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::NotConnected
             | io::ErrorKind::UnexpectedEof => Self::Closed,
             _ => Self::Io(error),
         }
+    }
+}
+
+/// An error while sending the `hello` or waiting for its answer. A
+/// connection torn down at that point, however the platform reports it
+/// (end of stream, reset, broken pipe, or `ENOTCONN` on macOS when the
+/// peer closed before the `hello` was written), belongs to an agent that is
+/// stopping (on Windows the pipe of a stopped agent can still be opened for
+/// a moment): nothing runs that could serve this client.
+fn handshake_error(error: ClientError) -> ClientError {
+    match error {
+        ClientError::Closed => ClientError::NotRunning,
+        other => other,
     }
 }
 
@@ -157,7 +177,8 @@ impl AgentClient {
                 io::ErrorKind::TimedOut,
                 "the agent did not answer the handshake",
             ))
-        })??;
+        })?
+        .map_err(handshake_error)?;
         match welcome {
             ServerMessage::Welcome {
                 agent_version,
@@ -285,20 +306,43 @@ pub async fn request_once(
 mod tests {
     use super::*;
 
+    const TEARDOWN: [io::ErrorKind; 5] = [
+        io::ErrorKind::ConnectionReset,
+        io::ErrorKind::ConnectionAborted,
+        io::ErrorKind::BrokenPipe,
+        io::ErrorKind::NotConnected,
+        io::ErrorKind::UnexpectedEof,
+    ];
+
     #[test]
     fn peer_teardown_is_reported_as_closed() {
-        for kind in [
-            io::ErrorKind::ConnectionReset,
-            io::ErrorKind::ConnectionAborted,
-            io::ErrorKind::BrokenPipe,
-            io::ErrorKind::UnexpectedEof,
-        ] {
+        for kind in TEARDOWN {
             let error = ClientError::from(FrameError::Io(io::Error::from(kind)));
             assert!(matches!(error, ClientError::Closed), "{kind:?}");
         }
+        // As the OS reports it: `ENOTCONN` (57 on macOS) for a write after
+        // the peer closed.
+        #[cfg(target_os = "macos")]
+        assert!(matches!(
+            ClientError::from(FrameError::Io(io::Error::from_raw_os_error(57))),
+            ClientError::Closed
+        ));
         let other = ClientError::from(FrameError::Io(io::Error::from(
             io::ErrorKind::PermissionDenied,
         )));
+        assert!(matches!(other, ClientError::Io(_)));
+    }
+
+    #[test]
+    fn a_connection_torn_down_during_the_hello_means_no_agent_runs() {
+        for kind in TEARDOWN {
+            let error = handshake_error(ClientError::from(FrameError::Io(io::Error::from(kind))));
+            assert!(matches!(error, ClientError::NotRunning), "{kind:?}");
+        }
+        // Other failures are reported as they are.
+        let other = handshake_error(ClientError::from(FrameError::Io(io::Error::from(
+            io::ErrorKind::PermissionDenied,
+        ))));
         assert!(matches!(other, ClientError::Io(_)));
     }
 }
