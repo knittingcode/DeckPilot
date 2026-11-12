@@ -35,6 +35,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { useEditorShortcuts } from "@/hooks/use-editor-shortcuts"
 import { useStatusItem } from "@/hooks/use-status"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { IS_MAC } from "@/hooks/use-navigation"
@@ -55,6 +56,7 @@ import type {
   WorkflowTrigger,
   WorkflowVariable,
 } from "@/lib/types"
+import { shortcutLabel } from "@/lib/shortcuts"
 import { cn } from "@/lib/utils"
 
 import { type CatalogEntry, DRAG_TYPE, actionEntry, flowEntries, moduleGroups } from "./catalog"
@@ -184,13 +186,6 @@ function ToolButton({
     >
       {children}
     </Button>
-  )
-}
-
-function isEditable(target: EventTarget | null) {
-  return (
-    target instanceof HTMLElement &&
-    (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
   )
 }
 
@@ -476,36 +471,8 @@ function Builder({
   }
 
   // Keyboard shortcuts of the editor (deleting is handled by the canvas).
-  const handlers = useRef({ doUndo, doRedo, doCopy, doPaste, save })
-  useEffect(() => {
-    handlers.current = { doUndo, doRedo, doCopy, doPaste, save }
-  })
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const mod = IS_MAC ? event.metaKey : event.ctrlKey
-      if (!mod) return
-      const key = event.key.toLowerCase()
-      if (key === "s") {
-        event.preventDefault()
-        handlers.current.save()
-        return
-      }
-      if (isEditable(event.target)) return
-      if (key === "z" && !event.shiftKey) handlers.current.doUndo()
-      else if ((key === "z" && event.shiftKey) || key === "y") handlers.current.doRedo()
-      else if (key === "c") handlers.current.doCopy()
-      else if (key === "v") handlers.current.doPaste()
-      else return
-      event.preventDefault()
-    }
-    window.addEventListener("keydown", onKey)
-    return () => {
-      window.removeEventListener("keydown", onKey)
-    }
-  }, [])
+  useEditorShortcuts({ undo: doUndo, redo: doRedo, copy: doCopy, paste: doPaste, save })
 
-  const shortcut = (key: string, shift = false) =>
-    IS_MAC ? `${shift ? "⇧" : ""}⌘${key}` : `Ctrl+${shift ? "Shift+" : ""}${key}`
   useTitlebar({
     actions: [
       {
@@ -522,7 +489,7 @@ function Builder({
           : errors.length > 0
             ? `Fix ${errors.length} problem${errors.length === 1 ? "" : "s"} to save`
             : workflow.name
-              ? `Save (${shortcut("S")})`
+              ? `Save (${shortcutLabel("S")})`
               : "Give the workflow a name",
       },
       {
@@ -734,7 +701,7 @@ function Builder({
         <div className="flex items-center" role="toolbar" aria-label="Edit">
           <ToolButton
             label="Undo"
-            shortcut={shortcut("Z")}
+            shortcut={shortcutLabel("Z")}
             disabled={state.past.length === 0}
             onClick={doUndo}
           >
@@ -742,7 +709,7 @@ function Builder({
           </ToolButton>
           <ToolButton
             label="Redo"
-            shortcut={shortcut("Z", true)}
+            shortcut={shortcutLabel("Z", true)}
             disabled={state.future.length === 0}
             onClick={doRedo}
           >
@@ -902,7 +869,8 @@ function Builder({
                   )}
                   {selected.length > 1 && (
                     <p className="text-xs text-muted-foreground">
-                      {selected.length} nodes selected. Copy with {shortcut("C")}, delete with ⌫.
+                      {selected.length} nodes selected. Copy with {shortcutLabel("C")}, delete with
+                      ⌫.
                     </p>
                   )}
                   {notes.length > 0 && (

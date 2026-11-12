@@ -17,7 +17,7 @@ import {
 import type { BindingTarget } from "@/lib/types"
 
 import type { TargetGroup } from "./targets"
-import { shortcutLabel } from "./use-editor-shortcuts"
+import { shortcutLabel } from "@/lib/shortcuts"
 
 export interface ControlMenuState {
   /** Number of controls the commands apply to. */
