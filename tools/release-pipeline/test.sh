@@ -266,8 +266,9 @@ python3 "$here/check-workflow-gate.py" "$work/writing-gate.yml" > "$work/structu
   || { grep -q "validate-tag may not have contents: write" "$work/structure.log" \
     && grep -q "workflow-level permission contents: write" "$work/structure.log" \
     && ok "write permissions of the gate or the workflow are caught" || bad "structure: $(cat "$work/structure.log")"; }
-# Publication: only the publish job, in the release environment, behind the
-# publication gate; no other job may write.
+# Publication: the publish job, in the production-release environment,
+# behind the publication gate; signing secrets only in that environment; no
+# other job may write.
 # mutate <name> <python statement on `jobs`> <expected message>
 mutate() {
   python3 - "$root/.github/workflows/release.yml" "$work/$1.yml" "$2" << 'EOF'
@@ -285,9 +286,13 @@ EOF
     bad "$1: $(cat "$work/structure.log")"
   fi
 }
-mutate "publishing without the approval environment" 'del jobs["publish"]["environment"]' "only publish may use an environment"
+mutate "publishing without the approval environment" 'del jobs["publish"]["environment"]' "publish must run in the environment 'production-release'"
+mutate "publishing in another environment" 'jobs["publish"]["environment"] = "release"' "publish must run in the environment 'production-release'"
+mutate "signing without the environment" 'del jobs["build"]["environment"]' "job build uses signing secrets outside the environment"
+# shellcheck disable=SC2016 # a literal GitHub expression
+mutate "signing secrets in another job" 'jobs["verify"]["env"] = {"K": "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"}' "job verify uses signing secrets outside the environment"
 mutate "publishing without the publication gate" 'jobs["publish"]["needs"] = ["validate-tag"]' "publish must need publish-gate"
-mutate "another job in the release environment" 'jobs["prepare"]["environment"] = "release"' "only publish may use an environment"
+mutate "another job in the environment" 'jobs["verify"]["environment"] = "production-release"' "job verify may not use the environment"
 mutate "a reading job that writes" 'jobs["publish-gate"]["permissions"]["contents"] = "write"' "job publish-gate may not have contents: write"
 
 echo

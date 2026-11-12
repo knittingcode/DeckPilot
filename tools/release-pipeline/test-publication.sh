@@ -206,14 +206,16 @@ expect_failure "a pre-release with latest.json" "contains latest.json" "$here/ch
 
 echo "== publication gate"
 fresh
-expect_failure "no release environment" "does not exist" "$here/check-environment.sh" release
-echo '{"name": "release", "protection_rules": []}' > "$STUB_DIR/environments/release.json"
-expect_failure "an environment without reviewers" "requires no reviewer" "$here/check-environment.sh" release
-echo '{"name": "release", "protection_rules": [{"type": "wait_timer", "wait_timer": 5}]}' > "$STUB_DIR/environments/release.json"
-expect_failure "an environment with only a wait timer" "requires no reviewer" "$here/check-environment.sh" release
-echo '{"name": "release", "protection_rules": [{"type": "required_reviewers", "reviewers": [{"type": "User", "reviewer": {"login": "maintainer"}}]}]}' \
-  > "$STUB_DIR/environments/release.json"
-run env.log "$here/check-environment.sh" release && ok "an environment with a required reviewer" || bad "environment: $(cat "$work/env.log")"
+expect_failure "no production-release environment" "does not exist" "$here/check-environment.sh"
+echo '{"name": "release", "protection_rules": [{"type": "required_reviewers", "reviewers": [{"type": "User"}]}]}' > "$STUB_DIR/environments/release.json"
+expect_failure "a protected environment of another name does not count" "'production-release' does not exist" "$here/check-environment.sh"
+echo '{"name": "production-release", "protection_rules": []}' > "$STUB_DIR/environments/production-release.json"
+expect_failure "an environment without reviewers" "requires no reviewer" "$here/check-environment.sh" production-release
+echo '{"name": "production-release", "protection_rules": [{"type": "wait_timer", "wait_timer": 5}]}' > "$STUB_DIR/environments/production-release.json"
+expect_failure "an environment with only a wait timer" "requires no reviewer" "$here/check-environment.sh" production-release
+echo '{"name": "production-release", "protection_rules": [{"type": "required_reviewers", "reviewers": [{"type": "User", "reviewer": {"login": "maintainer"}}]}]}' \
+  > "$STUB_DIR/environments/production-release.json"
+run env.log "$here/check-environment.sh" production-release && ok "an environment with a required reviewer" || bad "environment: $(cat "$work/env.log")"
 
 echo "== publication"
 # expect_draft <what> <message> <tag>: publication refused, still a draft.

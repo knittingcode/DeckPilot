@@ -4,7 +4,7 @@ Releases are built by `.github/workflows/release.yml` when a release tag
 is pushed (or when the workflow is started manually for an existing tag),
 in two stages: stage A builds, signs and checks everything into a **draft**
 release; stage B publishes it only after a maintainer approves it in the
-`release` environment and every check has passed again
+`production-release` environment and every check has passed again
 ([release steps](#release-steps)).
 
 ## Release tags and the tag gate
@@ -74,8 +74,8 @@ job depends on `validate-tag` through `needs` (directly or transitively);
 tests* workflow if a job is added without it, if the gate gets write
 permissions or if the workflow-level permissions grant write access. Only
 the jobs that write to the draft release (draft, build, manifest, verify)
-and the publishing job (publish, the only one in the `release`
-environment, behind the publication gate) have `contents: write`.
+and the publishing job (publish, in the `production-release` environment,
+behind the publication gate) have `contents: write`.
 
 The tests (`tools/release-pipeline/test.sh`, run by
 `.github/workflows/release-tests.yml` on pull requests that touch the
@@ -290,7 +290,8 @@ Without building or publishing anything:
      every required asset is in the draft
      (`tools/release-pipeline/check-assets.sh --final`).
 4. **Stage B** (after approval): the *Publication gate* job checks that the
-   `release` environment exists and requires a reviewer (see below); the
+   `production-release` environment exists and requires a reviewer (see
+   below); the
    *Publish and verify* job then waits for a reviewer's approval in the
    workflow run. After approval it checks the draft again
    (`tools/release-pipeline/publish.sh`) — exactly one release for the tag,
@@ -313,33 +314,105 @@ Without building or publishing anything:
 Nothing is published without the approval; a partial or unverified draft
 is never published, and a pre-release never becomes the stable release.
 
-### Publication gate (repository setting, to be done once)
+### Publication gate and signing environment (repository settings)
 
-Stage B runs in the deployment environment **`release`**, which must
-require a reviewer. The workflow does not create or change it; until a
-maintainer creates it, the *Publication gate* job fails and nothing is
-published (GitHub would otherwise create the environment, unprotected, the
-first time the publish job names it — which is why the gate job runs
-first). Proposed configuration (Settings → Environments → New environment):
+The protected deployment environment is **`production-release`**. Three
+jobs run in it:
 
-- name `release`;
-- **Required reviewers**: the maintainers who may publish (optionally
+- *Check configuration and release notes* (`prepare`) and the four
+  *Build* jobs: the only jobs that read the signing secrets
+  (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`,
+  `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY`);
+- *Publish and verify* (`publish`): the only job that publishes.
+
+`tools/release-pipeline/check-workflow-gate.py` refuses any other job in
+the environment and any job outside it that references a signing secret.
+With required reviewers, a release therefore asks for approval three times:
+before `prepare`, before the builds (one approval covers the four pending
+build jobs), and before publication.
+
+The workflow does not create or change the environment. GitHub creates a
+named environment, **unprotected**, the first time a job refers to it, so
+its mere existence proves nothing: the *Publication gate* job checks that
+`production-release` exists **and requires a reviewer**, and otherwise
+fails, so nothing is published. Until the secrets are moved (below), the
+jobs keep reading the repository-level secrets — a job in an environment
+sees repository secrets too, and environment secrets take precedence over
+repository secrets of the same name.
+
+Proposed configuration (Settings → Environments → New environment):
+
+- name `production-release`;
+- **Required reviewers**: the maintainers who may release (optionally
   *Prevent self-review*);
 - **Deployment branches and tags**: *Selected branches and tags*, add the
   tag rule `v*` (the workflow runs for a tag);
-- no environment secrets are needed (publication uses the job's
-  `GITHUB_TOKEN`).
+- **Environment secrets**: see the migration below.
 
-Equivalent API call (an admin token; review before running):
+Equivalent API calls (an admin token; review before running):
 
 ```sh
-gh api -X PUT repos/knittingcode/DeckPilot/environments/release \
+gh api -X PUT repos/knittingcode/DeckPilot/environments/production-release \
   -F 'reviewers[][type]=User' -F "reviewers[][id]=$(gh api users/<maintainer> --jq .id)" \
   -F 'deployment_branch_policy[protected_branches]=false' \
   -F 'deployment_branch_policy[custom_branch_policies]=true'
-gh api -X POST repos/knittingcode/DeckPilot/environments/release/deployment-branch-policies \
+gh api -X POST repos/knittingcode/DeckPilot/environments/production-release/deployment-branch-policies \
   -f name='v*' -f type=tag
 ```
+
+### Moving the signing secrets into the environment
+
+Done by the owner, by hand, in this order. No step prints a secret; values
+are typed or piped from the offline copies, never echoed or logged.
+
+1. **Create the environment** `production-release` as above (required
+   reviewers, tag rule `v*`).
+2. **Re-enter each secret in the environment** (the values cannot be read
+   back from the repository secrets; use the offline copies):
+
+   ```sh
+   env=production-release
+   gh secret set TAURI_SIGNING_PRIVATE_KEY --env "$env" < ~/.config/deckpilot/signing/updater.key
+   gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --env "$env"   # prompts, no echo
+   gh secret set APPLE_CERTIFICATE --env "$env" < <path to the base64 .p12>
+   gh secret set APPLE_CERTIFICATE_PASSWORD --env "$env"           # prompts
+   gh secret set APPLE_API_KEY --env "$env" < <path to AuthKey_<id>.p8>
+   gh secret list --env "$env"    # names and dates only
+   ```
+
+   The variables (`DECKPILOT_UPDATER_PUBKEY`, `APPLE_SIGNING_IDENTITY`,
+   `APPLE_TEAM_ID`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`,
+   `DECKPILOT_ALLOW_UNSIGNED_MACOS`) are not secret and stay repository
+   variables.
+3. **Verify the protection**:
+
+   ```sh
+   gh api repos/knittingcode/DeckPilot/environments/production-release \
+     --jq '{reviewers: [.protection_rules[] | select(.type == "required_reviewers") | .reviewers[].reviewer.login], branch_policy: .deployment_branch_policy}'
+   gh api repos/knittingcode/DeckPilot/environments/production-release/deployment-branch-policies --jq '.branch_policies[] | "\(.type) \(.name)"'
+   ```
+
+   It must list at least one reviewer and only the tag rule `v*`.
+4. **Run a non-publishing validation that uses the environment secrets.**
+   Push an alpha tag of a `main` commit (or dispatch the release workflow
+   for an existing alpha tag) and let **stage A only** run: approve
+   `prepare` and the builds, which now read the environment secrets;
+   check that the draft is complete (signed updater artifacts, notarized
+   macOS builds, `release-meta.json`); then **reject** the *Publish and
+   verify* deployment, or let it wait, so nothing is published. Discard
+   the draft afterwards (`tools/release-pipeline/discard-draft.sh <tag>`).
+5. **Only then, with the owner's explicit approval, remove the
+   repository-level secrets** (`gh secret delete <name>` for each of the
+   five). Before that, decide how the other workflows that read them keep
+   working: *Signing check* (`signing-check.yml`, whose *Updater signing
+   keys match* is a required check of `main` and runs on every pull request
+   and push to `main`) and *Update continuity* (`update-continuity.yml`)
+   read the repository secrets and are not in the environment. Putting them
+   into `production-release` would make every pull request wait for a
+   release reviewer; this is an open decision for the owner (for example a
+   separate environment for the checks, or keeping those secrets at
+   repository level), and the repository-level secrets must stay until it
+   is made.
 
 ### Failure recovery
 
@@ -347,7 +420,7 @@ gh api -X POST repos/knittingcode/DeckPilot/environments/release/deployment-bran
 | ----------- | ----- | ---------- |
 | The tag gate | nothing created | Fix the cause (wait for CI, tag a commit on `main`, fix the version) and push a **new** tag; delete a wrong tag only if no release exists for it: `git push origin :refs/tags/<tag>` |
 | Stage A (a build, signing, notarization, manifest, checksums) | a draft, possibly incomplete | Re-run the failed jobs (`gh run rerun <run-id> --failed`): the draft of the same commit is reused and its assets replaced. For a clean retry, discard the draft and run again: `tools/release-pipeline/discard-draft.sh <tag>` (refuses published releases; keeps the tag), then `gh workflow run release.yml -f tag=<tag>` |
-| Publication gate | a complete draft | Create the `release` environment (above), then `gh run rerun <run-id> --failed` |
+| Publication gate | a complete draft | Create or protect the `production-release` environment (above), then `gh run rerun <run-id> --failed` |
 | Stage B before publishing | a complete draft, unpublished | Re-run the failed jobs, or `gh workflow run release.yml -f tag=<tag> -f publish_only=true` (skips stage A, publishes the existing draft after the same checks). Every check runs again; nothing is published until all pass |
 | Stage B after publishing (verification of the public release) | published | Never delete a published release. Find the cause (for example an asset removed by hand), fix it without replacing published assets, and re-run: for an already published release of the same commit `publish.sh` changes nothing and only verifies again. If the release itself is wrong, publish a new version |
 
