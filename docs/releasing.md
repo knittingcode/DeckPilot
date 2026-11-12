@@ -465,12 +465,13 @@ unpublished, idempotent re-runs and recovery.
 
 ### The first pre-release, command by command
 
-Once: create the `release` environment ([publication gate](#publication-gate-repository-setting-to-be-done-once)).
+Once: create the protected `production-release` environment
+([publication gate and signing environment](#publication-gate-and-signing-environment-repository-settings)).
 Then, from an up-to-date, clean checkout of `main`:
 
 ```sh
 cargo run -p deckpilot-dev -- prepare-release 0.6.0-alpha.1   # branch, commit, PR; no tag
-gh pr checks --watch <pr-number>                                # then merge the PR (squash)
+gh pr checks --watch <pr-number>                                # the owner approves and merges the PR
 git fetch origin
 sha=$(git rev-parse origin/main)                                # the merge commit
 gh api "repos/knittingcode/DeckPilot/commits/$sha/check-runs" \
@@ -478,7 +479,8 @@ gh api "repos/knittingcode/DeckPilot/commits/$sha/check-runs" \
 git tag -s v0.6.0-alpha.1 "$sha" -m "DeckPilot 0.6.0-alpha.1"
 git push origin v0.6.0-alpha.1                                  # starts stage A
 gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
-# Review the draft, then approve "Publish and verify" in the run (stage B).
+# Approve "prepare" and the builds (production-release), review the draft,
+# then approve "Publish and verify" in the run (stage B).
 ```
 
 ### Dependency on the packaging workflow
