@@ -9,6 +9,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/release.yml
+      - .github/workflows/packaging.yml
       - .github/workflows/release-tests.yml
       - .github/workflows/signing-check.yml
       - tools/release-pipeline/**

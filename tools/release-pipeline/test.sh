@@ -34,7 +34,7 @@ export GH="$here/gh-stub.sh" STUB_DIR="$work/stub" REPOSITORY=example/DeckPilot
 export MAIN_REF=refs/heads/main
 mkdir -p "$STUB_DIR"
 # Never the real repository's environment.
-unset GITHUB_OUTPUT GITHUB_REPOSITORY GH_TOKEN GITHUB_TOKEN RELEASE_REF
+unset GITHUB_OUTPUT GITHUB_REPOSITORY GH_TOKEN GITHUB_TOKEN RELEASE_REF RUN_SHA
 
 # A synthetic repository whose sources declare one version.
 repo="$work/repo"
@@ -187,6 +187,9 @@ refuses "tag that does not exist" v9.9.9 "does not exist"
 RELEASE_REF=refs/heads/main refuses "a manual run on a branch" v0.6.0 "run it on the tag"
 RELEASE_REF=refs/tags/v0.6.0-alpha.1 refuses "a manual run on another tag" v0.6.0 "run it on the tag"
 RELEASE_REF=refs/tags/v0.6.0 accepts "a manual run on the tag" v0.6.0 channel=stable
+# The tag was moved between the push and the gate.
+RUN_SHA="$alpha" refuses "a run for another commit than the tag's" v0.6.0 "the tag was moved"
+RUN_SHA="$stable" accepts "a run for the tag's commit" v0.6.0 "sha=$stable"
 # The checkout is somewhere else than the tag.
 git -C "$repo" checkout -q --detach "$alpha"
 : > "$work/output"
@@ -297,6 +300,9 @@ mutate "signing without the environment" 'del jobs["build"]["environment"]' "job
 mutate "signing secrets in another job" 'jobs["verify"]["env"] = {"K": "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"}' "job verify uses signing secrets outside the environment"
 mutate "publishing without the publication gate" 'jobs["publish"]["needs"] = ["validate-tag"]' "publish must need publish-gate"
 mutate "another job in the environment" 'jobs["verify"]["environment"] = "production-release"' "job verify may not use the environment"
+mutate "a draft that does not wait for the installer checks" 'jobs["draft"]["needs"].remove("packaging")' "draft must need packaging"
+mutate "installer checks with secrets" 'jobs["packaging"]["secrets"] = "inherit"' "packaging must not pass secrets"
+mutate "no installer checks" 'del jobs["packaging"]; jobs["draft"]["needs"].remove("packaging")' "no job packaging calling"
 mutate "a job without a timeout" 'del jobs["manifest"]["timeout-minutes"]' "job manifest has no timeout-minutes"
 mutate "an action pinned to a tag" 'jobs["draft"]["steps"][0]["uses"] = "actions/checkout@v4"' "actions/checkout@v4 is not pinned"
 mutate "a cache in a job that holds secrets" 'jobs["build"]["steps"].insert(1, {"uses": "Swatinem/rust-cache@" + "a" * 40})' "job build holds secrets and restores a cache"
