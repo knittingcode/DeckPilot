@@ -20,7 +20,8 @@ import {
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { failureMessage, toastFailure } from "@/lib/failure"
 import { moduleOf } from "@/lib/modules"
 import { buildParameters, initialValue, missingRequired } from "@/lib/parameters"
 import type {
@@ -112,7 +113,9 @@ export function ActionEditor({
       toast.success(action ? "Action saved" : "Action created")
       onSaved(saved)
     } catch (e) {
-      setError(errorMessage(e))
+      setError(
+        failureMessage(action ? "The action was not saved" : "The action was not created", e),
+      )
     }
   }
 
@@ -123,7 +126,7 @@ export function ActionEditor({
       toast.success("Action duplicated")
       onSaved(copy)
     } catch (e) {
-      toast.error(errorMessage(e))
+      toastFailure(`“${action.name}” was not duplicated`, e)
     }
   }
 
@@ -134,7 +137,7 @@ export function ActionEditor({
       toast.success("Action deleted")
       onDeleted()
     } catch (e) {
-      toast.error(errorMessage(e))
+      toastFailure(`“${action.name}” was not deleted`, e)
     }
   }
 
@@ -143,7 +146,7 @@ export function ActionEditor({
     try {
       setResult(await api.runAction(profileId, action.id))
     } catch (e) {
-      toast.error(errorMessage(e))
+      toastFailure(`“${action.name}” did not run`, e, "Check that the agent is running")
     }
   }
 
