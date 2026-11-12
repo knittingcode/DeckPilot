@@ -5,26 +5,22 @@ import { addPage, controlLabel, deletePage, page as findPage, renamePage } from 
 import type { BindingTarget, ControlId, DeviceLayout, DeviceModel } from "@/lib/types"
 
 import { type KeyLookChange, applyAppearance } from "./appearance"
+import { canRedo, canUndo, commit, history, redo, undo } from "@/lib/history"
+
 import {
   assignTarget,
-  canRedo,
-  canUndo,
   clearControls,
-  commit,
   copyControls,
   dropOnControl,
   duplicateControls,
   emptySelection,
   folderOf,
-  history,
   isSelected,
   parentPage,
   pasteControls,
-  redo,
   select,
   selectOnly,
   selectedInOrder,
-  undo,
   type Clipboard,
   type DragSource,
   type SelectMode,

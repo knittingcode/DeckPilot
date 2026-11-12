@@ -6,10 +6,12 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { TitlebarContext } from "@/hooks/use-titlebar"
-import { AppContext, type AppContextValue } from "@/lib/app-context"
+import { AppContext } from "@/lib/app-context"
 import { TitlebarStore } from "@/lib/titlebar"
 import type { ActionType, ProfileView, Workflow } from "@/lib/types"
 import { WorkflowsPage } from "@/pages/workflows"
+import { profiles } from "@/test/fixtures"
+import { appContext } from "@/test/render"
 import type { BuilderProps } from "@/workflow-builder/builder"
 
 const api = {
@@ -66,28 +68,7 @@ function view(workflows: Workflow[]): ProfileView {
   }
 }
 
-function context(): AppContextValue {
-  return {
-    profiles: {
-      profiles: [{ id: "profile-1", name: "Work", updatedAt: 0 }],
-      activeProfileId: null,
-    },
-    editingProfileId: "profile-1",
-    setEditingProfileId: vi.fn(),
-    refresh: vi.fn(),
-    revision: 0,
-    agent: null,
-    setAgent: vi.fn(),
-    updates: null,
-    setUpdates: vi.fn(),
-    navigate: vi.fn(),
-    openSettings: vi.fn(),
-    closeSettings: vi.fn(),
-    history: { canGoBack: false, canGoForward: false, back: vi.fn(), forward: vi.fn() },
-    modules: [],
-    setModules: vi.fn(),
-  }
-}
+const context = () => appContext({ profiles: profiles([{ id: "profile-1", name: "Work" }], null) })
 
 beforeAll(() => {
   Element.prototype.hasPointerCapture = () => false
