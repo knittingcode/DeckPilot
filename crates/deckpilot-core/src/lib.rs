@@ -30,6 +30,7 @@ pub mod registry;
 pub mod resource;
 pub mod runtime;
 pub mod trigger;
+pub mod variables;
 pub mod workflow;
 
 #[cfg(test)]
