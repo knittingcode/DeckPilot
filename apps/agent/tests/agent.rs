@@ -30,6 +30,9 @@ use tokio::task::JoinHandle;
 /// Upper bound for conditions to be reached; generous for slow CI runners
 /// (passing tests continue as soon as the condition holds).
 const TIMEOUT: Duration = Duration::from_secs(20);
+/// Like the agent binary, a test agent waits briefly for the lock of one
+/// that is still stopping.
+const LOCK_WAIT: Duration = Duration::from_secs(2);
 
 /// The agent task and the sender that stops it.
 type Running = (JoinHandle<Result<(), AgentError>>, oneshot::Sender<()>);
@@ -151,7 +154,7 @@ fn start_agent_with(
         screen,
         notifier,
     } = extras;
-    let lock = InstanceLock::acquire(&paths.lock_file)?;
+    let lock = InstanceLock::acquire_waiting(&paths.lock_file, LOCK_WAIT)?;
     let options = AgentOptions {
         paths,
         backend: Box::new(mock.clone()),

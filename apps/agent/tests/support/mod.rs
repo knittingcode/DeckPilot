@@ -118,7 +118,7 @@ impl TestAgent {
         mock: &MockBackend,
         clock: Option<Clock>,
     ) -> Self {
-        let lock = InstanceLock::acquire(&paths.lock_file).unwrap();
+        let lock = InstanceLock::acquire_waiting(&paths.lock_file, Duration::from_secs(2)).unwrap();
         let options = AgentOptions {
             paths: paths.clone(),
             backend: Box::new(mock.clone()),
