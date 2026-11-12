@@ -1276,7 +1276,12 @@ pub fn default_options(paths: AgentPaths, mock_models: &[DeviceModel]) -> AgentO
         backend = backend.with(Box::new(mock.clone()));
     }
     let autostart = match Autostart::for_current_exe() {
-        Ok(autostart) => Some(autostart),
+        Ok(autostart) => {
+            if let Err(error) = autostart.repair() {
+                warn!(%error, "cannot update the autostart entry");
+            }
+            Some(autostart)
+        }
         Err(error) => {
             warn!(%error, "autostart is unavailable");
             None
