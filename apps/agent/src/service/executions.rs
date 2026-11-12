@@ -646,12 +646,17 @@ fn spawn_run(
             };
             // A panicking action must not leave the run open forever.
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                engine.execute_workflow_with(
+                // References of its actions see this run's id
+                // (`workflow.execution.id`).
+                let invocation =
+                    deckpilot_core::resolution::Invocation::default().with_execution(Some(id));
+                engine.execute_workflow_as(
                     &profile,
                     &machine,
                     &mut context,
                     workflow,
                     &inputs,
+                    &invocation,
                     &cancel,
                     &on_event,
                 )

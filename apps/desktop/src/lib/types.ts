@@ -629,6 +629,7 @@ export type Capability =
   | "network"
   | "notifications"
   | "credentials"
+  | "variables-read"
 
 export interface ModulePage {
   id: string
