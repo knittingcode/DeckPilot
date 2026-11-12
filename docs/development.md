@@ -182,6 +182,31 @@ real local IPC; no hardware is needed.
   same argument shapes as `src/lib/api.ts`.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/).
 
+## Pull requests and branches
+
+`main` is protected: changes arrive as squash-merged pull requests whose
+required checks passed on a branch that is up to date with `main`. Every
+change goes through this cycle:
+
+1. Push a feature branch and open a pull request against `main`.
+2. Wait for the required checks; to update a branch, merge `main` into it
+   (no rebase or force-push on shared branches).
+3. Squash-merge: `gh pr merge <number> --squash --delete-branch`.
+4. Check that the remote branch is gone (the repository also deletes head
+   branches on merge): `git ls-remote --heads origin <branch>` prints nothing.
+5. Remove the branch's worktree if one was used and nothing in it is
+   uncommitted or unpushed: `git worktree remove <path>` (it refuses a dirty
+   tree; never force it).
+6. Delete the local branch with `git branch -d <branch>`, which refuses a
+   branch with work that is not on its upstream.
+7. Prune remote-tracking references and update `main`:
+   `git fetch --prune origin && git switch main && git merge --ff-only origin/main`.
+
+A branch that another open pull request uses as its base is deleted only
+after that pull request has been retargeted to `main` and `main` has been
+merged into it. Branches of pull requests closed without merging are kept
+until their owner decides.
+
 ## Adding an action type
 
 Action types belong to a feature module (see [Feature modules](modules.md)).
