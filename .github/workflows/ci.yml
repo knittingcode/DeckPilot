@@ -88,6 +88,17 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo run --locked -p deckpilot-dev -- check-versions
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # TEMPORARY (removed before merge): repeat the agent tests on Windows.
+      - name: Repeat agent tests (temporary)
+        if: runner.os == 'Windows'
+        shell: bash
+        timeout-minutes: 30
+        run: |
+          for i in $(seq 1 12); do
+            echo "== run $i"
+            cargo test --locked -p deckpilot-agent --test agent -- single_instance_shutdown_and_client_reconnect --exact || exit 1
+            cargo test --locked -p deckpilot-agent --test agent 2>&1 | tail -3 || exit 1
+          done
       - run: cargo test --workspace --locked
         timeout-minutes: 25
       # The guided hardware test, run against a simulated MK.2 with the real
