@@ -22,5 +22,8 @@ windows-native-keyring-store = { version = "1", default-features = false }
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus-secret-service-keyring-store = { version = "1", features = ["rt-async-io-crypto-rust"] }
 
+[dev-dependencies]
+getrandom.workspace = true
+
 [lints]
 workspace = true
