@@ -70,7 +70,8 @@ fn profile() -> Profile {
             "nodes": [
                 {"id": "start", "type": "trigger"},
                 {"id": "say", "type": "action", "action": ids.2,
-                 "mappings": {"message": {"type": "template",
+                 "mappings": {"level": {"type": "variable", "reference": "shared.paths.root"},
+                              "message": {"type": "template",
                                           "template": "at {{ shared.paths.root }}"}}},
             ],
             "edges": [{"from": "start", "to": "say"}],
@@ -109,17 +110,18 @@ fn every_kind_of_use_is_found() {
             ("Template", "parameters.message"),
             ("Literal", "label"),
             ("Steps", "steps[0].overrides.message"),
+            ("Graph", "graph.nodes[1].mappings.level"),
             ("Graph", "graph.nodes[1].mappings.message"),
             ("Graph", "triggers[0]"),
             ("Main", "Home › label"),
         ]
     );
     assert!(matches!(
-        &uses[4].site,
+        &uses[5].site,
         VariableUse::Workflow { node: Some(node), .. } if node.as_str() == "say"
     ));
     assert!(matches!(
-        uses[5].site,
+        uses[6].site,
         VariableUse::Trigger { index: 0, .. }
     ));
     // Literal text that looks like a reference is no use.
@@ -152,7 +154,7 @@ fn a_used_variable_is_never_deleted() {
     let Err(StorageError::VariableInUse(uses)) = refused else {
         panic!("{refused:?}");
     };
-    assert_eq!(uses.len(), 7);
+    assert_eq!(uses.len(), 8);
     assert_eq!(uses[0].profile_name, "Work");
     assert!(store.shared_variable(&key("paths.root")).unwrap().is_some());
     // The unused one goes.
@@ -202,7 +204,7 @@ fn uses_in_every_profile_are_listed() {
     let uses = store
         .shared_variable_references(&key("paths.root"))
         .unwrap();
-    assert_eq!(uses.len(), 14);
+    assert_eq!(uses.len(), 16);
     let mut profiles: Vec<_> = uses.iter().map(|u| u.profile).collect();
     profiles.dedup();
     assert_eq!(profiles.len(), 2);
