@@ -322,7 +322,25 @@ impl From<CapabilityDenied> for ActionResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ContextEffect {
-    SelectProject { project: ProjectId },
+    SelectProject {
+        project: ProjectId,
+    },
+    /// Moves to the next or previous project of the profile. The engine
+    /// steps from the project that is active when it applies the effect,
+    /// not from the one the handler saw, so presses handled one after the
+    /// other each move exactly one project on. The engine reports the
+    /// applied effect as the [`SelectProject`](Self::SelectProject) it
+    /// resulted in, so results never carry a cycle that was not applied.
+    CycleProject {
+        direction: crate::CycleDirection,
+        /// Whether stepping past either end continues at the other one.
+        #[serde(rename = "wrapAround", default = "wrap_around_default")]
+        wrap_around: bool,
+    },
+}
+
+fn wrap_around_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
