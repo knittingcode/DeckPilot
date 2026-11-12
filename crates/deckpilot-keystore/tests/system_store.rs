@@ -19,6 +19,11 @@ const CHILD_EXPECTED_ENV: &str = "DECKPILOT_TEST_KEYSTORE_EXPECTED";
 
 fn enabled() -> bool {
     if std::env::var(ENABLE_ENV).is_ok_and(|value| value == "1") {
+        // Visible with `--nocapture`, so a CI log shows the store was used.
+        println!(
+            "using the {} under throwaway service names",
+            deckpilot_keystore::platform_store_name()
+        );
         true
     } else {
         eprintln!("skipped: set {ENABLE_ENV}=1 to use the real credential store");

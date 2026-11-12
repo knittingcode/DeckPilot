@@ -121,10 +121,10 @@ jobs:
         run: |
           dbus-run-session -- sh -c '
             echo "ci-keyring" | gnome-keyring-daemon --daemonize --unlock --components=secrets >/dev/null &&
-            cargo test -p deckpilot-keystore --locked'
+            cargo test -p deckpilot-keystore --locked -- --nocapture'
       - name: Test
         if: runner.os != 'Linux'
-        run: cargo test -p deckpilot-keystore --locked
+        run: cargo test -p deckpilot-keystore --locked -- --nocapture
 
   # Builds the Linux .deb with the release configuration (bundled agent,
   # udev rule) to catch packaging mistakes before a release. Nothing is
