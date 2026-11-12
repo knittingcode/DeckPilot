@@ -16,7 +16,7 @@ import {
   REVIEW_KIND_TEXT,
   describeDuration,
   formatElapsed,
-  intervalsElapsedMs,
+  noticeText,
   openReviews,
 } from "./model"
 
@@ -118,9 +118,10 @@ function SessionRow({
   onChange: (summary: WorkSessionSummary) => void
 }) {
   const [open, setOpen] = useState(false)
-  // Elapsed of an active session is shown as of when the list was drawn.
+  // An open interval is shown up to when the list was drawn.
   const [now] = useState(() => Date.now())
-  const elapsed = intervalsElapsedMs(summary.intervals, summary.stoppedAtMs ?? now)
+  // Counted time as of the agent's answer (an active session's keeps growing).
+  const elapsed = summary.elapsedMs
   const flagged = openReviews(summary.reviews).length
   const when = summary.startedAtMs ?? summary.requestedAtMs
   const detailsId = `session-${summary.session}`
@@ -160,6 +161,18 @@ function SessionRow({
       </div>
       {open && (
         <div id={detailsId} className="grid gap-4 border-t px-3 py-3 text-sm">
+          {summary.notice && (
+            <section className="grid gap-1">
+              <h4 className="font-medium">Notice</h4>
+              <p>
+                <span className="font-medium">{noticeText(summary.notice).title}</span>
+                <span className="text-muted-foreground">
+                  {" "}
+                  — {noticeText(summary.notice).detail} ({time(summary.notice.atMs)})
+                </span>
+              </p>
+            </section>
+          )}
           {summary.reviews.length > 0 && (
             <section className="grid gap-2">
               <h4 className="font-medium">Flagged gaps</h4>

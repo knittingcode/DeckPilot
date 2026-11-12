@@ -53,6 +53,7 @@ export function summary(change: Partial<WorkSessionSummary> = {}): WorkSessionSu
     requestedAtMs: NOW - 3 * HOUR,
     startedAtMs: NOW - 3 * HOUR,
     stoppedAtMs: NOW - 30 * MINUTE,
+    elapsedMs: 2 * HOUR + 30 * MINUTE,
     intervals: [{ seq: 1, startedAtMs: NOW - 3 * HOUR, endedAtMs: NOW - 30 * MINUTE }],
     reviews: [review()],
     transitions: [

@@ -6,7 +6,6 @@ import {
   draftOf,
   formatElapsed,
   inputIssue,
-  intervalsElapsedMs,
   liveElapsedMs,
   nextTickMs,
   noticeText,
@@ -46,19 +45,6 @@ describe("elapsed time", () => {
     expect(nextTickMs(HOUR + 20_000, "minutes")).toBe(40_000)
     expect(nextTickMs(HOUR, "minutes")).toBe(MINUTE)
     expect(nextTickMs(1_250, "seconds")).toBe(750)
-  })
-
-  it("sums intervals, an open one up to now, never negative", () => {
-    expect(
-      intervalsElapsedMs(
-        [
-          { seq: 1, startedAtMs: 0, endedAtMs: HOUR },
-          { seq: 2, startedAtMs: 2 * HOUR, endedAtMs: HOUR },
-          { seq: 3, startedAtMs: 3 * HOUR },
-        ],
-        3 * HOUR + 10 * MINUTE,
-      ),
-    ).toBe(HOUR + 10 * MINUTE)
   })
 })
 
@@ -117,11 +103,18 @@ describe("settings validation", () => {
   const plain = workflow("plain", "Plain")
 
   it("turns a valid form into settings", () => {
-    const draft = { ...draftOf(settings()), verificationWorkflow: "check", longPressMs: "900" }
+    const draft = { ...draftOf(settings()), verificationWorkflow: "check", approvalMinutes: "15" }
     expect(validateSettings(draft, [check, plain])).toEqual({
-      settings: settings({ verificationWorkflow: "check", longPressMs: 900 }),
+      settings: settings({ verificationWorkflow: "check", approvalTtlSeconds: 900 }),
       issues: {},
     })
+  })
+
+  it("saves only what the form edits, not the answer's profile and time", () => {
+    const saved = settings({ profile: "profile-1", updatedAtMs: NOW, reviewGapSeconds: 1800 })
+    expect(validateSettings(draftOf(saved), [check]).settings).toEqual(
+      settings({ reviewGapSeconds: 1800 }),
+    )
   })
 
   it("flags a verification workflow without a Boolean canFinish output", () => {
@@ -137,14 +130,10 @@ describe("settings validation", () => {
       startWorkflow: "gone",
       approvalMinutes: "0",
       reviewGapMinutes: "abc",
-      doubleClickMs: "100",
-      longPressMs: "6000",
     }
     const { issues } = validateSettings(draft, [check])
     expect(Object.keys(issues).sort()).toEqual([
       "approvalMinutes",
-      "doubleClickMs",
-      "longPressMs",
       "reviewGapMinutes",
       "startWorkflow",
     ])

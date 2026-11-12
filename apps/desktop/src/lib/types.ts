@@ -546,7 +546,7 @@ export interface NodeReport {
 }
 
 export type ExecutionState = "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
-export type ExecutionTrigger = "app" | "device" | "schedule" | "lifecycle" | "other"
+export type ExecutionTrigger = "app" | "device" | "schedule" | "lifecycle" | "workSession" | "other"
 
 export interface ExecutionSummary {
   id: string
@@ -1169,25 +1169,28 @@ export type WorkSessionVariable =
   | "system.work.session.projectId"
   | "system.work.session.canFinish"
 
-// Work Session page (W6). The shapes the page expects from the protocol 8
-// requests and Tauri commands of docs/gestures-and-work-session.md §9.
-// Proposed here until W5 lands them; W5 owns the final form.
+// Work sessions over protocol 8 (`deckpilot_ipc::work_session`, the Tauri
+// commands in `commands/work_session.rs`). docs/gestures-and-work-session.md §9.
+// No request starts, verifies or finishes a session: only its key does (D11).
 
 /** How keys and the page show elapsed time: `h:mm` (D4) or `h:mm:ss`. */
 export type ElapsedFormat = "minutes" | "seconds"
 
 /** `work_session_settings` of a profile. */
 export interface WorkSessionSettings {
+  /** The profile they belong to: set in answers; when saving, `profileId` decides. */
+  profile?: string
   /** Runs before the timer starts; `null`: the session starts at once. */
   startWorkflow: string | null
   /** Must declare the output `canFinish` (boolean); `null`: hold the key to finish (D12). */
   verificationWorkflow: string | null
+  /** 60–86400. */
   approvalTtlSeconds: number
+  /** 60–86400. */
   reviewGapSeconds: number
   elapsedFormat: ElapsedFormat
-  /** Gesture timings of work session keys; unset uses the machine defaults. */
-  doubleClickMs?: number
-  longPressMs?: number
+  /** When last saved; unset for defaults never saved. Ignored when saving. */
+  updatedAtMs?: number
 }
 
 export type WorkSessionReviewKind = "agentDown" | "sleep" | "clockBack" | "clockForward"
@@ -1231,8 +1234,12 @@ export interface WorkSessionSummary {
   requestedAtMs: number
   startedAtMs?: number
   stoppedAtMs?: number
+  /** Counted time when the answer was made: the sum of the intervals. */
+  elapsedMs: number
   intervals: WorkSessionInterval[]
   reviews: WorkSessionReview[]
   transitions: WorkSessionTransition[]
   verification?: VerificationRecord
+  /** The session's last notice, until it is cleared. */
+  notice?: WorkSessionNotice
 }

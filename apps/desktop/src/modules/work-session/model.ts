@@ -6,7 +6,6 @@ import { errorMessage } from "@/lib/api"
 import type {
   ElapsedFormat,
   Workflow,
-  WorkSessionInterval,
   WorkSessionNotice,
   WorkSessionProblem,
   WorkSessionRecordState,
@@ -33,9 +32,6 @@ export const DEFAULT_SETTINGS: WorkSessionSettings = {
 
 /** Approval lifetime and review threshold, in minutes (60–86400 s stored). */
 export const MINUTES_RANGE = { min: 1, max: 1440 }
-/** `GestureTimings::validate` and the defaults of `gesture.rs`. */
-export const DOUBLE_CLICK_MS = { default: 300, min: 150, max: 1000 }
-export const LONG_PRESS_MS = { default: 700, min: 300, max: 5000 }
 
 // Elapsed time ---------------------------------------------------------------
 
@@ -53,14 +49,6 @@ export function showsElapsed(state: WorkSessionState): boolean {
 export function liveElapsedMs(snapshot: WorkSessionSnapshot, nowMs: number): number {
   const since = timerRunning(snapshot.state) ? Math.max(0, nowMs - snapshot.asOfMs) : 0
   return Math.max(0, snapshot.elapsedMs) + since
-}
-
-/** Sum of the intervals, an open one up to `nowMs`; like `work_session::elapsed_ms`. */
-export function intervalsElapsedMs(intervals: WorkSessionInterval[], nowMs: number): number {
-  return intervals.reduce(
-    (sum, interval) => sum + Math.max(0, (interval.endedAtMs ?? nowMs) - interval.startedAtMs),
-    0,
-  )
 }
 
 /** `h:mm` (D4), or `h:mm:ss` with the `seconds` format. Hours are not capped at 24. */
@@ -243,9 +231,6 @@ export interface SettingsDraft {
   approvalMinutes: string
   reviewGapMinutes: string
   elapsedFormat: ElapsedFormat
-  /** Empty: the machine default. */
-  doubleClickMs: string
-  longPressMs: string
 }
 
 export type SettingsField = Exclude<keyof SettingsDraft, "elapsedFormat">
@@ -258,8 +243,6 @@ export function draftOf(settings: WorkSessionSettings): SettingsDraft {
     approvalMinutes: String(Math.round(settings.approvalTtlSeconds / 60)),
     reviewGapMinutes: String(Math.round(settings.reviewGapSeconds / 60)),
     elapsedFormat: settings.elapsedFormat,
-    doubleClickMs: settings.doubleClickMs === undefined ? "" : String(settings.doubleClickMs),
-    longPressMs: settings.longPressMs === undefined ? "" : String(settings.longPressMs),
   }
 }
 
@@ -298,18 +281,6 @@ export function validateSettings(
   const reviewGap = integerIn(draft.reviewGapMinutes, MINUTES_RANGE)
   if (reviewGap === null) issues.reviewGapMinutes = minutes
 
-  const timing = (text: string, range: { min: number; max: number }) => {
-    if (text.trim() === "") return { value: undefined }
-    const value = integerIn(text, range)
-    return value === null
-      ? { issue: `Enter milliseconds from ${range.min} to ${range.max}, or leave empty.` }
-      : { value }
-  }
-  const doubleClick = timing(draft.doubleClickMs, DOUBLE_CLICK_MS)
-  if (doubleClick.issue) issues.doubleClickMs = doubleClick.issue
-  const longPress = timing(draft.longPressMs, LONG_PRESS_MS)
-  if (longPress.issue) issues.longPressMs = longPress.issue
-
   if (Object.keys(issues).length > 0 || approval === null || reviewGap === null) {
     return { settings: null, issues }
   }
@@ -320,8 +291,6 @@ export function validateSettings(
       approvalTtlSeconds: approval * 60,
       reviewGapSeconds: reviewGap * 60,
       elapsedFormat: draft.elapsedFormat,
-      ...(doubleClick.value === undefined ? {} : { doubleClickMs: doubleClick.value }),
-      ...(longPress.value === undefined ? {} : { longPressMs: longPress.value }),
     },
     issues,
   }

@@ -15,12 +15,11 @@ import {
 } from "@/components/ui/select"
 import type { AsyncState } from "@/hooks/use-async"
 import { api } from "@/lib/api"
+import { useAppContext } from "@/lib/app-context"
 import type { ElapsedFormat, Workflow, WorkSessionSettings } from "@/lib/types"
 
 import { failureMessage, toastFailure } from "./failure"
 import {
-  DOUBLE_CLICK_MS,
-  LONG_PRESS_MS,
   MINUTES_RANGE,
   draftOf,
   inputIssue,
@@ -32,7 +31,7 @@ import {
 
 const NONE = "none"
 
-type NumberKey = "approvalMinutes" | "reviewGapMinutes" | "doubleClickMs" | "longPressMs"
+type NumberKey = "approvalMinutes" | "reviewGapMinutes"
 
 /** The work session settings of the profile being edited. */
 export function SettingsCard({
@@ -91,6 +90,7 @@ function SettingsForm({
   workflows: Workflow[]
   onSaved: (settings: WorkSessionSettings) => void
 }) {
+  const { openSettings } = useAppContext()
   const [initial, setInitial] = useState(() => draftOf(saved))
   const [draft, setDraft] = useState(initial)
   const [saving, setSaving] = useState(false)
@@ -206,38 +206,28 @@ function SettingsForm({
           </SelectContent>
         </Select>
       </div>
-      <fieldset className="grid gap-3">
-        <legend className="mb-1 text-sm font-medium">Gestures of work session keys</legend>
+      <section aria-labelledby="work-session-gestures" className="grid gap-2">
+        <h3 id="work-session-gestures" className="text-sm font-medium">
+          Gesture timings
+        </h3>
         <p className="text-xs text-muted-foreground">
-          Click starts, checks and finishes; long press cancels, keeps working, or finishes without
-          a verification workflow. Leave empty to use the defaults ({LONG_PRESS_MS.default} ms long
-          press, {DOUBLE_CLICK_MS.default} ms double click).
+          How long a long press or a double click takes is set on the key, in the Layout
+          Designer&apos;s gesture editor. Keys without their own timings use the defaults in
+          Settings › Devices.
         </p>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <NumberField
-            id="work-session-long-press"
-            label="Long press (ms)"
-            hint={`${LONG_PRESS_MS.min}–${LONG_PRESS_MS.max} ms of holding.`}
-            field="longPressMs"
-            draft={draft}
-            issues={issues}
-            range={LONG_PRESS_MS}
-            placeholder={String(LONG_PRESS_MS.default)}
-            onChange={set}
-          />
-          <NumberField
-            id="work-session-double-click"
-            label="Double click (ms)"
-            hint={`${DOUBLE_CLICK_MS.min}–${DOUBLE_CLICK_MS.max} ms between clicks.`}
-            field="doubleClickMs"
-            draft={draft}
-            issues={issues}
-            range={DOUBLE_CLICK_MS}
-            placeholder={String(DOUBLE_CLICK_MS.default)}
-            onChange={set}
-          />
+        <div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              openSettings("devices")
+            }}
+          >
+            Open Settings › Devices
+          </Button>
         </div>
-      </fieldset>
+      </section>
       <div className="flex gap-2">
         <Button type="submit" disabled={!settings || !dirty || saving}>
           Save settings
@@ -326,7 +316,6 @@ function NumberField({
   draft,
   issues,
   range,
-  placeholder,
   onChange,
 }: {
   id: string
@@ -336,7 +325,6 @@ function NumberField({
   draft: SettingsDraft
   issues: SettingsIssues
   range: { min: number; max: number }
-  placeholder?: string
   onChange: (field: NumberKey, value: string) => void
 }) {
   const issue = issues[field]
@@ -348,7 +336,6 @@ function NumberField({
         inputMode="numeric"
         min={range.min}
         max={range.max}
-        placeholder={placeholder}
         value={draft[field]}
         aria-invalid={issue ? true : undefined}
         aria-describedby={`${id}-hint`}

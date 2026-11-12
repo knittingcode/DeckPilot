@@ -216,16 +216,27 @@ describe("Work Session settings", () => {
       "true",
     )
     await user.click(screen.getByRole("option", { name: "Ready check" }))
-    await user.clear(screen.getByLabelText("Long press (ms)"))
-    await user.type(screen.getByLabelText("Long press (ms)"), "1000")
 
-    api.saveWorkSessionSettings.mockImplementation((_, value) => Promise.resolve(value))
+    api.saveWorkSessionSettings.mockImplementation((profile, value) =>
+      Promise.resolve({ ...value, profile, updatedAtMs: NOW }),
+    )
     await user.click(screen.getByRole("button", { name: "Save settings" }))
     expect(api.saveWorkSessionSettings).toHaveBeenCalledWith(
       "profile-1",
-      settings({ verificationWorkflow: "check", longPressMs: 1000 }),
+      settings({ verificationWorkflow: "check" }),
     )
     expect(toast.success).toHaveBeenCalledWith("Work session settings saved")
+    // The stored answer is the new baseline: nothing left to save.
+    expect(screen.getByRole("button", { name: "Save settings" })).toBeDisabled()
+  })
+
+  it("leaves gesture timings to the key and Settings › Devices", async () => {
+    const { user, context } = await renderPage()
+    await screen.findByRole("button", { name: "Save settings" })
+    expect(screen.queryByLabelText(/long press/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/double click/i)).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Open Settings › Devices" }))
+    expect(context.openSettings).toHaveBeenCalledWith("devices")
   })
 
   it("flags a saved verification workflow that lost its canFinish output", async () => {
@@ -237,7 +248,7 @@ describe("Work Session settings", () => {
       "Its output “canFinish” is not a Boolean. Change its kind to Boolean.",
     )
     // Even an unrelated change cannot be saved until it is fixed.
-    await user.type(screen.getByLabelText("Double click (ms)"), "400")
+    await user.type(screen.getByLabelText("Flag gaps longer than (minutes)"), "0")
     expect(screen.getByRole("button", { name: "Save settings" })).toBeDisabled()
   })
 
@@ -293,6 +304,7 @@ describe("Work Session history", () => {
     api.resolveWorkSessionReview.mockResolvedValue(
       summary({
         project: shop.id,
+        elapsedMs: HOUR + 30 * MINUTE,
         intervals: [
           {
             seq: 1,
@@ -338,8 +350,10 @@ describe("Work Session history", () => {
         state: "aborted",
         startedAtMs: undefined,
         stoppedAtMs: undefined,
+        elapsedMs: 0,
         intervals: [],
         reviews: [],
+        notice: { problem: "startFailed", message: "step Open IDE failed", atMs: NOW },
       }),
     ])
     const { user } = await renderPage()
@@ -347,6 +361,9 @@ describe("Work Session history", () => {
     expect(within(list).getByText("Did not start")).toBeInTheDocument()
     await user.click(within(list).getByRole("button", { expanded: false }))
     expect(within(list).getByText(/the timer never started/)).toBeInTheDocument()
+    // Its last notice says why.
+    expect(within(list).getByText("The work session did not start")).toBeInTheDocument()
+    expect(within(list).getByText(/Step Open IDE failed\./)).toBeInTheDocument()
   })
 
   it("reloads when the agent's session changes", async () => {
