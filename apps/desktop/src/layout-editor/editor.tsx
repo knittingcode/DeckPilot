@@ -51,6 +51,7 @@ import {
 import { Inspector } from "./inspector"
 import { LibraryPanel } from "./library-panel"
 import { PageBar } from "./page-bar"
+import { PageTreePanel } from "./page-tree-panel"
 import { targetGroups } from "./targets"
 import { shortcutLabel, useEditorShortcuts } from "./use-editor-shortcuts"
 import { useIcons } from "./use-icons"
@@ -116,7 +117,7 @@ export function LayoutEditor({
   const { draft, pageId, selected, selection, commands } = editing
   const [previewProject, setPreviewProject] = useState<string | null>(view.activeProjectId)
   const [errors, setErrors] = useState<string[]>([])
-  const dirty = JSON.stringify(draft) !== JSON.stringify(saved)
+  const dirty = JSON.stringify(draft) !== JSON.stringify(editing.baseline)
   const { actions, workflows, projects } = view.profile
   const library = useIcons(profileId)
   const { faces, images } = usePreviewFaces(
@@ -128,7 +129,7 @@ export function LayoutEditor({
   )
   const iconState: IconState = {
     ...library,
-    usage: (icon) => effectiveUsage(icon.usages, icon.id, saved, draft),
+    usage: (icon) => effectiveUsage(icon.usages, icon.id, editing.baseline, draft),
   }
   const groups = useMemo(
     () => targetGroups(view.profile, draft, pageId),
@@ -290,6 +291,19 @@ export function LayoutEditor({
               onAdd={commands.addPage}
               onRename={commands.renamePage}
               onDelete={commands.deletePage}
+            />
+            <PageTreePanel
+              profileId={profileId}
+              draft={draft}
+              layouts={view.profile.layouts}
+              dirty={dirty}
+              pageId={pageId}
+              onOpen={commands.openPage}
+              onStored={(layout, page) => {
+                if (layout) commands.reset(layout, page)
+                onSaved()
+                refresh()
+              }}
             />
           </CardHeader>
           <CardContent className="grid gap-4">

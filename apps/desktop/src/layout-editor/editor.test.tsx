@@ -19,6 +19,7 @@ vi.mock("@/lib/api", () => ({
   api: {
     previewLayout: () => Promise.resolve([]),
     listIcons: () => Promise.resolve([]),
+    pageTree: () => Promise.resolve({ pages: [], warnings: [] }),
     saveLayout: (...args: unknown[]) => saveLayout(...args) as unknown,
   },
   errorMessage: (error: unknown) => String(error),

@@ -15,6 +15,7 @@ const api = {
   listIcons: vi.fn(),
   importIcon: vi.fn(),
   deleteIcon: vi.fn(),
+  pageTree: vi.fn(),
 }
 
 vi.mock("@/lib/api", () => ({
@@ -119,6 +120,7 @@ beforeAll(() => {
 beforeEach(() => {
   for (const fn of Object.values(api)) fn.mockReset()
   api.previewLayout.mockImplementation(rendered)
+  api.pageTree.mockResolvedValue({ pages: [], warnings: [] })
   api.listIcons.mockResolvedValue([icon("rocket", "Rocket", 1), icon("star", "Star", 0)])
   api.saveLayout.mockResolvedValue(undefined)
 })
