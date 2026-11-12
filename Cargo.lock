@@ -980,6 +980,7 @@ dependencies = [
  "deckpilot-render",
  "deckpilot-storage",
  "deckpilot-update",
+ "minisign",
  "serde",
  "serde_json",
  "tauri",
