@@ -783,6 +783,7 @@ export type AgentCapability =
   | "encryptedDatabase"
   | "backgroundExecutions"
   | "notifications"
+  | "variables"
 
 export interface AgentConnection {
   running: boolean
