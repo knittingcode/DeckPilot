@@ -2558,6 +2558,140 @@ fn restarting_the_agent_never_ends_running_workflows_silently() {
     wait_for(&h, |s| s["status"]["runningExecutions"] == 0);
 }
 
+// One scenario through every step of the safe deletion.
+#[allow(clippy::too_many_lines)]
+#[test]
+fn referenced_actions_are_replaced_or_unbound_before_they_are_deleted() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    let hello = log_action(&h, &profile_id, "Hello", "hi");
+    let other = log_action(&h, &profile_id, "Other", "ho");
+    let ids = json!({ "profileId": profile_id, "actionId": hello["id"] });
+
+    // Used on a key, in a step workflow and in a graph node of a workflow
+    // with a trigger.
+    let mut layout = h.ok(
+        "create_layout",
+        json!({ "profileId": profile_id, "modelId": "elgato.streamdeck.mk2", "name": "Main", "generate": false }),
+    );
+    layout["pages"][0]["bindings"] = json!([{
+        "control": { "kind": "key", "index": 0 },
+        "trigger": { "type": "press" },
+        "target": { "type": "action", "action": hello["id"] }
+    }]);
+    let layout = h.ok(
+        "save_layout",
+        json!({ "profileId": profile_id, "layout": layout }),
+    );
+    h.ok(
+        "save_workflow",
+        json!({
+            "profileId": profile_id,
+            "workflow": {
+                "id": "00000000-0000-4000-8000-000000000001",
+                "name": "Steps",
+                "steps": [{ "action": hello["id"], "onFailure": "stop" }]
+            }
+        }),
+    );
+    let policy = json!({ "onError": "stop", "retry": { "attempts": 0, "backoffMs": 0 } });
+    h.ok(
+        "save_workflow",
+        json!({
+            "profileId": profile_id,
+            "workflow": {
+                "id": "00000000-0000-4000-8000-000000000002",
+                "name": "Morning",
+                "steps": [],
+                "triggers": [{ "type": "schedule", "schedule": { "every": "daily", "at": "09:00" } }],
+                "graph": {
+                    "version": 1,
+                    "nodes": [
+                        { "id": "start", "type": "trigger", "position": { "x": 0, "y": 0 } },
+                        { "id": "say", "label": "Say hello", "type": "action", "action": hello["id"],
+                          "policy": policy, "position": { "x": 200, "y": 0 } }
+                    ],
+                    "edges": [{ "from": "start", "port": "out", "to": "say" }]
+                }
+            }
+        }),
+    );
+
+    let references = h.ok("action_references", ids.clone());
+    let sites: Vec<&Value> = references
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| &r["site"])
+        .collect();
+    let kinds: Vec<&str> = sites.iter().map(|s| s["type"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["binding", "step", "node", "trigger"]);
+    assert_eq!(references[0]["ownerName"], "Main");
+    assert_eq!(references[2]["detail"], "Say hello");
+    let (binding, step, node, trigger) = (sites[0], sites[1], sites[2], sites[3]);
+
+    // Deleting is refused while anything uses it, and changes nothing.
+    let refused = h.error("delete_action", ids.clone());
+    assert!(refused.contains("still used in 4 place(s)"), "{refused}");
+    assert_eq!(h.ok("action_references", ids.clone()), references);
+
+    // A graph node cannot be unbound; a trigger is never changed itself.
+    let sites_of = |list: &[&Value]| json!({ "type": "sites", "sites": list });
+    let error = h.error(
+        "unbind_action_references",
+        json!({ "profileId": profile_id, "actionId": hello["id"], "selection": sites_of(&[node]) }),
+    );
+    assert!(error.contains("cannot be unbound"), "{error}");
+    let error = h.error(
+        "replace_action_references",
+        json!({ "profileId": profile_id, "actionId": hello["id"], "replacement": other["id"],
+                "selection": sites_of(&[trigger]) }),
+    );
+    assert!(error.contains("trigger"), "{error}");
+    assert_eq!(h.ok("action_references", ids.clone()), references);
+
+    // Replace the step and the node, unbind the key.
+    let change = h.ok(
+        "replace_action_references",
+        json!({ "profileId": profile_id, "actionId": hello["id"], "replacement": other["id"],
+                "selection": sites_of(&[step, node]) }),
+    );
+    assert_eq!(change["changed"], json!([step, node]));
+    // Same action type: nothing was cleared.
+    assert_eq!(change["clearedSettings"], json!([]));
+    let change = h.ok(
+        "unbind_action_references",
+        json!({ "profileId": profile_id, "actionId": hello["id"], "selection": sites_of(&[binding]) }),
+    );
+    assert_eq!(change["changed"], json!([binding]));
+
+    assert_eq!(h.ok("action_references", ids.clone()), json!([]));
+    h.ok("delete_action", ids);
+
+    // The other action now has the step, the node and with it the trigger;
+    // the key is empty.
+    let moved = h.ok(
+        "action_references",
+        json!({ "profileId": profile_id, "actionId": other["id"] }),
+    );
+    let kinds: Vec<&str> = moved
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["site"]["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["step", "node", "trigger"]);
+    let view = h.ok("get_profile", json!({ "profileId": profile_id }));
+    let page = view["profile"]["layouts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == layout["id"])
+        .unwrap()["pages"][0]
+        .clone();
+    assert_eq!(page["bindings"], json!([]));
+}
+
 // One scenario through the Shared Variables page's commands.
 #[allow(clippy::too_many_lines)]
 #[test]
