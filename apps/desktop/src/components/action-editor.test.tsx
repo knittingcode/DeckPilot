@@ -216,6 +216,41 @@ describe("ActionEditor", () => {
     )
   })
 
+  it("offers no deprecated types for new actions but still edits saved ones", async () => {
+    const user = userEvent.setup()
+    const nextType: ActionType = {
+      ...selectType,
+      id: "projects.next",
+      name: "Next project",
+      description: "Makes the next project of the profile active.",
+      parameters: [],
+      deprecated: true,
+    }
+    const modules = [module("projects", "Projects", [selectType, nextType])]
+    // The deprecated type does not count: select is the only type offered.
+    renderEditor(null, 0, modules)
+    expect(screen.getByLabelText("Action type")).toHaveTextContent("Select project")
+    await user.click(screen.getByLabelText("Action type"))
+    expect(screen.getByRole("option", { name: "Select project" })).toBeInTheDocument()
+    expect(screen.queryByRole("option", { name: "Next project" })).not.toBeInTheDocument()
+    cleanup()
+
+    const saved: ActionInstance = {
+      id: "a6",
+      name: "Old next",
+      actionType: nextType.id,
+      parameters: {},
+    }
+    updateAction.mockResolvedValue(saved)
+    renderEditor(saved, 0, modules)
+    expect(screen.getByText(/Projects › Next project/)).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: /^save$/i }))
+    expect(updateAction).toHaveBeenCalledWith(
+      "profile",
+      expect.objectContaining({ id: "a6", actionType: "projects.next" }),
+    )
+  })
+
   it("keeps actions of disabled modules visible but unavailable", () => {
     const action: ActionInstance = {
       id: "a3",

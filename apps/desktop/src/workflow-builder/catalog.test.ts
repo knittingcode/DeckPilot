@@ -43,6 +43,23 @@ describe("catalog", () => {
     expect(groups[0]?.entries[0]?.kind).toMatchObject({ type: "action", action: "a1" })
   })
 
+  it("offers no new nodes of deprecated types but keeps their saved actions", () => {
+    const next: ActionType = {
+      ...repository,
+      id: "projects.next",
+      name: "Next project",
+      deprecated: true,
+    }
+    const cycle: ActionType = { ...repository, id: "projects.cycle", name: "Cycle projects" }
+    const saved: ActionInstance[] = [
+      { id: "n1", name: "Old next", actionType: "projects.next", parameters: {} },
+    ]
+    const groups = moduleGroups([moduleInfo({ id: "projects", actionTypes: [next, cycle] })], saved)
+    expect(groups[0]?.types.map((t) => t.id)).toEqual(["projects.cycle"])
+    expect(groups[0]?.entries.map((e) => e.title)).toEqual(["Old next"])
+    expect(groups[0]?.entries[0]?.description).toBe("Next project")
+  })
+
   it("offers a loop and a sub-workflow only when another workflow exists", () => {
     expect(flowEntries(undefined).some((e) => e.kind.type === "loop")).toBe(false)
     expect(flowEntries(undefined).some((e) => e.kind.type === "call")).toBe(false)

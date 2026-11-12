@@ -41,6 +41,37 @@ fn now() -> u64 {
         .as_secs()
 }
 
+/// Year, month (1–12) and day of a day number since 1970-01-01
+/// (H. Hinnant's `civil_from_days`).
+fn civil(days: u64) -> (u64, usize, u64) {
+    let z = days + 719_468;
+    let era = z / 146_097;
+    let doe = z % 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + u64::from(month <= 2);
+    (year, usize::try_from(month).unwrap(), day)
+}
+
+/// `at` (Unix seconds) as an HTTP date; the weekday is not checked.
+fn http_date(at: u64) -> String {
+    let (days, rest) = (at / 86_400, at % 86_400);
+    let (year, month, day) = civil(days);
+    let months = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    format!(
+        "Mon, {day:02} {} {year} {:02}:{:02}:{:02} GMT",
+        months[month - 1],
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
+}
+
 fn search(query: &str) -> (String, Vec<String>, Vec<u8>) {
     let per_page: usize = query
         .split('&')
@@ -65,6 +96,7 @@ fn search(query: &str) -> (String, Vec<String>, Vec<u8>) {
     )
 }
 
+#[allow(clippy::too_many_lines)] // One table of the stand-in's answers.
 fn route(
     path: &str,
     query: &str,
@@ -113,6 +145,12 @@ fn route(
         "/repos/octo/secondary" => {
             let (_, mut headers, body) = json("429 Too Many Requests", "{}");
             headers.push("Retry-After: 30".into());
+            ("429 Too Many Requests".into(), headers, body)
+        }
+        "/repos/octo/dated" => {
+            // Retry-After as an HTTP date, 90 s ahead.
+            let (_, mut headers, body) = json("429 Too Many Requests", "{}");
+            headers.push(format!("Retry-After: {}", http_date(now() + 90)));
             ("429 Too Many Requests".into(), headers, body)
         }
         "/repos/octo/broken" => json("502 Bad Gateway", r#"{"message":"Server Error"}"#),
@@ -509,6 +547,11 @@ fn github_failures_have_codes() {
     let secondary = run("octo/secondary");
     assert_eq!(secondary.code.as_deref(), Some(codes::RATE_LIMITED));
     assert_eq!(secondary.data["retryAfterSeconds"], "30");
+
+    let dated = run("octo/dated");
+    assert_eq!(dated.code.as_deref(), Some(codes::RATE_LIMITED));
+    let wait: u64 = dated.data["retryAfterSeconds"].parse().unwrap();
+    assert!((85..=90).contains(&wait), "{wait}");
 
     let broken = run("octo/broken");
     assert_eq!(broken.code.as_deref(), Some(codes::GITHUB_ERROR));

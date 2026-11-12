@@ -447,7 +447,7 @@ limit for the whole action, and cancellation at once.
 
 **Failures.** `unauthorized` (401), `forbidden` (403, e.g. a token without
 `read_api`), `not-found` (404, also for private projects the token cannot
-see), `rate-limited` (429; `retryAfterSeconds` from `Retry-After` or
+see), `rate-limited` (429; `retryAfterSeconds` from `Retry-After` (seconds or an HTTP date) or
 `RateLimit-Reset`), `gitlab-error` (another status, with GitLab's message),
 and `credential-missing` when no token is stored under the name.
 
@@ -515,7 +515,7 @@ time limit for the whole action, and cancellation at once.
 
 **Failures.** `unauthorized` (401), `forbidden` (403), `not-found` (404,
 also for issues the account may not see), `rate-limited` (429;
-`retryAfterSeconds` from `Retry-After`), `jira-error` (another status, with
+`retryAfterSeconds` from `Retry-After`, seconds or an HTTP date), `jira-error` (another status, with
 Jira's first error message, e.g. a filter that does not exist), and
 `credential-missing` when nothing is stored under the name or a Cloud
 credential is not `email:api-token`.
