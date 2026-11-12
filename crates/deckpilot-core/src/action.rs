@@ -345,6 +345,10 @@ pub struct ActionType {
     /// How the action behaves as a workflow node.
     #[serde(default)]
     pub node: crate::graph::NodeSpec,
+    /// Replaced by another type: saved actions, workflow nodes and keys of
+    /// this type keep working, but the type is not offered for new ones.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deprecated: bool,
 }
 
 impl ActionType {
@@ -750,6 +754,7 @@ mod tests {
                 },
             ],
             requires_project: false,
+            deprecated: false,
             node: crate::graph::NodeSpec::default(),
         }
     }
@@ -838,6 +843,7 @@ mod structured_text_tests {
                 default: None,
             }],
             requires_project: false,
+            deprecated: false,
             node: crate::graph::NodeSpec::default(),
         }
     }

@@ -206,7 +206,8 @@ pub fn rate_limit_wait(status: u16, headers: &[(String, String)], now: u64) -> O
     if status != 429 {
         return None;
     }
-    if let Some(seconds) = header(headers, "retry-after").and_then(|v| v.parse::<u64>().ok()) {
+    if let Some(seconds) = header(headers, "retry-after").and_then(|v| client::retry_after(v, now))
+    {
         return Some(seconds);
     }
     let reset = header(headers, "ratelimit-reset").and_then(|v| v.parse::<u64>().ok());
@@ -624,6 +625,20 @@ mod tests {
             Some(30)
         );
         assert_eq!(rate_limit_wait(429, &[], 0), Some(60));
+        // An HTTP date, counted from now (1794466800 is 07:00:00).
+        assert_eq!(
+            rate_limit_wait(
+                429,
+                &headers(&[("Retry-After", "Thu, 12 Nov 2026 07:00:45 GMT")]),
+                1_794_466_800
+            ),
+            Some(45)
+        );
+        // A form not understood: the reset time, then a minute.
+        assert_eq!(
+            rate_limit_wait(429, &headers(&[("Retry-After", "later")]), 0),
+            Some(60)
+        );
         assert_eq!(
             rate_limit_wait(403, &headers(&[("Retry-After", "1")]), 0),
             None

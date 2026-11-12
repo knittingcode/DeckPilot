@@ -280,6 +280,7 @@ fn definition(kind: Kind) -> ActionType {
         category: "Git".into(),
         parameters,
         requires_project: false,
+        deprecated: false,
         node: spec,
     }
 }
