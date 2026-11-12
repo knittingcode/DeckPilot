@@ -1393,6 +1393,14 @@ fn assert_export_hides_its_content(bytes: &[u8], password: &str) {
     assert!(!contains(bytes, machine));
 }
 
+/// A fresh export password for one test, generated so that it is never a
+/// constant that could pass for (or be reused as) a real credential.
+fn generated_export_password() -> String {
+    let mut bytes = [0u8; 16];
+    deckpilot_storage::crypto::random_bytes(&mut bytes).unwrap();
+    format!("test-export-{:032x}", u128::from_le_bytes(bytes))
+}
+
 #[test]
 fn configuration_round_trips_through_an_encrypted_export() {
     let h = Harness::new();
@@ -1407,14 +1415,15 @@ fn configuration_round_trips_through_an_encrypted_export() {
     );
     let file = h.paths.data_dir.join("work.deckpilot");
     let path = file.display().to_string();
+    let export_password = generated_export_password();
     h.ok("authenticate", json!({ "password": PASSWORD }));
     let result = h.ok(
         "export_configuration",
-        json!({ "request": { "path": path, "password": "export secret", "confirmation": "export secret", "profiles": null, "includeModuleSettings": true } }),
+        json!({ "request": { "path": path, "password": export_password, "confirmation": export_password, "profiles": null, "includeModuleSettings": true } }),
     );
     assert_eq!(result["profiles"], 1);
     let bytes = std::fs::read(&file).unwrap();
-    assert_export_hides_its_content(&bytes, "export secret");
+    assert_export_hides_its_content(&bytes, &export_password);
 
     assert!(
         h.error(
@@ -1432,7 +1441,7 @@ fn configuration_round_trips_through_an_encrypted_export() {
     assert!(
         h.call(
             "preview_import",
-            json!({ "path": tampered_path.display().to_string(), "password": "export secret" })
+            json!({ "path": tampered_path.display().to_string(), "password": export_password })
         )
         .is_err()
     );
@@ -1440,7 +1449,7 @@ fn configuration_round_trips_through_an_encrypted_export() {
     // Importing into the same installation: a conflict, kept as a copy.
     let preview = h.ok(
         "preview_import",
-        json!({ "path": path, "password": "export secret" }),
+        json!({ "path": path, "password": export_password }),
     );
     assert_eq!(
         preview["preview"]["profiles"][0]["conflict"]["type"],
