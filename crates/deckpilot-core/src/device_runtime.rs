@@ -454,7 +454,16 @@ impl Runtime {
     ) -> Result<RuntimeOutcome, EngineError> {
         match target {
             BindingTarget::Action { action } => {
-                let result = self.run_action(action)?;
+                // The key's device is part of the context its references
+                // are resolved in (`system.device.current.id`).
+                let session = self.session.as_mut().ok_or(EngineError::NoActiveProfile)?;
+                let result = self.engine.run_action_from(
+                    &session.profile,
+                    &self.machine,
+                    &mut session.projects,
+                    action,
+                    &crate::resolution::Invocation::from_device(device.clone()),
+                )?;
                 Ok(RuntimeOutcome::Action { action, result })
             }
             BindingTarget::Workflow { workflow } => {

@@ -236,6 +236,7 @@ describe("logs and update windows", () => {
         automaticChecks: true,
         checkIntervalHours: 24,
         lastCheck: null,
+        channel: "stable",
       },
       phase: "idle",
       available: null,

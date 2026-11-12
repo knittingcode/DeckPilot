@@ -5,6 +5,10 @@ import react from "@vitejs/plugin-react"
 import { defineConfig } from "vitest/config"
 
 const host = process.env.TAURI_DEV_HOST
+// A second development session (e.g. the integration preview) uses its own
+// port, with a Tauri configuration whose `devUrl` matches it
+// (DECKPILOT_TAURI_CONFIG, see docs/development.md).
+const port = Number(process.env.DECKPILOT_VITE_PORT ?? 1420)
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -13,10 +17,10 @@ export default defineConfig({
   },
   clearScreen: false,
   server: {
-    port: 1420,
+    port,
     strictPort: true,
     host: host ?? false,
-    hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
+    hmr: host ? { protocol: "ws", host, port: port + 1 } : undefined,
     watch: { ignored: ["**/src-tauri/**"] },
   },
   envPrefix: ["VITE_", "TAURI_ENV_*"],
