@@ -219,7 +219,8 @@ pub fn rate_limit_wait(
     if status != 403 && status != 429 {
         return None;
     }
-    if let Some(seconds) = header(headers, "retry-after").and_then(|v| v.parse::<u64>().ok()) {
+    if let Some(seconds) = header(headers, "retry-after").and_then(|v| client::retry_after(v, now))
+    {
         return Some(seconds);
     }
     if header(headers, "x-ratelimit-remaining") == Some("0") {
