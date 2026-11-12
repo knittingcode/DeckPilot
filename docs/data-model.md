@@ -424,7 +424,9 @@ profile documents are not changed. An item is *edited* when its canonical
 JSON differs from the snapshot (`provenance_status`). Rows go away with the
 item (saving a profile without it) and with the profile.
 
-Only newly created data gets provenance. Data from before schema 8 —
+The development seed (`tools/dev`) records a row for every action, workflow,
+layout and project it creates (catalog `dev-seed`, keys such as
+`work.action.next-project`). Only newly created data gets provenance. Data from before schema 8 —
 including seeded data of development databases, such as the
 `v0.5.0-2` fixture — has none and is treated as the user's: nothing removes
 it automatically.
