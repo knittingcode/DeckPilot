@@ -267,7 +267,9 @@ verifies it, and only then upgrades in a single transaction. The result is
 recorded in `migration_history`. The newest five backups are kept. A copy
 is written under a temporary name (`….db.partial`) and gets its backup name
 only once verified, so an interrupted backup never replaces a good one; an
-interrupted upgrade leaves the database as it was. See
+interrupted upgrade leaves the database as it was. An upgraded database that
+fails the integrity check after the commit is refused, naming the backup, at
+every start until a check passes. See
 [data-model.md](data-model.md#compatibility-between-versions) for the
 version policy.
 
