@@ -103,6 +103,29 @@ pub struct AgentClient {
     events: VecDeque<AgentEvent>,
 }
 
+impl Drop for AgentClient {
+    fn drop(&mut self) {
+        // Nothing is left to deliver: close the connection at once (see
+        // `SharedStream::skip_flush_on_close`).
+        self.writer.skip_flush_on_close();
+    }
+}
+
+/// Whether an agent holds the instance lock of `paths`. A lock that can be
+/// taken (and is released again at once) means no agent runs; one that
+/// cannot be checked counts as held.
+fn agent_holds_lock(paths: &AgentPaths) -> bool {
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .open(&paths.lock_file)
+    {
+        Ok(file) => !matches!(file.try_lock(), Ok(())),
+        // No lock file: no agent ever ran here.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(_) => true,
+    }
+}
+
 impl AgentClient {
     /// Connects and authenticates with the newest protocol the agent
     /// accepts, from [`PROTOCOL_VERSION`] down to
@@ -143,6 +166,10 @@ impl AgentClient {
                 io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
                     ClientError::NotRunning
                 }
+                // An endpoint that stayed busy (on Windows, the pipe of an
+                // agent that is gone, still held open by someone) while no
+                // agent holds the instance lock: nothing runs.
+                io::ErrorKind::TimedOut if !agent_holds_lock(paths) => ClientError::NotRunning,
                 _ => ClientError::Io(error),
             })?;
         let token = token::read(&paths.token_file).map_err(|error| match error.kind() {
@@ -344,5 +371,34 @@ mod tests {
             io::ErrorKind::PermissionDenied,
         ))));
         assert!(matches!(other, ClientError::Io(_)));
+    }
+
+    #[test]
+    fn the_instance_lock_tells_whether_an_agent_runs() {
+        let dir = std::env::temp_dir().join(format!(
+            "deckpilot-ipc-lock-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = AgentPaths::in_dir(&dir);
+        // Never ran here.
+        assert!(!agent_holds_lock(&paths));
+        // Ran and stopped (the file stays).
+        std::fs::write(&paths.lock_file, b"").unwrap();
+        assert!(!agent_holds_lock(&paths));
+        // Running: the lock is held.
+        let held = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&paths.lock_file)
+            .unwrap();
+        held.try_lock().unwrap();
+        assert!(agent_holds_lock(&paths));
+        // The check itself does not keep the lock.
+        drop(held);
+        let again = std::fs::File::open(&paths.lock_file).unwrap();
+        assert!(again.try_lock().is_ok());
+        drop(again);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
