@@ -157,6 +157,8 @@ struct Extras {
     screen: Option<std::sync::Arc<ScriptedScreenLock>>,
     /// Native notifications; never real ones in tests.
     notifier: Option<std::sync::Arc<deckpilot_core::notify::RecordingNotifier>>,
+    /// How long a cancelled run may take to stop (default 10 s).
+    cancel_grace: Option<Duration>,
 }
 
 /// Windows the agent asked to open by starting the app.
@@ -173,6 +175,7 @@ fn start_agent_with(
         clock,
         screen,
         notifier,
+        cancel_grace,
     } = extras;
     let lock = InstanceLock::acquire_waiting(&paths.lock_file, LOCK_WAIT)?;
     let options = AgentOptions {
@@ -192,7 +195,7 @@ fn start_agent_with(
             std::sync::Arc::new(keys)
         }),
         auto_lock_check: Duration::from_millis(50),
-        cancel_grace: Duration::from_secs(10),
+        cancel_grace: cancel_grace.unwrap_or(Duration::from_secs(10)),
         clock: clock.unwrap_or_else(deckpilot_agent::system_clock),
         notifier: notifier.map(|n| -> std::sync::Arc<dyn deckpilot_core::notify::Notifier> { n }),
         screen_lock: screen.map(|screen| -> std::sync::Arc<dyn ScreenLockMonitor> { screen }),
@@ -206,12 +209,16 @@ fn start_agent_with(
 }
 
 async fn setup() -> TestAgent {
+    setup_with(Extras::default()).await
+}
+
+async fn setup_with(extras: Extras) -> TestAgent {
     let watchdog = watch();
     let paths = temp_paths();
     let (work, key) = seed(&paths);
     let mock = MockBackend::new();
     let device = mock.plug(&models::stream_deck_mk2(), "TEST-0001");
-    let (task, stop) = start_agent(paths.clone(), mock.clone()).unwrap();
+    let (task, stop) = start_agent_with(paths.clone(), mock.clone(), extras).unwrap();
     unlock_agent(&paths, &key).await;
     let agent = TestAgent {
         paths,
@@ -3234,6 +3241,169 @@ async fn connections_offer_only_what_their_protocol_has() {
     assert_eq!(status["response"]["status"]["runningExecutions"], 0);
     drop((reader, writer, current));
     agent.shutdown().await;
+}
+
+/// A cancelled run whose action does not stop within the cancel grace is
+/// recorded as cancelled at the end of the grace. Subscribers then learn
+/// at once that nothing runs any more (the tray, the app, keys showing
+/// progress), and the result the action delivers later changes nothing.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_run_that_outlives_its_cancel_grace_ends_for_everyone() {
+    let agent = setup_with(Extras {
+        cancel_grace: Some(Duration::from_millis(300)),
+        ..Extras::default()
+    })
+    .await;
+    set_system(&agent, true, true);
+    // Ignores the polite stop; it is killed only after the process grace
+    // (2 s), well after the agent's cancel grace.
+    let workflow = command_workflow(&agent, "trap '' TERM; sleep 4");
+    let mut client = agent.client().await;
+    client.subscribe().await.unwrap();
+    client.request(Request::ReloadConfiguration).await.unwrap();
+
+    let run = start_workflow(&mut client, workflow).await;
+    agent
+        .wait_for_status(|s| s.running_executions == Some(1))
+        .await;
+    // Let the shell install its trap before it is asked to stop.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    client
+        .request(Request::CancelExecution { execution: run.id })
+        .await
+        .unwrap();
+    let (_, finished) = execution_events(&mut client, run.id).await;
+    assert_eq!(finished.state, deckpilot_core::ExecutionState::Cancelled);
+    assert!(
+        finished.message.contains("cannot be interrupted"),
+        "{}",
+        finished.message
+    );
+    // A state update follows right away, not only with the next change.
+    let status = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if let AgentEvent::State { status } = client.next_event().await.unwrap() {
+                break status;
+            }
+        }
+    })
+    .await
+    .expect("a state update after the run ended");
+    assert_eq!(status.running_executions, Some(0));
+
+    // The command is killed after its grace; its late result is discarded.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let record = agent.store().execution(run.id).unwrap().unwrap();
+    assert_eq!(
+        record.summary.state,
+        deckpilot_core::ExecutionState::Cancelled
+    );
+    assert_eq!(agent.status().await.running_executions, Some(0));
+    // The workflow can run again.
+    let again = start_workflow(&mut client, workflow).await;
+    client
+        .request(Request::CancelExecution {
+            execution: again.id,
+        })
+        .await
+        .unwrap();
+    agent.shutdown().await;
+}
+
+/// At most four workflows run together; a fifth is refused with a reason
+/// and recorded nowhere, and starts once one of the four has ended.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn at_most_four_workflows_run_together() {
+    let agent = setup().await;
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let wait = registry()
+        .create_instance(
+            "Wait a while",
+            general::wait_id(),
+            &ActionParameters::new().with("seconds", deckpilot_core::ParameterValue::Integer(300)),
+        )
+        .unwrap();
+    let wait_id = wait.id;
+    profile.actions.push(wait);
+    let workflows: Vec<deckpilot_core::WorkflowId> = (0..5)
+        .map(|n| {
+            let mut workflow = deckpilot_core::Workflow::new(format!("Wait {n}"));
+            workflow.graph = Some(
+                serde_json::from_value(json!({
+                    "version": 1,
+                    "nodes": [
+                        {"id": "start", "type": "trigger"},
+                        {"id": "wait", "type": "action", "action": wait_id},
+                    ],
+                    "edges": [{"from": "start", "to": "wait"}],
+                }))
+                .unwrap(),
+            );
+            let id = workflow.id;
+            profile.workflows.push(workflow);
+            id
+        })
+        .collect();
+    agent.store().save_profile(&profile).unwrap();
+    let mut client = agent.client().await;
+    client.subscribe().await.unwrap();
+    client.request(Request::ReloadConfiguration).await.unwrap();
+
+    let mut runs = Vec::new();
+    for workflow in &workflows[..4] {
+        runs.push(start_workflow(&mut client, *workflow).await);
+    }
+    let refused = client
+        .request(Request::StartWorkflow {
+            workflow: workflows[4],
+        })
+        .await;
+    assert!(
+        matches!(&refused, Err(ClientError::Agent(e)) if e.message.contains("4 workflows are already running")),
+        "{refused:?}"
+    );
+    assert_eq!(agent.status().await.running_executions, Some(4));
+    let listed = |executions: &[deckpilot_core::ExecutionSummary]| {
+        executions
+            .iter()
+            .filter(|e| e.workflow == workflows[4])
+            .count()
+    };
+    let Response::Executions { executions } = client
+        .request(Request::ListExecutions {
+            workflow: None,
+            limit: Some(50),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("executions expected");
+    };
+    assert_eq!(executions.len(), 4);
+    assert_eq!(listed(&executions), 0, "a refused start leaves no record");
+
+    // One ends: the fifth starts.
+    client
+        .request(Request::CancelExecution {
+            execution: runs[0].id,
+        })
+        .await
+        .unwrap();
+    let (_, finished) = execution_events(&mut client, runs[0].id).await;
+    assert_eq!(finished.state, deckpilot_core::ExecutionState::Cancelled);
+    let fifth = start_workflow(&mut client, workflows[4]).await;
+    assert_eq!(agent.status().await.running_executions, Some(4));
+
+    // Each run has its own record; stopping the agent ends the others as
+    // interrupted.
+    let store = agent.store();
+    agent.shutdown().await;
+    let state = |id| store.execution(id).unwrap().unwrap().summary.state;
+    assert_eq!(state(runs[0].id), deckpilot_core::ExecutionState::Cancelled);
+    for run in runs[1..].iter().chain([&fifth]) {
+        assert_eq!(state(run.id), deckpilot_core::ExecutionState::Interrupted);
+    }
 }
 
 /// A test that blocks its thread (which `tokio::time::timeout` cannot
