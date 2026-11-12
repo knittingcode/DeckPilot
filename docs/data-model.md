@@ -521,6 +521,17 @@ marked `ok` once a check passes, and restoring the named backup returns to
 the fixture row for row. A process killed between the commit and the check
 is verified on the next start.
 
+The same unit tests run on a 0.6.0 database (schema 7,
+`tests/fixtures/v0.6.0/`, created by the 0.6.0 tools with a workflow run, a
+credential, an active project and launches added so that every schema 7
+table has rows): every row is kept, the upgrade adds only the three empty
+schema 8 tables, failures and kills after migration 8 or before the commit
+leave the schema 7 database and its backup intact, and the next start
+upgrades. `tests/upgrade_from_0_6_0.rs` checks the data through the API,
+that shared variables work on the upgraded database, that the
+`deckpilot-schema7-…` backup restores the 0.6.0 state (losing what changed
+afterwards), and that a newer schema is refused without changes.
+
 Upgrades from schemas 1 to 4 are covered by the storage unit tests
 (`migrates_a_version_one_database_without_losing_data`,
 `upgrades_are_preceded_by_a_verified_encrypted_backup`); no database from a

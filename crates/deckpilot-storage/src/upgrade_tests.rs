@@ -1,5 +1,6 @@
-//! Upgrades of the real 0.5.0-2 database (`tests/fixtures/v0.5.0-2`, schema
-//! 5) checked row by row, and upgrades that fail or are killed half-way.
+//! Upgrades of real databases checked row by row — 0.5.0-2
+//! (`tests/fixtures/v0.5.0-2`, schema 5) and 0.6.0 (`tests/fixtures/v0.6.0`,
+//! schema 7) — and upgrades that fail or are killed half-way.
 //!
 //! These are unit tests because failures are injected at points inside the
 //! upgrade ([`Failpoint`]), which only test builds have. A killed process is
@@ -16,8 +17,30 @@ use crate::sqlite::{ABORT_AT_ENV, FAIL_AT, Failpoint};
 use crate::vault::Vault;
 use crate::{DatabaseKey, Encryption, SqliteStore, StorageError};
 
-const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/v0.5.0-2");
-/// The development password the fixture was created with.
+/// A database created by a released DeckPilot's development tools.
+#[derive(Debug, Clone, Copy)]
+struct Fixture {
+    dir: &'static str,
+    /// Its schema version.
+    version: u32,
+}
+
+/// `deckpilot-dev validation seed` of 0.5.0-2.
+const V0_5_0: Fixture = Fixture {
+    dir: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/v0.5.0-2"),
+    version: 5,
+};
+/// `deckpilot-dev validation seed` of 0.6.0 (`main` before schema 8), plus a
+/// workflow run, a credential, an active project and launches, so that
+/// every table of schema 7 has rows.
+const V0_6_0: Fixture = Fixture {
+    dir: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/v0.6.0"),
+    version: 7,
+};
+const FIXTURES: [Fixture; 2] = [V0_5_0, V0_6_0];
+/// The schema this build upgrades to.
+const CURRENT: u32 = 8;
+/// The development password the fixtures were created with.
 const PASSWORD: &str = "deckpilot-dev";
 /// The database the child process upgrades.
 const CHILD_DATABASE_ENV: &str = "DECKPILOT_TEST_DATABASE";
@@ -26,6 +49,7 @@ const CHILD_DATABASE_ENV: &str = "DECKPILOT_TEST_DATABASE";
 struct Copy {
     dir: PathBuf,
     key: DatabaseKey,
+    version: u32,
 }
 
 impl Drop for Copy {
@@ -34,7 +58,7 @@ impl Drop for Copy {
     }
 }
 
-fn copy() -> Copy {
+fn copy(fixture: Fixture) -> Copy {
     let mut bytes = [0u8; 8];
     getrandom::fill(&mut bytes).unwrap();
     let dir = std::env::temp_dir().join(format!(
@@ -44,12 +68,16 @@ fn copy() -> Copy {
     ));
     std::fs::create_dir_all(&dir).unwrap();
     for file in ["deckpilot.db", "deckpilot.vault.json"] {
-        std::fs::copy(Path::new(FIXTURE).join(file), dir.join(file)).unwrap();
+        std::fs::copy(Path::new(fixture.dir).join(file), dir.join(file)).unwrap();
     }
     let key = Vault::new(dir.join("deckpilot.db"))
         .unlock(&Password::new(PASSWORD))
         .unwrap();
-    Copy { dir, key }
+    Copy {
+        dir,
+        key,
+        version: fixture.version,
+    }
 }
 
 impl Copy {
@@ -131,6 +159,20 @@ fn dump(connection: &Connection) -> Dump {
     }
 }
 
+/// Every fixture with every failpoint inside the upgrade transaction: after
+/// each migration it runs, and just before the commit.
+fn inside_the_transaction() -> Vec<(Fixture, Failpoint)> {
+    FIXTURES
+        .into_iter()
+        .flat_map(|fixture| {
+            (fixture.version + 1..=CURRENT)
+                .map(Failpoint::Migration)
+                .chain([Failpoint::Commit])
+                .map(move |point| (fixture, point))
+        })
+        .collect()
+}
+
 /// Runs `open` with an injected failure at `point`.
 fn failing_at<T>(point: Failpoint, open: impl FnOnce() -> T) -> T {
     FAIL_AT.with(|fail| fail.set(Some(point)));
@@ -139,17 +181,17 @@ fn failing_at<T>(point: Failpoint, open: impl FnOnce() -> T) -> T {
     result
 }
 
-/// The database is still the fixture, row for row, at schema 5.
+/// The database is still the fixture, row for row, at its schema.
 fn assert_untouched(copy: &Copy, original: &Dump) {
     let now = dump(&raw(&copy.database(), &copy.key));
-    assert_eq!(now.version, 5);
+    assert_eq!(now.version, copy.version);
     assert!(now == *original, "the database changed");
 }
 
 /// `name` is a complete, verified backup holding the original state.
 fn assert_backup_of(copy: &Copy, name: &str, original: &Dump) {
     assert!(
-        name.starts_with("deckpilot-schema5-")
+        name.starts_with(&format!("deckpilot-schema{}-", copy.version))
             && Path::new(name).extension().is_some_and(|e| e == "db"),
         "{name}"
     );
@@ -161,10 +203,13 @@ fn assert_backup_of(copy: &Copy, name: &str, original: &Dump) {
 /// The next start upgrades normally.
 fn assert_next_start_upgrades(copy: &Copy) {
     let store = copy.open().unwrap();
-    assert_eq!(store.schema_version().unwrap(), 8);
+    assert_eq!(store.schema_version().unwrap(), CURRENT);
     store.check_integrity().unwrap();
     let last = store.migration_history().unwrap().pop().unwrap();
-    assert_eq!((last.from_version, last.to_version), (5, 8));
+    assert_eq!(
+        (last.from_version, last.to_version),
+        (copy.version, CURRENT)
+    );
     assert_eq!(last.result, "ok");
     assert!(Path::new(&last.backup.unwrap()).exists());
     // Only complete backups remain.
@@ -179,24 +224,39 @@ fn assert_next_start_upgrades(copy: &Copy) {
 
 #[test]
 fn every_row_of_every_table_is_kept_and_reopening_changes_nothing() {
-    let copy = copy();
+    for fixture in FIXTURES {
+        every_row_is_kept(fixture);
+    }
+}
+
+fn every_row_is_kept(fixture: Fixture) {
+    let copy = copy(fixture);
     let original = dump(&raw(&copy.database(), &copy.key));
-    assert_eq!(original.version, 5);
+    assert_eq!(original.version, fixture.version);
     // The fixture has data in the tables that matter.
-    for table in [
+    let mut filled = vec![
         "profiles",
         "projects",
         "default_projects",
         "machine_config",
         "settings",
         "migration_history",
-    ] {
+    ];
+    if fixture.version >= 7 {
+        filled.extend([
+            "active_projects",
+            "app_launches",
+            "credentials",
+            "workflow_executions",
+        ]);
+    }
+    for table in filled {
         assert!(!original.tables[table].1.is_empty(), "{table} is empty");
     }
 
     let store = copy.open().unwrap();
     let upgraded = dump(store.connection_for_tests());
-    assert_eq!(upgraded.version, 8);
+    assert_eq!(upgraded.version, CURRENT);
     for (table, (sql, rows)) in &original.tables {
         let (new_sql, new_rows) = &upgraded.tables[table];
         assert_eq!(new_sql, sql, "the definition of {table} changed");
@@ -214,16 +274,14 @@ fn every_row_of_every_table_is_kept_and_reopening_changes_nothing() {
         .filter(|table| !original.tables.contains_key(*table))
         .map(String::as_str)
         .collect();
-    assert_eq!(
-        added,
-        BTreeSet::from([
-            "credentials",
-            "provenance",
-            "shared_variable_values",
-            "shared_variables",
-            "workflow_executions"
-        ])
-    );
+    let mut expected = BTreeSet::from(["provenance", "shared_variable_values", "shared_variables"]);
+    if fixture.version < 6 {
+        expected.insert("workflow_executions");
+    }
+    if fixture.version < 7 {
+        expected.insert("credentials");
+    }
+    assert_eq!(added, expected, "{fixture:?}");
     // The new tables start empty: no provenance is invented for existing
     // (seeded) data, and no variable is created.
     for table in ["provenance", "shared_variable_values", "shared_variables"] {
@@ -244,13 +302,8 @@ fn every_row_of_every_table_is_kept_and_reopening_changes_nothing() {
 
 #[test]
 fn a_failed_upgrade_changes_nothing_and_the_next_start_succeeds() {
-    for point in [
-        Failpoint::Migration(6),
-        Failpoint::Migration(7),
-        Failpoint::Migration(8),
-        Failpoint::Commit,
-    ] {
-        let copy = copy();
+    for (fixture, point) in inside_the_transaction() {
+        let copy = copy(fixture);
         let original = dump(&raw(&copy.database(), &copy.key));
         let failed = failing_at(point, || copy.open());
         assert!(
@@ -270,7 +323,13 @@ fn a_failed_upgrade_changes_nothing_and_the_next_start_succeeds() {
 
 #[test]
 fn a_backup_that_cannot_be_verified_is_removed_and_nothing_is_upgraded() {
-    let copy = copy();
+    for fixture in FIXTURES {
+        backup_that_cannot_be_verified(fixture);
+    }
+}
+
+fn backup_that_cannot_be_verified(fixture: Fixture) {
+    let copy = copy(fixture);
     let original = dump(&raw(&copy.database(), &copy.key));
     let failed = failing_at(Failpoint::Backup, || copy.open());
     assert!(
@@ -322,13 +381,12 @@ fn kill_upgrade_at(copy: &Copy, point: Failpoint) {
 
 #[test]
 fn a_killed_upgrade_is_rolled_back() {
-    for point in [
-        Failpoint::Backup,
-        Failpoint::Migration(7),
-        Failpoint::Migration(8),
-        Failpoint::Commit,
-    ] {
-        let copy = copy();
+    let points = FIXTURES
+        .into_iter()
+        .map(|fixture| (fixture, Failpoint::Backup))
+        .chain(inside_the_transaction());
+    for (fixture, point) in points {
+        let copy = copy(fixture);
         let original = dump(&raw(&copy.database(), &copy.key));
         kill_upgrade_at(&copy, point);
 
@@ -369,7 +427,13 @@ fn last_result(copy: &Copy) -> String {
 /// never used unchecked, and nothing is upgraded or backed up again.
 #[test]
 fn a_failed_check_after_the_commit_refuses_the_database_until_it_passes() {
-    let copy = copy();
+    for fixture in FIXTURES {
+        failed_check_after_the_commit(fixture);
+    }
+}
+
+fn failed_check_after_the_commit(fixture: Fixture) {
+    let copy = copy(fixture);
     let original = dump(&raw(&copy.database(), &copy.key));
     let failed = failing_at(Failpoint::Verify, || copy.open());
     let Err(StorageError::MigrationFailed {
@@ -384,7 +448,7 @@ fn a_failed_check_after_the_commit_refuses_the_database_until_it_passes() {
     assert_eq!(copy.backup(&backups[0]).display().to_string(), backup);
     assert_backup_of(&copy, &backups[0], &original);
     let upgraded = dump(&raw(&copy.database(), &copy.key));
-    assert_eq!(upgraded.version, 8);
+    assert_eq!(upgraded.version, CURRENT);
     assert_eq!(last_result(&copy), "unverified");
 
     // The next start checks again; while the check fails, the database is
@@ -411,7 +475,10 @@ fn a_failed_check_after_the_commit_refuses_the_database_until_it_passes() {
         original.tables["migration_history"].1.len() + 1
     );
     let last = history.last().unwrap();
-    assert_eq!((last.from_version, last.to_version), (5, 8));
+    assert_eq!(
+        (last.from_version, last.to_version),
+        (fixture.version, CURRENT)
+    );
     assert_eq!(last.result, "ok");
     drop(store);
     assert_eq!(copy.backup_files(), backups);
@@ -420,7 +487,13 @@ fn a_failed_check_after_the_commit_refuses_the_database_until_it_passes() {
 
 #[test]
 fn the_backup_named_by_a_failed_check_restores_the_previous_state() {
-    let copy = copy();
+    for fixture in FIXTURES {
+        backup_named_by_a_failed_check_restores(fixture);
+    }
+}
+
+fn backup_named_by_a_failed_check_restores(fixture: Fixture) {
+    let copy = copy(fixture);
     let original = dump(&raw(&copy.database(), &copy.key));
     let failed = failing_at(Failpoint::Verify, || copy.open());
     let Err(StorageError::MigrationFailed {
@@ -443,14 +516,16 @@ fn the_backup_named_by_a_failed_check_restores_the_previous_state() {
 
 #[test]
 fn a_process_killed_before_the_check_is_verified_on_the_next_start() {
-    let copy = copy();
-    kill_upgrade_at(&copy, Failpoint::Verify);
-    // Committed, but never checked.
-    assert_eq!(dump(&raw(&copy.database(), &copy.key)).version, 8);
-    assert_eq!(last_result(&copy), "unverified");
-    assert_eq!(copy.backup_files().len(), 1);
+    for fixture in FIXTURES {
+        let copy = copy(fixture);
+        kill_upgrade_at(&copy, Failpoint::Verify);
+        // Committed, but never checked.
+        assert_eq!(dump(&raw(&copy.database(), &copy.key)).version, CURRENT);
+        assert_eq!(last_result(&copy), "unverified");
+        assert_eq!(copy.backup_files().len(), 1);
 
-    assert_next_start_upgrades(&copy);
-    assert_eq!(last_result(&copy), "ok");
-    assert_eq!(copy.backup_files().len(), 1);
+        assert_next_start_upgrades(&copy);
+        assert_eq!(last_result(&copy), "ok");
+        assert_eq!(copy.backup_files().len(), 1);
+    }
 }
