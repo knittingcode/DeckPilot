@@ -1,10 +1,16 @@
 //! Application updates from GitHub Releases.
 //!
 //! The Tauri updater downloads the platform artifact named in the release's
-//! `latest.json` and verifies its minisign signature against the public key
+//! manifest and verifies its minisign signature against the public key
 //! compiled into this build (`DECKPILOT_UPDATER_PUBKEY`). Builds without a
 //! key, such as development builds, report updates as not configured and
 //! never download anything.
+//!
+//! Channels (`deckpilot_update::channel`): the stable channel (default)
+//! reads `latest.json` of GitHub's latest release and never installs a
+//! pre-release. The prerelease channel picks the newest published release
+//! of either kind from GitHub's release list and reads that release's
+//! manifest, so it moves on to a stable release once that is newer.
 //!
 //! Installing replaces both executables, because the agent ships inside the
 //! application bundle. The sequence is:
@@ -24,6 +30,7 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 
 use deckpilot_ipc::{AgentPaths, Request, Response};
 use deckpilot_storage::ConfigStore;
+use deckpilot_update::channel::{Channel, ListedRelease, newest_release};
 use deckpilot_update::policy::{InstallContext, InstallDecision, UpdatePreferences, decide};
 
 use crate::error::{CommandError, CommandResult};
@@ -55,9 +62,13 @@ fn is_loopback_test_endpoint(endpoint: &str) -> bool {
         .is_some_and(|rest| !rest.is_empty() && !rest.contains(['@', '#', '?']))
 }
 
-/// The update manifest URL: the stable channel, or the test endpoint.
-fn endpoint() -> &'static str {
-    test_endpoint().unwrap_or(deckpilot_update::STABLE_ENDPOINT)
+/// Where updates of `channel` are looked up: the stable manifest, the
+/// release list (prerelease channel), or the test endpoint.
+fn endpoint(channel: Channel) -> &'static str {
+    test_endpoint().unwrap_or(match channel {
+        Channel::Stable => deckpilot_update::STABLE_ENDPOINT,
+        Channel::Prerelease => deckpilot_update::RELEASES_API,
+    })
 }
 
 /// Background timing; the update test build checks quickly.
@@ -171,12 +182,13 @@ fn snapshot<R: Runtime>(app: &AppHandle<R>) -> UpdateState {
     let state = app.state::<AppState>();
     let manager = app.state::<UpdateManager>();
     let inner = manager.lock();
+    let preferences = preferences(&state);
     UpdateState {
         current_version: env!("CARGO_PKG_VERSION"),
         configured: configured(),
         target: deckpilot_update::manifest::current_target(),
-        endpoint: endpoint(),
-        preferences: preferences(&state),
+        endpoint: endpoint(preferences.channel),
+        preferences,
         phase: inner.phase,
         available: inner.available.clone(),
         progress: inner.progress,
@@ -225,13 +237,27 @@ fn begin<R: Runtime>(app: &AppHandle<R>, phase: Phase) -> CommandResult<()> {
     Ok(())
 }
 
+/// Where the manifest of an update comes from.
+#[derive(Debug, Clone)]
+pub(crate) enum Endpoint {
+    /// A fixed manifest URL (the stable channel, the test endpoint).
+    Manifest(String),
+    /// The newest release in GitHub's release list that the channel
+    /// accepts; its manifest is under `downloads` (the release download
+    /// prefix, a loopback URL in tests).
+    Releases { list: String, downloads: String },
+}
+
 /// Where updates come from and how long the network may stall. Release
 /// builds use [`Source::release`]; tests use a loopback server and a
 /// throwaway key.
 #[derive(Debug, Clone)]
 pub(crate) struct Source {
     pub key: String,
-    pub endpoint: String,
+    pub endpoint: Endpoint,
+    /// Which versions may be installed; checked again on the version the
+    /// manifest announces, whatever endpoint it came from.
+    pub channel: Channel,
     /// Establishing a connection may take at most this long.
     pub connect_timeout: Duration,
     /// A response that sends no data for this long fails, so a dropped or
@@ -247,35 +273,102 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl Source {
-    fn release() -> CommandResult<Self> {
+    fn release(channel: Channel) -> CommandResult<Self> {
         let key = PUBLIC_KEY.filter(|_| configured()).ok_or_else(|| {
             CommandError::Invalid("updates are not configured in this build".into())
         })?;
+        let endpoint = match (test_endpoint(), channel) {
+            (None, Channel::Prerelease) => Endpoint::Releases {
+                list: deckpilot_update::RELEASES_API.to_owned(),
+                downloads: deckpilot_update::DOWNLOAD_PREFIX.to_owned(),
+            },
+            _ => Endpoint::Manifest(endpoint(channel).to_owned()),
+        };
         Ok(Self {
             key: key.to_owned(),
-            endpoint: endpoint().to_owned(),
+            endpoint,
+            channel,
             connect_timeout: CONNECT_TIMEOUT,
             read_timeout: READ_TIMEOUT,
             executable: None,
         })
     }
 
+    /// The manifest to check: fixed, or chosen from the release list.
+    /// `None` when the list has nothing newer for the channel.
+    async fn manifest(&self) -> Result<Option<String>, CheckError> {
+        let (list, downloads) = match &self.endpoint {
+            Endpoint::Manifest(url) => return Ok(Some(url.clone())),
+            Endpoint::Releases { list, downloads } => (list, downloads),
+        };
+        let releases = fetch_releases(list, self.connect_timeout, self.read_timeout)
+            .await
+            .map_err(CheckError::Releases)?;
+        let current = semver::Version::parse(env!("CARGO_PKG_VERSION"))
+            .map_err(|e| CheckError::Releases(e.to_string()))?;
+        Ok(newest_release(&releases, self.channel, &current)
+            .map(|tag| tag.manifest_url_at(downloads)))
+    }
+
     fn updater<R: Runtime>(
         &self,
         app: &AppHandle<R>,
+        manifest: &str,
     ) -> Result<tauri_plugin_updater::Updater, tauri_plugin_updater::Error> {
-        let endpoint = self.endpoint.parse()?;
+        let endpoint = manifest.parse()?;
         let (connect, read) = (self.connect_timeout, self.read_timeout);
+        let channel = self.channel;
         let mut builder = app
             .updater_builder()
             .pubkey(self.key.clone())
             .endpoints(vec![endpoint])?
+            // Never a pre-release on the stable channel, never an older
+            // version: whatever a manifest announces.
+            .version_comparator(move |current, remote| channel.accepts(&current, &remote.version))
             .configure_client(move |client| client.connect_timeout(connect).read_timeout(read));
         if let Some(executable) = &self.executable {
             builder = builder.executable_path(executable);
         }
         builder.build()
     }
+}
+
+/// Why a check failed: the updater, or reading the release list.
+#[derive(Debug)]
+pub(crate) enum CheckError {
+    Updater(tauri_plugin_updater::Error),
+    Releases(String),
+}
+
+/// GitHub's release list (prerelease channel). Read like the updater reads
+/// a manifest: HTTPS with the same timeouts; the answer only chooses which
+/// release's manifest is read, see [`newest_release`].
+async fn fetch_releases(
+    url: &str,
+    connect: Duration,
+    read: Duration,
+) -> Result<Vec<ListedRelease>, String> {
+    // The updater's TLS stack (rustls) needs a crypto provider, as in the
+    // updater plugin.
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("DeckPilot/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(connect)
+        .read_timeout(read)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client
+        .get(url)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?;
+    let body = response.bytes().await.map_err(|e| e.to_string())?;
+    serde_json::from_slice(&body).map_err(|e| format!("not a release list: {e}"))
 }
 
 /// The step of an update that failed, for messages and the log.
@@ -413,7 +506,8 @@ fn fail<R: Runtime>(app: &AppHandle<R>, phase: Phase, message: String) -> Comman
 }
 
 async fn check<R: Runtime>(app: &AppHandle<R>) -> CommandResult<Option<UpdateInfo>> {
-    let source = Source::release()?;
+    let channel = preferences(&app.state::<AppState>()).channel;
+    let source = Source::release(channel)?;
     check_from(app, &source).await
 }
 
@@ -422,7 +516,16 @@ pub(crate) async fn check_from<R: Runtime>(
     source: &Source,
 ) -> CommandResult<Option<UpdateInfo>> {
     begin(app, Phase::Checking)?;
-    let result = async { source.updater(app)?.check().await }.await;
+    let result = async {
+        let Some(manifest) = source.manifest().await? else {
+            return Ok(None);
+        };
+        let updater = source
+            .updater(app, &manifest)
+            .map_err(CheckError::Updater)?;
+        updater.check().await.map_err(CheckError::Updater)
+    }
+    .await;
     let state = app.state::<AppState>();
     let mut prefs = preferences(&state);
     prefs.last_check = Some(now());
@@ -459,7 +562,18 @@ pub(crate) async fn check_from<R: Runtime>(
             publish(app);
             Ok(info)
         }
-        Err(error) => Err(fail(app, Phase::Idle, describe(Stage::Check, &error))),
+        Err(CheckError::Updater(error)) => {
+            Err(fail(app, Phase::Idle, describe(Stage::Check, &error)))
+        }
+        Err(CheckError::Releases(detail)) => Err(fail(
+            app,
+            Phase::Idle,
+            format!(
+                "update check failed: the list of DeckPilot releases on GitHub could not be \
+                 read; nothing was downloaded. Check the internet connection and try again \
+                 later ({detail})"
+            ),
+        )),
     }
 }
 
@@ -631,7 +745,27 @@ pub fn set_update_preferences<R: Runtime>(
     preferences: UpdatePreferences,
 ) -> CommandResult<UpdateState> {
     let mut preferences = preferences.sanitized();
-    preferences.last_check = self::preferences(&state).last_check;
+    let previous = self::preferences(&state);
+    preferences.last_check = previous.last_check;
+    if preferences.channel != previous.channel {
+        // An update found on the other channel is forgotten; the next
+        // check looks on the new one.
+        let manager = app.state::<UpdateManager>();
+        let mut inner = manager.lock();
+        if !may_start(inner.phase) {
+            return Err(CommandError::Invalid(
+                "the update channel cannot change while an update is being checked, \
+                 downloaded or installed"
+                    .into(),
+            ));
+        }
+        inner.available = None;
+        inner.update = None;
+        inner.bytes = None;
+        inner.progress = None;
+        inner.phase = Phase::Idle;
+        inner.error = None;
+    }
     save_preferences(&state, &preferences)?;
     Ok(snapshot(&app))
 }
@@ -725,9 +859,13 @@ mod endpoint_tests {
         ] {
             assert!(!is_loopback_test_endpoint(rejected), "{rejected}");
         }
-        // Normal builds use the stable channel.
+        // Normal builds use the channel's endpoint.
         if TEST_ENDPOINT.is_none() {
-            assert_eq!(endpoint(), deckpilot_update::STABLE_ENDPOINT);
+            assert_eq!(endpoint(Channel::Stable), deckpilot_update::STABLE_ENDPOINT);
+            assert_eq!(
+                endpoint(Channel::Prerelease),
+                deckpilot_update::RELEASES_API
+            );
             assert_eq!(timing(), (STARTUP_DELAY, TICK));
         }
     }

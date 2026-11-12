@@ -142,10 +142,10 @@ stable=$(git -C "$repo" rev-parse HEAD)
 git -C "$repo" tag -a v0.6.1 -m "version mismatch: the sources say 0.6.0"
 for sha in "$alpha" "$beta" "$rc" "$stable"; do checks "$sha"; done
 
-accepts "stable tag" v0.6.0 version=0.6.0 channel=stable prerelease=false "sha=$stable" msi_version=0.6.0
+accepts "stable tag" v0.6.0 version=0.6.0 channel=stable prerelease=false "sha=$stable" msi_version=0.6.0 manifest=latest.json
 accepts "alpha tag (annotated)" v0.6.0-alpha.1 version=0.6.0-alpha.1 channel=prerelease prerelease=true "sha=$alpha"
 accepts "beta tag (lightweight)" v0.6.0-beta.2 version=0.6.0-beta.2 channel=prerelease prerelease=true "sha=$beta"
-accepts "rc tag" v0.6.0-rc.10 version=0.6.0-rc.10 channel=prerelease prerelease=true "sha=$rc" msi_version=0.6.0.40010
+accepts "rc tag" v0.6.0-rc.10 version=0.6.0-rc.10 channel=prerelease prerelease=true "sha=$rc" msi_version=0.6.0.40010 manifest=prerelease.json
 tag_object=$(git -C "$repo" rev-parse v0.6.0)
 [ "$tag_object" != "$stable" ] && ok "v0.6.0 is an annotated tag object" || bad "v0.6.0 is not annotated"
 accepts "annotated tag dereferenced to its commit" v0.6.0 "sha=$stable"

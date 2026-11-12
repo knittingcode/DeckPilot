@@ -2,25 +2,43 @@
 
 use std::path::Path;
 
+use deckpilot_update::channel::{PRERELEASE_MANIFEST, ReleaseTag, STABLE_MANIFEST};
 use deckpilot_update::manifest::{Manifest, parse_version};
 use deckpilot_update::signature;
 
-/// Checks `latest.json` in `dir`: the version must equal `expected_version`,
-/// every artifact URL must be a DeckPilot release download, and every
-/// artifact present in `dir` must carry a valid signature for `public_key`.
-/// Returns one line per verified artifact.
+/// Checks the update manifest in `dir` — `latest.json` for a stable
+/// version, `prerelease.json` for a pre-release; the other one must not be
+/// there, so that the channels stay apart. The version must equal
+/// `expected_version`, every artifact URL must be a DeckPilot release
+/// download, and every artifact present in `dir` must carry a valid
+/// signature for `public_key`. Returns one line per verified artifact.
 pub fn verify(dir: &Path, public_key: &str, expected_version: &str) -> Result<Vec<String>, String> {
-    let text = std::fs::read_to_string(dir.join("latest.json"))
-        .map_err(|e| format!("cannot read latest.json: {e}"))?;
+    let kind = ReleaseTag::for_version(expected_version)
+        .map_err(|e| e.to_string())?
+        .kind;
+    let name = kind.manifest();
+    let other = if name == STABLE_MANIFEST {
+        PRERELEASE_MANIFEST
+    } else {
+        STABLE_MANIFEST
+    };
+    if dir.join(other).exists() {
+        return Err(format!(
+            "a {} release must not contain {other}: it would be offered on the wrong channel",
+            kind.name()
+        ));
+    }
+    let text =
+        std::fs::read_to_string(dir.join(name)).map_err(|e| format!("cannot read {name}: {e}"))?;
     let manifest = Manifest::parse(&text).map_err(|e| e.to_string())?;
     let version = parse_version(&manifest.version).map_err(|e| e.to_string())?;
     if version.to_string() != expected_version {
         return Err(format!(
-            "latest.json announces {version}, but the sources are version {expected_version}"
+            "{name} announces {version}, but the sources are version {expected_version}"
         ));
     }
     if manifest.platforms.is_empty() {
-        return Err("latest.json lists no platforms".into());
+        return Err(format!("{name} lists no platforms"));
     }
     let mut verified = Vec::new();
     // URL prefix and signature format, as the client checks them. The
@@ -171,7 +189,8 @@ mod tests {
                 "url": format!("{}v{version}/{url_name}", deckpilot_update::DOWNLOAD_PREFIX)
             }}
         });
-        std::fs::write(dir.join("latest.json"), manifest.to_string()).unwrap();
+        let name = ReleaseTag::for_version(version).map_or(STABLE_MANIFEST, |t| t.kind.manifest());
+        std::fs::write(dir.join(name), manifest.to_string()).unwrap();
         (dir, STANDARD.encode(keys.pk.to_box().unwrap().to_string()))
     }
 
@@ -222,26 +241,67 @@ mod tests {
     }
 
     #[test]
-    fn test_releases_with_pre_release_versions_are_verified_too() {
-        let (dir, key) = release_dir("0.5.0-1", Some("0.5.0-1"), "artifact.bin");
+    fn pre_releases_are_verified_from_their_own_manifest() {
+        let (dir, key) = release_dir("0.6.0-rc.1", Some("0.6.0-rc.1"), "artifact.bin");
+        assert!(dir.join("prerelease.json").exists() && !dir.join("latest.json").exists());
         assert_eq!(
-            verify(&dir, &key, "0.5.0-1").unwrap(),
+            verify(&dir, &key, "0.6.0-rc.1").unwrap(),
             ["linux-x86_64: artifact.bin"]
         );
+        // Announced on the other channel.
         assert!(
-            verify(&dir, &key, "0.5.0")
+            verify(&dir, &key, "0.6.0")
+                .unwrap_err()
+                .contains("must not contain prerelease.json")
+        );
+        assert!(
+            verify(&dir, &key, "0.6.0-rc.2")
                 .unwrap_err()
                 .contains("announces")
         );
         std::fs::remove_dir_all(dir).unwrap();
         // The stable channel still refuses it.
-        let text = serde_json::json!({ "version": "0.5.0-1", "platforms": {} }).to_string();
+        let text = serde_json::json!({ "version": "0.6.0-rc.1", "platforms": {} }).to_string();
         let manifest = Manifest::parse(&text).unwrap();
         assert!(
             manifest
                 .update_for(&semver::Version::new(0, 4, 0), "linux-x86_64")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn channels_stay_apart() {
+        // A pre-release that also carries latest.json would be offered to
+        // stable installations if it were ever marked latest.
+        let (dir, key) = release_dir("0.6.0-beta.1", Some("0.6.0-beta.1"), "artifact.bin");
+        std::fs::copy(dir.join("prerelease.json"), dir.join("latest.json")).unwrap();
+        assert!(
+            verify(&dir, &key, "0.6.0-beta.1")
+                .unwrap_err()
+                .contains("must not contain latest.json")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+        // A stable release has latest.json only.
+        let (dir, key) = release_dir("0.6.0", Some("0.6.0"), "artifact.bin");
+        std::fs::copy(dir.join("latest.json"), dir.join("prerelease.json")).unwrap();
+        assert!(
+            verify(&dir, &key, "0.6.0")
+                .unwrap_err()
+                .contains("must not contain prerelease.json")
+        );
+        std::fs::remove_file(dir.join("latest.json")).unwrap();
+        std::fs::remove_file(dir.join("prerelease.json")).unwrap();
+        assert!(
+            verify(&dir, &key, "0.6.0")
+                .unwrap_err()
+                .contains("cannot read latest.json")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+        // Sources whose version cannot be a release tag are refused.
+        let (dir, key) = release_dir("0.6.0-dev.1", Some("0.6.0-dev.1"), "artifact.bin");
+        assert!(verify(&dir, &key, "0.6.0-dev.1").is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -247,9 +247,11 @@ Without building or publishing anything:
      and Intel) and Windows (x86_64), bundling the agent as an external
      binary;
    - signs updater artifacts and uploads everything to the draft release;
-     each build also hands its `latest.json` entries (target keys, asset
-     names, signatures) to a single job that assembles `latest.json` once,
-     after all builds, and attaches it: concurrent merges by the builds
+     each build also hands its update-manifest entries (target keys, asset
+     names, signatures) to a single job that assembles the manifest once,
+     after all builds, and attaches it — `latest.json` for a stable
+     release, `prerelease.json` for a pre-release, never both (the update
+     channels, see [updates.md](updates.md#channels-and-discovery)): concurrent merges by the builds
      could lose entries. It fails if a platform or package type is missing,
      if two builds claim the same entry or if an asset is not in the draft
      (`tools/ci/assemble-latest-json.sh`, tested on every pull request with
@@ -265,7 +267,8 @@ Without building or publishing anything:
      `deckpilot-dev verify-release` — including that each signature names
      the announced version, which installations require
      (`requireSignedVersion`, the protection against downgrade attacks) —
-     checks that `latest.json` has an entry for every platform and package
+     refuses the other channel's manifest, checks that the manifest has an
+     entry for every platform and package
      type (macOS app on both architectures, Linux AppImage, `.deb` and, for
      final releases, `.rpm`, Windows MSI and NSIS), and attaches
      `SHA256SUMS`.
