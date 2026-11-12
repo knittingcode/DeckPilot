@@ -21,6 +21,7 @@
 
 pub mod credentials;
 pub mod crypto;
+mod engine;
 pub mod executions;
 mod legacy;
 pub mod policy;
@@ -89,6 +90,10 @@ pub enum StorageError {
     UnsupportedDocument(u32),
     #[error("database encryption is not available in this build")]
     EncryptionUnavailable,
+    /// SQLCipher is linked but not usable on a connection (or plain SQLite
+    /// was linked): nothing is opened, backed up or migrated.
+    #[error("database encryption is incomplete: {0}")]
+    SqlCipherIncomplete(String),
     #[error("the database could not be opened with the provided key")]
     InvalidKey,
     #[error("profile does not exist")]

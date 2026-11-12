@@ -153,13 +153,13 @@ impl SqliteStore {
     /// verified and recorded in `migration_history`.
     pub fn open(path: impl AsRef<Path>, encryption: &Encryption) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let connection = Connection::open(&path)?;
+        let connection = crate::engine::open(&path)?;
         Self::init(connection, Some(path), encryption)
     }
 
     /// Opens a private in-memory database. Useful for tests.
     pub fn open_in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?, None, &Encryption::None)
+        Self::init(crate::engine::open_in_memory()?, None, &Encryption::None)
     }
 
     fn init(
@@ -904,6 +904,9 @@ pub(crate) fn export_database(
     target: &Path,
     key: Option<&DatabaseKey>,
 ) -> Result<()> {
+    // Never attempt the export on a connection that cannot do it: refused
+    // before the target is touched.
+    crate::engine::check_complete(connection)?;
     if target.exists() {
         std::fs::remove_file(target).map_err(StorageError::Io)?;
     }
@@ -934,7 +937,7 @@ pub(crate) fn export_database(
 
 /// Opens `path` with `encryption` and checks integrity and schema version.
 pub(crate) fn verify_copy(path: &Path, encryption: &Encryption, version: u32) -> Result<()> {
-    let connection = Connection::open(path)?;
+    let connection = crate::engine::open(path)?;
     apply_key(&connection, encryption)?;
     check_integrity(&connection)?;
     let found: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
