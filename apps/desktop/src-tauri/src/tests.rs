@@ -2805,3 +2805,203 @@ fn the_variable_picker_reads_catalog_and_previews_from_the_agent() {
     h.ok("stop_agent", json!({}));
     wait_for(&h, |s| s["running"] == false);
 }
+
+// One scenario through the Shared Variables page's commands.
+#[allow(clippy::too_many_lines)]
+#[test]
+fn shared_variables_are_managed_without_revealing_secrets() {
+    let h = Harness::new();
+    let work = new_profile(&h, "Work");
+    let home = new_profile(&h, "Home");
+    let shop = h.ok(
+        "create_project",
+        json!({ "profileId": work, "project": { "key": "SHOP", "name": "Shop" } }),
+    );
+    let other = h.ok(
+        "create_project",
+        json!({ "profileId": home, "project": { "key": "GARDEN", "name": "Garden" } }),
+    );
+
+    let root = json!({
+        "key": "paths.root",
+        "label": "Code root",
+        "valueType": { "type": "string" },
+        "scopes": ["global", "project"],
+        "default": { "type": "string", "value": "~" }
+    });
+    h.ok("save_shared_variable", json!({ "definition": root }));
+    h.ok(
+        "save_shared_variable",
+        json!({ "definition": {
+            "key": "deploy.token",
+            "valueType": { "type": "string" },
+            "scopes": ["profile"],
+            "sensitive": true,
+            "default": { "type": "string", "value": "default-secret" }
+        } }),
+    );
+    h.ok(
+        "save_shared_variable",
+        json!({ "definition": {
+            "key": "github.token",
+            "valueType": { "type": "secretRef" },
+            "scopes": ["global"]
+        } }),
+    );
+
+    // Invalid definitions and values are refused.
+    let reserved = h.call(
+        "save_shared_variable",
+        json!({ "definition": { "key": "system.x", "valueType": { "type": "string" }, "scopes": ["global"] } }),
+    );
+    assert!(reserved.is_err());
+    let no_scope = h.error(
+        "save_shared_variable",
+        json!({ "definition": { "key": "a.b", "valueType": { "type": "string" }, "scopes": [] } }),
+    );
+    assert!(no_scope.contains("no scope"), "{no_scope}");
+
+    let set = |key: &str, scope: Value, value: Value| {
+        h.call(
+            "set_shared_variable_value",
+            json!({ "key": key, "scope": scope, "value": value }),
+        )
+    };
+    let text = |value: &str| json!({ "type": "string", "value": value });
+    let project_scope = json!({ "kind": "project", "profile": work, "project": shop["id"] });
+    set("paths.root", json!({ "kind": "global" }), text("~/code")).unwrap();
+    set("paths.root", project_scope.clone(), text("~/code/shop")).unwrap();
+    set(
+        "deploy.token",
+        json!({ "kind": "profile", "profile": work }),
+        text("hunter2-secret"),
+    )
+    .unwrap();
+    set(
+        "github.token",
+        json!({ "kind": "global" }),
+        json!({ "type": "secretRef", "value": "github" }),
+    )
+    .unwrap();
+    // Wrong type, a scope the definition does not allow, another profile's
+    // project, an execution value.
+    assert!(
+        set(
+            "paths.root",
+            json!({ "kind": "global" }),
+            json!({ "type": "integer", "value": 1 })
+        )
+        .is_err()
+    );
+    assert!(
+        set(
+            "paths.root",
+            json!({ "kind": "profile", "profile": work }),
+            text("x")
+        )
+        .is_err()
+    );
+    assert!(
+        set(
+            "paths.root",
+            json!({ "kind": "project", "profile": work, "project": other["id"] }),
+            text("x")
+        )
+        .is_err()
+    );
+    let execution = h.error(
+        "set_shared_variable_value",
+        json!({ "key": "paths.root", "scope": { "kind": "execution", "execution": "00000000-0000-4000-8000-000000000009" }, "value": text("x") }),
+    );
+    assert!(execution.contains("only during a run"), "{execution}");
+
+    let listed = h.ok("list_shared_variables", json!({ "profileId": work }));
+    // Neither the sensitive value nor its default reaches the app.
+    let raw = listed.to_string();
+    assert!(!raw.contains("hunter2-secret"), "{raw}");
+    assert!(!raw.contains("default-secret"), "{raw}");
+    let find = |list: &Value, key: &str| {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["definition"]["key"] == key)
+            .unwrap()
+            .clone()
+    };
+    let token = find(&listed, "deploy.token");
+    assert_eq!(token["values"][0]["scope"]["kind"], "profile");
+    assert!(token["values"][0].get("value").is_none());
+    assert!(token["definition"].get("default").is_none());
+    let paths = find(&listed, "paths.root");
+    assert_eq!(paths["definition"]["default"]["value"], "~");
+    let values: Vec<&Value> = paths["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| &v["value"]["value"])
+        .collect();
+    assert_eq!(values, ["~/code", "~/code/shop"]);
+    assert_eq!(
+        find(&listed, "github.token")["values"][0]["value"],
+        json!({ "type": "secretRef", "value": "github" })
+    );
+    // Another profile sees the global values only.
+    let home_view = h.ok("list_shared_variables", json!({ "profileId": home }));
+    assert_eq!(
+        find(&home_view, "paths.root")["values"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(find(&home_view, "deploy.token")["values"], json!([]));
+    let no_profile = h.ok("list_shared_variables", json!({ "profileId": null }));
+    assert_eq!(
+        find(&no_profile, "paths.root")["values"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // An action uses the variable: it cannot be deleted, and the use is listed.
+    let action = h.ok(
+        "create_action",
+        json!({
+            "profileId": work,
+            "action": {
+                "name": "Where",
+                "actionType": "general.log",
+                "parameters": { "message": { "type": "template", "value": "in {{ shared.paths.root }}" } }
+            }
+        }),
+    );
+    let paths = find(
+        &h.ok("list_shared_variables", json!({ "profileId": work })),
+        "paths.root",
+    );
+    assert_eq!(paths["references"][0]["use"]["type"], "action");
+    assert_eq!(paths["references"][0]["ownerName"], "Where");
+    assert_eq!(paths["references"][0]["profileName"], "Work");
+    let refused = h.error("delete_shared_variable", json!({ "key": "paths.root" }));
+    assert!(refused.contains("still used"), "{refused}");
+
+    h.ok(
+        "delete_action",
+        json!({ "profileId": work, "actionId": action["id"] }),
+    );
+    h.ok(
+        "clear_shared_variable_value",
+        json!({ "key": "paths.root", "scope": project_scope }),
+    );
+    // Clearing twice is fine.
+    h.ok(
+        "clear_shared_variable_value",
+        json!({ "key": "paths.root", "scope": project_scope }),
+    );
+    h.ok("delete_shared_variable", json!({ "key": "paths.root" }));
+    let missing = h.error("delete_shared_variable", json!({ "key": "paths.root" }));
+    assert!(missing.contains("not found"), "{missing}");
+    let left = h.ok("list_shared_variables", json!({ "profileId": work }));
+    assert_eq!(left.as_array().unwrap().len(), 2);
+}
