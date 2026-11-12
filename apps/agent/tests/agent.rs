@@ -3429,9 +3429,10 @@ fn a_hanging_test_ends_the_test_binary_with_its_step() {
                 .build()
                 .unwrap();
             runtime.spawn(async { std::thread::sleep(Duration::from_secs(30)) });
-            let watchdog = Watchdog::new("the hanging test", Duration::from_millis(300));
+            // Long enough for the panic to be reported and unwound before
+            // the limit, also on a slow runner (Windows CI took over 250 ms).
+            let watchdog = Watchdog::new("the hanging test", Duration::from_secs(3));
             watchdog.step("asserting");
-            std::thread::sleep(Duration::from_millis(50));
             panic!("the assertion failed");
         }
         _ => {}
