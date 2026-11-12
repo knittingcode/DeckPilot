@@ -200,11 +200,18 @@ The updater signature is independent of all platform signatures.
 Without building or publishing anything:
 
 - **In CI:** the *Signing check* workflow (`.github/workflows/signing-check.yml`)
-  runs on pull requests that touch release code and on demand
-  (`gh workflow run "Signing check"`). It signs a throwaway file with the
-  secrets and verifies the signature against the variable with the same
-  code the app uses. A failure such as *Wrong password for that key* means
-  the two secrets do not belong together.
+  runs on every pull request, on every push to `main` and on demand
+  (`gh workflow run "Signing check"`). *Updater signing keys match*
+  decrypts the secret key with its password and checks that its key ID and
+  public key equal `DECKPILOT_UPDATER_PUBKEY`
+  (`.github/scripts/updater-key-pair.py`, Python standard library only;
+  tested with throwaway keys by `tools/release-pipeline/test-updater-key-pair.sh`).
+  *wrong password or key* means the two secrets do not belong together.
+  While a secret is in the job, nothing else runs: the jobs check out only
+  `.github/scripts`, restore no cache and install no dependencies, so no
+  package installation or build script can see a secret. Pull requests
+  from forks and from Dependabot get no secrets; the jobs are skipped for
+  them, and a skipped required check counts as passed.
 - **Locally:** sign a throwaway file with your key (the password is read
   without echo and never appears in the command line) and verify it against
   the public key:
