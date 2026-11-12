@@ -367,8 +367,8 @@ the request at once.
 `forbidden` (403: e.g. a missing permission or SSO), `not-found` (404, which
 GitHub also answers for private repositories the token cannot see),
 `rate-limited` (primary or secondary rate limit; the result's data has
-`retryAfterSeconds`, from `Retry-After` or the limit's reset time),
-`github-error` (another status, with GitHub's message), and
+`retryAfterSeconds`, from `Retry-After` or the limit's reset time, else 60
+for a 429 or a 403 whose message is about the rate limit), `github-error` (another status, with GitHub's message), and
 `credential-missing` when no token is stored under the name.
 
 Error codes: `invalid-api-url`, `invalid-repository`, `invalid-ref`,
