@@ -4,132 +4,82 @@
 //!
 //! The agent is the only place that resolves references against real data;
 //! the configuration app asks it (`listVariables`, `previewReferences`).
-//! Until the configuration database stores shared variables (workstream E),
-//! the set is held in memory: empty in production, filled by tests through
-//! [`Agent::with_shared_variables`].
+//! Shared variables come from the configuration database: per profile, a
+//! snapshot of every definition with the global values and those of the
+//! profile and its projects ([`SqliteStore::shared_variables_for`]). Runs
+//! read the snapshots taken at the last reload; previews read the database
+//! directly.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{PoisonError, RwLock};
 
 use deckpilot_core::resolution::ContextResolver;
 use deckpilot_core::variables::{
-    CatalogEntry, CatalogFilter, DefinitionIssue, MissingReason, PreviewItem, ProjectResolver,
-    ProjectSource, ReferenceAvailability, ReferencePreview, Resolution, ResolutionContext,
-    ResolutionPhase, ScopeKey, SystemVariable, ValueSource, VariableDefinition, VariableGroup,
-    VariableKey, VariableRef, VariableResolver, VariableScope, VariableValue, preview_reference,
-    select_value,
+    CatalogEntry, CatalogFilter, MissingReason, PreviewItem, ProjectResolver, ProjectSource,
+    ReferenceAvailability, ReferencePreview, Resolution, ResolutionContext, ResolutionPhase,
+    SystemVariable, ValueSource, VariableGroup, VariableKey, VariableRef, VariableResolver,
+    VariableScope, preview_reference, select_value,
 };
 use deckpilot_core::{ModuleId, Profile, ProfileId, ProjectId};
 use deckpilot_ipc::{AgentEvent, ErrorCode, IpcError, Response, SecurityState};
-use deckpilot_storage::ConfigStore;
+use deckpilot_storage::{ConfigStore, SharedVariables, SqliteStore, StorageError};
 
 use super::{Agent, locked, storage_error};
 
-/// Definitions and values of shared variables.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SharedVariables {
-    definitions: BTreeMap<VariableKey, VariableDefinition>,
-    values: BTreeMap<VariableKey, Vec<(ScopeKey, VariableValue)>>,
+/// Resolves `shared.` references against one profile's snapshot.
+/// Variables declared by a disabled module cannot be read.
+struct SnapshotResolver<'a> {
+    snapshot: Option<&'a SharedVariables>,
+    disabled: &'a BTreeSet<ModuleId>,
 }
 
-impl SharedVariables {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Adds or replaces a definition. A definition with problems is refused.
-    pub fn define(&mut self, definition: VariableDefinition) -> Result<(), DefinitionIssue> {
-        if let Some(issue) = definition.issues().into_iter().next() {
-            return Err(issue);
+impl VariableResolver for SnapshotResolver<'_> {
+    /// Shared variables only; system variables and node outputs are
+    /// resolved by [`ContextResolver`] from the context itself.
+    fn resolve(&self, reference: &VariableRef, context: &ResolutionContext) -> Resolution {
+        let VariableRef::Shared(key) = reference else {
+            return Resolution::UnavailableUntilRuntime;
+        };
+        let Some(snapshot) = self.snapshot else {
+            return Resolution::Missing(MissingReason::UnknownVariable);
+        };
+        let declared_by_disabled = snapshot
+            .definition(key)
+            .and_then(|definition| definition.module.as_ref())
+            .is_some_and(|module| self.disabled.contains(module));
+        if declared_by_disabled {
+            return Resolution::PermissionDenied;
         }
-        self.definitions.insert(definition.key.clone(), definition);
-        Ok(())
-    }
-
-    /// Sets the value of `key` at `scope`, replacing an earlier one there.
-    /// Execution values are never stored.
-    pub fn set(
-        &mut self,
-        key: &VariableKey,
-        scope: ScopeKey,
-        value: VariableValue,
-    ) -> Result<(), String> {
-        let definition = self
-            .definitions
-            .get(key)
-            .ok_or_else(|| format!("`{key}` is not defined"))?;
-        if scope.scope() == VariableScope::Execution {
-            return Err("execution values exist only during a run".into());
-        }
-        definition
-            .check_value(&scope, &value)
-            .map_err(|issue| issue.to_string())?;
-        let values = self.values.entry(key.clone()).or_default();
-        values.retain(|(existing, _)| *existing != scope);
-        values.push((scope, value));
-        Ok(())
-    }
-
-    pub fn definitions(&self) -> impl Iterator<Item = &VariableDefinition> {
-        self.definitions.values()
-    }
-
-    fn values_of<'a>(
-        &'a self,
-        key: &VariableKey,
-    ) -> impl Iterator<Item = (&'a ScopeKey, &'a VariableValue)> + 'a {
-        self.values
-            .get(key)
-            .into_iter()
-            .flatten()
-            .map(|(scope, value)| (scope, value))
-    }
-
-    /// Keys whose definition or values differ from `other`.
-    pub fn changed_keys(&self, other: &Self) -> Vec<String> {
-        let keys: BTreeSet<&VariableKey> = self
-            .definitions
-            .keys()
-            .chain(other.definitions.keys())
-            .collect();
-        keys.into_iter()
-            .filter(|key| {
-                self.definitions.get(*key) != other.definitions.get(*key)
-                    || self.values.get(*key) != other.values.get(*key)
-            })
-            .map(ToString::to_string)
-            .collect()
+        // Execution values are never stored; runs do not set any yet (D7).
+        snapshot.resolve(key, context, &[])
     }
 }
 
-/// The agent's variable store: what runs and previews read. Values are read
-/// when a reference is resolved, so a run after a change sees the new
-/// value; nothing is cached.
+/// The agent's shared variables for runs: one snapshot per profile, taken
+/// at the last reload. A run started after a reload reads the new values.
 #[derive(Debug, Default)]
 pub struct VariableStore {
-    variables: RwLock<SharedVariables>,
+    snapshots: RwLock<BTreeMap<ProfileId, SharedVariables>>,
     /// Variables declared by these modules cannot be read while the module
     /// is disabled.
     disabled_modules: RwLock<BTreeSet<ModuleId>>,
 }
 
 impl VariableStore {
-    pub fn snapshot(&self) -> SharedVariables {
-        self.variables
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
-    /// Replaces the set and returns the keys that changed.
-    pub fn replace(&self, variables: SharedVariables) -> Vec<String> {
+    /// Takes new snapshots of every profile and returns the keys whose
+    /// definition or values changed.
+    pub fn reload(&self, store: &SqliteStore) -> Result<Vec<String>, StorageError> {
+        let mut snapshots = BTreeMap::new();
+        for profile in store.list_profiles()? {
+            snapshots.insert(profile.id, store.shared_variables_for(profile.id)?);
+        }
         let mut current = self
-            .variables
+            .snapshots
             .write()
             .unwrap_or_else(PoisonError::into_inner);
-        let changed = variables.changed_keys(&current);
-        *current = variables;
-        changed
+        let changed = changed_keys(&current, &snapshots);
+        *current = snapshots;
+        Ok(changed)
     }
 
     pub fn set_disabled_modules(&self, modules: BTreeSet<ModuleId>) {
@@ -139,42 +89,57 @@ impl VariableStore {
             .unwrap_or_else(PoisonError::into_inner) = modules;
     }
 
-    fn denied(&self, definition: &VariableDefinition) -> bool {
-        definition.module.as_ref().is_some_and(|module| {
-            self.disabled_modules
-                .read()
-                .unwrap_or_else(PoisonError::into_inner)
-                .contains(module)
-        })
+    fn disabled(&self) -> BTreeSet<ModuleId> {
+        self.disabled_modules
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
 impl VariableResolver for VariableStore {
-    /// Shared variables only; system variables and node outputs are
-    /// resolved by [`ContextResolver`] from the context itself.
     fn resolve(&self, reference: &VariableRef, context: &ResolutionContext) -> Resolution {
-        let VariableRef::Shared(key) = reference else {
-            return Resolution::UnavailableUntilRuntime;
-        };
-        let variables = self
-            .variables
+        let snapshots = self
+            .snapshots
             .read()
             .unwrap_or_else(PoisonError::into_inner);
-        let Some(definition) = variables.definitions.get(key) else {
-            return Resolution::Missing(MissingReason::UnknownVariable);
-        };
-        if self.denied(definition) {
-            return Resolution::PermissionDenied;
+        let disabled = self.disabled();
+        SnapshotResolver {
+            snapshot: snapshots.get(&context.profile),
+            disabled: &disabled,
         }
-        match select_value(definition, variables.values_of(key), context) {
-            Some((value, source)) => Resolution::Value {
-                value: value.clone(),
-                source,
-                sensitive: definition.sensitive,
-            },
-            None => Resolution::Missing(MissingReason::NoValue),
+        .resolve(reference, context)
+    }
+}
+
+/// Keys whose definition, or values in any profile, differ.
+fn changed_keys(
+    old: &BTreeMap<ProfileId, SharedVariables>,
+    new: &BTreeMap<ProfileId, SharedVariables>,
+) -> Vec<String> {
+    let profiles: BTreeSet<&ProfileId> = old.keys().chain(new.keys()).collect();
+    let mut keys = BTreeSet::new();
+    for profile in profiles {
+        let (before, after) = (old.get(profile), new.get(profile));
+        let candidates: BTreeSet<&VariableKey> = before
+            .into_iter()
+            .chain(after)
+            .flat_map(|snapshot| snapshot.definitions().map(|d| &d.key))
+            .collect();
+        for key in candidates {
+            let definition =
+                |s: Option<&SharedVariables>| s.and_then(|s| s.definition(key)).cloned();
+            let values =
+                |s: Option<&SharedVariables>| s.map(|s| s.values(key).to_vec()).unwrap_or_default();
+            // A profile that appears or disappears changes no definition.
+            let redefined =
+                before.is_some() && after.is_some() && definition(before) != definition(after);
+            if redefined || values(before) != values(after) {
+                keys.insert(key.to_string());
+            }
         }
     }
+    keys.into_iter().collect()
 }
 
 /// The application's active project of each profile, as the agent last
@@ -217,7 +182,12 @@ pub fn catalog(variables: &SharedVariables, context: &ResolutionContext) -> Vec<
         .map(|variable| system_entry(variable, context))
         .collect();
     for definition in variables.definitions() {
-        let selected = select_value(definition, variables.values_of(&definition.key), context);
+        let values = variables.values(&definition.key);
+        let selected = select_value(
+            definition,
+            values.iter().map(|(scope, value)| (scope, value)),
+            context,
+        );
         let scope = match &selected {
             Some((_, ValueSource::Scope { scope })) => Some(scope.scope()),
             _ => None,
@@ -313,13 +283,22 @@ fn as_preview(context: &ResolutionContext) -> ResolutionContext {
 }
 
 impl Agent {
-    /// Uses `variables` as the shared variables, before the agent runs.
-    /// A stand-in until the configuration database stores them.
-    #[must_use]
-    pub fn with_shared_variables(self, variables: SharedVariables) -> Self {
-        let changed = self.variables.replace(variables);
+    /// Takes new snapshots of the shared variables after the configuration
+    /// changed, and announces the keys that changed.
+    pub(super) fn reload_variables(&self) -> Result<(), StorageError> {
+        let Some(store) = self.store.as_ref() else {
+            return Ok(());
+        };
+        let changed = self.variables.reload(store)?;
         self.publish_variables(changed);
-        self
+        Ok(())
+    }
+
+    /// The shared variables of `profile` as the database holds them now.
+    fn current_variables(&self, profile: ProfileId) -> Result<SharedVariables, IpcError> {
+        self.store()?
+            .shared_variables_for(profile)
+            .map_err(|e| storage_error(&e))
     }
 
     /// The profile a client's context names: the active one, or one from
@@ -346,7 +325,7 @@ impl Agent {
         // does not exist is not.
         self.context_profile(context.profile)?;
         let context = as_preview(context);
-        let entries = catalog(&self.variables.snapshot(), &context)
+        let entries = catalog(&self.current_variables(context.profile)?, &context)
             .into_iter()
             .filter(|entry| filter.matches(entry))
             .collect();
@@ -360,10 +339,16 @@ impl Agent {
     ) -> Result<Response, IpcError> {
         let profile = self.context_profile(context.profile)?;
         let context = as_preview(context);
+        let variables = self.current_variables(profile.id)?;
+        let disabled = self.variables.disabled();
+        let shared = SnapshotResolver {
+            snapshot: Some(&variables),
+            disabled: &disabled,
+        };
         let resolver = ContextResolver {
             profile: &profile,
             os: self.runtime.machine().os,
-            shared: self.variables.as_ref(),
+            shared: &shared,
             outputs: None,
         };
         let previews: Vec<ReferencePreview> = items
@@ -448,166 +433,131 @@ impl Agent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use deckpilot_core::variables::VariableType;
+    use deckpilot_core::variables::{ScopeKey, VariableDefinition, VariableType, VariableValue};
     use deckpilot_core::{Project, ProjectKey};
 
     fn key(text: &str) -> VariableKey {
         VariableKey::new(text).unwrap()
     }
 
-    fn profile() -> Profile {
+    fn store() -> (SqliteStore, Profile) {
+        let store = SqliteStore::open_in_memory().unwrap();
         let mut profile = Profile::new("Work");
         profile
             .projects
             .push(Project::new(ProjectKey::new("SHOP").unwrap(), "Shop"));
-        profile
+        store.save_profile(&profile).unwrap();
+        (store, profile)
+    }
+
+    fn name(store: &VariableStore, context: &ResolutionContext) -> Resolution {
+        store.resolve(&VariableRef::parse("shared.team.name").unwrap(), context)
     }
 
     #[test]
-    fn a_change_is_seen_by_the_next_resolution() {
-        let profile = profile();
-        let store = VariableStore::default();
-        let mut variables = SharedVariables::new();
-        variables
-            .define(VariableDefinition::new(
-                key("team.name"),
-                VariableType::String,
-                &[VariableScope::Global, VariableScope::Profile],
-            ))
-            .unwrap();
-        variables
-            .set(
-                &key("team.name"),
-                ScopeKey::Global,
-                VariableValue::String("one".into()),
-            )
-            .unwrap();
-        assert_eq!(store.replace(variables.clone()), ["team.name"]);
-        let reference = VariableRef::parse("shared.team.name").unwrap();
+    fn a_reload_brings_the_new_value_and_names_the_changed_keys() {
+        let (db, profile) = store();
+        db.save_shared_variable(&VariableDefinition::new(
+            key("team.name"),
+            VariableType::String,
+            &[VariableScope::Global, VariableScope::Profile],
+        ))
+        .unwrap();
+        db.set_shared_variable_value(
+            &key("team.name"),
+            &ScopeKey::Global,
+            &VariableValue::String("one".into()),
+        )
+        .unwrap();
+        let variables = VariableStore::default();
+        assert_eq!(variables.reload(&db).unwrap(), ["team.name"]);
         let context = ResolutionContext::preview(profile.id);
-        let value = |store: &VariableStore| match store.resolve(&reference, &context) {
-            Resolution::Value {
-                value: VariableValue::String(text),
-                ..
-            } => text,
-            other => panic!("{other:?}"),
-        };
-        assert_eq!(value(&store), "one");
-        variables
-            .set(
-                &key("team.name"),
-                ScopeKey::Profile {
-                    profile: profile.id,
-                },
-                VariableValue::String("two".into()),
-            )
-            .unwrap();
-        assert_eq!(store.replace(variables.clone()), ["team.name"]);
-        assert_eq!(value(&store), "two");
-        assert_eq!(store.replace(variables), Vec::<String>::new());
-    }
-
-    #[test]
-    fn values_are_checked_and_never_stored_for_a_run() {
-        let mut variables = SharedVariables::new();
-        variables
-            .define(VariableDefinition::new(
-                key("team.size"),
-                VariableType::Integer,
-                &[VariableScope::Global, VariableScope::Execution],
-            ))
-            .unwrap();
-        assert!(
-            variables
-                .set(
-                    &key("team.size"),
-                    ScopeKey::Global,
-                    VariableValue::String("x".into())
-                )
-                .is_err()
-        );
-        assert!(
-            variables
-                .set(
-                    &key("team.size"),
-                    ScopeKey::Execution {
-                        execution: deckpilot_core::ExecutionId::new()
-                    },
-                    VariableValue::Integer(1)
-                )
-                .is_err()
-        );
-        assert!(
-            variables
-                .set(&key("nope.x"), ScopeKey::Global, VariableValue::Integer(1))
-                .is_err()
-        );
-        assert!(
-            variables
-                .define(VariableDefinition::new(
-                    key("team.empty"),
-                    VariableType::Integer,
-                    &[]
-                ))
-                .is_err()
+        assert!(matches!(
+            name(&variables, &context),
+            Resolution::Value { value: VariableValue::String(text), .. } if text == "one"
+        ));
+        db.set_shared_variable_value(
+            &key("team.name"),
+            &ScopeKey::Profile {
+                profile: profile.id,
+            },
+            &VariableValue::String("two".into()),
+        )
+        .unwrap();
+        // Until the reload, runs keep the snapshot they had.
+        assert!(matches!(
+            name(&variables, &context),
+            Resolution::Value { value: VariableValue::String(text), .. } if text == "one"
+        ));
+        assert_eq!(variables.reload(&db).unwrap(), ["team.name"]);
+        assert!(matches!(
+            name(&variables, &context),
+            Resolution::Value { value: VariableValue::String(text), .. } if text == "two"
+        ));
+        assert_eq!(variables.reload(&db).unwrap(), Vec::<String>::new());
+        // A profile the agent does not know resolves nothing.
+        assert_eq!(
+            name(&variables, &ResolutionContext::preview(ProfileId::new())),
+            Resolution::Missing(MissingReason::UnknownVariable)
         );
     }
 
     #[test]
     fn variables_of_disabled_modules_are_denied() {
-        let store = VariableStore::default();
+        let (db, profile) = store();
         let module = ModuleId::new("projects").unwrap();
-        let mut variables = SharedVariables::new();
-        variables
-            .define(VariableDefinition {
-                module: Some(module.clone()),
-                default: Some(VariableValue::Boolean(true)),
-                ..VariableDefinition::new(
-                    key("projects.flag"),
-                    VariableType::Boolean,
-                    &[VariableScope::Global],
-                )
-            })
+        let conflicts = db
+            .declare_module_variables(
+                &module,
+                &[VariableDefinition {
+                    default: Some(VariableValue::Boolean(true)),
+                    ..VariableDefinition::new(
+                        key("projects.flag"),
+                        VariableType::Boolean,
+                        &[VariableScope::Global],
+                    )
+                }],
+            )
             .unwrap();
-        store.replace(variables);
+        assert!(conflicts.is_empty(), "{conflicts:?}");
+        let variables = VariableStore::default();
+        variables.reload(&db).unwrap();
         let reference = VariableRef::parse("shared.projects.flag").unwrap();
-        let context = ResolutionContext::preview(ProfileId::new());
+        let context = ResolutionContext::preview(profile.id);
         assert!(matches!(
-            store.resolve(&reference, &context),
+            variables.resolve(&reference, &context),
             Resolution::Value { .. }
         ));
-        store.set_disabled_modules(BTreeSet::from([module]));
+        variables.set_disabled_modules(BTreeSet::from([module]));
         assert_eq!(
-            store.resolve(&reference, &context),
+            variables.resolve(&reference, &context),
             Resolution::PermissionDenied
         );
     }
 
     #[test]
     fn the_catalog_lists_metadata_for_the_context() {
-        let profile = profile();
+        let (db, profile) = store();
         let shop = profile.projects[0].id;
-        let mut variables = SharedVariables::new();
-        variables
-            .define(VariableDefinition {
-                sensitive: true,
-                ..VariableDefinition::new(
-                    key("vault.pin"),
-                    VariableType::String,
-                    &[VariableScope::Project],
-                )
-            })
-            .unwrap();
-        variables
-            .set(
-                &key("vault.pin"),
-                ScopeKey::Project {
-                    profile: profile.id,
-                    project: shop,
-                },
-                VariableValue::String("s3cr3t".into()),
+        db.save_shared_variable(&VariableDefinition {
+            sensitive: true,
+            ..VariableDefinition::new(
+                key("vault.pin"),
+                VariableType::String,
+                &[VariableScope::Project],
             )
-            .unwrap();
+        })
+        .unwrap();
+        db.set_shared_variable_value(
+            &key("vault.pin"),
+            &ScopeKey::Project {
+                profile: profile.id,
+                project: shop,
+            },
+            &VariableValue::String("s3cr3t".into()),
+        )
+        .unwrap();
+        let variables = db.shared_variables_for(profile.id).unwrap();
         let without = ResolutionContext::preview(profile.id);
         let with = without
             .clone()
