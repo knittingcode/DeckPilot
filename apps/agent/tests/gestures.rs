@@ -3,9 +3,11 @@
 //! synthetic instants; these tests check the wiring with real time and
 //! generous margins.
 //!
-//! Layouts cannot bind gestures yet, so the hooks put keys 0 to 4 in
-//! gesture mode on every page and record what fires. Key 5 stays raw: on
-//! the home page it opens a folder, in the folder it goes back.
+//! The hooks put keys 0 to 4 in gesture mode on every page, in place of
+//! the page's bindings, and record what fires; the layout binds no
+//! gestures to them, so nothing runs. Key 5 stays raw: on the home page it
+//! opens a folder, in the folder it goes back. Gestures bound by layouts
+//! are tested in `gesture_bindings.rs`.
 
 mod support;
 
@@ -138,7 +140,8 @@ impl GestureHooks for Recorder {
         };
         if let Some(gate) = gate {
             *self.entered.lock().unwrap() = Some(Instant::now());
-            let _ = gate.recv_timeout(TIMEOUT);
+            // Bounded, so a broken test cannot hang the agent forever.
+            let _ = gate.recv_timeout(Duration::from_secs(120));
             *self.left.lock().unwrap() = Some(Instant::now());
         }
     }
@@ -509,7 +512,7 @@ async fn two_devices_are_independent() {
     setup.agent.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_slow_dispatch_does_not_turn_a_click_into_a_long_press() {
     let (setup, devices) = setup(&["G-1"]).await;
     let d = &devices[0];
@@ -524,6 +527,12 @@ async fn a_slow_dispatch_does_not_turn_a_click_into_a_long_press() {
     // is read meanwhile, far below the 2 s threshold.
     setup.tap(d, CLICK_KEY);
     setup.release(d, SLOW_KEY);
+    // While the service task is blocked, all waiting happens on this
+    // thread with std time, never on Tokio timers: the task stays blocked
+    // until well past the threshold, measured from the press that was
+    // read before the block. Handling the release only then must not make
+    // it a long press.
+    let past = Duration::from_millis(u64::from(SLOW_LONG_MS) + 1500);
     let deadline = Instant::now() + TIMEOUT;
     let entered = loop {
         if let Some(entered) = *setup.hooks.entered.lock().unwrap() {
@@ -534,13 +543,14 @@ async fn a_slow_dispatch_does_not_turn_a_click_into_a_long_press() {
             "the click did not block: {}",
             setup.hooks.timings(origin)
         );
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        std::thread::sleep(Duration::from_millis(5));
     };
-    // Keep the task blocked well past the threshold, measured from the
-    // press read before the block: handling the release only now must not
-    // make it a long press.
-    let past = Duration::from_millis(u64::from(SLOW_LONG_MS) + 1500);
-    tokio::time::sleep_until((entered + past).into()).await;
+    std::thread::sleep((entered + past).saturating_duration_since(Instant::now()));
+    assert!(
+        setup.hooks.left.lock().unwrap().is_none(),
+        "the block ended early: {}",
+        setup.hooks.timings(origin)
+    );
     release.send(()).unwrap();
     setup
         .wait_for("the tap after the block", |s| s.len() == 2)
