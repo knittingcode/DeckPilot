@@ -297,6 +297,11 @@ Automated tests never need hardware:
   IPC: rendering, button routing, project cycling and persistence, profile
   switching, unplug/replug, brightness, authentication, request validation,
   single instance, shutdown and client reconnection.
+- `apps/agent/tests/hardware.rs` covers the device lifecycle with simulated
+  MK.2s: a replugged device gets its page, brightness and images back (also
+  when unplugged while keys are redrawn), several devices keep their own
+  pages and connections, keys are blanked when the agent stops and stale
+  images are replaced when it starts.
 - `apps/desktop/src-tauri/src/tests.rs` drives the configuration app's
   commands against a running agent.
 

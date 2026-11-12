@@ -50,7 +50,9 @@ impl MockBackend {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Attaches a device of `model` with the given serial number.
+    /// Attaches a device of `model` with the given serial number. Like a
+    /// real device after a power cycle, it starts blank and with its own
+    /// default brightness (reported as `None`).
     pub fn plug(&self, model: &DeviceModel, serial: &str) -> DeviceId {
         let id = DeviceId {
             model: model.id.clone(),
@@ -64,6 +66,7 @@ impl MockBackend {
         device.input.clear();
         device.frames.clear();
         device.pending.clear();
+        device.brightness = None;
         drop(devices);
         self.shared.changed.notify_all();
         id
