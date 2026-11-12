@@ -24,6 +24,11 @@ pub const EXECUTION_EVENT: &str = "workflow-execution";
 /// Event with a notification an action asked the agent to show, for the
 /// status bar.
 pub const NOTIFICATION_EVENT: &str = "agent-notification";
+/// Event with the agent's context changes as they are (`projectChanged`,
+/// `profileChanged`, `sharedVariablesChanged`, `resourceBindingsChanged`,
+/// `deviceContextChanged`, `executionContextChanged`), so the variable
+/// picker refreshes its previews. Agents before protocol 7 send none.
+pub const VARIABLES_EVENT: &str = "agent-variables";
 
 /// Overrides the agent executable.
 const AGENT_BIN_ENV: &str = "DECKPILOT_AGENT_BIN";
@@ -375,6 +380,14 @@ async fn subscribe<R: Runtime>(app: &AppHandle<R>, paths: &AgentPaths) -> Result
             }
             AgentEvent::Notification { notification } => {
                 let _ = app.emit(NOTIFICATION_EVENT, notification);
+            }
+            event @ (AgentEvent::ProjectChanged { .. }
+            | AgentEvent::ProfileChanged { .. }
+            | AgentEvent::SharedVariablesChanged { .. }
+            | AgentEvent::ResourceBindingsChanged
+            | AgentEvent::DeviceContextChanged { .. }
+            | AgentEvent::ExecutionContextChanged { .. }) => {
+                let _ = app.emit(VARIABLES_EVENT, event);
             }
         }
     }
