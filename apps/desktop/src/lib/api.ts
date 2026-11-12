@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core"
 
 import type {
   ActionInstance,
-  ActionReferenceChange,
+  ActionReference,
   ActionParameters,
   ActionResult,
   ActionType,
@@ -39,8 +39,9 @@ import type {
   ResourceKind,
   UpdateInfo,
   UpdatePreferences,
+  ReferenceChangeResult,
+  ReferenceSelection,
   UpdateState,
-  Usage,
   Workflow,
   WorkflowReport,
 } from "./types"
@@ -154,13 +155,25 @@ export const api = {
     invoke<null>("delete_action", { profileId, actionId }),
   runAction: (profileId: string, actionId: string) =>
     invoke<ActionResult>("run_action", { profileId, actionId }),
-  /**
-   * Replaces or unbinds references to an action in one change, so that it
-   * can be deleted; returns the references that remain. Usages name the
-   * places as `actionUsages` reported them before the change.
-   */
-  changeActionReferences: (profileId: string, actionId: string, changes: ActionReferenceChange[]) =>
-    invoke<Usage[]>("change_action_references", { profileId, actionId, changes }),
+  /** Every place that uses an action, triggers of workflows that run it included. */
+  actionReferences: (profileId: string, actionId: string) =>
+    invoke<ActionReference[]>("action_references", { profileId, actionId }),
+  /** Points the selected uses of an action at `replacement`. */
+  replaceActionReferences: (
+    profileId: string,
+    actionId: string,
+    replacement: string,
+    selection: ReferenceSelection,
+  ) =>
+    invoke<ReferenceChangeResult>("replace_action_references", {
+      profileId,
+      actionId,
+      replacement,
+      selection,
+    }),
+  /** Clears the selected key bindings and removes the selected steps; refuses graph nodes. */
+  unbindActionReferences: (profileId: string, actionId: string, selection: ReferenceSelection) =>
+    invoke<ReferenceChangeResult>("unbind_action_references", { profileId, actionId, selection }),
 
   saveWorkflow: (profileId: string, workflow: Workflow) =>
     invoke<Workflow>("save_workflow", { profileId, workflow }),

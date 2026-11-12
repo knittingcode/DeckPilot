@@ -85,11 +85,9 @@ function renderEditor(
       modules={modules}
       projects={projects}
       action={action}
-      usages={Array.from({ length: usages }, (_, i) => ({
-        type: "workflowStep" as const,
-        workflow: "w",
-        workflowName: "Start Work",
-        position: i + 1,
+      references={Array.from({ length: usages }, (_, index) => ({
+        site: { type: "step" as const, workflow: "w", index },
+        ownerName: "Start Work",
       }))}
       canRun={false}
       onSaved={onSaved}
@@ -154,7 +152,8 @@ describe("ActionEditor", () => {
     expect(within(dialog).getByRole("button", { name: "Apply and delete" })).toBeDisabled()
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
     expect(api.deleteAction).not.toHaveBeenCalled()
-    expect(api.changeActionReferences).not.toHaveBeenCalled()
+    expect(api.replaceActionReferences).not.toHaveBeenCalled()
+    expect(api.unbindActionReferences).not.toHaveBeenCalled()
 
     const name = screen.getByLabelText("Name")
     await user.clear(name)

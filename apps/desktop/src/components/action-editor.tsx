@@ -24,13 +24,12 @@ import { creatableTypes, moduleOf } from "@/lib/modules"
 import { buildParameters, initialValue, missingRequired } from "@/lib/parameters"
 import type {
   ActionInstance,
+  ActionReference,
   ActionResult,
   ActionType,
   ModuleInfo,
   ParameterValue,
   Project,
-  Usage,
-  Workflow,
 } from "@/lib/types"
 
 function valuesFor(type: ActionType | undefined, action: ActionInstance | null) {
@@ -60,14 +59,13 @@ export function ActionEditor({
   projects,
   action,
   initialType,
-  usages,
-  workflows = [],
+  references,
   candidates = [],
   canRun,
   onSaved,
   onDeleted,
   onChangeType,
-  onOpenUsage,
+  onOpenReference,
 }: {
   profileId: string
   modules: ModuleInfo[]
@@ -77,9 +75,7 @@ export function ActionEditor({
   /** For a new action: the type chosen before. */
   initialType?: string
   /** Every place that uses the action. */
-  usages: Usage[]
-  /** Workflows of the profile, to tell how workflow usages are started. */
-  workflows?: Workflow[]
+  references: ActionReference[]
   /** Actions a reference can use instead when this one is deleted. */
   candidates?: ActionInstance[]
   canRun: boolean
@@ -87,7 +83,7 @@ export function ActionEditor({
   onDeleted: () => void
   /** For a new action with `initialType`: go back to choosing the type. */
   onChangeType?: () => void
-  onOpenUsage?: (usage: Usage) => void
+  onOpenReference?: (reference: ActionReference) => void
 }) {
   const usable = modules.filter(
     (m) => m.enabled && m.supported && creatableTypes(m.actionTypes).length > 0,
@@ -371,11 +367,11 @@ export function ActionEditor({
             </Button>
             {deleting && (
               <DeleteActionDialog
-                open
                 profileId={profileId}
                 action={action}
-                usages={usages}
+                references={references}
                 candidates={candidates}
+                onOpen={onOpenReference}
                 onClose={() => {
                   setDeleting(false)
                 }}
@@ -415,8 +411,8 @@ export function ActionEditor({
           <Separator />
           <div className="grid gap-2">
             <h3 className="text-sm font-medium">Used in</h3>
-            <ReferenceList usages={usages} workflows={workflows} onOpen={onOpenUsage} />
-            {usages.length > 0 && (
+            <ReferenceList references={references} onOpen={onOpenReference} />
+            {references.length > 0 && (
               <p className="text-xs text-muted-foreground">
                 To delete the action, choose for each reference whether it uses another action or is
                 unbound.

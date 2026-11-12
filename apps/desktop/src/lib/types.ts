@@ -462,14 +462,6 @@ export interface Profile {
 
 export type Usage =
   | { type: "workflowStep"; workflow: string; workflowName: string; position: number }
-  /** A node of a workflow graph (`NodeKind::Action`). */
-  | {
-      type: "workflowNode"
-      workflow: string
-      workflowName: string
-      node: string
-      nodeLabel?: string
-    }
   | {
       type: "layoutBinding"
       layout: string
@@ -479,16 +471,44 @@ export type Usage =
       control: ControlId
     }
 
-/** What happens to one reference of an action that is about to be deleted. */
-export type ReferenceChange =
-  /** Point the key, step or node at another saved action. */
-  | { type: "replace"; action: string }
-  /** Remove the key binding, the workflow step or the workflow node. */
-  | { type: "unbind" }
+// Safe deletion of actions (deckpilot_storage::references, workstream E).
 
-export interface ActionReferenceChange {
-  usage: Usage
-  change: ReferenceChange
+/** One place that uses an action. */
+export type ReferenceSite =
+  /** A key, dial or touch binding of a layout page. */
+  | { type: "binding"; layout: string; page: string; control: ControlId; trigger: Trigger }
+  /** A step of a step-list workflow (index from 0). */
+  | { type: "step"; workflow: string; index: number }
+  /** An action node of a graph workflow. */
+  | { type: "node"; workflow: string; node: string }
+  /**
+   * A trigger of a workflow that runs the action. Indirect: it follows the
+   * workflow and is never changed by replacing or unbinding.
+   */
+  | { type: "trigger"; workflow: string; index: number }
+
+export type TriggerKind =
+  { type: "schedule"; schedule: Schedule } | { type: "lifecycle"; event: LifecycleEvent }
+
+/** A use of an action, with names for display. */
+export interface ActionReference {
+  site: ReferenceSite
+  /** The layout or workflow name. */
+  ownerName: string
+  /** The page name of a binding, the node label of a node, "paused" for paused triggers. */
+  detail?: string
+  /** The trigger of a `trigger` site. */
+  trigger?: TriggerKind
+}
+
+/** Which uses a replace or unbind acts on. */
+export type ReferenceSelection = { type: "all" } | { type: "sites"; sites: ReferenceSite[] }
+
+/** What a replace or unbind changed. */
+export interface ReferenceChangeResult {
+  changed: ReferenceSite[]
+  /** Steps and nodes whose overrides and mappings were removed: the replacement has another type. */
+  clearedSettings: ReferenceSite[]
 }
 
 export interface ProfileSummary {

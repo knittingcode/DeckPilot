@@ -5,12 +5,12 @@ import { cleanup, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { clearFocus, peekFocus } from "@/lib/focus"
-import type { Usage, Workflow } from "@/lib/types"
+import type { DeviceLayout, ReferenceSite, Workflow } from "@/lib/types"
 import { ActionsPage } from "@/pages/actions"
 import { api, resetApi } from "@/test/api-mock"
 import { installDomStubs } from "@/test/dom"
 import { ACTION_TYPES, action, builtInModules, profileView, stepWorkflow } from "@/test/fixtures"
-import { renderWithApp } from "@/test/render"
+import { type AppRender, renderWithApp } from "@/test/render"
 import { resetToasts, toast } from "@/test/toast"
 
 vi.mock("@/lib/api", async () => (await import("@/test/api-mock")).apiModule)
@@ -27,14 +27,7 @@ const modules = builtInModules({ git: { enabled: false } })
 const TITLE = "[data-slot=card-title]"
 
 function library(actions = [docs, containers, repo]) {
-  return profileView(
-    { actions },
-    {
-      actionUsages: {
-        "a-docs": [{ type: "workflowStep", workflow: "w", workflowName: "Start", position: 1 }],
-      },
-    },
-  )
+  return profileView({ actions, workflows: [stepWorkflow("w", "Start", ["a-docs"])] })
 }
 
 beforeAll(installDomStubs)
@@ -184,7 +177,8 @@ describe("Action Library", () => {
     const dialog = screen.getByRole("dialog", { name: "Delete “Docker status”?" })
     expect(dialog).toHaveTextContent("The action is removed from this profile.")
     await user.click(within(dialog).getByRole("button", { name: "Delete" }))
-    expect(api.changeActionReferences).not.toHaveBeenCalled()
+    expect(api.replaceActionReferences).not.toHaveBeenCalled()
+    expect(api.unbindActionReferences).not.toHaveBeenCalled()
     expect(api.deleteAction).toHaveBeenCalledWith("profile-1", "a-docker")
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
@@ -217,16 +211,26 @@ describe("Action Library", () => {
 })
 
 describe("Action references", () => {
-  const step: Usage = { type: "workflowStep", workflow: "w", workflowName: "Start", position: 1 }
-  const key: Usage = {
-    type: "layoutBinding",
-    layout: "l",
-    layoutName: "Main",
-    page: "home",
-    pageName: "Home",
-    control: { kind: "key", index: 2 },
-  }
-  // A graph workflow with a trigger: the backend reports no usage for its node.
+  const layout = {
+    id: "l",
+    name: "Main",
+    model: "mk2",
+    homePage: "home",
+    pages: [
+      {
+        id: "home",
+        name: "Home",
+        bindings: [
+          {
+            control: { kind: "key", index: 2 },
+            trigger: { type: "press" },
+            target: { type: "action", action: "a-docs" },
+          },
+        ],
+      },
+    ],
+  } as DeviceLayout
+  // A graph workflow with a trigger, and a step workflow.
   const graphWorkflow: Workflow = {
     ...stepWorkflow("g", "Morning"),
     triggers: [{ type: "schedule", schedule: { every: "daily", at: "09:00" } }],
@@ -245,17 +249,21 @@ describe("Action references", () => {
       edges: [],
     },
   }
-  const used = profileView(
-    { actions: [docs, containers, repo], workflows: [stepWorkflow("w", "Start"), graphWorkflow] },
-    { actionUsages: { "a-docs": [step, key] } },
-  )
-  const node: Usage = {
-    type: "workflowNode",
-    workflow: "g",
-    workflowName: "Morning",
-    node: "open",
-    nodeLabel: "Open the docs",
+  const used = profileView({
+    actions: [docs, containers, repo],
+    workflows: [stepWorkflow("w", "Start", ["a-docs"]), graphWorkflow],
+    layouts: [layout],
+  })
+  const keySite: ReferenceSite = {
+    type: "binding",
+    layout: "l",
+    page: "home",
+    control: { kind: "key", index: 2 },
+    trigger: { type: "press" },
   }
+  const stepSite: ReferenceSite = { type: "step", workflow: "w", index: 0 }
+  const nodeSite: ReferenceSite = { type: "node", workflow: "g", node: "open" }
+  const noChange = { changed: [], clearedSettings: [] }
 
   afterEach(() => {
     clearFocus("workflow")
@@ -268,7 +276,12 @@ describe("Action references", () => {
     return rendered
   }
 
-  it("lists keys, workflow steps and graph nodes, with triggers, and opens them", async () => {
+  async function openDelete(user: AppRender["user"]) {
+    await user.click(screen.getByRole("button", { name: "Delete" }))
+    return screen.getByRole("dialog", { name: "Delete “Open docs”?" })
+  }
+
+  it("lists keys, workflow steps, graph nodes and triggers, and opens them", async () => {
     const { user, context } = await openDocs()
     const list = screen.getByRole("list", { name: "References" })
     expect(
@@ -276,11 +289,12 @@ describe("Action references", () => {
         .getAllByRole("listitem")
         .map((li) => li.textContent),
     ).toEqual([
-      "Workflow “Start”, step 1 Open",
       "Layout “Main”, page “Home”, Key 3 Open",
-      "Workflow “Morning”, node “Open the docs”Workflow started by 1 trigger Open",
+      "Workflow “Start”, step 1 Open",
+      "Workflow “Morning”, node “Open the docs” Open",
+      "Workflow “Morning” starts by trigger: Daily at 09:00 Open",
     ])
-    // The count in the list includes the graph node.
+    // The count in the list: direct uses, not the trigger.
     expect(screen.getByRole("button", { name: /^Open docs/ })).toHaveTextContent("3")
 
     await user.click(
@@ -295,11 +309,15 @@ describe("Action references", () => {
   })
 
   it("deletes only after every reference was replaced or unbound", async () => {
-    api.changeActionReferences.mockResolvedValue([])
+    api.replaceActionReferences.mockResolvedValue(noChange)
+    api.unbindActionReferences.mockResolvedValue(noChange)
     const { user } = await openDocs()
-    await user.click(screen.getByRole("button", { name: "Delete" }))
-    const dialog = screen.getByRole("dialog", { name: "Delete “Open docs”?" })
+    const dialog = await openDelete(user)
     expect(dialog).toHaveTextContent("used in 3 places")
+    // The trigger is listed but follows its workflow.
+    expect(within(dialog).getByRole("list", { name: "Triggers" })).toHaveTextContent(
+      "Daily at 09:00",
+    )
     const apply = within(dialog).getByRole("button", { name: "Apply and delete" })
     expect(apply).toBeDisabled()
     expect(dialog).toHaveTextContent("3 references need a choice.")
@@ -326,60 +344,97 @@ describe("Action references", () => {
         name: "Change for Workflow “Morning”, node “Open the docs”",
       }),
     )
-    await user.click(screen.getByRole("option", { name: "Replace with “Shop status”" }))
-    expect(api.changeActionReferences).not.toHaveBeenCalled()
+    // A graph node cannot be unbound (it can be opened in the workflow editor instead).
+    expect(screen.queryByRole("option", { name: "Unbind" })).not.toBeInTheDocument()
+    await user.click(screen.getByRole("option", { name: "Replace with “Docker status”" }))
+    expect(api.replaceActionReferences).not.toHaveBeenCalled()
     await user.click(apply)
 
-    expect(api.changeActionReferences).toHaveBeenCalledWith("profile-1", "a-docs", [
-      { usage: step, change: { type: "replace", action: "a-docker" } },
-      { usage: key, change: { type: "unbind" } },
-      { usage: node, change: { type: "replace", action: "a-git" } },
-    ])
-    expect(api.deleteAction).toHaveBeenCalledWith("profile-1", "a-docs")
     await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith("Action deleted")
+      expect(api.deleteAction).toHaveBeenCalledWith("profile-1", "a-docs")
     })
-  })
-
-  it("unbinds all references at once", async () => {
-    api.changeActionReferences.mockResolvedValue([])
-    const { user } = await openDocs()
-    await user.click(screen.getByRole("button", { name: "Delete" }))
-    const dialog = screen.getByRole("dialog", { name: "Delete “Open docs”?" })
-    await user.click(within(dialog).getByRole("combobox", { name: "For all references" }))
-    await user.click(screen.getByRole("option", { name: "Unbind" }))
-    await user.click(within(dialog).getByRole("button", { name: "Apply and delete" }))
-    expect(api.changeActionReferences).toHaveBeenCalledWith(
+    expect(api.replaceActionReferences).toHaveBeenCalledExactlyOnceWith(
       "profile-1",
       "a-docs",
-      [step, key, node].map((usage) => ({ usage, change: { type: "unbind" } })),
+      "a-docker",
+      { type: "sites", sites: [stepSite, nodeSite] },
     )
-    expect(api.deleteAction).toHaveBeenCalledWith("profile-1", "a-docs")
+    expect(api.unbindActionReferences).toHaveBeenCalledWith("profile-1", "a-docs", {
+      type: "sites",
+      sites: [keySite],
+    })
+    expect(toast.success).toHaveBeenCalledWith("Action deleted")
   })
 
-  it("keeps the action when references remain after the change", async () => {
-    api.changeActionReferences.mockResolvedValue([key])
+  it("unbinds all keys and steps at once; graph nodes still need a replacement", async () => {
+    api.replaceActionReferences.mockResolvedValue({
+      changed: [nodeSite],
+      clearedSettings: [nodeSite],
+    })
+    api.unbindActionReferences.mockResolvedValue(noChange)
     const { user } = await openDocs()
-    await user.click(screen.getByRole("button", { name: "Delete" }))
-    const dialog = screen.getByRole("dialog", { name: "Delete “Open docs”?" })
+    const dialog = await openDelete(user)
     await user.click(within(dialog).getByRole("combobox", { name: "For all references" }))
-    await user.click(screen.getByRole("option", { name: "Replace with “Docker status”" }))
-    await user.click(within(dialog).getByRole("button", { name: "Apply and delete" }))
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "Still used in Layout “Main”, page “Home”, Key 3. Nothing was deleted.",
+    await user.click(screen.getByRole("option", { name: "Unbind" }))
+    const apply = within(dialog).getByRole("button", { name: "Apply and delete" })
+    expect(apply).toBeDisabled()
+    expect(dialog).toHaveTextContent("1 reference needs a choice.")
+    await user.click(
+      within(dialog).getByRole("combobox", {
+        name: "Change for Workflow “Morning”, node “Open the docs”",
+      }),
     )
+    await user.click(screen.getByRole("option", { name: "Replace with “Shop status”" }))
+    await user.click(apply)
+    await waitFor(() => {
+      expect(api.deleteAction).toHaveBeenCalledWith("profile-1", "a-docs")
+    })
+    expect(api.replaceActionReferences).toHaveBeenCalledWith("profile-1", "a-docs", "a-git", {
+      type: "sites",
+      sites: [nodeSite],
+    })
+    expect(api.unbindActionReferences).toHaveBeenCalledWith("profile-1", "a-docs", {
+      type: "sites",
+      sites: [keySite, stepSite],
+    })
+    // Overrides of another type's parameters were dropped; the user is told.
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining("1 step or node"))
+  })
+
+  it("opens a graph node in the workflow editor from the dialog", async () => {
+    const { user, context } = await openDocs()
+    const dialog = await openDelete(user)
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Open in workflow editor: Workflow “Morning”, node “Open the docs”",
+      }),
+    )
+    expect(context.navigate).toHaveBeenCalledWith("workflows")
+    expect(peekFocus("workflow")).toEqual({ type: "workflow", workflow: "g" })
     expect(api.deleteAction).not.toHaveBeenCalled()
   })
 
-  it("does not delete anything when cancelled", async () => {
+  it("keeps the action when the backend refuses", async () => {
+    api.replaceActionReferences.mockResolvedValue(noChange)
+    api.deleteAction.mockRejectedValue(new Error("the action is still used"))
     const { user } = await openDocs()
-    await user.click(screen.getByRole("button", { name: "Delete" }))
-    const dialog = screen.getByRole("dialog", { name: "Delete “Open docs”?" })
+    const dialog = await openDelete(user)
+    await user.click(within(dialog).getByRole("combobox", { name: "For all references" }))
+    await user.click(screen.getByRole("option", { name: "Replace with “Docker status”" }))
+    await user.click(within(dialog).getByRole("button", { name: "Apply and delete" }))
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("the action is still used")
+    expect(toast.success).not.toHaveBeenCalledWith("Action deleted")
+  })
+
+  it("does not change anything when cancelled", async () => {
+    const { user } = await openDocs()
+    const dialog = await openDelete(user)
     await user.click(within(dialog).getByRole("combobox", { name: "For all references" }))
     await user.click(screen.getByRole("option", { name: "Unbind" }))
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
-    expect(api.changeActionReferences).not.toHaveBeenCalled()
+    expect(api.replaceActionReferences).not.toHaveBeenCalled()
+    expect(api.unbindActionReferences).not.toHaveBeenCalled()
     expect(api.deleteAction).not.toHaveBeenCalled()
   })
 })

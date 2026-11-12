@@ -18,12 +18,12 @@ import {
 } from "@/components/ui/select"
 import { useEditingProfile } from "@/hooks/use-profile"
 import { useTitlebar } from "@/hooks/use-titlebar"
-import { actionReferences, usageTarget } from "@/lib/action-references"
+import { actionReferences, isDirect, referenceTarget } from "@/lib/action-references"
 import { useAppContext } from "@/lib/app-context"
 import { requestFocus } from "@/lib/focus"
 import { moduleOf } from "@/lib/modules"
 import { ActionIcon } from "@/components/action-icon"
-import type { ActionInstance, ActionType, ProfileView, Usage } from "@/lib/types"
+import type { ActionInstance, ActionReference, ActionType, ProfileView } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 export function ActionsPage() {
@@ -121,8 +121,8 @@ function Library({
   const current =
     selected && selected !== "new" ? view.profile.actions.find((a) => a.id === selected) : null
   const creating = selected === "new"
-  const openUsage = (usage: Usage) => {
-    const target = usageTarget(usage)
+  const openReference = (reference: ActionReference) => {
+    const target = referenceTarget(reference)
     requestFocus(target.focus)
     navigate(target.page)
   }
@@ -178,7 +178,7 @@ function Library({
             <section key={group} className="grid min-w-0 gap-1" aria-label={group}>
               <h3 className="px-2 text-xs font-medium text-muted-foreground uppercase">{group}</h3>
               {actions.map((action) => {
-                const used = actionReferences(view, action.id).length
+                const used = actionReferences(view.profile, action.id).filter(isDirect).length
                 return (
                   <button
                     key={action.id}
@@ -231,8 +231,7 @@ function Library({
               modules={modules}
               projects={view.profile.projects}
               action={current}
-              usages={actionReferences(view, current.id)}
-              workflows={view.profile.workflows}
+              references={actionReferences(view.profile, current.id)}
               candidates={view.profile.actions}
               canRun={canRun}
               onSaved={changed}
@@ -240,7 +239,7 @@ function Library({
                 setSelected(null)
                 changed()
               }}
-              onOpenUsage={openUsage}
+              onOpenReference={openReference}
             />
           </CardContent>
         </Card>
@@ -258,7 +257,7 @@ function Library({
               projects={view.profile.projects}
               action={null}
               initialType={newType}
-              usages={[]}
+              references={[]}
               canRun={false}
               onSaved={(action) => {
                 setNewType(null)
