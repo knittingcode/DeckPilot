@@ -1168,6 +1168,7 @@ dependencies = [
 name = "deckpilot-modules"
 version = "0.6.0"
 dependencies = [
+ "base64 0.22.1",
  "deckpilot-core",
  "deckpilot-device",
  "deckpilot-module-docker",
@@ -1181,6 +1182,9 @@ dependencies = [
  "deckpilot-module-projects",
  "deckpilot-module-system",
  "deckpilot-module-workspace",
+ "rustls",
+ "serde_json",
+ "url",
 ]
 
 [[package]]
