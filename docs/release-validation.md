@@ -6,16 +6,20 @@ Nothing here publishes a release or touches the release signing keys.
 
 ## 1. Signed test release (CI)
 
-A test tag runs the real release workflow: the same build, signing and
-notarization as a final release, ending in a **draft** release.
+A pre-release tag runs the real release workflow: the same build, signing
+and notarization as a final release, ending in a **draft** release. (The
+0.5.0 test releases used `vX.Y.Z-N` tags; those no longer start the
+workflow, see [releasing.md](releasing.md#release-tags-and-the-tag-gate).)
 
-1. Set the version to the test version, e.g. `0.5.0-1` (Windows installers
-   accept only numeric pre-release identifiers), and push the commit. RPM
-   does not accept `-` in versions, so test releases build `.deb` and the
+1. Set the version to the pre-release version, e.g. `0.6.0-alpha.1`, merge
+   it to `main` and wait for the required checks on the merge commit. The
+   MSI gets a numeric version computed by the tag gate (`0.6.0.1`). RPM
+   does not accept `-` in versions, so pre-releases build `.deb` and the
    AppImage on Linux; final versions build all packages.
-2. Tag and push: `git tag v0.5.0-1 && git push origin v0.5.0-1`.
-3. The workflow refuses to continue if versions, release notes (a test
-   version uses the notes of `0.5.0`), updater or Apple signing are not in
+2. Tag that commit and push: `git tag -s v0.6.0-alpha.1 <sha> -m "DeckPilot 0.6.0-alpha.1" && git push origin v0.6.0-alpha.1`.
+3. The workflow refuses to continue if the tag, its commit, versions, the
+   required checks, release notes (a pre-release uses the notes of
+   `0.6.0`), updater or Apple signing are not in
    order. A tag with a pre-release suffix becomes a pre-release, so even if
    it were published it would never become the release the app updates to
    (the app only reads `releases/latest`).
