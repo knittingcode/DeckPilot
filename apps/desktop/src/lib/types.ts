@@ -797,11 +797,15 @@ export interface AgentConnection {
 
 export type UpdateMode = "notifyOnly" | "downloadAndAsk" | "installWhenIdle"
 
+/** Stable releases only (default), or also alpha, beta and rc builds. */
+export type UpdateChannel = "stable" | "prerelease"
+
 export interface UpdatePreferences {
   mode: UpdateMode
   automaticChecks: boolean
   checkIntervalHours: number
   lastCheck: number | null
+  channel: UpdateChannel
 }
 
 export interface UpdateInfo {

@@ -65,6 +65,7 @@ jobs:
       sha: ${{ steps.gate.outputs.sha }}
       prerelease: ${{ steps.gate.outputs.prerelease }}
       msi_version: ${{ steps.gate.outputs.msi_version }}
+      manifest: ${{ steps.gate.outputs.manifest }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -264,7 +265,8 @@ jobs:
           # alpha, beta and rc tags become pre-releases: even if published,
           # they never become "latest", the channel the app reads.
           prerelease: ${{ needs.validate-tag.outputs.prerelease == 'true' }}
-          # latest.json is assembled once, after all builds, by the manifest
+          # The update manifest (latest.json or prerelease.json) is
+          # assembled once, after all builds, by the manifest
           # job: four jobs merging into it concurrently can lose entries.
           includeUpdaterJson: false
           # RPM does not allow "-" in versions: pre-releases build .deb and
@@ -280,7 +282,7 @@ jobs:
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD; do
             echo "$name=" >> "$GITHUB_ENV"
           done
-      # This build's entries of latest.json (target keys, asset names and
+      # This build's entries of the update manifest (target keys, asset names and
       # signatures), for the manifest job.
       - name: Updater manifest fragment
         shell: bash
@@ -365,16 +367,19 @@ jobs:
             target/${{ matrix.target }}/release/bundle/**/*.exe
             target/${{ matrix.target }}/release/bundle/**/*.sig
 
-  # Writes latest.json once, from the fragments of all builds, and attaches
-  # it to the draft. Fails if a platform or package type is missing, if two
-  # builds claim the same entry, or if a referenced asset is not in the
-  # draft (tools/ci/assemble-latest-json.sh, tested on every pull request by
+  # Writes the update manifest once, from the fragments of all builds, and
+  # attaches it to the draft: latest.json for a stable release (the stable
+  # channel's manifest), prerelease.json for a pre-release, never both, so
+  # a pre-release can never reach stable installations (docs/updates.md).
+  # Fails if a platform or package type is missing, if two builds claim the
+  # same entry, or if a referenced asset is not in the draft
+  # (tools/ci/assemble-latest-json.sh, tested on every pull request by
   # tools/ci/test-latest-json.sh).
   manifest:
-    name: Assemble latest.json
+    name: Assemble the update manifest
     needs: [validate-tag, prepare, build]
     runs-on: ubuntu-latest
-    # Attaches latest.json to the draft.
+    # Attaches the manifest to the draft.
     permissions:
       contents: write
     steps:
@@ -387,19 +392,20 @@ jobs:
           pattern: updater-fragment-*
           merge-multiple: true
           path: ${{ runner.temp }}/updater-fragments
-      - name: Assemble latest.json and attach it to the draft
+      - name: Assemble the manifest and attach it to the draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NOTES: ${{ needs.prepare.outputs.notes }}
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+          MANIFEST: ${{ needs.validate-tag.outputs.manifest }}
         run: |
-          version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
           printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' \
             > "$RUNNER_TEMP/assets.txt"
-          REPOSITORY="$GITHUB_REPOSITORY" VERSION="$version" NOTES_FILE="$RUNNER_TEMP/notes.md" \
+          REPOSITORY="$GITHUB_REPOSITORY" NOTES_FILE="$RUNNER_TEMP/notes.md" \
             ASSETS_FILE="$RUNNER_TEMP/assets.txt" \
-            tools/ci/assemble-latest-json.sh "$RUNNER_TEMP/updater-fragments" "$RUNNER_TEMP/latest.json"
-          gh release upload "$TAG" "$RUNNER_TEMP/latest.json" --repo "$GITHUB_REPOSITORY" --clobber
+            tools/ci/assemble-latest-json.sh "$RUNNER_TEMP/updater-fragments" "$RUNNER_TEMP/$MANIFEST"
+          gh release upload "$TAG" "$RUNNER_TEMP/$MANIFEST" --repo "$GITHUB_REPOSITORY" --clobber
 
   verify:
     name: Verify artifacts and publish checksums
@@ -422,25 +428,27 @@ jobs:
         env:
           DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
         run: cargo run --locked -p deckpilot-dev -- verify-release release-files
-      # Each build job merges its platforms into latest.json; a job that
-      # failed to (or overwrote another's entry) would leave installations
-      # of that platform or package type without updates, silently.
-      - name: Every platform and package type is in latest.json
+      # A build whose entries are missing from the manifest would leave
+      # installations of that platform or package type without updates,
+      # silently. (verify-release has already refused the other channel's
+      # manifest.)
+      - name: Every platform and package type is in the manifest
         env:
           PRERELEASE: ${{ needs.validate-tag.outputs.prerelease }}
+          MANIFEST: ${{ needs.validate-tag.outputs.manifest }}
         run: |
           required="darwin-aarch64 darwin-aarch64-app darwin-x86_64 darwin-x86_64-app
             linux-x86_64 linux-x86_64-appimage linux-x86_64-deb
             windows-x86_64 windows-x86_64-msi windows-x86_64-nsis"
           # Stable releases also build the .rpm (see the build job).
           [ "$PRERELEASE" = true ] || required="$required linux-x86_64-rpm"
-          listed=$(jq -r '.platforms | keys[]' release-files/latest.json)
-          echo "latest.json lists: $(tr '\n' ' ' <<< "$listed")"
+          listed=$(jq -r '.platforms | keys[]' "release-files/$MANIFEST")
+          echo "$MANIFEST lists: $(tr '\n' ' ' <<< "$listed")"
           missing=""
           for target in $required; do
             echo "$listed" | grep -q -x -F "$target" || missing="$missing $target"
           done
-          [ -z "$missing" ] || { echo "::error::latest.json has no update for:$missing"; exit 1; }
+          [ -z "$missing" ] || { echo "::error::$MANIFEST has no update for:$missing"; exit 1; }
       - name: Attach checksums
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

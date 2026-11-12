@@ -181,6 +181,17 @@ impl ReleaseTag {
         Ok(format!("{core}.{}", offset + n))
     }
 
+    /// The URL of this release's manifest: `latest.json` of a stable
+    /// release, `prerelease.json` of a pre-release.
+    pub fn manifest_url(&self) -> String {
+        self.manifest_url_at(crate::DOWNLOAD_PREFIX)
+    }
+
+    /// [`Self::manifest_url`] under another download prefix (tests).
+    pub fn manifest_url_at(&self, downloads: &str) -> String {
+        format!("{downloads}{}/{}", self.tag, self.kind.manifest())
+    }
+
     /// `key=value` lines for the release workflow (`GITHUB_OUTPUT`).
     pub fn describe(&self) -> Result<String, String> {
         Ok(format!(
@@ -193,6 +204,43 @@ impl ReleaseTag {
             self.msi_version()?,
         ))
     }
+}
+
+/// A release as GitHub's release list describes it
+/// (`GET /repos/{owner}/{repo}/releases`); other fields are ignored.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ListedRelease {
+    pub tag_name: String,
+    #[serde(default)]
+    pub draft: bool,
+    #[serde(default)]
+    pub prerelease: bool,
+}
+
+/// The release the prerelease channel offers: the newest published release
+/// — pre-release or stable — that the channel accepts over `current`.
+/// Drafts, tags that are not release tags, and releases whose GitHub
+/// pre-release flag disagrees with their tag are never offered. `None` when
+/// there is nothing newer.
+///
+/// The list comes from the network and is not trusted beyond this choice:
+/// the manifest URL is built from the validated tag
+/// ([`ReleaseTag::manifest_url`]), and the updater still verifies the
+/// package's signature and its signed version.
+pub fn newest_release(
+    releases: &[ListedRelease],
+    channel: Channel,
+    current: &Version,
+) -> Option<ReleaseTag> {
+    releases
+        .iter()
+        .filter(|release| !release.draft)
+        .filter_map(|release| {
+            let tag = ReleaseTag::parse(&release.tag_name).ok()?;
+            (release.prerelease == (tag.kind == ReleaseKind::Prerelease)).then_some(tag)
+        })
+        .filter(|tag| channel.accepts(current, &tag.version))
+        .max_by(|a, b| a.version.cmp(&b.version))
 }
 
 #[cfg(test)]
@@ -306,6 +354,63 @@ mod tests {
             assert!(msi(tag).is_err(), "{tag}");
             assert!(ReleaseTag::parse(tag).unwrap().describe().is_err(), "{tag}");
         }
+    }
+
+    fn listed(tag: &str, draft: bool, prerelease: bool) -> ListedRelease {
+        ListedRelease {
+            tag_name: tag.into(),
+            draft,
+            prerelease,
+        }
+    }
+
+    #[test]
+    fn the_prerelease_channel_offers_the_newest_release_of_either_kind() {
+        let v = |s: &str| Version::parse(s).unwrap();
+        let releases = [
+            listed("v0.7.0-alpha.1", false, true),
+            listed("v0.6.1", false, false),
+            listed("v0.7.0-beta.1", true, true), // draft
+            listed("v0.5.0-2", true, true),      // old test build
+            listed("v0.9.0", false, true),       // flag disagrees with the tag
+            listed("v0.9.0-rc.1", false, false), // flag disagrees with the tag
+            listed("v1.0.0-preview.1", false, true),
+            listed("nightly", false, true),
+        ];
+        let base = crate::DOWNLOAD_PREFIX;
+        let newest = |list: &[ListedRelease], channel, current: &str| {
+            newest_release(list, channel, &v(current)).map(|tag| tag.manifest_url())
+        };
+        assert_eq!(
+            newest(&releases, Channel::Prerelease, "0.6.0"),
+            Some(format!("{base}v0.7.0-alpha.1/prerelease.json"))
+        );
+        // Stable releases come from the stable manifest of their own tag:
+        // a pre-release user moves on to the stable release once it is newer.
+        let with_stable = [releases.as_slice(), &[listed("v0.7.0", false, false)]].concat();
+        assert_eq!(
+            newest(&with_stable, Channel::Prerelease, "0.7.0-alpha.1"),
+            Some(format!("{base}v0.7.0/latest.json"))
+        );
+        // Never the same or an older version.
+        assert_eq!(newest(&with_stable, Channel::Prerelease, "0.7.0"), None);
+        // The stable channel never takes a pre-release from the list.
+        assert_eq!(
+            newest(&releases, Channel::Stable, "0.6.0"),
+            Some(format!("{base}v0.6.1/latest.json"))
+        );
+        assert_eq!(newest(&[], Channel::Prerelease, "0.6.0"), None);
+        assert_eq!(
+            ReleaseTag::parse("v1.0.0-rc.1")
+                .unwrap()
+                .manifest_url_at("http://127.0.0.1:1/"),
+            "http://127.0.0.1:1/v1.0.0-rc.1/prerelease.json"
+        );
+        let parsed: Vec<ListedRelease> = serde_json::from_str(
+            r#"[{"tag_name":"v0.7.0-rc.1","draft":false,"prerelease":true,"assets":[]}]"#,
+        )
+        .unwrap();
+        assert_eq!(parsed[0], listed("v0.7.0-rc.1", false, true));
     }
 
     #[test]
