@@ -11,6 +11,8 @@ on:
       - .github/workflows/release.yml
       - .github/workflows/release-tests.yml
       - .github/workflows/signing-check.yml
+      - .github/workflows/update-continuity.yml
+      - .github/scripts/updater-key-pair.py
       - tools/release-pipeline/**
       - tools/dev/src/release.rs
       - tools/dev/src/versions.rs
@@ -45,6 +47,12 @@ jobs:
         with:
           key: release-tests
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The Tauri CLI makes the throwaway keys of the key-pair test.
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - run: pnpm install --frozen-lockfile
       - name: shellcheck
         run: shellcheck -x tools/release-pipeline/*.sh
       - name: Two-stage publication (stubbed GitHub)
@@ -53,3 +61,5 @@ jobs:
         run: cargo test --locked -p deckpilot-dev -p deckpilot-update
       - name: Tag gate and workflow structure
         run: tools/release-pipeline/test.sh "$RUNNER_TEMP/release-pipeline"
+      - name: The signing check's key-pair verification (throwaway keys)
+        run: tools/release-pipeline/test-updater-key-pair.sh "$RUNNER_TEMP/updater-key-pair"
