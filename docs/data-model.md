@@ -423,6 +423,13 @@ a run and are never stored.
 - Changing a definition so that stored values would no longer fit (another
   type, a scope removed) is refused (`VariableValuesConflict`); values are
   never dropped silently. Deleting a variable deletes its values.
+- A variable that is still used cannot be deleted, and its type cannot
+  change (`VariableInUse`, with every use). `shared_variable_references`
+  lists the uses in all profiles: reference and template parameter values
+  of actions, step and node overrides, workflow mappings (template and
+  whole-value), key and action labels, inline actions of bindings, and —
+  indirectly — the triggers of the workflows that use it. Plain text
+  values are never parsed, so `{{` in them is no use.
 - A `secretRef` value is the name of a credential, never the secret, which
   stays in `credentials`. `sensitive` marks values that are only ever shown
   redacted.
