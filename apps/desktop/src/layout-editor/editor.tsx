@@ -52,7 +52,8 @@ import { Inspector } from "./inspector"
 import { LibraryPanel } from "./library-panel"
 import { PageBar } from "./page-bar"
 import { targetGroups } from "./targets"
-import { shortcutLabel, useEditorShortcuts } from "./use-editor-shortcuts"
+import { useEditorShortcuts } from "@/hooks/use-editor-shortcuts"
+import { shortcutLabel } from "@/lib/shortcuts"
 import { useIcons } from "./use-icons"
 import { useLayoutEditing } from "./use-layout-editing"
 
@@ -148,6 +149,9 @@ export function LayoutEditor({
     cut: commands.cut,
     paste: commands.paste,
     duplicate: commands.duplicate,
+    save: () => {
+      if (dirty) void save()
+    },
   })
 
   const pageBindings = useMemo(() => findPage(draft, pageId)?.bindings ?? [], [draft, pageId])
