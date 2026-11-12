@@ -5,17 +5,57 @@ DeckPilot updates itself from **GitHub Releases** of
 metadata only. No profile, database, token or other user data is ever
 uploaded.
 
-## Channel and discovery
+## Channels and discovery
 
-The app reads
-`https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json`.
-GitHub's `latest` alias never points at drafts or pre-releases, so this is the
-stable channel. The manifest is produced by the Tauri bundler and lists one
-artifact per platform target (`darwin-aarch64`, `darwin-x86_64`,
-`linux-x86_64`, `windows-x86_64`) and, on Linux, per package type: the
-updater installs the same kind of package that is installed (AppImage,
-`.deb` or `.rpm`; the latter two through the system package tools, which
-ask for administrator authorization).
+Settings → Updates → *Update channel* chooses between two channels; the
+default is **Stable**. The choice is stored on this computer only (it is
+not part of exports).
+
+| | Stable (default) | Pre-releases |
+| --- | --- | --- |
+| Offers | stable releases (`vX.Y.Z`) | the newest of pre-releases (`-alpha.N`, `-beta.N`, `-rc.N`) **and** stable releases |
+| Where the app looks | `https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json` | GitHub's release list (`api.github.com/repos/knittingcode/DeckPilot/releases`), then the manifest of the chosen release |
+| Manifest | `latest.json` of the latest release | `prerelease.json` of a pre-release, `latest.json` of a stable release |
+
+Each release carries exactly one manifest, named for its channel:
+`latest.json` in a stable release, `prerelease.json` in a pre-release
+(`deckpilot-dev verify-release` refuses a release with the other one, and
+the release workflow attaches only the right one). The channels are
+isolated three times over:
+
+1. GitHub's `latest` alias never points at drafts or pre-releases;
+2. a pre-release has no `latest.json`, so even a pre-release marked
+   "latest" by mistake offers nothing to stable installations (the download
+   fails as "no update description");
+3. the app refuses any pre-release version on the stable channel, whatever
+   manifest announced it (the updater's version comparison,
+   `Channel::accepts`).
+
+On the pre-release channel, the app reads the release list (30 newest
+releases), ignores drafts, tags that are not release tags and releases
+whose GitHub pre-release flag disagrees with their tag, and takes the
+highest version newer than the running one. It then reads that release's
+manifest; the URL is built from the validated tag, never taken from the
+list. Signatures, the signed version and the trusted download prefix are
+checked exactly as on the stable channel. The list request is
+unauthenticated (GitHub allows 60 per hour per address; the app checks at
+most hourly).
+
+**Moving between channels.** A pre-release user is offered the stable
+release as soon as it is newer than the pre-release they run
+(`0.7.0` > `0.7.0-rc.2`). Switching back to Stable never installs an older
+version: the installation stays on its pre-release until a stable release
+is newer. Changing the channel forgets an update found on the other
+channel; it cannot change while an update is being checked, downloaded or
+installed.
+
+Each manifest lists one artifact per platform target (`darwin-aarch64`,
+`darwin-x86_64`, `linux-x86_64`, `windows-x86_64`) and, on Linux, per
+package type: the updater installs the same kind of package that is
+installed (AppImage, `.deb` or `.rpm`; the latter two through the system
+package tools, which ask for administrator authorization). Pre-releases
+have no `.rpm` (RPM refuses `-` in versions); `.rpm` installations update
+from stable releases only.
 
 ## Authenticity
 
@@ -133,6 +173,8 @@ never installs an older version than the running one.
 | What | How | Status |
 | ---- | --- | ------ |
 | Manifest parsing, channel (no pre-releases, no downgrades), trusted URLs | `deckpilot-update` unit tests | automated |
+| Channels: tag classification, stable never accepts a pre-release, the prerelease channel picks the newest published release of either kind and moves on to stable, drafts and mismatched flags ignored | `deckpilot-update` channel tests; `updates_tests.rs` against a loopback release list | automated |
+| Each release carries only its channel's manifest | `deckpilot-dev verify-release` tests; release workflow | automated |
 | Non-manifest responses (offline captive portal, empty, truncated JSON) | unit tests | automated |
 | Signature verification: valid accepted; tampered, truncated, extended, zeroed, empty package rejected; signature by another key rejected; signed version bound to the announced one | unit tests with throwaway keys | automated |
 | Install decisions: modes, idle device, running workflows (`agent_busy`) | policy unit tests | automated |

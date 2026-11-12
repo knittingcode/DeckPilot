@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Assembles the release's latest.json once, from the fragments of all build
-# jobs (updater-fragment.sh), so that no entry can be lost to concurrent
-# updates of the draft release.
+# Assembles the release's update manifest once (latest.json of a stable
+# release, prerelease.json of a pre-release; the caller names the output),
+# from the fragments of all build jobs (updater-fragment.sh), so that no
+# entry can be lost to concurrent updates of the draft release.
 #
 #   tools/ci/assemble-latest-json.sh <fragments dir> <output.json>
 #
 # Environment:
 #   REPOSITORY  owner/name, for the download URLs
-#   TAG         the release tag, e.g. v0.6.0 (pre-release tags contain "-")
+#   TAG         the release tag, e.g. v0.6.0 or v0.6.0-alpha.1 (validated by
+#               the release gate; pre-release tags contain "-")
 #   VERSION     the version announced, e.g. 0.6.0
 #   NOTES_FILE  file with the release notes
 #   PUB_DATE    optional; RFC 3339, default now
@@ -35,8 +37,8 @@ files=("$fragments"/*.json)
 duplicates=$(jq -r '.platforms | keys[]' "${files[@]}" | sort | uniq -d)
 [ -z "$duplicates" ] || fail "several builds provide: $(echo "$duplicates" | tr "\n" " " | sed "s/ $//")"
 
-# Every platform and package type that installations update from. Final
-# releases also build the .rpm; test releases (pre-release tags) do not.
+# Every platform and package type that installations update from. Stable
+# releases also build the .rpm; pre-releases do not (RPM refuses "-").
 required="darwin-aarch64 darwin-aarch64-app darwin-x86_64 darwin-x86_64-app
   linux-x86_64 linux-x86_64-appimage linux-x86_64-deb
   windows-x86_64 windows-x86_64-msi windows-x86_64-nsis"
