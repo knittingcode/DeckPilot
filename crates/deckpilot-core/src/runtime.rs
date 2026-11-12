@@ -450,6 +450,15 @@ impl Engine {
         let invocation = invocation.clone().with_workflow(workflow);
         if definition.graph.is_some() {
             let inputs = workflow_inputs(definition, inputs)?;
+            // Mappings resolve through the same resolver as the actions'
+            // own parameters: this engine's shared variables, system
+            // variables from the run.
+            let resolver = self.resolver(profile, machine, None);
+            let services = RunServices {
+                variables: Some(&resolver),
+                device: invocation.device.as_ref(),
+                execution: invocation.execution,
+            };
             self.run_graph_nested(
                 profile,
                 machine,
@@ -458,7 +467,7 @@ impl Engine {
                 &inputs,
                 cancel,
                 on_event,
-                (0, RunServices::default()),
+                (0, services),
                 &invocation,
             )
         } else {
@@ -608,6 +617,11 @@ impl Engine {
             .workflow(workflow)
             .ok_or(EngineError::UnknownWorkflow(workflow))?;
         let inputs = workflow_inputs(definition, &std::collections::BTreeMap::new())?;
+        let resolver = self.resolver(profile, machine, None);
+        let services = RunServices {
+            variables: Some(&resolver),
+            ..RunServices::default()
+        };
         self.run_graph_nested(
             profile,
             machine,
@@ -616,7 +630,7 @@ impl Engine {
             &inputs,
             cancel,
             on_event,
-            (0, RunServices::default()),
+            (0, services),
             &Invocation::default().with_workflow(workflow),
         )
     }
@@ -658,7 +672,7 @@ impl Engine {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn run_graph_nested(
         &self,
         profile: &Profile,
@@ -687,12 +701,12 @@ impl Engine {
         let run_action = |instance: &ActionInstance,
                           overrides: &ActionParameters,
                           context: &mut ActiveProjectContext,
-                          control: &crate::ExecutionControl<'_>| {
+                          control: &crate::ExecutionControl<'_>,
+                          outputs: &crate::graph::mapping::Outputs| {
             let overrides = (!overrides.is_empty()).then_some(overrides);
-            // Node outputs for `steps.` references in the instance's own
-            // parameters are supplied once the executor passes them
-            // (workstream C); mapped values arrive as literals already.
-            self.execute(
+            // The run's node outputs so far, for `steps.` references in the
+            // instance's own parameters; mapped values arrive as literals.
+            self.execute_with_outputs(
                 profile,
                 machine,
                 context,
@@ -700,6 +714,7 @@ impl Engine {
                 overrides,
                 Some(control),
                 invocation,
+                Some(outputs),
             )
         };
         // Nested workflows report their progress as part of the Loop or
