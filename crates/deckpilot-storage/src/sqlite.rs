@@ -275,6 +275,7 @@ impl SqliteStore {
                 4 => crate::project_actions::migrate(&tx)?,
                 _ => {}
             }
+            failpoint(Failpoint::Migration(version + 1))?;
         }
         tx.pragma_update(None, "user_version", supported)?;
         if current < supported {
@@ -284,6 +285,7 @@ impl SqliteStore {
                 params![current, supported, backup_name, now()],
             )?;
         }
+        failpoint(Failpoint::Commit)?;
         tx.commit()?;
         // A failed check after commit is reported with the verified backup,
         // which still holds the previous consistent state.
@@ -305,9 +307,21 @@ impl SqliteStore {
         };
         let dir = backup_dir(path);
         std::fs::create_dir_all(&dir).map_err(StorageError::Io)?;
+        // Copies left by an interrupted earlier attempt were never verified.
+        remove_partial_backups(&dir);
         let target = dir.join(format!("deckpilot-schema{version}-{}.db", now_millis()));
-        export_database(&self.connection, &target, Some(key))?;
-        verify_copy(&target, &Encryption::Key(key.clone()), version)?;
+        // Written under a temporary name and renamed once verified, so that
+        // an incomplete copy is never taken for a backup (or counted towards
+        // the kept ones), even if the process is killed while writing it.
+        let partial = partial_backup(&target);
+        let written = export_database(&self.connection, &partial, Some(key))
+            .and_then(|()| failpoint(Failpoint::Backup))
+            .and_then(|()| verify_copy(&partial, &Encryption::Key(key.clone()), version))
+            .and_then(|()| std::fs::rename(&partial, &target).map_err(StorageError::Io));
+        if let Err(error) = written {
+            remove_partial_backups(&dir);
+            return Err(error);
+        }
         prune_backups(&dir);
         Ok(Some(target))
     }
@@ -518,6 +532,72 @@ fn now_millis() -> u128 {
         .unwrap_or_default()
 }
 
+/// Points of an upgrade where tests make it fail or kill the process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Failpoint {
+    /// The backup is written but not yet verified.
+    Backup,
+    /// The migration to this version ran, inside the open transaction.
+    Migration(u32),
+    /// Everything ran; the transaction is about to be committed.
+    Commit,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Makes the upgrade on this thread fail at the given point.
+    pub(crate) static FAIL_AT: std::cell::Cell<Option<Failpoint>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Environment variable that makes a test process abort at a failpoint
+/// (its `Debug` form, e.g. `Migration(7)`), as if it had been killed.
+#[cfg(test)]
+pub(crate) const ABORT_AT_ENV: &str = "DECKPILOT_TEST_ABORT_AT";
+
+/// Test builds only: fails or aborts at `point` when asked to.
+#[cfg(test)]
+fn failpoint(point: Failpoint) -> Result<()> {
+    if std::env::var(ABORT_AT_ENV).is_ok_and(|value| value == format!("{point:?}")) {
+        std::process::abort();
+    }
+    if FAIL_AT.with(std::cell::Cell::get) == Some(point) {
+        return Err(StorageError::Invalid(format!(
+            "injected failure at {point:?}"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(test))]
+#[allow(clippy::unnecessary_wraps)]
+#[inline]
+fn failpoint(_point: Failpoint) -> Result<()> {
+    Ok(())
+}
+
+const PARTIAL_SUFFIX: &str = ".partial";
+
+fn partial_backup(target: &Path) -> PathBuf {
+    let mut name = target.as_os_str().to_owned();
+    name.push(PARTIAL_SUFFIX);
+    PathBuf::from(name)
+}
+
+/// Removes unverified copies (and their side files) from `dir`. Best effort.
+fn remove_partial_backups(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(std::result::Result::ok) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // `….db.partial` and its side files (`….db.partial-journal`).
+        if name.starts_with("deckpilot-schema") && name.contains(&format!(".db{PARTIAL_SUFFIX}")) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Removes the oldest backups beyond [`KEPT_BACKUPS`]. Best effort.
 fn prune_backups(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -526,10 +606,12 @@ fn prune_backups(dir: &Path) {
     let mut backups: Vec<(std::time::SystemTime, PathBuf)> = entries
         .filter_map(std::result::Result::ok)
         .filter(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("deckpilot-schema")
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // Not `….db.partial`: an unverified copy is not a backup.
+            name.starts_with("deckpilot-schema")
+                && Path::new(&name)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("db"))
         })
         .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
         .collect();
