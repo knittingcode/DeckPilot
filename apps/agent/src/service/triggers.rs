@@ -39,6 +39,8 @@ pub(crate) struct Launch {
     pub inputs: BTreeMap<String, String>,
     /// Which schedule or event started it, for history.
     pub detail: Option<String>,
+    /// Set for the start and verification runs of a work session.
+    pub purpose: Option<super::work_session::RunPurpose>,
 }
 
 /// What the agent's lifecycle looked like when last observed.
@@ -238,6 +240,7 @@ impl Agent {
         let launch = Launch {
             inputs,
             detail: Some(detail.clone()),
+            purpose: None,
         };
         match self.start_execution_with(workflow, kind, launch) {
             Ok(_) => info!(workflow = %name, %detail, "workflow started by its trigger"),

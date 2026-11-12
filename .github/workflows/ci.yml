@@ -8,22 +8,35 @@ on:
 permissions:
   contents: read
 
+# Pull requests: a new push cancels the obsolete run of the same pull
+# request. main: every pushed commit gets its own group, so post-merge runs
+# are never cancelled or replaced; they queue for runners instead.
+# (Only main and pull requests trigger this workflow, so a commit never runs
+# twice for push and pull_request.)
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.ref, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
+  # Line tables keep file and line numbers in backtraces at a fraction of
+  # full debug info: smaller caches, faster linking (notably on Windows).
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  # Only main saves Rust caches. Pull requests restore main's: their own
+  # entries (one per branch, ~0.8 GB on Windows) evicted main's from the
+  # 10 GB repository cache and turned later restores into partial matches.
+  RUST_CACHE_SAVE: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:
   # Which optional jobs a pull request needs (tools/ci/changed-paths.sh).
   # Required checks never depend on it; on pushes to main every optional
-  # job runs. A job whose paths did not change reports as skipped.
+  # job runs. A job whose paths did not change reports as skipped. The
+  # package checks are in packaging.yml.
   changes:
     name: Changed paths
     runs-on: ubuntu-latest
     outputs:
-      packaging: ${{ steps.paths.outputs.packaging }}
       keystore: ${{ steps.paths.outputs.keystore }}
       release_manifest: ${{ steps.paths.outputs.release_manifest }}
     steps:
@@ -73,6 +86,8 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install && rustc --version && cargo clippy --version
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -114,6 +129,8 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install && rustc --version && cargo clippy --version
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
       - run: cargo test -p deckpilot-storage --features sqlcipher --locked
 
   # The real credential store of each platform, under throwaway service
@@ -135,17 +152,18 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install && rustc --version
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
       - name: Secret Service (GNOME Keyring)
         if: runner.os == 'Linux'
         run: |
           timeout 600 sudo apt-get update -o Acquire::ForceIPv4=true
           timeout 600 sudo apt-get install -y --no-install-recommends -o Acquire::ForceIPv4=true gnome-keyring dbus
+      # In a D-Bus session with an unlocked keyring that answers before the
+      # tests start; see tools/ci/with-keyring.sh.
       - name: Test (Linux, in a D-Bus session with an unlocked keyring)
         if: runner.os == 'Linux'
-        run: |
-          dbus-run-session -- sh -c '
-            echo "ci-keyring" | gnome-keyring-daemon --daemonize --unlock --components=secrets >/dev/null &&
-            cargo test -p deckpilot-keystore --locked -- --nocapture'
+        run: tools/ci/with-keyring.sh cargo test -p deckpilot-keystore --locked -- --nocapture
       - name: Test
         if: runner.os != 'Linux'
         run: cargo test -p deckpilot-keystore --locked -- --nocapture
@@ -167,6 +185,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-manifest
+          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -177,99 +196,3 @@ jobs:
         run: shellcheck tools/ci/*.sh
       - name: Assemble and verify latest.json from fixture builds
         run: tools/ci/test-latest-json.sh "$RUNNER_TEMP/latest-json-test"
-
-  # Builds the Linux .deb and .rpm with the release configuration (bundled
-  # agent, udev rule) and their updater artifacts, signed with a throwaway
-  # key, to catch packaging mistakes before a release. Nothing is published.
-  package-linux:
-    name: Package check (Linux .deb)
-    needs: changes
-    if: needs.changes.outputs.packaging == 'true'
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Linux system dependencies
-        run: tools/ci/install-linux-deps.sh
-      - name: Install Rust toolchain
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: package-linux
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Throwaway updater key (not the release key)
-        run: tools/ci/throwaway-updater-key.sh
-      - name: Build and stage the agent
-        run: |
-          cargo build --release --locked -p deckpilot-agent
-          mkdir -p apps/desktop/src-tauri/binaries
-          cp target/release/deckpilot-agent "apps/desktop/src-tauri/binaries/deckpilot-agent-$(rustc -vV | sed -n 's/^host: //p')"
-      - name: Build the .deb and .rpm
-        run: >
-          pnpm --filter @deckpilot/desktop tauri build --bundles deb,rpm
-          --config src-tauri/tauri.release.conf.json
-          --config "$THROWAWAY_UPDATER_CONFIG"
-      - name: Names, versions, app, agent, udev rule and updater signatures
-        run: tools/ci/check-packages.sh linux
-
-  # Builds the Windows installers with the release configuration, the way
-  # the release workflow does (agent built in a bash step with Strawberry
-  # Perl for OpenSSL), with updater signatures from a throwaway key, and
-  # checks their contents. Not code-signed; nothing is published.
-  package-windows:
-    name: Package check (Windows installers)
-    needs: changes
-    if: needs.changes.outputs.packaging == 'true'
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust toolchain
-        shell: bash
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: package-windows
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Use Strawberry Perl for OpenSSL
-        shell: pwsh
-        run: |
-          "OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Throwaway updater key (not the release key)
-        shell: bash
-        run: tools/ci/throwaway-updater-key.sh
-      - name: Build and stage the agent
-        shell: bash
-        run: |
-          cargo build --release --locked -p deckpilot-agent
-          mkdir -p apps/desktop/src-tauri/binaries
-          cp target/release/deckpilot-agent.exe "apps/desktop/src-tauri/binaries/deckpilot-agent-$(rustc -vV | sed -n 's/^host: //p').exe"
-      - name: Build the installers
-        shell: bash
-        run: >
-          pnpm --filter @deckpilot/desktop tauri build --bundles nsis,msi
-          --config src-tauri/tauri.release.conf.json
-          --config "$THROWAWAY_UPDATER_CONFIG"
-      - name: Extract the installers
-        shell: pwsh
-        run: |
-          $version = (Get-Content apps/desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          $nsis = "target/release/bundle/nsis/DeckPilot_${version}_x64-setup.exe"
-          $msi = "target/release/bundle/msi/DeckPilot_${version}_x64_en-US.msi"
-          foreach ($file in @($nsis, $msi)) {
-            if (-not (Test-Path $file)) { Write-Error "expected $file"; exit 1 }
-          }
-          & 7z x -y "-o$env:RUNNER_TEMP\nsis" (Resolve-Path $nsis).Path | Out-Null
-          $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @("/a", "`"$((Resolve-Path $msi).Path)`"", "/qn", "TARGETDIR=`"$env:RUNNER_TEMP\msi`"")
-          if ($process.ExitCode -ne 0) { Write-Error "administrative MSI extraction failed: $($process.ExitCode)"; exit 1 }
-      - name: Names, versions, app, agent and updater signatures
-        shell: bash
-        run: tools/ci/check-packages.sh windows "$RUNNER_TEMP"

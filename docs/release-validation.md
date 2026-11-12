@@ -6,16 +6,20 @@ Nothing here publishes a release or touches the release signing keys.
 
 ## 1. Signed test release (CI)
 
-A test tag runs the real release workflow: the same build, signing and
-notarization as a final release, ending in a **draft** release.
+A pre-release tag runs the real release workflow: the same build, signing
+and notarization as a final release, ending in a **draft** release. (The
+0.5.0 test releases used `vX.Y.Z-N` tags; those no longer start the
+workflow, see [releasing.md](releasing.md#release-tags-and-the-tag-gate).)
 
-1. Set the version to the test version, e.g. `0.5.0-1` (Windows installers
-   accept only numeric pre-release identifiers), and push the commit. RPM
-   does not accept `-` in versions, so test releases build `.deb` and the
+1. Set the version to the pre-release version, e.g. `0.6.0-alpha.1`, merge
+   it to `main` and wait for the required checks on the merge commit. The
+   MSI gets a numeric version computed by the tag gate (`0.6.0.1`). RPM
+   does not accept `-` in versions, so pre-releases build `.deb` and the
    AppImage on Linux; final versions build all packages.
-2. Tag and push: `git tag v0.5.0-1 && git push origin v0.5.0-1`.
-3. The workflow refuses to continue if versions, release notes (a test
-   version uses the notes of `0.5.0`), updater or Apple signing are not in
+2. Tag that commit and push: `git tag -s v0.6.0-alpha.1 <sha> -m "DeckPilot 0.6.0-alpha.1" && git push origin v0.6.0-alpha.1`.
+3. The workflow refuses to continue if the tag, its commit, versions, the
+   required checks, release notes (a pre-release uses the notes of
+   `0.6.0`), updater or Apple signing are not in
    order. A tag with a pre-release suffix becomes a pre-release, so even if
    it were published it would never become the release the app updates to
    (the app only reads `releases/latest`).
@@ -66,7 +70,23 @@ Developer ID (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
 `APPLE_SIGNING_IDENTITY`); the builds are never notarized. The *Update
 continuity* workflow (`.github/workflows/update-continuity.yml`) runs it on a
 macOS runner with a temporary keychain: no Apple submission, no release,
-nothing public.
+nothing public. It runs only when started by hand
+(`gh workflow run "Update continuity" --ref main`), never on pull requests:
+it builds the app (dependency installation, build scripts) in the job that
+holds the certificate, so it runs only for a reviewed ref, without
+restoring caches of other workflows.
+
+The *Signing check* workflow holds the release secrets on every pull
+request, so its jobs run only code that is already trusted: a sparse
+checkout of `.github/scripts` — on pull requests from the **base commit**
+(already on `main`), not from the pull request — and nothing else (no
+dependency installation, no build, no cache). A pull request that changes
+`updater-key-pair.py`, `apple-certificate.sh` or `apple-api-key.sh` is
+therefore checked with the previous versions against the real secrets, and
+its own versions are tested only with throwaway keys
+(`tools/release-pipeline/test-updater-key-pair.sh` in the *Release pipeline
+tests*); the new versions meet the secrets first on the push to `main`
+after review.
 
 ## 3. Stream Deck MK.2 (physical device)
 
