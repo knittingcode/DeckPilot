@@ -765,15 +765,17 @@ async fn single_instance_shutdown_and_client_reconnect() {
         "keys are blanked"
     );
     agent.watchdog.step("connecting to the stopped agent");
-    assert!(matches!(
-        within(
-            "connecting to the stopped agent",
-            TIMEOUT,
-            AgentClient::connect(&paths, ClientKind::Other)
-        )
-        .await,
-        Err(ClientError::NotRunning)
-    ));
+    let stopped = within(
+        "connecting to the stopped agent",
+        TIMEOUT,
+        AgentClient::connect(&paths, ClientKind::Other),
+    )
+    .await;
+    assert!(
+        matches!(stopped, Err(ClientError::NotRunning)),
+        "connecting to the stopped agent: {:?}",
+        stopped.map(|_| "connected")
+    );
 
     // A restarted agent accepts clients again and restores the selection.
     // It starts locked, like after a reboot, until the app unlocks it.
