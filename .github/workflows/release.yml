@@ -183,7 +183,8 @@ jobs:
   # rule, updater signatures by a throwaway key) on the tagged commit,
   # before anything is signed: the draft and every later job need it. It
   # builds github.sha, which the gate checked is the tag's commit (RUN_SHA),
-  # and gets no secret.
+  # and gets no secret. Pre-releases build no .rpm and the MSI gets the
+  # gate's numeric version, as in the signed build.
   packaging:
     name: Installer checks (unsigned)
     needs: validate-tag
@@ -191,6 +192,9 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/packaging.yml
+    with:
+      prerelease: ${{ needs.validate-tag.outputs.prerelease == 'true' }}
+      msi-version: ${{ needs.validate-tag.outputs.msi_version }}
 
   # Database migration and IPC compatibility with the previous release's
   # real binaries (tools/compat/matrix.sh, as the Compatibility workflow),

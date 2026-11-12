@@ -280,12 +280,10 @@ tag; that push starts the release workflow.
      The draft, and with it every signed build and the publication, waits
      for them. The called workflow builds the run's commit, which the gate
      checked is the tag's (`RUN_SHA`): a tag moved after the push is
-     refused. **Pre-release tags are blocked here until the Packaging
-     workflow handles pre-release versions:** it builds an `.rpm` (RPM
-     refuses `-` in versions) and an MSI without the numeric
-     `msi_version` (WiX refuses `0.6.0-alpha.1`); it needs inputs for the
-     pre-release flag and the MSI version, which the release workflow
-     would pass from the gate;
+     refused. The job passes the gate's `prerelease` and `msi_version`
+     (inputs `prerelease` and `msi-version`), so a pre-release builds no
+     `.rpm` (RPM refuses `-` in versions) and its MSI gets the same numeric
+     version as the signed build (WiX refuses `0.6.0-alpha.1`);
    - runs the real-binary compatibility matrix against the previous release
      (`tools/compat/matrix.sh`, baseline in
      `tools/release-pipeline/compat-baseline`): database migration and IPC

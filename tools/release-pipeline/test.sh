@@ -301,6 +301,8 @@ mutate "signing secrets in another job" 'jobs["verify"]["env"] = {"K": "${{ secr
 mutate "publishing without the publication gate" 'jobs["publish"]["needs"] = ["validate-tag"]' "publish must need publish-gate"
 mutate "another job in the environment" 'jobs["verify"]["environment"] = "production-release"' "job verify may not use the environment"
 mutate "a draft that does not wait for the installer checks" 'jobs["draft"]["needs"].remove("packaging")' "draft must need packaging"
+mutate "installer checks without the pre-release flag" 'del jobs["packaging"]["with"]["prerelease"]' "packaging must pass prerelease"
+mutate "installer checks with another MSI version" 'jobs["packaging"]["with"]["msi-version"] = "0.6.0"' "packaging must pass msi-version"
 mutate "installer checks with secrets" 'jobs["packaging"]["secrets"] = "inherit"' "packaging must not pass secrets"
 mutate "no installer checks" 'del jobs["packaging"]; jobs["draft"]["needs"].remove("packaging")' "no job packaging calling"
 mutate "a job without a timeout" 'del jobs["manifest"]["timeout-minutes"]' "job manifest has no timeout-minutes"

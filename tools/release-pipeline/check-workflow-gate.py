@@ -11,8 +11,8 @@ Fails unless:
   * the workflow-level permissions grant no write access, so only jobs that
     ask for it explicitly can write; every job declares its permissions and
     only the draft, build, manifest, verify and publish jobs may write;
-  * the job `packaging` calls the Packaging workflow without secrets, and
-    `draft` needs it;
+  * the job `packaging` calls the Packaging workflow without secrets, with
+    the gate's `prerelease` and `msi_version`, and `draft` needs it;
   * every job has timeout-minutes (except one that calls a workflow), every action is pinned to a commit SHA,
     and no job in the environment restores a cache;
   * the protected environment is `production-release`: `publish` runs in
@@ -36,6 +36,10 @@ ENVIRONMENT = "production-release"
 ENVIRONMENT_JOBS = {"prepare", "build", PUBLISHER}
 PACKAGING = "packaging"
 PACKAGING_WORKFLOW = "./.github/workflows/packaging.yml"
+PACKAGING_INPUTS = {
+    "prerelease": "${{ needs.validate-tag.outputs.prerelease == 'true' }}",
+    "msi-version": "${{ needs.validate-tag.outputs.msi_version }}",
+}
 PINNED = re.compile(r"^[^@]+@[0-9a-f]{40}$")
 CACHES = {"Swatinem/rust-cache", "actions/cache"}
 SIGNING_SECRET = re.compile(r"secrets\.(APPLE_|TAURI_SIGNING_)")
@@ -109,6 +113,12 @@ def check(path):
     else:
         if "secrets" in packaging:
             problems.append(f"{PACKAGING} must not pass secrets")
+        # The gate's classification and MSI version, as the signed build
+        # uses them.
+        inputs = packaging.get("with") or {}
+        for name, expected in PACKAGING_INPUTS.items():
+            if str(inputs.get(name, "")).replace(" ", "") != expected.replace(" ", ""):
+                problems.append(f"{PACKAGING} must pass {name}: {expected}")
         if PACKAGING not in needs_of(jobs.get("draft", {})):
             problems.append(f"draft must need {PACKAGING}")
 
