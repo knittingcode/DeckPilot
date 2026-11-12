@@ -26,10 +26,20 @@ use serde_json::{Value, json};
 use tokio::io::BufReader;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use watchdog::{Watchdog, within};
+
+#[path = "support/watchdog.rs"]
+mod watchdog;
 
 /// Upper bound for conditions to be reached; generous for slow CI runners
 /// (passing tests continue as soon as the condition holds).
 const TIMEOUT: Duration = Duration::from_secs(20);
+/// A single request in a polling loop: one that gets no answer is given
+/// up and tried again instead of blocking the loop.
+const ATTEMPT: Duration = Duration::from_secs(5);
+/// Lifecycle tests (start, stop, restart) that take longer than this hang:
+/// the test binary is ended with a message.
+const HANG: Duration = Duration::from_secs(120);
 
 /// The agent task and the sender that stops it.
 type Running = (JoinHandle<Result<(), AgentError>>, oneshot::Sender<()>);
@@ -42,6 +52,13 @@ struct TestAgent {
     key: DatabaseKey,
     task: Option<JoinHandle<Result<(), AgentError>>>,
     stop: Option<oneshot::Sender<()>>,
+    /// Ends the test binary if the test hangs.
+    watchdog: Watchdog,
+}
+
+/// A watchdog for the running test (libtest names its thread after it).
+fn watch() -> Watchdog {
+    Watchdog::new(std::thread::current().name().unwrap_or("a test"), HANG)
 }
 
 impl Drop for TestAgent {
@@ -73,15 +90,18 @@ fn create_database(paths: &AgentPaths) -> (SqliteStore, DatabaseKey) {
 
 /// Unlocks a running agent the way the configuration app does.
 async fn unlock_agent(paths: &AgentPaths, key: &DatabaseKey) {
-    let mut client = AgentClient::connect(paths, ClientKind::Desktop)
-        .await
-        .unwrap();
-    client
-        .request(Request::Unlock {
-            key: KeyMaterial::new(key.to_hex()),
-        })
-        .await
-        .unwrap();
+    within("unlocking the agent", TIMEOUT, async {
+        let mut client = AgentClient::connect(paths, ClientKind::Desktop)
+            .await
+            .unwrap();
+        client
+            .request(Request::Unlock {
+                key: KeyMaterial::new(key.to_hex()),
+            })
+            .await
+            .unwrap();
+    })
+    .await;
 }
 
 fn seed(paths: &AgentPaths) -> (Profile, DatabaseKey) {
@@ -183,6 +203,7 @@ fn start_agent_with(
 }
 
 async fn setup() -> TestAgent {
+    let watchdog = watch();
     let paths = temp_paths();
     let (work, key) = seed(&paths);
     let mock = MockBackend::new();
@@ -197,6 +218,7 @@ async fn setup() -> TestAgent {
         key,
         task: Some(task),
         stop: Some(stop),
+        watchdog,
     };
     agent
         .wait_for_status(|s| {
@@ -210,18 +232,24 @@ async fn setup() -> TestAgent {
 
 impl TestAgent {
     async fn client(&self) -> AgentClient {
-        AgentClient::connect(&self.paths, ClientKind::Other)
-            .await
-            .unwrap()
+        within(
+            "connecting to the agent",
+            TIMEOUT,
+            AgentClient::connect(&self.paths, ClientKind::Other),
+        )
+        .await
+        .unwrap()
     }
 
     async fn status(&self) -> AgentStatus {
-        match self
-            .client()
-            .await
-            .request(Request::GetStatus)
-            .await
-            .unwrap()
+        let mut client = self.client().await;
+        match within(
+            "the status request",
+            TIMEOUT,
+            client.request(Request::GetStatus),
+        )
+        .await
+        .unwrap()
         {
             Response::Status { status } => *status,
             other => panic!("unexpected {other:?}"),
@@ -231,8 +259,18 @@ impl TestAgent {
     async fn wait_for_status(&self, predicate: impl Fn(&AgentStatus) -> bool) -> AgentStatus {
         let deadline = tokio::time::Instant::now() + TIMEOUT;
         loop {
-            if let Ok(mut client) = AgentClient::connect(&self.paths, ClientKind::Other).await
-                && let Ok(Response::Status { status }) = client.request(Request::GetStatus).await
+            // Each attempt is bounded: a connection that is never answered
+            // must not keep the loop from reaching its deadline.
+            let attempt = tokio::time::timeout(ATTEMPT, async {
+                let mut client = AgentClient::connect(&self.paths, ClientKind::Other)
+                    .await
+                    .ok()?;
+                match client.request(Request::GetStatus).await {
+                    Ok(Response::Status { status }) => Some(status),
+                    _ => None,
+                }
+            });
+            if let Ok(Some(status)) = attempt.await
                 && predicate(&status)
             {
                 return *status;
@@ -257,11 +295,14 @@ impl TestAgent {
     }
 
     async fn shutdown(mut self) {
-        self.client()
-            .await
-            .request(Request::Shutdown)
-            .await
-            .unwrap();
+        let mut client = self.client().await;
+        within(
+            "the shutdown request",
+            TIMEOUT,
+            client.request(Request::Shutdown),
+        )
+        .await
+        .unwrap();
         let task = self.task.take().unwrap();
         tokio::time::timeout(TIMEOUT, task)
             .await
@@ -657,6 +698,7 @@ async fn rejects_unauthenticated_and_invalid_messages() {
 async fn single_instance_shutdown_and_client_reconnect() {
     let mut agent = setup().await;
     let paths = agent.paths.clone();
+    agent.watchdog.step("a second instance is refused");
     assert!(matches!(
         InstanceLock::acquire(&paths.lock_file),
         Err(LockError::AlreadyRunning)
@@ -666,24 +708,32 @@ async fn single_instance_shutdown_and_client_reconnect() {
         Err(AgentError::Lock(LockError::AlreadyRunning))
     ));
 
+    agent.watchdog.step("subscribing");
     let mut subscriber = agent.client().await;
-    subscriber.subscribe().await.unwrap();
-    assert!(agent.frames_shown());
-
-    agent
-        .client()
-        .await
-        .request(Request::Shutdown)
+    within("subscribing", TIMEOUT, subscriber.subscribe())
         .await
         .unwrap();
+    assert!(agent.frames_shown());
+
+    agent.watchdog.step("the shutdown request");
+    let mut client = agent.client().await;
+    within(
+        "the shutdown request",
+        TIMEOUT,
+        client.request(Request::Shutdown),
+    )
+    .await
+    .unwrap();
+    drop(client);
+    agent.watchdog.step("waiting for the agent task to end");
     let task = agent.task.take().unwrap();
-    tokio::time::timeout(TIMEOUT, task)
+    within("the agent task after shutdown", TIMEOUT, task)
         .await
-        .unwrap()
         .unwrap()
         .unwrap();
 
     // Subscribers are told before the connection closes.
+    agent.watchdog.step("the subscriber's shutdown event");
     let mut saw_shutdown = false;
     while let Ok(Ok(event)) = tokio::time::timeout(TIMEOUT, subscriber.next_event()).await {
         if event == AgentEvent::ShuttingDown {
@@ -697,29 +747,40 @@ async fn single_instance_shutdown_and_client_reconnect() {
     // pipe instance, and with it the name, from being reused.
     drop(subscriber);
     assert!(!paths.token_file.exists(), "token is removed on shutdown");
+    agent.watchdog.step("keys blanked after shutdown");
     assert!(
         agent
             .mock
             .wait_for(&agent.device, TIMEOUT, |frames, _| frames.is_empty()),
         "keys are blanked"
     );
+    agent.watchdog.step("connecting to the stopped agent");
     assert!(matches!(
-        AgentClient::connect(&paths, ClientKind::Other).await,
+        within(
+            "connecting to the stopped agent",
+            TIMEOUT,
+            AgentClient::connect(&paths, ClientKind::Other)
+        )
+        .await,
         Err(ClientError::NotRunning)
     ));
 
     // A restarted agent accepts clients again and restores the selection.
     // It starts locked, like after a reboot, until the app unlocks it.
+    agent.watchdog.step("restarting the agent");
     let (task, stop) = start_agent(paths.clone(), agent.mock.clone()).unwrap();
     agent.task = Some(task);
     agent.stop = Some(stop);
+    agent.watchdog.step("the restarted agent's status");
     let locked = agent.wait_for_status(|s| !s.devices.is_empty()).await;
     assert_eq!(locked.security, SecurityState::Locked);
+    agent.watchdog.step("unlocking the restarted agent");
     unlock_agent(&paths, &agent.key).await;
     let status = agent
         .wait_for_status(|s| s.security == SecurityState::Unlocked)
         .await;
     assert_eq!(status.active_profile.unwrap().id, agent.work.id);
+    agent.watchdog.step("stopping the restarted agent");
     agent.shutdown().await;
 }
 
@@ -987,6 +1048,7 @@ async fn profiles_keep_their_own_projects_and_selection() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn starts_locked_and_unlocks_only_with_the_right_key() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let (work, key) = seed(&paths);
     let mock = MockBackend::new();
@@ -1111,6 +1173,7 @@ async fn reports_missing_and_legacy_databases_without_opening_them() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn requests_windows_from_the_app_instead_of_drawing_them() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let (work, key) = seed(&paths);
     let mock = MockBackend::new();
@@ -1242,11 +1305,15 @@ async fn wait_for(paths: &AgentPaths, predicate: impl Fn(&AgentStatus) -> bool) 
 }
 
 async fn request(paths: &AgentPaths, request: Request) -> Result<Response, ClientError> {
-    AgentClient::connect(paths, ClientKind::Desktop)
-        .await
-        .unwrap()
-        .request(request)
-        .await
+    let what = format!("the {} request", request.name());
+    within(&what, TIMEOUT, async {
+        AgentClient::connect(paths, ClientKind::Desktop)
+            .await
+            .unwrap()
+            .request(request)
+            .await
+    })
+    .await
 }
 
 async fn stop_agent(paths: &AgentPaths, (task, stop): Running) {
@@ -1279,6 +1346,7 @@ fn unlocked(status: &AgentStatus) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_fresh_install_opens_without_a_password_and_after_restarts() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     let running = start_agent_with(paths.clone(), MockBackend::new(), with_keys(&keys)).unwrap();
@@ -1310,6 +1378,7 @@ async fn a_fresh_install_opens_without_a_password_and_after_restarts() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unavailable_credential_store_is_a_clear_locked_state() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     let running = start_agent_with(paths.clone(), MockBackend::new(), with_keys(&keys)).unwrap();
@@ -1349,6 +1418,7 @@ async fn an_unavailable_credential_store_is_a_clear_locked_state() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn retrying_after_the_store_becomes_available_unlocks() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     let running = start_agent_with(paths.clone(), MockBackend::new(), with_keys(&keys)).unwrap();
@@ -1370,6 +1440,7 @@ async fn retrying_after_the_store_becomes_available_unlocks() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn no_credential_store_on_first_run_creates_nothing() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     keys.set_unavailable(true);
@@ -1388,6 +1459,7 @@ async fn no_credential_store_on_first_run_creates_nothing() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_password_database_switches_to_a_system_key() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let (profile, key) = seed(&paths);
     let keys = MemoryKeyStore::new();
@@ -1429,6 +1501,7 @@ async fn a_password_database_switches_to_a_system_key() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_switch_leaves_the_password_protection() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let (_, key) = seed(&paths);
     let keys = MemoryKeyStore::new();
@@ -1459,6 +1532,7 @@ async fn locks_after_inactivity_and_sleep_when_configured() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     let offset = Arc::new(AtomicU64::new(0));
@@ -1514,6 +1588,7 @@ async fn locks_after_inactivity_and_sleep_when_configured() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_legacy_database_is_encrypted_with_a_system_key() {
+    let _watchdog = watch();
     let paths = temp_paths();
     {
         let store = SqliteStore::open(&paths.database, &Encryption::None).unwrap();
@@ -1567,6 +1642,7 @@ fn restored(status: &AgentStatus, profile: &Profile, project: &ProjectKey) -> bo
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unlocking_restores_profile_project_and_layouts() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     let (profile, project) = system_configuration(&paths, &keys);
@@ -1588,6 +1664,7 @@ async fn unlocking_restores_profile_project_and_layouts() {
 async fn locks_when_the_screen_locks_where_it_can_be_detected() {
     use deckpilot_storage::policy::{AutoLock, SecurityPolicy, set_security_policy};
 
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     let screen = std::sync::Arc::new(ScriptedScreenLock::default());
@@ -1642,6 +1719,7 @@ async fn locks_when_the_screen_locks_where_it_can_be_detected() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unreachable_store_is_retried_but_a_refusal_is_not() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     let running = start_agent_with(paths.clone(), MockBackend::new(), with_keys(&keys)).unwrap();
@@ -1686,6 +1764,7 @@ async fn an_unreachable_store_is_retried_but_a_refusal_is_not() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_missing_database_is_reported_not_replaced() {
+    let _watchdog = watch();
     let paths = temp_paths();
     let keys = MemoryKeyStore::new();
     system_configuration(&paths, &keys);
@@ -1954,6 +2033,7 @@ async fn device_bound_workflows_run_in_the_background() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn runs_of_a_stopped_agent_are_recorded_as_interrupted() {
+    let _watchdog = watch();
     let agent = setup().await;
     let workflow = waiting_workflow(&agent.work, 60_000);
     let workflow_id = workflow.id;
@@ -2719,6 +2799,7 @@ async fn notifications_reach_the_status_bar_and_the_desktop() {
         key,
         task: Some(task),
         stop: Some(stop),
+        watchdog: watch(),
     };
     let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
     let summary = registry()
@@ -3150,4 +3231,57 @@ async fn connections_offer_only_what_their_protocol_has() {
     assert_eq!(status["response"]["status"]["runningExecutions"], 0);
     drop((reader, writer, current));
     agent.shutdown().await;
+}
+
+/// A test that blocks its thread (which `tokio::time::timeout` cannot
+/// interrupt), or that panics and then hangs while its runtime shuts down,
+/// ends the test binary with a message naming the step, instead of hanging
+/// the CI job. Runs itself in child processes, with the harness capturing
+/// output as in CI.
+#[test]
+fn a_hanging_test_ends_the_test_binary_with_its_step() {
+    const CHILD: &str = "DECKPILOT_WATCHDOG_TEST_CHILD";
+    match std::env::var(CHILD).as_deref() {
+        Ok("block") => {
+            let watchdog = Watchdog::new("the hanging test", Duration::from_millis(300));
+            watchdog.step("blocking forever");
+            std::thread::sleep(Duration::from_secs(30));
+            return;
+        }
+        Ok("panic") => {
+            // A worker that never returns keeps the runtime from shutting
+            // down after the test panics.
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .build()
+                .unwrap();
+            runtime.spawn(async { std::thread::sleep(Duration::from_secs(30)) });
+            let watchdog = Watchdog::new("the hanging test", Duration::from_millis(300));
+            watchdog.step("asserting");
+            std::thread::sleep(Duration::from_millis(50));
+            panic!("the assertion failed");
+        }
+        _ => {}
+    }
+    for (mode, step) in [
+        ("block", "`blocking forever`"),
+        ("panic", "`panicked, then did not finish, after: asserting`"),
+    ] {
+        let started = std::time::Instant::now();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "a_hanging_test_ends_the_test_binary_with_its_step",
+                "--exact",
+            ])
+            .env(CHILD, mode)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(101), "{mode}: {stderr}");
+        assert!(
+            stderr.contains("the hanging test hung") && stderr.contains(step),
+            "{mode}: {stderr}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(20), "{mode}");
+    }
 }
