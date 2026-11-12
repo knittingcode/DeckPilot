@@ -63,4 +63,7 @@ jobs:
           workspaces: |
             . -> target
             ${{ runner.temp }}/compat/old-tree -> target
+          # Saved by main only (about 1 GB): per-pull-request copies filled
+          # the repository's 10 GB cache storage and evicted main's caches.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: tools/compat/matrix.sh v0.5.0-2 "$RUNNER_TEMP/compat"
