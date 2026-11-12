@@ -3438,7 +3438,10 @@ fn a_hanging_test_ends_the_test_binary_with_its_step() {
     }
     for (mode, step) in [
         ("block", "`blocking forever`"),
-        ("panic", "`panicked, then did not finish, after: asserting`"),
+        (
+            "panic",
+            "`panicked, then did not finish, after: asserting; the panic: panicked at",
+        ),
     ] {
         let started = std::time::Instant::now();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -3455,6 +3458,14 @@ fn a_hanging_test_ends_the_test_binary_with_its_step() {
             stderr.contains("the hanging test hung") && stderr.contains(step),
             "{mode}: {stderr}"
         );
+        if mode == "panic" {
+            // What panicked is shown, although the harness captured the
+            // test's output and never printed it.
+            assert!(
+                stderr.contains("[panic in") && stderr.contains("the assertion failed"),
+                "{stderr}"
+            );
+        }
         assert!(started.elapsed() < Duration::from_secs(20), "{mode}");
     }
 }
