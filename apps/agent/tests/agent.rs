@@ -40,6 +40,9 @@ const ATTEMPT: Duration = Duration::from_secs(5);
 /// Lifecycle tests (start, stop, restart) that take longer than this hang:
 /// the test binary is ended with a message.
 const HANG: Duration = Duration::from_secs(120);
+/// Like the agent binary, a test agent waits briefly for the lock of one
+/// that is still stopping.
+const LOCK_WAIT: Duration = Duration::from_secs(2);
 
 /// The agent task and the sender that stops it.
 type Running = (JoinHandle<Result<(), AgentError>>, oneshot::Sender<()>);
@@ -171,7 +174,7 @@ fn start_agent_with(
         screen,
         notifier,
     } = extras;
-    let lock = InstanceLock::acquire(&paths.lock_file)?;
+    let lock = InstanceLock::acquire_waiting(&paths.lock_file, LOCK_WAIT)?;
     let options = AgentOptions {
         paths,
         backend: Box::new(mock.clone()),
