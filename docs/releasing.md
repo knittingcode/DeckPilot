@@ -162,14 +162,19 @@ Without building or publishing anything:
      fake signed packages by `tools/ci/test-latest-json.sh`);
    - checks that the built app embeds the configured updater public key;
    - on macOS, verifies code signature, agent identity and notarization when
-     signing is configured;
+     signing is configured. The Developer ID certificate is put into the
+     environment only right before the bundler runs and removed after it,
+     so dependency installation scripts and the agent build never see it;
    - attests build provenance for every artifact
      (`gh attestation verify <file> --repo knittingcode/DeckPilot`);
    - downloads the draft, verifies the manifest and every signature with
      `deckpilot-dev verify-release` — including that each signature names
      the announced version, which installations require
      (`requireSignedVersion`, the protection against downgrade attacks) —
-     and attaches `SHA256SUMS`.
+     checks that `latest.json` has an entry for every platform and package
+     type (macOS app on both architectures, Linux AppImage, `.deb` and, for
+     final releases, `.rpm`, Windows MSI and NSIS), and attaches
+     `SHA256SUMS`.
 4. Review the draft and publish it. Missing signing secrets, a missing
    changelog section or a failed verification stop the workflow before
    anything could be published.
