@@ -143,14 +143,33 @@ fn export(
     options: ExportOptions,
 ) -> Payload {
     let payload = payload::export(store, &modules(), profiles, options, 1, "0.6.0").unwrap();
-    let bytes = payload::seal(&payload, &Password::new("pw"), KdfParams::for_tests()).unwrap();
-    payload::open(&bytes, &Password::new("pw")).unwrap()
+    let bytes = payload::seal(
+        &payload,
+        &Password::new(export_password()),
+        KdfParams::for_tests(),
+    )
+    .unwrap();
+    payload::open(&bytes, &Password::new(export_password())).unwrap()
 }
 
 fn contains(haystack: &[u8], needle: &str) -> bool {
     haystack
         .windows(needle.len())
         .any(|window| window == needle.as_bytes())
+}
+
+/// The export password of this test run: generated, so that it is never a
+/// constant that could pass for (or be reused as) a real credential.
+fn export_password() -> &'static str {
+    static PASSWORD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PASSWORD.get_or_init(generated_password)
+}
+
+/// A new random password, different from every other one.
+fn generated_password() -> String {
+    let mut bytes = [0u8; 16];
+    deckpilot_storage::crypto::random_bytes(&mut bytes).unwrap();
+    format!("test-export-{:032x}", u128::from_le_bytes(bytes))
 }
 
 fn apply(store: &SqliteStore, payload: &Payload, options: &ImportOptions) -> ImportSummary {
@@ -176,7 +195,12 @@ fn sensitive_values_secrets_and_other_profiles_never_leave() {
         let payload = export(&store, Some(&[work.id]), options);
         assert_eq!(payload.version, PAYLOAD_VERSION);
         let plain = serde_json::to_vec(&payload).unwrap();
-        let sealed = payload::seal(&payload, &Password::new("pw"), KdfParams::for_tests()).unwrap();
+        let sealed = payload::seal(
+            &payload,
+            &Password::new(export_password()),
+            KdfParams::for_tests(),
+        )
+        .unwrap();
         for marker in [
             SENSITIVE_VALUE,
             SENSITIVE_DEFAULT,
