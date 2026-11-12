@@ -20,3 +20,6 @@ pub use service::{
     TrayCommand, UNLOCK_WINDOW, WORKFLOW_SUMMARY_WINDOW, WindowOpener, default_options,
     system_clock,
 };
+pub use service::{
+    Ignored, PressContext, WorkSessionOperation, WorkSessionOutcome, WorkSessionRequest,
+};

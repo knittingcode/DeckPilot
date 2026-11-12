@@ -930,6 +930,7 @@ version = "0.6.0"
 dependencies = [
  "auto-launch",
  "chrono",
+ "deckpilot-agent",
  "deckpilot-core",
  "deckpilot-device",
  "deckpilot-hid",
