@@ -54,7 +54,9 @@ jobs:
           node-version: 24
       - run: pnpm install --frozen-lockfile
       - name: shellcheck
-        run: shellcheck tools/release-pipeline/*.sh
+        run: shellcheck -x tools/release-pipeline/*.sh
+      - name: Two-stage publication (stubbed GitHub)
+        run: tools/release-pipeline/test-publication.sh "$RUNNER_TEMP/release-publication"
       - name: Release commands of deckpilot-dev and the channel rules
         run: cargo test --locked -p deckpilot-dev -p deckpilot-update
       - name: Tag gate and workflow structure

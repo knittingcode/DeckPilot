@@ -29,5 +29,10 @@ pub const REPOSITORY: &str = "knittingcode/DeckPilot";
 pub const STABLE_ENDPOINT: &str =
     "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json";
 
+/// The release list the prerelease channel chooses from (newest first).
+/// The stable channel does not use it.
+pub const RELEASES_API: &str =
+    "https://api.github.com/repos/knittingcode/DeckPilot/releases?per_page=30";
+
 /// Prefix that every artifact URL in a manifest must have.
 pub const DOWNLOAD_PREFIX: &str = "https://github.com/knittingcode/DeckPilot/releases/download/";

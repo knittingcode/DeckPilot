@@ -16,8 +16,9 @@
 #      name, the latest check run of this SHA must have concluded "success";
 #   5. alpha, beta and rc are pre-releases, a plain version is stable.
 #
-# Writes version, channel, sha, prerelease (true/false) and msi_version (the
-# numeric Windows Installer version) to $GITHUB_OUTPUT (or stdout). Exits non-zero, with an ::error::, on the first failure.
+# Writes version, channel, sha, prerelease (true/false), msi_version (the
+# numeric Windows Installer version) and manifest (latest.json or
+# prerelease.json) to $GITHUB_OUTPUT (or stdout). Exits non-zero, with an ::error::, on the first failure.
 #
 # Environment:
 #   REPOSITORY     owner/name (default $GITHUB_REPOSITORY)
@@ -73,6 +74,7 @@ echo "tag $tag points to $sha, which is on $main_ref"
 classified=$("${deckpilot_dev[@]}" release-tag "$tag") || fail "$tag cannot be released"
 grep -q -x "channel=$channel" <<< "$classified" || fail "deckpilot-dev classifies $tag differently: $classified"
 msi_version=$(sed -n 's/^msi_version=//p' <<< "$classified")
+manifest=$(sed -n 's/^manifest=//p' <<< "$classified")
 [ -n "$msi_version" ] || fail "no MSI version for $tag"
 
 # 4. Required checks of exactly this commit: the pinned list, plus whatever
@@ -121,5 +123,6 @@ out="${GITHUB_OUTPUT:-/dev/stdout}"
   echo "sha=$sha"
   echo "prerelease=$prerelease"
   echo "msi_version=$msi_version"
+  echo "manifest=$manifest"
 } >> "$out"
 echo "$tag: version $version, $channel channel, commit $sha"
