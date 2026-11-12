@@ -64,8 +64,8 @@ git add "$list" && git commit -q -m "preview(tooling): pull request list for $ba
 
 cargo fmt --all --check
 cargo clippy -q --workspace --all-targets --locked -- -D warnings
-(cd apps/desktop && pnpm -s typecheck)
-if $TESTS; then cargo test -q --workspace --locked; (cd apps/desktop && pnpm -s test); fi
+(cd apps/desktop && pnpm typecheck)
+if $TESTS; then cargo test -q --workspace --locked; (cd apps/desktop && pnpm test); fi
 
 if [ -d "$DATA" ]; then
   mkdir -p "$ROOT/.dev/backups"

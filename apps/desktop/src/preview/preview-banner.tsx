@@ -30,7 +30,13 @@ export function PreviewBanner() {
       style={{ zIndex: 2147483647 }}
       className="fixed bottom-2 left-1/2 max-w-[90vw] -translate-x-1/2 rounded-md border border-amber-500 bg-amber-400 px-3 py-1 text-xs text-black shadow-lg"
     >
-      <button type="button" className="font-semibold" onClick={() => setOpen((o) => !o)}>
+      <button
+        type="button"
+        className="font-semibold"
+        onClick={() => {
+          setOpen((o) => !o)
+        }}
+      >
         Integration preview · {info.version} · main {info.base} · {info.included.length} PRs
       </button>
       {open && (
