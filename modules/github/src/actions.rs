@@ -314,6 +314,7 @@ fn definition(kind: Kind) -> ActionType {
         category: "GitHub".into(),
         parameters,
         requires_project: false,
+        deprecated: false,
         node,
     }
 }

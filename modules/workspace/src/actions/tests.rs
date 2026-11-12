@@ -625,3 +625,201 @@ fn files_reached_through_links_must_stay_in_the_repository() {
     );
     assert_eq!(leak.code.as_deref(), Some(system_codes::INVALID_PATH));
 }
+
+#[test]
+fn missing_and_mismatched_resources_open_nothing() {
+    let fixture = fixture();
+    let launcher = Arc::new(RecordingLauncher::new());
+    let run = |kind: &str, parameters: ActionParameters, context: &ExecutionContext<'_>| {
+        run_with(kind, &launcher, &parameters, context)
+    };
+    let cases = [
+        // Not bound on this computer.
+        (
+            OPEN_IN_EDITOR,
+            ActionParameters::new().with("application", fixed("shop.ci")),
+            "resource-unbound",
+        ),
+        // Bound as something else: a page as the editor, an editor as the folder.
+        (
+            OPEN_IN_EDITOR,
+            ActionParameters::new().with("application", fixed("shop.docs")),
+            "resource-kind-mismatch",
+        ),
+        (
+            OPEN_IN_EDITOR,
+            editor_parameters().with("location", fixed("tools.editor")),
+            "resource-kind-mismatch",
+        ),
+        (
+            OPEN_URLS,
+            ActionParameters::new()
+                .with("urls", text("https://example.com/"))
+                .with("browser", fixed("shop.ci")),
+            "resource-unbound",
+        ),
+        (
+            OPEN_URLS,
+            ActionParameters::new()
+                .with("urls", text("https://example.com/"))
+                .with("browser", fixed("shop.repository")),
+            "resource-kind-mismatch",
+        ),
+        (
+            OPEN_PROJECT,
+            ActionParameters::new().with("browser", fixed("shop.ci")),
+            "resource-unbound",
+        ),
+    ];
+    for (kind, parameters, code) in cases {
+        let result = run(kind, parameters, &fixture.context());
+        assert_eq!(
+            result.code.as_deref(),
+            Some(code),
+            "{kind}: {}",
+            result.message
+        );
+    }
+    // A project without a repository role.
+    let result = run(OPEN_IN_EDITOR, editor_parameters(), &fixture.context_for(2));
+    assert_eq!(
+        result.code.as_deref(),
+        Some("resource-role-missing"),
+        "{}",
+        result.message
+    );
+    assert!(result.message.contains("repository"), "{}", result.message);
+    assert_eq!(launcher.plans().len(), 0);
+}
+
+#[test]
+fn a_bound_folder_that_is_gone_is_reported() {
+    let fixture = fixture();
+    std::fs::remove_dir_all(fixture.repo()).unwrap();
+    let launcher = Arc::new(RecordingLauncher::new());
+    let editor = run_with(
+        OPEN_IN_EDITOR,
+        &launcher,
+        &editor_parameters(),
+        &fixture.context(),
+    );
+    assert_eq!(
+        editor.code.as_deref(),
+        Some(system_codes::NOT_FOUND),
+        "{}",
+        editor.message
+    );
+    let file = run_with(
+        OPEN_IN_EDITOR,
+        &launcher,
+        &editor_parameters().with("path", text("src/main.rs")),
+        &fixture.context(),
+    );
+    assert_eq!(file.code.as_deref(), Some(system_codes::NOT_FOUND));
+    assert_eq!(launcher.plans().len(), 0);
+
+    // The rest of the project still opens; the folder is reported.
+    let project = run_with(
+        OPEN_PROJECT,
+        &launcher,
+        &ActionParameters::new(),
+        &fixture.context(),
+    );
+    assert!(project.is_success(), "{}", project.message);
+    assert_eq!(project.data["openedRoles"], "docs");
+    assert!(
+        project.data["missing"].starts_with("repository: ")
+            && project.data["missing"].contains("does not exist"),
+        "{}",
+        project.data["missing"]
+    );
+
+    // A documentation folder that is gone: nothing at all to open.
+    std::fs::remove_dir_all(fixture.dir.join("handbook")).unwrap();
+    let book = Arc::new(RecordingLauncher::new());
+    let none = run_with(
+        OPEN_PROJECT,
+        &book,
+        &ActionParameters::new(),
+        &fixture.context_for(2),
+    );
+    assert_eq!(none.code.as_deref(), Some(codes::NOTHING_OPENED));
+    assert!(
+        none.data["missing"].contains("docs: "),
+        "{}",
+        none.data["missing"]
+    );
+    assert_eq!(book.plans().len(), 0);
+}
+
+#[test]
+fn odd_paths_stay_inside_or_are_not_found() {
+    let fixture = fixture();
+    let launcher = Arc::new(RecordingLauncher::new());
+    let run = |path: &str| {
+        run_with(
+            OPEN_IN_EDITOR,
+            &launcher,
+            &editor_parameters().with("path", text(path)),
+            &fixture.context(),
+        )
+    };
+    let dotted = run("./src/./main.rs");
+    assert!(dotted.is_success(), "{}", dotted.message);
+    for outside in ["src/..", "..", r"\\server\share", "C:secret.txt"] {
+        let result = run(outside);
+        assert_eq!(
+            result.code.as_deref(),
+            Some(system_codes::INVALID_PATH),
+            "{outside}: {}",
+            result.message
+        );
+    }
+    // `~` is not expanded: it is a name inside the folder.
+    for absent in [
+        "~/secret.txt",
+        "src/main.rs\0",
+        "src/ main.rs",
+        &"a/".repeat(500),
+    ] {
+        let result = run(absent);
+        assert_eq!(
+            result.code.as_deref(),
+            Some(system_codes::NOT_FOUND),
+            "{absent:?}: {}",
+            result.message
+        );
+    }
+    // Only the dotted path opened.
+    assert_eq!(launcher.plans().len(), 1);
+}
+
+#[test]
+fn page_addresses_are_validated_when_run() {
+    for bad in [
+        "https://",
+        "https://exa mple.com/",
+        "//example.com/page",
+        "example.com",
+        "data:text/html,<script>alert(1)</script>",
+        "file://localhost/etc/passwd",
+        "ws://example.com/socket",
+        // A template that was never rendered.
+        "{{ steps.a.output.url }}",
+    ] {
+        assert_eq!(
+            urls(Some(bad)).unwrap_err().code.as_deref(),
+            Some(system_codes::INVALID_URL),
+            "{bad}"
+        );
+    }
+    let long = format!("https://example.com/{}", "a".repeat(2048));
+    assert_eq!(
+        urls(Some(&long)).unwrap_err().code.as_deref(),
+        Some(system_codes::INVALID_URL)
+    );
+    assert_eq!(
+        urls(Some("HTTPS://Example.COM/Path")).unwrap(),
+        ["https://example.com/Path"]
+    );
+}

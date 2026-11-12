@@ -277,6 +277,7 @@ fn definition(kind: Kind) -> ActionType {
         category: "Workspace".into(),
         parameters,
         requires_project: false,
+        deprecated: false,
         node,
     }
 }
