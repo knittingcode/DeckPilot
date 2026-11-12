@@ -35,8 +35,8 @@ Consequences for the design:
 1. The expression language is extended, not replaced: new roots inside the
    same `{{ … }}` grammar.
 2. Seeded-action cleanup cannot be reliable for existing data (no marker).
-   Provenance must be recorded from now on; legacy cleanup is a dev-only,
-   content-matched, opt-in operation (see §9, question Q2).
+   Provenance is recorded for newly seeded data only; legacy items are left
+   alone (decision D2).
 3. Instance parameters are literal today. References in instances need an
    explicit new parameter value variant; existing text containing `{{` must
    keep meaning literal text.
@@ -160,8 +160,10 @@ CREATE TABLE provenance (
   bindings, workflow nodes, triggers). Bindings are never deleted by
   cleanup; a binding whose target would be removed keeps the target.
 - The dev seed records a row for every item it creates.
-- Legacy data (before provenance): see §9 Q2. Production databases never
-  received seeded data, so no automatic production cleanup is needed.
+- Legacy data (before provenance) is left alone (D2): no automatic cleanup
+  and no cleanup tool. Users remove such items themselves through the
+  normal safe deletion, which lists every reference first. Production
+  databases never received seeded data.
 
 ## 4. Shared variable registry
 
@@ -186,14 +188,22 @@ values only for that project of that profile. Values therefore never cross
 profiles; a `projectId`/`profileId` value naming another profile resolves to
 `missing(otherProfile)`.
 
-Execution values are set during a run (by `projects.select` with execution
-scope, or a later "set shared variable" node) and vanish with it.
+Execution values are set during a run and vanish with it. A workflow node
+that writes persistent (profile, project or global) values is out of scope
+for this effort (D7).
 
 ### Reserved namespaces
 
-`steps`, `shared`, `system`, `workflow`, `vars`, `env`, `secret`,
-`secrets`, `deckpilot`, `internal` (`RESERVED_NAMESPACES`). Module ids are
-not reserved for users (see Q4).
+Reserved are only the roots `steps`, `system` and `workflow`, and the keys
+a module declares itself (D4). Users may create variables in a group named
+after a module, e.g. `shared.projects.favorite`, as long as the key is not
+one the module declares.
+
+The contract code currently reserves more namespaces
+(`RESERVED_NAMESPACES` also lists `shared`, `vars`, `env`, `secret`,
+`secrets`, `deckpilot`, `internal`). Workstream A narrows the list to
+`steps`, `system`, `workflow` and adds the check against module-declared
+keys when module variables exist.
 
 ## 5. Expression syntax
 
@@ -210,8 +220,10 @@ One grammar: `{{ <root>.<path> }}`, plain substitution, closed set of roots
 A whole-value reference (`ParameterValue::Reference`, `Mapping::Variable`)
 keeps the native type (`VariableValue::to_parameter`). A template renders
 each reference as text (`render_text`); a `secretRef` or `resource` in a
-template is a type error. Key labels keep their own presentation
-placeholders for now (Q6).
+template is a type error. Key labels accept the same references
+(`{{ system.project.current.key }}`); the existing `{profile}`,
+`{project.key}` and `{project.name}` placeholders keep working as aliases
+(D6).
 
 Every template valid today parses to the same references (tested in
 `variables/tests.rs`).
@@ -293,9 +305,10 @@ A adds `ExecutionContext::with_dependencies` and accessors
 
 - `projects.select`: parameter `project_id` accepts a literal, a
   `reference` (typed `projectId` shared variable, `system.…`) or a mapped
-  workflow output; new `scope` choice `inherit` | `global` | `execution`
-  (default: Q1). Cross-profile targets fail (`project-other-profile`).
-  Global scope inside a workflow requires `project_scope = application`.
+  workflow output. Scope keeps today's behaviour (D1): a key press changes
+  the global active project; inside a workflow the workflow's own
+  `project_scope` decides. No new required field. Cross-profile targets
+  fail (`project-other-profile`).
 - `projects.cycle`: one type with `direction` (`next` \| `previous`), wraps
   per module setting; 0 projects → `no-projects`; 1 project → success
   without change; active project deleted → starts from the first/last;
@@ -305,9 +318,12 @@ A adds `ExecutionContext::with_dependencies` and accessors
   (not a precomputed target). A profile change between press and apply
   drops the effect. Device faces update through the existing
   `after_change`; the agent emits `projectChanged` (§10).
-  `projects.next`/`previous` stay (Q3).
+  `projects.next`/`previous` are hidden from the creation catalog (D3);
+  existing instances keep working.
 - `projects.current`: alias of `projects.active` semantics with typed
-  outputs (`id`, `key`, `name`) — Q3 decides whether it replaces it.
+  outputs (`id`, `key`, `name`); it replaces `projects.active`, which is
+  hidden from the creation catalog while existing instances keep working
+  (D3).
 - `projects.resolve-resource`: unchanged contract, resolving through
   `ResourceResolver`; project parameter may be a reference.
 
@@ -439,27 +455,30 @@ select, C executor → A IPC → F live → D integration.
 | backward compatibility: legacy templates, v1 graphs, literal parameters, fixtures 0.5.0-2 and 0.6.0, rollback via backup | 0 (grammar, done), C, E |
 | seed provenance and cleanup never deleting edited or referenced items | E |
 
-## 16. Open questions
+## 16. Decisions
 
-- **Q1** Default scope of `projects.select`: `inherit` (today's behaviour:
-  global from a key, per `project_scope` inside a workflow), or explicit
-  `global`/`execution` required for new instances?
-- **Q2** Legacy seeded data (no provenance): leave it (proposal), or offer a
-  dev-only `deckpilot-dev seed --clean-legacy` that matches the current seed
-  catalog by content and removes only unedited, unreferenced items after a
-  dry run? Never automatic, never in production.
-- **Q3** Keep `projects.next`/`previous`/`active` as visible types, or hide
-  them from the catalog in favour of `projects.cycle`/`projects.current`
-  (existing instances keep working)?
-- **Q4** May users create variables in a namespace equal to a module id
-  (`shared.projects.favorite`), or is that reserved for module-declared
-  variables (users get e.g. `shared.my.*`)?
-- **Q5** Are global shared variable values part of profile exports? Proposal:
-  definitions and profile/project values travel with the profile; global
-  values only with "app settings"; sensitive values never.
-- **Q6** Should key labels move from `{project.key}` to the reference
-  grammar (`{{ system.project.current.key }}`), with the old placeholders
-  kept as aliases?
-- **Q7** Should a "set shared variable" workflow node (writing profile or
-  project values, not only execution values) be in this effort? It needs a
-  new capability and a permission prompt.
+Decided by the user (D1–D4); D5–D7 are coordinator defaults the user can
+still override.
+
+- **D1** `projects.select` scope keeps today's behaviour: a key press sets
+  the global active project; inside a workflow the workflow's own
+  `project_scope` applies. No new required field.
+- **D2** Legacy seeded data without provenance is left alone: no automatic
+  cleanup and no `--clean-legacy` tool. Provenance is recorded for newly
+  seeded data only. Users remove legacy items manually through safe
+  deletion with the reference list.
+- **D3** `projects.next`, `projects.previous` and `projects.active` are
+  hidden from the creation catalog, replaced by `projects.cycle` (direction
+  `next`/`previous`) and `projects.current`. Existing instances keep
+  working.
+- **D4** Users may create shared variables in module-named groups (e.g.
+  `shared.projects.favorite`). Reserved are only `system.`, `workflow.`,
+  `steps.` and keys a module declares itself.
+- **D5** Exports: definitions and profile/project values travel with the
+  profile; global values only with the app settings; sensitive values
+  never.
+- **D6** Key labels support `{{ system.project.current.key }}` (and the
+  other references); `{project.key}`, `{project.name}` and `{profile}` stay
+  as aliases.
+- **D7** A workflow node that writes persistent shared variables is out of
+  scope for this effort (future work; needs a permission and a prompt).
