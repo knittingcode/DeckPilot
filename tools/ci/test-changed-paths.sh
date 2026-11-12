@@ -40,6 +40,7 @@ expect "keystore=false packaging=true release_manifest=false" apps/desktop/src-t
 expect "keystore=false packaging=true release_manifest=false" Cargo.lock
 expect "keystore=false packaging=true release_manifest=false" packaging/linux/70-deckpilot-streamdeck.rules
 expect "keystore=true packaging=false release_manifest=false" crates/deckpilot-keystore/src/lib.rs
+expect "keystore=true packaging=true release_manifest=true" tools/ci/with-keyring.sh
 expect "keystore=false packaging=true release_manifest=true" tools/ci/check-packages.sh
 expect "keystore=false packaging=true release_manifest=true" .github/workflows/release.yml
 expect "keystore=true packaging=true release_manifest=true" .github/workflows/ci.yml
