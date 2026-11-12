@@ -930,6 +930,7 @@ version = "0.6.0"
 dependencies = [
  "auto-launch",
  "chrono",
+ "deckpilot-agent",
  "deckpilot-core",
  "deckpilot-device",
  "deckpilot-hid",
@@ -980,6 +981,10 @@ dependencies = [
  "deckpilot-render",
  "deckpilot-storage",
  "deckpilot-update",
+ "minisign",
+ "reqwest",
+ "rustls",
+ "semver",
  "serde",
  "serde_json",
  "tauri",
@@ -1053,6 +1058,7 @@ name = "deckpilot-keystore"
 version = "0.6.0"
 dependencies = [
  "apple-native-keyring-store",
+ "getrandom 0.3.4",
  "keyring-core",
  "thiserror 2.0.21",
  "windows-native-keyring-store",
@@ -1168,6 +1174,7 @@ dependencies = [
 name = "deckpilot-modules"
 version = "0.6.0"
 dependencies = [
+ "base64 0.22.1",
  "deckpilot-core",
  "deckpilot-device",
  "deckpilot-module-docker",
@@ -1181,6 +1188,9 @@ dependencies = [
  "deckpilot-module-projects",
  "deckpilot-module-system",
  "deckpilot-module-workspace",
+ "rustls",
+ "serde_json",
+ "url",
 ]
 
 [[package]]

@@ -260,6 +260,7 @@ fn definition(kind: Kind) -> ActionType {
         category: "Jira".into(),
         parameters,
         requires_project: false,
+        deprecated: false,
         node,
     }
 }

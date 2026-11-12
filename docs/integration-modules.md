@@ -61,7 +61,11 @@ with `gtk-launch`), and on Windows `rundll32 url.dll,FileProtocolHandler`
 for pages and files, `explorer` for folders and the executable itself for
 applications. Other URL schemes (`file:`, `javascript:`, custom handlers)
 are refused because they can start programs. Relative paths cannot leave
-their resource (`..`, absolute paths and drive letters are refused). An
+their resource (`..`, absolute paths and drive letters are refused), and
+what they lead to must be inside it too: a link (symlink) inside the
+resource that points outside it is refused with `invalid-path`, a link to
+nothing is `not-found`; links that stay inside, and a resource folder that
+is itself a link, are fine. An
 opened application is independent of the workflow: cancelling does not
 close it.
 
@@ -363,8 +367,8 @@ the request at once.
 `forbidden` (403: e.g. a missing permission or SSO), `not-found` (404, which
 GitHub also answers for private repositories the token cannot see),
 `rate-limited` (primary or secondary rate limit; the result's data has
-`retryAfterSeconds`, from `Retry-After` or the limit's reset time),
-`github-error` (another status, with GitHub's message), and
+`retryAfterSeconds`, from `Retry-After` or the limit's reset time, else 60
+for a 429 or a 403 whose message is about the rate limit), `github-error` (another status, with GitHub's message), and
 `credential-missing` when no token is stored under the name.
 
 Error codes: `invalid-api-url`, `invalid-repository`, `invalid-ref`,
@@ -443,7 +447,7 @@ limit for the whole action, and cancellation at once.
 
 **Failures.** `unauthorized` (401), `forbidden` (403, e.g. a token without
 `read_api`), `not-found` (404, also for private projects the token cannot
-see), `rate-limited` (429; `retryAfterSeconds` from `Retry-After` or
+see), `rate-limited` (429; `retryAfterSeconds` from `Retry-After` (seconds or an HTTP date) or
 `RateLimit-Reset`), `gitlab-error` (another status, with GitLab's message),
 and `credential-missing` when no token is stored under the name.
 
@@ -511,7 +515,7 @@ time limit for the whole action, and cancellation at once.
 
 **Failures.** `unauthorized` (401), `forbidden` (403), `not-found` (404,
 also for issues the account may not see), `rate-limited` (429;
-`retryAfterSeconds` from `Retry-After`), `jira-error` (another status, with
+`retryAfterSeconds` from `Retry-After`, seconds or an HTTP date), `jira-error` (another status, with
 Jira's first error message, e.g. a filter that does not exist), and
 `credential-missing` when nothing is stored under the name or a Cloud
 credential is not `email:api-token`.
@@ -555,8 +559,8 @@ arguments go through `open -a … --args`, which only reaches an editor that
 is not running yet. A tool given by path must exist.
 
 **Paths** follow the System module's rules: relative to the folder, no
-`..`, no absolute paths or drive letters, and the file or folder must exist
-(`invalid-path`, `not-found`).
+`..`, no absolute paths or drive letters, no links that lead outside the
+folder, and the file or folder must exist (`invalid-path`, `not-found`).
 
 **Pages** follow the System module's URL rules, limited to `http` and
 `https` (no `mailto`, `file`, `javascript:` or application schemes:

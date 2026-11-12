@@ -263,7 +263,10 @@ async fn handle_message(
         };
     }
     match handle.request(request).await {
-        Ok(response) => ServerMessage::Response { id, response },
+        Ok(response) => ServerMessage::Response {
+            id,
+            response: response.for_protocol(protocol),
+        },
         Err(error) => ServerMessage::Error {
             id: Some(id),
             error,

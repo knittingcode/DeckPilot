@@ -6,13 +6,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use super::mapping::{convert, is_value_key, references_in};
+use super::mapping::{convert, is_value_key};
 use super::{
     ErrorPolicy, GRAPH_VERSION, MAX_DELAY_MS, MAX_LOOP_ITERATIONS, MAX_NESTING, MAX_NODES,
     MAX_RETRIES, MAX_TIMEOUT_MS, MAX_WORKFLOW_VALUES, Mapping, NodeId, NodeKind, Port, Predicate,
-    Reference, VARIABLES_NODE, WorkflowGraph, WorkflowInput, WorkflowOutput, WorkflowVariable,
+    Reference, VARIABLES_NODE, ValueKind, WorkflowGraph, WorkflowInput, WorkflowOutput,
+    WorkflowVariable,
 };
-use crate::{ActionRegistry, Profile, Workflow, WorkflowId};
+use crate::variables::{VariableDefinition, VariableRef, VariableType};
+use crate::{ActionRegistry, ParameterKind, Profile, Workflow, WorkflowId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +65,17 @@ struct Checker<'a> {
     inputs: &'a [WorkflowInput],
     outputs: &'a [WorkflowOutput],
     variables: &'a [WorkflowVariable],
+    /// Shared variable definitions, when the caller knows them; otherwise
+    /// `shared.` references are checked when they are resolved.
+    shared: Option<&'a [VariableDefinition]>,
+}
+
+/// What a reference is known to hold.
+#[derive(Default)]
+struct Found {
+    sensitive: bool,
+    /// `None`: not known before the run (node outputs are text).
+    value_type: Option<VariableType>,
 }
 
 /// What a referenced node provides under an output key.
@@ -95,7 +108,37 @@ impl WorkflowGraph {
                 )
             })
             .unwrap_or_default();
-        self.check(owner, (inputs, outputs, variables), profile, registry)
+        self.check(owner, (inputs, outputs, variables), profile, registry, None)
+    }
+
+    /// [`WorkflowGraph::validate`] that also checks `shared.` references
+    /// against the shared variable definitions: unknown variables, types
+    /// that cannot fill their parameter, and sensitive values flowing into
+    /// values that are not marked sensitive.
+    pub fn validate_with_variables(
+        &self,
+        owner: WorkflowId,
+        profile: &Profile,
+        registry: &ActionRegistry,
+        shared: &[VariableDefinition],
+    ) -> Vec<GraphIssue> {
+        let (inputs, outputs, variables) = profile
+            .workflow(owner)
+            .map(|w| {
+                (
+                    w.inputs.as_slice(),
+                    w.outputs.as_slice(),
+                    w.variables.as_slice(),
+                )
+            })
+            .unwrap_or_default();
+        self.check(
+            owner,
+            (inputs, outputs, variables),
+            profile,
+            registry,
+            Some(shared),
+        )
     }
 
     /// Every problem of this graph as the graph of `workflow`, which need
@@ -111,6 +154,7 @@ impl WorkflowGraph {
             (&workflow.inputs, &workflow.outputs, &workflow.variables),
             profile,
             registry,
+            None,
         )
     }
 
@@ -120,6 +164,7 @@ impl WorkflowGraph {
         (inputs, outputs, variables): (&[WorkflowInput], &[WorkflowOutput], &[WorkflowVariable]),
         profile: &Profile,
         registry: &ActionRegistry,
+        shared: Option<&[VariableDefinition]>,
     ) -> Vec<GraphIssue> {
         let mut checker = Checker {
             graph: self,
@@ -130,6 +175,7 @@ impl WorkflowGraph {
             inputs,
             outputs,
             variables,
+            shared,
         };
         checker.declarations();
         checker.variable_declarations();
@@ -149,7 +195,7 @@ impl WorkflowGraph {
     }
 }
 
-impl Checker<'_> {
+impl<'a> Checker<'a> {
     /// Structural checks; `true` if semantic checks can run.
     fn structure(&mut self) -> bool {
         let graph = self.graph;
@@ -412,22 +458,197 @@ impl Checker<'_> {
     }
 
     /// Checks the references of a mapping at `node`; `true` if the value
-    /// can contain a sensitive one.
+    /// can contain a sensitive one. A template renders every reference as
+    /// text, so values that never become text (credential names,
+    /// resources) cannot be part of one.
     fn check_mapping(&mut self, node: &NodeId, mapping: &Mapping) -> bool {
-        let references = match mapping {
-            Mapping::Output { reference, .. } => Ok(vec![reference.clone()]),
-            Mapping::Template { template } => references_in(template),
-        };
-        match references {
-            Ok(references) => references.iter().fold(false, |sensitive, r| {
-                self.check_reference(node, r) | sensitive
-            }),
+        let references = match mapping.references() {
+            Ok(references) => references,
             Err(error) => {
                 self.issues
                     .push(GraphIssue::error(Some(node), error.to_string()));
-                false
+                return false;
+            }
+        };
+        let mut sensitive = false;
+        for reference in &references {
+            let found = self.check_variable(node, reference);
+            sensitive |= found.sensitive;
+            if matches!(mapping, Mapping::Template { .. })
+                && let Some(value_type) = found.value_type
+                && !renders_as_text(value_type)
+            {
+                self.issues.push(GraphIssue::error(
+                    Some(node),
+                    format!(
+                        "{{{{ {reference} }}}} is a {} value and cannot be part of text",
+                        value_type.name()
+                    ),
+                ));
             }
         }
+        sensitive
+    }
+
+    /// Checks one reference of any root at `node`.
+    fn check_variable(&mut self, node: &NodeId, reference: &VariableRef) -> Found {
+        match reference {
+            VariableRef::Step(step) => Found {
+                sensitive: self.check_reference(node, step),
+                value_type: None,
+            },
+            VariableRef::System(variable) => Found {
+                sensitive: false,
+                value_type: Some(variable.value_type()),
+            },
+            // Without the definitions the variable is checked when it is
+            // resolved at run time.
+            VariableRef::Shared(key) => match self.shared {
+                None => Found::default(),
+                Some(definitions) => {
+                    if let Some(definition) = definitions.iter().find(|d| &d.key == key) {
+                        Found {
+                            sensitive: definition.sensitive,
+                            value_type: Some(definition.value_type),
+                        }
+                    } else {
+                        self.issues.push(GraphIssue::error(
+                            Some(node),
+                            format!("{{{{ {reference} }}}}: there is no shared variable `{key}`"),
+                        ));
+                        Found::default()
+                    }
+                }
+            },
+        }
+    }
+
+    /// Checks a mapping that fills parameter `key` of `kind`; `true` if the
+    /// value can contain a sensitive one.
+    ///
+    /// A whole-value reference whose type is known (system variables,
+    /// shared variables with known definitions) must fit the parameter, and
+    /// so must its default. Node outputs are text converted at run time;
+    /// a declared output kind that can never fit is a warning, so graphs
+    /// that were accepted before keep running.
+    fn check_typed_mapping(
+        &mut self,
+        node: &NodeId,
+        key: &str,
+        mapping: &Mapping,
+        kind: &ParameterKind,
+    ) -> bool {
+        let sensitive = self.check_mapping(node, mapping);
+        let step = match mapping {
+            Mapping::Output { reference, .. }
+            | Mapping::Variable {
+                reference: VariableRef::Step(reference),
+                ..
+            } => Some(reference),
+            Mapping::Variable { reference, default } => {
+                let found = self.peek_type(reference);
+                if let Some(value_type) = found
+                    && !value_type.assignable_to(kind)
+                {
+                    self.issues.push(GraphIssue::error(
+                        Some(node),
+                        format!(
+                            "parameter `{key}`: {{{{ {reference} }}}} is a {} value, the parameter expects {}",
+                            value_type.name(),
+                            expects(kind)
+                        ),
+                    ));
+                }
+                if let Some(default) = default
+                    && default.to_parameter(kind).is_none()
+                {
+                    self.issues.push(GraphIssue::error(
+                        Some(node),
+                        format!(
+                            "parameter `{key}`: the default is a {} value, the parameter expects {}",
+                            default.value_type().name(),
+                            expects(kind)
+                        ),
+                    ));
+                }
+                None
+            }
+            Mapping::Template { .. } => None,
+        };
+        if let Some(reference) = step {
+            if matches!(kind, ParameterKind::Resource { .. }) {
+                self.issues.push(GraphIssue::warning(
+                    Some(node),
+                    format!(
+                        "parameter `{key}` is a resource; a node output cannot fill it, so the node fails when it runs"
+                    ),
+                ));
+            } else if let Some(output) = self.output_kind(reference)
+                && !output_fits(output, kind)
+            {
+                self.issues.push(GraphIssue::warning(
+                    Some(node),
+                    format!(
+                        "parameter `{key}`: {reference} is {}, the parameter expects {}",
+                        output_name(output),
+                        expects(kind)
+                    ),
+                ));
+            }
+        }
+        sensitive
+    }
+
+    /// The known type of a non-`steps` reference, without reporting
+    /// anything (`check_mapping` did).
+    fn peek_type(&self, reference: &VariableRef) -> Option<VariableType> {
+        match reference {
+            VariableRef::Step(_) => None,
+            VariableRef::System(variable) => Some(variable.value_type()),
+            VariableRef::Shared(key) => self
+                .shared?
+                .iter()
+                .find(|d| &d.key == key)
+                .map(|d| d.value_type),
+        }
+    }
+
+    /// The declared kind of the output `reference` points to, if known.
+    fn output_kind(&self, reference: &Reference) -> Option<ValueKind> {
+        if self.is_variable(reference) {
+            return self
+                .variables
+                .iter()
+                .find(|v| v.key == reference.output)
+                .map(|v| v.kind);
+        }
+        let source = self.graph.node(&reference.node)?;
+        let key = reference.output.as_str();
+        match &source.kind {
+            NodeKind::Action { action, .. } => {
+                let instance = self.profile.action(*action)?;
+                self.declared_output(&instance.action_type, key)
+            }
+            NodeKind::Trigger => self.inputs.iter().find(|i| i.key == key).map(|i| i.kind),
+            NodeKind::Call { workflow, .. } => self
+                .profile
+                .workflow(*workflow)?
+                .outputs
+                .iter()
+                .find(|o| o.key == key)
+                .map(|o| o.kind),
+            _ => None,
+        }
+    }
+
+    fn declared_output(&self, action_type: &crate::ActionTypeId, key: &str) -> Option<ValueKind> {
+        self.registry
+            .definition(action_type)?
+            .node
+            .outputs
+            .iter()
+            .find(|o| o.key == key)
+            .map(|o| o.kind)
     }
 
     /// Whether `reference` reads a variable (`steps.vars.output.<key>` in a
@@ -840,18 +1061,10 @@ impl Checker<'_> {
             ));
             return;
         };
-        let Some(definition) = self.registry.definition(&instance.action_type) else {
-            let reason = self
-                .registry
-                .unavailable_reason(&instance.action_type)
-                .unwrap_or("its action type is not available");
-            self.issues.push(GraphIssue::error(
-                Some(id),
-                format!("{}: {reason}", instance.name),
-            ));
+        let Some(definition) = self.definition(id, &instance.action_type, &instance.name) else {
             return;
         };
-        for key in overrides.iter().map(|(key, _)| key).chain(mappings.keys()) {
+        for key in overrides.iter().map(|(key, _)| key) {
             if !definition.parameters.iter().any(|spec| &spec.key == key) {
                 self.issues.push(GraphIssue::error(
                     Some(id),
@@ -859,21 +1072,87 @@ impl Checker<'_> {
                 ));
             }
         }
-        if let Err(errors) = definition.normalize(&instance.parameters.overlay(overrides)) {
-            // A required parameter supplied by a mapping is filled
-            // in at run time and checked then.
+        self.invocation(
+            id,
+            definition,
+            &instance.parameters.overlay(overrides),
+            mappings,
+            policy,
+        );
+    }
+
+    /// The action type, or an issue saying why it cannot run.
+    fn definition(
+        &mut self,
+        id: &NodeId,
+        action_type: &crate::ActionTypeId,
+        name: &str,
+    ) -> Option<&'a crate::ActionType> {
+        let registry = self.registry;
+        let definition = registry.definition(action_type);
+        if definition.is_none() {
+            let reason = registry
+                .unavailable_reason(action_type)
+                .unwrap_or("its action type is not available");
+            self.issues
+                .push(GraphIssue::error(Some(id), format!("{name}: {reason}")));
+        }
+        definition
+    }
+
+    /// The checks of an action node: the configured parameters, the
+    /// mappings (each against the kind of the parameter it fills) and the
+    /// error policy.
+    fn invocation(
+        &mut self,
+        id: &NodeId,
+        definition: &crate::ActionType,
+        configured: &crate::ActionParameters,
+        mappings: &BTreeMap<String, Mapping>,
+        policy: super::ErrorPolicy,
+    ) {
+        for key in mappings.keys() {
+            if !definition.parameters.iter().any(|spec| &spec.key == key) {
+                self.issues.push(GraphIssue::error(
+                    Some(id),
+                    format!("`{key}` is not a parameter of {}", definition.name),
+                ));
+            }
+        }
+        // A required parameter supplied by a mapping is filled in at run
+        // time and checked then. For node-output mappings this ends the
+        // checks, as it always has, so graphs that ran before keep running;
+        // variable references (which no earlier graph contains) are still
+        // checked.
+        let mut stopped = false;
+        if let Err(errors) = definition.normalize(configured) {
             for error in errors {
                 if let crate::ParameterError::Missing(key) = &error
                     && mappings.contains_key(key)
                 {
-                    return;
+                    stopped = true;
+                    break;
                 }
                 self.issues
                     .push(GraphIssue::error(Some(id), error.to_string()));
             }
         }
-        for mapping in mappings.values() {
-            self.check_mapping(id, mapping);
+        for (key, mapping) in mappings {
+            if stopped && !reads_variables(mapping) {
+                continue;
+            }
+            match definition.parameters.iter().find(|spec| &spec.key == key) {
+                Some(spec) => {
+                    self.check_typed_mapping(id, key, mapping, &spec.kind);
+                }
+                // Reported above; its references are still checked.
+                None => {
+                    self.check_mapping(id, mapping);
+                }
+            }
+        }
+        if stopped {
+            return;
         }
         if policy.retry.attempts > MAX_RETRIES {
             self.issues.push(GraphIssue::error(
@@ -931,4 +1210,62 @@ fn nesting(
     }
     path.pop();
     Ok(depth)
+}
+
+/// Whether `mapping` reads anything other than node outputs: a shape that
+/// did not exist before variable references.
+fn reads_variables(mapping: &Mapping) -> bool {
+    mapping
+        .references()
+        .is_ok_and(|refs| refs.iter().any(|r| !matches!(r, VariableRef::Step(_))))
+        || matches!(mapping, Mapping::Variable { .. })
+}
+
+/// Whether a value of `value_type` can be inserted into text.
+fn renders_as_text(value_type: VariableType) -> bool {
+    !matches!(
+        value_type,
+        VariableType::SecretRef | VariableType::Resource { .. }
+    )
+}
+
+/// What a parameter of `kind` expects, for messages.
+fn expects(kind: &ParameterKind) -> &'static str {
+    match kind {
+        ParameterKind::Text { .. }
+        | ParameterKind::Lines { .. }
+        | ParameterKind::Pairs { .. }
+        | ParameterKind::Code { .. } => "text",
+        ParameterKind::Integer { .. } => "a whole number",
+        ParameterKind::Boolean => "true or false",
+        ParameterKind::Choice { .. } => "one of its choices",
+        ParameterKind::Resource { .. } => "a resource",
+        ParameterKind::Project => "a project",
+        ParameterKind::Credential => "a credential",
+    }
+}
+
+fn output_name(kind: ValueKind) -> &'static str {
+    match kind {
+        ValueKind::Text => "text",
+        ValueKind::Integer => "a whole number",
+        ValueKind::Boolean => "true or false",
+        ValueKind::Path => "a path",
+        ValueKind::Url => "a URL",
+        ValueKind::ProjectKey => "a project key",
+    }
+}
+
+/// Whether an output of `output` kind can ever convert to a parameter of
+/// `kind` (outputs are text; whether a given text converts is known only
+/// at run time).
+fn output_fits(output: ValueKind, kind: &ParameterKind) -> bool {
+    match kind {
+        ParameterKind::Integer { .. } => {
+            !matches!(output, ValueKind::Boolean | ValueKind::ProjectKey)
+        }
+        ParameterKind::Boolean => !matches!(output, ValueKind::Integer | ValueKind::ProjectKey),
+        ParameterKind::Project => !matches!(output, ValueKind::Integer | ValueKind::Boolean),
+        _ => true,
+    }
 }

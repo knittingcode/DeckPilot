@@ -525,6 +525,8 @@ fn plan_update_settings(
         automatic_checks: updates.automatic_checks,
         check_interval_hours: updates.check_interval_hours,
         last_check: local.last_check,
+        // The update channel is this computer's choice; it is not exported.
+        channel: local.channel,
     }
     .sanitized();
     let text = serde_json::to_string(&preferences)

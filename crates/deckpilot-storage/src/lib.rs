@@ -21,12 +21,20 @@
 
 pub mod credentials;
 pub mod crypto;
+mod engine;
 pub mod executions;
 mod legacy;
 pub mod policy;
 mod project_actions;
+pub mod provenance;
+pub mod references;
 mod sqlite;
+#[cfg(all(test, feature = "sqlcipher"))]
+mod upgrade_tests;
+pub mod variable_references;
+pub mod variables;
 pub mod vault;
+pub mod work_sessions;
 
 use deckpilot_core::{
     MachineConfig, ModuleId, ModuleSettings, ModuleStates, Profile, ProfileId, ProjectId,
@@ -37,6 +45,7 @@ use thiserror::Error;
 pub use sqlite::{
     ConfigChanges, DatabaseKey, Encryption, MigrationRecord, SqliteStore, backup_dir,
 };
+pub use variables::{SharedVariables, StoredValue, StoredVariable, VariableOrigin};
 
 /// Version of the JSON document format written for profiles and machine
 /// configuration. Bumped when the serialized shape changes incompatibly.
@@ -44,7 +53,11 @@ pub use sqlite::{
 /// Version 3 no longer contains projects and the default project; they are
 /// stored in their own tables. Version 4 uses the generic projects action
 /// parameters (`project_id`, a resource name for `projects.resolve-resource`).
-pub const DOCUMENT_VERSION: u32 = 4;
+/// Version 5 marks documents that may contain the shapes of the action
+/// architecture (references and templates in parameters, inline
+/// invocations, graph version 2); version 4 documents decode unchanged, and
+/// a DeckPilot that reads at most version 4 refuses them.
+pub const DOCUMENT_VERSION: u32 = 5;
 
 /// A change a schema migration made to user data beyond a plain format
 /// upgrade, for example a project that needed a new id.
@@ -80,6 +93,10 @@ pub enum StorageError {
     UnsupportedDocument(u32),
     #[error("database encryption is not available in this build")]
     EncryptionUnavailable,
+    /// SQLCipher is linked but not usable on a connection (or plain SQLite
+    /// was linked): nothing is opened, backed up or migrated.
+    #[error("database encryption is incomplete: {0}")]
+    SqlCipherIncomplete(String),
     #[error("the database could not be opened with the provided key")]
     InvalidKey,
     #[error("profile does not exist")]
@@ -122,6 +139,30 @@ pub enum StorageError {
     ProjectOfAnotherProfile(ProjectId),
     #[error("project key `{0}` is already used in this profile")]
     DuplicateProjectKey(String),
+    #[error("there is no shared variable `{0}`")]
+    UnknownVariable(String),
+    /// The key is declared by a module; users cannot create or change it.
+    #[error("`{key}` is a variable of the module `{module}`")]
+    VariableKeyTaken { key: String, module: String },
+    /// Changing the definition would make stored values invalid. They are
+    /// never dropped silently.
+    #[error(
+        "`{key}` has {count} value(s) that the new definition does not accept; clear them first"
+    )]
+    VariableValuesConflict { key: String, count: usize },
+    #[error(transparent)]
+    Variable(#[from] deckpilot_core::variables::DefinitionIssue),
+    /// The profile has the active work session.
+    #[error("finish the work session first")]
+    WorkSessionActive,
+    /// The variable is still used; nothing was changed. Remove or replace
+    /// the listed references first.
+    #[error("the variable is still used in {} place(s); remove those references first", .0.len())]
+    VariableInUse(Vec<variable_references::VariableReference>),
+    /// The action is still used; nothing was deleted. Replace or unbind
+    /// the listed uses first.
+    #[error("the action is still used in {} place(s); replace or unbind those first", .0.len())]
+    ActionInUse(Vec<references::ActionReference>),
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;

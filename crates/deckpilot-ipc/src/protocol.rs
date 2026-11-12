@@ -11,9 +11,13 @@
 use serde::{Deserialize, Serialize};
 
 use deckpilot_core::graph::ExecutionEvent;
+use deckpilot_core::variables::{
+    CatalogEntry, CatalogFilter, PreviewItem, ProjectSource, ReferencePreview, ResolutionContext,
+};
 use deckpilot_core::{
-    ActionInstanceId, ActionResult, ActionStatus, CycleDirection, ExecutionId, ExecutionRecord,
-    ExecutionSummary, LayoutStatus, ProfileId, Project, ProjectId, WorkflowId, WorkflowReport,
+    ActionInstanceId, ActionResult, ActionStatus, ContextEffect, CycleDirection, ExecutionId,
+    ExecutionRecord, ExecutionSummary, LayoutStatus, ProfileId, Project, ProjectId, WorkflowId,
+    WorkflowReport,
 };
 use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId};
 
@@ -33,7 +37,18 @@ use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId};
 ///
 /// Version 6: actions show notifications; the agent sends them to the app
 /// as `notification` events for its status bar.
-pub const PROTOCOL_VERSION: u32 = 6;
+///
+/// Version 7: shared variables and references. The agent lists the
+/// references available in a context (`listVariables`, metadata only) and
+/// previews them (`previewReferences`); it announces context changes
+/// (`projectChanged`, `profileChanged`, `sharedVariablesChanged`,
+/// `resourceBindingsChanged`, `deviceContextChanged`,
+/// `executionContextChanged`). Action results may carry `cycleProject`
+/// effects, which are removed for older clients.
+pub const PROTOCOL_VERSION: u32 = 7;
+
+/// Most references one `previewReferences` may ask about.
+pub const MAX_PREVIEW_ITEMS: usize = 200;
 
 /// Most executions returned by one `listExecutions`.
 pub const MAX_EXECUTION_LIST: u32 = 200;
@@ -150,16 +165,21 @@ pub enum Capability {
     BackgroundExecutions,
     /// Notifications for the status bar. Protocol 6.
     Notifications,
+    /// Shared variables: `listVariables`, `previewReferences` and context
+    /// events. Without it the app shows no live values and does not save
+    /// references, which the agent could not resolve. Protocol 7.
+    Variables,
 }
 
 impl Capability {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Workflows,
         Self::PrepareForUpdate,
         Self::ModuleNamespaces,
         Self::EncryptedDatabase,
         Self::BackgroundExecutions,
         Self::Notifications,
+        Self::Variables,
     ];
 
     /// The protocol that introduced the capability.
@@ -170,6 +190,7 @@ impl Capability {
             Self::EncryptedDatabase => 4,
             Self::BackgroundExecutions => 5,
             Self::Notifications => 6,
+            Self::Variables => 7,
         }
     }
 
@@ -325,6 +346,20 @@ pub enum Request {
     },
     /// The report of the last workflow the agent ran. Since protocol 4.
     GetLastWorkflowReport,
+    /// The references available in `context` that match `filter`:
+    /// metadata only, never values. Since protocol 7.
+    ListVariables {
+        context: Box<ResolutionContext>,
+        #[serde(default)]
+        filter: Box<CatalogFilter>,
+    },
+    /// What each reference resolves to in `context`, as a preview: values
+    /// of sensitive variables are redacted and run-time values are
+    /// unavailable. Since protocol 7.
+    PreviewReferences {
+        context: Box<ResolutionContext>,
+        items: Vec<PreviewItem>,
+    },
 }
 
 impl Request {
@@ -348,6 +383,9 @@ impl Request {
             } if *limit == 0 || *limit > MAX_EXECUTION_LIST => {
                 Err(format!("limit must be between 1 and {MAX_EXECUTION_LIST}"))
             }
+            Self::PreviewReferences { items, .. } if items.len() > MAX_PREVIEW_ITEMS => Err(
+                format!("at most {MAX_PREVIEW_ITEMS} references can be previewed at once"),
+            ),
             _ => Ok(()),
         }
     }
@@ -457,7 +495,44 @@ pub enum Response {
     Autostart {
         enabled: bool,
     },
+    /// Answer to `listVariables`. Since protocol 7.
+    Variables {
+        entries: Vec<CatalogEntry>,
+    },
+    /// Answer to `previewReferences`, in the order asked. Since protocol 7.
+    ReferencePreviews {
+        previews: Vec<ReferencePreview>,
+    },
     Ok,
+}
+
+impl Response {
+    /// The response as a client speaking `protocol` understands it: effects
+    /// it does not know are removed from action results (`cycleProject`
+    /// before protocol 7).
+    #[must_use]
+    pub fn for_protocol(mut self, protocol: u32) -> Self {
+        if protocol >= 7 {
+            return self;
+        }
+        let strip = |result: &mut ActionResult| {
+            result
+                .effects
+                .retain(|effect| matches!(effect, ContextEffect::SelectProject { .. }));
+        };
+        match &mut self {
+            Self::ActionResult { result } => strip(result),
+            Self::WorkflowReport { report }
+            | Self::LastWorkflow {
+                report: Some(report),
+            } => report
+                .steps
+                .iter_mut()
+                .for_each(|step| strip(&mut step.result)),
+            _ => {}
+        }
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -504,6 +579,35 @@ pub enum AgentEvent {
     Notification {
         notification: deckpilot_core::notify::Notification,
     },
+    /// The application's active project of `profile` changed (a key, a
+    /// request, a workflow with application scope, a reload). Since
+    /// protocol 7.
+    ProjectChanged {
+        profile: ProfileId,
+        project: Option<ProjectId>,
+        source: ProjectSource,
+    },
+    /// Another profile became active. Since protocol 7.
+    ProfileChanged {
+        profile: ProfileId,
+    },
+    /// Definitions or values of these shared variables changed. Keys only,
+    /// never values. Since protocol 7.
+    SharedVariablesChanged {
+        keys: Vec<String>,
+    },
+    /// This computer's resource bindings changed. Since protocol 7.
+    ResourceBindingsChanged,
+    /// A device connected or disconnected. Since protocol 7.
+    DeviceContextChanged {
+        device: Option<DeviceId>,
+    },
+    /// A run started or finished with this project in its own context.
+    /// Since protocol 7.
+    ExecutionContextChanged {
+        execution: ExecutionId,
+        project: Option<ProjectId>,
+    },
 }
 
 impl Request {
@@ -523,6 +627,7 @@ impl Request {
             | Self::GetDatabaseKey
             | Self::RequestWindow { .. }
             | Self::GetLastWorkflowReport => 4,
+            Self::ListVariables { .. } | Self::PreviewReferences { .. } => 7,
             Self::RunWorkflow { .. } | Self::PrepareForUpdate => 2,
             Self::GetStatus
             | Self::ListDevices
@@ -563,6 +668,12 @@ impl AgentEvent {
             | Self::ExecutionProgress { .. }
             | Self::ExecutionFinished { .. } => 5,
             Self::Notification { .. } => 6,
+            Self::ProjectChanged { .. }
+            | Self::ProfileChanged { .. }
+            | Self::SharedVariablesChanged { .. }
+            | Self::ResourceBindingsChanged
+            | Self::DeviceContextChanged { .. }
+            | Self::ExecutionContextChanged { .. } => 7,
             Self::OpenWindow { .. } => 4,
             Self::State { .. }
             | Self::ActionCompleted { .. }
@@ -711,6 +822,112 @@ mod tests {
         assert!(list(Some(MAX_EXECUTION_LIST)).validate().is_ok());
         assert!(list(Some(0)).validate().is_err());
         assert!(list(Some(MAX_EXECUTION_LIST + 1)).validate().is_err());
+    }
+
+    #[test]
+    fn variables_need_protocol_7() {
+        let profile = ProfileId::new();
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "type": "previewReferences",
+            "context": {"profile": profile},
+            "items": [{"reference": "shared.projects.favorite", "expected": {"type": "project"}}],
+        }))
+        .unwrap();
+        assert_eq!(request.since_protocol(), 7);
+        assert_eq!(request.name(), "previewReferences");
+        let list: Request = serde_json::from_value(serde_json::json!({
+            "type": "listVariables",
+            "context": {"profile": profile, "projectSource": "execution"},
+        }))
+        .unwrap();
+        let Request::ListVariables { context, filter } = &list else {
+            panic!("listVariables");
+        };
+        assert_eq!(context.project_source, ProjectSource::Execution);
+        assert_eq!(**filter, CatalogFilter::default());
+        assert_eq!(list.since_protocol(), 7);
+        let too_many = Request::PreviewReferences {
+            context: Box::new(ResolutionContext::preview(profile)),
+            items: vec![
+                PreviewItem {
+                    reference: "system.platform".into(),
+                    expected: None,
+                };
+                MAX_PREVIEW_ITEMS + 1
+            ],
+        };
+        assert!(too_many.validate().is_err());
+
+        for (event, name) in [
+            (
+                AgentEvent::ProjectChanged {
+                    profile,
+                    project: None,
+                    source: ProjectSource::Application,
+                },
+                "projectChanged",
+            ),
+            (AgentEvent::ProfileChanged { profile }, "profileChanged"),
+            (
+                AgentEvent::SharedVariablesChanged {
+                    keys: vec!["projects.favorite".into()],
+                },
+                "sharedVariablesChanged",
+            ),
+            (
+                AgentEvent::ResourceBindingsChanged,
+                "resourceBindingsChanged",
+            ),
+            (
+                AgentEvent::DeviceContextChanged { device: None },
+                "deviceContextChanged",
+            ),
+            (
+                AgentEvent::ExecutionContextChanged {
+                    execution: ExecutionId::new(),
+                    project: None,
+                },
+                "executionContextChanged",
+            ),
+        ] {
+            assert_eq!(event.since_protocol(), 7);
+            let json = serde_json::to_value(&event).unwrap();
+            assert_eq!(json["type"], name);
+            assert_eq!(serde_json::from_value::<AgentEvent>(json).unwrap(), event);
+        }
+        assert!(
+            Capability::of_protocol(6)
+                .iter()
+                .all(|c| *c != Capability::Variables)
+        );
+        assert!(Capability::of_protocol(7).contains(&Capability::Variables));
+        assert_eq!(
+            serde_json::to_value(Capability::Variables).unwrap(),
+            "variables"
+        );
+    }
+
+    #[test]
+    fn older_clients_never_see_new_effects() {
+        let project = ProjectId::new();
+        let result = ActionResult::success("switched")
+            .with_effect(ContextEffect::SelectProject { project })
+            .with_effect(ContextEffect::CycleProject {
+                direction: CycleDirection::Next,
+                wrap_around: true,
+            });
+        let response = Response::ActionResult {
+            result: result.clone(),
+        };
+        let Response::ActionResult { result: old } = response.clone().for_protocol(6) else {
+            panic!("an action result");
+        };
+        assert_eq!(old.effects, vec![ContextEffect::SelectProject { project }]);
+        assert_eq!(
+            response.clone().for_protocol(7),
+            Response::ActionResult { result }
+        );
+        assert_eq!(Response::Ok.for_protocol(1), Response::Ok);
     }
 
     #[test]
