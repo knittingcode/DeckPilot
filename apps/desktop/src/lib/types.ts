@@ -586,7 +586,7 @@ export interface NodeReport {
 }
 
 export type ExecutionState = "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
-export type ExecutionTrigger = "app" | "device" | "schedule" | "lifecycle" | "other"
+export type ExecutionTrigger = "app" | "device" | "schedule" | "lifecycle" | "workSession" | "other"
 
 export interface ExecutionSummary {
   id: string
