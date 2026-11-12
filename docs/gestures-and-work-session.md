@@ -249,13 +249,15 @@ Work-session default rules:
 |---|---|---|---|
 | idle | start | – | – |
 | starting | – (shows "Starting…") | cancelStart | – |
-| working | verify | – | – |
+| working | verify (only with a verification workflow) | verify (only without one: passes at once, D12) | – |
 | verifyingEnd | – (shows "Checking…") | cancelVerification | – |
 | readyToFinish | finish | continueWorking | – |
 | stopping | – | – | – |
 
 Because long press is bound, a click fires on the release. Double click is
-not bound by default, so a click never waits 300 ms.
+not bound by default, so a click never waits 300 ms. Without a verification
+workflow, a click in working does nothing except show "Hold to finish", so
+no click ever leads towards finishing (D12).
 
 ## 5. Work session state machine
 
@@ -270,13 +272,13 @@ else is refused (`InvalidTransition`).
 | T1 | idle | Start | unlocked; no active session; settings valid; session's profile active | insert `work_sessions` row (`starting`, `requested_at`); if a start workflow is set, run it with tag `Start{session}` | starting |
 | T2 | starting | StartSucceeded | run tag matches session; row still `starting` | `started_at = now`; open interval 1; mark the row active; event | working |
 | T3 | starting | StartFailed | failure, cancel (`cancelStart`) or interruption of the tagged run | row → `aborted`, notice `startFailed`/`startInterrupted`; **no interval was ever opened** | idle |
-| T4 | working | Verify | unlocked; session's profile active; verification workflow not already running | new `VerificationId v`; persist `verifying(v)`; run with tag `Verify{session, v}` (none configured: see D12) | verifyingEnd |
+| T4 | working | Verify | unlocked; session's profile active; verification workflow not already running | new `VerificationId v`; persist `verifying(v)`; run with tag `Verify{session, v}`. None configured (D12): only by long press, and T4 + T5 commit together with `canFinish = true`, details "no verification configured" | verifyingEnd |
 | T5 | verifyingEnd | VerificationPassed | tag `(session, v)` = current; outputs valid, `canFinish = true` | store outcome; `approval = v`, `approved_at`, `approval_boot` | readyToFinish |
 | T6 | verifyingEnd | VerificationRejected | tag matches; `canFinish = false` | store outcome and details; notice `notReady` | working |
 | T7 | verifyingEnd | VerificationFailed | tag matches; run failed or cancelled, no valid `canFinish`, or interrupted | notice `verificationFailed`/`verificationInterrupted` | working |
 | T8 | readyToFinish | Verify | as T4 | the old approval is dropped and a new `v` is used | verifyingEnd |
 | T9 | readyToFinish | ApprovalInvalidated | TTL passed, sleep detected, agent restarted, settings changed, or `continueWorking` | clear approval; notice `approvalExpired`/`approvalInvalidated` | working |
-| T10 | readyToFinish | Finish | single click (key) or explicit app action (D11); `approval` = current; approval valid; key pressed ≥ arming delay after entering ready | CAS `readyToFinish → stopping` with `stopped_at = now`, close the open interval at `now` | stopping |
+| T10 | readyToFinish | Finish | **single click on the key only** (D11; the app has no finish); `approval` = current; approval valid; key pressed ≥ arming delay after entering ready | CAS `readyToFinish → stopping` with `stopped_at = now`, close the open interval at `now` | stopping |
 | T11 | stopping | StopCompleted | – | row → `stopped`, clear active marker, event | idle |
 
 Invariants (tested in the contract):
@@ -307,9 +309,9 @@ INSERT INTO work_session_transitions (...);
 COMMIT;
 ```
 
-A device click and an app request with the same approval cannot both
-finish. The second gets "already finished". A finish request with an old
-approval is refused. T11 is a second, trivial transaction. If the agent
+Only a key click can finish (D11). Two clicks, or a duplicated signal, with
+the same approval cannot both finish: the second gets "already finished". A
+click with an old approval is refused. T11 is a second, trivial transaction. If the agent
 dies between the two, recovery completes T11 (section 6.5), and the stop
 time is already fixed.
 
@@ -352,8 +354,8 @@ bounds how long nothing was running.
 A gap longer than the review threshold (default 15 min, D8) records a
 `work_session_reviews` row of kind `agentDown`, `sleep`, `clockBack` or
 `clockForward` and shows the notice `needsReview`. The gap is **counted by
-default**, so the timer is preserved. The user explicitly chooses *count*
-or *exclude* on the Work Session page. *Exclude* splits the interval in one
+default**, so the timer is preserved. The user can exclude it later, in the
+session history on the Work Session page (D8). *Exclude* splits the interval in one
 transaction: close it at `from`, open a new one at `to`. Elapsed time stays
 a plain sum.
 
@@ -551,9 +553,6 @@ picker code of its own. Open pickers refresh on `workSessionChanged`
 
 ```jsonc
 { "type": "getWorkSession" }                         → { "type": "workSession", "snapshot": WorkSessionSnapshot }
-{ "type": "workSessionCommand", "operation": "start" | "verify" | "finish" | "cancelStart"
-    | "cancelVerification" | "continueWorking", "session"?: id, "approval"?: id }
-                                                     → { "type": "workSession", "snapshot": ... }
 { "type": "listWorkSessions", "limit": n, "before"?: ms } → { "type": "workSessions", "entries": WorkSessionSummary[] }
 { "type": "resolveWorkSessionReview", "session": id, "review": n, "count": bool } → workSession
 { "type": "clearWorkSessionNotices", "session": id } → workSession
@@ -561,12 +560,13 @@ picker code of its own. Open pickers refresh on `workSessionChanged`
 { "type": "workSessionChanged", "snapshot": WorkSessionSnapshot }
 ```
 
-- `finish` requires `session` and `approval`, which makes it idempotent
-  (section 5.2). `verify` and `continueWorking` require `session`.
+- There is **no request that starts, verifies or finishes a session**
+  (D11): session operations come only from the key. Tests drive them with
+  `simulateInput`.
 - Settings use the existing configuration pattern: the app writes
   `work_session_settings` after validating the workflow and the contract,
   then calls `notify_reload`.
-- Tauri (W5): `get_work_session`, `work_session_command`,
+- Tauri (W5): `get_work_session`,
   `list_work_sessions`, `resolve_work_session_review`,
   `clear_work_session_notices`, `get_work_session_settings`,
   `save_work_session_settings`, and the event `agent-work-session`. With an
@@ -589,10 +589,9 @@ picker code of its own. Open pickers refresh on `workSessionChanged`
 - **Work Session page** (module page `work-session`, W6,
   `apps/desktop/src/modules/work-session/**`):
   - Status card with live state, elapsed time, project, the last
-    verification with details, notices with **Clear**, and reviews with
-    **Count**/**Exclude**.
-  - Buttons that follow the state machine: Start, Verify, Finish (only in
-    readyToFinish, D11), Cancel.
+    verification with details, and notices with **Clear**. **State only:
+    no Start, Verify or Finish buttons** (D11). The session is operated
+    from its key.
   - Settings: start workflow (any workflow of the profile without required
     inputs) and verification workflow (only workflows that pass the
     contract, with the issue shown for the others), approval lifetime,
@@ -601,7 +600,8 @@ picker code of its own. Open pickers refresh on `workSessionChanged`
   - **Assign to key…** opens the layout designer's key chooser and writes a
     `Stateful { machine: "workSession" }` binding. **No action instance is
     created**, before or after.
-  - History: sessions with date, project, duration, result and transitions.
+  - History: sessions with date, project, duration, result and
+    transitions. Flagged gaps show here with **Exclude** (D8).
 - **Settings › Devices**: the default gesture timings.
 - A built-in module `work-session` (`modules/work-session`, a manifest only
   with page, config and no action types) provides the page and the
@@ -633,7 +633,7 @@ picker code of its own. Open pickers refresh on `workSessionChanged`
 | start failure → idle + error | failing, cancelled and refused start workflow | W2 |
 | canFinish typed | `from_outputs` strictness (done); missing or ill-typed output → T7 | G0, W2 |
 | verification never stops the timer | elapsed keeps growing through T6/T7/T9 | W2 |
-| finish only by click in ready, atomic + idempotent | double click, device + IPC race, repeated IPC finish, arming delay | W2 |
+| finish only by click in ready, atomic + idempotent | only a key click finishes (no IPC path), double click, duplicated signals, arming delay | W2 |
 | stale approvals | TTL, sleep, restart, re-verify, settings change | W2 |
 | old session's verification cannot stop a new one | result tagged with an old session or old `v` is dropped | W2 |
 | disconnect never stops | unplug in each state | W2 + T |
@@ -673,7 +673,8 @@ merged), **G2 with C**, and **W6 on mocks** → **G4**, **W2** → **W4**, **W3*
 
 ## 13. Decisions
 
-Proposed defaults. The user decides.
+Decided by the user (2026-11-12): D4, D8, D11, D12. The rest are the
+proposed defaults, accepted by the coordinator.
 
 - **D1** Single click is delayed only when double click is bound to that
   key. With long press bound it fires on the release. Double click fires on
@@ -682,28 +683,27 @@ Proposed defaults. The user decides.
   (raw mode). The editor converts them to `Click` only when the user adds
   another gesture, with a confirmation.
 - **D3** Parameterized gesture actions: **P1 now**, a saved instance plus
-  per-binding `overrides` (references allowed). Inline `Invoke` comes later
-  through C, with no contract change.
+  per-binding `overrides` (references allowed). There is no inline
+  invocation now. `Invoke` may come later through C, with no contract
+  change.
 - **D4** Elapsed text on keys is `h:mm`, redrawn once per minute and only
   while a work session key is shown. `seconds` (1 Hz) is opt-in per profile.
-- **D5** Variables are `system.work.session.*` (existing root) rather than a
-  new `work.` root.
-- **D6** Storage is core **schema 9** after E's schema 8, rather than
-  module-owned tables.
+- **D5** Variables are `system.work.session.*` (existing root).
+- **D6** Storage is core **schema 9** after E's schema 8.
 - **D7** There is one active session per database. It records its profile
-  and project. Start, verify and cancel need that profile to be active.
-  Finish does not.
+  and project. Start and verify need that profile to be active. Finish does
+  not.
 - **D8** A gap over 15 min (agent down, sleep, clock jump) is counted and
-  flagged for review. The user may exclude it. The alternative is excluding
-  it until it is confirmed.
-- **D9** The approval lasts 10 min and is invalidated by sleep, restart,
-  re-verification and settings changes. The finish arming delay is 1 s.
-- **D10** Time counts from the commit of `working`. The start workflow's
+  flagged for review. The user can exclude it later in the session history.
+- **D9** The approval lasts 10 min and is invalidated by sleep, restart, a
+  new verification and settings changes. A finish click whose press comes
+  less than 1 s after entering readyToFinish is ignored.
+- **D10** Time counts from entering `working`. The start workflow's
   duration is not counted.
-- **D11** Finishing is possible by a single click on the key in
-  readyToFinish **and** by the explicit Finish button on the Work Session
-  page (same approval and transaction). The alternative is the key only.
-- **D12** With no verification workflow configured, Verify passes at once
-  (`canFinish = true`, details "no verification configured"). The
-  alternative is that finishing requires a configured verification
-  workflow.
+- **D11** Finishing is possible **only** by a single click on the key in
+  readyToFinish. The app has no Finish button and no IPC request that
+  finishes. The Work Session page shows the state only.
+- **D12** With no verification workflow configured, a **long press** in
+  working passes at once to readyToFinish (`canFinish = true`, details "no
+  verification configured"). In that configuration a click in working does
+  nothing.
