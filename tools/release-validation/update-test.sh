@@ -74,6 +74,10 @@ build() {
   # The first `version` in Cargo.toml is [workspace.package]'s.
   perl -0pi -e "s/^version = \"[^\"]+\"/version = \"$version\"/m" "$tree/Cargo.toml"
   perl -0pi -e "s/\"version\": \"[^\"]+\"/\"version\": \"$version\"/" "$tree/apps/desktop/package.json" "$tree/apps/desktop/src-tauri/tauri.conf.json"
+  # Packaging requires release notes for the version; test versions have
+  # none in the changelog. Only the temporary worktree's copy is changed.
+  grep -q "^## \[$version\]" "$tree/CHANGELOG.md" \
+    || perl -0pi -e "s/^## \[/## [$version] - Update test build\n\nTest build of the update test; never released.\n\n## [/m" "$tree/CHANGELOG.md"
   mkdir -p "$work/target"
   ln -s "$work/target" "$tree/target"
   (
