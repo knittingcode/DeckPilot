@@ -17,7 +17,8 @@
 //!   does not (D7). Finishing needs a single click on the key, the
 //!   approval seen at the press, and the arming delay (D9, D11). Without a
 //!   verification workflow, only a long press verifies, and it passes at
-//!   once (D12).
+//!   once (D12). In `readyToFinish`, where a click finishes, a long press
+//!   verifies again either way (T8).
 //! - **Persistence first.** Every transition is committed by the store
 //!   before the in-memory state changes; the store's compare-and-set
 //!   answers a repeated request (a duplicated click, a late result) with
@@ -603,8 +604,12 @@ impl Agent {
             Err(outcome) => return outcome,
         };
         let workflow = settings.verification_workflow;
+        // In readyToFinish a click finishes, so verifying again is a long
+        // press (T8), with or without a verification workflow.
+        let again = record.status == SessionStatus::ReadyToFinish;
         match (workflow, gesture) {
             (None, Gesture::LongPress) | (Some(_), Gesture::Click | Gesture::DoubleClick) => {}
+            (Some(_), Gesture::LongPress) if again => {}
             (None, _) => return WorkSessionOutcome::Ignored(Ignored::HoldToFinish),
             (Some(_), Gesture::LongPress) => {
                 return WorkSessionOutcome::Ignored(Ignored::ClickToCheck);

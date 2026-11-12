@@ -463,6 +463,7 @@ fn portable_application_settings_travel_without_local_state() {
         automatic_checks: false,
         check_interval_hours: 72,
         last_check: Some(1_000),
+        channel: deckpilot_update::channel::Channel::Prerelease,
     };
     source
         .set_setting(
@@ -479,7 +480,9 @@ fn portable_application_settings_travel_without_local_state() {
     assert_eq!(updates.mode, UpdateMode::DownloadAndAsk);
     assert_eq!(updates.check_interval_hours, 72);
     let text = serde_json::to_string(&payload).unwrap();
+    // Neither the last check nor the update channel is portable.
     assert!(!text.contains("lastCheck") && !text.contains("autoLock"));
+    assert!(!text.contains("channel") && !text.contains("prerelease"));
     let without = payload::export(&source, &modules(), None, NONE, 1, "x").unwrap();
     assert!(without.settings.is_empty());
 

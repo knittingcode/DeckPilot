@@ -7,13 +7,16 @@
 # update comes from a loopback endpoint on the runner: no release, nothing
 # public. The agent keeps its key in a temporary keychain that exists only
 # for this job.
+#
+# Manual runs only (`gh workflow run "Update continuity" --ref main`): the
+# test builds the app (dependency installation, build scripts) in the job
+# that holds the Developer ID certificate, so it never runs on pull
+# requests, where any branch's dependencies would run next to it. No cache
+# is restored, so nothing written by other workflows is reused. The
+# certificate is passed only to the update test step.
 name: Update continuity
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/update-continuity.yml
-      - tools/release-validation/**
   workflow_dispatch:
 
 permissions:
@@ -28,20 +31,16 @@ jobs:
     name: Keychain access after a signed update (macOS)
     runs-on: macos-latest
     timeout-minutes: 120
-    # Secrets are not available to pull requests from forks.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Install Rust toolchain
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: update-continuity
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
-          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Temporary keychain for the agent
         run: |
@@ -59,7 +58,7 @@ jobs:
         run: tools/release-validation/update-test.sh "$RUNNER_TEMP/update-test"
       - name: Logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: update-continuity-logs
           path: |

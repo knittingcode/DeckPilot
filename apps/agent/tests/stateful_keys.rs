@@ -316,6 +316,13 @@ async fn the_key_starts_verifies_and_finishes_a_session() {
     f.click();
     stays(&agent, &ready).await;
     tokio::time::sleep(SETTLE).await;
+    // A long press checks again and gives a fresh approval.
+    f.long_press().await;
+    wait_state(&agent, S::VerifyingEnd).await;
+    let again = wait_state(&agent, S::ReadyToFinish).await;
+    assert_eq!(again.session, working.session);
+    assert!(again.approval.is_some() && again.approval != ready.approval);
+    tokio::time::sleep(SETTLE).await;
     // A click finishes.
     f.click();
     let idle = wait_state(&agent, S::Idle).await;
@@ -327,12 +334,12 @@ async fn the_key_starts_verifies_and_finishes_a_session() {
         .unwrap();
     assert_eq!(record.status, SessionStatus::Stopped);
     assert!(record.stopped_at_ms.is_some());
-    assert_eq!(runs(&agent, check_id).await, 1);
+    assert_eq!(runs(&agent, check_id).await, 2);
 
     // Every operation ran on the agent's service task, never on a device
     // thread.
     let threads = f.dispatch_threads();
-    assert_eq!(threads.len(), 4, "{threads:?}");
+    assert_eq!(threads.len(), 5, "{threads:?}");
     assert!(
         threads.iter().all(|name| !name.starts_with("device")),
         "{threads:?}"
@@ -406,15 +413,15 @@ async fn without_verification_a_click_hints_and_a_long_press_approves() {
     stays(&agent, &ready).await;
     // The hint is gone with the state it belonged to.
     f.wait_face(&face("Finish Work", Some("0:00"), Some(Indicator::Ok)));
-    // A long press in ready goes back to working, the same session.
+    // A long press in ready approves again at once (D12): a fresh
+    // approval with its own arming delay.
     tokio::time::sleep(SETTLE).await;
     f.long_press().await;
-    let working_again = wait_state(&agent, S::Working).await;
-    assert_eq!(working_again.session, working.session);
-    assert_eq!(working_again.approval, None);
-    tokio::time::sleep(SETTLE).await;
-    f.long_press().await;
-    wait_state(&agent, S::ReadyToFinish).await;
+    let fresh = wait_for(&agent, "a fresh approval", |s| {
+        s.state == S::ReadyToFinish && s.approval.is_some() && s.approval != ready.approval
+    })
+    .await;
+    assert_eq!(fresh.session, working.session);
     tokio::time::sleep(SETTLE).await;
     f.click();
     wait_state(&agent, S::Idle).await;

@@ -234,8 +234,10 @@ impl StateMachine for WorkSessionMachine {
     /// Section 4: a click starts and finishes; in working both a click and
     /// a long press verify, and the agent lets only the one that fits the
     /// settings through (a click with a verification workflow, a long press
-    /// without one, D12); a long press cancels what runs and leaves
-    /// `readyToFinish`. Double click is not bound, so a click never waits.
+    /// without one, D12); a long press cancels what runs; in
+    /// `readyToFinish` a long press verifies again (a new check, or with no
+    /// verification workflow a fresh approval). Double click is not bound,
+    /// so a click never waits.
     const DEFAULT_RULES: &'static [StatefulRule<WorkSessionState, WorkSessionOperation>] = {
         use Gesture as G;
         use WorkSessionOperation as O;
@@ -247,7 +249,7 @@ impl StateMachine for WorkSessionMachine {
             StatefulRule::new(S::Working, G::LongPress, O::Verify),
             StatefulRule::new(S::VerifyingEnd, G::LongPress, O::CancelVerification),
             StatefulRule::new(S::ReadyToFinish, G::Click, O::Finish),
-            StatefulRule::new(S::ReadyToFinish, G::LongPress, O::ContinueWorking),
+            StatefulRule::new(S::ReadyToFinish, G::LongPress, O::Verify),
         ]
     };
 
@@ -383,7 +385,7 @@ mod tests {
             Some(O::CancelVerification)
         );
         assert_eq!(op(S::ReadyToFinish, G::Click), Some(O::Finish));
-        assert_eq!(op(S::ReadyToFinish, G::LongPress), Some(O::ContinueWorking));
+        assert_eq!(op(S::ReadyToFinish, G::LongPress), Some(O::Verify));
         assert_eq!(op(S::Stopping, G::Click), None);
         // No default rule for double click: binding it would only delay
         // the click.
@@ -396,7 +398,7 @@ mod tests {
     fn own_rules_replace_the_defaults() {
         let key = rules(&[
             (S::Idle, G::DoubleClick, O::Start),
-            (S::ReadyToFinish, G::LongPress, O::Verify),
+            (S::ReadyToFinish, G::LongPress, O::ContinueWorking),
         ]);
         assert_eq!(key.issues(bound(&[G::DoubleClick, G::LongPress])), []);
         assert_eq!(key.work_session_operation(S::Idle, G::Click), None);
@@ -406,7 +408,7 @@ mod tests {
         );
         assert_eq!(
             key.work_session_operation(S::ReadyToFinish, G::LongPress),
-            Some(O::Verify)
+            Some(O::ContinueWorking)
         );
         assert_eq!(key.work_session_operation(S::ReadyToFinish, G::Click), None);
     }

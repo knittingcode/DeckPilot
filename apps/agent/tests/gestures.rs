@@ -3,7 +3,7 @@
 //! synthetic instants; these tests check the wiring with real time and
 //! generous margins.
 //!
-//! Layouts cannot bind gestures yet, so the hooks put keys 0 to 3 in
+//! Layouts cannot bind gestures yet, so the hooks put keys 0 to 4 in
 //! gesture mode on every page and record what fires. Key 5 stays raw: on
 //! the home page it opens a folder, in the folder it goes back.
 
@@ -31,6 +31,9 @@ const DOUBLE_KEY: u16 = 2;
 /// Click and a 5 s long press: a hold that surely outlasts what a test
 /// does meanwhile.
 const HOLD_KEY: u16 = 3;
+/// Click and a 2 s long press, for the slow-dispatch test.
+const SLOW_KEY: u16 = 4;
+const SLOW_LONG_MS: u16 = 2000;
 /// Raw: opens the folder, and goes back from it.
 const FOLDER_KEY: u16 = 5;
 
@@ -46,6 +49,10 @@ struct Seen {
     page: Option<PageId>,
     thread: String,
     held: Duration,
+    pressed_at: Instant,
+    at: Instant,
+    /// When the hook was called.
+    dispatched: Instant,
 }
 
 #[derive(Default)]
@@ -54,10 +61,14 @@ struct Recorder {
     /// Pages seen when a gesture key's sequence could start, by device
     /// serial.
     pages: Mutex<Vec<(String, u16, Option<PageId>)>>,
-    /// How long the hook blocks the service task on the next click of
-    /// `CLICK_KEY`, as a slow synchronous action would.
-    block_next: Mutex<Option<Duration>>,
-    blocking: Mutex<bool>,
+    /// When set, the next click of `CLICK_KEY` blocks the service task,
+    /// as a slow synchronous action would, until the test sends on (or
+    /// drops) the other end.
+    gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    /// When the blocking click was entered and left; kept, so a check
+    /// cannot miss it.
+    entered: Mutex<Option<Instant>>,
+    left: Mutex<Option<Instant>>,
 }
 
 impl GestureHooks for Recorder {
@@ -75,7 +86,7 @@ impl GestureHooks for Recorder {
                 click: true,
                 ..BoundGestures::default()
             },
-            LONG_KEY | HOLD_KEY => BoundGestures {
+            LONG_KEY | HOLD_KEY | SLOW_KEY => BoundGestures {
                 click: true,
                 long_press: true,
                 ..BoundGestures::default()
@@ -87,7 +98,11 @@ impl GestureHooks for Recorder {
             },
             _ => return None,
         };
-        let long_press_ms = if index == HOLD_KEY { 5000 } else { LONG_MS };
+        let long_press_ms = match index {
+            HOLD_KEY => 5000,
+            SLOW_KEY => SLOW_LONG_MS,
+            _ => LONG_MS,
+        };
         self.pages
             .lock()
             .unwrap()
@@ -112,16 +127,19 @@ impl GestureHooks for Recorder {
             page: fired.page,
             thread: std::thread::current().name().unwrap_or("").to_owned(),
             held: fired.at - fired.pressed_at,
+            pressed_at: fired.pressed_at,
+            at: fired.at,
+            dispatched: Instant::now(),
         });
-        let block = if index == CLICK_KEY {
-            self.block_next.lock().unwrap().take()
+        let gate = if index == CLICK_KEY {
+            self.gate.lock().unwrap().take()
         } else {
             None
         };
-        if let Some(block) = block {
-            *self.blocking.lock().unwrap() = true;
-            std::thread::sleep(block);
-            *self.blocking.lock().unwrap() = false;
+        if let Some(gate) = gate {
+            *self.entered.lock().unwrap() = Some(Instant::now());
+            let _ = gate.recv_timeout(TIMEOUT);
+            *self.left.lock().unwrap() = Some(Instant::now());
         }
     }
 }
@@ -134,6 +152,37 @@ impl Recorder {
             .iter()
             .map(|s| (s.serial.clone(), s.key, s.gesture))
             .collect()
+    }
+
+    /// What fired and when, relative to `origin`, for failure messages.
+    fn timings(&self, origin: Instant) -> String {
+        let ms = |at: Instant| at.saturating_duration_since(origin).as_millis();
+        let mut out: Vec<String> = self
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|s| {
+                format!(
+                    "key {} {:?}: pressed {} ms, fired {} ms (held {} ms), dispatched {} ms",
+                    s.key,
+                    s.gesture,
+                    ms(s.pressed_at),
+                    ms(s.at),
+                    s.held.as_millis(),
+                    ms(s.dispatched)
+                )
+            })
+            .collect();
+        let entered = *self.entered.lock().unwrap();
+        let left = *self.left.lock().unwrap();
+        out.push(format!(
+            "blocked from {:?} ms to {:?} ms; {} sequence starts looked up",
+            entered.map(ms),
+            left.map(ms),
+            self.presses()
+        ));
+        out.join("; ")
     }
 
     fn presses(&self) -> usize {
@@ -464,29 +513,48 @@ async fn two_devices_are_independent() {
 async fn a_slow_dispatch_does_not_turn_a_click_into_a_long_press() {
     let (setup, devices) = setup(&["G-1"]).await;
     let d = &devices[0];
-    // The next click blocks the service task for well over the long-press
-    // time, as a slow synchronous action does.
-    *setup.hooks.block_next.lock().unwrap() = Some(Duration::from_millis(u64::from(LONG_MS) * 4));
+    let origin = Instant::now();
+    // The next click of CLICK_KEY blocks the service task until `release`.
+    let (release, gate) = std::sync::mpsc::channel::<()>();
+    *setup.hooks.gate.lock().unwrap() = Some(gate);
     // The press of a quick tap is handled...
-    setup.press(d, LONG_KEY);
+    setup.press(d, SLOW_KEY);
     setup.wait_presses(1).await;
-    // ...then another key's slow click blocks the task, and the tap's
-    // release is read meanwhile, well below the threshold.
+    // ...then another key's click blocks the task, and the tap's release
+    // is read meanwhile, far below the 2 s threshold.
     setup.tap(d, CLICK_KEY);
-    setup.release(d, LONG_KEY);
+    setup.release(d, SLOW_KEY);
     let deadline = Instant::now() + TIMEOUT;
-    while !*setup.hooks.blocking.lock().unwrap() {
-        assert!(Instant::now() < deadline, "the click did not block");
+    let entered = loop {
+        if let Some(entered) = *setup.hooks.entered.lock().unwrap() {
+            break entered;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the click did not block: {}",
+            setup.hooks.timings(origin)
+        );
         tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    setup.wait_for("the tap", |s| s.len() == 2).await;
-    tokio::time::sleep(Duration::from_millis(u64::from(LONG_MS) * 2)).await;
+    };
+    // Keep the task blocked well past the threshold, measured from the
+    // press read before the block: handling the release only now must not
+    // make it a long press.
+    let past = Duration::from_millis(u64::from(SLOW_LONG_MS) + 1500);
+    tokio::time::sleep_until((entered + past).into()).await;
+    release.send(()).unwrap();
+    setup
+        .wait_for("the tap after the block", |s| s.len() == 2)
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let seen = setup.hooks.seen();
     assert_eq!(
-        setup.hooks.seen(),
+        seen,
         [
             g("G-1", CLICK_KEY, Gesture::Click),
-            g("G-1", LONG_KEY, Gesture::Click)
-        ]
+            g("G-1", SLOW_KEY, Gesture::Click)
+        ],
+        "{}",
+        setup.hooks.timings(origin)
     );
     setup.agent.shutdown().await;
 }

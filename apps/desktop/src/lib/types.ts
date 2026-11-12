@@ -812,11 +812,15 @@ export interface AgentConnection {
 
 export type UpdateMode = "notifyOnly" | "downloadAndAsk" | "installWhenIdle"
 
+/** Stable releases only (default), or also alpha, beta and rc builds. */
+export type UpdateChannel = "stable" | "prerelease"
+
 export interface UpdatePreferences {
   mode: UpdateMode
   automaticChecks: boolean
   checkIntervalHours: number
   lastCheck: number | null
+  channel: UpdateChannel
 }
 
 export interface UpdateInfo {
@@ -1190,7 +1194,7 @@ export interface StatefulRule<S, O> {
  * table applies: idle click → start; starting long press → cancelStart;
  * working click and long press → verify (the agent lets through the one
  * that fits the settings); verifyingEnd long press → cancelVerification;
- * readyToFinish click → finish, long press → continueWorking.
+ * readyToFinish click → finish, long press → verify again.
  * Only on click, double click or long press bindings; `finish` only on
  * click; every stateful binding of a key has the same machine and rules.
  */
