@@ -3,7 +3,32 @@ import { describe, expect, it } from "vitest"
 import type { LiveExecution } from "@/lib/executions"
 import type { ActionType, WorkflowGraph } from "@/lib/types"
 
-import { nodeRuns, runNodeInfo, runSummary } from "./run-model"
+import { nodeRuns, runBlockedReason, runNodeInfo, runSummary } from "./run-model"
+
+describe("runBlockedReason", () => {
+  const ready = {
+    isNew: false,
+    dirty: false,
+    agentRunning: true,
+    activeProfileId: "p1",
+    profileId: "p1",
+    profileName: "Work",
+  }
+
+  it("says why a workflow cannot run and what to do", () => {
+    expect(runBlockedReason(ready)).toBeNull()
+    expect(runBlockedReason({ ...ready, isNew: true })).toBe("Save the workflow to run it")
+    expect(runBlockedReason({ ...ready, dirty: true })).toBe(
+      "Save your changes to run the workflow",
+    )
+    expect(runBlockedReason({ ...ready, agentRunning: false })).toBe(
+      "The agent is not running. Start it in Settings › Agent",
+    )
+    expect(runBlockedReason({ ...ready, activeProfileId: "p2" })).toBe(
+      "Workflows run for the active profile. Make “Work” active to run this one",
+    )
+  })
+})
 
 function run(change: Partial<LiveExecution> = {}): LiveExecution {
   return {
