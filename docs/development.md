@@ -200,7 +200,7 @@ they report as skipped:
 
 | Job | Runs on a pull request that changes |
 | --- | ----------------------------------- |
-| Package check (Linux .deb), Package check (Windows installers) | `apps/desktop/src-tauri/`, `apps/agent/`, `packaging/`, `tools/ci/`, `.github/workflows/`, `Cargo.lock`, `Cargo.toml`, `apps/desktop/package.json` |
+| Package check (Linux .deb), Package check (Windows installers), in the Packaging workflow | `apps/desktop/src-tauri/`, `apps/agent/`, `packaging/`, `tools/ci/`, `.github/workflows/`, `Cargo.lock`, `Cargo.toml`, `apps/desktop/package.json` |
 | Credential store (3 platforms) | `crates/deckpilot-keystore/`, `.github/workflows/ci.yml` |
 | Release manifest assembly | `tools/ci/`, `.github/workflows/release.yml`, `.github/workflows/ci.yml` |
 | Compatibility (own workflow) | its path filter in `compatibility.yml` |
@@ -210,6 +210,16 @@ the files between the pull request's merge commit and its base, and tests
 its rules first (`tools/ci/test-changed-paths.sh`). If the changed files
 cannot be determined, every optional job runs. A skipped job can always be
 run locally with the commands of its steps in `ci.yml`.
+
+The Packaging workflow (`packaging.yml`) builds the Linux .deb and .rpm and
+the Windows NSIS and MSI installers with the release configuration and
+updater artifacts signed by a throwaway key, and checks them
+(`tools/ci/check-packages.sh`). Besides pull requests that change the paths
+above, it runs on pushes to `main` that change them, nightly, for version
+tags, by hand (Actions → Packaging → Run workflow) and when another workflow
+calls it (`uses: ./.github/workflows/packaging.yml`; output `version`, the
+checked version). A release should only be made from a commit with a green
+Packaging run.
 
 Runs and caches:
 
