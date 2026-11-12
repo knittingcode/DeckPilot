@@ -73,7 +73,6 @@ export function describeValue(value: ParameterValue, projects: Project[] = []): 
       return value.value.type === "fixed" ? value.value.key : `active project › ${value.value.role}`
     case "project":
       return projects.find((p) => p.id === value.value)?.key ?? "a project of another profile"
-    // The reference itself, never a previewed value.
     case "reference":
       return `{{ ${value.value} }}`
     case "template":

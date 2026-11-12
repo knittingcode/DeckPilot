@@ -58,6 +58,7 @@ fn definition(
         category: "System".into(),
         parameters,
         requires_project: false,
+        deprecated: false,
         node,
     }
 }
