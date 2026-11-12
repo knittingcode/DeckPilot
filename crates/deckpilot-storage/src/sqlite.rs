@@ -153,13 +153,13 @@ impl SqliteStore {
     /// verified and recorded in `migration_history`.
     pub fn open(path: impl AsRef<Path>, encryption: &Encryption) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let connection = Connection::open(&path)?;
+        let connection = crate::engine::open(&path)?;
         Self::init(connection, Some(path), encryption)
     }
 
     /// Opens a private in-memory database. Useful for tests.
     pub fn open_in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?, None, &Encryption::None)
+        Self::init(crate::engine::open_in_memory()?, None, &Encryption::None)
     }
 
     fn init(
@@ -603,9 +603,39 @@ impl SqliteStore {
         origin: crate::variables::VariableOrigin,
     ) -> Result<()> {
         let tx = self.write_transaction()?;
+        // A type change would break the references that use the variable
+        // (a project parameter cannot take a string); refused while any
+        // exist.
+        if let Some(existing) = crate::variables::get(&tx, &definition.key)?
+            && existing.definition.value_type != definition.value_type
+        {
+            let references = self.shared_variable_references(&definition.key)?;
+            if !references.is_empty() {
+                return Err(StorageError::VariableInUse(references));
+            }
+        }
         crate::variables::save(&tx, definition, origin)?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Every place in every profile that refers to `shared.<key>`:
+    /// reference and template parameter values, workflow mappings and
+    /// overrides, key labels and inline actions, and the triggers of the
+    /// workflows that use it.
+    pub fn shared_variable_references(
+        &self,
+        key: &deckpilot_core::variables::VariableKey,
+    ) -> Result<Vec<crate::variable_references::VariableReference>> {
+        let mut references = Vec::new();
+        for summary in self.list_profiles()? {
+            if let Some(profile) = self.load_profile(summary.id)? {
+                references.extend(crate::variable_references::variable_references(
+                    &profile, key,
+                ));
+            }
+        }
+        Ok(references)
     }
 
     /// Declares the variables of a module. Keys already held by a user
@@ -623,12 +653,17 @@ impl SqliteStore {
     }
 
     /// Deletes a user variable with all its values. Returns whether it
-    /// existed.
+    /// existed. Refused with [`StorageError::VariableInUse`] while anything
+    /// refers to it.
     pub fn delete_shared_variable(
         &self,
         key: &deckpilot_core::variables::VariableKey,
     ) -> Result<bool> {
         let tx = self.write_transaction()?;
+        let references = self.shared_variable_references(key)?;
+        if !references.is_empty() {
+            return Err(StorageError::VariableInUse(references));
+        }
         let deleted = crate::variables::delete(&tx, key)?;
         tx.commit()?;
         Ok(deleted)
@@ -975,6 +1010,9 @@ pub(crate) fn export_database(
     target: &Path,
     key: Option<&DatabaseKey>,
 ) -> Result<()> {
+    // Never attempt the export on a connection that cannot do it: refused
+    // before the target is touched.
+    crate::engine::check_complete(connection)?;
     if target.exists() {
         std::fs::remove_file(target).map_err(StorageError::Io)?;
     }
@@ -1005,7 +1043,7 @@ pub(crate) fn export_database(
 
 /// Opens `path` with `encryption` and checks integrity and schema version.
 pub(crate) fn verify_copy(path: &Path, encryption: &Encryption, version: u32) -> Result<()> {
-    let connection = Connection::open(path)?;
+    let connection = crate::engine::open(path)?;
     apply_key(&connection, encryption)?;
     check_integrity(&connection)?;
     let found: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;

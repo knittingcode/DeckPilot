@@ -78,6 +78,15 @@ entity_id!(
     /// Identifies an [`Icon`](crate::Icon) within a profile.
     IconId
 );
+entity_id!(
+    /// Identifies one work session (see [`crate::work_session`]).
+    WorkSessionId
+);
+entity_id!(
+    /// Identifies one run of a work session's end verification; an
+    /// approval to finish names the verification that gave it.
+    VerificationId
+);
 
 /// Validates a dotted, lowercase identifier such as `deckpilot.core.log`.
 pub(crate) fn validate_dotted(

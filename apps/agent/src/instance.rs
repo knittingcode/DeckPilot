@@ -76,7 +76,14 @@ mod tests {
             Err(LockError::AlreadyRunning)
         ));
         drop(first);
-        assert!(InstanceLock::acquire(&path).is_ok());
+        // Released, but not necessarily at once: a program that another
+        // test of this process is starting right now holds a copy of every
+        // descriptor until it executes (close-on-exec), the lock's
+        // included. That is why a starting agent waits briefly for the lock
+        // (`acquire_waiting`), and so does this test.
+        let again = InstanceLock::acquire_waiting(&path, Duration::from_secs(2));
+        assert!(again.is_ok(), "{again:?}");
+        drop(again);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
