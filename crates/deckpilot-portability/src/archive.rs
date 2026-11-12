@@ -21,7 +21,7 @@ use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use deckpilot_storage::crypto::{KdfParams, Password, random_bytes};
+use deckpilot_storage::crypto::{KdfParams, Password, random_array};
 
 use crate::PortabilityError;
 
@@ -69,8 +69,8 @@ pub fn seal(
     created_at: i64,
     app_version: &str,
 ) -> Result<Vec<u8>, PortabilityError> {
-    let mut nonce = [0u8; NONCE_LEN];
-    random_bytes(&mut nonce)?;
+    // A fresh random nonce for every archive (never a fixed or reused one).
+    let nonce: [u8; NONCE_LEN] = random_array()?;
     let header = Header {
         format: FORMAT.into(),
         version: FORMAT_VERSION,
@@ -247,5 +247,36 @@ mod tests {
             open(&costly, &password("export password")),
             Err(PortabilityError::Kdf(_))
         ));
+    }
+
+    /// An archive written by DeckPilot 0.6.0 (before the nonce came from
+    /// `random_array`), with test KDF parameters and a fixture password
+    /// that protects nothing else.
+    const ARCHIVE_0_6_0: &str = r#"{"header":"{\"format\":\"deckpilot-configuration\",\"version\":1,\"cipher\":\"xchacha20poly1305\",\"nonce\":\"nFjfe3BgLBY857Y0AwAH16H7pBurBpl2\",\"kdf\":{\"algorithm\":\"argon2id\",\"version\":19,\"memoryKib\":8192,\"iterations\":1,\"parallelism\":1,\"salt\":\"WomupH3touDcWYAYBTtACQ==\"},\"createdAt\":1700000000,\"appVersion\":\"0.6.0\"}","ciphertext":"bK2PHBoXUhIraUwekBdEXJgbQGaypDXy/XQZI2QciQ=="}"#;
+
+    #[test]
+    fn archives_of_earlier_versions_still_open() {
+        let (header, plaintext) = open(
+            ARCHIVE_0_6_0.as_bytes(),
+            &password("fixture: not a real password"),
+        )
+        .unwrap();
+        assert_eq!(plaintext.as_slice(), b"{\"profiles\":[]}");
+        assert_eq!(header.app_version, "0.6.0");
+        assert_eq!(header.created_at, 1_700_000_000);
+    }
+
+    #[test]
+    fn every_archive_has_a_fresh_full_length_nonce() {
+        let nonce_of = |archive: &[u8]| {
+            let header = read_header(archive).unwrap();
+            BASE64.decode(header.nonce).unwrap()
+        };
+        let first = nonce_of(&sealed(b"same"));
+        let second = nonce_of(&sealed(b"same"));
+        assert_eq!(first.len(), NONCE_LEN);
+        assert_eq!(second.len(), NONCE_LEN);
+        assert_ne!(first, second);
+        assert_ne!(first, vec![0u8; NONCE_LEN]);
     }
 }
