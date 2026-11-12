@@ -39,7 +39,6 @@ mod triggers;
 pub mod variables;
 
 pub use security::{AUTO_LOCK_CHECK, Clock, system_clock};
-pub use variables::SharedVariables;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_BRIGHTNESS: u8 = 60;
@@ -848,6 +847,7 @@ impl Agent {
         // Module states may have changed in the configuration app.
         self.modules = load_modules(store)?;
         self.update_variable_permissions();
+        self.reload_variables()?;
         self.auto_lock = deckpilot_storage::policy::security_policy(store)?.auto_lock;
         let (profile, project) = load_active(store)?;
         // Credentials are loaded with the configuration, so the app asks
