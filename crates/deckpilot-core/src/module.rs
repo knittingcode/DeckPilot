@@ -114,6 +114,10 @@ pub enum Capability {
     /// Use credentials stored on this computer, by their identifier. The
     /// secret itself is never part of a workflow or an export.
     Credentials,
+    /// Read shared and system variables while running. Values a module
+    /// receives through its parameters need no capability: the user put the
+    /// reference there.
+    VariablesRead,
 }
 
 impl Capability {
@@ -128,6 +132,7 @@ impl Capability {
             Self::Network => "Send network requests",
             Self::Notifications => "Show desktop notifications",
             Self::Credentials => "Use credentials stored on this computer",
+            Self::VariablesRead => "Read shared variables",
         }
     }
 }

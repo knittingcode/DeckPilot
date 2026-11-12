@@ -35,6 +35,11 @@ pub struct ExecutionContext<'a> {
     credentials: Option<&'a dyn crate::CredentialSource>,
     /// Shows notifications.
     notifier: Option<&'a dyn crate::notify::Notifier>,
+    /// Injected services and the context references are resolved in.
+    dependencies: Option<(
+        crate::variables::ExecutionDependencies<'a>,
+        &'a crate::variables::ResolutionContext,
+    )>,
 }
 
 /// How the workflow run an action belongs to is going, for actions that
@@ -68,9 +73,9 @@ pub struct Progress {
 /// that is cancelled when the run is cancelled or the attempt's timeout
 /// passes, and a way to report progress.
 pub struct ExecutionControl<'a> {
-    cancel: &'a crate::CancellationToken,
-    progress: &'a (dyn Fn(Progress) + Sync),
-    summary: Option<RunSummary>,
+    pub(crate) cancel: &'a crate::CancellationToken,
+    pub(crate) progress: &'a (dyn Fn(Progress) + Sync),
+    pub(crate) summary: Option<RunSummary>,
 }
 
 impl<'a> ExecutionControl<'a> {
@@ -118,7 +123,63 @@ impl<'a> ExecutionContext<'a> {
             control: None,
             credentials: None,
             notifier: None,
+            dependencies: None,
         }
+    }
+
+    /// The same context with the services of an execution, handed over
+    /// explicitly, and the context its references are resolved in. Also
+    /// sets the credential source to the one in `dependencies`.
+    #[must_use]
+    pub fn with_dependencies(
+        self,
+        dependencies: crate::variables::ExecutionDependencies<'a>,
+        context: &'a crate::variables::ResolutionContext,
+    ) -> Self {
+        Self {
+            credentials: Some(dependencies.credentials),
+            dependencies: Some((dependencies, context)),
+            ..self
+        }
+    }
+
+    /// The context the action's references are resolved in, if the engine
+    /// provided one.
+    pub fn resolution_context(&self) -> Option<&'a crate::variables::ResolutionContext> {
+        self.dependencies.map(|(_, context)| context)
+    }
+
+    /// The value of a variable in the action's context, with the module's
+    /// [`Capability::VariablesRead`]. Without injected services every
+    /// reference is unavailable.
+    pub fn variable(
+        &self,
+        reference: &crate::variables::VariableRef,
+    ) -> Result<crate::variables::Resolution, CapabilityDenied> {
+        self.require(Capability::VariablesRead)?;
+        Ok(match self.dependencies {
+            Some((dependencies, context)) => dependencies.variables.resolve(reference, context),
+            None => crate::variables::Resolution::UnavailableUntilRuntime,
+        })
+    }
+
+    /// The device whose control started the action, if any.
+    pub fn device(&self) -> Option<deckpilot_device::DeviceId> {
+        let (dependencies, context) = self.dependencies?;
+        context
+            .device
+            .clone()
+            .or_else(|| dependencies.device.current_device())
+    }
+
+    /// The application's active project of the action's profile, which may
+    /// differ from [`ExecutionContext::project`] inside a workflow run.
+    /// Requires [`Capability::ProfileRead`].
+    pub fn application_project(&self) -> Result<Option<ProjectId>, CapabilityDenied> {
+        self.require(Capability::ProfileRead)?;
+        Ok(self
+            .dependencies
+            .and_then(|(dependencies, _)| dependencies.projects.active_project(self.profile.id)))
     }
 
     /// The same context with a way to show notifications.

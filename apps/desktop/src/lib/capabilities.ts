@@ -38,6 +38,11 @@ export const CAPABILITIES: Record<Capability, { title: string; description: stri
     title: "Show desktop notifications",
     description: "Shows notifications on this computer and in the status bar.",
   },
+  "variables-read": {
+    title: "Read shared variables",
+    description:
+      "Reads shared and system variables while an action runs. Sensitive values stay hidden everywhere else.",
+  },
   credentials: {
     title: "Use stored credentials",
     description:
