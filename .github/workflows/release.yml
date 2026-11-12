@@ -3,9 +3,9 @@
 #   Stage A  builds, signs and notarizes, assembles the update manifest, the
 #            signing record and SHA256SUMS into a *draft* release, and checks
 #            all of it. Nothing is visible to users.
-#   Stage B  waits for approval in the "release" environment (required
-#            reviewers; fails closed if the environment is missing or has
-#            none), checks the draft's assets again, publishes it in one
+#   Stage B  waits for approval in the "production-release" environment
+#            (required reviewers; fails closed if the environment is missing
+#            or has none), checks the draft's assets again, publishes it in one
 #            update — as a pre-release for alpha/beta/rc, as latest only for
 #            the newest stable release — and verifies what users download.
 #
@@ -13,6 +13,13 @@
 # publish_only); it never changes a published release. A failed stage A
 # leaves a draft that can be discarded (tools/release-pipeline/discard-draft.sh)
 # and built again.
+#
+# The signing secrets are read only by the jobs that run in the
+# "production-release" environment (prepare and build; publish needs none).
+# They work with repository-level secrets as well as with environment
+# secrets, so the secrets can move into the environment without a workflow
+# change (docs/releasing.md, "Moving the signing secrets"). No other job may
+# reference them (tools/release-pipeline/check-workflow-gate.py).
 #
 # Required repository configuration (see docs/releasing.md):
 #   secrets.TAURI_SIGNING_PRIVATE_KEY          updater signing key (minisign)
@@ -103,6 +110,8 @@ jobs:
     name: Check configuration and release notes
     needs: validate-tag
     runs-on: ubuntu-latest
+    # Reads the signing secrets (presence and form only).
+    environment: production-release
     # Reads only; the draft is created by the draft job.
     permissions:
       contents: read
@@ -218,6 +227,8 @@ jobs:
   build:
     name: Build (${{ matrix.target }})
     needs: [validate-tag, prepare, draft]
+    # Signs (updater key, Developer ID) and notarizes.
+    environment: production-release
     strategy:
       fail-fast: false
       matrix:
@@ -601,10 +612,11 @@ jobs:
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' > "$RUNNER_TEMP/assets.txt"
           tools/release-pipeline/check-assets.sh "$RUNNER_TEMP/assets.txt" --final
 
-  # Stage B precondition: publication needs the "release" environment with
-  # at least one required reviewer. Without it this job fails and nothing
-  # is published (GitHub would otherwise create the environment unprotected
-  # when the publish job names it).
+  # Stage B precondition: publication needs the "production-release"
+  # environment with at least one required reviewer. Without it this job
+  # fails and nothing is published. (GitHub creates a named environment,
+  # unprotected, when a job first refers to it — stage A's prepare job may
+  # have done so — so its existence alone proves nothing.)
   publish-gate:
     name: Publication gate
     needs: [validate-tag, verify]
@@ -617,11 +629,11 @@ jobs:
         with:
           ref: ${{ needs.validate-tag.outputs.sha }}
           persist-credentials: false
-      - name: The release environment requires a reviewer
+      - name: The production-release environment requires a reviewer
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-        run: tools/release-pipeline/check-environment.sh release
+        run: tools/release-pipeline/check-environment.sh production-release
 
   # Stage B: after approval, checks the draft's assets again, publishes it
   # in one update and verifies the published release. The only job that
@@ -630,7 +642,7 @@ jobs:
     name: Publish and verify
     needs: [validate-tag, publish-gate]
     runs-on: ubuntu-latest
-    environment: release
+    environment: production-release
     permissions:
       contents: write
     steps:
