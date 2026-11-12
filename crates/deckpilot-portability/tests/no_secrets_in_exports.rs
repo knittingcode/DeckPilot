@@ -174,12 +174,36 @@ fn an_export_never_contains_secrets_or_values_of_this_computer() {
     assert_eq!(payload.modules["http"].settings.text("privateHosts"), None);
     assert!(text.contains("WorkIsolationMarker"));
 
-    // The archive is encrypted: not even the profile names are readable.
+    // The archive is encrypted: not even the profile names are readable,
+    // neither in the plaintext header nor in the decoded ciphertext. The
+    // needles are structured text of the payload (quotes, dots), so they
+    // cannot match base64 text or random bytes by chance.
     let sealed = seal(&payload);
-    for marker in NEVER_EXPORTED
-        .iter()
-        .chain(&["WorkIsolationMarker", "WORKX", "github.token"])
-    {
+    let envelope: serde_json::Value = serde_json::from_slice(&sealed).unwrap();
+    let header = envelope["header"].as_str().unwrap().as_bytes();
+    let ciphertext = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .decode(envelope["ciphertext"].as_str().unwrap())
+            .unwrap()
+    };
+    let visible = [
+        r#""name":"WorkIsolationMarker""#,
+        r#""key":"WORKX""#,
+        r#""credential":"#,
+        "work.repo",
+    ];
+    for needle in visible {
+        assert!(text.contains(needle), "{needle} is not in the payload");
+        for (part, bytes) in [
+            ("file", &sealed[..]),
+            ("header", header),
+            ("ciphertext", &ciphertext),
+        ] {
+            assert!(!contains(bytes, needle), "the {part} shows {needle}");
+        }
+    }
+    for marker in NEVER_EXPORTED {
         assert!(!contains(&sealed, marker), "the archive contains {marker}");
     }
 }
