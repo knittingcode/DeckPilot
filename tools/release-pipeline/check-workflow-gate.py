@@ -9,7 +9,9 @@ Fails unless:
   * every other job reaches `validate-tag` through `needs` (directly or
     through other jobs) -- an `if:` condition does not count;
   * the workflow-level permissions grant no write access, so only jobs that
-    ask for it explicitly can write.
+    ask for it explicitly can write; every job declares its permissions and
+    only the draft, build, manifest, verify and publish jobs may write;
+  * only `publish` uses an environment: `release`, behind `publish-gate`.
 """
 
 import sys
@@ -18,6 +20,11 @@ import yaml
 
 GATE = "validate-tag"
 READ_ONLY = {"contents", "checks", "actions"}
+PUBLISHER = "publish"
+PUBLISH_GATE = "publish-gate"
+# Jobs that may write to the repository: the draft and its assets (stage
+# A), and publication (stage B).
+WRITERS = {"draft", "build", "manifest", "verify", PUBLISHER}
 
 
 def needs_of(job):
@@ -59,6 +66,24 @@ def check(path):
             return False
         seen.add(name)
         return any(reaches_gate(n, seen) for n in needs_of(jobs[name]))
+
+    # Stage B: only `publish` publishes, behind the approval environment and
+    # the job that checks that environment.
+    publishers = [n for n, j in jobs.items() if "environment" in j]
+    if publishers != [PUBLISHER]:
+        problems.append(f"only {PUBLISHER} may use an environment, not {publishers}")
+    elif jobs[PUBLISHER]["environment"] != "release":
+        problems.append(f"{PUBLISHER} must run in the environment 'release'")
+    elif PUBLISH_GATE not in needs_of(jobs[PUBLISHER]):
+        problems.append(f"{PUBLISHER} must need {PUBLISH_GATE}")
+    for name, job in jobs.items():
+        permissions = job.get("permissions")
+        if not isinstance(permissions, dict):
+            problems.append(f"job {name} must declare its permissions")
+            continue
+        for scope, level in permissions.items():
+            if level == "write" and scope == "contents" and name not in WRITERS:
+                problems.append(f"job {name} may not have contents: write")
 
     for name, job in jobs.items():
         if name == GATE:

@@ -266,6 +266,29 @@ python3 "$here/check-workflow-gate.py" "$work/writing-gate.yml" > "$work/structu
   || { grep -q "validate-tag may not have contents: write" "$work/structure.log" \
     && grep -q "workflow-level permission contents: write" "$work/structure.log" \
     && ok "write permissions of the gate or the workflow are caught" || bad "structure: $(cat "$work/structure.log")"; }
+# Publication: only the publish job, in the release environment, behind the
+# publication gate; no other job may write.
+# mutate <name> <python statement on `jobs`> <expected message>
+mutate() {
+  python3 - "$root/.github/workflows/release.yml" "$work/$1.yml" "$2" << 'EOF'
+import sys, yaml
+workflow = yaml.safe_load(open(sys.argv[1]))
+jobs = workflow["jobs"]
+exec(sys.argv[3])
+yaml.safe_dump(workflow, open(sys.argv[2], "w"))
+EOF
+  if python3 "$here/check-workflow-gate.py" "$work/$1.yml" > "$work/structure.log" 2>&1; then
+    bad "$1: passes the structural check"
+  elif grep -q -F -- "$3" "$work/structure.log"; then
+    ok "$1 is caught"
+  else
+    bad "$1: $(cat "$work/structure.log")"
+  fi
+}
+mutate "publishing without the approval environment" 'del jobs["publish"]["environment"]' "only publish may use an environment"
+mutate "publishing without the publication gate" 'jobs["publish"]["needs"] = ["validate-tag"]' "publish must need publish-gate"
+mutate "another job in the release environment" 'jobs["prepare"]["environment"] = "release"' "only publish may use an environment"
+mutate "a reading job that writes" 'jobs["publish-gate"]["permissions"]["contents"] = "write"' "job publish-gate may not have contents: write"
 
 echo
 echo "$passed passed, $failures failed (work dir: $work)"
