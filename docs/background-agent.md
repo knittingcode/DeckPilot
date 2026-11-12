@@ -66,8 +66,14 @@ closed and reopened at any time without interrupting devices.
 ### Tray menu
 
 - **Open DeckPilot**: focuses the configuration window if it is connected,
-  otherwise starts the configuration app found next to the agent (or
-  `DECKPILOT_DESKTOP_BIN`)
+  otherwise starts the configuration app found next to the agent
+  (`deckpilot-desktop` in a build directory or Linux package, `DeckPilot` in
+  the macOS `.app` and on Windows; inside an AppImage the AppImage itself),
+  or `DECKPILOT_DESKTOP_BIN`. While an app it started is still starting (up
+  to 20 seconds, until it connects), further clicks start no second one. In
+  a development session `DECKPILOT_DESKTOP_BIN` is `deckpilot-dev`, which
+  restarts the session's `tauri dev` with its Vite server (see
+  [development](development.md#live-development))
 - **Active Profile**: lists profiles; selecting one switches immediately and
   redraws all devices
 - **Project**: shows the active project (informational)
@@ -213,7 +219,9 @@ Protocol 5 runs workflows in the background (see
 [Workflow graphs](workflow-graphs.md#running-in-the-agent)). Protocol 4 added
 the encrypted database; protocol 3 made action results only carry
 `selectProject` effects, with action types in module namespaces
-(`projects.next`). Project switching requests are refused while the projects
+(`projects.next`); a `cycleProject` requested by `projects.cycle` is applied
+by the engine and reported as the `selectProject` it made, so it never
+reaches a client. Project switching requests are refused while the projects
 module is disabled. Events are only sent to clients whose protocol has them.
 Clients negotiate the protocol (stepping down until an older agent accepts
 their `hello`) and never send a request newer than the connection's

@@ -120,7 +120,9 @@ impl fmt::Debug for ActionRegistry {
 /// The capability an effect requires.
 fn required_capability(effect: &ContextEffect) -> Capability {
     match effect {
-        ContextEffect::SelectProject { .. } => Capability::ProjectContext,
+        ContextEffect::SelectProject { .. } | ContextEffect::CycleProject { .. } => {
+            Capability::ProjectContext
+        }
     }
 }
 

@@ -2270,6 +2270,17 @@ async fn only_permitted_runs_change_the_active_project_and_never_over_a_newer_ch
     );
     let workflow_id = workflow.id;
     profile.workflows.push(workflow);
+    // The same, waiting long enough that the user's choice below certainly
+    // arrives while it runs, also on a slow runner.
+    let mut slow = select_wait_announce(
+        &mut profile,
+        "CMR",
+        3000,
+        deckpilot_core::ProjectScope::Application,
+    );
+    slow.name = "Work on CMR slowly".into();
+    let slow_id = slow.id;
+    profile.workflows.push(slow);
     agent.store().save_profile(&profile).unwrap();
     let mut events = agent.client().await;
     events.subscribe().await.unwrap();
@@ -2283,10 +2294,13 @@ async fn only_permitted_runs_change_the_active_project_and_never_over_a_newer_ch
         Some(deckpilot_core::ProjectScope::Application)
     );
     let (_, done) = execution_events(&mut events, run.id).await;
-    assert!(matches!(
-        done.project,
-        Some(deckpilot_core::ProjectOutcome::Applied { .. })
-    ));
+    assert!(
+        matches!(
+            done.project,
+            Some(deckpilot_core::ProjectOutcome::Applied { .. })
+        ),
+        "{done:?}"
+    );
     agent
         .wait_for_status(|s| active_key(s) == Some("CMR"))
         .await;
@@ -2304,17 +2318,44 @@ async fn only_permitted_runs_change_the_active_project_and_never_over_a_newer_ch
         .request(Request::SelectProject { project: shop })
         .await
         .unwrap();
-    let run = start_workflow(&mut client, workflow_id).await;
+    let run = start_workflow(&mut client, slow_id).await;
+    // The run is waiting (its project already selected in its own
+    // context) when the user picks another one.
+    let mut early = Vec::new();
+    loop {
+        let event = within("the run's wait to begin", TIMEOUT, events.next_event())
+            .await
+            .unwrap();
+        let waiting = matches!(
+            &event,
+            AgentEvent::ExecutionProgress {
+                execution,
+                event: deckpilot_core::graph::ExecutionEvent::NodeStarted { node },
+                ..
+            } if *execution == run.id && node.as_str() == "wait"
+        );
+        assert!(
+            !matches!(&event, AgentEvent::ExecutionFinished { execution } if execution.id == run.id),
+            "the run ended before it waited: {event:?}"
+        );
+        early.push(event);
+        if waiting {
+            break;
+        }
+    }
     client
         .request(Request::SelectProject { project: cms })
         .await
         .unwrap();
-    let (_, done) = execution_events(&mut events, run.id).await;
-    match done.project {
+    let (later, done) = execution_events(&mut events, run.id).await;
+    match &done.project {
         Some(deckpilot_core::ProjectOutcome::NotApplied { reason, .. }) => {
             assert!(reason.contains("changed during the run"), "{reason}");
         }
-        other => panic!("unexpected {other:?}"),
+        other => panic!(
+            "expected the run not to change the user's newer choice, got {other:?}; \
+             run: {done:?}; events: {early:?} {later:?}"
+        ),
     }
     assert_eq!(active_key(&agent.status().await), Some("CMS"));
     agent.shutdown().await;
@@ -3429,9 +3470,10 @@ fn a_hanging_test_ends_the_test_binary_with_its_step() {
                 .build()
                 .unwrap();
             runtime.spawn(async { std::thread::sleep(Duration::from_secs(30)) });
-            let watchdog = Watchdog::new("the hanging test", Duration::from_millis(300));
+            // Long enough for the panic to be reported and unwound before
+            // the limit, also on a slow runner (Windows CI took over 250 ms).
+            let watchdog = Watchdog::new("the hanging test", Duration::from_secs(3));
             watchdog.step("asserting");
-            std::thread::sleep(Duration::from_millis(50));
             panic!("the assertion failed");
         }
         _ => {}
