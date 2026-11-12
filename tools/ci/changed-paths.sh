@@ -20,7 +20,7 @@ pattern() {
     # runs on main and nightly.
     packaging) echo '^apps/desktop/src-tauri/(tauri[^/]*\.json$|build\.rs$|Cargo\.toml$|capabilities/|icons/|app-icon\.svg$)|^apps/agent/(build\.rs|Cargo\.toml|Info\.plist)$|^packaging/|^tools/ci/|^\.github/workflows/|^Cargo\.(lock|toml)$|^apps/desktop/package\.json$' ;;
     # Real credential stores.
-    keystore) echo '^crates/deckpilot-keystore/|^\.github/workflows/ci\.yml$' ;;
+    keystore) echo '^crates/deckpilot-keystore/|^tools/ci/with-keyring\.sh$|^\.github/workflows/ci\.yml$' ;;
     # Assembly of the release's latest.json.
     release_manifest) echo '^tools/ci/|^\.github/workflows/(release|ci)\.yml$' ;;
   esac
