@@ -245,6 +245,7 @@ impl ExecutionRecord {
                     output: std::collections::BTreeMap::new(),
                     error: None,
                     action: None,
+                    action_type: None,
                     workflow: None,
                     sets_variables: false,
                 });
@@ -369,6 +370,7 @@ mod tests {
             output: BTreeMap::new(),
             error: None,
             action: None,
+            action_type: None,
             workflow: None,
             sets_variables: false,
         }

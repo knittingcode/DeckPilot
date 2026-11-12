@@ -22,19 +22,34 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ActionInstanceId, ActionParameters, WorkflowId};
+use crate::variables::{ExpressionError, VariableRef, VariableValue, references_in_expression};
+use crate::{ActionInstanceId, ActionParameters, ActionTypeId, WorkflowId};
 
 pub use convert::{Conversion, from_steps};
 pub use executor::{
     CancelReason, CancellationToken, ExecutionEvent, ExecutionLimits, GraphReport, NodeReport,
-    NodeStatus, RunStatus, StepError,
+    NodeStatus, RunServices, RunStatus, StepError,
 };
 pub use mapping::{Reference, TemplateError, parse_template, references_in};
 pub use validate::{GraphIssue, IssueSeverity};
 
-/// Format version of [`WorkflowGraph`]. Bumped when the stored shape changes;
-/// older versions are migrated when a profile is loaded.
-pub const GRAPH_VERSION: u32 = 1;
+/// Newest format version of [`WorkflowGraph`] this build reads and writes.
+///
+/// - **1**: action nodes run saved action instances; mappings refer to node
+///   outputs (`{{ steps.<node>.output.<key> }}`) only.
+/// - **2**: adds [`NodeKind::Invoke`] (an inline action without a saved
+///   instance), [`Mapping::Variable`], and templates that refer to shared
+///   and system variables (`{{ shared.… }}`, `{{ system.… }}`,
+///   `{{ workflow.… }}`).
+///
+/// A graph is stored with at least the lowest version that describes it
+/// ([`WorkflowGraph::required_version`]): a graph that uses none of the
+/// version 2 shapes stays readable by older builds, and an older build
+/// refuses (instead of misreading) one that does. Version 1 graphs load and
+/// run unchanged.
+pub const GRAPH_VERSION: u32 = 2;
+/// Oldest format version this build reads.
+pub const MIN_GRAPH_VERSION: u32 = 1;
 
 /// Upper bounds that keep every workflow finite.
 pub const MAX_NODES: usize = 200;
@@ -176,9 +191,44 @@ pub enum Mapping {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         default: Option<String>,
     },
-    /// Text with `{{ steps.<node>.output.<key> }}` placeholders. Plain
-    /// substitution only: no expressions, no code.
+    /// Text with `{{ … }}` placeholders: node outputs
+    /// (`steps.<node>.output.<key>`) and, from graph version 2, shared and
+    /// system variables. Plain substitution only: no expressions, no code.
     Template { template: String },
+    /// The whole value of a reference with any root (`shared.…`,
+    /// `system.…`, `workflow.…`, `steps.…`), keeping its native type: a
+    /// project id fills a project parameter, an integer an integer one.
+    /// Requires graph version 2.
+    Variable {
+        reference: VariableRef,
+        /// Used when the reference has no value at run time. Without it, a
+        /// missing value fails the node.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<VariableValue>,
+    },
+}
+
+impl Mapping {
+    /// Every reference the mapping reads, in order.
+    pub fn references(&self) -> Result<Vec<VariableRef>, ExpressionError> {
+        match self {
+            Self::Output { reference, .. } => Ok(vec![VariableRef::Step(reference.clone())]),
+            Self::Template { template } => references_in_expression(template),
+            Self::Variable { reference, .. } => Ok(vec![reference.clone()]),
+        }
+    }
+
+    /// Whether the mapping needs graph version 2: a whole-value variable
+    /// reference, or a template that refers to something other than node
+    /// outputs.
+    fn needs_version_2(&self) -> bool {
+        match self {
+            Self::Output { .. } => false,
+            Self::Variable { .. } => true,
+            Self::Template { template } => references_in_expression(template)
+                .is_ok_and(|refs| refs.iter().any(|r| !matches!(r, VariableRef::Step(_)))),
+        }
+    }
 }
 
 /// What a condition node tests.
@@ -208,6 +258,24 @@ pub enum NodeKind {
         #[serde(default, skip_serializing_if = "ActionParameters::is_empty")]
         overrides: ActionParameters,
         /// Values from earlier nodes, by parameter key.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        mappings: BTreeMap<String, Mapping>,
+        #[serde(default)]
+        policy: ErrorPolicy,
+    },
+    /// Runs an action type of a module inline, with parameters stored in
+    /// the node instead of a saved instance of the Action Library.
+    /// Otherwise it behaves exactly like [`NodeKind::Action`]: same ports,
+    /// mappings, outputs, timeout, retry and context rules. Requires graph
+    /// version 2.
+    Invoke {
+        #[serde(rename = "actionType")]
+        action_type: ActionTypeId,
+        /// The action's parameters; missing ones get the type's defaults.
+        #[serde(default, skip_serializing_if = "ActionParameters::is_empty")]
+        parameters: ActionParameters,
+        /// Values from earlier nodes and variables, by parameter key. They
+        /// replace `parameters` of the same key.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         mappings: BTreeMap<String, Mapping>,
         #[serde(default)]
@@ -258,7 +326,9 @@ impl NodeKind {
     /// Output ports the kind offers.
     pub fn ports(&self) -> &'static [Port] {
         match self {
-            Self::Action { .. } | Self::Call { .. } => &[Port::Out, Port::Error],
+            Self::Action { .. } | Self::Invoke { .. } | Self::Call { .. } => {
+                &[Port::Out, Port::Error]
+            }
             Self::Condition { .. } => &[Port::True, Port::False],
             Self::Stop => &[],
             Self::Trigger
@@ -275,6 +345,7 @@ impl NodeKind {
         match self {
             Self::Trigger => "trigger",
             Self::Action { .. } => "action",
+            Self::Invoke { .. } => "invoke",
             Self::Condition { .. } => "condition",
             Self::Parallel => "parallel",
             Self::Join => "join",
@@ -284,6 +355,16 @@ impl NodeKind {
             Self::SetVariable { .. } => "setVariable",
             Self::Delay { .. } => "delay",
             Self::Stop => "stop",
+        }
+    }
+
+    /// The node's mappings, by parameter, input, output or variable key.
+    pub fn mappings(&self) -> Option<&BTreeMap<String, Mapping>> {
+        match self {
+            Self::Action { mappings, .. } | Self::Invoke { mappings, .. } => Some(mappings),
+            Self::Call { inputs, .. } => Some(inputs),
+            Self::Output { values } | Self::SetVariable { values } => Some(values),
+            _ => None,
         }
     }
 }
@@ -314,7 +395,11 @@ fn default_port() -> Port {
     Port::Out
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A workflow graph. `version` is the format the graph was read in or
+/// created with; it is stored as at least
+/// [`WorkflowGraph::required_version`], so a graph that gained a version 2
+/// shape is never stored as version 1.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowGraph {
     pub version: u32,
@@ -322,10 +407,29 @@ pub struct WorkflowGraph {
     pub edges: Vec<Edge>,
 }
 
+impl Serialize for WorkflowGraph {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Stored<'a> {
+            version: u32,
+            nodes: &'a [Node],
+            edges: &'a [Edge],
+        }
+        Stored {
+            version: self.version.max(self.required_version()),
+            nodes: &self.nodes,
+            edges: &self.edges,
+        }
+        .serialize(serializer)
+    }
+}
+
 impl Default for WorkflowGraph {
+    /// An empty graph in the oldest format; storing it raises the version
+    /// only when it gains newer shapes.
     fn default() -> Self {
         Self {
-            version: GRAPH_VERSION,
+            version: MIN_GRAPH_VERSION,
             nodes: Vec::new(),
             edges: Vec::new(),
         }
@@ -333,6 +437,20 @@ impl Default for WorkflowGraph {
 }
 
 impl WorkflowGraph {
+    /// The lowest format version that can hold this graph: 2 if a node is
+    /// an inline invocation or a mapping uses a variable reference or a
+    /// non-`steps` root in a template, otherwise 1.
+    pub fn required_version(&self) -> u32 {
+        let newer = self.nodes.iter().any(|node| {
+            matches!(node.kind, NodeKind::Invoke { .. })
+                || node
+                    .kind
+                    .mappings()
+                    .is_some_and(|m| m.values().any(Mapping::needs_version_2))
+        });
+        if newer { 2 } else { MIN_GRAPH_VERSION }
+    }
+
     pub fn node(&self, id: &NodeId) -> Option<&Node> {
         self.nodes.iter().find(|n| &n.id == id)
     }

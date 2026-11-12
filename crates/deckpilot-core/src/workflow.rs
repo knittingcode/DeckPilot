@@ -154,6 +154,9 @@ impl Workflow {
         match &self.graph {
             Some(graph) => graph.nodes.iter().any(|node| match &node.kind {
                 crate::graph::NodeKind::Action { action, .. } => changes(*action),
+                crate::graph::NodeKind::Invoke { action_type, .. } => registry
+                    .definition(action_type)
+                    .is_some_and(|definition| definition.node.changes_context),
                 _ => false,
             }),
             None => self.steps.iter().any(|step| changes(step.action)),
