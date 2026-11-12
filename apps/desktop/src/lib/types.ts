@@ -39,6 +39,13 @@ export type ParameterValue =
   | { type: "choice"; value: string }
   | { type: "resource"; value: ResourceRef }
   | { type: "project"; value: string }
+  /**
+   * A whole-value reference without braces, e.g. `shared.projects.favorite`;
+   * resolved when the action runs (docs/action-architecture.md §3.2).
+   */
+  | { type: "reference"; value: string }
+  /** Text with `{{ … }}` references; only for text kinds. */
+  | { type: "template"; value: string }
 
 export type ActionParameters = Record<string, ParameterValue>
 
@@ -766,6 +773,8 @@ export type AgentCapability =
   | "encryptedDatabase"
   | "backgroundExecutions"
   | "notifications"
+  /** Shared variables and references: `listVariables`, `previewReferences`. Protocol 7. */
+  | "variables"
 
 export interface AgentConnection {
   running: boolean
