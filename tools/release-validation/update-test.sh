@@ -209,6 +209,10 @@ wait_for 180 "the app fetched the tampered update" grep -q "GET /tampered.app.ta
 sleep 20
 [ "$(installed_version)" = "$from" ] || fail "the tampered update was installed"
 agent_version_is "$from" || fail "the agent stopped after a rejected update"
+# The app records why, next to the agent's logs (both builds are from this
+# commit).
+grep -q "failed signature verification" "$data/logs/updates.log" 2>/dev/null \
+  || fail "updates.log does not record the rejected signature: $(tail -n 5 "$data/logs/updates.log" 2>&1)"
 echo "rejected: installed $(installed_version), agent: $(status)"
 
 log "2. the signed update is installed ($key_mode)"
