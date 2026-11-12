@@ -9,6 +9,7 @@
 
 mod agent;
 mod commands;
+mod dev_server;
 mod error;
 mod modules;
 mod state;
@@ -37,7 +38,7 @@ fn requested_window() -> Option<String> {
 /// unlocked. If the frontend never asks (it failed to load), it is shown
 /// anyway so the user is not left without a window.
 fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
-    let config = app
+    let mut config = app
         .config()
         .app
         .windows
@@ -45,6 +46,12 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
         .find(|w| w.label == windows::MAIN)
         .cloned()
         .unwrap_or_default();
+    // Development builds without their Vite server: a diagnostic page
+    // instead of a blank window.
+    if let Some(url) = dev_server::fallback_url(app.config(), "") {
+        config.url = url;
+        config.visible = true;
+    }
     WebviewWindowBuilder::from_config(app.handle(), &config)?.build()?;
     let handle = app.handle().clone();
     tauri::async_runtime::spawn(async move {
@@ -64,7 +71,25 @@ fn main() {
     // `--agent`: this executable stands in for the agent (AppImages).
     agent::run_agent_if_requested();
     let window_only = requested_window();
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    if tauri::is_dev() {
+        builder = builder.register_uri_scheme_protocol(dev_server::SCHEME, |ctx, request| {
+            let app = ctx.app_handle();
+            let config = app.config();
+            let session = dev_server::Session {
+                product: config.product_name.clone().unwrap_or_default(),
+                identifier: config.identifier.clone(),
+                data_dir: deckpilot_ipc::AgentPaths::resolve()
+                    .map(|paths| paths.data_dir)
+                    .unwrap_or_default(),
+            };
+            match dev_server::dev_url(config) {
+                Some(dev) => dev_server::respond(dev, &session, &request),
+                None => tauri::http::Response::new(std::borrow::Cow::Borrowed(&b""[..])),
+            }
+        });
+    }
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(updates::UpdateManager::default())
