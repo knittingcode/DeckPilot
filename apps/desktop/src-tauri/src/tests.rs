@@ -803,14 +803,34 @@ fn fresh_installation_has_an_empty_action_library() {
     assert_eq!(
         types,
         [
-            "projects.next",
-            "projects.previous",
+            "projects.cycle",
             "projects.select",
-            "projects.active",
+            "projects.current",
             "projects.repository",
             "projects.documentation",
-            "projects.resolve-resource"
+            "projects.resolve-resource",
+            "projects.next",
+            "projects.previous",
+            "projects.active",
         ]
+    );
+    // Replaced types are marked, so the app does not offer them for new
+    // actions; the flag is left out for every other type.
+    let deprecated: Vec<_> = module("projects")["actionTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["deprecated"] == true)
+        .map(|t| t["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        deprecated,
+        ["projects.next", "projects.previous", "projects.active"]
+    );
+    assert!(
+        module("projects")["actionTypes"][0]
+            .get("deprecated")
+            .is_none()
     );
     assert_eq!(h.ok("migration_notes", json!({})), json!([]));
 }

@@ -1,8 +1,16 @@
-import type { ModuleInfo } from "./types"
+import type { ActionType, ModuleInfo } from "./types"
 
 /** The module that provides an action type, enabled or not. */
 export function moduleOf(modules: ModuleInfo[], typeId: string): ModuleInfo | undefined {
   return modules.find((m) => m.actionTypes.some((t) => t.id === typeId))
+}
+
+/**
+ * The types offered for new actions and workflow nodes: deprecated types
+ * are left out, while saved actions of them keep working and stay editable.
+ */
+export function creatableTypes(types: ActionType[]): ActionType[] {
+  return types.filter((t) => !t.deprecated)
 }
 
 /** Whether the user can switch a module on or off now, and why not. */

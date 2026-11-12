@@ -219,7 +219,9 @@ Protocol 5 runs workflows in the background (see
 [Workflow graphs](workflow-graphs.md#running-in-the-agent)). Protocol 4 added
 the encrypted database; protocol 3 made action results only carry
 `selectProject` effects, with action types in module namespaces
-(`projects.next`). Project switching requests are refused while the projects
+(`projects.next`); a `cycleProject` requested by `projects.cycle` is applied
+by the engine and reported as the `selectProject` it made, so it never
+reaches a client. Project switching requests are refused while the projects
 module is disabled. Events are only sent to clients whose protocol has them.
 Clients negotiate the protocol (stepping down until an older agent accepts
 their `hello`) and never send a request newer than the connection's
