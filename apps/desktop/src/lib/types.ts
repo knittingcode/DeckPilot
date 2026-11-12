@@ -471,6 +471,46 @@ export type Usage =
       control: ControlId
     }
 
+// Safe deletion of actions (deckpilot_storage::references, workstream E).
+
+/** One place that uses an action. */
+export type ReferenceSite =
+  /** A key, dial or touch binding of a layout page. */
+  | { type: "binding"; layout: string; page: string; control: ControlId; trigger: Trigger }
+  /** A step of a step-list workflow (index from 0). */
+  | { type: "step"; workflow: string; index: number }
+  /** An action node of a graph workflow. */
+  | { type: "node"; workflow: string; node: string }
+  /**
+   * A trigger of a workflow that runs the action. Indirect: it follows the
+   * workflow and is never changed by replacing or unbinding.
+   */
+  | { type: "trigger"; workflow: string; index: number }
+
+export type TriggerKind =
+  { type: "schedule"; schedule: Schedule } | { type: "lifecycle"; event: LifecycleEvent }
+
+/** A use of an action, with names for display. */
+export interface ActionReference {
+  site: ReferenceSite
+  /** The layout or workflow name. */
+  ownerName: string
+  /** The page name of a binding, the node label of a node, "paused" for paused triggers. */
+  detail?: string
+  /** The trigger of a `trigger` site. */
+  trigger?: TriggerKind
+}
+
+/** Which uses a replace or unbind acts on. */
+export type ReferenceSelection = { type: "all" } | { type: "sites"; sites: ReferenceSite[] }
+
+/** What a replace or unbind changed. */
+export interface ReferenceChangeResult {
+  changed: ReferenceSite[]
+  /** Steps and nodes whose overrides and mappings were removed: the replacement has another type. */
+  clearedSettings: ReferenceSite[]
+}
+
 export interface ProfileSummary {
   id: string
   name: string
@@ -944,6 +984,22 @@ export interface ImportPreview {
   localProfiles: [string, string][]
   /** Portable application settings in the export. */
   settings: AppSettings
+  /** Shared variables in the export (deckpilot_portability::VariablesPreview). */
+  variables: ImportVariablesPreview
+}
+
+/** The shared variables an import brings. */
+export interface ImportVariablesPreview {
+  /** Variables that do not exist here and would be created. */
+  new: string[]
+  /** Variables that exist here with the same type; the local definition is kept. */
+  existing: string[]
+  /** Variables whose type differs from the local one; their values are not imported. */
+  incompatible: string[]
+  /** Values of profiles and projects. */
+  values: number
+  /** Global values, applied only with the application settings. */
+  globalValues: number
 }
 
 export type ImportMode = "merge" | "replace"
@@ -977,6 +1033,12 @@ export interface ImportSummary {
   renamed: string[]
   modules: string[]
   settings: string[]
+  /** Shared variables that were created. */
+  variables: string[]
+  /** Number of shared variable values that were set. */
+  variableValues: number
+  /** Values that were not imported, and why. */
+  skippedValues: string[]
 }
 
 // Shared variables and references (deckpilot_core::variables). Contract

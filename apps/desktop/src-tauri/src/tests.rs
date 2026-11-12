@@ -1342,13 +1342,15 @@ fn legacy_databases_are_encrypted_on_request() {
 }
 
 /// The export file reveals nothing of its content: neither the plaintext
-/// header nor the (base64-decoded) ciphertext contains the serialized
-/// profile, and machine values are not even in the decrypted payload.
+/// header nor the (base64-decoded) ciphertext contains any of `hidden`,
+/// which the decrypted payload must contain, and none of `machine` (values
+/// of this computer) is even in the decrypted payload.
 ///
-/// The needles are long, structured strings taken from the plaintext, so
-/// a random match is practically impossible (searching for a short word
-/// such as "Work" in base64 text matches by chance now and then).
-fn assert_export_hides_its_content(bytes: &[u8], password: &str) {
+/// Pass structured strings of the payload (with quotes, dots or slashes,
+/// which base64 never produces), so a random match is practically
+/// impossible: a short word such as "Work" matches base64 text by chance
+/// now and then.
+fn assert_export_hides(bytes: &[u8], password: &str, hidden: &[&str], machine: &[&str]) {
     use base64::Engine as _;
     let contains = |haystack: &[u8], needle: &str| {
         haystack
@@ -1376,7 +1378,6 @@ fn assert_export_hides_its_content(bytes: &[u8], password: &str) {
     )
     .unwrap();
     let plaintext = serde_json::to_string(&payload).unwrap();
-    let hidden = [r#""name":"Work""#, r#""key":"SHOP""#, "shop.repository"];
     for needle in hidden {
         // Meaningful: the payload holds exactly this text.
         assert!(plaintext.contains(needle), "{needle} is not in the payload");
@@ -1388,9 +1389,18 @@ fn assert_export_hides_its_content(bytes: &[u8], password: &str) {
         assert!(!contains(bytes, needle), "the file shows {needle}");
     }
     // Machine values are never exported at all.
-    let machine = "/private/machine/path";
-    assert!(!plaintext.contains(machine));
-    assert!(!contains(bytes, machine));
+    for value in machine {
+        assert!(!plaintext.contains(value), "the payload holds {value}");
+        assert!(!contains(bytes, value), "the file shows {value}");
+    }
+}
+
+/// A fresh export password for one test, generated so that it is never a
+/// constant that could pass for (or be reused as) a real credential.
+fn generated_export_password() -> String {
+    let mut bytes = [0u8; 16];
+    deckpilot_storage::crypto::random_bytes(&mut bytes).unwrap();
+    format!("test-export-{:032x}", u128::from_le_bytes(bytes))
 }
 
 #[test]
@@ -1407,14 +1417,20 @@ fn configuration_round_trips_through_an_encrypted_export() {
     );
     let file = h.paths.data_dir.join("work.deckpilot");
     let path = file.display().to_string();
+    let export_password = generated_export_password();
     h.ok("authenticate", json!({ "password": PASSWORD }));
     let result = h.ok(
         "export_configuration",
-        json!({ "request": { "path": path, "password": "export secret", "confirmation": "export secret", "profiles": null, "includeModuleSettings": true } }),
+        json!({ "request": { "path": path, "password": export_password, "confirmation": export_password, "profiles": null, "includeModuleSettings": true } }),
     );
     assert_eq!(result["profiles"], 1);
     let bytes = std::fs::read(&file).unwrap();
-    assert_export_hides_its_content(&bytes, "export secret");
+    assert_export_hides(
+        &bytes,
+        &export_password,
+        &[r#""name":"Work""#, r#""key":"SHOP""#, "shop.repository"],
+        &["/private/machine/path"],
+    );
 
     assert!(
         h.error(
@@ -1432,7 +1448,7 @@ fn configuration_round_trips_through_an_encrypted_export() {
     assert!(
         h.call(
             "preview_import",
-            json!({ "path": tampered_path.display().to_string(), "password": "export secret" })
+            json!({ "path": tampered_path.display().to_string(), "password": export_password })
         )
         .is_err()
     );
@@ -1440,7 +1456,7 @@ fn configuration_round_trips_through_an_encrypted_export() {
     // Importing into the same installation: a conflict, kept as a copy.
     let preview = h.ok(
         "preview_import",
-        json!({ "path": path, "password": "export secret" }),
+        json!({ "path": path, "password": export_password }),
     );
     assert_eq!(
         preview["preview"]["profiles"][0]["conflict"]["type"],
@@ -1602,6 +1618,7 @@ fn a_fresh_install_opens_without_a_password() {
 
 #[test]
 fn sensitive_operations_need_a_fresh_authentication() {
+    let export_password = generated_export_password();
     let paths = Harness::temp_paths();
     let keys = MemoryKeyStore::new();
     let (_runtime, _mock) = start_agent_with(&paths, Some(keys));
@@ -1613,7 +1630,7 @@ fn sensitive_operations_need_a_fresh_authentication() {
         let path = h.paths.data_dir.join("all.deckpilot").display().to_string();
         h.call(
             "export_configuration",
-            json!({ "request": { "path": path, "password": "export secret", "confirmation": "export secret", "profiles": null, "includeModuleSettings": true } }),
+            json!({ "request": { "path": path, "password": export_password, "confirmation": export_password, "profiles": null, "includeModuleSettings": true } }),
         )
     };
     assert_eq!(export().unwrap_err(), "authentication required");
@@ -1919,11 +1936,17 @@ fn rich_profile(h: &Harness, name: &str) -> deckpilot_core::Profile {
     profile
 }
 
-fn export_to(h: &Harness, file: &std::path::Path, password: Option<&str>) -> Value {
+/// Exports everything to `file`, protected by `export_password`.
+fn export_to(
+    h: &Harness,
+    file: &std::path::Path,
+    password: Option<&str>,
+    export_password: &str,
+) -> Value {
     h.ok("authenticate", json!({ "password": password }));
     h.ok(
         "export_configuration",
-        json!({ "request": { "path": file.display().to_string(), "password": "export secret", "confirmation": "export secret", "profiles": null, "includeModuleSettings": true, "includeAppSettings": true } }),
+        json!({ "request": { "path": file.display().to_string(), "password": export_password, "confirmation": export_password, "profiles": null, "includeModuleSettings": true, "includeAppSettings": true } }),
     )
 }
 
@@ -1935,6 +1958,7 @@ fn database_is_encrypted(paths: &AgentPaths) -> bool {
 #[test]
 fn a_system_key_installation_moves_to_a_password_installation() {
     use deckpilot_storage::ConfigStore as _;
+    let export_password = generated_export_password();
 
     // Source: system-managed key, Touch ID.
     let source_paths = Harness::temp_paths();
@@ -1955,17 +1979,20 @@ fn a_system_key_installation_moves_to_a_password_installation() {
         json!({ "preferences": { "mode": "downloadAndAsk", "automaticChecks": false, "checkIntervalHours": 48, "lastCheck": null } }),
     );
     let file = source.paths.data_dir.join("work.deckpilot");
-    let result = export_to(&source, &file, None);
+    let result = export_to(&source, &file, None, &export_password);
     assert_eq!(result["profiles"], 1);
     let bytes = std::fs::read(&file).unwrap();
-    for secret in [
-        &b"Work"[..],
-        b"SHOP",
-        b"/source/machine/shop",
-        b"downloadAndAsk",
-    ] {
-        assert!(!bytes.windows(secret.len()).any(|w| w == secret));
-    }
+    assert_export_hides(
+        &bytes,
+        &export_password,
+        &[
+            r#""name":"Work""#,
+            r#""key":"SHOP""#,
+            "shop.repository",
+            r#""mode":"downloadAndAsk""#,
+        ],
+        &["/source/machine/shop"],
+    );
     assert_eq!(source_keys.ids().len(), 1);
 
     // Target: password protection, its own binding for the same resource.
@@ -1984,7 +2011,7 @@ fn a_system_key_installation_moves_to_a_password_installation() {
     );
     let preview = target.ok(
         "preview_import",
-        json!({ "path": file.display().to_string(), "password": "export secret" }),
+        json!({ "path": file.display().to_string(), "password": export_password }),
     );
     assert_eq!(
         preview["preview"]["settings"]["updates"]["mode"],
@@ -2035,18 +2062,19 @@ fn a_system_key_installation_moves_to_a_password_installation() {
 
     // And back: a password installation exports as well.
     let back = target.paths.data_dir.join("back.deckpilot");
-    export_to(&target, &back, Some(PASSWORD));
+    export_to(&target, &back, Some(PASSWORD), &export_password);
     assert!(back.exists());
     assert_eq!(source_keys.ids().len(), 1, "no credential was touched");
 }
 
 #[test]
 fn replacing_with_selected_profiles() {
+    let export_password = generated_export_password();
     let source = Harness::new();
     let home = rich_profile(&source, "Home");
     let work = rich_profile(&source, "Work 2");
     let file = source.paths.data_dir.join("both.deckpilot");
-    export_to(&source, &file, Some(PASSWORD));
+    export_to(&source, &file, Some(PASSWORD), &export_password);
 
     let target = Harness::new();
     let local = new_profile(&target, "Local");
@@ -2056,7 +2084,7 @@ fn replacing_with_selected_profiles() {
     );
     let preview = target.ok(
         "preview_import",
-        json!({ "path": file.display().to_string(), "password": "export secret" }),
+        json!({ "path": file.display().to_string(), "password": export_password }),
     );
     assert_eq!(preview["preview"]["localProfiles"][0][0], json!(local));
     let summary = target.ok(
@@ -2124,17 +2152,18 @@ fn hostile_archives_are_rejected_without_changes() {
 
 #[test]
 fn a_failed_import_changes_nothing_and_can_be_retried() {
+    let export_password = generated_export_password();
     let source = Harness::new();
     rich_profile(&source, "Imported");
     let file = source.paths.data_dir.join("one.deckpilot");
-    export_to(&source, &file, Some(PASSWORD));
+    export_to(&source, &file, Some(PASSWORD), &export_password);
 
     let target = Harness::new();
     new_profile(&target, "Existing");
     let preview = |h: &Harness| {
         h.ok(
             "preview_import",
-            json!({ "path": file.display().to_string(), "password": "export secret" }),
+            json!({ "path": file.display().to_string(), "password": export_password }),
         )
     };
     let first = preview(&target);
@@ -2183,6 +2212,7 @@ fn a_failed_import_changes_nothing_and_can_be_retried() {
 
 #[test]
 fn credentials_are_never_read_back_or_exported() {
+    let export_password = generated_export_password();
     let source = Harness::new();
     new_profile(&source, "Work");
     let listed = source.ok(
@@ -2213,11 +2243,11 @@ fn credentials_are_never_read_back_or_exported() {
     );
 
     let file = source.paths.data_dir.join("credentials.deckpilot");
-    export_to(&source, &file, Some(PASSWORD));
+    export_to(&source, &file, Some(PASSWORD), &export_password);
     let target = Harness::new();
     let preview = target.ok(
         "preview_import",
-        json!({ "path": file.display().to_string(), "password": "export secret" }),
+        json!({ "path": file.display().to_string(), "password": export_password }),
     );
     let profile = preview["preview"]["profiles"][0]["id"].clone();
     target.ok(
