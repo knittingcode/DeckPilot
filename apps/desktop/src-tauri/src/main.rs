@@ -61,6 +61,8 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
 }
 
 fn main() {
+    // `--agent`: this executable stands in for the agent (AppImages).
+    agent::run_agent_if_requested();
     let window_only = requested_window();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

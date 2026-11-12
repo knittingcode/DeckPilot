@@ -206,9 +206,16 @@ fn header<'h>(headers: &'h [(String, String)], name: &str) -> Option<&'h str> {
 
 /// How long to wait when an answer says the rate limit is reached: a
 /// secondary limit's `Retry-After`, or the primary limit's reset time
-/// when no requests remain. `None` when the answer is not about the rate
+/// when no requests remain, or a minute for a 429 or a 403 whose
+/// `message` is about the rate limit (GitHub's secondary limits may come
+/// without either header). `None` when the answer is not about the rate
 /// limit.
-pub fn rate_limit_wait(status: u16, headers: &[(String, String)], now: u64) -> Option<u64> {
+pub fn rate_limit_wait(
+    status: u16,
+    headers: &[(String, String)],
+    message: Option<&str>,
+    now: u64,
+) -> Option<u64> {
     if status != 403 && status != 429 {
         return None;
     }
@@ -220,7 +227,8 @@ pub fn rate_limit_wait(status: u16, headers: &[(String, String)], now: u64) -> O
         let reset = header(headers, "x-ratelimit-reset").and_then(|v| v.parse::<u64>().ok());
         return Some(reset.map_or(60, |reset| reset.saturating_sub(now)));
     }
-    (status == 429).then_some(60)
+    let about_the_limit = message.is_some_and(|m| m.to_ascii_lowercase().contains("rate limit"));
+    (status == 429 || about_the_limit).then_some(60)
 }
 
 /// The `rel="next"` target of a `Link` header.
@@ -441,20 +449,22 @@ impl<'a> Api<'a> {
 
     fn status_failure(&self, response: &client::Response, what: &str) -> Failure {
         let status = response.status;
-        let detail = serde_json::from_slice::<Value>(&response.body)
+        let message = serde_json::from_slice::<Value>(&response.body)
             .ok()
             .and_then(|v| {
                 v.get("message")
                     .and_then(Value::as_str)
                     .map(|m| clean(m, 200))
             })
-            .filter(|m| !m.is_empty())
+            .filter(|m| !m.is_empty());
+        let detail = message
+            .as_deref()
             .map(|m| format!(": {m}"))
             .unwrap_or_default();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
-        if let Some(wait) = rate_limit_wait(status, &response.headers, now) {
+        if let Some(wait) = rate_limit_wait(status, &response.headers, message.as_deref(), now) {
             return fail(
                 codes::RATE_LIMITED,
                 format!("GitHub's rate limit is reached; try again in {wait} s"),
@@ -639,21 +649,46 @@ mod tests {
                     ("x-ratelimit-remaining", "0"),
                     ("x-ratelimit-reset", "1100")
                 ]),
+                None,
                 1000
             ),
             Some(100)
         );
         assert_eq!(
-            rate_limit_wait(429, &headers(&[("retry-after", "30")]), 0),
+            rate_limit_wait(429, &headers(&[("retry-after", "30")]), None, 0),
             Some(30)
         );
-        assert_eq!(rate_limit_wait(429, &[], 0), Some(60));
+        assert_eq!(rate_limit_wait(429, &[], None, 0), Some(60));
         assert_eq!(
-            rate_limit_wait(403, &headers(&[("x-ratelimit-remaining", "12")]), 0),
+            rate_limit_wait(403, &headers(&[("x-ratelimit-remaining", "12")]), None, 0),
             None
         );
         assert_eq!(
-            rate_limit_wait(500, &headers(&[("retry-after", "1")]), 0),
+            rate_limit_wait(
+                403,
+                &[],
+                Some("Resource not accessible by personal access token"),
+                0
+            ),
+            None
+        );
+        // A secondary limit without Retry-After.
+        assert_eq!(
+            rate_limit_wait(
+                403,
+                &headers(&[("x-ratelimit-remaining", "4990")]),
+                Some("You have exceeded a secondary rate limit. Please wait a few minutes."),
+                0
+            ),
+            Some(60)
+        );
+        assert_eq!(
+            rate_limit_wait(
+                500,
+                &headers(&[("retry-after", "1")]),
+                Some("rate limit"),
+                0
+            ),
             None
         );
 

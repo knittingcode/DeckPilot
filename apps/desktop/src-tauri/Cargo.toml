@@ -33,6 +33,7 @@ tokio.workspace = true
 [dev-dependencies]
 deckpilot-keystore.workspace = true
 deckpilot-agent = { path = "../../agent" }
+minisign = "0.10"
 tauri = { workspace = true, features = ["test"] }
 
 [lints]
