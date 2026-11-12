@@ -22,7 +22,9 @@ use tauri::{AppHandle, Manager};
 use deckpilot_ipc::AgentPaths;
 use deckpilot_presence::Unavailable;
 
-use super::{Phase, Source, UPDATE_LOG, UpdateManager, check_from, download, may_start};
+use deckpilot_update::channel::Channel;
+
+use super::{Endpoint, Phase, Source, UPDATE_LOG, UpdateManager, check_from, download, may_start};
 use crate::state::AppState;
 
 /// The announced version: newer than any real one.
@@ -142,10 +144,14 @@ fn sign(keys: &Keys, data: &[u8], version: &str) -> String {
 }
 
 fn manifest(server: &Server, signature: &str) -> Vec<u8> {
+    manifest_of(server, signature, VERSION)
+}
+
+fn manifest_of(server: &Server, signature: &str, version: &str) -> Vec<u8> {
     let platform = json!({ "url": server.url("package"), "signature": signature });
     let target = deckpilot_update::manifest::current_target();
     serde_json::to_vec(&json!({
-        "version": VERSION,
+        "version": version,
         "notes": "Test update",
         "pub_date": "2026-11-12T00:00:00Z",
         "platforms": {
@@ -192,7 +198,8 @@ impl Harness {
         let keys = keys();
         let source = Source {
             key: keys.public.clone(),
-            endpoint: server.url("latest.json"),
+            endpoint: Endpoint::Manifest(server.url("latest.json")),
+            channel: Channel::Stable,
             connect_timeout: Duration::from_secs(5),
             read_timeout: Duration::from_secs(1),
             executable: Some(dir.join("DeckPilot.app/Contents/MacOS/deckpilot-desktop")),
@@ -281,6 +288,105 @@ fn a_correctly_signed_update_is_downloaded_and_verified() {
         Some(&package[..])
     );
     assert!(h.log().contains("signature verified"), "{}", h.log());
+}
+
+/// The prerelease channel reads GitHub's release list from the server.
+fn prerelease_channel(h: &mut Harness) {
+    h.source.channel = Channel::Prerelease;
+    h.source.endpoint = Endpoint::Releases {
+        list: h.server.url("releases"),
+        downloads: h.server.url(""),
+    };
+}
+
+fn releases(list: &[(&str, bool, bool)]) -> Reply {
+    let list: Vec<_> = list
+        .iter()
+        .map(|(tag, draft, prerelease)| json!({"tag_name": tag, "draft": draft, "prerelease": prerelease}))
+        .collect();
+    Reply::Ok(serde_json::to_vec(&list).unwrap())
+}
+
+#[test]
+fn the_stable_channel_never_installs_a_pre_release() {
+    let h = Harness::new();
+    let package = b"pre-release package".to_vec();
+    // Even if a pre-release manifest were served as latest.json.
+    let pre = "99.0.0-beta.1";
+    h.server.reply(
+        "latest.json",
+        Reply::Ok(manifest_of(&h.server, &sign(&h.keys, &package, pre), pre)),
+    );
+    h.server.reply("package", Reply::Ok(package));
+    assert_eq!(h.check(), Ok(None));
+    assert_eq!(h.phase(), Phase::Idle);
+}
+
+#[test]
+fn the_prerelease_channel_offers_the_newest_release_and_moves_on_to_stable() {
+    let mut h = Harness::new();
+    prerelease_channel(&mut h);
+    let package = b"pre-release package".to_vec();
+    let alpha = "99.0.0-alpha.2";
+    h.server.reply(
+        "releases",
+        releases(&[
+            ("v99.0.0-beta.1", true, true), // a draft: never offered
+            ("v99.0.0-alpha.2", false, true),
+            ("v99.0.0-alpha.1", false, true),
+            ("v0.5.0-2", true, true),
+        ]),
+    );
+    h.server.reply(
+        "v99.0.0-alpha.2/prerelease.json",
+        Reply::Ok(manifest_of(
+            &h.server,
+            &sign(&h.keys, &package, alpha),
+            alpha,
+        )),
+    );
+    h.server.reply("package", Reply::Ok(package.clone()));
+    assert_eq!(h.check(), Ok(Some(alpha.to_owned())));
+    h.download().unwrap();
+    assert_eq!(h.phase(), Phase::Ready);
+
+    // Once the stable release is out, it is what the channel offers.
+    h.server.reply(
+        "releases",
+        releases(&[("v99.0.0", false, false), ("v99.0.0-alpha.2", false, true)]),
+    );
+    h.server.reply(
+        "v99.0.0/latest.json",
+        Reply::Ok(manifest(&h.server, &sign(&h.keys, &package, VERSION))),
+    );
+    assert_eq!(h.check(), Ok(Some(VERSION.to_owned())));
+
+    // Nothing newer than the running version: nothing is offered and no
+    // manifest is read.
+    h.server
+        .reply("releases", releases(&[("v0.0.1", false, false)]));
+    h.server.reply("v0.0.1/latest.json", Reply::Status(500));
+    assert_eq!(h.check(), Ok(None));
+    assert_eq!(h.shown_error(), None);
+}
+
+#[test]
+fn an_unreadable_release_list_fails_the_check_cleanly() {
+    let mut h = Harness::new();
+    prerelease_channel(&mut h);
+    for reply in [
+        Reply::Status(403),
+        Reply::Ok(b"<html>Sign in to the network</html>".to_vec()),
+    ] {
+        h.server.reply("releases", reply);
+        let error = h.check().unwrap_err();
+        assert!(
+            error.contains("list of DeckPilot releases on GitHub could not be read"),
+            "{error}"
+        );
+        assert_eq!(h.phase(), Phase::Idle);
+        assert!(h.log().contains(&error));
+    }
 }
 
 #[test]

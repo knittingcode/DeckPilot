@@ -460,6 +460,29 @@ layout bindings stay as they are.
 A test migrates every case and checks that ids, order and layout bindings are
 unchanged.
 
+## Deleting actions safely
+
+An action is deleted only when nothing uses it. `SqliteStore::
+action_references` lists every use in the profile: layout bindings (layout,
+page, control, trigger), steps of step-list workflows, action nodes of graph
+workflows, and — as indirect uses — the triggers of each workflow that runs
+the action. `delete_action` refuses with `ActionInUse` and that list while
+any use remains, and changes nothing.
+
+Uses are removed only by an explicit choice, for all uses or for selected
+ones (each must still be a current use, else nothing changes):
+
+- `replace_action_references(from, to)` points bindings, steps and nodes at
+  another action of the profile. Step overrides and node overrides and
+  mappings are kept when both actions have the same type, and cleared
+  (reported in `clearedSettings`) when the type differs.
+- `unbind_action` clears the key bindings (the control becomes empty) and
+  removes the steps. Graph nodes are refused: they are part of a connected
+  graph, so they are replaced or removed in the workflow editor.
+
+Each operation loads, changes and saves the profile in one transaction.
+Triggers are never changed here; they follow their workflow.
+
 ## Compatibility between versions
 
 - A DeckPilot build reads every older schema and upgrades it; it **refuses to

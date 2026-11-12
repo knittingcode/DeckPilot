@@ -14,6 +14,7 @@ pub mod credentials;
 pub mod device_runtime;
 pub mod execution;
 pub mod face;
+pub mod gesture;
 pub mod graph;
 pub mod history;
 pub mod id;
@@ -27,10 +28,12 @@ pub mod process;
 pub mod profile;
 pub mod project;
 pub mod registry;
+pub mod resolution;
 pub mod resource;
 pub mod runtime;
 pub mod trigger;
 pub mod variables;
+pub mod work_session;
 pub mod workflow;
 
 #[cfg(test)]
@@ -64,7 +67,8 @@ pub use history::{
     safe_event, safe_report,
 };
 pub use id::{
-    ActionInstanceId, ExecutionId, IconId, LayoutId, PageId, ProfileId, ProjectId, WorkflowId,
+    ActionInstanceId, ExecutionId, IconId, LayoutId, PageId, ProfileId, ProjectId, VerificationId,
+    WorkSessionId, WorkflowId,
 };
 pub use layout::{BindingTarget, ControlBinding, DeviceLayout, LayoutIssue, LayoutPage, Trigger};
 pub use module::{

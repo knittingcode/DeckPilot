@@ -163,13 +163,13 @@ impl SqliteStore {
     /// verified and recorded in `migration_history`.
     pub fn open(path: impl AsRef<Path>, encryption: &Encryption) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let connection = Connection::open(&path)?;
+        let connection = crate::engine::open(&path)?;
         Self::init(connection, Some(path), encryption)
     }
 
     /// Opens a private in-memory database. Useful for tests.
     pub fn open_in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?, None, &Encryption::None)
+        Self::init(crate::engine::open_in_memory()?, None, &Encryption::None)
     }
 
     fn init(
@@ -755,6 +755,77 @@ impl SqliteStore {
     }
 }
 
+/// Safe deletion of actions. See [`crate::references`].
+impl SqliteStore {
+    /// Loads `profile`, applies `change` and saves the result, all in one
+    /// transaction; nothing is written when `change` fails.
+    fn change_profile<T>(
+        &self,
+        profile: ProfileId,
+        change: impl FnOnce(&mut Profile) -> Result<T>,
+    ) -> Result<T> {
+        let tx = self.write_transaction()?;
+        let mut document = self
+            .load_profile(profile)?
+            .ok_or(StorageError::UnknownProfile)?;
+        let result = change(&mut document)?;
+        write_profile(&tx, &document)?;
+        tx.commit()?;
+        Ok(result)
+    }
+
+    /// Every place in `profile` that uses `action`: key bindings, workflow
+    /// steps and nodes, and the triggers of those workflows.
+    pub fn action_references(
+        &self,
+        profile: ProfileId,
+        action: deckpilot_core::ActionInstanceId,
+    ) -> Result<Vec<crate::references::ActionReference>> {
+        let document = self
+            .load_profile(profile)?
+            .ok_or(StorageError::UnknownProfile)?;
+        Ok(crate::references::action_references(&document, action))
+    }
+
+    /// Deletes `action` if nothing uses it; otherwise
+    /// [`StorageError::ActionInUse`] lists the uses and nothing changes.
+    pub fn delete_action(
+        &self,
+        profile: ProfileId,
+        action: deckpilot_core::ActionInstanceId,
+    ) -> Result<deckpilot_core::ActionInstance> {
+        self.change_profile(profile, |document| {
+            crate::references::delete_action(document, action)
+        })
+    }
+
+    /// Points the selected uses of `from` at `to`, in one transaction.
+    pub fn replace_action_references(
+        &self,
+        profile: ProfileId,
+        from: deckpilot_core::ActionInstanceId,
+        to: deckpilot_core::ActionInstanceId,
+        selection: &crate::references::Selection,
+    ) -> Result<crate::references::ReferenceChange> {
+        self.change_profile(profile, |document| {
+            crate::references::replace_action(document, from, to, selection)
+        })
+    }
+
+    /// Removes the selected key bindings and steps that use `action`, in
+    /// one transaction. Graph nodes are refused.
+    pub fn unbind_action(
+        &self,
+        profile: ProfileId,
+        action: deckpilot_core::ActionInstanceId,
+        selection: &crate::references::Selection,
+    ) -> Result<crate::references::ReferenceChange> {
+        self.change_profile(profile, |document| {
+            crate::references::unbind_action(document, action, selection)
+        })
+    }
+}
+
 /// `backups/` next to the database file.
 pub fn backup_dir(database: &Path) -> PathBuf {
     database
@@ -922,6 +993,9 @@ pub(crate) fn export_database(
     target: &Path,
     key: Option<&DatabaseKey>,
 ) -> Result<()> {
+    // Never attempt the export on a connection that cannot do it: refused
+    // before the target is touched.
+    crate::engine::check_complete(connection)?;
     if target.exists() {
         std::fs::remove_file(target).map_err(StorageError::Io)?;
     }
@@ -952,7 +1026,7 @@ pub(crate) fn export_database(
 
 /// Opens `path` with `encryption` and checks integrity and schema version.
 pub(crate) fn verify_copy(path: &Path, encryption: &Encryption, version: u32) -> Result<()> {
-    let connection = Connection::open(path)?;
+    let connection = crate::engine::open(path)?;
     apply_key(&connection, encryption)?;
     check_integrity(&connection)?;
     let found: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;

@@ -578,7 +578,8 @@ fn unresolved_references_fail_the_node_without_values() {
     assert_eq!(status(&report, "never"), NodeStatus::Skipped);
     assert_eq!(f.ran(), Vec::<String>::new());
 
-    // Without a resolver the same references are unavailable.
+    // A plain run uses the engine's own resolver: without a variable
+    // store the variable does not exist.
     let report = f.run(workflow);
     assert_eq!(
         report
@@ -588,7 +589,7 @@ fn unresolved_references_fail_the_node_without_values() {
             .as_ref()
             .unwrap()
             .code,
-        "reference-unavailable"
+        "reference-missing"
     );
 }
 
