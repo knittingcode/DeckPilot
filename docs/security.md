@@ -294,8 +294,28 @@ applied) and the logical resource keys the profiles use with their kinds.
 It never contains machine paths or application locations, the database key
 or anything from the credential store, passwords, IPC tokens, the security
 policy (importing it could weaken another computer's protection), runtime
-state (such as the time of the last update check) or caches. Exporting works
-the same in both protection modes and asks for authentication first.
+state (such as the time of the last update check) or caches. Stored
+credentials (the secrets modules use by name) are not exported, secrets or
+descriptions: a module setting such as GitHub's `credential` carries only the
+credential's *name*, and each computer stores its own secret. Module settings
+a module declares machine-specific or sensitive are never exported, and are
+dropped when a (hand-made) export carries them anyway. Exporting works the
+same in both protection modes and asks for authentication first.
+
+`crates/deckpilot-portability/tests/no_secrets_in_exports.rs` checks this
+with marked values. It fills a store with credentials, machine-specific
+module settings, machine paths, security settings and runtime state, then
+asserts that none of them appear in the payload or the sealed archive (in
+which not even profile names are readable). It also checks that importing
+never adds or replaces a credential, even from a crafted export, that
+exporting one profile contains nothing of the others, and that imported
+copies get their own identifiers, so projects and active-project selections
+never cross profiles.
+
+A secret the user types into an ordinary text parameter of an action is
+configuration like any other text and is exported with its profile. The
+HTTP module refuses secret headers and query parameters written into a
+workflow for this reason; credentials are the place for secrets.
 
 ### Importing
 
