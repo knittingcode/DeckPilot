@@ -1,4 +1,5 @@
-//! Upgrading a DeckPilot 0.6.0 database (schema 7) to schema 8.
+//! Upgrading a DeckPilot 0.6.0 database (schema 7) to the current schema
+//! (9: shared variables and provenance in 8, work sessions in 9).
 //!
 //! `fixtures/v0.6.0/` was created by the 0.6.0 tools (`deckpilot-dev
 //! validation seed`, `main` before schema 8) with the development password,
@@ -72,9 +73,9 @@ fn copy() -> Copy {
 fn upgrading_keeps_every_kind_of_data() {
     let copy = copy();
     let store = copy.open().unwrap();
-    assert_eq!(store.schema_version().unwrap(), 8);
+    assert_eq!(store.schema_version().unwrap(), 9);
     let upgrade = store.migration_history().unwrap().pop().unwrap();
-    assert_eq!((upgrade.from_version, upgrade.to_version), (7, 8));
+    assert_eq!((upgrade.from_version, upgrade.to_version), (7, 9));
     assert_eq!(upgrade.result, "ok");
 
     let mut profiles: Vec<_> = store
@@ -209,22 +210,22 @@ fn the_backup_restores_the_schema_7_database() {
 }
 
 #[test]
-fn a_schema_8_database_is_refused_by_a_build_that_supports_less() {
-    // What 0.6.0 does with a schema 8 database is what this build does with
-    // a newer one: refuse it and leave the file as it is.
+fn a_newer_database_is_refused_by_a_build_that_supports_less() {
+    // What 0.6.0 does with a schema 8 or 9 database is what this build does
+    // with a newer one: refuse it and leave the file as it is.
     let copy = copy();
     let store = copy.open().unwrap();
     store
         .connection_for_tests()
-        .pragma_update(None, "user_version", 9)
+        .pragma_update(None, "user_version", 10)
         .unwrap();
     drop(store);
     let before = std::fs::read(copy.database()).unwrap();
     assert!(matches!(
         copy.open(),
         Err(StorageError::UnsupportedSchema {
-            found: 9,
-            supported: 8
+            found: 10,
+            supported: 9
         })
     ));
     assert!(
