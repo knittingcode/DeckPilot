@@ -20,7 +20,7 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { api, errorMessage } from "@/lib/api"
-import { moduleOf } from "@/lib/modules"
+import { creatableTypes, moduleOf } from "@/lib/modules"
 import { buildParameters, initialValue, missingRequired } from "@/lib/parameters"
 import type {
   ActionInstance,
@@ -89,16 +89,21 @@ export function ActionEditor({
   onChangeType?: () => void
   onOpenUsage?: (usage: Usage) => void
 }) {
-  const usable = modules.filter((m) => m.enabled && m.supported && m.actionTypes.length > 0)
+  const usable = modules.filter(
+    (m) => m.enabled && m.supported && creatableTypes(m.actionTypes).length > 0,
+  )
   const chosenType = action?.actionType ?? initialType
   const owner = chosenType ? moduleOf(modules, chosenType) : undefined
   const unavailable = Boolean(action) && !owner?.enabled
   const [moduleId, setModuleId] = useState(owner?.id ?? (usable.length === 1 ? usable[0]?.id : ""))
   const module = modules.find((m) => m.id === moduleId)
+  // Every type, so a saved action of a deprecated type still finds its own.
   const types: ActionType[] = module?.actionTypes ?? []
   // A module with a single action type needs no second choice.
-  const onlyType = (m: ModuleInfo | undefined) =>
-    m?.actionTypes.length === 1 ? (m.actionTypes[0]?.id ?? "") : ""
+  const onlyType = (m: ModuleInfo | undefined) => {
+    const offered = creatableTypes(m?.actionTypes ?? [])
+    return offered.length === 1 ? (offered[0]?.id ?? "") : ""
+  }
   const [typeId, setTypeId] = useState(chosenType ?? onlyType(module))
   const type = types.find((t) => t.id === typeId)
   const [name, setName] = useState(action?.name ?? "")
@@ -234,7 +239,7 @@ export function ActionEditor({
                 <SelectValue placeholder={module ? "Choose a type" : "Choose a module first"} />
               </SelectTrigger>
               <SelectContent>
-                {types.map((t) => (
+                {creatableTypes(types).map((t) => (
                   <SelectItem key={t.id} value={t.id}>
                     {t.name}
                   </SelectItem>
