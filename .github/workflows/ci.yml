@@ -105,18 +105,6 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
         timeout-minutes: 25
-      # TEMPORARY (removed before merge): repeats the update flow tests to
-      # show the retry flake is gone on Windows.
-      - name: TEMPORARY update flow tests, 30 times
-        if: runner.os == 'Windows'
-        shell: bash
-        timeout-minutes: 20
-        run: |
-          for i in $(seq 1 30); do
-            cargo test --locked -p deckpilot-desktop flow_tests -- --quiet \
-              || { echo "::error::update flow tests failed in run $i of 30"; exit 1; }
-          done
-          echo "update flow tests passed 30 times"
       # The guided hardware test, run against a simulated MK.2 with the real
       # agent: checks the procedure (not hardware).
       - name: Hardware test procedure (simulated device)
