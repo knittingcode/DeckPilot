@@ -82,7 +82,7 @@ exist yet.
 
 | Situation                        | Behaviour                                                        |
 | -------------------------------- | ---------------------------------------------------------------- |
-| Agent starts                     | Takes an exclusive lock on `agent.lock`; a second instance exits |
+| Agent starts                     | Takes an exclusive lock on `agent.lock`; a second instance exits (after waiting up to 5 s, see below) |
 | Configuration app starts         | Connects to the running agent, or starts it if it is not running |
 | Configuration app closes         | Agent keeps running                                              |
 | Device unplugged                 | Device marked disconnected; agent keeps running                  |
@@ -90,7 +90,12 @@ exist yet.
 | Quit (tray), `Shutdown` request, Ctrl+C, SIGTERM | Keys blanked, IPC closed, token removed, lock released |
 
 The lock is an OS file lock, so it is released automatically if the process
-crashes.
+crashes. A starting agent waits up to 5 seconds for the lock before it
+concludes that another agent is running: a stopping agent closes its
+endpoint before it has finished and released the lock, and a restart (the
+app's "restart agent", an update) starts the next agent as soon as the
+endpoint is gone. After a crash the new agent replaces the stale socket
+file and token; the old token is no longer accepted.
 
 ### Start at login
 
