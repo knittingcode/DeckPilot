@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::graph::executor::{Executor, NestedRun, RunStatus};
+use crate::graph::executor::{Executor, NestedRun, RunServices, RunStatus};
 use crate::graph::{
     CancellationToken, ExecutionEvent, ExecutionLimits, GraphReport, IssueSeverity, MAX_NESTING,
     WorkflowGraph,
@@ -320,7 +320,14 @@ impl Engine {
         if definition.graph.is_some() {
             let inputs = workflow_inputs(definition, inputs)?;
             self.run_graph_nested(
-                profile, machine, context, workflow, &inputs, cancel, on_event, 0,
+                profile,
+                machine,
+                context,
+                workflow,
+                &inputs,
+                cancel,
+                on_event,
+                (0, RunServices::default()),
             )
         } else {
             self.run_steps(profile, machine, context, workflow, cancel, on_event)
@@ -460,7 +467,46 @@ impl Engine {
             .ok_or(EngineError::UnknownWorkflow(workflow))?;
         let inputs = workflow_inputs(definition, &std::collections::BTreeMap::new())?;
         self.run_graph_nested(
-            profile, machine, context, workflow, &inputs, cancel, on_event, 0,
+            profile,
+            machine,
+            context,
+            workflow,
+            &inputs,
+            cancel,
+            on_event,
+            (0, RunServices::default()),
+        )
+    }
+
+    /// [`Engine::execute_workflow_with`] for a graph workflow whose
+    /// references to shared, system and workflow variables are resolved
+    /// through `services` (see [`crate::graph::RunServices`]); nested
+    /// workflows use the same services and run.
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_graph_with_services(
+        &self,
+        profile: &Profile,
+        machine: &MachineConfig,
+        context: &mut ActiveProjectContext,
+        workflow: WorkflowId,
+        inputs: &std::collections::BTreeMap<String, String>,
+        services: RunServices<'_>,
+        cancel: &CancellationToken,
+        on_event: &(dyn Fn(ExecutionEvent) + Sync),
+    ) -> Result<GraphReport, EngineError> {
+        let definition = profile
+            .workflow(workflow)
+            .ok_or(EngineError::UnknownWorkflow(workflow))?;
+        let inputs = workflow_inputs(definition, inputs)?;
+        self.run_graph_nested(
+            profile,
+            machine,
+            context,
+            workflow,
+            &inputs,
+            cancel,
+            on_event,
+            (0, services),
         )
     }
 
@@ -474,7 +520,7 @@ impl Engine {
         inputs: &std::collections::BTreeMap<String, String>,
         cancel: &CancellationToken,
         on_event: &(dyn Fn(ExecutionEvent) + Sync),
-        depth: usize,
+        (depth, services): (usize, RunServices<'_>),
     ) -> Result<GraphReport, EngineError> {
         let definition = profile
             .workflow(workflow)
@@ -522,7 +568,7 @@ impl Engine {
                     &values,
                     token,
                     &|_| {},
-                    depth + 1,
+                    (depth + 1, services),
                 )?;
                 let outputs = if report.status == RunStatus::Succeeded {
                     workflow_outputs(inner_graph, &report)
@@ -560,6 +606,7 @@ impl Engine {
             on_event,
             cancel,
             limits: ExecutionLimits::default(),
+            services,
             summary: std::sync::Mutex::new(crate::RunSummary {
                 workflow: Some(workflow),
                 ..crate::RunSummary::default()
