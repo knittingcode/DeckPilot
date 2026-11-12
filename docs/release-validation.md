@@ -76,6 +76,18 @@ it builds the app (dependency installation, build scripts) in the job that
 holds the certificate, so it runs only for a reviewed ref, without
 restoring caches of other workflows.
 
+The *Signing check* workflow holds the release secrets on every pull
+request, so its jobs run only code that is already trusted: a sparse
+checkout of `.github/scripts` — on pull requests from the **base commit**
+(already on `main`), not from the pull request — and nothing else (no
+dependency installation, no build, no cache). A pull request that changes
+`updater-key-pair.py`, `apple-certificate.sh` or `apple-api-key.sh` is
+therefore checked with the previous versions against the real secrets, and
+its own versions are tested only with throwaway keys
+(`tools/release-pipeline/test-updater-key-pair.sh` in the *Release pipeline
+tests*); the new versions meet the secrets first on the push to `main`
+after review.
+
 ## 3. Stream Deck MK.2 (physical device)
 
 `deckpilot-dev hardware-test` is the reproducible procedure: it starts its own

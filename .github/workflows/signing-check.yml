@@ -15,7 +15,10 @@
 # While a secret is in a job, no dependency installation, build script or
 # other repository code than .github/scripts runs: the jobs check out only
 # .github/scripts (sparse), restore no cache, install nothing, and pass each
-# secret only to the step that needs it. Dependabot pull requests get no
+# secret only to the step that needs it. On pull requests they check out
+# the base commit, so only scripts already on main run next to the secrets;
+# a pull request's changes to them are tested with throwaway keys by the
+# Release pipeline tests (tools/release-pipeline/test-updater-key-pair.sh). Dependabot pull requests get no
 # secrets, so the jobs skip them (a skipped required check counts as
 # passed); pull requests from forks too.
 name: Signing check
@@ -53,11 +56,28 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          # On pull requests the scripts of the base commit (already on
+          # main), never the pull request's own: a change to them runs next
+          # to the secrets only after review and merge.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
           sparse-checkout: .github/scripts
+      # Only for the pull request that introduces the script: its base does
+      # not have it yet. Then no secret is used here, and the first push to
+      # main runs the check with the real secrets.
+      - name: The base commit has the key-pair check
+        id: base
+        run: |
+          if [ -f .github/scripts/updater-key-pair.py ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::the base commit has no .github/scripts/updater-key-pair.py yet; the key pair is checked on the push to main"
+          fi
       # Python's standard library only (scrypt, BLAKE2b); -I: no site
       # packages, no environment, nothing from the working directory.
       - name: Signing key, password and public key belong together
+        if: steps.base.outputs.present == 'true'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -78,6 +98,10 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          # On pull requests the scripts of the base commit (already on
+          # main), never the pull request's own: a change to them runs next
+          # to the secrets only after review and merge.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
           sparse-checkout: .github/scripts
       - name: The certificate provides the configured Developer ID identity
