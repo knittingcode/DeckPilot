@@ -5,6 +5,8 @@
 //! against the public key compiled into the app. This crate contains the
 //! parts that are independent of Tauri and testable on their own:
 //!
+//! * [`channel`]: release tags, their kind (stable, pre-release, test
+//!   build) and the update channels;
 //! * [`manifest`]: the `latest.json` format, validation and selection of
 //!   the artifact for this platform;
 //! * [`signature`]: signature verification, also used by the release
@@ -13,6 +15,7 @@
 //!   safe;
 //! * [`compatibility`]: whether a running agent fits the application.
 
+pub mod channel;
 pub mod compatibility;
 pub mod manifest;
 pub mod policy;

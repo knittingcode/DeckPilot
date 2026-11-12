@@ -629,6 +629,7 @@ export type Capability =
   | "network"
   | "notifications"
   | "credentials"
+  | "variables-read"
 
 export interface ModulePage {
   id: string
@@ -782,6 +783,7 @@ export type AgentCapability =
   | "encryptedDatabase"
   | "backgroundExecutions"
   | "notifications"
+  | "variables"
 
 export interface AgentConnection {
   running: boolean
@@ -1095,3 +1097,74 @@ export interface CatalogFilter {
   compatibleWith?: ParameterKind
   includeUnavailable?: boolean
 }
+
+// Gestures and work sessions (deckpilot_core::gesture, ::work_session).
+// Contract only: nothing sends or receives these yet. See
+// docs/gestures-and-work-session.md.
+
+export type Gesture = "click" | "doubleClick" | "longPress"
+
+export interface GestureTimings {
+  doubleClickMs: number
+  longPressMs: number
+}
+
+/** Timings of one key of a page; unset values use the defaults. */
+export interface KeyGestureSettings {
+  control: ControlId
+  doubleClickMs?: number
+  longPressMs?: number
+}
+
+export type WorkSessionState =
+  "idle" | "starting" | "working" | "verifyingEnd" | "readyToFinish" | "stopping"
+
+export type WorkSessionProblem =
+  | "startFailed"
+  | "startInterrupted"
+  | "verificationFailed"
+  | "verificationInterrupted"
+  | "notReady"
+  | "approvalExpired"
+  | "approvalInvalidated"
+  | "needsReview"
+
+export interface WorkSessionNotice {
+  problem: WorkSessionProblem
+  message: string
+  atMs: number
+}
+
+export interface VerificationOutcome {
+  canFinish: boolean
+  details?: string
+}
+
+export interface VerificationRecord {
+  id: string
+  outcome?: VerificationOutcome
+  atMs: number
+}
+
+/** Elapsed time at `asOfMs`; while the timer runs, add the time since. */
+export interface WorkSessionSnapshot {
+  state: WorkSessionState
+  session?: string
+  profile?: string
+  project?: string
+  startedAtMs?: number
+  elapsedMs: number
+  asOfMs: number
+  verification?: VerificationRecord
+  approval?: string
+  notices?: WorkSessionNotice[]
+}
+
+/** Read-only variables of the active work session (proposed paths). */
+export type WorkSessionVariable =
+  | "system.work.session.id"
+  | "system.work.session.state"
+  | "system.work.session.startedAt"
+  | "system.work.session.elapsedSeconds"
+  | "system.work.session.projectId"
+  | "system.work.session.canFinish"

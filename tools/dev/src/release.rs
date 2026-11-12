@@ -66,10 +66,21 @@ pub fn release_notes(changelog: &str, version: &str) -> Result<String, String> {
     Ok(notes)
 }
 
-/// `verify-release`, `check-updater-key`, `verify-signature` and
-/// `release-notes`.
+/// `verify-release`, `check-updater-key`, `verify-signature`,
+/// `release-notes` and `release-tag`.
 pub fn command(name: &str, args: &[String], root: &Path) -> Result<(), String> {
     match name {
+        // The release workflow's classification of a tag, as `key=value`
+        // lines for `GITHUB_OUTPUT`; fails for anything but a release tag.
+        "release-tag" => {
+            let tag = args
+                .first()
+                .ok_or("expected the tag, e.g. v0.6.0-alpha.1")?;
+            let parsed =
+                deckpilot_update::channel::ReleaseTag::parse(tag).map_err(|e| e.to_string())?;
+            print!("{}", parsed.describe()?);
+            Ok(())
+        }
         "verify-release" => {
             let dir = args
                 .first()

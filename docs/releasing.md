@@ -1,9 +1,93 @@
 # Releasing
 
-Releases are built by `.github/workflows/release.yml` when a tag `v*` is
-pushed (or when the workflow is started manually for an existing tag). The
-workflow creates a **draft** release; nothing reaches users until a
+Releases are built by `.github/workflows/release.yml` when a release tag
+is pushed (or when the workflow is started manually for an existing tag).
+The workflow creates a **draft** release; nothing reaches users until a
 maintainer reviews and publishes it.
+
+## Release tags and the tag gate
+
+Only these tags build a release; the trigger's `v*` is just a preliminary
+filter:
+
+| Tag | Example | Kind | GitHub release |
+| --- | ------- | ---- | -------------- |
+| `vX.Y.Z` | `v0.6.0` | stable | release |
+| `vX.Y.Z-alpha.N` | `v0.6.0-alpha.1` | pre-release | pre-release |
+| `vX.Y.Z-beta.N` | `v0.6.0-beta.2` | pre-release | pre-release |
+| `vX.Y.Z-rc.N` | `v0.6.0-rc.1` | pre-release | pre-release |
+
+Exactly the expression
+`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.[1-9][0-9]*)?$`:
+no leading zeros, `N` from 1, no build metadata, nothing normalized.
+`testv0.6.0`, `v0.6.0-bettta.1`, `v0.6`, `v01.0.0`, `v1.0.0-beta.0`,
+`v1.0.0-preview.1` and `v1.0.0-extra` are all refused.
+
+The first job of the workflow, **Validate the release tag** (`validate-tag`,
+`tools/release-pipeline/validate-tag.sh`), is the authoritative gate. With
+read-only permissions (`contents: read`, `checks: read`) it checks, without
+changing anything:
+
+1. the tag against the expression above;
+2. the commit the tag points to (annotated tags are dereferenced with
+   `git rev-parse "$TAG^{commit}"`) is the checked-out, unmodified commit
+   and is reachable from the protected `main` branch: a tag on a side
+   branch or on an unmerged commit is refused;
+3. every version declaration matches the tag:
+   `deckpilot-dev check-versions --tag <tag>` (the workspace version in
+   `Cargo.toml`, which the agent and every crate inherit, the workspace
+   packages in `Cargo.lock`, `apps/desktop/package.json`,
+   `apps/desktop/src-tauri/tauri.conf.json` — the version the updater
+   artifacts are signed for — and a `CHANGELOG.md` section);
+4. the required checks passed on **exactly** that SHA, using the checks API:
+   for every required check name, the latest check run of that commit
+   (highest ID) must have concluded `success`; a missing, running,
+   cancelled, skipped or failed check refuses the tag, and runs of other
+   commits never count. The required checks are the pinned list in
+   `tools/release-pipeline/required-checks.txt` — `Frontend`, `Storage with
+   SQLCipher`, `Rust (ubuntu-latest)`, `Rust (macos-latest)`,
+   `Rust (windows-latest)`, `Updater signing keys match`, the required
+   status checks of the *Protect main* ruleset — plus whatever the branch
+   rules of `main` require when the release runs (read with
+   `GET /repos/{owner}/{repo}/rules/branches/main`; if that cannot be read,
+   the pinned list alone applies, with a warning). The *Signing check*
+   workflow also runs on every push to `main` so that `Updater signing keys
+   match` exists for the squash-merge commit that is tagged;
+5. classification: `alpha`, `beta` and `rc` are pre-releases, a plain
+   version is stable (`deckpilot-dev release-tag <tag>` must agree).
+
+Its outputs `version`, `channel` (`stable` or `prerelease`), `sha`,
+`prerelease` (`true`/`false`) and `msi_version` drive the rest of the
+workflow. `msi_version` exists because Windows Installer accepts only
+numeric versions (`0.6.0-alpha.1` fails the MSI build): alpha.N becomes
+`X.Y.Z.N`, beta.N `X.Y.Z.(20000+N)`, rc.N `X.Y.Z.(40000+N)`, a stable
+release `X.Y.Z`. Windows Installer compares only the first three fields
+and DeckPilot's installer allows same-version upgrades, so the stable
+release installs over its pre-releases. A version an MSI cannot carry
+(major or minor above 255, patch above 65535, N above 19999) is refused by
+the gate. Every later job builds `sha`, not whatever the tag points to by
+then. Every other
+job depends on `validate-tag` through `needs` (directly or transitively);
+`tools/release-pipeline/check-workflow-gate.py` fails the *Release pipeline
+tests* workflow if a job is added without it, if the gate gets write
+permissions or if the workflow-level permissions grant write access. Only
+the jobs that write to the draft release (build, manifest, checksums) have
+`contents: write`.
+
+The tests (`tools/release-pipeline/test.sh`, run by
+`.github/workflows/release-tests.yml` on pull requests that touch the
+pipeline; not a required check) use a synthetic repository and mocked API
+answers (`tools/release-pipeline/gh-stub.sh`); no real tag is created.
+
+### The former `vX.Y.Z-N` test tags
+
+`v0.5.0-1` and `v0.5.0-2` were signed draft test builds. Tags of that form
+**no longer start a release**: the gate refuses them. The two existing
+drafts stay as they are (the compatibility workflow still uses the
+`v0.5.0-2` binaries). To test the pipeline end to end, push an `alpha` tag
+of a commit on `main`: it builds the same signed, notarized draft, which is
+never published unless a maintainer publishes it. To build installers
+without a release, use the packaging workflow instead.
 
 ## One-time provisioning
 
@@ -143,9 +227,12 @@ Without building or publishing anything:
    `apps/desktop/package.json` and `apps/desktop/src-tauri/tauri.conf.json`.
    `cargo run -p deckpilot-dev -- check-versions` confirms they match; CI
    checks it too.
-2. Merge to `main`, then tag: `git tag v0.3.0 && git push origin v0.3.0`.
+2. Merge to `main`, wait until the required checks have passed on the merge
+   commit, then tag that commit:
+   `git tag -s v0.6.0-alpha.1 <sha> -m "DeckPilot 0.6.0-alpha.1" && git push origin v0.6.0-alpha.1`.
 3. The workflow:
-   - checks that the tag matches the versions, that updater signing is
+   - validates the tag (see [the tag gate](#release-tags-and-the-tag-gate));
+   - checks that updater signing is
      configured, that `CHANGELOG.md` has notes for the version (they become
      the release notes and the notes shown by the in-app updater), and that
      macOS signing is configured (or explicitly waived);

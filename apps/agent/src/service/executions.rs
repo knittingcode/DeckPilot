@@ -268,6 +268,7 @@ impl Agent {
         let _ = self.handle.events.send(AgentEvent::ExecutionStarted {
             execution: summary.clone(),
         });
+        self.publish_execution_context(id, start_project);
         // Keys bound to the workflow show that it runs.
         self.render_all();
         Ok(summary)
@@ -366,6 +367,7 @@ impl Agent {
             .handle
             .events
             .send(AgentEvent::ExecutionFinished { execution: summary });
+        self.publish_execution_context(execution, context.project_id());
         self.after_change();
     }
 
@@ -646,12 +648,17 @@ fn spawn_run(
             };
             // A panicking action must not leave the run open forever.
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                engine.execute_workflow_with(
+                // References of its actions see this run's id
+                // (`workflow.execution.id`).
+                let invocation =
+                    deckpilot_core::resolution::Invocation::default().with_execution(Some(id));
+                engine.execute_workflow_as(
                     &profile,
                     &machine,
                     &mut context,
                     workflow,
                     &inputs,
+                    &invocation,
                     &cancel,
                     &on_event,
                 )
