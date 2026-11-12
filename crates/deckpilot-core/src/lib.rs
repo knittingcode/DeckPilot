@@ -87,7 +87,7 @@ pub use registry::{ActionHandler, ActionRegistry, RegistryError};
 pub use resource::{
     MachineConfig, MachineResourceBinding, ResolveError, ResourceKey, ResourceKind, ResourceRef,
 };
-pub use runtime::{Engine, EngineError, StepReport, WorkflowReport};
+pub use runtime::{Engine, EngineError, StepReport, WorkflowReport, declared_outputs};
 pub use trigger::{
     EventField, LifecycleEvent, Schedule, Scheduler, TriggerEvent, TriggerKind, TriggerValue,
     WallTime, WorkflowTrigger,
