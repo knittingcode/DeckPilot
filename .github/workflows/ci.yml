@@ -94,6 +94,38 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p deckpilot-storage --features sqlcipher --locked
 
+  # The real credential store of each platform, under throwaway service
+  # names that the test creates and deletes (never DeckPilot's own).
+  keystore:
+    name: Credential store (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      DECKPILOT_TEST_SYSTEM_KEYSTORE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup toolchain install && rustc --version
+      - uses: Swatinem/rust-cache@v2
+      - name: Secret Service (GNOME Keyring)
+        if: runner.os == 'Linux'
+        run: |
+          timeout 600 sudo apt-get update -o Acquire::ForceIPv4=true
+          timeout 600 sudo apt-get install -y --no-install-recommends -o Acquire::ForceIPv4=true gnome-keyring dbus
+      - name: Test (Linux, in a D-Bus session with an unlocked keyring)
+        if: runner.os == 'Linux'
+        run: |
+          dbus-run-session -- sh -c '
+            echo "ci-keyring" | gnome-keyring-daemon --daemonize --unlock --components=secrets >/dev/null &&
+            cargo test -p deckpilot-keystore --locked'
+      - name: Test
+        if: runner.os != 'Linux'
+        run: cargo test -p deckpilot-keystore --locked
+
   # Builds the Linux .deb with the release configuration (bundled agent,
   # udev rule) to catch packaging mistakes before a release. Nothing is
   # signed or published.
