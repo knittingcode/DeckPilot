@@ -200,7 +200,7 @@ they report as skipped:
 
 | Job | Runs on a pull request that changes |
 | --- | ----------------------------------- |
-| Package check (Linux .deb), Package check (Windows installers), in the Packaging workflow | `apps/desktop/src-tauri/`, `apps/agent/`, `packaging/`, `tools/ci/`, `.github/workflows/`, `Cargo.lock`, `Cargo.toml`, `apps/desktop/package.json` |
+| Package check (Linux .deb), Package check (Windows installers), in the Packaging workflow | files that affect bundling: `apps/desktop/src-tauri/` `tauri*.json`, `build.rs`, `Cargo.toml`, `capabilities/`, `icons/`, `app-icon.svg`; `apps/agent/` `build.rs`, `Cargo.toml`, `Info.plist`; `packaging/`, `tools/ci/`, `.github/workflows/`, `Cargo.lock`, `Cargo.toml`, `apps/desktop/package.json` |
 | Credential store (3 platforms) | `crates/deckpilot-keystore/`, `.github/workflows/ci.yml` |
 | Release manifest assembly | `tools/ci/`, `.github/workflows/release.yml`, `.github/workflows/ci.yml` |
 | Compatibility (own workflow) | its path filter in `compatibility.yml` |
@@ -214,8 +214,11 @@ run locally with the commands of its steps in `ci.yml`.
 The Packaging workflow (`packaging.yml`) builds the Linux .deb and .rpm and
 the Windows NSIS and MSI installers with the release configuration and
 updater artifacts signed by a throwaway key, and checks them
-(`tools/ci/check-packages.sh`). Besides pull requests that change the paths
-above, it runs on pushes to `main` that change them, nightly, for version
+(`tools/ci/check-packages.sh`). Besides pull requests that change the files
+above, it runs on pushes to `main` that change anything under
+`apps/desktop/src-tauri/`, `apps/agent/`, `packaging/` or `tools/ci/`, the
+Cargo manifests or `apps/desktop/package.json` (so plain source changes are
+packaged after they merge), nightly, for version
 tags, by hand (Actions → Packaging → Run workflow) and when another workflow
 calls it (`uses: ./.github/workflows/packaging.yml`; output `version`, the
 checked version). A release should only be made from a commit with a green
