@@ -956,3 +956,126 @@ export interface ImportSummary {
   modules: string[]
   settings: string[]
 }
+
+// Shared variables and references (deckpilot_core::variables). Contract
+// only: nothing sends or receives these yet. See docs/action-architecture.md.
+
+export type VariableType =
+  | { type: "string" }
+  | { type: "integer" }
+  | { type: "boolean" }
+  | { type: "projectId" }
+  | { type: "profileId" }
+  | { type: "resource"; kind?: ResourceKind }
+  | { type: "json" }
+  /** The name of a stored credential, never the secret. */
+  | { type: "secretRef" }
+
+export type VariableValue =
+  | { type: "string"; value: string }
+  | { type: "integer"; value: number }
+  | { type: "boolean"; value: boolean }
+  | { type: "projectId"; value: string }
+  | { type: "profileId"; value: string }
+  | { type: "resource"; value: ResourceRef }
+  | { type: "json"; value: unknown }
+  | { type: "secretRef"; value: string }
+
+/** Most specific first: execution, project, profile, global. */
+export type VariableScope = "global" | "profile" | "project" | "execution"
+
+export type ScopeKey =
+  | { kind: "global" }
+  | { kind: "profile"; profile: string }
+  | { kind: "project"; profile: string; project: string }
+  | { kind: "execution"; execution: string }
+
+/** A shared variable; `key` is `namespace.name` without `shared.`. */
+export interface VariableDefinition {
+  key: string
+  label?: string
+  description?: string
+  valueType: VariableType
+  scopes: VariableScope[]
+  default?: VariableValue
+  sensitive?: boolean
+  module?: string
+}
+
+/** Which project a context uses; previews always say which. */
+export type ProjectSource = "application" | "execution" | "explicit"
+
+export type ResolutionPhase = "preview" | "execution"
+
+/** The explicit context references are resolved in. */
+export interface ResolutionContext {
+  profile: string
+  project?: string
+  projectSource?: ProjectSource
+  device?: DeviceId
+  workflow?: string
+  execution?: string
+  phase?: ResolutionPhase
+}
+
+export type ValueSource =
+  | { type: "scope"; scope: ScopeKey }
+  | { type: "default" }
+  | { type: "system" }
+  | { type: "stepOutput"; node: string }
+
+export type MissingReason =
+  | "unknownVariable"
+  | "noValue"
+  | "noProject"
+  | "noDevice"
+  | "noWorkflow"
+  | "noExecution"
+  | "noOutput"
+  | "otherProfile"
+
+/** What the agent's resolver reports for one reference. */
+export type ReferenceStatus =
+  | { status: "resolved"; value: VariableValue; source: ValueSource }
+  | { status: "redacted"; valueType: VariableType; source: ValueSource }
+  | { status: "unavailableUntilRuntime" }
+  | { status: "missing"; reason: MissingReason }
+  | { status: "typeMismatch"; found: VariableType }
+  | { status: "permissionDenied" }
+  | { status: "invalid"; message: string }
+
+/** A reference (without braces) to preview, and the parameter it fills. */
+export interface PreviewItem {
+  reference: string
+  expected?: ParameterKind
+}
+
+export interface ReferencePreview {
+  reference: string
+  status: ReferenceStatus
+}
+
+export type VariableGroup = "shared" | "system" | "profile" | "project" | "workflow" | "stepOutput"
+
+export type ReferenceAvailability = "available" | "runtimeOnly" | "notInContext"
+
+/** Metadata of one reference the picker can insert; never a value. */
+export interface CatalogEntry {
+  reference: string
+  label: string
+  description?: string
+  group: VariableGroup
+  valueType: VariableType
+  scope?: VariableScope
+  module?: string
+  sensitive?: boolean
+  dynamic?: boolean
+  availability: ReferenceAvailability
+}
+
+export interface CatalogFilter {
+  query?: string
+  groups?: VariableGroup[]
+  compatibleWith?: ParameterKind
+  includeUnavailable?: boolean
+}
