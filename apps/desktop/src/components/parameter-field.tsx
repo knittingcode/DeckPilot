@@ -8,13 +8,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Textarea } from "@/components/ui/textarea"
+import { ReferenceDiagnostics } from "@/components/variable-picker/reference-diagnostics"
+import { ReferenceInput } from "@/components/variable-picker/reference-input"
+import { ReferenceValueField } from "@/components/variable-picker/reference-value"
+import { VariablePicker } from "@/components/variable-picker/variable-picker"
+import { initialValue } from "@/lib/parameters"
 import type { ParameterSpec, ParameterValue, Project, ResourceRef } from "@/lib/types"
+import { TEMPLATE_KIND, templateReferences } from "@/lib/variables"
 
 /**
  * Form control for one action parameter, chosen from its declared kind.
  * `projects` are the projects of the profile the action belongs to; project
  * parameters can only refer to those.
+ *
+ * Every editor that draws parameters uses this field, so all of them get
+ * the variable picker: text takes `{{ … }}` references at the cursor (a
+ * `template` value), other kinds a whole-value `reference` of a compatible
+ * type. The reference is what is saved, never its previewed value.
  */
 export function ParameterField({
   spec,
@@ -28,13 +38,44 @@ export function ParameterField({
   onChange: (value: ParameterValue) => void
 }) {
   const id = `parameter-${spec.key}`
+  const labelId = `${id}-label`
   return (
     <div className="grid gap-2">
-      <Label htmlFor={id}>
+      <Label id={labelId} htmlFor={id}>
         {spec.label}
         {spec.required && <span className="text-destructive">*</span>}
       </Label>
-      <Control id={id} spec={spec} value={value} projects={projects} onChange={onChange} />
+      {value.type === "reference" ? (
+        <ReferenceValueField
+          id={id}
+          labelId={labelId}
+          fieldLabel={spec.label}
+          reference={value.value}
+          kind={spec.kind}
+          onReference={(reference) => {
+            onChange({ type: "reference", value: reference })
+          }}
+          onFixedValue={() => {
+            onChange(initialValue(spec))
+          }}
+        />
+      ) : spec.kind.type === "text" ? (
+        <Control id={id} spec={spec} value={value} projects={projects} onChange={onChange} />
+      ) : (
+        <div className="flex min-w-0 items-start gap-1">
+          <div className="min-w-0 flex-1">
+            <Control id={id} spec={spec} value={value} projects={projects} onChange={onChange} />
+          </div>
+          <VariablePicker
+            kind={spec.kind}
+            fieldLabel={spec.label}
+            label={`Use a variable for ${spec.label}`}
+            onPick={(reference) => {
+              onChange({ type: "reference", value: reference })
+            }}
+          />
+        </div>
+      )}
       {spec.description && <p className="text-xs text-muted-foreground">{spec.description}</p>}
     </div>
   )
@@ -54,16 +95,35 @@ function Control({
   onChange: (value: ParameterValue) => void
 }) {
   const kind = spec.kind
-  if (kind.type === "text" && value.type === "text") {
-    const props = {
-      id,
-      value: value.value,
-      maxLength: kind.maxLength,
-      onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-        onChange({ type: "text", value: e.target.value })
-      },
-    }
-    return kind.multiline ? <Textarea {...props} /> : <Input {...props} />
+  if (kind.type === "text" && (value.type === "text" || value.type === "template")) {
+    const template = value.type === "template"
+    const { references, unclosed } = template
+      ? templateReferences(value.value)
+      : { references: [], unclosed: false }
+    return (
+      <>
+        <ReferenceInput
+          id={id}
+          value={value.value}
+          fieldLabel={spec.label}
+          multiline={kind.multiline}
+          maxLength={kind.maxLength}
+          aria-invalid={unclosed || undefined}
+          onChange={(text, inserted) => {
+            // Only a value that is a template is read for references;
+            // `{{` typed into plain text stays literal text.
+            const asTemplate = (template || inserted) && text.includes("{{")
+            onChange({ type: asTemplate ? "template" : "text", value: text })
+          }}
+        />
+        <ReferenceDiagnostics
+          references={references}
+          kind={TEMPLATE_KIND}
+          unclosed={unclosed}
+          literalBraces={!template && value.value.includes("{{")}
+        />
+      </>
+    )
   }
   if (kind.type === "integer" && value.type === "integer") {
     return (
