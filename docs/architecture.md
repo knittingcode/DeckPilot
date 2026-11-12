@@ -56,8 +56,8 @@ Nothing outside a driver assumes a fixed number of keys.
 
 ### `deckpilot-hid`
 
-USB HID driver for the Stream Deck MK.2 using `elgato-streamdeck` and
-`hidapi`. Only models with a descriptor are exposed.
+USB HID driver for the Stream Deck MK.2: its wire protocol (`mk2.rs`, pure
+and tested byte by byte) on top of `hidapi`. Only models with a descriptor are exposed.
 
 ### `deckpilot-update`
 

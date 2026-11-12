@@ -92,8 +92,8 @@ pub mod models {
 
     /// Elgato Stream Deck MK.2: 15 keys (5 x 3) with 72 x 72 px JPEG images.
     ///
-    /// The values match the `elgato-streamdeck` protocol implementation used
-    /// by the driver (checked by a test in `deckpilot-hid`). The driver has
+    /// The values match the driver's protocol implementation and the
+    /// `elgato-streamdeck` reference (checked by tests in `deckpilot-hid`). The driver has
     /// not been tested on a physical device yet, so the support level is
     /// [`HardwareSupport::Unverified`].
     pub fn stream_deck_mk2() -> DeviceModel {

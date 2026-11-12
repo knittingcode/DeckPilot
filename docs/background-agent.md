@@ -204,16 +204,27 @@ which automatic updates use to wait until the deck is idle.
 | Stream Deck XL    | `0fd9:006c` | Layout design only (descriptor, no driver) |
 | Stream Deck +     | `0fd9:0084` | Layout design only (descriptor, no driver) |
 
-The driver (`crates/deckpilot-hid`) uses `elgato-streamdeck` on top of
-`hidapi`. The MK.2 descriptor (15 keys in 5 × 3, 72 × 72 px JPEG, mirrored on
-both axes, keys indexed left to right, top to bottom) is checked against the
-library's protocol constants by a unit test. Other Stream Deck models are
-recognised by the library but deliberately not exposed until they are
-described and tested.
+The driver (`crates/deckpilot-hid`) implements the MK.2 wire protocol on top
+of `hidapi` (`mk2.rs`):
+
+| Report | Bytes |
+| ------ | ----- |
+| Input `0x01` (key states) | `01 xx xx xx` then one byte per key, non-zero while pressed |
+| Output `0x02 0x07` (key image) | 1024-byte reports: `02 07 key last len_lo len_hi page_lo page_hi`, up to 1016 image bytes, zero padding |
+| Feature `0x03 0x08` (brightness) | `03 08 percent`, zero-padded to 32 bytes |
+
+Key images are 72 × 72 px JPEG (quality 90), mirrored on both axes before
+upload; keys are indexed 0–14 left to right, top to bottom, for both input
+and images. Clearing a key uploads a black image; the reset report is never
+sent. Unit tests check every report byte by byte, and check the descriptor
+and the JPEG output against the `elgato-streamdeck` crate as an independent
+reference (a test-only dependency). Other Stream Deck models are
+deliberately not exposed until they are described and tested.
 
 Supported operations: discovery, connect/disconnect, key press and release
 (state changes are diffed so repeated reports do not trigger twice), key
-images, brightness.
+images (queued and sent on flush, the last request per key wins),
+brightness.
 
 The device abstraction (`DeviceBackend`, `DeviceHandle`, `Frame`,
 `DeviceCapabilities`) is not specific to the MK.2: encoders, touch zones,

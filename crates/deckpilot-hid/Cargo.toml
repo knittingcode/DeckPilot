@@ -10,9 +10,12 @@ publish.workspace = true
 
 [dependencies]
 deckpilot-device.workspace = true
-elgato-streamdeck.workspace = true
 hidapi.workspace = true
-image.workspace = true
+image = { workspace = true, features = ["jpeg"] }
+
+[dev-dependencies]
+# Independent protocol implementation the driver is checked against.
+elgato-streamdeck.workspace = true
 
 [lints]
 workspace = true
