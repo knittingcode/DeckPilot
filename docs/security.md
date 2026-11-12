@@ -330,10 +330,16 @@ XChaCha20-Poly1305 (`RustCrypto` `chacha20poly1305`), so any change to it
 or to the ciphertext is detected. A wrong password and a modified file are
 reported the same way.
 
-The payload (version 1) contains profiles (with projects, actions,
-workflows, layouts and their bindings), the portable settings of feature
-modules, portable application settings (how updates are checked and
-applied) and the logical resource keys the profiles use with their kinds.
+The payload (version 2; version 1 exports still import) contains profiles
+(with projects, actions, workflows, layouts and their bindings), the
+portable settings of feature modules, portable application settings (how
+updates are checked and applied), the logical resource keys the profiles use
+with their kinds, and shared variables: the user's definitions and the
+values of the exported profiles and their projects; global values only when
+the application settings are exported. Values of sensitive variables, and
+their defaults, are never exported; a `secretRef` value is only a
+credential's name. A DeckPilot that reads only payload version 1 refuses a
+version 2 export instead of dropping what it does not know.
 It never contains machine paths or application locations, the database key
 or anything from the credential store, passwords, IPC tokens, the security
 policy (importing it could weaken another computer's protection), runtime
@@ -353,7 +359,10 @@ which not even profile names are readable). It also checks that importing
 never adds or replaces a credential, even from a crafted export, that
 exporting one profile contains nothing of the others, and that imported
 copies get their own identifiers, so projects and active-project selections
-never cross profiles.
+never cross profiles. `tests/shared_variables.rs` does the same for shared
+variables: sensitive values and defaults, credential secrets and values of
+profiles not selected never appear in the payload or archive, and global
+values only with the application settings.
 
 A secret the user types into an ordinary text parameter of an action is
 configuration like any other text and is exported with its profile. The
@@ -372,6 +381,12 @@ profiles. The import is written in one transaction. Imported workflows do
 not run, imported profiles are not activated, and this computer's resource
 bindings are never overwritten. No module code runs during an import:
 module settings are checked against the module's declared contract.
+Shared variables are validated too: user definitions only (a definition
+claiming to be a module's is refused), each key and value slot once, values
+only for exported profiles and their own projects, of the declared type and
+an allowed scope, never of a run. Local definitions are never replaced;
+values that do not fit the local definition are skipped and reported, and
+values of an imported copy follow its new profile and project ids.
 
 ## Reporting a vulnerability
 
