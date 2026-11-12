@@ -1,35 +1,17 @@
 //! Switching the active project of a profile.
 //!
-//! Used by the `projects.next` and `projects.previous` actions and by the
-//! agent and the configuration app when the user switches from the tray or
-//! the window, so every path follows the same order and the module's
-//! `wrapAround` setting.
+//! Used by the agent and the configuration app when the user switches from
+//! the tray or the window. The `projects.cycle`, `projects.next` and
+//! `projects.previous` actions request the same step as a
+//! [`ContextEffect::CycleProject`](deckpilot_core::ContextEffect), which the
+//! engine applies with [`ProjectSwitcher::step`], so every path follows the
+//! same order and the module's `wrapAround` setting.
 
 use deckpilot_core::{CycleDirection, ModuleRegistry, Profile, ProjectId, ProjectSwitcher};
-use thiserror::Error;
 
 use crate::{WRAP_AROUND, module_id};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum StepError {
-    #[error("this profile has no projects")]
-    NoProjects,
-    #[error("already at the last project")]
-    AtLast,
-    #[error("already at the first project")]
-    AtFirst,
-}
-
-impl StepError {
-    /// Stable error code for [`deckpilot_core::ActionResult::code`].
-    pub fn code(self) -> &'static str {
-        match self {
-            Self::NoProjects => "no-projects",
-            Self::AtLast => "at-last-project",
-            Self::AtFirst => "at-first-project",
-        }
-    }
-}
+pub use deckpilot_core::ProjectStepError as StepError;
 
 /// The project after (or before) `current` in the profile's order. Without
 /// wrap-around, stepping past either end is an error. A missing or stale
@@ -40,22 +22,7 @@ pub fn step(
     direction: CycleDirection,
     wrap_around: bool,
 ) -> Result<ProjectId, StepError> {
-    let projects = &profile.projects;
-    if projects.is_empty() {
-        return Err(StepError::NoProjects);
-    }
-    if !wrap_around
-        && let Some(position) = current.and_then(|id| projects.iter().position(|p| p.id == id))
-    {
-        match direction {
-            CycleDirection::Next if position + 1 == projects.len() => {
-                return Err(StepError::AtLast);
-            }
-            CycleDirection::Previous if position == 0 => return Err(StepError::AtFirst),
-            _ => {}
-        }
-    }
-    ProjectSwitcher::cycle(projects, current, direction).ok_or(StepError::NoProjects)
+    ProjectSwitcher::step(&profile.projects, current, direction, wrap_around)
 }
 
 /// The module's `wrapAround` setting as currently configured in `modules`.

@@ -60,6 +60,11 @@ export interface ActionType {
   requiresProject: boolean
   /** Always sent by the backend; optional for fixtures. */
   node?: NodeSpec
+  /**
+   * Replaced by another type: saved actions of this type keep working, but
+   * it is not offered for new ones. Omitted when false.
+   */
+  deprecated?: boolean
 }
 
 export interface ActionInstance {

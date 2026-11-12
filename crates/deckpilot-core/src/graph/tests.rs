@@ -115,6 +115,7 @@ impl Fixture {
                         ),
                     ],
                     requires_project: false,
+                    deprecated: false,
                     node: NodeSpec {
                         outputs: vec![OutputSpec {
                             key: "value".into(),
