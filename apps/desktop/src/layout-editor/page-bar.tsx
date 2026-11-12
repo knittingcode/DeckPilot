@@ -4,13 +4,13 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { page as findPage } from "@/lib/layout-model"
+import { ancestors, page as findPage } from "@/lib/layout-model"
 import type { DeviceLayout } from "@/lib/types"
 
 interface PageBarProps {
   draft: DeviceLayout
   pageId: string
-  /** Pages opened before the current one, oldest first. */
+  /** Pages opened before the current one, oldest first; empty when opened from a tab. */
   trail: string[]
   onOpen: (pageId: string) => void
   onBack: () => void
@@ -34,7 +34,10 @@ export function PageBar({
   const current = findPage(draft, pageId)
   const position = draft.pages.findIndex((p) => p.id === pageId) + 1
   const isHome = pageId === draft.homePage
-  const path = [...trail, pageId]
+  // How the page was reached, else where it is in the page tree.
+  const route =
+    trail.length > 0 ? [...trail, pageId] : [...ancestors(draft, pageId).reverse(), pageId]
+  const path = route
     .map((id) => findPage(draft, id))
     .filter((p): p is NonNullable<typeof p> => p !== undefined)
   if (path[0]?.id !== draft.homePage && !isHome) {
