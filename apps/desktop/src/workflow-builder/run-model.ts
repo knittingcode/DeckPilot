@@ -75,3 +75,24 @@ export function projectOutcomeText(
       return null
   }
 }
+
+/**
+ * Why a workflow cannot be run from the app right now, with what to do;
+ * `null` when it can. Runs happen in the agent, for the active profile.
+ */
+export function runBlockedReason(state: {
+  isNew: boolean
+  dirty: boolean
+  agentRunning: boolean
+  activeProfileId: string | null
+  profileId: string
+  profileName: string
+}): string | null {
+  if (state.isNew) return "Save the workflow to run it"
+  if (state.dirty) return "Save your changes to run the workflow"
+  if (!state.agentRunning) return "The agent is not running. Start it in Settings › Agent"
+  if (state.activeProfileId !== state.profileId) {
+    return `Workflows run for the active profile. Make “${state.profileName}” active to run this one`
+  }
+  return null
+}

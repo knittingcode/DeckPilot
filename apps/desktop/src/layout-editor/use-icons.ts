@@ -6,6 +6,12 @@ import type { IconInfo } from "@/lib/types"
 
 import { iconFileProblem, iconName, iconSizeProblem } from "./appearance"
 
+/** A backend message as the end of a sentence. */
+function sentence(message: string): string {
+  const text = message.trim()
+  return /[.!?]$/.test(text) ? text : `${text}.`
+}
+
 /** The file's content as base64, without the `data:` prefix. */
 function readBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -50,7 +56,7 @@ export function useIcons(profileId: string) {
       },
       (e: unknown) => {
         setLoading(false)
-        setProblem(errorMessage(e))
+        setProblem(`The icons could not be loaded: ${sentence(errorMessage(e))}`)
       },
     )
   }, [profileId])
@@ -80,7 +86,7 @@ export function useIcons(profileId: string) {
       toast.success(`Imported “${icon.name}”`)
       return icon
     } catch (e) {
-      setProblem(errorMessage(e))
+      setProblem(`“${file.name}” was not imported: ${sentence(errorMessage(e))}`)
       return null
     } finally {
       setBusy(false)
@@ -95,7 +101,7 @@ export function useIcons(profileId: string) {
       setIcons((list) => list.filter((i) => i.id !== icon.id))
       toast.success(`Deleted “${icon.name}”`)
     } catch (e) {
-      setProblem(errorMessage(e))
+      setProblem(`“${icon.name}” was not deleted: ${sentence(errorMessage(e))}`)
     } finally {
       setBusy(false)
     }

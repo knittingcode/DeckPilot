@@ -9,7 +9,7 @@ import { ExecutionStore } from "@/lib/executions"
 
 import { type BuilderProps, WorkflowBuilder } from "./builder"
 import { RunDebugger } from "./run-debugger"
-import { nodeRuns, runNodeInfo, runSummary } from "./run-model"
+import { nodeRuns, runBlockedReason, runNodeInfo, runSummary } from "./run-model"
 import { RunHistory, StateIcon } from "./run-panel"
 
 const NO_EXECUTIONS = new ExecutionStore()
@@ -57,6 +57,7 @@ export function WorkflowRun(props: Props) {
   const shown = runs.find((r) => r.id === shownId)
   const now = useNow(running)
   const connection = agent?.running ? (agent.status?.startedAt ?? 0) : null
+  const [historyProblem, setHistoryProblem] = useState<string | null>(null)
 
   // The history of this workflow, also after the agent reconnects.
   useEffect(() => {
@@ -64,9 +65,13 @@ export function WorkflowRun(props: Props) {
     let current = true
     api.listExecutions(workflowId, HISTORY).then(
       (list) => {
-        if (current) executions.merge(list)
+        if (!current) return
+        setHistoryProblem(null)
+        executions.merge(list)
       },
-      () => undefined,
+      (e: unknown) => {
+        if (current) setHistoryProblem(errorMessage(e))
+      },
     )
     return () => {
       current = false
@@ -93,13 +98,21 @@ export function WorkflowRun(props: Props) {
   })
 
   const cancel = (id: string) => {
-    api.cancelExecution(id).catch((e: unknown) => toast.error(errorMessage(e)))
+    api
+      .cancelExecution(id)
+      .catch((e: unknown) =>
+        toast.error("The run was not cancelled", { description: errorMessage(e) }),
+      )
   }
-  const canRun =
-    !props.isNew &&
-    !starting &&
-    Boolean(agent?.running) &&
-    profiles.activeProfileId === props.profileId
+  const runBlocked = runBlockedReason({
+    isNew: props.isNew,
+    dirty: false, // the builder knows about unsaved changes
+    agentRunning: Boolean(agent?.running),
+    activeProfileId: profiles.activeProfileId,
+    profileId: props.profileId,
+    profileName: props.view.profile.name,
+  })
+  const canRun = runBlocked === null && !starting
 
   return (
     <WorkflowBuilder
@@ -126,6 +139,7 @@ export function WorkflowRun(props: Props) {
               runs={runs}
               shown={shownId}
               now={now}
+              problem={historyProblem}
               onShow={setChosen}
               onCancel={cancel}
               projectKey={(id) =>
@@ -138,7 +152,11 @@ export function WorkflowRun(props: Props) {
                     executions?.forget((r) => r.workflow === workflowId)
                     setChosen(undefined)
                   })
-                  .catch((e: unknown) => toast.error(errorMessage(e)))
+                  .catch((e: unknown) =>
+                    toast.error("The run history was not cleared", {
+                      description: errorMessage(e),
+                    }),
+                  )
               }}
             />
             {shown && <RunDebugger key={shown.id} run={shown} now={now} info={info} />}
@@ -146,6 +164,7 @@ export function WorkflowRun(props: Props) {
         )
       }
       canRun={canRun}
+      runBlocked={runBlocked}
       running={running || starting}
       onRun={() => {
         setStarting(true)
@@ -153,7 +172,9 @@ export function WorkflowRun(props: Props) {
         api
           .startWorkflow(props.profileId, workflowId)
           .then((execution) => executions?.apply({ type: "executionStarted", execution }))
-          .catch((e: unknown) => toast.error(errorMessage(e)))
+          .catch((e: unknown) =>
+            toast.error(`“${props.initial.name}” did not start`, { description: errorMessage(e) }),
+          )
           .finally(() => {
             setStarting(false)
           })
