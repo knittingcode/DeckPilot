@@ -70,7 +70,11 @@ Developer ID (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
 `APPLE_SIGNING_IDENTITY`); the builds are never notarized. The *Update
 continuity* workflow (`.github/workflows/update-continuity.yml`) runs it on a
 macOS runner with a temporary keychain: no Apple submission, no release,
-nothing public.
+nothing public. It runs only when started by hand
+(`gh workflow run "Update continuity" --ref main`), never on pull requests:
+it builds the app (dependency installation, build scripts) in the job that
+holds the certificate, so it runs only for a reviewed ref, without
+restoring caches of other workflows.
 
 ## 3. Stream Deck MK.2 (physical device)
 
