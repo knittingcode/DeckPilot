@@ -122,6 +122,55 @@ impl ProjectSwitcher {
         };
         Some(projects[index].id)
     }
+
+    /// Like [`cycle`](Self::cycle), but without `wrap_around` stepping past
+    /// either end is an error. A missing or stale `current` (e.g. a deleted
+    /// project) starts at the first (or last) project, so it never blocks
+    /// switching. The order is the profile's current order.
+    pub fn step(
+        projects: &[Project],
+        current: Option<ProjectId>,
+        direction: CycleDirection,
+        wrap_around: bool,
+    ) -> Result<ProjectId, ProjectStepError> {
+        if projects.is_empty() {
+            return Err(ProjectStepError::NoProjects);
+        }
+        if !wrap_around
+            && let Some(position) = current.and_then(|id| projects.iter().position(|p| p.id == id))
+        {
+            match direction {
+                CycleDirection::Next if position + 1 == projects.len() => {
+                    return Err(ProjectStepError::AtLast);
+                }
+                CycleDirection::Previous if position == 0 => return Err(ProjectStepError::AtFirst),
+                _ => {}
+            }
+        }
+        Self::cycle(projects, current, direction).ok_or(ProjectStepError::NoProjects)
+    }
+}
+
+/// Why stepping through a profile's projects selected nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ProjectStepError {
+    #[error("this profile has no projects")]
+    NoProjects,
+    #[error("already at the last project")]
+    AtLast,
+    #[error("already at the first project")]
+    AtFirst,
+}
+
+impl ProjectStepError {
+    /// Stable error code for [`ActionResult::code`](crate::ActionResult::code).
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::NoProjects => "no-projects",
+            Self::AtLast => "at-last-project",
+            Self::AtFirst => "at-first-project",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -286,6 +335,38 @@ mod tests {
             ProjectSwitcher::cycle(&profile.projects, stale, CycleDirection::Next),
             Some(profile.projects[0].id)
         );
+    }
+
+    #[test]
+    fn step_follows_the_order_and_the_wrap_setting() {
+        let profile = profile_with(&["A", "B", "C"]);
+        let ids: Vec<_> = profile.projects.iter().map(|p| p.id).collect();
+        let step = |current, direction, wrap| {
+            ProjectSwitcher::step(&profile.projects, current, direction, wrap)
+        };
+        assert_eq!(step(Some(ids[2]), CycleDirection::Next, true), Ok(ids[0]));
+        assert_eq!(
+            step(Some(ids[0]), CycleDirection::Previous, true),
+            Ok(ids[2])
+        );
+        assert_eq!(
+            step(Some(ids[2]), CycleDirection::Next, false),
+            Err(ProjectStepError::AtLast)
+        );
+        assert_eq!(
+            step(Some(ids[0]), CycleDirection::Previous, false),
+            Err(ProjectStepError::AtFirst)
+        );
+        // A deleted (stale) or missing current project starts at an end,
+        // even without wrap-around.
+        let stale = Some(ProjectId::new());
+        assert_eq!(step(stale, CycleDirection::Next, false), Ok(ids[0]));
+        assert_eq!(step(None, CycleDirection::Previous, false), Ok(ids[2]));
+        assert_eq!(
+            ProjectSwitcher::step(&[], None, CycleDirection::Next, true),
+            Err(ProjectStepError::NoProjects)
+        );
+        assert_eq!(ProjectStepError::NoProjects.code(), "no-projects");
     }
 
     #[test]

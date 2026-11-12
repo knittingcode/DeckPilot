@@ -159,6 +159,7 @@ fn schema(id: &str, parameters: Vec<ParameterSpec>) -> ActionType {
         category: String::new(),
         parameters,
         requires_project: false,
+        deprecated: false,
         node: deckpilot_core::graph::NodeSpec::default(),
     }
 }
@@ -1063,6 +1064,7 @@ mod broken {
             category,
             parameters,
             requires_project: false,
+            deprecated: false,
             node,
         }
     }
