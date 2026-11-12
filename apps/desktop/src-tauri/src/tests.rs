@@ -1342,13 +1342,15 @@ fn legacy_databases_are_encrypted_on_request() {
 }
 
 /// The export file reveals nothing of its content: neither the plaintext
-/// header nor the (base64-decoded) ciphertext contains the serialized
-/// profile, and machine values are not even in the decrypted payload.
+/// header nor the (base64-decoded) ciphertext contains any of `hidden`,
+/// which the decrypted payload must contain, and none of `machine` (values
+/// of this computer) is even in the decrypted payload.
 ///
-/// The needles are long, structured strings taken from the plaintext, so
-/// a random match is practically impossible (searching for a short word
-/// such as "Work" in base64 text matches by chance now and then).
-fn assert_export_hides_its_content(bytes: &[u8], password: &str) {
+/// Pass structured strings of the payload (with quotes, dots or slashes,
+/// which base64 never produces), so a random match is practically
+/// impossible: a short word such as "Work" matches base64 text by chance
+/// now and then.
+fn assert_export_hides(bytes: &[u8], password: &str, hidden: &[&str], machine: &[&str]) {
     use base64::Engine as _;
     let contains = |haystack: &[u8], needle: &str| {
         haystack
@@ -1376,7 +1378,6 @@ fn assert_export_hides_its_content(bytes: &[u8], password: &str) {
     )
     .unwrap();
     let plaintext = serde_json::to_string(&payload).unwrap();
-    let hidden = [r#""name":"Work""#, r#""key":"SHOP""#, "shop.repository"];
     for needle in hidden {
         // Meaningful: the payload holds exactly this text.
         assert!(plaintext.contains(needle), "{needle} is not in the payload");
@@ -1388,9 +1389,10 @@ fn assert_export_hides_its_content(bytes: &[u8], password: &str) {
         assert!(!contains(bytes, needle), "the file shows {needle}");
     }
     // Machine values are never exported at all.
-    let machine = "/private/machine/path";
-    assert!(!plaintext.contains(machine));
-    assert!(!contains(bytes, machine));
+    for value in machine {
+        assert!(!plaintext.contains(value), "the payload holds {value}");
+        assert!(!contains(bytes, value), "the file shows {value}");
+    }
 }
 
 #[test]
@@ -1414,7 +1416,12 @@ fn configuration_round_trips_through_an_encrypted_export() {
     );
     assert_eq!(result["profiles"], 1);
     let bytes = std::fs::read(&file).unwrap();
-    assert_export_hides_its_content(&bytes, "export secret");
+    assert_export_hides(
+        &bytes,
+        "export secret",
+        &[r#""name":"Work""#, r#""key":"SHOP""#, "shop.repository"],
+        &["/private/machine/path"],
+    );
 
     assert!(
         h.error(
@@ -1958,14 +1965,17 @@ fn a_system_key_installation_moves_to_a_password_installation() {
     let result = export_to(&source, &file, None);
     assert_eq!(result["profiles"], 1);
     let bytes = std::fs::read(&file).unwrap();
-    for secret in [
-        &b"Work"[..],
-        b"SHOP",
-        b"/source/machine/shop",
-        b"downloadAndAsk",
-    ] {
-        assert!(!bytes.windows(secret.len()).any(|w| w == secret));
-    }
+    assert_export_hides(
+        &bytes,
+        "export secret",
+        &[
+            r#""name":"Work""#,
+            r#""key":"SHOP""#,
+            "shop.repository",
+            r#""mode":"downloadAndAsk""#,
+        ],
+        &["/source/machine/shop"],
+    );
     assert_eq!(source_keys.ids().len(), 1);
 
     // Target: password protection, its own binding for the same resource.
