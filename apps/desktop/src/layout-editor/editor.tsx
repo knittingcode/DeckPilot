@@ -32,6 +32,7 @@ import {
   controlKey,
   controlLabel,
   page as findPage,
+  hasWayBack,
   targetLabel,
   triggerLabel,
 } from "@/lib/layout-model"
@@ -43,7 +44,6 @@ import { ControlMenu } from "./control-menu"
 import {
   boundControls,
   folderOf,
-  hasBack,
   orderedControls,
   parseControlKey,
   type DragSource,
@@ -351,10 +351,10 @@ export function LayoutEditor({
                 choose in the inspector.
               </EmptyState>
             )}
-            {isFolderPage && !hasBack(draft, pageId) && (
+            {isFolderPage && !hasWayBack(draft, pageId) && (
               <p className="text-xs text-muted-foreground" role="note">
-                This folder has no “Back” binding, so it cannot be left on the device. Drag “Back”
-                from the library onto a control.
+                This folder has no “Back” binding. On the device, DeckPilot adds one on its first
+                free key. To choose the key, drag “Back” from the library onto a control.
               </p>
             )}
             <div className="flex flex-wrap items-center gap-2 text-sm">
