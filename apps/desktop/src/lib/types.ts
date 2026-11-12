@@ -984,6 +984,22 @@ export interface ImportPreview {
   localProfiles: [string, string][]
   /** Portable application settings in the export. */
   settings: AppSettings
+  /** Shared variables in the export (deckpilot_portability::VariablesPreview). */
+  variables: ImportVariablesPreview
+}
+
+/** The shared variables an import brings. */
+export interface ImportVariablesPreview {
+  /** Variables that do not exist here and would be created. */
+  new: string[]
+  /** Variables that exist here with the same type; the local definition is kept. */
+  existing: string[]
+  /** Variables whose type differs from the local one; their values are not imported. */
+  incompatible: string[]
+  /** Values of profiles and projects. */
+  values: number
+  /** Global values, applied only with the application settings. */
+  globalValues: number
 }
 
 export type ImportMode = "merge" | "replace"
@@ -1017,6 +1033,12 @@ export interface ImportSummary {
   renamed: string[]
   modules: string[]
   settings: string[]
+  /** Shared variables that were created. */
+  variables: string[]
+  /** Number of shared variable values that were set. */
+  variableValues: number
+  /** Values that were not imported, and why. */
+  skippedValues: string[]
 }
 
 // Shared variables and references (deckpilot_core::variables). Contract
