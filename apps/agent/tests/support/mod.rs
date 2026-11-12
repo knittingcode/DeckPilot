@@ -103,6 +103,8 @@ pub struct TestAgent {
     pub paths: AgentPaths,
     pub key: DatabaseKey,
     pub mock: MockBackend,
+    /// In-process access, e.g. to the work session.
+    pub handle: deckpilot_agent::AgentHandle,
     task: Option<JoinHandle<Result<(), AgentError>>>,
     stop: Option<oneshot::Sender<()>>,
     /// Ends the test binary if the test hangs.
@@ -143,6 +145,7 @@ impl TestAgent {
             screen_lock: None,
         };
         let agent = Agent::start(options, lock).unwrap();
+        let handle = agent.handle();
         let (stop, stopped) = oneshot::channel::<()>();
         let task = tokio::spawn(agent.run(async move {
             let _ = stopped.await;
@@ -151,6 +154,7 @@ impl TestAgent {
             paths: paths.clone(),
             key: key.clone(),
             mock: mock.clone(),
+            handle,
             task: Some(task),
             stop: Some(stop),
             _watchdog: watchdog::Watchdog::new(

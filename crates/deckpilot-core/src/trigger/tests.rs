@@ -328,6 +328,10 @@ fn triggers_and_trigger_kinds_serialize_compatibly() {
         "schedule"
     );
     assert_eq!(
+        serde_json::to_value(ExecutionTrigger::WorkSession).unwrap(),
+        "workSession"
+    );
+    assert_eq!(
         serde_json::from_value::<ExecutionTrigger>("webhook".into()).unwrap(),
         ExecutionTrigger::Other
     );

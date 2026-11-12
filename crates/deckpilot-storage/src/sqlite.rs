@@ -10,7 +10,15 @@ use deckpilot_core::{
     ModuleStates, Profile, ProfileId, Project, ProjectId, ProjectKey,
 };
 
+use deckpilot_core::work_session::WorkSessionNotice;
+use deckpilot_core::{VerificationId, WorkSessionId, WorkflowId};
+
 use crate::executions::{ExecutionQuery, Retention};
+use crate::work_sessions::{
+    GapKind, HistoryQuery, NewWorkSession, ReviewResolution, SessionStatus, StoredInterval,
+    Transition, TransitionRecord, VerificationResult, WorkSessionRecord, WorkSessionReview,
+    WorkSessionSettings, WorkSessionSummary,
+};
 use crate::{
     ConfigStore, DOCUMENT_VERSION, LaunchInfo, MigrationNote, ProfileSummary, Result, StorageError,
 };
@@ -72,6 +80,8 @@ const MIGRATIONS: &[&str] = &[
     // Additive: no document is rewritten and no provenance is invented for
     // existing data.
     crate::variables::SCHEMA,
+    // Work sessions. Additive: new, empty tables only.
+    crate::work_sessions::SCHEMA,
 ];
 
 /// Runs `step` again while SQLite reports the database busy, for up to
@@ -547,6 +557,9 @@ impl SqliteStore {
             rusqlite::TransactionBehavior::Immediate,
         )?;
         for id in &changes.delete_profiles {
+            if crate::work_sessions::profile_has_active(&tx, *id)? {
+                return Err(StorageError::WorkSessionActive);
+            }
             tx.execute("DELETE FROM profiles WHERE id = ?1", [id.to_string()])?;
             tx.execute(
                 "DELETE FROM workflow_executions WHERE profile_id = ?1",
@@ -857,6 +870,228 @@ impl SqliteStore {
     ) -> Result<crate::references::ReferenceChange> {
         self.change_profile(profile, |document| {
             crate::references::unbind_action(document, action, selection)
+        })
+    }
+}
+
+/// Work sessions (schema 9). See [`crate::work_sessions`]. Every
+/// transition is one `IMMEDIATE` transaction; a refused or repeated request
+/// writes nothing.
+impl SqliteStore {
+    fn work_session_write<T>(&self, write: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        let tx = self.write_transaction()?;
+        let result = write(&tx)?;
+        tx.commit()?;
+        Ok(result)
+    }
+
+    /// The work session settings of `profile` (defaults if never saved).
+    pub fn work_session_settings(&self, profile: ProfileId) -> Result<WorkSessionSettings> {
+        crate::work_sessions::settings(&self.connection, profile)
+    }
+
+    /// Saves the settings of a profile; `at_ms` becomes `updated_at_ms`.
+    pub fn save_work_session_settings(
+        &self,
+        settings: &WorkSessionSettings,
+        at_ms: i64,
+    ) -> Result<WorkSessionSettings> {
+        self.work_session_write(|tx| crate::work_sessions::save_settings(tx, settings, at_ms))
+    }
+
+    /// The active session (at most one, decision D7).
+    pub fn active_work_session(&self) -> Result<Option<WorkSessionRecord>> {
+        crate::work_sessions::active(&self.connection)
+    }
+
+    pub fn work_session(&self, id: WorkSessionId) -> Result<Option<WorkSessionRecord>> {
+        crate::work_sessions::get(&self.connection, id)
+    }
+
+    pub fn work_session_intervals(&self, id: WorkSessionId) -> Result<Vec<StoredInterval>> {
+        crate::work_sessions::intervals(&self.connection, id)
+    }
+
+    /// Counted time at `now_ms`, computed from the persisted intervals.
+    pub fn work_session_elapsed_ms(&self, id: WorkSessionId, now_ms: i64) -> Result<u64> {
+        crate::work_sessions::elapsed(&self.connection, id, now_ms)
+    }
+
+    pub fn work_session_reviews(&self, id: WorkSessionId) -> Result<Vec<WorkSessionReview>> {
+        crate::work_sessions::reviews(&self.connection, id)
+    }
+
+    /// The audit log of a session, oldest first.
+    pub fn work_session_transitions(&self, id: WorkSessionId) -> Result<Vec<TransitionRecord>> {
+        crate::work_sessions::transitions(&self.connection, id)
+    }
+
+    /// Sessions, newest first, with their counted time at `now_ms`.
+    pub fn work_session_history(
+        &self,
+        query: HistoryQuery,
+        now_ms: i64,
+    ) -> Result<Vec<WorkSessionSummary>> {
+        crate::work_sessions::history(&self.connection, query, now_ms)
+    }
+
+    /// T1: creates the session in `starting`. Refused while another
+    /// session is active.
+    pub fn begin_work_session(&self, new: &NewWorkSession) -> Result<Transition> {
+        self.work_session_write(|tx| crate::work_sessions::begin(tx, new))
+    }
+
+    /// Records the execution of the start run. Returns whether the session
+    /// is still starting.
+    pub fn set_work_session_start_execution(
+        &self,
+        id: WorkSessionId,
+        execution: ExecutionId,
+    ) -> Result<bool> {
+        self.work_session_write(|tx| crate::work_sessions::set_start_execution(tx, id, execution))
+    }
+
+    /// Records the execution of the running verification `verification`.
+    /// Returns whether it is still the session's running verification.
+    pub fn set_work_session_verification_execution(
+        &self,
+        id: WorkSessionId,
+        verification: VerificationId,
+        execution: ExecutionId,
+    ) -> Result<bool> {
+        self.work_session_write(|tx| {
+            crate::work_sessions::set_verification_execution(tx, id, verification, execution)
+        })
+    }
+
+    /// T2: opens the first interval at `at_ms`.
+    pub fn work_session_start_succeeded(
+        &self,
+        id: WorkSessionId,
+        at_ms: i64,
+    ) -> Result<Transition> {
+        self.work_session_write(|tx| crate::work_sessions::start_succeeded(tx, id, at_ms))
+    }
+
+    /// T3 with `startFailed` or `startInterrupted`.
+    pub fn work_session_start_failed(
+        &self,
+        id: WorkSessionId,
+        notice: &WorkSessionNotice,
+        at_ms: i64,
+    ) -> Result<Transition> {
+        self.work_session_write(|tx| crate::work_sessions::start_failed(tx, id, notice, at_ms))
+    }
+
+    /// T4 (`from` working) or T8 (`from` readyToFinish).
+    pub fn begin_work_session_verification(
+        &self,
+        id: WorkSessionId,
+        from: SessionStatus,
+        verification: VerificationId,
+        workflow: Option<WorkflowId>,
+        at_ms: i64,
+    ) -> Result<Transition> {
+        self.work_session_write(|tx| {
+            crate::work_sessions::begin_verification(tx, id, from, verification, workflow, at_ms)
+        })
+    }
+
+    /// T5–T7: the result of `verification`, applied only if it is the
+    /// session's current, running verification. A pass records the
+    /// approval for agent instance `boot`.
+    pub fn record_work_session_verification(
+        &self,
+        id: WorkSessionId,
+        verification: VerificationId,
+        result: &VerificationResult,
+        boot: &str,
+        at_ms: i64,
+    ) -> Result<Transition> {
+        self.work_session_write(|tx| {
+            crate::work_sessions::verification_result(tx, id, verification, result, boot, at_ms)
+        })
+    }
+
+    /// T9: drops the approval `approval`.
+    pub fn invalidate_work_session_approval(
+        &self,
+        id: WorkSessionId,
+        approval: VerificationId,
+        notice: Option<&WorkSessionNotice>,
+        at_ms: i64,
+    ) -> Result<Transition> {
+        self.work_session_write(|tx| {
+            crate::work_sessions::invalidate_approval(tx, id, approval, notice, at_ms)
+        })
+    }
+
+    /// T10: the final stop, atomic and idempotent. Only with the current
+    /// approval, given to `boot` within the profile's approval lifetime;
+    /// the same approval again answers [`Transition::Repeated`].
+    pub fn finish_work_session(
+        &self,
+        id: WorkSessionId,
+        approval: VerificationId,
+        boot: &str,
+        at_ms: i64,
+    ) -> Result<Transition> {
+        self.work_session_write(|tx| crate::work_sessions::finish(tx, id, approval, boot, at_ms))
+    }
+
+    /// T11: the session becomes history.
+    pub fn complete_work_session_stop(&self, id: WorkSessionId, at_ms: i64) -> Result<Transition> {
+        self.work_session_write(|tx| crate::work_sessions::complete_stop(tx, id, at_ms))
+    }
+
+    /// The heartbeat: moves `last_alive_at` of the active session only.
+    pub fn touch_work_session(&self, id: WorkSessionId, at_ms: i64) -> Result<bool> {
+        self.work_session_write(|tx| crate::work_sessions::touch(tx, id, at_ms))
+    }
+
+    /// Clears the session's notice. Returns whether there was one.
+    pub fn clear_work_session_problem(&self, id: WorkSessionId) -> Result<bool> {
+        self.work_session_write(|tx| crate::work_sessions::clear_problem(tx, id))
+    }
+
+    /// The notice for an idle snapshot: that of the newest session when no
+    /// session is active and it still has one.
+    pub fn idle_work_session_notice(&self) -> Result<Option<(WorkSessionId, WorkSessionNotice)>> {
+        crate::work_sessions::idle_notice(&self.connection)
+    }
+
+    /// Clears the notices of all finished and aborted sessions (clearing an
+    /// idle snapshot's notice, which names no session). Returns how many.
+    pub fn clear_idle_work_session_notices(&self) -> Result<usize> {
+        self.work_session_write(crate::work_sessions::clear_idle_notices)
+    }
+
+    /// Records a gap longer than the profile's review threshold as a
+    /// review (still counted) with the notice `needsReview`; shorter gaps,
+    /// and gaps of a session whose timer does not run, record nothing.
+    pub fn flag_work_session_gap(
+        &self,
+        id: WorkSessionId,
+        kind: GapKind,
+        from_ms: i64,
+        to_ms: i64,
+        at_ms: i64,
+    ) -> Result<Option<WorkSessionReview>> {
+        self.work_session_write(|tx| {
+            crate::work_sessions::flag_gap(tx, id, kind, from_ms, to_ms, at_ms)
+        })
+    }
+
+    /// Resolves a review or changes its resolution: excluding cuts the gap
+    /// out of the intervals, counting an excluded gap again adds it back.
+    pub fn resolve_work_session_review(
+        &self,
+        review: i64,
+        resolution: ReviewResolution,
+        at_ms: i64,
+    ) -> Result<WorkSessionReview> {
+        self.work_session_write(|tx| {
+            crate::work_sessions::resolve_review(tx, review, resolution, at_ms)
         })
     }
 }
@@ -1342,6 +1577,9 @@ impl ConfigStore for SqliteStore {
 
     fn delete_profile(&self, id: ProfileId) -> Result<bool> {
         let tx = self.write_transaction()?;
+        if crate::work_sessions::profile_has_active(&tx, id)? {
+            return Err(StorageError::WorkSessionActive);
+        }
         let deleted = tx.execute("DELETE FROM profiles WHERE id = ?1", [id.to_string()])? > 0;
         tx.execute(
             "DELETE FROM workflow_executions WHERE profile_id = ?1",
@@ -2425,6 +2663,9 @@ mod tests {
                      DROP TABLE workflow_executions; DROP TABLE credentials;
                      DROP TABLE shared_variable_values; DROP TABLE shared_variables;
                      DROP TABLE provenance;
+                     DROP TABLE work_session_transitions; DROP TABLE work_session_reviews;
+                     DROP TABLE work_session_intervals; DROP TABLE work_sessions;
+                     DROP TABLE work_session_settings;
                      PRAGMA user_version = 4;",
                 )
                 .unwrap();
