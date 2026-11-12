@@ -211,6 +211,9 @@ export type GraphPredicate =
 export type GraphMapping =
   | { type: "output"; reference: GraphReference; default?: string }
   | { type: "template"; template: string }
+  /** The whole value of a shared, system, workflow or step reference, with
+   * its native type. */
+  | { type: "variable"; reference: string; default?: VariableValue }
 
 export interface ErrorPolicy {
   onError: "stop" | "continue"

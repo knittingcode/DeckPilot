@@ -452,14 +452,20 @@ Workflows → a workflow opens in the graph editor (`apps/desktop/src/workflow-b
   remembered; narrow windows start without the catalog.
 - **Inspector** (right): the selected node — label, id, problems, its run
   result, and its settings: the action and, per parameter, the action's
-  value, a value for this node, or a value **from earlier nodes**. Mappings
-  are edited as parts: one output (chosen from the declared outputs of
-  nodes that run before, with their types), or text composed of text parts
-  and outputs. The editor shows a preview (with the shown run's values where
-  known), references that are missing or do not run before the node, and
-  whether the value fits the parameter (numbers, yes/no, choices and
-  projects must convert; resources cannot be mapped). Nothing is evaluated
-  in the editor. Then failure handling, retries (only for retry-safe
+  value, a value for this node, or a value **from earlier nodes or
+  variables**. Mappings are edited as parts: one output (chosen from the
+  declared outputs of nodes that run before, with their types), one
+  variable (`shared.…`, `system.…`, `workflow.…`, keeping its type; the only
+  way to fill a resource parameter), or text composed of text parts,
+  outputs and variables. The editor shows a preview (with the shown run's
+  values where known; variables appear as placeholders, their values only
+  in the variable picker), references that are missing, malformed or do not
+  run before the node, and whether the value fits the parameter (numbers,
+  yes/no, choices and projects must convert; a variable's type must fit, a
+  credential name or resource never goes into text). Variable references
+  are typed until the universal variable picker is connected
+  (`VARIABLE_PICKER` in `workflow-builder/variable-reference.ts`). Nothing
+  is evaluated in the editor. Then failure handling, retries (only for retry-safe
   actions), timeout (saying whether the action can be interrupted), and
   **about this node**: its type id and version, module, the module's
   permissions, behaviour (retry-safe, idempotent, interruptible, selects a
