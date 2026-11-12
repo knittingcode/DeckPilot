@@ -46,20 +46,62 @@
 //!   path, starting from the initial values. A Join merges them by the same
 //!   rule; branches that set a variable to different values fail it
 //!   (`variable-conflict`). Variables belong to the run alone.
+//! - **References** other than node outputs (`shared.…`, `system.…`,
+//!   `workflow.…`) are resolved through the run's [`RunServices`] in the
+//!   node's own context: the run's project as it is at that node (never the
+//!   application's active project, which may differ), the running workflow
+//!   and the run. A whole-value reference keeps its native type. Mappings
+//!   are resolved once per node, before its first attempt; retries reuse
+//!   the values. A reference without a value fails the node with a
+//!   `reference-*` code; messages name the reference, never a value. A
+//!   sensitive value may only flow into outputs, variables and inputs that
+//!   are marked sensitive.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use super::mapping::{Outputs, convert, lookup, resolve};
+use deckpilot_device::DeviceId;
+
+use super::mapping::{
+    MappingError, Outputs, Resolved, Sources, convert, lookup, resolve_text, resolve_value,
+};
 use super::{Mapping, NodeId, NodeKind, OnError, Port, Predicate, WorkflowGraph};
+use crate::resolution::Redactor;
+use crate::variables::{
+    ProjectSource, ReferenceError, ReferenceProblem, ResolutionContext, ResolutionPhase,
+    VariableResolver,
+};
 use crate::{
     ActionInstance, ActionParameters, ActionRegistry, ActionResult, ActiveProjectContext,
-    EngineError, ParameterKind, ParameterValue, Profile, WorkflowId,
+    EngineError, ExecutionId, ParameterKind, ParameterValue, Profile, WorkflowId,
 };
 
 pub use crate::cancel::{CancelReason, CancellationToken};
+
+/// What a run resolves references with, handed to it explicitly. The
+/// default has no resolver: `shared.`, `system.` and `workflow.`
+/// references are then unavailable (`reference-unavailable`), while node
+/// outputs resolve as always.
+#[derive(Clone, Copy, Default)]
+pub struct RunServices<'a> {
+    pub variables: Option<&'a dyn VariableResolver>,
+    /// The device whose control started the run.
+    pub device: Option<&'a DeviceId>,
+    /// The run, shared by the sub-workflows it calls.
+    pub execution: Option<ExecutionId>,
+}
+
+impl std::fmt::Debug for RunServices<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunServices")
+            .field("variables", &self.variables.is_some())
+            .field("device", &self.device)
+            .field("execution", &self.execution)
+            .finish()
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExecutionLimits {
@@ -194,11 +236,16 @@ pub enum ExecutionEvent {
 
 /// Runs one action instance with the given parameter overrides against a
 /// context. Effects are applied to that context.
+/// Runs one attempt of an action node: the instance, its overrides plus
+/// mapped values, the node's context, the attempt's control and the
+/// outputs of the nodes that ran before it (for `steps.` references in the
+/// instance's own parameters).
 pub(crate) type RunAction<'a> = dyn Fn(
         &ActionInstance,
         &ActionParameters,
         &mut ActiveProjectContext,
         &crate::ExecutionControl<'_>,
+        &Outputs,
     ) -> Result<ActionResult, EngineError>
     + Sync
     + 'a;
@@ -236,6 +283,8 @@ pub(crate) struct Executor<'a> {
     pub on_event: &'a (dyn Fn(ExecutionEvent) + Sync),
     pub cancel: &'a CancellationToken,
     pub limits: ExecutionLimits,
+    /// Resolves references other than node outputs.
+    pub services: RunServices<'a>,
     /// How the run is going, for actions that report on it.
     pub summary: std::sync::Mutex<crate::RunSummary>,
     pub started: Instant,
@@ -742,6 +791,7 @@ impl Executor<'_> {
         let Some(node) = self.graph.node(id) else {
             return finished(idle(id, NodeStatus::Skipped, started_ms), vec![]);
         };
+        let resolution = self.resolution_context(context);
         let mut outcome = match &node.kind {
             NodeKind::Trigger => {
                 let mut report = done(id, started_ms, "");
@@ -789,20 +839,68 @@ impl Executor<'_> {
                 workflow,
                 inputs,
                 policy,
-            } => self.run_call(id, *workflow, inputs, *policy, context, outputs, started_ms),
-            NodeKind::Output { values } => self.set_outputs(id, values, outputs, started_ms),
-            NodeKind::SetVariable { values } => self.set_variables(id, values, outputs, started_ms),
+            } => self.run_call(
+                id,
+                *workflow,
+                inputs,
+                *policy,
+                context,
+                &self.sources(outputs, &resolution),
+                started_ms,
+            ),
+            NodeKind::Output { values } => {
+                self.set_outputs(id, values, &self.sources(outputs, &resolution), started_ms)
+            }
+            NodeKind::SetVariable { values } => {
+                self.set_variables(id, values, &self.sources(outputs, &resolution), started_ms)
+            }
+            NodeKind::Action { .. } => self.run_action_kind(
+                id,
+                &node.kind,
+                context,
+                &self.sources(outputs, &resolution),
+                started_ms,
+            ),
+        };
+        outcome.report.duration_ms = u64::try_from(begun.elapsed().as_millis()).unwrap_or(u64::MAX);
+        outcome
+    }
+
+    /// An action node: the saved instance it runs.
+    fn run_action_kind(
+        &self,
+        id: &NodeId,
+        kind: &NodeKind,
+        context: &ActiveProjectContext,
+        sources: &Sources<'_>,
+        started_ms: u64,
+    ) -> Outcome {
+        match kind {
             NodeKind::Action {
                 action,
                 overrides,
                 mappings,
                 policy,
-            } => self.run_action_node(
-                id, *action, overrides, mappings, *policy, context, outputs, started_ms,
-            ),
-        };
-        outcome.report.duration_ms = u64::try_from(begun.elapsed().as_millis()).unwrap_or(u64::MAX);
-        outcome
+            } => {
+                let Some(instance) = self.profile.action(*action) else {
+                    let mut report = idle(id, NodeStatus::Failed, started_ms);
+                    report.error = Some(StepError::new(
+                        "unavailable",
+                        "the action no longer exists",
+                        false,
+                    ));
+                    return self.route_failure(report, policy.on_error, id);
+                };
+                let invocation = Invocation {
+                    instance,
+                    overrides,
+                    mappings,
+                    policy: *policy,
+                };
+                self.run_action_node(id, &invocation, context, sources, started_ms)
+            }
+            _ => finished(idle(id, NodeStatus::Skipped, started_ms), vec![]),
+        }
     }
 
     fn evaluate(
@@ -882,7 +980,7 @@ impl Executor<'_> {
         mappings: &BTreeMap<String, Mapping>,
         policy: super::ErrorPolicy,
         context: &ActiveProjectContext,
-        outputs: &Outputs,
+        sources: &Sources<'_>,
         started_ms: u64,
     ) -> Outcome {
         let failed = |code: &str, message: String| {
@@ -898,10 +996,10 @@ impl Executor<'_> {
             let report = failed("unavailable", "the workflow no longer exists".to_owned());
             return self.route_failure(report, policy.on_error, id);
         };
-        let inputs = match self.call_inputs(callee, mappings, outputs) {
+        let inputs = match self.call_inputs(callee, mappings, sources) {
             Ok(inputs) => inputs,
-            Err(message) => {
-                let report = failed("mapping", message);
+            Err(error) => {
+                let report = failed(error.code(), error.message());
                 return self.route_failure(report, policy.on_error, id);
             }
         };
@@ -971,20 +1069,24 @@ impl Executor<'_> {
         &self,
         callee: &crate::Workflow,
         mappings: &BTreeMap<String, Mapping>,
-        outputs: &Outputs,
-    ) -> Result<BTreeMap<String, String>, String> {
+        sources: &Sources<'_>,
+    ) -> Result<BTreeMap<String, String>, MappingError> {
         if let Some(key) = mappings
             .keys()
             .find(|key| !callee.inputs.iter().any(|input| &input.key == *key))
         {
-            return Err(format!("`{key}` is not an input of {}", callee.name));
+            return Err(format!("`{key}` is not an input of {}", callee.name).into());
         }
         let mut values = BTreeMap::new();
         for input in &callee.inputs {
             let text = match (mappings.get(&input.key), &input.default) {
-                (Some(mapping), _) => resolve(mapping, outputs)?,
+                (Some(mapping), _) => {
+                    let (text, sensitive) = resolve_text(mapping, sources)?;
+                    check_sensitive(&input.key, sensitive, input.sensitive, "input")?;
+                    text
+                }
                 (None, _) if input.required => {
-                    return Err(format!("the input `{}` needs a value", input.key));
+                    return Err(format!("the input `{}` needs a value", input.key).into());
                 }
                 (None, Some(default)) => default.clone(),
                 (None, None) => continue,
@@ -1002,7 +1104,7 @@ impl Executor<'_> {
         &self,
         id: &NodeId,
         mappings: &BTreeMap<String, Mapping>,
-        outputs: &Outputs,
+        sources: &Sources<'_>,
         started_ms: u64,
     ) -> Outcome {
         let declared = self
@@ -1010,14 +1112,15 @@ impl Executor<'_> {
             .workflow(self.workflow)
             .map(|w| w.variables.as_slice())
             .unwrap_or_default();
-        let values: Result<BTreeMap<String, String>, String> = mappings
+        let values: Result<BTreeMap<String, String>, MappingError> = mappings
             .iter()
             .map(|(key, mapping)| {
                 let spec = declared
                     .iter()
                     .find(|v| &v.key == key)
                     .ok_or_else(|| format!("`{key}` is not a variable of this workflow"))?;
-                let text = resolve(mapping, outputs)?;
+                let (text, sensitive) = resolve_text(mapping, sources)?;
+                check_sensitive(key, sensitive, spec.sensitive, "variable")?;
                 let value =
                     convert(spec.kind, &text, self.profile).map_err(|e| format!("`{key}` {e}"))?;
                 Ok((key.clone(), value))
@@ -1035,8 +1138,8 @@ impl Executor<'_> {
                 outcome.variables = values;
                 outcome
             }
-            Err(message) => {
-                report.error = Some(StepError::new("mapping", message, false));
+            Err(error) => {
+                report.error = Some(StepError::new(error.code(), error.message(), false));
                 let mut outcome = finished(report, vec![]);
                 outcome.fails_workflow = true;
                 outcome
@@ -1050,7 +1153,7 @@ impl Executor<'_> {
         &self,
         id: &NodeId,
         mappings: &BTreeMap<String, Mapping>,
-        outputs: &Outputs,
+        sources: &Sources<'_>,
         started_ms: u64,
     ) -> Outcome {
         let declared = self
@@ -1058,14 +1161,15 @@ impl Executor<'_> {
             .workflow(self.workflow)
             .map(|w| w.outputs.as_slice())
             .unwrap_or_default();
-        let values: Result<BTreeMap<String, String>, String> = mappings
+        let values: Result<BTreeMap<String, String>, MappingError> = mappings
             .iter()
             .map(|(key, mapping)| {
                 let spec = declared
                     .iter()
                     .find(|o| &o.key == key)
                     .ok_or_else(|| format!("`{key}` is not an output of this workflow"))?;
-                let text = resolve(mapping, outputs)?;
+                let (text, sensitive) = resolve_text(mapping, sources)?;
+                check_sensitive(key, sensitive, spec.sensitive, "output")?;
                 let value =
                     convert(spec.kind, &text, self.profile).map_err(|e| format!("`{key}` {e}"))?;
                 Ok((key.clone(), value))
@@ -1078,10 +1182,10 @@ impl Executor<'_> {
                 report.workflow = Some(self.workflow);
                 finished(report, vec![Port::Out])
             }
-            Err(message) => {
+            Err(error) => {
                 let mut report = idle(id, NodeStatus::Failed, started_ms);
                 report.workflow = Some(self.workflow);
-                report.error = Some(StepError::new("mapping", message, false));
+                report.error = Some(StepError::new(error.code(), error.message(), false));
                 let mut outcome = finished(report, vec![]);
                 outcome.fails_workflow = true;
                 outcome
@@ -1089,43 +1193,35 @@ impl Executor<'_> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn run_action_node(
         &self,
         id: &NodeId,
-        action: crate::ActionInstanceId,
-        overrides: &ActionParameters,
-        mappings: &BTreeMap<String, Mapping>,
-        policy: super::ErrorPolicy,
+        invocation: &Invocation<'_>,
         context: &ActiveProjectContext,
-        outputs: &Outputs,
+        sources: &Sources<'_>,
         started_ms: u64,
     ) -> Outcome {
-        let fail = |report: NodeReport, error: StepError| {
-            let mut report = report;
-            report.status = NodeStatus::Failed;
-            report.error = Some(error);
-            report
-        };
-        let Some(instance) = self.profile.action(action) else {
-            let report = fail(
-                idle(id, NodeStatus::Failed, started_ms),
-                StepError::new("unavailable", "the action no longer exists", false),
-            );
-            return self.route_failure(report, policy.on_error, id);
-        };
+        let &Invocation {
+            instance,
+            overrides,
+            mappings,
+            policy,
+        } = invocation;
+        let action = Some(instance.id);
         let definition = self.registry.definition(&instance.action_type);
-        let parameters = match self.mapped_parameters(overrides, mappings, instance, outputs) {
-            Ok(parameters) => parameters,
-            Err(message) => {
-                let mut report = fail(
-                    idle(id, NodeStatus::Failed, started_ms),
-                    StepError::new("mapping", message, false),
-                );
-                report.action = Some(action);
-                return self.route_failure(report, policy.on_error, id);
-            }
-        };
+        // Sensitive mapped values are removed from what the node reports.
+        let mut redactor = Redactor::default();
+        let parameters =
+            match self.mapped_parameters(overrides, mappings, instance, sources, &mut redactor) {
+                Ok(parameters) => parameters,
+                Err(error) => {
+                    let mut report = idle(id, NodeStatus::Failed, started_ms);
+                    let message = redactor.redact(&error.message());
+                    report.error = Some(StepError::new(error.code(), message, false));
+                    report.action = action;
+                    return self.route_failure(report, policy.on_error, id);
+                }
+            };
         let spec = definition.map(|d| d.node.clone()).unwrap_or_default();
         let timeout = node_timeout(policy.timeout_ms, spec.timeout_ms);
         let attempts = 1 + if spec.retry_safe {
@@ -1138,7 +1234,7 @@ impl Executor<'_> {
             if self.cancel.is_cancelled() {
                 let mut report = idle(id, NodeStatus::Cancelled, started_ms);
                 report.attempts = attempt - 1;
-                report.action = Some(action);
+                report.action = action;
                 return finished(report, vec![]);
             }
             let mut working = context.clone();
@@ -1147,8 +1243,8 @@ impl Executor<'_> {
                 instance,
                 &parameters,
                 &mut working,
-                timeout,
-                spec.retry_safe,
+                (timeout, spec.retry_safe),
+                (sources.outputs, &redactor),
             );
             let report = NodeReport {
                 node: id.clone(),
@@ -1159,7 +1255,7 @@ impl Executor<'_> {
                 message,
                 output,
                 error,
-                action: Some(action),
+                action,
                 workflow: None,
                 sets_variables: false,
             };
@@ -1185,7 +1281,7 @@ impl Executor<'_> {
                     // Cancelled while waiting to retry.
                     let mut report = idle(id, NodeStatus::Cancelled, started_ms);
                     report.attempts = attempt;
-                    report.action = Some(action);
+                    report.action = action;
                     report.error = Some(StepError::new(
                         "cancelled",
                         "cancelled while waiting to retry",
@@ -1207,8 +1303,8 @@ impl Executor<'_> {
         instance: &ActionInstance,
         parameters: &ActionParameters,
         working: &mut ActiveProjectContext,
-        timeout: Duration,
-        retry_safe: bool,
+        (timeout, retry_safe): (Duration, bool),
+        (outputs, redactor): (&Outputs, &Redactor),
     ) -> (
         NodeStatus,
         Option<StepError>,
@@ -1220,7 +1316,10 @@ impl Executor<'_> {
         let progress = |progress: crate::Progress| {
             (self.on_event)(ExecutionEvent::NodeProgress {
                 node: id.clone(),
-                progress,
+                progress: crate::Progress {
+                    message: redactor.redact(&progress.message),
+                    ..progress
+                },
             });
         };
         let mut summary = self
@@ -1230,7 +1329,8 @@ impl Executor<'_> {
             .clone();
         summary.elapsed_ms = ms(self.started);
         let control = crate::ExecutionControl::new(&token, &progress).with_summary(summary);
-        let result = (self.run_action)(instance, parameters, working, &control);
+        let result = (self.run_action)(instance, parameters, working, &control, outputs)
+            .map(|result| redactor.redact_result(result));
         let late = begun.elapsed() > timeout;
         classify(
             result,
@@ -1257,22 +1357,75 @@ impl Executor<'_> {
         }
     }
 
-    /// Overrides plus mapped values, converted to the parameters' kinds.
+    /// The resolution context of a node: the run's profile, the project of
+    /// the node's own context (execution-local), the workflow and the run.
+    fn resolution_context(&self, context: &ActiveProjectContext) -> ResolutionContext {
+        let base = ResolutionContext::preview(self.profile.id)
+            .with_project(context.project_id(), ProjectSource::Execution)
+            .with_device(self.services.device.cloned())
+            .with_workflow(self.workflow);
+        match self.services.execution {
+            Some(execution) => base.for_execution(execution),
+            None => ResolutionContext {
+                phase: ResolutionPhase::Execution,
+                ..base
+            },
+        }
+    }
+
+    fn sources<'s>(&'s self, outputs: &'s Outputs, context: &'s ResolutionContext) -> Sources<'s> {
+        Sources {
+            outputs,
+            variables: self.services.variables,
+            context,
+        }
+    }
+
+    /// Overrides plus mapped values for the parameters' kinds. A
+    /// whole-value reference keeps its native type; text (node outputs,
+    /// templates) is converted as it always was.
     fn mapped_parameters(
         &self,
         overrides: &ActionParameters,
         mappings: &BTreeMap<String, Mapping>,
         instance: &ActionInstance,
-        outputs: &Outputs,
-    ) -> Result<ActionParameters, String> {
+        sources: &Sources<'_>,
+        redactor: &mut Redactor,
+    ) -> Result<ActionParameters, MappingError> {
         let mut parameters = overrides.clone();
         let definition = self.registry.definition(&instance.action_type);
         for (key, mapping) in mappings {
-            let text = resolve(mapping, outputs)?;
+            let resolved = resolve_value(mapping, sources).map_err(|error| match error {
+                MappingError::Reference(error) => MappingError::Reference(ReferenceError {
+                    parameter: Some(key.clone()),
+                    ..error
+                }),
+                other @ MappingError::Text(_) => other,
+            })?;
+            if resolved.1 {
+                collect_sensitive(mapping, &resolved.0, sources, redactor);
+            }
             let kind = definition
                 .and_then(|d| d.parameters.iter().find(|spec| &spec.key == key))
                 .map(|spec| &spec.kind)
                 .ok_or_else(|| format!("`{key}` is not a parameter of this action"))?;
+            let text = match resolved.0 {
+                Resolved::Text(text) => text,
+                Resolved::Value(value) => {
+                    let parameter = value.to_parameter(kind).ok_or_else(|| {
+                        MappingError::Reference(ReferenceError {
+                            parameter: Some(key.clone()),
+                            reference: mapping_reference(mapping),
+                            problem: ReferenceProblem::TypeMismatch {
+                                found: value.value_type(),
+                                expected: expects(kind),
+                            },
+                        })
+                    })?;
+                    parameters = parameters.with(key.clone(), parameter);
+                    continue;
+                }
+            };
             let value = match kind {
                 ParameterKind::Text { .. }
                 | ParameterKind::Lines { .. }
@@ -1287,7 +1440,9 @@ impl Executor<'_> {
                 ParameterKind::Boolean => match text.trim() {
                     "true" => ParameterValue::Boolean(true),
                     "false" => ParameterValue::Boolean(false),
-                    _ => return Err(format!("`{key}` expects true or false, got “{text}”")),
+                    _ => {
+                        return Err(format!("`{key}` expects true or false, got “{text}”").into());
+                    }
                 },
                 ParameterKind::Choice { .. } => ParameterValue::Choice(text),
                 ParameterKind::Project => {
@@ -1300,12 +1455,99 @@ impl Executor<'_> {
                     ParameterValue::Project(project.id)
                 }
                 ParameterKind::Resource { .. } => {
-                    return Err(format!("`{key}` refers to a resource and cannot be mapped"));
+                    return Err(format!("`{key}` refers to a resource and cannot be mapped").into());
                 }
             };
             parameters = parameters.with(key.clone(), value);
         }
         Ok(parameters)
+    }
+}
+
+/// Adds a sensitive mapped value to `redactor`: the value as the action
+/// receives it, and for a template every sensitive value in it, so that an
+/// action repeating part of the text does not reveal it either.
+fn collect_sensitive(
+    mapping: &Mapping,
+    resolved: &Resolved,
+    sources: &Sources<'_>,
+    redactor: &mut Redactor,
+) {
+    match resolved {
+        Resolved::Text(text) => redactor.add(text),
+        Resolved::Value(value) => redactor.add_value(value),
+    }
+    let Mapping::Template { template } = mapping else {
+        return;
+    };
+    for reference in crate::variables::references_in_expression(template).unwrap_or_default() {
+        match &reference {
+            crate::variables::VariableRef::Step(step) => {
+                if let Some(text) = lookup(sources.outputs, step) {
+                    redactor.add(text);
+                }
+            }
+            _ => {
+                if let Some(crate::variables::Resolution::Value {
+                    value,
+                    sensitive: true,
+                    ..
+                }) = sources
+                    .variables
+                    .map(|variables| variables.resolve(&reference, sources.context))
+                {
+                    redactor.add_value(&value);
+                }
+            }
+        }
+    }
+}
+
+/// What an action node runs: a saved instance with overrides and mappings.
+struct Invocation<'i> {
+    instance: &'i ActionInstance,
+    overrides: &'i ActionParameters,
+    mappings: &'i BTreeMap<String, Mapping>,
+    policy: super::ErrorPolicy,
+}
+
+/// A sensitive value may only go where it is kept out of history.
+fn check_sensitive(
+    key: &str,
+    sensitive: bool,
+    marked: bool,
+    what: &str,
+) -> Result<(), MappingError> {
+    if sensitive && !marked {
+        return Err(format!(
+            "`{key}` gets a sensitive value; mark the {what} sensitive so it stays out of history"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// The reference of a whole-value mapping, for messages.
+fn mapping_reference(mapping: &Mapping) -> String {
+    match mapping {
+        Mapping::Output { reference, .. } => reference.to_string(),
+        Mapping::Variable { reference, .. } => reference.to_string(),
+        Mapping::Template { .. } => "template".to_owned(),
+    }
+}
+
+fn expects(kind: &ParameterKind) -> &'static str {
+    match kind {
+        ParameterKind::Text { .. }
+        | ParameterKind::Lines { .. }
+        | ParameterKind::Pairs { .. }
+        | ParameterKind::Code { .. } => "text",
+        ParameterKind::Integer { .. } => "an integer",
+        ParameterKind::Boolean => "true or false",
+        ParameterKind::Choice { .. } => "one of its choices",
+        ParameterKind::Resource { .. } => "a resource",
+        ParameterKind::Project => "a project",
+        ParameterKind::Credential => "a credential",
     }
 }
 

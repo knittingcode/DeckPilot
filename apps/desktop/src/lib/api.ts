@@ -2,10 +2,13 @@ import { invoke } from "@tauri-apps/api/core"
 
 import type {
   ActionInstance,
+  ActionReference,
   ActionParameters,
   ActionResult,
   ActionType,
   AgentConnection,
+  CatalogEntry,
+  CatalogFilter,
   ControlFace,
   IconInfo,
   PageChange,
@@ -33,11 +36,16 @@ import type {
   ProfileSummary,
   ProfilesView,
   ProfileView,
+  PreviewItem,
   Project,
+  ReferencePreview,
+  ResolutionContext,
   ResourceCheck,
   ResourceKind,
   UpdateInfo,
   UpdatePreferences,
+  ReferenceChangeResult,
+  ReferenceSelection,
   UpdateState,
   Workflow,
   WorkflowReport,
@@ -152,6 +160,25 @@ export const api = {
     invoke<null>("delete_action", { profileId, actionId }),
   runAction: (profileId: string, actionId: string) =>
     invoke<ActionResult>("run_action", { profileId, actionId }),
+  /** Every place that uses an action, triggers of workflows that run it included. */
+  actionReferences: (profileId: string, actionId: string) =>
+    invoke<ActionReference[]>("action_references", { profileId, actionId }),
+  /** Points the selected uses of an action at `replacement`. */
+  replaceActionReferences: (
+    profileId: string,
+    actionId: string,
+    replacement: string,
+    selection: ReferenceSelection,
+  ) =>
+    invoke<ReferenceChangeResult>("replace_action_references", {
+      profileId,
+      actionId,
+      replacement,
+      selection,
+    }),
+  /** Clears the selected key bindings and removes the selected steps; refuses graph nodes. */
+  unbindActionReferences: (profileId: string, actionId: string, selection: ReferenceSelection) =>
+    invoke<ReferenceChangeResult>("unbind_action_references", { profileId, actionId, selection }),
 
   saveWorkflow: (profileId: string, workflow: Workflow) =>
     invoke<Workflow>("save_workflow", { profileId, workflow }),
@@ -188,6 +215,20 @@ export const api = {
     invoke<string | null>("cycle_project", { profileId, direction }),
   selectProject: (profileId: string, projectId: string) =>
     invoke<null>("select_project", { profileId, projectId }),
+
+  /**
+   * References the variable picker can insert in `context`: metadata only,
+   * never values. Forwarded to the agent (protocol 7); rejects with "not
+   * supported" for an older agent.
+   */
+  listVariables: (context: ResolutionContext, filter: CatalogFilter) =>
+    invoke<CatalogEntry[]>("list_variables", { context, filter }),
+  /**
+   * What the agent's resolver makes of each reference in `context`. The only
+   * source of variable values in the app; sensitive values come back redacted.
+   */
+  previewReferences: (context: ResolutionContext, items: PreviewItem[]) =>
+    invoke<ReferencePreview[]>("preview_references", { context, items }),
 
   getMachineConfig: () => invoke<MachineConfig>("get_machine_config"),
   setResourceBinding: (key: string, kind: ResourceKind, value: string) =>

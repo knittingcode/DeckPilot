@@ -18,6 +18,7 @@ import { useEditingProfile } from "@/hooks/use-profile"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { api, errorMessage } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
+import { useFocusTarget } from "@/lib/focus"
 import type { ActionType, Conversion, ProfileView, Workflow } from "@/lib/types"
 import { type WorkflowSelection, shownWorkflow } from "@/lib/workflow-model"
 import { StepEditor } from "@/pages/workflow-steps"
@@ -102,7 +103,11 @@ function WorkflowsView({
 }) {
   const { refresh, modules } = useAppContext()
   const workflows = view.profile.workflows
-  const [selection, setSelection] = useState<WorkflowSelection>({ id: workflows[0]?.id ?? NEW })
+  // Opened from another page (e.g. the references of an action): that workflow.
+  const focus = useFocusTarget("workflow")
+  const [selection, setSelection] = useState<WorkflowSelection>({
+    id: workflows.find((w) => w.id === focus?.workflow)?.id ?? workflows[0]?.id ?? NEW,
+  })
   // A new workflow gets a fresh id each time "New workflow" is chosen.
   const [draft, setDraft] = useState(newWorkflow)
   const select = (id: string) => {

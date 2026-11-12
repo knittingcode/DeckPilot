@@ -39,6 +39,17 @@ export type ParameterValue =
   | { type: "choice"; value: string }
   | { type: "resource"; value: ResourceRef }
   | { type: "project"; value: string }
+  /**
+   * The whole value from one reference, without braces, e.g.
+   * `shared.projects.favorite`; keeps the native type. Resolved by the agent
+   * when the action runs.
+   */
+  | { type: "reference"; value: string }
+  /**
+   * Text with `{{ … }}` references, for text kinds only. Literal `text`
+   * values are never parsed for `{{`.
+   */
+  | { type: "template"; value: string }
 
 export type ActionParameters = Record<string, ParameterValue>
 
@@ -60,6 +71,11 @@ export interface ActionType {
   requiresProject: boolean
   /** Always sent by the backend; optional for fixtures. */
   node?: NodeSpec
+  /**
+   * Replaced by another type: saved actions of this type keep working, but
+   * it is not offered for new ones. Omitted when false.
+   */
+  deprecated?: boolean
 }
 
 export interface ActionInstance {
@@ -455,6 +471,46 @@ export type Usage =
       control: ControlId
     }
 
+// Safe deletion of actions (deckpilot_storage::references, workstream E).
+
+/** One place that uses an action. */
+export type ReferenceSite =
+  /** A key, dial or touch binding of a layout page. */
+  | { type: "binding"; layout: string; page: string; control: ControlId; trigger: Trigger }
+  /** A step of a step-list workflow (index from 0). */
+  | { type: "step"; workflow: string; index: number }
+  /** An action node of a graph workflow. */
+  | { type: "node"; workflow: string; node: string }
+  /**
+   * A trigger of a workflow that runs the action. Indirect: it follows the
+   * workflow and is never changed by replacing or unbinding.
+   */
+  | { type: "trigger"; workflow: string; index: number }
+
+export type TriggerKind =
+  { type: "schedule"; schedule: Schedule } | { type: "lifecycle"; event: LifecycleEvent }
+
+/** A use of an action, with names for display. */
+export interface ActionReference {
+  site: ReferenceSite
+  /** The layout or workflow name. */
+  ownerName: string
+  /** The page name of a binding, the node label of a node, "paused" for paused triggers. */
+  detail?: string
+  /** The trigger of a `trigger` site. */
+  trigger?: TriggerKind
+}
+
+/** Which uses a replace or unbind acts on. */
+export type ReferenceSelection = { type: "all" } | { type: "sites"; sites: ReferenceSite[] }
+
+/** What a replace or unbind changed. */
+export interface ReferenceChangeResult {
+  changed: ReferenceSite[]
+  /** Steps and nodes whose overrides and mappings were removed: the replacement has another type. */
+  clearedSettings: ReferenceSite[]
+}
+
 export interface ProfileSummary {
   id: string
   name: string
@@ -530,7 +586,7 @@ export interface NodeReport {
 }
 
 export type ExecutionState = "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
-export type ExecutionTrigger = "app" | "device" | "schedule" | "lifecycle" | "other"
+export type ExecutionTrigger = "app" | "device" | "schedule" | "lifecycle" | "workSession" | "other"
 
 export interface ExecutionSummary {
   id: string
@@ -613,6 +669,7 @@ export type Capability =
   | "network"
   | "notifications"
   | "credentials"
+  | "variables-read"
 
 export interface ModulePage {
   id: string
@@ -766,6 +823,7 @@ export type AgentCapability =
   | "encryptedDatabase"
   | "backgroundExecutions"
   | "notifications"
+  | "variables"
 
 export interface AgentConnection {
   running: boolean
@@ -780,11 +838,15 @@ export interface AgentConnection {
 
 export type UpdateMode = "notifyOnly" | "downloadAndAsk" | "installWhenIdle"
 
+/** Stable releases only (default), or also alpha, beta and rc builds. */
+export type UpdateChannel = "stable" | "prerelease"
+
 export interface UpdatePreferences {
   mode: UpdateMode
   automaticChecks: boolean
   checkIntervalHours: number
   lastCheck: number | null
+  channel: UpdateChannel
 }
 
 export interface UpdateInfo {
@@ -922,6 +984,22 @@ export interface ImportPreview {
   localProfiles: [string, string][]
   /** Portable application settings in the export. */
   settings: AppSettings
+  /** Shared variables in the export (deckpilot_portability::VariablesPreview). */
+  variables: ImportVariablesPreview
+}
+
+/** The shared variables an import brings. */
+export interface ImportVariablesPreview {
+  /** Variables that do not exist here and would be created. */
+  new: string[]
+  /** Variables that exist here with the same type; the local definition is kept. */
+  existing: string[]
+  /** Variables whose type differs from the local one; their values are not imported. */
+  incompatible: string[]
+  /** Values of profiles and projects. */
+  values: number
+  /** Global values, applied only with the application settings. */
+  globalValues: number
 }
 
 export type ImportMode = "merge" | "replace"
@@ -955,4 +1033,204 @@ export interface ImportSummary {
   renamed: string[]
   modules: string[]
   settings: string[]
+  /** Shared variables that were created. */
+  variables: string[]
+  /** Number of shared variable values that were set. */
+  variableValues: number
+  /** Values that were not imported, and why. */
+  skippedValues: string[]
 }
+
+// Shared variables and references (deckpilot_core::variables). Contract
+// only: nothing sends or receives these yet. See docs/action-architecture.md.
+
+export type VariableType =
+  | { type: "string" }
+  | { type: "integer" }
+  | { type: "boolean" }
+  | { type: "projectId" }
+  | { type: "profileId" }
+  | { type: "resource"; kind?: ResourceKind }
+  | { type: "json" }
+  /** The name of a stored credential, never the secret. */
+  | { type: "secretRef" }
+
+export type VariableValue =
+  | { type: "string"; value: string }
+  | { type: "integer"; value: number }
+  | { type: "boolean"; value: boolean }
+  | { type: "projectId"; value: string }
+  | { type: "profileId"; value: string }
+  | { type: "resource"; value: ResourceRef }
+  | { type: "json"; value: unknown }
+  | { type: "secretRef"; value: string }
+
+/** Most specific first: execution, project, profile, global. */
+export type VariableScope = "global" | "profile" | "project" | "execution"
+
+export type ScopeKey =
+  | { kind: "global" }
+  | { kind: "profile"; profile: string }
+  | { kind: "project"; profile: string; project: string }
+  | { kind: "execution"; execution: string }
+
+/** A shared variable; `key` is `namespace.name` without `shared.`. */
+export interface VariableDefinition {
+  key: string
+  label?: string
+  description?: string
+  valueType: VariableType
+  scopes: VariableScope[]
+  default?: VariableValue
+  sensitive?: boolean
+  module?: string
+}
+
+/** Which project a context uses; previews always say which. */
+export type ProjectSource = "application" | "execution" | "explicit"
+
+export type ResolutionPhase = "preview" | "execution"
+
+/** The explicit context references are resolved in. */
+export interface ResolutionContext {
+  profile: string
+  project?: string
+  projectSource?: ProjectSource
+  device?: DeviceId
+  workflow?: string
+  execution?: string
+  phase?: ResolutionPhase
+}
+
+export type ValueSource =
+  | { type: "scope"; scope: ScopeKey }
+  | { type: "default" }
+  | { type: "system" }
+  | { type: "stepOutput"; node: string }
+
+export type MissingReason =
+  | "unknownVariable"
+  | "noValue"
+  | "noProject"
+  | "noDevice"
+  | "noWorkflow"
+  | "noExecution"
+  | "noOutput"
+  | "otherProfile"
+
+/** What the agent's resolver reports for one reference. */
+export type ReferenceStatus =
+  | { status: "resolved"; value: VariableValue; source: ValueSource }
+  | { status: "redacted"; valueType: VariableType; source: ValueSource }
+  | { status: "unavailableUntilRuntime" }
+  | { status: "missing"; reason: MissingReason }
+  | { status: "typeMismatch"; found: VariableType }
+  | { status: "permissionDenied" }
+  | { status: "invalid"; message: string }
+
+/** A reference (without braces) to preview, and the parameter it fills. */
+export interface PreviewItem {
+  reference: string
+  expected?: ParameterKind
+}
+
+export interface ReferencePreview {
+  reference: string
+  status: ReferenceStatus
+}
+
+export type VariableGroup = "shared" | "system" | "profile" | "project" | "workflow" | "stepOutput"
+
+export type ReferenceAvailability = "available" | "runtimeOnly" | "notInContext"
+
+/** Metadata of one reference the picker can insert; never a value. */
+export interface CatalogEntry {
+  reference: string
+  label: string
+  description?: string
+  group: VariableGroup
+  valueType: VariableType
+  scope?: VariableScope
+  module?: string
+  sensitive?: boolean
+  dynamic?: boolean
+  availability: ReferenceAvailability
+}
+
+export interface CatalogFilter {
+  query?: string
+  groups?: VariableGroup[]
+  compatibleWith?: ParameterKind
+  includeUnavailable?: boolean
+}
+
+// Gestures and work sessions (deckpilot_core::gesture, ::work_session).
+// Contract only: nothing sends or receives these yet. See
+// docs/gestures-and-work-session.md.
+
+export type Gesture = "click" | "doubleClick" | "longPress"
+
+export interface GestureTimings {
+  doubleClickMs: number
+  longPressMs: number
+}
+
+/** Timings of one key of a page; unset values use the defaults. */
+export interface KeyGestureSettings {
+  control: ControlId
+  doubleClickMs?: number
+  longPressMs?: number
+}
+
+export type WorkSessionState =
+  "idle" | "starting" | "working" | "verifyingEnd" | "readyToFinish" | "stopping"
+
+export type WorkSessionProblem =
+  | "startFailed"
+  | "startInterrupted"
+  | "verificationFailed"
+  | "verificationInterrupted"
+  | "notReady"
+  | "approvalExpired"
+  | "approvalInvalidated"
+  | "needsReview"
+
+export interface WorkSessionNotice {
+  problem: WorkSessionProblem
+  message: string
+  atMs: number
+}
+
+export interface VerificationOutcome {
+  canFinish: boolean
+  details?: string
+}
+
+export interface VerificationRecord {
+  id: string
+  outcome?: VerificationOutcome
+  atMs: number
+}
+
+/** Elapsed time at `asOfMs`; while the timer runs, add the time since. */
+export interface WorkSessionSnapshot {
+  state: WorkSessionState
+  session?: string
+  profile?: string
+  project?: string
+  startedAtMs?: number
+  elapsedMs: number
+  asOfMs: number
+  verification?: VerificationRecord
+  approval?: string
+  notices?: WorkSessionNotice[]
+}
+
+/** Read-only variables of the active work session (proposed paths). */
+export type WorkSessionVariable =
+  | "system.work.session.id"
+  | "system.work.session.state"
+  | "system.work.session.startedAt"
+  | "system.work.session.elapsedSeconds"
+  | "system.work.session.projectId"
+  | "system.work.session.canFinish"
