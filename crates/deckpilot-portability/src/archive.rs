@@ -159,10 +159,24 @@ mod tests {
         Password::new(text)
     }
 
+    /// The export password of this test run: generated, so that it is never a
+    /// constant that could pass for (or be reused as) a real credential.
+    fn export_password() -> &'static str {
+        static PASSWORD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        PASSWORD.get_or_init(generated_password)
+    }
+
+    /// A new random password, different from every other one.
+    fn generated_password() -> String {
+        let mut bytes = [0u8; 16];
+        deckpilot_storage::crypto::random_bytes(&mut bytes).unwrap();
+        format!("test-export-{:032x}", u128::from_le_bytes(bytes))
+    }
+
     fn sealed(data: &[u8]) -> Vec<u8> {
         seal(
             data,
-            &password("export password"),
+            &password(export_password()),
             KdfParams::for_tests(),
             0,
             "0.4.0",
@@ -173,7 +187,7 @@ mod tests {
     #[test]
     fn round_trips_with_the_right_password() {
         let archive = sealed(b"{\"hello\":1}");
-        let (header, plaintext) = open(&archive, &password("export password")).unwrap();
+        let (header, plaintext) = open(&archive, &password(export_password())).unwrap();
         assert_eq!(plaintext.as_slice(), b"{\"hello\":1}");
         assert_eq!(header.format, FORMAT);
         assert_eq!(header.kdf.algorithm, "argon2id");
@@ -187,7 +201,7 @@ mod tests {
     fn wrong_passwords_and_tampering_are_rejected() {
         let archive = sealed(b"secret configuration");
         assert!(matches!(
-            open(&archive, &password("wrong password")),
+            open(&archive, &password(&generated_password())),
             Err(PortabilityError::WrongPasswordOrDamaged)
         ));
 
@@ -200,7 +214,7 @@ mod tests {
         envelope["ciphertext"] = BASE64.encode(ciphertext).into();
         let tampered = serde_json::to_vec(&envelope).unwrap();
         assert!(matches!(
-            open(&tampered, &password("export password")),
+            open(&tampered, &password(export_password())),
             Err(PortabilityError::WrongPasswordOrDamaged)
         ));
 
@@ -213,7 +227,7 @@ mod tests {
         envelope["header"] = header.into();
         let tampered = serde_json::to_vec(&envelope).unwrap();
         assert!(matches!(
-            open(&tampered, &password("export password")),
+            open(&tampered, &password(export_password())),
             Err(PortabilityError::WrongPasswordOrDamaged)
         ));
     }
@@ -221,16 +235,19 @@ mod tests {
     #[test]
     fn malformed_and_oversized_input_is_rejected_early() {
         assert!(matches!(
-            open(b"not json", &password("x")),
+            open(b"not json", &password(&generated_password())),
             Err(PortabilityError::NotAnArchive)
         ));
         assert!(matches!(
-            open(b"{\"header\":\"{}\",\"ciphertext\":\"\"}", &password("x")),
+            open(
+                b"{\"header\":\"{}\",\"ciphertext\":\"\"}",
+                &password(&generated_password())
+            ),
             Err(PortabilityError::NotAnArchive)
         ));
         let huge = vec![b' '; MAX_ARCHIVE_BYTES + 1];
         assert!(matches!(
-            open(&huge, &password("x")),
+            open(&huge, &password(&generated_password())),
             Err(PortabilityError::TooLarge)
         ));
         // Expensive key derivation parameters are refused before deriving.
@@ -242,7 +259,7 @@ mod tests {
         envelope["header"] = serde_json::to_string(&header).unwrap().into();
         let costly = serde_json::to_vec(&envelope).unwrap();
         assert!(matches!(
-            open(&costly, &password("export password")),
+            open(&costly, &password(export_password())),
             Err(PortabilityError::Kdf(_))
         ));
     }
