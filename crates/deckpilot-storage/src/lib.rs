@@ -26,6 +26,8 @@ mod legacy;
 pub mod policy;
 mod project_actions;
 mod sqlite;
+#[cfg(all(test, feature = "sqlcipher"))]
+mod upgrade_tests;
 pub mod vault;
 
 use deckpilot_core::{
