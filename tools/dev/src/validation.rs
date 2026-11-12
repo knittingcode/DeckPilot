@@ -40,7 +40,7 @@ async fn request(dir: &Path, request: Request) -> Result<Response, String> {
 /// idle"), so that an update test build updates without any clicks.
 fn seed(dir: &Path) -> Result<(), String> {
     let paths = DevPaths::isolated(dir);
-    seed::seed(&paths, true).map_err(|e| e.to_string())?;
+    seed::seed(&paths, seed::MissingDatabase::CreateWithDevPassword).map_err(|e| e.to_string())?;
     let key = seed::dev_key(&paths)
         .ok_or("the configuration does not open with the development password")?;
     let store = SqliteStore::open(dir.join("deckpilot.db"), &Encryption::Key(key))
