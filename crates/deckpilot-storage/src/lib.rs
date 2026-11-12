@@ -25,6 +25,7 @@ pub mod executions;
 mod legacy;
 pub mod policy;
 mod project_actions;
+pub mod references;
 mod sqlite;
 #[cfg(all(test, feature = "sqlcipher"))]
 mod upgrade_tests;
@@ -124,6 +125,10 @@ pub enum StorageError {
     ProjectOfAnotherProfile(ProjectId),
     #[error("project key `{0}` is already used in this profile")]
     DuplicateProjectKey(String),
+    /// The action is still used; nothing was deleted. Replace or unbind
+    /// the listed uses first.
+    #[error("the action is still used in {} place(s); replace or unbind those first", .0.len())]
+    ActionInUse(Vec<references::ActionReference>),
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;
