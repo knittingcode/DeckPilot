@@ -14,11 +14,14 @@ export function VariableScopeProvider({
   context,
   names,
   stepOutputs,
+  disabled = false,
   children,
 }: {
   context?: Partial<ResolutionContext>
   names?: ContextNames
   stepOutputs?: CatalogEntry[]
+  /** No references here: nothing resolves them (e.g. module settings). */
+  disabled?: boolean
   children: ReactNode
 }) {
   const parent = useVariableScope()
@@ -33,11 +36,12 @@ export function VariableScopeProvider({
     ]
     return {
       ...parent,
+      live: parent.live && !disabled,
       context: { ...parent.context, ...c },
       names: { ...parent.names, ...n },
       stepOutputs: s ?? parent.stepOutputs,
     }
-  }, [parent, key])
+  }, [parent, key, disabled])
   if (!value) return children
   return <VariableScopeContext value={value}>{children}</VariableScopeContext>
 }
