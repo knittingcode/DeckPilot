@@ -8,12 +8,25 @@ on:
 permissions:
   contents: read
 
+# Pull requests: a new push cancels the obsolete run of the same pull
+# request. main: every pushed commit gets its own group, so post-merge runs
+# are never cancelled or replaced; they queue for runners instead.
+# (Only main and pull requests trigger this workflow, so a commit never runs
+# twice for push and pull_request.)
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.ref, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
+  # Line tables keep file and line numbers in backtraces at a fraction of
+  # full debug info: smaller caches, faster linking (notably on Windows).
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  # Only main saves Rust caches. Pull requests restore main's: their own
+  # entries (one per branch, ~0.8 GB on Windows) evicted main's from the
+  # 10 GB repository cache and turned later restores into partial matches.
+  RUST_CACHE_SAVE: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:
   # Which optional jobs a pull request needs (tools/ci/changed-paths.sh).
@@ -73,6 +86,8 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install && rustc --version && cargo clippy --version
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -114,6 +129,8 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install && rustc --version && cargo clippy --version
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
       - run: cargo test -p deckpilot-storage --features sqlcipher --locked
 
   # The real credential store of each platform, under throwaway service
@@ -135,6 +152,8 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install && rustc --version
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
       - name: Secret Service (GNOME Keyring)
         if: runner.os == 'Linux'
         run: |
@@ -167,6 +186,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-manifest
+          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -195,6 +215,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: package-linux
+          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -233,6 +254,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: package-windows
+          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
