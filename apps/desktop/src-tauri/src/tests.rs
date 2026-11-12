@@ -618,6 +618,33 @@ fn updates_report_their_configuration_and_store_preferences() {
     assert_eq!(launch["encryption"]["passwordRequired"], true);
 }
 
+#[test]
+fn gesture_defaults_are_a_validated_machine_setting() {
+    let h = Harness::new();
+    assert_eq!(
+        h.ok("get_gesture_defaults", json!({})),
+        json!({ "doubleClickMs": 300, "longPressMs": 700 })
+    );
+    let saved = h.ok(
+        "set_gesture_defaults",
+        json!({ "timings": { "doubleClickMs": 450, "longPressMs": 1200 } }),
+    );
+    assert_eq!(saved, json!({ "doubleClickMs": 450, "longPressMs": 1200 }));
+    let refused = h
+        .call(
+            "set_gesture_defaults",
+            json!({ "timings": { "doubleClickMs": 50, "longPressMs": 1200 } }),
+        )
+        .unwrap_err();
+    assert!(
+        refused
+            .as_str()
+            .unwrap()
+            .contains("between 150 and 1000 ms")
+    );
+    assert_eq!(h.ok("get_gesture_defaults", json!({})), saved);
+}
+
 /// Starts a real agent with a simulated MK.2 on its own runtime, without a
 /// credential store.
 fn start_agent(paths: &AgentPaths) -> (tokio::runtime::Runtime, MockBackend) {

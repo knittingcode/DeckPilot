@@ -72,10 +72,19 @@ const CORE_PAGES: SettingsPageEntry[] = [
   {
     id: "devices",
     title: "Devices",
-    description: "Connected Stream Decks and their brightness",
+    description: "Connected Stream Decks, brightness and gesture timing",
     category: "hardware",
     icon: MonitorSmartphone,
-    keywords: ["stream deck", "hardware", "brightness", "connected", "usb"],
+    keywords: [
+      "stream deck",
+      "hardware",
+      "brightness",
+      "connected",
+      "usb",
+      "gesture",
+      "double click",
+      "long press",
+    ],
     view: view(() => import("./pages/devices").then((m) => ({ default: m.DevicesSettings }))),
   },
   {

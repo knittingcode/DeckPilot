@@ -18,6 +18,7 @@ import type {
   DeviceLayout,
   DeviceModel,
   ExportResult,
+  GestureTimings,
   ImportOptions,
   ImportPreview,
   ImportSummary,
@@ -193,6 +194,10 @@ export const api = {
   setResourceBinding: (key: string, kind: ResourceKind, value: string) =>
     invoke<MachineConfig>("set_resource_binding", { key, kind, value }),
   removeResourceBinding: (key: string) => invoke<MachineConfig>("remove_resource_binding", { key }),
+  /** This computer's default gesture timings (`gestures.defaults`). */
+  getGestureDefaults: () => invoke<GestureTimings>("get_gesture_defaults"),
+  setGestureDefaults: (timings: GestureTimings) =>
+    invoke<GestureTimings>("set_gesture_defaults", { timings }),
   checkResources: (profileId: string) => invoke<ResourceCheck[]>("check_resources", { profileId }),
 
   createLayout: (profileId: string, modelId: string, name: string, generate: boolean) =>

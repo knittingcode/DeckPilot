@@ -77,7 +77,36 @@ export function supportedTriggers(model: DeviceModel, control: ControlId): Trigg
   }
 }
 
+/** The gesture triggers, in the order the editor shows them. */
+export const GESTURE_TRIGGERS: Trigger[] = [
+  { type: "click" },
+  { type: "doubleClick" },
+  { type: "longPress" },
+]
+
+export function isGestureTrigger(trigger: Trigger): boolean {
+  return trigger.type === "click" || trigger.type === "doubleClick" || trigger.type === "longPress"
+}
+
+/**
+ * Whether a control can take gesture triggers: it must press and release
+ * (keys and pressable dials), as the backend validates.
+ */
+export function acceptsGestures(model: DeviceModel, control: ControlId): boolean {
+  const triggers = supportedTriggers(model, control)
+  return triggers.some((t) => t.type === "press") && triggers.some((t) => t.type === "release")
+}
+
+/** Every trigger a binding of the control may use: raw edges and gestures. */
+export function bindableTriggers(model: DeviceModel, control: ControlId): Trigger[] {
+  const raw = supportedTriggers(model, control)
+  return acceptsGestures(model, control) ? [...raw, ...GESTURE_TRIGGERS] : raw
+}
+
 const TRIGGER_LABELS: Record<string, string> = {
+  click: "Click",
+  doubleClick: "Double click",
+  longPress: "Long press",
   press: "Press",
   release: "Release",
   rotateClockwise: "Turn right",
@@ -151,7 +180,11 @@ export function removeBinding(
   }))
 }
 
-/** The first supported trigger that is still free on a control. */
+/**
+ * The first supported trigger that is still free on a control. A control
+ * that already uses gestures gets a gesture (never a raw edge, which would
+ * mix both kinds), falling back to replacing its click.
+ */
 export function defaultTrigger(
   model: DeviceModel,
   layout: DeviceLayout,
@@ -159,7 +192,10 @@ export function defaultTrigger(
   control: ControlId,
 ): Trigger | undefined {
   const used = bindingsFor(layout, pageId, control)
-  const triggers = supportedTriggers(model, control)
+  const supported = supportedTriggers(model, control)
+  const triggers = used.some((b) => isGestureTrigger(b.trigger))
+    ? [...GESTURE_TRIGGERS, ...supported.filter((t) => t.type !== "press" && t.type !== "release")]
+    : supported
   return triggers.find((t) => !used.some((b) => sameTrigger(b.trigger, t))) ?? triggers[0]
 }
 

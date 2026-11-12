@@ -2,7 +2,9 @@
 // clipboard, move/swap, duplicate and undo history. Everything is derived
 // from the device model's controls; no geometry is hard-coded.
 
+import { keyTimings, setKeyTimings } from "@/components/gesture-editor/model"
 import {
+  bindableTriggers,
   bindingsFor,
   controlKey,
   controlsOf,
@@ -11,7 +13,6 @@ import {
   sameControl,
   sameTrigger,
   setBinding,
-  supportedTriggers,
 } from "@/lib/layout-model"
 import type {
   BindingTarget,
@@ -19,6 +20,7 @@ import type {
   ControlId,
   DeviceLayout,
   DeviceModel,
+  KeyGestureSettings,
 } from "@/lib/types"
 
 // ---------------------------------------------------------------------------
@@ -130,6 +132,16 @@ export function selectedInOrder(model: DeviceModel, selection: Selection): Contr
 
 type ControlBindings = Omit<ControlBinding, "control">[]
 
+/** A control's gesture timings without the control; they travel with its bindings. */
+type ControlTimings = Omit<KeyGestureSettings, "control"> | undefined
+
+function timingsOf(layout: DeviceLayout, pageId: string, control: ControlId): ControlTimings {
+  const own = keyTimings(layout, pageId, control)
+  if (!own) return undefined
+  const { doubleClickMs, longPressMs } = own
+  return { doubleClickMs, longPressMs }
+}
+
 /** A control's bindings without the control; label and appearance travel along. */
 function strip(bindings: ControlBinding[]): ControlBindings {
   return bindings.map(({ trigger, target, label, appearance }) => ({
@@ -140,19 +152,21 @@ function strip(bindings: ControlBinding[]): ControlBindings {
   }))
 }
 
-/** Removes every binding of the given controls on a page. */
+/** Removes every binding (and the gesture timings) of the given controls on a page. */
 export function clearControls(
   layout: DeviceLayout,
   pageId: string,
   controls: ControlId[],
 ): DeviceLayout {
+  const cleared = (control: ControlId) => controls.some((c) => sameControl(c, control))
   return {
     ...layout,
     pages: layout.pages.map((p) =>
       p.id === pageId
         ? {
             ...p,
-            bindings: p.bindings.filter((b) => !controls.some((c) => sameControl(c, b.control))),
+            bindings: p.bindings.filter((b) => !cleared(b.control)),
+            ...(p.gestures ? { gestures: p.gestures.filter((g) => !cleared(g.control)) } : {}),
           }
         : p,
     ),
@@ -176,9 +190,10 @@ function placeBindings(
   pageId: string,
   control: ControlId,
   bindings: ControlBindings,
+  timings?: ControlTimings,
 ): { layout: DeviceLayout; skipped: number } {
-  const supported = supportedTriggers(model, control)
-  let next = clearControls(layout, pageId, [control])
+  const supported = bindableTriggers(model, control)
+  let next = setKeyTimings(clearControls(layout, pageId, [control]), pageId, control, timings)
   let skipped = 0
   for (const binding of bindings) {
     if (
@@ -219,7 +234,7 @@ export function assignTarget(
   return next
 }
 
-/** The page a control opens with its press (or first) binding, if any. */
+/** The page a control opens with its press, click (or first) binding, if any. */
 export function folderOf(
   layout: DeviceLayout,
   pageId: string,
@@ -229,7 +244,10 @@ export function folderOf(
     (b): b is ControlBinding & { target: { type: "openPage"; page: string } } =>
       b.target.type === "openPage",
   )
-  const preferred = opening.find((b) => b.trigger.type === "press") ?? opening[0]
+  const preferred =
+    opening.find((b) => b.trigger.type === "press") ??
+    opening.find((b) => b.trigger.type === "click") ??
+    opening[0]
   return preferred && findPage(layout, preferred.target.page) ? preferred.target.page : undefined
 }
 
@@ -238,7 +256,12 @@ export function folderOf(
 
 export interface Clipboard {
   /** Copied controls with their position relative to the first one. */
-  entries: { offset: number; control: ControlId; bindings: ControlBindings }[]
+  entries: {
+    offset: number
+    control: ControlId
+    bindings: ControlBindings
+    timings?: ControlTimings
+  }[]
 }
 
 /** Copies the bindings of the selected controls (empty controls included). */
@@ -260,6 +283,7 @@ export function copyControls(
       offset: index - first.index,
       control,
       bindings: strip(bindingsFor(layout, pageId, control)),
+      timings: timingsOf(layout, pageId, control),
     })),
   }
 }
@@ -289,21 +313,24 @@ export function pasteControls(
   const sortedTargets = order.filter((c) => targets.some((t) => sameControl(t, c)))
   const start = sortedTargets[0]
   const single = clipboard.entries.length === 1 ? clipboard.entries[0] : undefined
-  const placements: { control: ControlId; bindings: ControlBindings }[] = []
+  const placements: { control: ControlId; bindings: ControlBindings; timings: ControlTimings }[] =
+    []
   let skipped = 0
   if (single && sortedTargets.length > 1) {
-    for (const control of sortedTargets) placements.push({ control, bindings: single.bindings })
+    for (const control of sortedTargets) {
+      placements.push({ control, bindings: single.bindings, timings: single.timings })
+    }
   } else if (start) {
     const base = order.findIndex((c) => sameControl(c, start))
     for (const entry of clipboard.entries) {
       const control = order[base + entry.offset]
-      if (control) placements.push({ control, bindings: entry.bindings })
+      if (control) placements.push({ control, bindings: entry.bindings, timings: entry.timings })
       else skipped += entry.bindings.length
     }
   }
   let next = layout
-  for (const { control, bindings } of placements) {
-    const placed = placeBindings(model, next, pageId, control, bindings)
+  for (const { control, bindings, timings } of placements) {
+    const placed = placeBindings(model, next, pageId, control, bindings, timings)
     next = placed.layout
     skipped += placed.skipped
   }
@@ -329,11 +356,15 @@ export function moveControl(
   const source = strip(bindingsFor(layout, pageId, from))
   const dest = strip(bindingsFor(layout, pageId, to))
   const fits = (control: ControlId, bindings: ControlBindings) => {
-    const supported = supportedTriggers(model, control)
+    const supported = bindableTriggers(model, control)
     return bindings.every((b) => supported.some((t) => sameTrigger(t, b.trigger)))
   }
   if (!fits(to, source) || !fits(from, dest)) return null
+  const sourceTimings = timingsOf(layout, pageId, from)
+  const destTimings = timingsOf(layout, pageId, to)
   let next = clearControls(layout, pageId, [from, to])
+  next = setKeyTimings(next, pageId, to, sourceTimings)
+  next = setKeyTimings(next, pageId, from, destTimings)
   for (const b of source) next = setBinding(next, pageId, { ...b, control: to })
   for (const b of dest) next = setBinding(next, pageId, { ...b, control: from })
   return next
@@ -366,7 +397,14 @@ export function duplicateControls(
           bindingsFor(next, pageId, c).length === 0,
       )
     if (!free) continue
-    next = placeBindings(model, next, pageId, free, bindings).layout
+    next = placeBindings(
+      model,
+      next,
+      pageId,
+      free,
+      bindings,
+      timingsOf(next, pageId, source),
+    ).layout
     created.push(free)
   }
   return { layout: next, controls: created }
