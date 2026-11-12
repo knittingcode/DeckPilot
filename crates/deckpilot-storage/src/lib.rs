@@ -31,6 +31,7 @@ mod sqlite;
 mod upgrade_tests;
 pub mod variables;
 pub mod vault;
+pub mod work_sessions;
 
 use deckpilot_core::{
     MachineConfig, ModuleId, ModuleSettings, ModuleStates, Profile, ProfileId, ProjectId,
@@ -144,6 +145,9 @@ pub enum StorageError {
     VariableValuesConflict { key: String, count: usize },
     #[error(transparent)]
     Variable(#[from] deckpilot_core::variables::DefinitionIssue),
+    /// The profile has the active work session.
+    #[error("finish the work session first")]
+    WorkSessionActive,
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;
