@@ -388,6 +388,49 @@ an allowed scope, never of a run. Local definitions are never replaced;
 values that do not fit the local definition are skipped and reported, and
 values of an imported copy follow its new profile and project ids.
 
+## Known dependency advisories
+
+Advisories that affect a dependency but cannot be fixed by an update yet,
+with the reason they are accepted. Each one is re-checked when Tauri, wry,
+tao or webkit2gtk is updated.
+
+### glib 0.18: `VariantStrIter` unsoundness (GHSA-wrw7-89jp-8q8g, RUSTSEC-2024-0429)
+
+- **Advisory.** In `glib` 0.15 to 0.19, the `Iterator` and
+  `DoubleEndedIterator` implementations of `glib::VariantStrIter` pass an
+  out-pointer as `&p` instead of `&mut p` to the variadic
+  `g_variant_get_child`; optimized builds can ignore the write and then
+  dereference a null pointer (a crash). Fixed in `glib` 0.20.
+- **How DeckPilot gets it.** Linux only: `glib` 0.18.5 comes with the GTK 3
+  stack of Tauri — `gtk` 0.18 and `webkit2gtk` 2.0.2, used by `tauri`,
+  `tauri-runtime-wry`, `wry`, `tao` (also in the agent, for the tray),
+  `muda`, `tray-icon` and `libappindicator`
+  (`cargo tree -i glib --target all`). No DeckPilot crate depends on
+  `glib` directly.
+- **Why it is not updated.** Every current release of that stack requires
+  `glib` 0.18: `webkit2gtk` 2.0.2 (pinned as `=2.0.2` by `wry` 0.57.2)
+  requires `glib ^0.18`, and `tauri` 2.12.5, `tao` 0.37.2, `wry` 0.57.2,
+  `muda` and `tray-icon` require `gtk ^0.18`. `glib` 0.18 has no patched
+  release (0.18.5 is the last), and the `gtk` 0.19 bindings (which use
+  `glib` 0.22) are not used by any `webkit2gtk` release. Reaching a fixed
+  `glib` needs a new WebKitGTK binding upstream, not a change here.
+- **Reachability.** The faulty code runs only through
+  `glib::Variant::array_iter_str()`, which creates the iterator. Neither
+  DeckPilot nor any crate in `Cargo.lock` calls it outside `glib`'s own
+  tests (searched in the sources of every locked crate, including `gtk`,
+  `gio`, `webkit2gtk`, `wry`, `tao`, `muda`, `tray-icon` and
+  `libappindicator`). DeckPilot does not use GLib variants itself.
+- **Assessment.** Accepted: not reachable in DeckPilot. The bug is
+  undefined behaviour whose observed effect is a null-pointer crash; no
+  attacker-controlled input reaches it. New code must not call
+  `Variant::array_iter_str()` (or iterate a `VariantStrIter`) while
+  `glib` 0.18 is in the lockfile. To re-check:
+
+  ```sh
+  cargo tree -i glib --target all --depth 0
+  grep -rln 'array_iter_str\|VariantStrIter' crates apps tools
+  ```
+
 ## Reporting a vulnerability
 
 Please report security problems privately through GitHub's
