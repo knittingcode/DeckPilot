@@ -21,11 +21,13 @@
 
 pub mod credentials;
 pub mod crypto;
+mod engine;
 pub mod executions;
 mod legacy;
 pub mod policy;
 mod project_actions;
 pub mod provenance;
+pub mod references;
 mod sqlite;
 #[cfg(all(test, feature = "sqlcipher"))]
 mod upgrade_tests;
@@ -90,6 +92,10 @@ pub enum StorageError {
     UnsupportedDocument(u32),
     #[error("database encryption is not available in this build")]
     EncryptionUnavailable,
+    /// SQLCipher is linked but not usable on a connection (or plain SQLite
+    /// was linked): nothing is opened, backed up or migrated.
+    #[error("database encryption is incomplete: {0}")]
+    SqlCipherIncomplete(String),
     #[error("the database could not be opened with the provided key")]
     InvalidKey,
     #[error("profile does not exist")]
@@ -148,6 +154,10 @@ pub enum StorageError {
     /// The profile has the active work session.
     #[error("finish the work session first")]
     WorkSessionActive,
+    /// The action is still used; nothing was deleted. Replace or unbind
+    /// the listed uses first.
+    #[error("the action is still used in {} place(s); replace or unbind those first", .0.len())]
+    ActionInUse(Vec<references::ActionReference>),
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;
