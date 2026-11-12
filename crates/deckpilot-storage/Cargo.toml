@@ -12,6 +12,7 @@ publish.workspace = true
 argon2.workspace = true
 base64.workspace = true
 deckpilot-core.workspace = true
+deckpilot-device.workspace = true
 deckpilot-keystore.workspace = true
 getrandom.workspace = true
 rusqlite.workspace = true
@@ -31,5 +32,3 @@ workspace = true
 default = ["sqlcipher"]
 sqlcipher = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
 
-[dev-dependencies]
-deckpilot-device.workspace = true
