@@ -284,16 +284,12 @@ async fn previews_report_every_status_without_secrets() {
     assert_eq!(previews[2]["status"]["reason"], "unknownVariable");
     assert_eq!(status(3), "permissionDenied");
     assert_eq!(status(4), "redacted");
-    // The contract serializes this field as `value_type` today (types.ts
-    // expects `valueType`); either way it carries the type, never a value.
+    // The type, as types.ts names it, and never a value.
     assert!(previews[4]["status"].get("value").is_none());
+    assert!(previews[4]["status"].get("value_type").is_none());
     assert_eq!(
-        previews[4]["status"]["valueType"]
-            .as_object()
-            .or(previews[4]["status"]["value_type"].as_object())
-            .cloned()
-            .map(Value::Object),
-        Some(json!({"type": "string"}))
+        previews[4]["status"]["valueType"],
+        json!({"type": "string"})
     );
     assert_eq!(status(5), "unavailableUntilRuntime");
     assert_eq!(status(6), "invalid");
@@ -530,4 +526,100 @@ async fn runs_announce_their_own_context_and_resolve_in_it() {
     let record = s.agent.wait_finished(execution).await;
     assert_eq!(record.nodes[0].message, "hi shop crew on SHOP");
     s.agent.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn graph_runs_resolve_mappings_and_instance_references() {
+    let dir = TempDir::new("deckpilot-variables-graph");
+    let mut work = Profile::new("Work");
+    work.projects
+        .push(Project::new(ProjectKey::new("SHOP").unwrap(), "SHOP"));
+    // The instance itself refers to a node output and a shared variable;
+    // the second node maps its message from shared and system variables.
+    let own = log(
+        &mut work,
+        "Own references",
+        ParameterValue::Template("{{ steps.vars.output.stage }} for {{ shared.team.name }}".into()),
+    );
+    let mapped = log(&mut work, "Mapped", ParameterValue::Text("unused".into()));
+    let secret = log(&mut work, "Secret", ParameterValue::Text("unused".into()));
+    let mut workflow = support::graph_workflow(
+        "Greet",
+        support::graph(
+            &json!([
+                {"id": "start", "type": "trigger"},
+                {"id": "remember", "type": "setVariable", "values": {
+                    "stage": {"type": "template", "template": "ready"},
+                }},
+                {"id": "own", "type": "action", "action": own},
+                {"id": "mapped", "type": "action", "action": mapped, "mappings": {
+                    "message": {"type": "template",
+                        "template": "{{ shared.team.name }}/{{ system.project.current.key }}"},
+                }},
+                {"id": "secret", "type": "action", "action": secret, "mappings": {
+                    "message": {"type": "template", "template": "pin {{ shared.vault.pin }}"},
+                }},
+            ]),
+            &json!([
+                {"from": "start", "to": "remember"},
+                {"from": "remember", "to": "own"},
+                {"from": "own", "to": "mapped"},
+                {"from": "mapped", "to": "secret"},
+            ]),
+        ),
+    );
+    workflow.variables = vec![deckpilot_core::graph::WorkflowVariable {
+        initial: Some("start".into()),
+        ..deckpilot_core::graph::WorkflowVariable::new(
+            "stage",
+            deckpilot_core::graph::ValueKind::Text,
+        )
+    }];
+    let workflow_id = workflow.id;
+    work.workflows.push(workflow);
+    let (paths, db_key) = data_dir(&dir, &work, &[]);
+    let mock = MockBackend::new();
+    let agent =
+        TestAgent::start_with_variables(&paths, &db_key, &mock, None, Some(variables(&work)));
+    agent.unlock().await;
+    let execution = match agent
+        .request(Request::StartWorkflow {
+            workflow: workflow_id,
+        })
+        .await
+        .unwrap()
+    {
+        Response::ExecutionStarted { execution } => execution.id,
+        other => panic!("unexpected {other:?}"),
+    };
+    let record = agent.wait_finished(execution).await;
+    let message = |node: &str| {
+        record
+            .nodes
+            .iter()
+            .find(|n| n.node.as_str() == node)
+            .map(|n| (n.status, n.message.clone(), n.error.clone()))
+            .unwrap()
+    };
+    assert_eq!(
+        message("own").1,
+        "ready for shop crew",
+        "{:?}",
+        message("own")
+    );
+    assert_eq!(
+        message("mapped").1,
+        "shop crew/SHOP",
+        "{:?}",
+        message("mapped")
+    );
+    let secret = message("secret");
+    assert!(!format!("{record:?}").contains("s3cr3t"));
+    assert_eq!(
+        secret.0,
+        deckpilot_core::graph::NodeStatus::Succeeded,
+        "{secret:?}"
+    );
+    assert_eq!(secret.1, "[redacted]");
+    agent.shutdown().await;
 }
