@@ -108,6 +108,22 @@ only (no system services):
 
 Use the checkbox in Settings, or `deckpilot-agent autostart enable|disable|status`.
 
+The entry runs the agent's executable, which is at a fixed path for the
+macOS app, the Windows installers and the Linux `.deb`/`.rpm`
+(`/usr/bin/deckpilot-agent`). An AppImage instead mounts its contents at a
+new temporary path on every run (`/tmp/.mount_…`) and unmounts it when its
+main process ends. So when the agent runs from an AppImage (`$APPIMAGE` is
+set and the agent lies inside `$APPDIR`):
+
+- the autostart entry runs `<the .AppImage file> --agent`; the app's
+  executable, started with `--agent`, replaces itself with the bundled
+  agent, so the agent is the AppImage's main process and its files stay
+  mounted as long as it runs;
+- the app starts the agent the same way, and the agent starts the app
+  through the `.AppImage` file, so neither depends on the other's mount;
+- an enabled entry is rewritten when the agent starts, which repairs
+  entries that earlier versions recorded with a path inside the mount.
+
 ## Storage ownership
 
 The agent and the configuration app open the same SQLite database (WAL mode
