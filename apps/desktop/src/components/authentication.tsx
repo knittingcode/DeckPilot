@@ -3,7 +3,8 @@ import { type ReactNode, useCallback, useState } from "react"
 
 import { ModalShell } from "@/components/modal-shell"
 import { PasswordField } from "@/components/password-field"
-import { api, errorMessage, isAuthenticationRequired } from "@/lib/api"
+import { api, isAuthenticationRequired } from "@/lib/api"
+import { failureMessage } from "@/lib/failure"
 import { AuthenticationCancelled, type Sensitive, SensitiveContext } from "@/lib/sensitive"
 import type { Verification } from "@/lib/types"
 
@@ -103,7 +104,13 @@ export function AuthenticateDialog({
     api
       .authenticate(needsPassword ? password : null)
       .then(onDone, (e: unknown) => {
-        setError(errorMessage(e))
+        setError(
+          failureMessage(
+            "You were not verified",
+            e,
+            needsPassword ? "Check the password and try again" : "Try again",
+          ),
+        )
         setPassword("")
       })
       .finally(() => {

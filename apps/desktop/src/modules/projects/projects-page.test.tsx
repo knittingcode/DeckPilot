@@ -150,6 +150,27 @@ describe("Projects page", () => {
     expect(api.deleteProject).toHaveBeenCalledWith("profile-1", cmr.id)
   })
 
+  it("says what failed when switching or deleting a project, and why", async () => {
+    api.selectProject.mockRejectedValue("the agent is not running")
+    api.deleteProject.mockRejectedValue(new Error("project is used by a workflow"))
+    const { user } = await renderProjects()
+    await user.click(screen.getByRole("radio", { name: "CMR" }))
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("The project was not switched", {
+        description: "The agent is not running.",
+      })
+    })
+
+    await user.click(screen.getByRole("button", { name: "Delete CMR" }))
+    const confirm = screen.getByRole("alertdialog", { name: "Delete CMR?" })
+    await user.click(within(confirm).getByRole("button", { name: "Delete" }))
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("CMR was not deleted", {
+        description: "Project is used by a workflow.",
+      })
+    })
+  })
+
   it("has empty states for projects and machine resources", async () => {
     api.checkResources.mockResolvedValue([])
     api.getProfile.mockResolvedValue(profileView())

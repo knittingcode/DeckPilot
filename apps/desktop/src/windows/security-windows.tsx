@@ -6,6 +6,7 @@ import { NewPasswordFields, PasswordField } from "@/components/password-field"
 import { newPasswordReady } from "@/lib/passwords"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { api, errorMessage } from "@/lib/api"
+import { failureMessage } from "@/lib/failure"
 import type { SecurityView } from "@/lib/types"
 
 /**
@@ -61,7 +62,16 @@ function useSecurityView(): ViewState & { reload: () => void } {
         if (!cancelled) setState({ status: "ready", data })
       },
       (error: unknown) => {
-        if (!cancelled) setState({ status: "error", error: errorMessage(error) })
+        if (!cancelled) {
+          setState({
+            status: "error",
+            error: failureMessage(
+              "The protection status could not be read",
+              error,
+              "Restart DeckPilot",
+            ),
+          })
+        }
       },
     )
     return () => {

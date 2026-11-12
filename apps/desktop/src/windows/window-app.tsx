@@ -4,7 +4,8 @@ import { ErrorNotice, Loading } from "@/components/page"
 import { ThemeProvider } from "@/components/theme-provider"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { failureMessage } from "@/lib/failure"
 import type { WindowSpec } from "@/lib/types"
 import { coalescedReporter, naturalSize } from "@/lib/window-fit"
 
@@ -26,7 +27,7 @@ export function WindowApp({ id }: { id: string }) {
         else setError(`this window is not registered as ${id}`)
       },
       (e: unknown) => {
-        setError(errorMessage(e))
+        setError(failureMessage("This window could not load", e, "Close it and try again"))
       },
     )
   }, [id])

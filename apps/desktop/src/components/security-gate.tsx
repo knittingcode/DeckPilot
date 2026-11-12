@@ -5,7 +5,8 @@ import { type ReactNode, useCallback, useEffect, useState } from "react"
 import { SensitiveOperations } from "@/components/authentication"
 import { ErrorNotice, Loading } from "@/components/page"
 import { Button } from "@/components/ui/button"
-import { SECURITY_CHANGED_EVENT, api, errorMessage } from "@/lib/api"
+import { SECURITY_CHANGED_EVENT, api } from "@/lib/api"
+import { failureMessage } from "@/lib/failure"
 import { SecurityContext } from "@/lib/security-context"
 import { promptWindow } from "@/lib/security-prompts"
 import type { SecurityView } from "@/lib/types"
@@ -25,7 +26,7 @@ export function SecurityGate({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(() => {
     api.securityStatus().then(setView, (e: unknown) => {
-      setError(errorMessage(e))
+      setError(failureMessage("The protection status could not be read", e, "Restart DeckPilot"))
     })
   }, [])
 
@@ -47,7 +48,7 @@ export function SecurityGate({ children }: { children: ReactNode }) {
     } else {
       api.openWindow(promptWindow(view)).catch((e: unknown) => {
         // Without a prompt the user must at least see why.
-        setError(errorMessage(e))
+        setError(failureMessage("The unlock window did not open", e, "Restart DeckPilot"))
       })
     }
   }, [view, unlocked])
@@ -88,7 +89,7 @@ export function SecurityGate({ children }: { children: ReactNode }) {
       <Button
         onClick={() => {
           api.openWindow(promptWindow(view)).catch((e: unknown) => {
-            setError(errorMessage(e))
+            setError(failureMessage("The unlock window did not open", e, "Restart DeckPilot"))
           })
         }}
       >

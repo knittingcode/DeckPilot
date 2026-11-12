@@ -21,7 +21,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { failureMessage, toastFailure } from "@/lib/failure"
 import { useSecurity } from "@/lib/security-context"
 import type { AutoLock, Reauthentication, SecurityPolicy, SecurityView } from "@/lib/types"
 
@@ -46,8 +47,11 @@ function canVerify(view: SecurityView): boolean {
   return view.verification !== "confirmationOnly"
 }
 
-function reportError(error: unknown) {
-  if (!isCancelled(error)) toast.error(errorMessage(error))
+/** Reports a failed change, unless the user cancelled the verification. */
+function reportError(what: string) {
+  return (error: unknown) => {
+    if (!isCancelled(error)) toastFailure(what, error)
+  }
 }
 
 /**
@@ -155,7 +159,7 @@ function UnlockMethod() {
                   setView(next)
                   toast.success(`The key is now kept in the ${view.keyStore}`)
                 },
-                reportError,
+                reportError("The protection was not changed"),
               )
             }}
           />
@@ -196,7 +200,7 @@ function ChoosePasswordDialog({ onClose }: { onClose: () => void }) {
         onClose()
       })
       .catch((e: unknown) => {
-        if (!isCancelled(e)) setError(errorMessage(e))
+        if (!isCancelled(e)) setError(failureMessage("The password was not set", e))
       })
       .finally(() => {
         setBusy(false)
@@ -246,7 +250,7 @@ function Policy() {
         setView(updated)
         toast.success("Security settings saved")
       },
-      reportError,
+      reportError("The security settings were not saved"),
     )
   }
   return (
@@ -328,7 +332,7 @@ function LockNow() {
       <Button
         variant="outline"
         onClick={() => {
-          api.lock().then(setView, reportError)
+          api.lock().then(setView, reportError("DeckPilot was not locked"))
         }}
       >
         <LockKeyhole /> Lock now
@@ -415,7 +419,7 @@ function LegacyCopies() {
                 setView(next)
                 toast.success("Unencrypted copy deleted")
               },
-              reportError,
+              reportError("The unencrypted copy was not deleted"),
             )
           }}
         />
@@ -447,7 +451,13 @@ function ChangePassword() {
         toast.success("Password changed")
       })
       .catch((e: unknown) => {
-        setError(errorMessage(e))
+        setError(
+          failureMessage(
+            "The password was not changed",
+            e,
+            "Check the current password and try again",
+          ),
+        )
       })
       .finally(() => {
         setBusy(false)
