@@ -58,8 +58,9 @@ announced=$(jq -r .version "$work/manifest.json")
 [ "$announced" = "$VERSION" ] || fail "$manifest_url announces $announced, expected $VERSION"
 while read -r url; do
   name="${url##*/}"
-  [ "$url" = "$base/download/$tag/$name" ] && [ -f "$work/assets/$name" ] \
-    || fail "the manifest points to $url, which is not a verified asset of $tag"
+  if [ "$url" != "$base/download/$tag/$name" ] || [ ! -f "$work/assets/$name" ]; then
+    fail "the manifest points to $url, which is not a verified asset of $tag"
+  fi
 done < <(jq -r '.platforms[].url' "$work/manifest.json")
 echo "$manifest_url announces $VERSION; every package URL is a verified asset"
 

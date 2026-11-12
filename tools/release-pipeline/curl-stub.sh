@@ -37,5 +37,5 @@ for release in "$dir"/releases/*.json; do
     id=$(jq -r .id "$release")
   fi
 done
-[ -n "$id" ] && [ -f "$dir/assets/$id/$name" ] || missing
+if [ -z "$id" ] || [ ! -f "$dir/assets/$id/$name" ]; then missing; fi
 cp "$dir/assets/$id/$name" "$out"
