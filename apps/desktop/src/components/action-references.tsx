@@ -88,6 +88,19 @@ function ChoiceSelect({
   )
 }
 
+/** A message as a sentence: trimmed, starting upper case, ending with a full stop. */
+function sentence(message: string): string {
+  const text = message.trim()
+  if (!text) return ""
+  const capital = text.charAt(0).toUpperCase() + text.slice(1)
+  return /[.!?…]$/.test(capital) ? capital : `${capital}.`
+}
+
+/** What failed, the backend's reason and what to do, as one line. */
+function failureMessage(what: string, error: unknown, next: string): string {
+  return `${what}: ${sentence(errorMessage(error))} ${sentence(next)}`
+}
+
 /**
  * Deletes an action. While it is used, every key binding, step and node
  * needs a decision first: use another action instead, or unbind it (keys
@@ -126,6 +139,9 @@ export function DeleteActionDialog({
   const confirm = async () => {
     setBusy(true)
     setError(null)
+    // What failed, for the message, and whether earlier steps changed anything.
+    let step = "The references were not replaced"
+    let changed = false
     try {
       // Replacements first: they keep step positions, which unbinding changes.
       const unbind: ReferenceSite[] = []
@@ -145,10 +161,14 @@ export function DeleteActionDialog({
           sites,
         })
         cleared += result.clearedSettings.length
+        changed = true
       }
       if (unbind.length > 0) {
+        step = "The references were not unbound"
         await api.unbindActionReferences(profileId, action.id, { type: "sites", sites: unbind })
+        changed = true
       }
+      step = "The action was not deleted"
       await api.deleteAction(profileId, action.id)
       if (cleared > 0) {
         toast.warning(
@@ -157,7 +177,15 @@ export function DeleteActionDialog({
       }
       onDeleted()
     } catch (e) {
-      setError(errorMessage(e))
+      setError(
+        failureMessage(
+          step,
+          e,
+          changed
+            ? "The changes made before were kept; close this dialog to see the current references"
+            : "Nothing was changed",
+        ),
+      )
     } finally {
       setBusy(false)
     }
