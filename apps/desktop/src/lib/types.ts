@@ -1168,3 +1168,71 @@ export type WorkSessionVariable =
   | "system.work.session.elapsedSeconds"
   | "system.work.session.projectId"
   | "system.work.session.canFinish"
+
+// Work Session page (W6). The shapes the page expects from the protocol 8
+// requests and Tauri commands of docs/gestures-and-work-session.md §9.
+// Proposed here until W5 lands them; W5 owns the final form.
+
+/** How keys and the page show elapsed time: `h:mm` (D4) or `h:mm:ss`. */
+export type ElapsedFormat = "minutes" | "seconds"
+
+/** `work_session_settings` of a profile. */
+export interface WorkSessionSettings {
+  /** Runs before the timer starts; `null`: the session starts at once. */
+  startWorkflow: string | null
+  /** Must declare the output `canFinish` (boolean); `null`: hold the key to finish (D12). */
+  verificationWorkflow: string | null
+  approvalTtlSeconds: number
+  reviewGapSeconds: number
+  elapsedFormat: ElapsedFormat
+  /** Gesture timings of work session keys; unset uses the machine defaults. */
+  doubleClickMs?: number
+  longPressMs?: number
+}
+
+export type WorkSessionReviewKind = "agentDown" | "sleep" | "clockBack" | "clockForward"
+
+/** A gap of uncertain time; counted until the user excludes it (D8). */
+export interface WorkSessionReview {
+  id: number
+  kind: WorkSessionReviewKind
+  fromMs: number
+  toMs: number
+  /** Unset: not reviewed yet (counted). */
+  resolution?: "counted" | "excluded"
+  resolvedAtMs?: number
+}
+
+export interface WorkSessionInterval {
+  seq: number
+  startedAtMs: number
+  /** Unset while the interval is open. */
+  endedAtMs?: number
+  endReason?: "stopped" | "gapExcluded"
+}
+
+export interface WorkSessionTransition {
+  seq: number
+  atMs: number
+  from: string
+  event: string
+  to: string
+}
+
+/** A stored session: the active one, or a finished or aborted one. */
+export type WorkSessionRecordState = Exclude<WorkSessionState, "idle"> | "stopped" | "aborted"
+
+/** One entry of the session history (`listWorkSessions`). */
+export interface WorkSessionSummary {
+  session: string
+  profile: string
+  project?: string
+  state: WorkSessionRecordState
+  requestedAtMs: number
+  startedAtMs?: number
+  stoppedAtMs?: number
+  intervals: WorkSessionInterval[]
+  reviews: WorkSessionReview[]
+  transitions: WorkSessionTransition[]
+  verification?: VerificationRecord
+}
