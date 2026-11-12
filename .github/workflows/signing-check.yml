@@ -1,9 +1,9 @@
 # Proves that the configured signing credentials work, without building or
 # publishing a release:
 #
-# - updater: a throwaway file is signed with the private key from the
-#   repository secrets and verified with the public key from the repository
-#   variable, using the same code the release workflow and the app use;
+# - updater: the private key from the secrets, decrypted with its password,
+#   belongs to the public key from the repository variable
+#   (.github/scripts/updater-key-pair.py, standard library only);
 # - macOS: the Developer ID certificate provides the configured identity of
 #   the configured team, a throwaway executable is signed with it (hardened
 #   runtime, secure timestamp), and Apple's notary service accepts the App
@@ -11,6 +11,16 @@
 #   executable for notarization is optional (manual run with `notarize`).
 #
 # No key material is printed; GitHub masks secrets.
+#
+# While a secret is in a job, no dependency installation, build script or
+# other repository code than .github/scripts runs: the jobs check out only
+# .github/scripts (sparse), restore no cache, install nothing, and pass each
+# secret only to the step that needs it. On pull requests they check out
+# the base commit, so only scripts already on main run next to the secrets;
+# a pull request's changes to them are tested with throwaway keys by the
+# Release pipeline tests (tools/release-pipeline/test-updater-key-pair.sh). Dependabot pull requests get no
+# secrets, so the jobs skip them (a skipped required check counts as
+# passed); pull requests from forks too.
 name: Signing check
 
 on:
@@ -37,46 +47,63 @@ jobs:
   signing:
     name: Updater signing keys match
     runs-on: ubuntu-latest
-    # Secrets are not available to pull requests from forks.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 10
+    # No secrets for pull requests from forks or from Dependabot.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
     steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust toolchain
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          key: signing-check
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Public key is well formed
-        env:
-          DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
-        run: cargo run --locked -p deckpilot-dev -- check-updater-key
-      - name: Sign a throwaway file with the release key
+          # On pull requests the scripts of the base commit (already on
+          # main), never the pull request's own: a change to them runs next
+          # to the secrets only after review and merge.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      # Only for the pull request that introduces the script: its base does
+      # not have it yet. Then no secret is used here, and the first push to
+      # main runs the check with the real secrets.
+      - name: The base commit has the key-pair check
+        id: base
+        run: |
+          if [ -f .github/scripts/updater-key-pair.py ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::the base commit has no .github/scripts/updater-key-pair.py yet; the key pair is checked on the push to main"
+          fi
+      # Python's standard library only (scrypt, BLAKE2b); -I: no site
+      # packages, no environment, nothing from the working directory.
+      - name: Signing key, password and public key belong together
+        if: steps.base.outputs.present == 'true'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo "::error::secret TAURI_SIGNING_PRIVATE_KEY is not configured"; exit 1; }
-          printf 'DeckPilot signing check %s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/signing-check.bin"
-          pnpm --filter @deckpilot/desktop tauri signer sign "$RUNNER_TEMP/signing-check.bin" > /dev/null
-          test -s "$RUNNER_TEMP/signing-check.bin.sig"
-      - name: Signature verifies with the public key
-        env:
           DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
-        run: cargo run --locked -p deckpilot-dev -- verify-signature "$RUNNER_TEMP/signing-check.bin" "$RUNNER_TEMP/signing-check.bin.sig"
+        run: python3 -I .github/scripts/updater-key-pair.py
 
   apple:
     name: Developer ID and notarization credentials
     runs-on: macos-latest
-    # Not on pushes to main: not a required check, and macOS minutes.
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    timeout-minutes: 30
+    # Not on pushes to main: not a required check, and macOS minutes. No
+    # secrets for pull requests from forks or from Dependabot.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # On pull requests the scripts of the base commit (already on
+          # main), never the pull request's own: a change to them runs next
+          # to the secrets only after review and merge.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
       - name: The certificate provides the configured Developer ID identity
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
