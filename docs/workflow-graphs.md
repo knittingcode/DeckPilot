@@ -367,7 +367,10 @@ connected devices):
   next day.
 - **Daylight saving time.** A local time that does not exist on a day
   (clocks go forward) does not fire that day; a time that occurs twice
-  (clocks go back) fires once. Intervals are not affected.
+  (clocks go back) fires once. The next day (or week) it fires as usual.
+  This also holds where clocks change at midnight or by 30 minutes; tests
+  run it in real time zones (Berlin, New York, Santiago, Lord Howe Island).
+  Intervals are not affected.
 
 In the editor, triggers are edited in the workflow panel (nothing
 selected): add a schedule or an event, choose values for the workflow's
