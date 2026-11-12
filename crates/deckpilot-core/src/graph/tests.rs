@@ -2549,3 +2549,5 @@ fn at_most_four_nodes_run_at_the_same_time() {
     assert!(elapsed < Duration::from_millis(1_000), "{elapsed:?}");
     assert_eq!(f.ran().len(), 6);
 }
+
+mod references;
