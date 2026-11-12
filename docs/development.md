@@ -192,6 +192,25 @@ CI (`.github/workflows/ci.yml`) runs the frontend checks on Linux and the
 Rust checks on Linux, macOS and Windows. Agent tests use simulated devices and
 real local IPC; no hardware is needed.
 
+The required checks (Frontend, Storage with SQLCipher, Rust on ubuntu, macos
+and windows, Updater signing keys match) and the Developer ID check run on
+every pull request. The heavier optional jobs run on every push to `main`,
+but on a pull request only when it changes files they depend on; otherwise
+they report as skipped:
+
+| Job | Runs on a pull request that changes |
+| --- | ----------------------------------- |
+| Package check (Linux .deb), Package check (Windows installers) | `apps/desktop/src-tauri/`, `apps/agent/`, `packaging/`, `tools/ci/`, `.github/workflows/`, `Cargo.lock`, `Cargo.toml`, `apps/desktop/package.json` |
+| Credential store (3 platforms) | `crates/deckpilot-keystore/`, `.github/workflows/ci.yml` |
+| Release manifest assembly | `tools/ci/`, `.github/workflows/release.yml`, `.github/workflows/ci.yml` |
+| Compatibility (own workflow) | its path filter in `compatibility.yml` |
+
+The "Changed paths" job decides this with `tools/ci/changed-paths.sh` from
+the files between the pull request's merge commit and its base, and tests
+its rules first (`tools/ci/test-changed-paths.sh`). If the changed files
+cannot be determined, every optional job runs. A skipped job can always be
+run locally with the commands of its steps in `ci.yml`.
+
 ## Conventions
 
 - Clippy runs with `pedantic` lints; CI treats warnings as errors.

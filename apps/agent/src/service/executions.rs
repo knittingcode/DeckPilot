@@ -268,6 +268,7 @@ impl Agent {
         let _ = self.handle.events.send(AgentEvent::ExecutionStarted {
             execution: summary.clone(),
         });
+        self.publish_execution_context(id, start_project);
         // Keys bound to the workflow show that it runs.
         self.render_all();
         Ok(summary)
@@ -366,6 +367,7 @@ impl Agent {
             .handle
             .events
             .send(AgentEvent::ExecutionFinished { execution: summary });
+        self.publish_execution_context(execution, context.project_id());
         self.after_change();
     }
 
