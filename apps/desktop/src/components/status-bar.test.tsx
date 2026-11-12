@@ -29,6 +29,7 @@ import type {
   UpdateState,
 } from "@/lib/types"
 import { moduleStatusItems } from "@/modules"
+import { appContext } from "@/test/render"
 
 /** Listeners of backend events, as the app registers them. */
 const backend = new Map<string, (event: { payload: unknown }) => void>()
@@ -118,24 +119,13 @@ const security = {
 }
 
 function context(overrides: Partial<AppContextValue>): AppContextValue {
-  return {
+  return appContext({
     profiles: { profiles: [], activeProfileId: null },
     editingProfileId: null,
-    setEditingProfileId: vi.fn(),
-    refresh: vi.fn(),
-    revision: 0,
     agent: agent(),
-    setAgent: vi.fn(),
     updates: updates(),
-    setUpdates: vi.fn(),
-    navigate: vi.fn(),
-    openSettings: vi.fn(),
-    closeSettings: vi.fn(),
-    history: { canGoBack: false, canGoForward: false, back: vi.fn(), forward: vi.fn() },
-    modules: [],
-    setModules: vi.fn(),
     ...overrides,
-  }
+  })
 }
 
 function Shell({
