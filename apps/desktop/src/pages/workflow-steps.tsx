@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/select"
 import { useExecutions } from "@/hooks/use-executions"
 import { api, errorMessage } from "@/lib/api"
+import { toastFailure } from "@/lib/failure"
 import { useSnapshot } from "@/hooks/use-status"
 import { EXECUTION_STATE_LABEL, ExecutionStore } from "@/lib/executions"
 import { useTitlebar } from "@/hooks/use-titlebar"
@@ -274,7 +275,9 @@ export function StepEditor({
                       toast.success("Workflow duplicated")
                       onChanged(copy.id)
                     })
-                    .catch((e: unknown) => toast.error(errorMessage(e)))
+                    .catch((e: unknown) => {
+                      toastFailure("The workflow was not duplicated", e)
+                    })
                 }}
               >
                 <Copy /> Duplicate
@@ -294,7 +297,9 @@ export function StepEditor({
                       toast.success("Workflow deleted")
                       onChanged()
                     })
-                    .catch((e: unknown) => toast.error(errorMessage(e)))
+                    .catch((e: unknown) => {
+                      toastFailure("The workflow was not deleted", e)
+                    })
                 }}
               />
             </>

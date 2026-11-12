@@ -1,6 +1,5 @@
 import { Download, RefreshCw, RotateCw } from "lucide-react"
 import { useState } from "react"
-import { toast } from "sonner"
 
 import { ErrorNotice } from "@/components/page"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -16,7 +15,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { toastFailure } from "@/lib/failure"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { useAppContext } from "@/lib/app-context"
 import { formatTimestamp } from "@/lib/format"
@@ -39,11 +39,13 @@ const MODES: { value: UpdateMode; label: string; description: string }[] = [
 
 const INTERVALS = [6, 12, 24, 72, 168]
 
+const INTERNET = "Check your internet connection and try again"
+
 export function UpdatesCard() {
   const { updates, setUpdates } = useAppContext()
   const [busy, setBusy] = useState(false)
   const checkNow = () => {
-    void run(() => api.checkForUpdates())
+    void run(() => api.checkForUpdates(), "Checking for updates failed", INTERNET)
   }
   const downloading = updates?.phase === "downloading" ? updates.progress : null
   useTitlebar({
@@ -70,17 +72,17 @@ export function UpdatesCard() {
   const { preferences, available, progress, phase } = updates
 
   const savePreferences = (change: Partial<UpdatePreferences>) => {
-    api
-      .setUpdatePreferences({ ...preferences, ...change })
-      .then(setUpdates, (e: unknown) => toast.error(errorMessage(e)))
+    api.setUpdatePreferences({ ...preferences, ...change }).then(setUpdates, (e: unknown) => {
+      toastFailure("The update settings were not saved", e)
+    })
   }
-  const run = async (operation: () => Promise<unknown>) => {
+  const run = async (operation: () => Promise<unknown>, failed: string, next?: string) => {
     setBusy(true)
     try {
       await operation()
       setUpdates(await api.updateState())
     } catch (e) {
-      toast.error(errorMessage(e))
+      toastFailure(failed, e, next)
     } finally {
       setBusy(false)
     }
@@ -147,7 +149,7 @@ export function UpdatesCard() {
                   onClick={() => {
                     // Progress follows in its own window as well.
                     void api.openWindow("updates.progress").catch(() => undefined)
-                    void run(() => api.downloadUpdate())
+                    void run(() => api.downloadUpdate(), "The update was not downloaded", INTERNET)
                   }}
                 >
                   <Download /> Download
@@ -158,7 +160,7 @@ export function UpdatesCard() {
                   disabled={busy}
                   onClick={() => {
                     void api.openWindow("updates.progress").catch(() => undefined)
-                    void run(() => api.installUpdate())
+                    void run(() => api.installUpdate(), "The update was not installed")
                   }}
                 >
                   <RotateCw /> Install and restart
