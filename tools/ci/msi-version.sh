@@ -23,7 +23,10 @@ elif [[ "$version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-(alpha|beta|rc)\.([0-9]+)$ ]]; t
   esac
   build=$((offset + 10#$n))
   # WiX allows at most 65535 in each field.
-  [ "$build" -le 65535 ] && [ "$n" -lt 20000 ] || { echo "$version: pre-release number too large for an MSI version" >&2; exit 1; }
+  if [ "$((10#$n))" -ge 20000 ] || [ "$build" -gt 65535 ]; then
+    echo "$version: pre-release number too large for an MSI version" >&2
+    exit 1
+  fi
   echo "$base.$build"
 else
   echo "$version: not a version the MSI can represent (X.Y.Z or X.Y.Z-alpha|beta|rc.N)" >&2
