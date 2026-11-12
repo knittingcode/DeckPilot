@@ -579,169 +579,208 @@ impl Rng {
     }
 }
 
+const DEVICES: [&str; 2] = ["A", "B"];
+const KEYS: u16 = 4;
+const SLOTS: usize = DEVICES.len() * KEYS as usize;
+
 #[derive(Default, Clone)]
 struct Track {
     down: bool,
     /// Gestures fired in the current sequence.
     fired: usize,
-    /// A sequence is in progress (the engine is not idle for the key).
-    active: bool,
 }
 
-#[test]
-fn every_sequence_resolves_to_at_most_one_gesture() {
-    const DEVICES: [&str; 2] = ["A", "B"];
-    const KEYS: u16 = 4;
-    for seed in 1..=200_u64 {
+/// Random sequences on two devices with four keys each, checked as they
+/// go.
+struct Property {
+    rng: Rng,
+    bench: Bench,
+    connection: [u64; 2],
+    contexts: Vec<KeyContext>,
+    tracks: Vec<Track>,
+}
+
+impl Property {
+    fn new(seed: u64) -> Self {
         let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
-        let mut bench = Bench::new();
-        let mut connection = [1_u64; 2];
-        let mut contexts = Vec::new();
-        for _ in 0..DEVICES.len() * usize::from(KEYS) {
-            let bound = BoundGestures {
-                click: rng.chance(70),
-                double_click: rng.chance(50),
-                long_press: rng.chance(50),
-            };
-            let bound = if bound.any() { bound } else { CLICK };
-            let timings = GestureTimings {
-                double_click_ms: 150 + u16::try_from(rng.below(851)).unwrap(),
-                long_press_ms: 300 + u16::try_from(rng.below(4701)).unwrap(),
-            };
-            contexts.push(KeyContext {
-                bound,
-                timings,
-                page: None,
-                generation: 1,
-            });
-        }
-        let mut tracks = vec![Track::default(); contexts.len()];
-        let mut now = 0_u64;
-        for _ in 0..400 {
-            now += rng.below(1500);
-            let at = bench.t(now);
-            // The caller feeds inputs read up to `now`, then advances.
-            let mut outputs = bench.engine.advance(at);
-            let roll = rng.below(100);
-            if roll < 5 {
-                let d = usize::try_from(rng.below(2)).unwrap();
-                let reason = [
-                    GestureCancel::Disconnected,
-                    GestureCancel::PageChanged,
-                    GestureCancel::ProfileChanged,
-                    GestureCancel::Locked,
-                ][usize::try_from(rng.below(4)).unwrap()];
-                check(&outputs, &contexts, &mut tracks, KEYS);
-                outputs.clear();
-                bench.engine.cancel(&device(DEVICES[d]), reason);
-                if reason == GestureCancel::Disconnected {
-                    // The device reconnects with every key up.
-                    for k in 0..usize::from(KEYS) {
-                        tracks[d * usize::from(KEYS) + k].down = false;
-                    }
-                    connection[d] += 1;
+        let contexts = (0..SLOTS)
+            .map(|_| {
+                let bound = BoundGestures {
+                    click: rng.chance(70),
+                    double_click: rng.chance(50),
+                    long_press: rng.chance(50),
+                };
+                KeyContext {
+                    bound: if bound.any() { bound } else { CLICK },
+                    timings: GestureTimings {
+                        double_click_ms: 150 + u16::try_from(rng.below(851)).unwrap(),
+                        long_press_ms: 300 + u16::try_from(rng.below(4701)).unwrap(),
+                    },
+                    page: None,
+                    generation: 1,
                 }
+            })
+            .collect();
+        Self {
+            rng,
+            bench: Bench::new(),
+            connection: [1; 2],
+            contexts,
+            tracks: vec![Track::default(); SLOTS],
+        }
+    }
+
+    fn slot(d: usize, k: u16) -> usize {
+        d * usize::from(KEYS) + usize::from(k)
+    }
+
+    /// One random step at `now`: a cancel or an edge of a random key.
+    fn step(&mut self, now: u64) {
+        let at = self.bench.t(now);
+        // The caller feeds inputs read up to `now`, then advances.
+        let outputs = self.bench.engine.advance(at);
+        self.check(&outputs);
+        let d = usize::try_from(self.rng.below(2)).unwrap();
+        if self.rng.chance(5) {
+            let reason = [
+                GestureCancel::Disconnected,
+                GestureCancel::PageChanged,
+                GestureCancel::ProfileChanged,
+                GestureCancel::Locked,
+            ][usize::try_from(self.rng.below(4)).unwrap()];
+            self.bench.engine.cancel(&device(DEVICES[d]), reason);
+            if reason == GestureCancel::Disconnected {
+                // The device reconnects with every key up.
+                for k in 0..KEYS {
+                    self.tracks[Self::slot(d, k)].down = false;
+                }
+                self.connection[d] += 1;
+            }
+        } else {
+            let k = u16::try_from(self.rng.below(u64::from(KEYS))).unwrap();
+            let slot = Self::slot(d, k);
+            // Mostly real edges, sometimes a repeated one.
+            let repeat = self.rng.chance(3);
+            let pressed = if repeat {
+                self.tracks[slot].down
             } else {
-                let d = usize::try_from(rng.below(2)).unwrap();
-                let k = u16::try_from(rng.below(u64::from(KEYS))).unwrap();
-                let slot = d * usize::from(KEYS) + usize::from(k);
-                // Mostly real edges, sometimes a repeated one.
-                let pressed = if rng.chance(3) {
-                    tracks[slot].down
-                } else {
-                    !tracks[slot].down
-                };
-                tracks[slot].down = pressed;
-                let input = if pressed {
-                    ControlInput::Press
-                } else {
-                    ControlInput::Release
-                };
-                check(&outputs, &contexts, &mut tracks, KEYS);
-                outputs.clear();
-                close_idle(&bench, &mut tracks, &connection, KEYS);
-                outputs = bench.engine.on_input(
-                    at,
-                    &device(DEVICES[d]),
-                    connection[d],
-                    control(k),
-                    input,
-                    || contexts[slot],
-                );
-            }
-            check(&outputs, &contexts, &mut tracks, KEYS);
-            close_idle(&bench, &mut tracks, &connection, KEYS);
-            assert!(bench.engine.pending() <= contexts.len(), "bounded state");
+                !self.tracks[slot].down
+            };
+            self.input(at, d, k, pressed);
         }
-        // Let everything end: release all keys, pass every deadline.
-        now += 10_000;
-        for (slot, context) in contexts.iter().enumerate() {
-            if tracks[slot].down {
-                let d = slot / usize::from(KEYS);
-                let k = u16::try_from(slot % usize::from(KEYS)).unwrap();
-                let at = bench.t(now);
-                let outputs = bench.engine.on_input(
-                    at,
-                    &device(DEVICES[d]),
-                    connection[d],
-                    control(k),
-                    ControlInput::Release,
-                    || *context,
-                );
-                check(&outputs, &contexts, &mut tracks, KEYS);
-                tracks[slot].down = false;
-            }
-        }
-        let outputs = bench.engine.advance(bench.t(now + 10_000));
-        check(&outputs, &contexts, &mut tracks, KEYS);
-        close_idle(&bench, &mut tracks, &connection, KEYS);
-        assert_eq!(
-            bench.engine.pending(),
-            0,
-            "seed {seed}: everything ends idle"
+        self.close_idle();
+        assert!(self.bench.engine.pending() <= SLOTS, "bounded state");
+    }
+
+    fn input(&mut self, at: Instant, d: usize, k: u16, pressed: bool) {
+        let slot = Self::slot(d, k);
+        self.tracks[slot].down = pressed;
+        let input = if pressed {
+            ControlInput::Press
+        } else {
+            ControlInput::Release
+        };
+        self.close_idle();
+        let context = self.contexts[slot];
+        let outputs = self.bench.engine.on_input(
+            at,
+            &device(DEVICES[d]),
+            self.connection[d],
+            control(k),
+            input,
+            || context,
         );
-        assert_eq!(bench.engine.next_deadline(), None);
+        self.check(&outputs);
     }
 
-    fn slot_of(device: &DeviceId, control: ControlId, keys: u16) -> usize {
-        let d = DEVICES.iter().position(|s| *s == device.serial).unwrap();
-        d * usize::from(keys) + usize::from(index(control))
+    /// Releases every key and passes every deadline.
+    fn finish(&mut self, now: u64) {
+        for d in 0..DEVICES.len() {
+            for k in 0..KEYS {
+                if self.tracks[Self::slot(d, k)].down {
+                    self.input(self.bench.t(now), d, k, false);
+                }
+            }
+        }
+        let outputs = self.bench.engine.advance(self.bench.t(now + 10_000));
+        self.check(&outputs);
+        self.close_idle();
     }
 
-    fn check(outputs: &[GestureOutput], contexts: &[KeyContext], tracks: &mut [Track], keys: u16) {
+    fn check(&mut self, outputs: &[GestureOutput]) {
         for output in outputs {
             let GestureOutput::Fired(fired) = output else {
                 panic!("gesture-mode keys never pass edges: {output:?}");
             };
-            let slot = slot_of(&fired.device, fired.control, keys);
+            let d = DEVICES
+                .iter()
+                .position(|s| *s == fired.device.serial)
+                .unwrap();
+            let slot = Self::slot(d, index(fired.control));
             assert!(
-                contexts[slot].bound.has(fired.gesture),
+                self.contexts[slot].bound.has(fired.gesture),
                 "{:?} fired but is not bound",
                 fired.gesture
             );
-            let track = &mut tracks[slot];
+            let track = &mut self.tracks[slot];
             track.fired += 1;
             assert_eq!(track.fired, 1, "more than one gesture in one sequence");
         }
     }
 
-    /// Ends the sequences of keys the engine has forgotten, and starts
-    /// tracking the ones it has begun.
-    fn close_idle(bench: &Bench, tracks: &mut [Track], connection: &[u64; 2], keys: u16) {
-        for (slot, track) in tracks.iter_mut().enumerate() {
-            let d = slot / usize::from(keys);
-            let k = u16::try_from(slot % usize::from(keys)).unwrap();
-            let idle = bench
-                .engine
-                .is_idle(&device(DEVICES[d]), connection[d], control(k));
-            if idle {
-                *track = Track {
-                    down: track.down,
-                    ..Track::default()
-                };
-            } else {
-                track.active = true;
+    /// Ends the sequences of keys the engine has forgotten.
+    fn close_idle(&mut self) {
+        for (d, serial) in DEVICES.iter().enumerate() {
+            for k in 0..KEYS {
+                let idle =
+                    self.bench
+                        .engine
+                        .is_idle(&device(serial), self.connection[d], control(k));
+                if idle {
+                    self.tracks[Self::slot(d, k)].fired = 0;
+                }
             }
+        }
+    }
+}
+
+#[test]
+fn every_sequence_resolves_to_at_most_one_gesture() {
+    for seed in 1..=200_u64 {
+        let mut property = Property::new(seed);
+        let mut now = 0_u64;
+        for _ in 0..400 {
+            now += property.rng.below(1500);
+            property.step(now);
+        }
+        property.finish(now + 10_000);
+        let engine = &property.bench.engine;
+        assert_eq!(engine.pending(), 0, "seed {seed}: everything ends idle");
+        assert_eq!(engine.next_deadline(), None);
+    }
+}
+
+#[derive(Default)]
+struct Sequence {
+    active: bool,
+    fired: usize,
+}
+
+impl Sequence {
+    /// Counts `fired` and checks the sequence once the key is idle.
+    /// Returns 1 when a sequence ended.
+    fn settle(&mut self, bench: &Bench, fired: usize, bound: BoundGestures) -> usize {
+        self.fired += fired;
+        if bench.engine.is_idle(&device("A"), 1, control(0)) {
+            let ended = self.active || self.fired > 0;
+            if ended {
+                assert_eq!(self.fired, 1, "{bound:?}");
+            }
+            *self = Self::default();
+            usize::from(ended)
+        } else {
+            self.active = true;
+            0
         }
     }
 }
@@ -760,7 +799,7 @@ fn an_uncancelled_sequence_with_click_bound_fires_exactly_once() {
         let mut bench = Bench::new();
         let mut seq = Sequence::default();
         let mut now = 0;
-        for _ in 0..1 + rng.below(3) {
+        for _ in 0..=rng.below(3) {
             now += rng.below(600);
             let out = bench.advance(now);
             ended += seq.settle(&bench, out.len(), bound);
@@ -777,29 +816,4 @@ fn an_uncancelled_sequence_with_click_bound_fires_exactly_once() {
         assert!(!seq.active, "every sequence ended");
     }
     assert!(ended >= 500, "sequences were checked");
-
-    #[derive(Default)]
-    struct Sequence {
-        active: bool,
-        fired: usize,
-    }
-
-    impl Sequence {
-        /// Counts `fired` and checks the sequence once the key is idle.
-        /// Returns 1 when a sequence ended.
-        fn settle(&mut self, bench: &Bench, fired: usize, bound: BoundGestures) -> usize {
-            self.fired += fired;
-            if bench.engine.is_idle(&device("A"), 1, control(0)) {
-                let ended = self.active || self.fired > 0;
-                if ended {
-                    assert_eq!(self.fired, 1, "{bound:?}");
-                }
-                *self = Self::default();
-                usize::from(ended)
-            } else {
-                self.active = true;
-                0
-            }
-        }
-    }
 }

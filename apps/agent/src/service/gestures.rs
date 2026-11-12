@@ -104,10 +104,9 @@ impl Agent {
                 control,
             )
         };
-        let outputs =
-            gestures
-                .engine
-                .on_input(at, device, session, control, input, context);
+        let outputs = gestures
+            .engine
+            .on_input(at, device, session, control, input, context);
         self.handle_gesture_outputs(outputs);
     }
 

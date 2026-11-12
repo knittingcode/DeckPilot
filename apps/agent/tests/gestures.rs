@@ -75,7 +75,7 @@ impl GestureHooks for Recorder {
                 click: true,
                 ..BoundGestures::default()
             },
-            LONG_KEY => BoundGestures {
+            LONG_KEY | HOLD_KEY => BoundGestures {
                 click: true,
                 long_press: true,
                 ..BoundGestures::default()
@@ -83,11 +83,6 @@ impl GestureHooks for Recorder {
             DOUBLE_KEY => BoundGestures {
                 click: true,
                 double_click: true,
-                ..BoundGestures::default()
-            },
-            HOLD_KEY => BoundGestures {
-                click: true,
-                long_press: true,
                 ..BoundGestures::default()
             },
             _ => return None,
