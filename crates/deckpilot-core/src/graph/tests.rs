@@ -412,6 +412,58 @@ fn parallel_branches_run_concurrently_and_join_once() {
     assert_eq!(order[4..], ["join", "last"]);
 }
 
+#[test]
+fn parallel_branches_beyond_the_limit_wait_for_a_free_slot() {
+    let mut f = Fixture::new();
+    let names = ["b1", "b2", "b3", "b4", "b5", "b6"];
+    let mut nodes = vec![
+        node("start", NodeKind::Trigger),
+        node("fork", NodeKind::Parallel),
+        node("join", NodeKind::Join),
+    ];
+    let mut edges = vec![edge("start", Port::Out, "fork")];
+    for name in names {
+        let probe = f.probe(name, &[("sleep_ms", ParameterValue::Integer(150))]);
+        nodes.push(action(name, probe));
+        edges.push(edge("fork", Port::Out, name));
+        edges.push(edge(name, Port::Out, "join"));
+    }
+    let workflow = f.workflow(graph(nodes, edges));
+    assert!(f.issues(workflow).is_empty(), "{:?}", f.issues(workflow));
+    let started = Instant::now();
+    let (report, events, _) = f.run_with(workflow, &CancellationToken::new());
+    let elapsed = started.elapsed();
+    assert_eq!(report.status, RunStatus::Succeeded);
+
+    // Never more than `max_parallel` (4) branches at once.
+    let limit = ExecutionLimits::default().max_parallel;
+    let mut running = 0usize;
+    let mut most = 0usize;
+    for event in &events {
+        match event {
+            ExecutionEvent::NodeStarted { node } if names.contains(&node.as_str()) => {
+                running += 1;
+                most = most.max(running);
+            }
+            ExecutionEvent::NodeFinished { report } if names.contains(&report.node.as_str()) => {
+                running -= 1;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(most, limit, "{events:?}");
+    // Six 150 ms branches, four at a time: two rounds.
+    assert!(elapsed >= Duration::from_millis(290), "{elapsed:?}");
+    // Every branch ran exactly once, and the Join after all of them.
+    let mut ran = f.ran();
+    ran.sort_unstable();
+    assert_eq!(ran, names);
+    assert_eq!(status(&report, "join"), NodeStatus::Succeeded);
+    let order: Vec<_> = report.nodes.iter().map(|r| r.node.as_str()).collect();
+    assert_eq!(order.last(), Some(&"join"));
+    assert_eq!(order.iter().filter(|n| **n == "join").count(), 1);
+}
+
 fn select_project(f: &mut Fixture, name: &str, key: &str) -> crate::ActionInstanceId {
     let project = f
         .profile

@@ -310,7 +310,13 @@ Since version 0.4 the database is encrypted with SQLCipher; see
 preceded by an integrity check and a verified, encrypted backup in
 `backups/`, runs in one `IMMEDIATE` transaction that re-reads the version
 (two processes opening an old database at once cannot both migrate it), and
-is verified afterwards.
+is verified afterwards. The upgrade is recorded in `migration_history` as
+`unverified` in the same transaction and becomes `ok` only once the
+committed database passes its integrity check. If the check fails (or the
+process stops before it ran), the database stays upgraded but is refused
+with `MigrationFailed`, naming the backup, on every start until a check
+passes; it is never used unchecked, and nothing is upgraded or backed up
+again. Restoring the named backup returns to the previous state.
 
 | Table              | Purpose                                              |
 | ------------------ | ---------------------------------------------------- |
@@ -428,6 +434,24 @@ rollback-journal mode; a truncated or damaged copy is reported as damaged
 and left byte-identical, without side files or backups. The real
 0.5.0-2 agent given a schema 7 database is tested by
 `tools/compat/matrix.sh` ([Compatibility](compatibility.md)).
+The storage unit tests in `src/upgrade_tests.rs` compare the same fixture row
+by row: every row and table definition of schema 5 is unchanged after the
+upgrade, which only adds `workflow_executions` and `credentials` and one
+`migration_history` row, and opening the upgraded database again changes
+nothing. They also make the upgrade fail at injected points (after migration
+6, after migration 7, just before the commit, and while the backup is
+written) and kill a child process at the same points with the transaction
+open: in every case the database is still the schema 5 fixture row for row,
+the backup made before the upgrade is complete and holds that state, an
+unverified backup copy is never left under a backup's name (it is written as
+`….db.partial` and renamed once verified), and the next start upgrades
+normally. A failed integrity check after the commit (injected) leaves the
+database at schema 7 marked `unverified` and refused, row for row
+unchanged by each refused start, with the backup intact; it is accepted and
+marked `ok` once a check passes, and restoring the named backup returns to
+the fixture row for row. A process killed between the commit and the check
+is verified on the next start.
+
 Upgrades from schemas 1 to 4 are covered by the storage unit tests
 (`migrates_a_version_one_database_without_losing_data`,
 `upgrades_are_preceded_by_a_verified_encrypted_backup`); no database from a

@@ -157,7 +157,14 @@ impl AgentClient {
                 io::ErrorKind::TimedOut,
                 "the agent did not answer the handshake",
             ))
-        })??;
+        })?
+        // Closed before it answered: an agent that is stopping (on Windows
+        // the pipe instance of a stopped agent can still be opened for a
+        // moment). Nothing runs that could serve this client.
+        .map_err(|error| match error {
+            ClientError::Closed => ClientError::NotRunning,
+            other => other,
+        })?;
         match welcome {
             ServerMessage::Welcome {
                 agent_version,
