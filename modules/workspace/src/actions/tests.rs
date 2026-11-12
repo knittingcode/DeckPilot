@@ -540,6 +540,92 @@ fn capabilities_are_required() {
     assert_eq!(launcher.plans().len(), 0);
 }
 
+/// A link at `link` to `target`; false where links cannot be made
+/// (Windows without the privilege).
+fn make_link(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    let made = if target.is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
+    made.is_ok()
+}
+
+#[test]
+fn files_reached_through_links_must_stay_in_the_repository() {
+    let fixture = fixture();
+    let repo = fixture.repo();
+    // secret.txt is next to the repository, not in it.
+    let made = make_link(&fixture.dir.join("secret.txt"), &repo.join("leak.txt"))
+        && make_link(&fixture.dir.join("handbook"), &repo.join("book"))
+        && make_link(&repo.join("src/main.rs"), &repo.join("entry.rs"))
+        && make_link(&repo.join("gone.rs"), &repo.join("dangling.rs"));
+    if !made {
+        eprintln!("links cannot be made here; skipped");
+        return;
+    }
+    let launcher = Arc::new(RecordingLauncher::new());
+    let run = |path: &str| {
+        run_with(
+            OPEN_IN_EDITOR,
+            &launcher,
+            &editor_parameters()
+                .with("path", text(path))
+                .with("line", ParameterValue::Integer(1)),
+            &fixture.context(),
+        )
+    };
+    for outside in ["leak.txt", "book"] {
+        let result = run(outside);
+        assert_eq!(
+            result.code.as_deref(),
+            Some(system_codes::INVALID_PATH),
+            "{outside}: {}",
+            result.message
+        );
+    }
+    assert_eq!(
+        run("dangling.rs").code.as_deref(),
+        Some(system_codes::NOT_FOUND)
+    );
+    assert_eq!(launcher.plans().len(), 0);
+    let inside = run("entry.rs");
+    assert!(inside.is_success(), "{}", inside.message);
+    assert_eq!(launcher.plans().len(), 1);
+
+    // The repository resource may itself be a link.
+    let linked = fixture.dir.join("shop-link");
+    assert!(make_link(&repo, &linked));
+    let mut machine = fixture.machine.clone();
+    machine.set_binding(MachineResourceBinding {
+        key: key("shop.repository"),
+        kind: ResourceKind::Directory,
+        value: linked.display().to_string(),
+    });
+    let context = ExecutionContext::new(
+        &fixture.profile,
+        Some(&fixture.profile.projects[0]),
+        &machine,
+    );
+    let through = run_with(
+        OPEN_IN_EDITOR,
+        &launcher,
+        &editor_parameters().with("path", text("src/main.rs")),
+        &context,
+    );
+    assert!(through.is_success(), "{}", through.message);
+    let leak = run_with(
+        OPEN_IN_EDITOR,
+        &launcher,
+        &editor_parameters().with("path", text("leak.txt")),
+        &context,
+    );
+    assert_eq!(leak.code.as_deref(), Some(system_codes::INVALID_PATH));
+}
+
 #[test]
 fn missing_and_mismatched_resources_open_nothing() {
     let fixture = fixture();

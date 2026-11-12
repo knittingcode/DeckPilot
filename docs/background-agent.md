@@ -82,7 +82,7 @@ exist yet.
 
 | Situation                        | Behaviour                                                        |
 | -------------------------------- | ---------------------------------------------------------------- |
-| Agent starts                     | Takes an exclusive lock on `agent.lock`; a second instance exits |
+| Agent starts                     | Takes an exclusive lock on `agent.lock`; a second instance exits (after waiting up to 5 s, see below) |
 | Configuration app starts         | Connects to the running agent, or starts it if it is not running |
 | Configuration app closes         | Agent keeps running                                              |
 | Device unplugged                 | Device marked disconnected; agent keeps running                  |
@@ -90,7 +90,12 @@ exist yet.
 | Quit (tray), `Shutdown` request, Ctrl+C, SIGTERM | Keys blanked, IPC closed, token removed, lock released |
 
 The lock is an OS file lock, so it is released automatically if the process
-crashes.
+crashes. A starting agent waits up to 5 seconds for the lock before it
+concludes that another agent is running: a stopping agent closes its
+endpoint before it has finished and released the lock, and a restart (the
+app's "restart agent", an update) starts the next agent as soon as the
+endpoint is gone. After a crash the new agent replaces the stale socket
+file and token; the old token is no longer accepted.
 
 ### Start at login
 
@@ -119,11 +124,19 @@ with a busy timeout).
 
 Transport:
 
-- **Linux/macOS**: Unix domain socket in a per-user directory
-  (`$XDG_RUNTIME_DIR/deckpilot-<uid>` or the per-user temporary directory)
-  with mode `0700`. The agent verifies the directory's owner and permissions.
-  On Linux the socket file additionally has mode `0600`. Abstract sockets are
-  never used.
+- **Linux/macOS**: Unix domain socket `agent-<hash>.sock` in a per-user
+  directory `deckpilot-<uid>` with mode `0700`, located in
+  `$XDG_RUNTIME_DIR` or, without it, the temporary directory (`$TMPDIR`).
+  Socket paths are limited to 104 bytes on macOS and 108 on Linux; when the
+  path there would be longer (a long `TMPDIR`), the directory is
+  `/tmp/deckpilot-<uid>` instead. The choice depends only on the
+  environment and the data directory, so the agent and a client started
+  with the same environment agree. The agent creates the directory with
+  mode `0700`; both the agent and every client refuse it if it is a symlink,
+  belongs to another user or is accessible to group or others (it is not
+  repaired, since another user may already have placed a socket in it), so
+  the token is never sent to a socket someone else controls. On Linux the
+  socket file additionally has mode `0600`. Abstract sockets are never used.
 - **Windows**: a named pipe with a security descriptor that grants access only
   to the owner and SYSTEM; remote clients are rejected.
 

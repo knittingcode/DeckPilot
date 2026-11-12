@@ -3,7 +3,7 @@
 use std::process::ExitCode;
 
 use deckpilot_agent::autostart::Autostart;
-use deckpilot_agent::{Agent, InstanceLock, LockError, default_options};
+use deckpilot_agent::{Agent, InstanceLock, LockError, STARTUP_LOCK_WAIT, default_options};
 use deckpilot_device::{DeviceModel, models};
 use deckpilot_ipc::AgentPaths;
 use tracing::{error, info};
@@ -174,7 +174,9 @@ fn main() -> ExitCode {
     };
     let _guard = init_logging(&paths, args.level);
 
-    let lock = match InstanceLock::acquire(&paths.lock_file) {
+    // A previous agent may still be finishing its shutdown (a restart or an
+    // update starts the next one as soon as the endpoint closes).
+    let lock = match InstanceLock::acquire_waiting(&paths.lock_file, STARTUP_LOCK_WAIT) {
         Ok(lock) => lock,
         Err(LockError::AlreadyRunning) => {
             info!("the agent is already running");
