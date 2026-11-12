@@ -31,6 +31,7 @@ pub mod references;
 mod sqlite;
 #[cfg(all(test, feature = "sqlcipher"))]
 mod upgrade_tests;
+pub mod variable_references;
 pub mod variables;
 pub mod vault;
 
@@ -150,6 +151,10 @@ pub enum StorageError {
     VariableValuesConflict { key: String, count: usize },
     #[error(transparent)]
     Variable(#[from] deckpilot_core::variables::DefinitionIssue),
+    /// The variable is still used; nothing was changed. Remove or replace
+    /// the listed references first.
+    #[error("the variable is still used in {} place(s); remove those references first", .0.len())]
+    VariableInUse(Vec<variable_references::VariableReference>),
     /// The action is still used; nothing was deleted. Replace or unbind
     /// the listed uses first.
     #[error("the action is still used in {} place(s); replace or unbind those first", .0.len())]
