@@ -61,7 +61,11 @@ with `gtk-launch`), and on Windows `rundll32 url.dll,FileProtocolHandler`
 for pages and files, `explorer` for folders and the executable itself for
 applications. Other URL schemes (`file:`, `javascript:`, custom handlers)
 are refused because they can start programs. Relative paths cannot leave
-their resource (`..`, absolute paths and drive letters are refused). An
+their resource (`..`, absolute paths and drive letters are refused), and
+what they lead to must be inside it too: a link (symlink) inside the
+resource that points outside it is refused with `invalid-path`, a link to
+nothing is `not-found`; links that stay inside, and a resource folder that
+is itself a link, are fine. An
 opened application is independent of the workflow: cancelling does not
 close it.
 
@@ -555,8 +559,8 @@ arguments go through `open -a … --args`, which only reaches an editor that
 is not running yet. A tool given by path must exist.
 
 **Paths** follow the System module's rules: relative to the folder, no
-`..`, no absolute paths or drive letters, and the file or folder must exist
-(`invalid-path`, `not-found`).
+`..`, no absolute paths or drive letters, no links that lead outside the
+folder, and the file or folder must exist (`invalid-path`, `not-found`).
 
 **Pages** follow the System module's URL rules, limited to `http` and
 `https` (no `mailto`, `file`, `javascript:` or application schemes:

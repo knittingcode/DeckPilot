@@ -980,6 +980,7 @@ dependencies = [
  "deckpilot-render",
  "deckpilot-storage",
  "deckpilot-update",
+ "minisign",
  "serde",
  "serde_json",
  "tauri",
@@ -1053,6 +1054,7 @@ name = "deckpilot-keystore"
 version = "0.6.0"
 dependencies = [
  "apple-native-keyring-store",
+ "getrandom 0.3.4",
  "keyring-core",
  "thiserror 2.0.21",
  "windows-native-keyring-store",

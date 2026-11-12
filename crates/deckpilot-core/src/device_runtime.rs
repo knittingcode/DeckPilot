@@ -86,6 +86,10 @@ pub struct Runtime {
     devices: DeviceRegistry,
     /// Page stack per connected device; the last entry is the visible page.
     navigation: BTreeMap<DeviceId, Vec<PageId>>,
+    /// Page stacks of devices that were disconnected, so that a device that
+    /// comes back (a loose cable, a hub reset) shows the page it showed.
+    /// Forgotten when the profile changes.
+    parked: BTreeMap<DeviceId, Vec<PageId>>,
     /// Shown instead of "No profile" while there is no profile, e.g.
     /// "Locked" while the configuration is encrypted and not unlocked.
     placeholder: Option<String>,
@@ -100,6 +104,7 @@ impl Runtime {
             session: None,
             devices: DeviceRegistry::default(),
             navigation: BTreeMap::new(),
+            parked: BTreeMap::new(),
             placeholder: None,
         }
     }
@@ -153,6 +158,7 @@ impl Runtime {
     /// `project` when it belongs to the profile, and every connected device
     /// returns to the home page of its layout. No action is executed.
     pub fn set_profile(&mut self, profile: Option<Profile>, project: Option<ProjectId>) {
+        self.parked.clear();
         self.session = profile.map(|profile| Session {
             projects: ActiveProjectContext::restore(&profile, project),
             profile,
@@ -276,6 +282,13 @@ impl Runtime {
             .and_then(|stack| stack.last().copied())
     }
 
+    /// Whether every page of `stack` exists in the layout for `device`.
+    fn pages_exist(&self, device: &DeviceId, stack: &[PageId]) -> bool {
+        self.layout_for(&device.model).is_some_and(|layout| {
+            !stack.is_empty() && stack.iter().all(|page| layout.page(*page).is_some())
+        })
+    }
+
     fn reset_navigation(&mut self, device: &DeviceId) {
         let home = self
             .layout_for(&device.model)
@@ -368,14 +381,21 @@ impl Runtime {
         match event {
             DeviceEvent::Connected { device } => {
                 self.devices.apply(event);
-                self.reset_navigation(device);
+                match self.parked.remove(device) {
+                    Some(stack) if self.pages_exist(device, &stack) => {
+                        self.navigation.insert(device.clone(), stack);
+                    }
+                    _ => self.reset_navigation(device),
+                }
                 Ok(RuntimeOutcome::DeviceConnected {
                     device: device.clone(),
                 })
             }
             DeviceEvent::Disconnected { device } => {
                 self.devices.apply(event);
-                self.navigation.remove(device);
+                if let Some(stack) = self.navigation.remove(device) {
+                    self.parked.insert(device.clone(), stack);
+                }
                 Ok(RuntimeOutcome::DeviceDisconnected {
                     device: device.clone(),
                 })
@@ -785,6 +805,95 @@ mod tests {
         let faces = runtime.faces(&device());
         assert_eq!(faces[0].1.detail.as_deref(), Some("CMS"));
         assert!(faces[2].1.highlighted);
+    }
+
+    fn connect(runtime: &mut Runtime, device: &DeviceId) {
+        runtime
+            .handle_event(&DeviceEvent::Connected {
+                device: device.clone(),
+            })
+            .unwrap();
+    }
+
+    fn disconnect(runtime: &mut Runtime, device: &DeviceId) {
+        runtime
+            .handle_event(&DeviceEvent::Disconnected {
+                device: device.clone(),
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn a_reconnected_device_returns_to_its_page() {
+        let f = fixture();
+        let home = f.profile.layouts[0].home_page;
+        let folder = f.profile.layouts[0].pages[1].id;
+        let mut runtime = runtime();
+        runtime.set_profile(Some(f.profile.clone()), None);
+        connect(&mut runtime, &device());
+        runtime.handle_event(&press(1)).unwrap();
+        assert_eq!(runtime.current_page(&device()), Some(folder));
+
+        disconnect(&mut runtime, &device());
+        assert_eq!(runtime.current_page(&device()), None);
+        connect(&mut runtime, &device());
+        assert_eq!(runtime.current_page(&device()), Some(folder));
+        // The restored stack still knows the way back.
+        runtime.handle_event(&press(1)).unwrap();
+        assert_eq!(runtime.current_page(&device()), Some(home));
+
+        // A page deleted while the device was away: back to home.
+        runtime.handle_event(&press(1)).unwrap();
+        disconnect(&mut runtime, &device());
+        let mut edited = f.profile.clone();
+        edited.layouts[0].pages.retain(|page| page.id != folder);
+        edited.layouts[0].pages[0]
+            .bindings
+            .retain(|binding| binding.target != BindingTarget::OpenPage { page: folder });
+        runtime.reload_profile(edited);
+        connect(&mut runtime, &device());
+        assert_eq!(runtime.current_page(&device()), Some(home));
+
+        // Another profile while the device was away: its home page.
+        runtime.set_profile(Some(f.profile.clone()), None);
+        runtime.handle_event(&press(1)).unwrap();
+        disconnect(&mut runtime, &device());
+        runtime.set_profile(Some(f.profile), None);
+        connect(&mut runtime, &device());
+        assert_eq!(runtime.current_page(&device()), Some(home));
+    }
+
+    #[test]
+    fn devices_navigate_independently() {
+        let f = fixture();
+        let home = f.profile.layouts[0].home_page;
+        let folder = f.profile.layouts[0].pages[1].id;
+        let mut runtime = runtime();
+        runtime.set_profile(Some(f.profile), None);
+        let other = DeviceId {
+            model: device().model,
+            serial: "OTHER".into(),
+        };
+        connect(&mut runtime, &device());
+        connect(&mut runtime, &other);
+
+        runtime.handle_event(&press(1)).unwrap();
+        assert_eq!(runtime.current_page(&device()), Some(folder));
+        assert_eq!(runtime.current_page(&other), Some(home));
+        assert_eq!(runtime.faces(&other)[1].1.style, FaceStyle::Folder);
+
+        disconnect(&mut runtime, &device());
+        assert_eq!(runtime.current_page(&other), Some(home));
+        let input = DeviceEvent::Input {
+            device: device(),
+            control: ControlId::Key { index: 1 },
+            input: ControlInput::Press,
+        };
+        assert!(matches!(
+            runtime.handle_event(&input).unwrap(),
+            RuntimeOutcome::Ignored { .. }
+        ));
+        assert_eq!(runtime.current_page(&other), Some(home));
     }
 
     #[test]
