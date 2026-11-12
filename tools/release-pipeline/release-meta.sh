@@ -44,8 +44,9 @@ for target in $targets; do
         [ "$codesign" = developer-id ] || fail "$target: signing failed (code signature: $codesign)"
         [ "$notarized" = true ] || fail "$target: notarization failed or was skipped"
       else
-        [ "$codesign" = unsigned ] && [ "$notarized" != true ] \
-          || fail "$target: signing was not configured, but the build reports $codesign/$notarized"
+        if [ "$codesign" != unsigned ] || [ "$notarized" = true ]; then
+          fail "$target: signing was not configured, but the build reports $codesign/$notarized"
+        fi
       fi
       ;;
     *-windows-*)
