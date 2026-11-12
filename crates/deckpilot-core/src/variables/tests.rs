@@ -761,3 +761,20 @@ fn the_frontend_mirrors_every_variant() {
         );
     }
 }
+
+#[test]
+fn status_fields_use_the_frontend_names() {
+    let redacted = ReferenceStatus::Redacted {
+        value_type: VariableType::String,
+        source: ValueSource::Default,
+    };
+    let json = serde_json::to_value(&redacted).unwrap();
+    assert_eq!(
+        json,
+        json!({"status": "redacted", "valueType": {"type": "string"}, "source": {"type": "default"}})
+    );
+    assert_eq!(
+        serde_json::from_value::<ReferenceStatus>(json).unwrap(),
+        redacted
+    );
+}
