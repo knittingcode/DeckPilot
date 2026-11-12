@@ -422,8 +422,24 @@ describe("Action references", () => {
     await user.click(within(dialog).getByRole("combobox", { name: "For all references" }))
     await user.click(screen.getByRole("option", { name: "Replace with “Docker status”" }))
     await user.click(within(dialog).getByRole("button", { name: "Apply and delete" }))
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("the action is still used")
+    // What failed, the backend's reason, and that the replacement made before stays.
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "The action was not deleted: The action is still used. The changes made before were kept; close this dialog to see the current references.",
+    )
     expect(toast.success).not.toHaveBeenCalledWith("Action deleted")
+  })
+
+  it("says nothing changed when the first step fails", async () => {
+    api.replaceActionReferences.mockRejectedValue("a selected place no longer uses this action")
+    const { user } = await openDocs()
+    const dialog = await openDelete(user)
+    await user.click(within(dialog).getByRole("combobox", { name: "For all references" }))
+    await user.click(screen.getByRole("option", { name: "Replace with “Docker status”" }))
+    await user.click(within(dialog).getByRole("button", { name: "Apply and delete" }))
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "The references were not replaced: A selected place no longer uses this action. Nothing was changed.",
+    )
+    expect(api.deleteAction).not.toHaveBeenCalled()
   })
 
   it("does not change anything when cancelled", async () => {
