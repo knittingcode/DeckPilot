@@ -39,6 +39,17 @@ export type ParameterValue =
   | { type: "choice"; value: string }
   | { type: "resource"; value: ResourceRef }
   | { type: "project"; value: string }
+  /**
+   * The whole value from one reference, without braces, e.g.
+   * `shared.projects.favorite`; keeps the native type. Resolved by the agent
+   * when the action runs.
+   */
+  | { type: "reference"; value: string }
+  /**
+   * Text with `{{ … }}` references, for text kinds only. Literal `text`
+   * values are never parsed for `{{`.
+   */
+  | { type: "template"; value: string }
 
 export type ActionParameters = Record<string, ParameterValue>
 
@@ -60,6 +71,11 @@ export interface ActionType {
   requiresProject: boolean
   /** Always sent by the backend; optional for fixtures. */
   node?: NodeSpec
+  /**
+   * Replaced by another type: saved actions of this type keep working, but
+   * it is not offered for new ones. Omitted when false.
+   */
+  deprecated?: boolean
 }
 
 export interface ActionInstance {
