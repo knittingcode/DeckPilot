@@ -16,6 +16,28 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Which optional jobs a pull request needs (tools/ci/changed-paths.sh).
+  # Required checks never depend on it; on pushes to main every optional
+  # job runs. A job whose paths did not change reports as skipped.
+  changes:
+    name: Changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      packaging: ${{ steps.paths.outputs.packaging }}
+      keystore: ${{ steps.paths.outputs.keystore }}
+      release_manifest: ${{ steps.paths.outputs.release_manifest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The pull request's merge commit and its first parent, the base.
+          fetch-depth: 2
+      - name: The path rules work
+        run: tools/ci/test-changed-paths.sh
+      - id: paths
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: tools/ci/changed-paths.sh
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
@@ -98,6 +120,8 @@ jobs:
   # names that the test creates and deletes (never DeckPilot's own).
   keystore:
     name: Credential store (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.keystore == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -131,6 +155,8 @@ jobs:
   # signed by a throwaway key. Nothing is published.
   release-manifest:
     name: Release manifest assembly
+    needs: changes
+    if: needs.changes.outputs.release_manifest == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -157,6 +183,8 @@ jobs:
   # key, to catch packaging mistakes before a release. Nothing is published.
   package-linux:
     name: Package check (Linux .deb)
+    needs: changes
+    if: needs.changes.outputs.packaging == 'true'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -194,6 +222,8 @@ jobs:
   # checks their contents. Not code-signed; nothing is published.
   package-windows:
     name: Package check (Windows installers)
+    needs: changes
+    if: needs.changes.outputs.packaging == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
