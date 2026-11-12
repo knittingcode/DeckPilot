@@ -63,27 +63,23 @@ import { type CatalogEntry, DRAG_TYPE, actionEntry, flowEntries, moduleGroups } 
 import { CatalogPanel } from "./catalog-panel"
 import { type Lookup, describeNode } from "./describe"
 import { type Panels, loadPanels, loadViewport, savePanels, saveViewport } from "./view-state"
+import { commit, history, redo, replace, settle, undo } from "@/lib/history"
+
 import {
   type Clipboard,
   MAX_NODES,
   PORT_LABEL,
   addNode,
   autoLayout,
-  commit,
   connect,
   connectionProblem,
   copy,
   freePosition,
-  history,
   outputPorts,
   paste,
   reconnect,
-  redo,
   removeEdges,
   removeNodes,
-  replace,
-  settle,
-  undo,
   updateNode,
 } from "./graph"
 import { IssueList, NodeInspector } from "./inspector"
