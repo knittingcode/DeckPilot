@@ -82,6 +82,21 @@ While the session runs:
 - **Window configuration** (`tauri.conf.json`: titlebar style, traffic-light
   position, window sizes) and **capabilities** are read when the window is
   created. Change them, then `make restart`; HMR cannot apply them.
+- **Closing the app window** ends `tauri dev` and its Vite server; the agent
+  keeps running. The tray's **Open DeckPilot** (or `deckpilot-dev open-ui`)
+  starts the app again with its server: the supervisor gives its agent
+  `DECKPILOT_DESKTOP_BIN` pointing at `deckpilot-dev` itself and
+  `DECKPILOT_DEV_UI_LAUNCHER` naming the session's directory, so the agent
+  asks *that* session's supervisor to run `tauri dev` again instead of
+  starting the bare debug app, which has no server to load from. While the
+  app runs, further clicks only bring its window to the front.
+  `deckpilot-dev show` sends the same request as the tray.
+- A debug build of the app started **without its Vite server** (for example
+  `target/debug/deckpilot-desktop` on its own) shows a built-in page naming
+  the server address, the data directory and how to start the server,
+  instead of a blank window. Its Retry button checks again and opens the
+  interface once the server answers. Release builds embed the frontend and
+  never show this page.
 
 | Command        | Purpose                                                        |
 | -------------- | -------------------------------------------------------------- |
@@ -92,6 +107,7 @@ While the session runs:
 | `make logs`    | Follow the agent and app logs (timestamped, colours removed)   |
 | `make agent`   | Run only the agent in the foreground (dev data)                |
 | `make ui`      | Run only the app with HMR in the foreground (dev data)         |
+| `cargo run -p deckpilot-dev -- open-ui` | Start the session's app again if it is not running (what the tray does) |
 | `make seed`    | Seed an empty dev database (`cargo run -p deckpilot-dev -- seed --reset` starts over) |
 | `make clean`   | Remove build output, logs and session files (keeps dev data)   |
 
@@ -110,7 +126,16 @@ it behaves the same on Linux, macOS and Windows:
   devices and releases them), then stops the app's process tree with a
   grace period. No pattern-based process killing is used.
 - Logs are written to `.dev/logs/agent.log`, `ui.log` and `supervisor.log`
-  with a timestamp per line. The agent additionally keeps its own rotating
+  with a timestamp per line. Requests to start the app again are noted in
+  `ui.log` (`[launcher]`) and `supervisor.log`.
+- A second session next to the regular one (the integration preview, or a
+  throwaway session for tests) needs its own directory and port:
+  `DECKPILOT_DEV_DIR` moves `.dev` (data, logs, session file),
+  `DECKPILOT_VITE_PORT` moves the Vite server, and `DECKPILOT_TAURI_CONFIG`
+  names an extra Tauri configuration passed to `tauri dev --config`, whose
+  `devUrl` must use that port (a separate `identifier` also keeps the
+  WebView storage apart). Set them for `up`; the supervisor keeps using
+  them when the tray restarts the app. The agent additionally keeps its own rotating
   log in `.dev/data/logs/`. Credentials are not logged.
 
 ### Windows
@@ -166,6 +191,25 @@ the desktop crate on a fresh checkout (`make build` does this).
 CI (`.github/workflows/ci.yml`) runs the frontend checks on Linux and the
 Rust checks on Linux, macOS and Windows. Agent tests use simulated devices and
 real local IPC; no hardware is needed.
+
+The required checks (Frontend, Storage with SQLCipher, Rust on ubuntu, macos
+and windows, Updater signing keys match) and the Developer ID check run on
+every pull request. The heavier optional jobs run on every push to `main`,
+but on a pull request only when it changes files they depend on; otherwise
+they report as skipped:
+
+| Job | Runs on a pull request that changes |
+| --- | ----------------------------------- |
+| Package check (Linux .deb), Package check (Windows installers) | `apps/desktop/src-tauri/`, `apps/agent/`, `packaging/`, `tools/ci/`, `.github/workflows/`, `Cargo.lock`, `Cargo.toml`, `apps/desktop/package.json` |
+| Credential store (3 platforms) | `crates/deckpilot-keystore/`, `.github/workflows/ci.yml` |
+| Release manifest assembly | `tools/ci/`, `.github/workflows/release.yml`, `.github/workflows/ci.yml` |
+| Compatibility (own workflow) | its path filter in `compatibility.yml` |
+
+The "Changed paths" job decides this with `tools/ci/changed-paths.sh` from
+the files between the pull request's merge commit and its base, and tests
+its rules first (`tools/ci/test-changed-paths.sh`). If the changed files
+cannot be determined, every optional job runs. A skipped job can always be
+run locally with the commands of its steps in `ci.yml`.
 
 ## Conventions
 
