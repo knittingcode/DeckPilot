@@ -38,9 +38,13 @@ mod security;
 mod states;
 mod triggers;
 pub mod variables;
+pub mod work_session;
 
 pub use gestures::GestureHooks;
 pub use security::{AUTO_LOCK_CHECK, Clock, system_clock};
+pub use work_session::{
+    Ignored, PressContext, WorkSessionOperation, WorkSessionOutcome, WorkSessionRequest,
+};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_BRIGHTNESS: u8 = 60;
@@ -138,6 +142,23 @@ pub(crate) enum Command {
     Execution(executions::ExecutionUpdate),
     /// A module's answer for a key's live state.
     ButtonState(states::StateUpdate),
+    /// A work session operation from a test (the keys call the service
+    /// directly). `press: None` is a press now, in the current state.
+    #[cfg(feature = "test-hooks")]
+    WorkSession {
+        operation: WorkSessionOperation,
+        gesture: deckpilot_core::gesture::Gesture,
+        press: Option<PressContext>,
+        reply: oneshot::Sender<WorkSessionOutcome>,
+    },
+    /// A tagged run "ended" with `canFinish` (`None`: it failed), e.g. a
+    /// late result of an older verification.
+    #[cfg(feature = "test-hooks")]
+    WorkSessionRunEnded {
+        purpose: work_session::RunPurpose,
+        can_finish: Option<bool>,
+        reply: oneshot::Sender<()>,
+    },
 }
 
 /// Cloneable access to a running agent.
@@ -146,6 +167,7 @@ pub struct AgentHandle {
     commands: mpsc::UnboundedSender<Command>,
     events: broadcast::Sender<AgentEvent>,
     pub(crate) desktop_clients: Arc<AtomicUsize>,
+    work_session: watch::Receiver<deckpilot_core::work_session::WorkSessionSnapshot>,
 }
 
 impl AgentHandle {
@@ -165,6 +187,58 @@ impl AgentHandle {
 
     pub fn subscribe(&self) -> broadcast::Receiver<AgentEvent> {
         self.events.subscribe()
+    }
+
+    /// The work session as last published; changes on every transition.
+    pub fn work_session(
+        &self,
+    ) -> watch::Receiver<deckpilot_core::work_session::WorkSessionSnapshot> {
+        self.work_session.clone()
+    }
+
+    /// Applies a work session operation as a key gesture would, pressed
+    /// now in the current state (`press: None`) or as described. Tests
+    /// only: no client can start, verify or finish a session (D11).
+    #[cfg(feature = "test-hooks")]
+    pub async fn work_session_operation(
+        &self,
+        operation: WorkSessionOperation,
+        gesture: deckpilot_core::gesture::Gesture,
+        press: Option<PressContext>,
+    ) -> Option<WorkSessionOutcome> {
+        let (reply, outcome) = oneshot::channel();
+        self.commands
+            .send(Command::WorkSession {
+                operation,
+                gesture,
+                press,
+                reply,
+            })
+            .ok()?;
+        outcome.await.ok()
+    }
+
+    /// Hands the work session the end of a tagged run as the execution
+    /// service would: succeeded with `canFinish`, or failed (`None`).
+    /// Tests only, for results that arrive late.
+    #[cfg(feature = "test-hooks")]
+    pub async fn work_session_run_ended(
+        &self,
+        purpose: work_session::RunPurpose,
+        can_finish: Option<bool>,
+    ) {
+        let (reply, done) = oneshot::channel();
+        if self
+            .commands
+            .send(Command::WorkSessionRunEnded {
+                purpose,
+                can_finish,
+                reply,
+            })
+            .is_ok()
+        {
+            let _ = done.await;
+        }
     }
 }
 
@@ -235,6 +309,8 @@ pub struct Agent {
     active_projects: Arc<variables::ActiveProjects>,
     /// The profile and project last announced to clients.
     context_watch: variables::ContextWatch,
+    /// The work session (one per database).
+    work: work_session::WorkSessions,
     handle: AgentHandle,
     commands: mpsc::UnboundedReceiver<Command>,
     signals_tx: mpsc::UnboundedSender<DeviceSignal>,
@@ -283,10 +359,12 @@ impl Agent {
         // Room for the node events of several running workflows.
         let (events, _) = broadcast::channel(512);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (work, work_session) = work_session::WorkSessions::new((options.clock)());
         let handle = AgentHandle {
             commands: commands_tx,
             events,
             desktop_clients: Arc::new(AtomicUsize::new(0)),
+            work_session,
         };
         let server = crate::server::spawn(listener, handle.clone(), token, shutdown_rx);
         info!(endpoint = %endpoint.display(), backend = options.backend.name(), ?security, "agent started");
@@ -331,6 +409,7 @@ impl Agent {
             variables: Arc::default(),
             active_projects: Arc::default(),
             context_watch: variables::ContextWatch::default(),
+            work,
             handle,
             commands,
             signals_tx,
@@ -385,6 +464,9 @@ impl Agent {
                     Flow::Continue
                 }
                 _ = auto_lock.tick() => {
+                    // Before auto-lock: a sleep is recorded while the
+                    // database is still open.
+                    self.check_work_session();
                     self.check_auto_lock();
                     self.expire_cancelled_executions();
                     self.tick_schedules();
@@ -410,6 +492,7 @@ impl Agent {
 
     async fn stop(mut self) {
         info!("agent shutting down");
+        self.work_session_shutdown();
         self.states.reset();
         self.interrupt_executions();
         let _ = self.handle.events.send(AgentEvent::ShuttingDown);
@@ -463,6 +546,35 @@ impl Agent {
             }
             Command::ButtonState(update) => {
                 self.handle_button_state(update);
+                Flow::Continue
+            }
+            #[cfg(feature = "test-hooks")]
+            Command::WorkSession {
+                operation,
+                gesture,
+                press,
+                reply,
+            } => {
+                let press = press.unwrap_or_else(|| {
+                    PressContext::of(&self.work_session_snapshot(), std::time::Instant::now())
+                });
+                let outcome = self.work_session_operation(&WorkSessionRequest {
+                    operation,
+                    gesture,
+                    press,
+                });
+                let _ = reply.send(outcome);
+                Flow::Continue
+            }
+            #[cfg(feature = "test-hooks")]
+            Command::WorkSessionRunEnded {
+                purpose,
+                can_finish,
+                reply,
+            } => {
+                let end = work_session::RunEnd::with_can_finish(can_finish);
+                self.work_session_run_ended(purpose, &end);
+                let _ = reply.send(());
                 Flow::Continue
             }
             Command::Request {
@@ -687,7 +799,9 @@ impl Agent {
                 session.io.set_brightness(brightness);
             }
         }
-        self.reload_configuration()
+        self.reload_configuration()?;
+        self.recover_work_session();
+        Ok(())
     }
 
     fn active_project_response(&self) -> Response {
@@ -894,6 +1008,7 @@ impl Agent {
             other => self.runtime.set_profile(other, project),
         }
         self.reload_icons();
+        self.work_session_settings_reloaded();
         info!("configuration reloaded");
         self.after_change();
         Ok(())
