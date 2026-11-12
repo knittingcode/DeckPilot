@@ -10,11 +10,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use deckpilot_core::{
     ActionInstanceId, ActionResult, CycleDirection, Engine, EngineError, ExecutionTrigger, KeyFace,
-    MachineConfig, ModuleRegistry, Os, ProfileId, ProjectId, Runtime, RuntimeOutcome,
+    MachineConfig, ModuleRegistry, Os, ProfileId, ProjectId, Runtime,
 };
 use deckpilot_device::{
-    CombinedBackend, ControlId, ControlInput, DeviceBackend, DeviceEvent, DeviceId, DeviceModel,
-    ModelCatalog, mock::MockBackend,
+    CombinedBackend, ControlId, DeviceBackend, DeviceEvent, DeviceId, DeviceModel, ModelCatalog,
+    mock::MockBackend,
 };
 use deckpilot_ipc::{
     AgentEvent, AgentPaths, AgentStatus, DeviceInfo, ErrorCode, IpcError, LockReason,
@@ -33,11 +33,13 @@ use crate::instance::{InstanceLock, LockError};
 use crate::render;
 
 mod executions;
+mod gestures;
 mod security;
 mod states;
 mod triggers;
 pub mod variables;
 
+pub use gestures::GestureHooks;
 pub use security::{AUTO_LOCK_CHECK, Clock, system_clock};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -221,6 +223,8 @@ pub struct Agent {
     triggers: triggers::Triggers,
     /// Live key states from module providers.
     states: states::ButtonStates,
+    /// Pending key gestures.
+    gestures: gestures::Gestures,
     /// Rendered key images by face and size.
     frames: render::FrameCache,
     /// Decoded icons of the active profile.
@@ -321,6 +325,7 @@ impl Agent {
             executions: executions::Executions::default(),
             triggers: triggers::Triggers::default(),
             states: states::ButtonStates::default(),
+            gestures: gestures::Gestures::default(),
             frames: render::FrameCache::new(FRAME_CACHE),
             icons: render::Icons::default(),
             variables: Arc::default(),
@@ -363,6 +368,11 @@ impl Agent {
                 || tokio::time::Instant::now() + Duration::from_secs(3600),
                 tokio::time::Instant::from_std,
             );
+            // Sleeps until the next pending gesture is due, if any.
+            let gesture_due = self.next_gesture_deadline().map_or_else(
+                || tokio::time::Instant::now() + Duration::from_secs(3600),
+                tokio::time::Instant::from_std,
+            );
             let flow = tokio::select! {
                 () = &mut shutdown => Flow::Stop,
                 Some(command) = self.commands.recv() => self.handle_command(command),
@@ -382,6 +392,10 @@ impl Agent {
                 }
                 () = tokio::time::sleep_until(state_due) => {
                     self.refresh_states();
+                    Flow::Continue
+                }
+                () = tokio::time::sleep_until(gesture_due) => {
+                    self.on_gesture_deadline();
                     Flow::Continue
                 }
             };
@@ -791,6 +805,7 @@ impl Agent {
         let project = store.active_project(id).map_err(|e| storage_error(&e))?;
         info!(profile = %profile.name, "profile activated");
         self.states.reset();
+        self.invalidate_gestures(deckpilot_core::gesture::GestureCancel::ProfileChanged);
         self.runtime.set_profile(Some(profile), project);
         self.reload_icons();
         self.persisted_project = self.runtime.active_project_id();
@@ -866,8 +881,10 @@ impl Agent {
                 .with_projects(self.active_projects.clone()),
         );
         // Actions, their modules or bindings may have changed: running
-        // state calls are cancelled and cached states dropped.
+        // state calls are cancelled and cached states dropped, and pending
+        // gestures are dropped.
         self.states.reset();
+        self.invalidate_gestures(deckpilot_core::gesture::GestureCancel::ProfileChanged);
         match profile {
             Some(profile) if self.runtime.profile().is_some_and(|p| p.id == profile.id) => {
                 self.runtime.reload_profile(profile);
@@ -948,42 +965,8 @@ impl Agent {
                 device,
                 control,
                 input,
-            } => {
-                if self.sessions.get(&device).map(|s| s.id) != Some(session) {
-                    return;
-                }
-                self.last_input_at = Some(unix_now());
-                self.last_activity = self.now_seconds();
-                if self.security != SecurityState::Unlocked {
-                    if matches!(input, ControlInput::Press) {
-                        self.prompt_unlock();
-                    }
-                    return;
-                }
-                let event = DeviceEvent::Input {
-                    device: device.clone(),
-                    control,
-                    input,
-                };
-                match self.runtime.handle_event(&event) {
-                    Ok(RuntimeOutcome::Action { action, result }) => {
-                        self.report_action(action, &result);
-                    }
-                    Ok(RuntimeOutcome::WorkflowRequested { workflow }) => {
-                        if let Err(error) = self.start_execution(workflow, ExecutionTrigger::Device)
-                        {
-                            warn!(%error, "cannot start the workflow");
-                        }
-                    }
-                    Ok(RuntimeOutcome::Ignored { reason }) => {
-                        debug!(%device, %control, %reason, "input ignored");
-                        return;
-                    }
-                    Ok(_) => {}
-                    Err(error) => warn!(%error, "input could not be handled"),
-                }
-                self.after_change();
-            }
+                at,
+            } => self.handle_input(session, &device, control, input, at),
             DeviceSignal::Closed {
                 session,
                 device,
@@ -1082,6 +1065,7 @@ impl Agent {
         if let Some(session) = self.sessions.remove(device) {
             session.io.close(Vec::new(), CLOSE_TIMEOUT);
         }
+        self.forget_gestures(device);
         self.states.forget_device(device);
         let _ = self.runtime.handle_event(&DeviceEvent::Disconnected {
             device: device.clone(),
