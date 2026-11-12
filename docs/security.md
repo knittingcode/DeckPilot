@@ -103,6 +103,18 @@ file and creates the encrypted database. No password is involved.
   this computer only. It does not move to another computer, and if the user
   account, the keychain or the computer is reset or lost, the configuration
   cannot be opened. **Keep an encrypted export** as the backup (see below).
+- **Tested against the real stores.** `crates/deckpilot-keystore/tests/
+  system_store.rs` stores a key in the platform store and reads it back from
+  a new connection and from a new process, as after a restart or an update.
+  It also checks that the entry is never overwritten, is invisible under
+  another service name and is gone after deletion. It runs only with
+  `DECKPILOT_TEST_SYSTEM_KEYSTORE=1` and uses throwaway service names
+  (`DeckPilot Test <random>`, enforced) that it deletes again. CI runs it
+  on macOS, Windows and Linux (GNOME Keyring in a D-Bus session). A unit
+  test fixes the service and account names, which an update must never
+  change. Continuity across an update of a Developer ID-signed agent on
+  macOS (same code identity, no prompt) cannot be tested this way and needs
+  the signed release builds.
 
 ### Password
 
