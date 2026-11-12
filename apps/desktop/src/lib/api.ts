@@ -41,6 +41,9 @@ import type {
   UpdateState,
   Workflow,
   WorkflowReport,
+  WorkSessionSettings,
+  WorkSessionSnapshot,
+  WorkSessionSummary,
 } from "./types"
 
 export interface ActionInput {
@@ -254,6 +257,25 @@ export const api = {
   installUpdate: () => invoke<null>("install_update"),
   setUpdatePreferences: (preferences: UpdatePreferences) =>
     invoke<UpdateState>("set_update_preferences", { preferences }),
+
+  // Work sessions (protocol 8, docs/gestures-and-work-session.md §9). There
+  // is deliberately no command that starts, verifies or finishes a session:
+  // only its key does (D11). With an agent below protocol 8 they reject with
+  // "not supported".
+  getWorkSession: () => invoke<WorkSessionSnapshot>("get_work_session"),
+  /** Newest first; `before`: only sessions requested before this time (ms). */
+  listWorkSessions: (limit: number, before?: number) =>
+    invoke<WorkSessionSummary[]>("list_work_sessions", { limit, before }),
+  /** Keeps a flagged gap counted (`count`) or excludes it from the session (D8). */
+  resolveWorkSessionReview: (session: string, review: number, count: boolean) =>
+    invoke<WorkSessionSummary>("resolve_work_session_review", { session, review, count }),
+  clearWorkSessionNotices: (session: string | null) =>
+    invoke<WorkSessionSnapshot>("clear_work_session_notices", { session }),
+  getWorkSessionSettings: (profileId: string) =>
+    invoke<WorkSessionSettings>("get_work_session_settings", { profileId }),
+  /** Validates the workflows against their contracts before it writes. */
+  saveWorkSessionSettings: (profileId: string, settings: WorkSessionSettings) =>
+    invoke<WorkSessionSettings>("save_work_session_settings", { profileId, settings }),
 }
 
 /** Backend event carrying the latest {@link AgentConnection}. */

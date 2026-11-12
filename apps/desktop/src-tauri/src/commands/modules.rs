@@ -5,7 +5,7 @@ use tauri::State;
 use deckpilot_core::{ActionParameters, ModuleId, ModuleInfo, ModuleSettings};
 use deckpilot_storage::ConfigStore;
 
-use crate::error::CommandResult;
+use crate::error::{CommandError, CommandResult};
 use crate::state::AppState;
 
 #[tauri::command]
@@ -54,6 +54,15 @@ pub async fn set_module_enabled(
     enabled: bool,
 ) -> CommandResult<Vec<ModuleInfo>> {
     let previous = current(&state, &module_id)?;
+    if !enabled
+        && module_id == deckpilot_modules::work_session::module_id()
+        && state.store()?.active_work_session()?.is_some()
+    {
+        return Err(CommandError::Invalid(
+            "a work session is active; finish it from its key before turning work sessions off"
+                .into(),
+        ));
+    }
     state.modules().set_enabled(&module_id, enabled)?;
     persist(&state, &module_id, previous).await
 }

@@ -32,7 +32,9 @@ tokio.workspace = true
 
 [dev-dependencies]
 deckpilot-keystore.workspace = true
-deckpilot-agent = { path = "../../agent" }
+# The work session's test entry point stands in for its key (decision D11:
+# the app itself has no way to operate a session).
+deckpilot-agent = { path = "../../agent", features = ["test-hooks"] }
 minisign = "0.10"
 tauri = { workspace = true, features = ["test"] }
 
