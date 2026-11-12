@@ -36,8 +36,10 @@ mod executions;
 mod security;
 mod states;
 mod triggers;
+pub mod variables;
 
 pub use security::{AUTO_LOCK_CHECK, Clock, system_clock};
+pub use variables::SharedVariables;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_BRIGHTNESS: u8 = 60;
@@ -224,6 +226,12 @@ pub struct Agent {
     frames: render::FrameCache,
     /// Decoded icons of the active profile.
     icons: render::Icons,
+    /// Shared variables, read by runs and previews.
+    variables: Arc<variables::VariableStore>,
+    /// The active project of each profile, for actions that ask.
+    active_projects: Arc<variables::ActiveProjects>,
+    /// The profile and project last announced to clients.
+    context_watch: variables::ContextWatch,
     handle: AgentHandle,
     commands: mpsc::UnboundedReceiver<Command>,
     signals_tx: mpsc::UnboundedSender<DeviceSignal>,
@@ -316,6 +324,9 @@ impl Agent {
             states: states::ButtonStates::default(),
             frames: render::FrameCache::new(FRAME_CACHE),
             icons: render::Icons::default(),
+            variables: Arc::default(),
+            active_projects: Arc::default(),
+            context_watch: variables::ContextWatch::default(),
             handle,
             commands,
             signals_tx,
@@ -520,6 +531,10 @@ impl Agent {
                 profile: self.active_profile_info(),
             }),
             Request::GetActiveProject => Ok(self.active_project_response()),
+            Request::ListVariables { context, filter } => self.list_variables(&context, &filter),
+            Request::PreviewReferences { context, items } => {
+                self.preview_references(&context, &items)
+            }
             Request::GetAutostart => {
                 let enabled = self.autostart()?.is_enabled().map_err(failed)?;
                 Ok(Response::Autostart { enabled })
@@ -618,6 +633,8 @@ impl Agent {
             | Request::ListProfiles
             | Request::GetActiveProfile
             | Request::GetActiveProject
+            | Request::ListVariables { .. }
+            | Request::PreviewReferences { .. }
             | Request::GetAutostart
             | Request::Subscribe
             | Request::Shutdown
@@ -822,11 +839,15 @@ impl Agent {
         let Some(store) = self.store.as_ref() else {
             return Ok(());
         };
-        if let Some(machine) = store.load_machine_config()? {
+        if let Some(machine) = store.load_machine_config()?
+            && machine != *self.runtime.machine()
+        {
             self.runtime.set_machine(machine);
+            let _ = self.handle.events.send(AgentEvent::ResourceBindingsChanged);
         }
         // Module states may have changed in the configuration app.
         self.modules = load_modules(store)?;
+        self.update_variable_permissions();
         self.auto_lock = deckpilot_storage::policy::security_policy(store)?.auto_lock;
         let (profile, project) = load_active(store)?;
         // Credentials are loaded with the configuration, so the app asks
@@ -840,7 +861,9 @@ impl Agent {
         self.runtime.set_engine(
             Engine::new(self.modules.action_registry())
                 .with_credentials(std::sync::Arc::new(credentials))
-                .with_notifier(std::sync::Arc::new(notifier)),
+                .with_notifier(std::sync::Arc::new(notifier))
+                .with_variables(self.variables.clone())
+                .with_projects(self.active_projects.clone()),
         );
         // Actions, their modules or bindings may have changed: running
         // state calls are cancelled and cached states dropped.
@@ -878,6 +901,7 @@ impl Agent {
         self.states.invalidate();
         self.render_all();
         self.publish();
+        self.publish_context();
     }
 
     /// Decodes the active profile's icons (with limits) after it changed.
@@ -1051,6 +1075,7 @@ impl Agent {
         self.render(&device, true);
         self.refresh_states();
         self.publish();
+        self.publish_device_context(Some(device));
     }
 
     fn disconnect(&mut self, device: &DeviceId) {
@@ -1063,6 +1088,7 @@ impl Agent {
         });
         info!(%device, "device disconnected");
         self.publish();
+        self.publish_device_context(Some(device.clone()));
     }
 
     /// Sends images for every control whose face changed (or all, if

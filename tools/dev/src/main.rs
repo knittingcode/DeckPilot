@@ -44,6 +44,10 @@ Commands:
                          Show session logs (follow with -f)
   agent                  Run the agent in the foreground (dev data)
   ui                     Run the app with HMR in the foreground (dev data)
+  open-ui                Start the app of the running session again (with its
+                         Vite server) unless it runs; the tray's
+                         \"Open DeckPilot\" does this in a session
+  show                   Ask the dev agent to show the app, as the tray does
   seed [--reset] [--password] [--encrypt-legacy]
                          Fill the dev database with demonstration data. A new
                          database gets a system-managed key from the agent
@@ -78,6 +82,18 @@ Commands:
 const UI_ARGS: &[&str] = &["--filter", "@deckpilot/desktop", "tauri", "dev"];
 const DEFAULT_DEVICES: &str = "mk2,xl,plus";
 
+/// The agent starts this program to open the app (`launcher.rs`).
+const DESKTOP_BIN_ENV: &str = "DECKPILOT_DESKTOP_BIN";
+/// Set by the supervisor on its agent: the development directory whose
+/// session the agent belongs to. `deckpilot-dev` started by that agent
+/// (without a command, or with `--window <id>` like the app) asks that
+/// session's supervisor to start the app instead of printing its usage.
+const UI_LAUNCHER_ENV: &str = "DECKPILOT_DEV_UI_LAUNCHER";
+/// An extra Tauri configuration for the app of a session (the integration
+/// preview: its own identifier, window title and `devUrl`), with
+/// `DECKPILOT_VITE_PORT` for its Vite server.
+const TAURI_CONFIG_ENV: &str = "DECKPILOT_TAURI_CONFIG";
+
 /// Executable name for tools installed as `.cmd` shims on Windows.
 pub fn program(name: &str) -> String {
     if cfg!(windows) && name == "pnpm" {
@@ -107,6 +123,35 @@ fn dev_env(command: &mut Command, paths: &DevPaths) {
         // The session manages the agent; the app must not start another one.
         .env("DECKPILOT_NO_AGENT_AUTOSTART", "1")
         .env("DECKPILOT_DEV", "1");
+}
+
+/// The configuration app in development mode (`tauri dev`, which starts
+/// Vite first).
+fn ui_command(paths: &DevPaths) -> Command {
+    ui_command_with(paths, std::env::var_os(TAURI_CONFIG_ENV))
+}
+
+fn ui_command_with(paths: &DevPaths, config: Option<std::ffi::OsString>) -> Command {
+    let mut command = Command::new(program("pnpm"));
+    command.args(UI_ARGS);
+    if let Some(config) = config.filter(|v| !v.is_empty()) {
+        command.arg("--config").arg(config);
+    }
+    dev_env(&mut command, paths);
+    command
+}
+
+/// Lets the session's agent open the real app: instead of the debug app
+/// next to it (which shows nothing once `tauri dev` and its Vite server have
+/// ended), the agent starts this program, which asks this supervisor to
+/// start `tauri dev` again. Absolute paths, so the working directory of
+/// the agent does not matter.
+fn set_ui_launcher(command: &mut Command, paths: &DevPaths) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    command
+        .env(DESKTOP_BIN_ENV, exe)
+        .env(UI_LAUNCHER_ENV, paths.dev_dir());
+    Ok(())
 }
 
 fn agent_args(devices: &str) -> Vec<String> {
@@ -440,6 +485,7 @@ fn supervise(
     let mut agent_command = Command::new(paths.agent_binary());
     agent_command.args(agent_args(devices));
     dev_env(&mut agent_command, paths);
+    set_ui_launcher(&mut agent_command, paths)?;
     let mut agent = spawn_logged(&mut agent_command, "agent", paths, foreground)?;
     if let Some(owned) = process::record("agent", agent.id()) {
         session.processes.push(owned);
@@ -453,12 +499,9 @@ fn supervise(
     println!("agent ready (data: {})", paths.data.display());
     unlock_dev_agent(paths, locked);
 
-    let mut ui_command = Command::new(program("pnpm"));
-    ui_command.args(UI_ARGS);
-    dev_env(&mut ui_command, paths);
-    let mut ui = spawn_logged(&mut ui_command, "ui", paths, foreground)?;
+    let mut ui = spawn_logged(&mut ui_command(paths), "ui", paths, foreground)?;
     if let Some(owned) = process::record("ui", ui.id()) {
-        session.processes.push(owned);
+        session.replace_process(owned);
         session.save(paths).map_err(|e| e.to_string())?;
     }
     println!(
@@ -473,8 +516,29 @@ fn supervise(
             agent_running = false;
         }
         if ui_running && let Ok(Some(status)) = ui.try_wait() {
-            println!("the configuration app exited ({status}); the agent keeps running");
+            println!(
+                "the configuration app exited ({status}); the agent keeps running \
+                 (the tray's Open DeckPilot or `deckpilot-dev open-ui` starts it again)"
+            );
             ui_running = false;
+        }
+        if take_ui_request(paths, &session.id) {
+            if ui_running {
+                println!("the configuration app was requested; it is running already");
+            } else {
+                println!("starting the configuration app again (requested)");
+                match spawn_logged(&mut ui_command(paths), "ui", paths, foreground) {
+                    Ok(child) => {
+                        if let Some(owned) = process::record("ui", child.id()) {
+                            session.replace_process(owned);
+                            let _ = session.save(paths);
+                        }
+                        ui = child;
+                        ui_running = true;
+                    }
+                    Err(error) => println!("{error}"),
+                }
+            }
         }
         std::thread::sleep(Duration::from_millis(250));
     }
@@ -489,6 +553,99 @@ fn supervise(
     Session::remove(paths);
     println!("session stopped");
     Ok(())
+}
+
+/// Whether `open-ui` asked the session `id` for the app. Consumes the
+/// request; one left by an earlier session is dropped.
+fn take_ui_request(paths: &DevPaths, id: &str) -> bool {
+    let Ok(requested) = std::fs::read_to_string(&paths.ui_request) else {
+        return false;
+    };
+    let _ = std::fs::remove_file(&paths.ui_request);
+    requested.trim() == id
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum UiRequest {
+    /// The supervisor will start the app.
+    Requested,
+    /// The app (`tauri dev`) of the session is running or starting.
+    Running,
+}
+
+/// `open-ui`: has the supervisor of the session in `paths` start the app
+/// again unless it runs. Only that session is touched: its own data
+/// directory, its own app configuration and port.
+fn request_ui(paths: &DevPaths) -> Result<UiRequest, String> {
+    let session = Session::load(paths)
+        .filter(Session::supervisor_alive)
+        .ok_or_else(|| {
+            format!(
+                "no development session is running for {}; start one with `make up`",
+                paths.data.display()
+            )
+        })?;
+    if session.process("ui").is_some_and(process::is_alive) {
+        return Ok(UiRequest::Running);
+    }
+    std::fs::write(&paths.ui_request, session.id.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(UiRequest::Requested)
+}
+
+fn open_ui(paths: &DevPaths) -> Result<(), String> {
+    match request_ui(paths)? {
+        UiRequest::Requested => {
+            println!("the session starts the configuration app (`make logs` shows its progress)");
+        }
+        UiRequest::Running => {
+            println!("the configuration app is running; asking it to show its window");
+            dev_request(paths, Request::ShowWindow)?;
+        }
+    }
+    Ok(())
+}
+
+/// Started by the session's agent in place of the app (see
+/// [`set_ui_launcher`]). Its output goes nowhere, so the outcome is noted
+/// in the session's app log.
+fn open_ui_for_agent(dev_dir: &std::path::Path) -> Result<(), String> {
+    let paths = DevPaths::in_dev_dir(DevPaths::new().root, dev_dir);
+    let outcome = launcher_for(
+        &paths,
+        std::env::var_os(deckpilot_ipc::paths::DATA_DIR_ENV).as_deref(),
+    )
+    .and_then(|()| request_ui(&paths));
+    let note = match &outcome {
+        Ok(UiRequest::Requested) => "app requested by the agent; the supervisor starts it".into(),
+        Ok(UiRequest::Running) => "app requested by the agent; it is starting already".into(),
+        Err(error) => format!("app requested by the agent: {error}"),
+    };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(logs::log_path(&paths.logs, "ui"))
+    {
+        use std::io::Write;
+        let _ = writeln!(
+            file,
+            "{} [launcher] {note}",
+            logs::timestamp(SystemTime::now())
+        );
+    }
+    outcome.map(|_| ())
+}
+
+/// The agent passes its own data directory: a launcher variable that leaked
+/// into another environment must not open a different session.
+fn launcher_for(paths: &DevPaths, agent_data: Option<&std::ffi::OsStr>) -> Result<(), String> {
+    match agent_data.map(std::path::Path::new) {
+        Some(data) if data != paths.data => Err(format!(
+            "this launcher belongs to {}, not to {}",
+            paths.data.display(),
+            data.display()
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Removes metadata of a session whose supervisor is gone, stopping any
@@ -702,10 +859,7 @@ fn foreground_agent(paths: &DevPaths, devices: &str) -> Result<(), String> {
 
 fn foreground_ui(paths: &DevPaths) -> Result<(), String> {
     paths.ensure_isolated()?;
-    let mut command = Command::new(program("pnpm"));
-    command.args(UI_ARGS);
-    dev_env(&mut command, paths);
-    let status = command.status().map_err(|e| e.to_string())?;
+    let status = ui_command(paths).status().map_err(|e| e.to_string())?;
     if status.success() {
         Ok(())
     } else {
@@ -737,6 +891,11 @@ fn option(args: &[String], name: &str) -> Option<String> {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
+    if let Some(dev_dir) = std::env::var_os(UI_LAUNCHER_ENV).filter(|v| !v.is_empty())
+        && args.first().is_none_or(|arg| arg == "--window")
+    {
+        return open_ui_for_agent(std::path::Path::new(&dev_dir));
+    }
     let paths = DevPaths::new();
     let flag = |name: &str| args.iter().any(|a| a == name);
     let devices = option(args, "--devices").unwrap_or_else(|| DEFAULT_DEVICES.to_owned());
@@ -779,6 +938,8 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         Some("agent") => foreground_agent(&paths, &devices),
         Some("ui") => foreground_ui(&paths),
+        Some("open-ui") => open_ui(&paths),
+        Some("show") => dev_request(&paths, Request::ShowWindow),
         Some("seed") => seed_command(
             &paths,
             flag("--reset"),
@@ -831,5 +992,167 @@ fn main() -> ExitCode {
             eprintln!("error: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+    use std::path::PathBuf;
+
+    use super::*;
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "deckpilot-dev-{tag}-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn session_in(paths: &DevPaths) -> Session {
+        paths.create().unwrap();
+        let session = Session {
+            id: uuid::Uuid::new_v4().to_string(),
+            started_at: now(),
+            // This test process stands in for a live supervisor.
+            supervisor: process::record("supervisor", std::process::id()).unwrap(),
+            processes: Vec::new(),
+            devices: "mk2".into(),
+        };
+        session.save(paths).unwrap();
+        session
+    }
+
+    fn env_of<'a>(command: &'a Command, name: &str) -> Option<&'a OsStr> {
+        command
+            .get_envs()
+            .find(|(key, _)| *key == name)
+            .and_then(|(_, value)| value)
+    }
+
+    #[test]
+    fn opening_the_app_asks_only_the_session_of_its_own_directory() {
+        let (a, b) = (TempDir::new("a"), TempDir::new("b"));
+        let root = DevPaths::new().root;
+        let (a, b) = (
+            DevPaths::in_dev_dir(root.clone(), &a.0),
+            DevPaths::in_dev_dir(root, &b.0),
+        );
+        assert_ne!(a.data, b.data);
+        let session = session_in(&a);
+
+        assert_eq!(request_ui(&a), Ok(UiRequest::Requested));
+        assert!(!b.ui_request.exists(), "another session is not asked");
+        let error = request_ui(&b).unwrap_err();
+        assert!(error.contains(&b.data.display().to_string()), "{error}");
+        assert!(!b.ui_request.exists());
+
+        // Only the supervisor of that session takes the request, once.
+        assert!(take_ui_request(&a, &session.id));
+        assert!(!take_ui_request(&a, &session.id));
+        // A request left for an earlier session is dropped.
+        std::fs::write(&a.ui_request, "earlier-session").unwrap();
+        assert!(!take_ui_request(&a, &session.id));
+        assert!(!a.ui_request.exists());
+    }
+
+    #[test]
+    fn a_running_app_is_not_started_again() {
+        let dir = TempDir::new("running");
+        let paths = DevPaths::in_dev_dir(DevPaths::new().root, &dir.0);
+        let mut session = session_in(&paths);
+        session.replace_process(process::record("ui", std::process::id()).unwrap());
+        session.save(&paths).unwrap();
+        assert_eq!(request_ui(&paths), Ok(UiRequest::Running));
+        assert!(!paths.ui_request.exists());
+
+        // An app that exited (window closed) is requested again.
+        let gone = OwnedProcess {
+            start_time: session.supervisor.start_time + 1,
+            ..session.process("ui").unwrap().clone()
+        };
+        session.replace_process(gone);
+        assert_eq!(
+            session.processes.iter().filter(|p| p.role == "ui").count(),
+            1
+        );
+        session.save(&paths).unwrap();
+        assert_eq!(request_ui(&paths), Ok(UiRequest::Requested));
+        assert!(paths.ui_request.exists());
+
+        // Without a live supervisor nothing can start the app.
+        session.supervisor.start_time += 1;
+        session.save(&paths).unwrap();
+        assert!(request_ui(&paths).is_err());
+    }
+
+    #[test]
+    fn the_agent_of_a_session_opens_the_app_through_that_session() {
+        let dir = TempDir::new("launcher");
+        let paths = DevPaths::in_dev_dir(DevPaths::new().root, &dir.0);
+        let mut agent = Command::new(paths.agent_binary());
+        dev_env(&mut agent, &paths);
+        set_ui_launcher(&mut agent, &paths).unwrap();
+        let launcher = PathBuf::from(env_of(&agent, DESKTOP_BIN_ENV).unwrap());
+        assert!(launcher.is_absolute());
+        assert_eq!(launcher, std::env::current_exe().unwrap());
+        assert_eq!(
+            env_of(&agent, UI_LAUNCHER_ENV),
+            Some(dir.0.as_os_str()),
+            "the session directory, not the working directory"
+        );
+        assert_eq!(
+            env_of(&agent, deckpilot_ipc::paths::DATA_DIR_ENV),
+            Some(paths.data.as_os_str())
+        );
+        // The launcher checks it was started by that session's agent.
+        assert!(launcher_for(&paths, Some(paths.data.as_os_str())).is_ok());
+        assert!(launcher_for(&paths, None).is_ok());
+        assert!(launcher_for(&paths, Some(OsStr::new("/elsewhere/data"))).is_err());
+        assert_eq!(paths.dev_dir(), dir.0.as_path());
+    }
+
+    #[test]
+    fn the_app_uses_the_session_data_and_an_optional_extra_configuration() {
+        let dir = TempDir::new("ui");
+        let paths = DevPaths::in_dev_dir(DevPaths::new().root, &dir.0);
+        let args = |command: &Command| -> Vec<String> {
+            command
+                .get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect()
+        };
+        let plain = ui_command_with(&paths, None);
+        assert_eq!(args(&plain), UI_ARGS);
+        assert_eq!(plain.get_current_dir(), Some(paths.root.as_path()));
+        assert_eq!(
+            env_of(&plain, deckpilot_ipc::paths::DATA_DIR_ENV),
+            Some(paths.data.as_os_str())
+        );
+        assert_eq!(
+            env_of(&plain, "DECKPILOT_NO_AGENT_AUTOSTART"),
+            Some(OsStr::new("1"))
+        );
+        // The app never gets the agent's launcher.
+        assert_eq!(env_of(&plain, UI_LAUNCHER_ENV), None);
+        let preview = ui_command_with(&paths, Some("/p/tauri.preview.conf.json".into()));
+        assert_eq!(
+            args(&preview)[UI_ARGS.len()..],
+            ["--config", "/p/tauri.preview.conf.json"]
+        );
+        assert_eq!(args(&ui_command_with(&paths, Some("".into()))), UI_ARGS);
     }
 }

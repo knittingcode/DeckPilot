@@ -629,6 +629,7 @@ export type Capability =
   | "network"
   | "notifications"
   | "credentials"
+  | "variables-read"
 
 export interface ModulePage {
   id: string
@@ -782,7 +783,6 @@ export type AgentCapability =
   | "encryptedDatabase"
   | "backgroundExecutions"
   | "notifications"
-  /** Shared variables and references: `listVariables`, `previewReferences`. Protocol 7. */
   | "variables"
 
 export interface AgentConnection {

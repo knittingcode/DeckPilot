@@ -81,7 +81,7 @@ fn the_fixture_is_a_schema_5_database() {
     let store = open(&copy);
     let history = store.migration_history().unwrap();
     let upgrade = history.last().unwrap();
-    assert_eq!((upgrade.from_version, upgrade.to_version), (5, 7));
+    assert_eq!((upgrade.from_version, upgrade.to_version), (5, 8));
     assert_eq!(upgrade.result, "ok");
 }
 
@@ -89,7 +89,7 @@ fn the_fixture_is_a_schema_5_database() {
 fn upgrading_keeps_every_kind_of_data() {
     let copy = copy();
     let store = open(&copy);
-    assert_eq!(store.schema_version().unwrap(), 7);
+    assert_eq!(store.schema_version().unwrap(), 8);
     assert_eq!(
         store.schema_version().unwrap(),
         SqliteStore::supported_schema_version()
@@ -254,13 +254,18 @@ fn a_wrong_key_changes_nothing() {
     assert_eq!(open(&copy).list_profiles().unwrap().len(), 3);
 }
 
+/// A schema version from a DeckPilot newer than this build.
+fn newer() -> u32 {
+    SqliteStore::supported_schema_version() + 1
+}
+
 #[test]
 fn a_newer_schema_is_refused_and_left_alone() {
     let copy = copy();
     let store = open(&copy);
     store
         .connection_for_tests()
-        .pragma_update(None, "user_version", 8)
+        .pragma_update(None, "user_version", newer())
         .unwrap();
     drop(store);
     let before = digest(&copy.database());
@@ -269,10 +274,8 @@ fn a_newer_schema_is_refused_and_left_alone() {
     assert!(
         matches!(
             refused,
-            Err(StorageError::UnsupportedSchema {
-                found: 8,
-                supported: 7
-            })
+            Err(StorageError::UnsupportedSchema { found, supported: 8 })
+                if found == newer()
         ),
         "{refused:?}"
     );
@@ -314,7 +317,9 @@ fn a_newer_schema_is_refused_before_the_journal_mode_is_touched() {
         connection
             .pragma_update(None, "journal_mode", "DELETE")
             .unwrap();
-        connection.pragma_update(None, "user_version", 8).unwrap();
+        connection
+            .pragma_update(None, "user_version", newer())
+            .unwrap();
     }
     let before = digest(&copy.database());
     let files_before = files(&copy);
@@ -322,10 +327,8 @@ fn a_newer_schema_is_refused_before_the_journal_mode_is_touched() {
     assert!(
         matches!(
             refused,
-            Err(StorageError::UnsupportedSchema {
-                found: 8,
-                supported: 7
-            })
+            Err(StorageError::UnsupportedSchema { found, supported: 8 })
+                if found == newer()
         ),
         "{refused:?}"
     );

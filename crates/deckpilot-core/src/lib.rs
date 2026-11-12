@@ -27,6 +27,7 @@ pub mod process;
 pub mod profile;
 pub mod project;
 pub mod registry;
+pub mod resolution;
 pub mod resource;
 pub mod runtime;
 pub mod trigger;
