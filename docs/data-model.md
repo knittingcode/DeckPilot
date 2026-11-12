@@ -284,7 +284,7 @@ App commands (Tauri):
 | `delete_icon` | `profileId`, `iconId` | — (refused while in use) |
 | `preview_layout` | as before, plus optional `render` | `ControlFace[]`; with `render: true` each also has `image`, the key as the device shows it (PNG `data:` URL at the model's image size) |
 
-## Storage schema (version 8)
+## Storage schema (version 9)
 
 Migrations run in a transaction each; a failed migration leaves the database
 unchanged.
@@ -308,6 +308,10 @@ unchanged.
   `provenance` (see [Shared variables](#shared-variables) and
   [Provenance](#provenance)). It is additive: no profile document is
   rewritten, and no provenance or variable is created for existing data.
+- **Migration 9** adds the work session tables `work_session_settings`,
+  `work_sessions`, `work_session_intervals`, `work_session_reviews` and
+  `work_session_transitions` (see [Work sessions](#work-sessions)). It is
+  additive: the new tables start empty and nothing else changes.
 
 Since version 0.4 the database is encrypted with SQLCipher; see
 [security.md](security.md). Every upgrade of an existing database is
@@ -340,6 +344,11 @@ again. Restoring the named backup returns to the previous state.
 | `shared_variables` | Shared variable definitions: key, type, allowed scopes, default, `sensitive`, declaring module, origin |
 | `shared_variable_values` | Values per scope key: global, a profile, or a project of that profile |
 | `provenance`       | Where seeded or imported items came from, with a snapshot as created |
+| `work_session_settings` | Per profile: start and verification workflow, approval lifetime, review threshold, elapsed format |
+| `work_sessions`    | Work sessions: state, times, last verification, approval, heartbeat, notice; at most one active |
+| `work_session_intervals` | Counted stretches of time of a session |
+| `work_session_reviews` | Gaps of uncertain time flagged for review, and how they were resolved |
+| `work_session_transitions` | Audit log of every state change of a session |
 
 Constraints keep projects inside their profile:
 
@@ -413,6 +422,61 @@ Only newly created data gets provenance. Data from before schema 8 —
 including seeded data of development databases, such as the
 `v0.5.0-2` fixture — has none and is treated as the user's: nothing removes
 it automatically.
+
+### Work sessions
+
+The work session the agent runs (design: `docs/gestures-and-work-session.md`
+§5–§6; contract: `deckpilot_core::work_session`). The store
+(`crates/deckpilot-storage/src/work_sessions.rs`, methods on `SqliteStore`)
+applies the transitions T1–T11 of the core table and nothing else. Times are
+wall-clock milliseconds supplied by the agent.
+
+- **One active session per database** (decision D7): `work_sessions.active`
+  is `1` exactly while the state is not `stopped` or `aborted` (a `CHECK`),
+  and unique. A second start is refused (`AnotherSessionActive`), also for a
+  writer that bypasses the API.
+- **Transitions** are one `IMMEDIATE` transaction each: the session is read,
+  checked to be the expected session in the expected state (and, for
+  results and approvals, the current verification id), updated with a
+  compare-and-set on `(id, state)`, and logged in
+  `work_session_transitions` (`idle → starting` for T1, `starting →
+  aborted` for T3, `stopping → stopped` for T11). A request that does not
+  match changes nothing and answers `Refused` (`UnknownSession`,
+  `WrongState`, `StaleVerification`, `ApprovalExpired`,
+  `ApprovalFromAnotherBoot`); a request already applied answers `Repeated`.
+  So a result of an older verification, or an approval of an older session,
+  can never move the current one.
+- **Final stop** (T10): only from `readyToFinish`, with the session's
+  current approval, given to the same agent instance (`approval_boot`), at
+  most `approval_ttl_seconds` old (decision D9: 600 by default) and not from
+  the future. It fixes `stopped_at` and closes the open interval in the same
+  transaction. The same approval again answers `Repeated` ("already
+  finished"), also after T11, because the approval id is kept.
+- **Elapsed time is never stored.** It is the sum of `work_session_intervals`
+  (`elapsed_ms` of the contract, an open interval counting up to now, a
+  negative one as zero). The heartbeat only moves `last_alive_at`.
+  Interval 1 opens at T2 (the start workflow is not counted, D10).
+- **Gaps** (decision D8): a gap longer than `review_gap_seconds` (900 by
+  default) while the timer runs is recorded in `work_session_reviews`
+  (`agentDown`, `sleep`, `clockBack`, `clockForward`) with the notice
+  `needsReview`, and stays counted. *Excluded* cuts it out of the
+  intervals; *counted* on an excluded gap adds it back (except where another
+  excluded gap still applies, and never before the start or after the stop),
+  joining the split intervals again. Both rewrite the session's intervals in
+  one transaction; elapsed time stays a plain sum. A clock set back added no
+  time and cannot be excluded. The notice goes once no review is open.
+- **Notices** (`problem`, `problem_message`, `problem_at`) belong to their
+  session. While no session is active, the notice to show is that of the
+  newest session (`idle_work_session_notice`, e.g. `startFailed` after T3);
+  clearing it clears the notices of all finished and aborted sessions.
+- **Verification details** are kept only as the non-sensitive text of the
+  contract, without control characters and at most 200 characters.
+- **Retention**: the newest 1000 finished or aborted sessions are kept, with
+  their intervals, reviews and log; the active session is never removed.
+- `work_session_settings` belongs to its profile (cascade). Sessions have no
+  foreign key to the profile, so history outlives it; deleting a profile
+  that has the active session is refused (`WorkSessionActive`).
+- Machine-local runtime state: not exported.
 
 ### Migration 3
 
@@ -505,7 +569,10 @@ Triggers are never changed here; they follow their workflow.
   0.5.0 (schema 5): the 0.5.0 agent refuses it and changes nothing; schema
   8 cannot be opened by 0.6.0 (schema 7) in the same way. Going back from
   schema 8 means restoring the `deckpilot-schema7-…` backup; shared
-  variables and everything else changed after the upgrade are lost.
+  variables and everything else changed after the upgrade are lost. A
+  build at schema 8 refuses schema 9 the same way; going back means
+  restoring the `deckpilot-schema8-…` backup, which loses the work
+  sessions recorded since.
 - Profile documents are written in document version 5 from schema 8 on.
   Version 4 documents (and older) are read unchanged and are not rewritten
   by the upgrade.
@@ -521,7 +588,7 @@ Triggers are never changed here; they follow their workflow.
 
 Tested with a real database created by the 0.5.0-2 tools
 (`crates/deckpilot-storage/tests/upgrade_from_0_5_0.rs`, fixture in
-`tests/fixtures/v0.5.0-2/`): the upgrade from schema 5 to 8 keeps profiles,
+`tests/fixtures/v0.5.0-2/`): the upgrade from schema 5 to 9 keeps profiles,
 projects and their resources, actions, step workflows, layouts, the active
 profile and default project, machine bindings and settings; it is preceded
 by an encrypted backup that can be restored; reopening does not upgrade or
@@ -535,17 +602,17 @@ and left byte-identical, without side files or backups. The real
 The storage unit tests in `src/upgrade_tests.rs` compare the same fixture row
 by row: every row and table definition of schema 5 is unchanged after the
 upgrade, which only adds `workflow_executions`, `credentials`,
-`shared_variables`, `shared_variable_values` and `provenance` (all empty)
-and one `migration_history` row, and opening the upgraded database again
+`shared_variables`, `shared_variable_values`, `provenance` and the five
+work session tables (all empty) and one `migration_history` row, and opening the upgraded database again
 changes nothing. They also make the upgrade fail at injected points (after
-migrations 6, 7 and 8, just before the commit, and while the backup is
+migrations 6, 7, 8 and 9, just before the commit, and while the backup is
 written) and kill a child process at the same points with the transaction
 open: in every case the database is still the schema 5 fixture row for row,
 the backup made before the upgrade is complete and holds that state, an
 unverified backup copy is never left under a backup's name (it is written as
 `….db.partial` and renamed once verified), and the next start upgrades
 normally. A failed integrity check after the commit (injected) leaves the
-database at schema 8 marked `unverified` and refused, row for row
+database at schema 9 marked `unverified` and refused, row for row
 unchanged by each refused start, with the backup intact; it is accepted and
 marked `ok` once a check passes, and restoring the named backup returns to
 the fixture row for row. A process killed between the commit and the check
@@ -554,13 +621,30 @@ is verified on the next start.
 The same unit tests run on a 0.6.0 database (schema 7,
 `tests/fixtures/v0.6.0/`, created by the 0.6.0 tools with a workflow run, a
 credential, an active project and launches added so that every schema 7
-table has rows): every row is kept, the upgrade adds only the three empty
-schema 8 tables, failures and kills after migration 8 or before the commit
-leave the schema 7 database and its backup intact, and the next start
-upgrades. `tests/upgrade_from_0_6_0.rs` checks the data through the API,
+table has rows): every row is kept, the upgrade adds only the empty
+schema 8 and 9 tables, failures and kills after migration 8 or 9 or before
+the commit leave the schema 7 database and its backup intact, and the next
+start upgrades. `tests/upgrade_from_0_6_0.rs` checks the data through the API,
 that shared variables work on the upgraded database, that the
 `deckpilot-schema7-…` backup restores the 0.6.0 state (losing what changed
 afterwards), and that a newer schema is refused without changes.
+
+They run a third time on a schema 8 database (`tests/fixtures/schema8/`:
+the 0.6.0 fixture upgraded by `main` at schema 8, plus shared variables
+with global, profile and project values and a provenance row, so that
+every schema 8 table has rows): every row is kept, the upgrade adds only
+the five empty work session tables, and failures and kills after migration
+9, before the commit or while the backup is written leave the schema 8
+database and its backup intact. `tests/upgrade_work_sessions_from_schema_8.rs`
+checks the variables and provenance through the API, that a work session on
+the upgraded database survives a reopen (which neither upgrades nor backs
+up again), that the `deckpilot-schema8-…` backup restores the schema 8 state
+(losing the session), and that schema 10 is refused without changes. The
+store's own tests (`src/work_sessions/tests.rs`) cover every transition and
+refusal, the one-active-session constraint, the idempotent final stop (also
+from two connections at once), approval lifetime and boot, stale and old
+sessions' results, gaps, exclusion and re-inclusion, retention, and a
+restart in each persisted state followed by its recovery transition.
 
 Upgrades from schemas 1 to 4 are covered by the storage unit tests
 (`migrates_a_version_one_database_without_losing_data`,
