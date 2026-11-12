@@ -269,7 +269,11 @@ pub fn select_value<'a>(
 /// What a preview shows for one reference. Sensitive values are never part
 /// of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "camelCase")]
+#[serde(
+    tag = "status",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum ReferenceStatus {
     Resolved {
         value: VariableValue,
