@@ -199,11 +199,12 @@ a module declares itself (D4). Users may create variables in a group named
 after a module, e.g. `shared.projects.favorite`, as long as the key is not
 one the module declares.
 
-The contract code currently reserves more namespaces
-(`RESERVED_NAMESPACES` also lists `shared`, `vars`, `env`, `secret`,
-`secrets`, `deckpilot`, `internal`). Workstream A narrows the list to
-`steps`, `system`, `workflow` and adds the check against module-declared
-keys when module variables exist.
+`RESERVED_NAMESPACES` in the contract is exactly `steps`, `system` and
+`workflow`, so `shared.steps.…` can never be mistaken for a node output.
+`shared` is not reserved: it is always the root of a reference and never
+part of the key, so `shared.shared.x` is the variable `shared.x`, without
+ambiguity. Module-declared keys are checked by the variable store (E) once
+modules can declare variables.
 
 ## 5. Expression syntax
 

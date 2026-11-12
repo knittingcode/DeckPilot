@@ -270,21 +270,13 @@ impl ScopeKey {
     }
 }
 
-/// Namespaces a shared variable cannot use: the roots of the reference
-/// grammar and names kept for later use.
-pub const RESERVED_NAMESPACES: &[&str] = &[
-    "steps",
-    "shared",
-    "system",
-    "workflow",
-    "vars",
-    "env",
-    "secret",
-    "secrets",
-    "deckpilot",
-    "internal",
-];
-
+/// Namespaces a shared variable cannot use: the other roots of the
+/// reference grammar, so that `shared.steps.…` is never mistaken for a node
+/// output. `shared` itself needs no reservation: it is always the first
+/// segment of a reference and never part of the key, so `shared.shared.x`
+/// is the variable `shared.x`. Keys a module declares are reserved by the
+/// variable store once modules can declare variables.
+pub const RESERVED_NAMESPACES: &[&str] = &["steps", "system", "workflow"];
 /// Longest key segment and number of segments of a [`VariableKey`].
 pub const MAX_KEY_SEGMENT: usize = 32;
 pub const MAX_KEY_SEGMENTS: usize = 4;

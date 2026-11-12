@@ -99,8 +99,29 @@ fn anything_outside_the_grammar_is_rejected() {
     }
     assert!(serde_json::from_value::<VariableRef>(json!("env.HOME")).is_err());
     assert_eq!(
-        VariableKey::new("secrets.token"),
-        Err(KeyError::Reserved("secrets".into()))
+        VariableKey::new("system.token"),
+        Err(KeyError::Reserved("system".into()))
+    );
+    for reserved in ["steps", "system", "workflow"] {
+        assert!(
+            VariableKey::new(format!("{reserved}.x")).is_err(),
+            "{reserved}"
+        );
+    }
+    // Only the grammar's other roots are reserved; module-named groups and
+    // any other group are free.
+    for free in [
+        "projects.favorite",
+        "shared.x",
+        "vars.x",
+        "secrets.name",
+        "deckpilot.x",
+    ] {
+        assert_eq!(key(free).as_str(), free);
+    }
+    assert_eq!(
+        reference("shared.shared.x"),
+        VariableRef::Shared(key("shared.x"))
     );
     assert_eq!(key("projects.favorite").namespace(), "projects");
 }
