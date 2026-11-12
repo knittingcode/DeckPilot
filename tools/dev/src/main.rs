@@ -60,14 +60,17 @@ Commands:
   press <serial> <key>   Press a key of a simulated device
   clean [--data]         Remove logs and session files (and dev data)
   set-version <version>  Set the application version everywhere it is declared
-  check-versions [--tag <tag>]
-                         Verify that all version numbers match
+  check-versions [--tag <tag>] [--root <dir>]
+                         Verify that all version numbers match (and that
+                         <tag> is the release tag of that version)
   package [-- <tauri build args>]
                          Build installers including the agent
   verify-release <dir>   Check a release's latest.json and artifact signatures
                          (public key from DECKPILOT_UPDATER_PUBKEY)
   check-updater-key      Check that DECKPILOT_UPDATER_PUBKEY is a valid public key
   release-notes          Print the CHANGELOG.md section of the current version
+  release-tag <tag>      Classify a release tag (vX.Y.Z, -alpha.N, -beta.N, -rc.N):
+                         version, channel, manifest; fails for any other tag
   hardware-test [--mock] [--dir <data-dir>] [--force]
                          Guided test of a physical Stream Deck with the real
                          agent; --mock checks the procedure on a simulated MK.2
@@ -957,7 +960,9 @@ fn run(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         Some("check-versions") => {
-            let version = versions::check(&paths.root, option(args, "--tag").as_deref())?;
+            // --root: another checkout (the release gate's tests); read only.
+            let root = option(args, "--root").map_or_else(|| paths.root.clone(), Into::into);
+            let version = versions::check(&root, option(args, "--tag").as_deref())?;
             println!("all versions are {version}");
             Ok(())
         }
@@ -974,7 +979,7 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         Some(
             command @ ("verify-release" | "check-updater-key" | "verify-signature"
-            | "release-notes"),
+            | "release-notes" | "release-tag"),
         ) => release::command(command, &args[1..], &paths.root),
         Some("help" | "--help" | "-h") | None => {
             println!("{USAGE}");

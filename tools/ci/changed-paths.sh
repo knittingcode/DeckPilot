@@ -15,10 +15,12 @@ groups="packaging keystore release_manifest"
 # The paths of a group: an extended regular expression on whole paths.
 pattern() {
   case "$1" in
-    # Package checks: what goes into the installers or builds them.
-    packaging) echo '^apps/desktop/src-tauri/|^apps/agent/|^packaging/|^tools/ci/|^\.github/workflows/|^Cargo\.(lock|toml)$|^apps/desktop/package\.json$' ;;
+    # Package checks: files that change what is bundled or how. Plain
+    # source changes are covered by the Rust jobs here and by the Packaging
+    # runs on main and nightly.
+    packaging) echo '^apps/desktop/src-tauri/(tauri[^/]*\.json$|build\.rs$|Cargo\.toml$|capabilities/|icons/|app-icon\.svg$)|^apps/agent/(build\.rs|Cargo\.toml|Info\.plist)$|^packaging/|^tools/ci/|^\.github/workflows/|^Cargo\.(lock|toml)$|^apps/desktop/package\.json$' ;;
     # Real credential stores.
-    keystore) echo '^crates/deckpilot-keystore/|^\.github/workflows/ci\.yml$' ;;
+    keystore) echo '^crates/deckpilot-keystore/|^tools/ci/with-keyring\.sh$|^\.github/workflows/ci\.yml$' ;;
     # Assembly of the release's latest.json.
     release_manifest) echo '^tools/ci/|^\.github/workflows/(release|ci)\.yml$' ;;
   esac
