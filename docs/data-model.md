@@ -407,6 +407,13 @@ unchanged.
   0.5.0 (schema 5): the 0.5.0 agent refuses it and changes nothing.
 - A wrong key or password never reinitializes, upgrades or backs up the
   database; the file stays byte-identical.
+- A newer schema is refused before anything is written to the file — the
+  version is read before the journal mode is switched to WAL, which would
+  rewrite the header.
+- A damaged file that opens with the right key (truncated, damaged pages) is
+  reported as damaged (`Corrupt`), not as a wrong password, and is left as it
+  is. A file whose first page does not authenticate cannot be told apart
+  from a wrong key and is reported as one; it is not written either.
 
 Tested with a real database created by the 0.5.0-2 tools
 (`crates/deckpilot-storage/tests/upgrade_from_0_5_0.rs`, fixture in
@@ -416,7 +423,9 @@ profile and default project, machine bindings and settings; it is preceded
 by an encrypted backup that can be restored; reopening does not upgrade or
 back up again; graph workflows, execution history and credentials added
 afterwards are kept (and secrets are never readable in the file); a wrong
-key changes nothing; a newer schema is refused without changes. The real
+key changes nothing; a newer schema is refused without changes, also in
+rollback-journal mode; a truncated or damaged copy is reported as damaged
+and left byte-identical, without side files or backups. The real
 0.5.0-2 agent given a schema 7 database is tested by
 `tools/compat/matrix.sh` ([Compatibility](compatibility.md)).
 Upgrades from schemas 1 to 4 are covered by the storage unit tests
