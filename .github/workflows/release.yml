@@ -220,7 +220,9 @@ jobs:
           # Test tags (e.g. v0.5.0-1) become pre-releases: even if published,
           # they never become "latest", the channel the app reads.
           prerelease: ${{ contains(env.TAG, '-') }}
-          includeUpdaterJson: true
+          # latest.json is assembled once, after all builds, by the manifest
+          # job: four jobs merging into it concurrently can lose entries.
+          includeUpdaterJson: false
           # RPM does not allow "-" in versions: test releases (pre-release
           # versions) build .deb and AppImage on Linux; final releases all.
           args: >-
@@ -234,6 +236,21 @@ jobs:
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD; do
             echo "$name=" >> "$GITHUB_ENV"
           done
+      # This build's entries of latest.json (target keys, asset names and
+      # signatures), for the manifest job.
+      - name: Updater manifest fragment
+        shell: bash
+        run: >
+          tools/ci/updater-fragment.sh "${{ matrix.target }}"
+          "target/${{ matrix.target }}/release/bundle"
+          "$RUNNER_TEMP/updater-fragment/${{ matrix.target }}.json"
+      - name: Upload the updater manifest fragment
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-fragment-${{ matrix.target }}
+          path: ${{ runner.temp }}/updater-fragment/${{ matrix.target }}.json
+          if-no-files-found: error
+          overwrite: true
       # The updater key compiled into the app must be the configured one;
       # otherwise installations could not verify (or would trust other) updates.
       - name: Embedded updater key matches DECKPILOT_UPDATER_PUBKEY
@@ -304,9 +321,42 @@ jobs:
             target/${{ matrix.target }}/release/bundle/**/*.exe
             target/${{ matrix.target }}/release/bundle/**/*.sig
 
+  # Writes latest.json once, from the fragments of all builds, and attaches
+  # it to the draft. Fails if a platform or package type is missing, if two
+  # builds claim the same entry, or if a referenced asset is not in the
+  # draft (tools/ci/assemble-latest-json.sh, tested on every pull request by
+  # tools/ci/test-latest-json.sh).
+  manifest:
+    name: Assemble latest.json
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Download the updater manifest fragments
+        uses: actions/download-artifact@v4
+        with:
+          pattern: updater-fragment-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/updater-fragments
+      - name: Assemble latest.json and attach it to the draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTES: ${{ needs.prepare.outputs.notes }}
+        run: |
+          version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' \
+            > "$RUNNER_TEMP/assets.txt"
+          REPOSITORY="$GITHUB_REPOSITORY" VERSION="$version" NOTES_FILE="$RUNNER_TEMP/notes.md" \
+            ASSETS_FILE="$RUNNER_TEMP/assets.txt" \
+            tools/ci/assemble-latest-json.sh "$RUNNER_TEMP/updater-fragments" "$RUNNER_TEMP/latest.json"
+          gh release upload "$TAG" "$RUNNER_TEMP/latest.json" --repo "$GITHUB_REPOSITORY" --clobber
+
   verify:
     name: Verify artifacts and publish checksums
-    needs: build
+    needs: manifest
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
