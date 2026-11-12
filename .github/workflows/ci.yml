@@ -94,6 +94,32 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p deckpilot-storage --features sqlcipher --locked
 
+  # The release assembles latest.json from per-build fragments; release.yml
+  # only runs on a tag, so the assembly is tested here with fake packages
+  # signed by a throwaway key. Nothing is published.
+  release-manifest:
+    name: Release manifest assembly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux system dependencies
+        run: tools/ci/install-linux-deps.sh
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-manifest
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Release scripts pass shellcheck
+        run: shellcheck tools/ci/*.sh
+      - name: Assemble and verify latest.json from fixture builds
+        run: tools/ci/test-latest-json.sh "$RUNNER_TEMP/latest-json-test"
+
   # Builds the Linux .deb with the release configuration (bundled agent,
   # udev rule) to catch packaging mistakes before a release. Nothing is
   # signed or published.
