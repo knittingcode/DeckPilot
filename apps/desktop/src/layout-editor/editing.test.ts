@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest"
 
+import { canRedo, canUndo, commit, history, redo, undo } from "@/lib/history"
+
 import {
   assignTarget,
-  canRedo,
-  canUndo,
   clearControls,
-  commit,
   controlRows,
   copyControls,
   dropOnControl,
@@ -14,19 +13,16 @@ import {
   extendSelection,
   folderOf,
   hasBack,
-  history,
   moveControl,
   neighbour,
   orderedControls,
   parentPage,
   parseControlKey,
   pasteControls,
-  redo,
   select,
   selectOnly,
   selectedInOrder,
   toggleSelected,
-  undo,
 } from "./editing"
 import { bindingsFor } from "@/lib/layout-model"
 import type { ControlBinding, ControlId, DeviceLayout, DeviceModel } from "@/lib/types"
