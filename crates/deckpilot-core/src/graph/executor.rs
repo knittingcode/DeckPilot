@@ -68,6 +68,7 @@ use super::mapping::{
     MappingError, Outputs, Resolved, Sources, convert, lookup, resolve_text, resolve_value,
 };
 use super::{Mapping, NodeId, NodeKind, OnError, Port, Predicate, WorkflowGraph};
+use crate::resolution::Redactor;
 use crate::variables::{
     ProjectSource, ReferenceError, ReferenceProblem, ResolutionContext, ResolutionPhase,
     VariableResolver,
@@ -235,11 +236,16 @@ pub enum ExecutionEvent {
 
 /// Runs one action instance with the given parameter overrides against a
 /// context. Effects are applied to that context.
+/// Runs one attempt of an action node: the instance, its overrides plus
+/// mapped values, the node's context, the attempt's control and the
+/// outputs of the nodes that ran before it (for `steps.` references in the
+/// instance's own parameters).
 pub(crate) type RunAction<'a> = dyn Fn(
         &ActionInstance,
         &ActionParameters,
         &mut ActiveProjectContext,
         &crate::ExecutionControl<'_>,
+        &Outputs,
     ) -> Result<ActionResult, EngineError>
     + Sync
     + 'a;
@@ -1203,15 +1209,19 @@ impl Executor<'_> {
         } = invocation;
         let action = Some(instance.id);
         let definition = self.registry.definition(&instance.action_type);
-        let parameters = match self.mapped_parameters(overrides, mappings, instance, sources) {
-            Ok(parameters) => parameters,
-            Err(error) => {
-                let mut report = idle(id, NodeStatus::Failed, started_ms);
-                report.error = Some(StepError::new(error.code(), error.message(), false));
-                report.action = action;
-                return self.route_failure(report, policy.on_error, id);
-            }
-        };
+        // Sensitive mapped values are removed from what the node reports.
+        let mut redactor = Redactor::default();
+        let parameters =
+            match self.mapped_parameters(overrides, mappings, instance, sources, &mut redactor) {
+                Ok(parameters) => parameters,
+                Err(error) => {
+                    let mut report = idle(id, NodeStatus::Failed, started_ms);
+                    let message = redactor.redact(&error.message());
+                    report.error = Some(StepError::new(error.code(), message, false));
+                    report.action = action;
+                    return self.route_failure(report, policy.on_error, id);
+                }
+            };
         let spec = definition.map(|d| d.node.clone()).unwrap_or_default();
         let timeout = node_timeout(policy.timeout_ms, spec.timeout_ms);
         let attempts = 1 + if spec.retry_safe {
@@ -1233,8 +1243,8 @@ impl Executor<'_> {
                 instance,
                 &parameters,
                 &mut working,
-                timeout,
-                spec.retry_safe,
+                (timeout, spec.retry_safe),
+                (sources.outputs, &redactor),
             );
             let report = NodeReport {
                 node: id.clone(),
@@ -1293,8 +1303,8 @@ impl Executor<'_> {
         instance: &ActionInstance,
         parameters: &ActionParameters,
         working: &mut ActiveProjectContext,
-        timeout: Duration,
-        retry_safe: bool,
+        (timeout, retry_safe): (Duration, bool),
+        (outputs, redactor): (&Outputs, &Redactor),
     ) -> (
         NodeStatus,
         Option<StepError>,
@@ -1306,7 +1316,10 @@ impl Executor<'_> {
         let progress = |progress: crate::Progress| {
             (self.on_event)(ExecutionEvent::NodeProgress {
                 node: id.clone(),
-                progress,
+                progress: crate::Progress {
+                    message: redactor.redact(&progress.message),
+                    ..progress
+                },
             });
         };
         let mut summary = self
@@ -1316,7 +1329,8 @@ impl Executor<'_> {
             .clone();
         summary.elapsed_ms = ms(self.started);
         let control = crate::ExecutionControl::new(&token, &progress).with_summary(summary);
-        let result = (self.run_action)(instance, parameters, working, &control);
+        let result = (self.run_action)(instance, parameters, working, &control, outputs)
+            .map(|result| redactor.redact_result(result));
         let late = begun.elapsed() > timeout;
         classify(
             result,
@@ -1376,6 +1390,7 @@ impl Executor<'_> {
         mappings: &BTreeMap<String, Mapping>,
         instance: &ActionInstance,
         sources: &Sources<'_>,
+        redactor: &mut Redactor,
     ) -> Result<ActionParameters, MappingError> {
         let mut parameters = overrides.clone();
         let definition = self.registry.definition(&instance.action_type);
@@ -1387,6 +1402,9 @@ impl Executor<'_> {
                 }),
                 other @ MappingError::Text(_) => other,
             })?;
+            if resolved.1 {
+                collect_sensitive(mapping, &resolved.0, sources, redactor);
+            }
             let kind = definition
                 .and_then(|d| d.parameters.iter().find(|spec| &spec.key == key))
                 .map(|spec| &spec.kind)
@@ -1443,6 +1461,45 @@ impl Executor<'_> {
             parameters = parameters.with(key.clone(), value);
         }
         Ok(parameters)
+    }
+}
+
+/// Adds a sensitive mapped value to `redactor`: the value as the action
+/// receives it, and for a template every sensitive value in it, so that an
+/// action repeating part of the text does not reveal it either.
+fn collect_sensitive(
+    mapping: &Mapping,
+    resolved: &Resolved,
+    sources: &Sources<'_>,
+    redactor: &mut Redactor,
+) {
+    match resolved {
+        Resolved::Text(text) => redactor.add(text),
+        Resolved::Value(value) => redactor.add_value(value),
+    }
+    let Mapping::Template { template } = mapping else {
+        return;
+    };
+    for reference in crate::variables::references_in_expression(template).unwrap_or_default() {
+        match &reference {
+            crate::variables::VariableRef::Step(step) => {
+                if let Some(text) = lookup(sources.outputs, step) {
+                    redactor.add(text);
+                }
+            }
+            _ => {
+                if let Some(crate::variables::Resolution::Value {
+                    value,
+                    sensitive: true,
+                    ..
+                }) = sources
+                    .variables
+                    .map(|variables| variables.resolve(&reference, sources.context))
+                {
+                    redactor.add_value(&value);
+                }
+            }
+        }
     }
 }
 
