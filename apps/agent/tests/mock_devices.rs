@@ -6,6 +6,8 @@
 
 mod support;
 
+use std::fmt::Write as _;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
@@ -153,51 +155,100 @@ fn data(dir: &TempDir) -> (AgentPaths, deckpilot_storage::DatabaseKey, Profile, 
     (paths, key, work, home)
 }
 
-/// The agent executable, stopped (and killed if needed) when dropped.
+/// How long the executable may take to start and accept connections; a
+/// cold start on a CI runner (Windows in particular) can be slow.
+const STARTUP: Duration = Duration::from_secs(90);
+
+/// The agent executable, stopped (and killed if needed) when dropped. All
+/// requests go over one connection, so a Windows named pipe is not opened
+/// and closed for every request.
 struct AgentProcess {
     child: Child,
     paths: AgentPaths,
+    /// The executable's standard error, shown when something goes wrong.
+    stderr: PathBuf,
+    client: Option<AgentClient>,
 }
 
 impl AgentProcess {
-    fn start(paths: &AgentPaths) -> Self {
+    /// Starts the executable and waits until it accepts a connection.
+    async fn start(paths: &AgentPaths, dir: &TempDir) -> Self {
+        let stderr = dir.path().join("agent-stderr.log");
         let child = Command::new(env!("CARGO_BIN_EXE_deckpilot-agent"))
             .args(["--headless", "--mock-devices", "mk2"])
             .env(deckpilot_ipc::paths::DATA_DIR_ENV, &paths.data_dir)
+            .env("RUST_BACKTRACE", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(std::fs::File::create(&stderr).unwrap())
             .spawn()
             .unwrap();
-        Self {
+        let mut agent = Self {
             child,
             paths: paths.clone(),
-        }
+            stderr,
+            client: None,
+        };
+        let client = agent.connect(ClientKind::Desktop).await;
+        agent.client = Some(client);
+        agent
     }
 
-    async fn client(&self, kind: ClientKind) -> AgentClient {
-        let deadline = tokio::time::Instant::now() + TIMEOUT;
-        loop {
-            if let Ok(client) = AgentClient::connect(&self.paths, kind).await {
-                return client;
+    /// What the executable reported: its exit status, standard error and
+    /// log files.
+    fn diagnostics(&mut self) -> String {
+        let status = match self.child.try_wait() {
+            Ok(Some(status)) => format!("exited with {status}"),
+            Ok(None) => "still running".to_owned(),
+            Err(error) => format!("unknown ({error})"),
+        };
+        let mut text = format!(
+            "agent {status}\n--- stderr ---\n{}",
+            std::fs::read_to_string(&self.stderr).unwrap_or_default()
+        );
+        if let Ok(entries) = std::fs::read_dir(&self.paths.log_dir) {
+            for entry in entries.flatten() {
+                let contents = std::fs::read_to_string(entry.path()).unwrap_or_default();
+                let tail: Vec<&str> = contents.lines().rev().take(60).collect();
+                let _ = writeln!(text, "\n--- {} ---", entry.path().display());
+                for line in tail.into_iter().rev() {
+                    text.push_str(line);
+                    text.push('\n');
+                }
             }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "the agent did not start"
-            );
-            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        text
+    }
+
+    /// A new connection, retried until the agent accepts it.
+    async fn connect(&mut self, kind: ClientKind) -> AgentClient {
+        let deadline = tokio::time::Instant::now() + STARTUP;
+        loop {
+            let error = match AgentClient::connect(&self.paths, kind).await {
+                Ok(client) => return client,
+                Err(error) => error,
+            };
+            if matches!(self.child.try_wait(), Ok(Some(_)))
+                || tokio::time::Instant::now() > deadline
+            {
+                panic!(
+                    "cannot connect to the agent (last error: {error})\n{}",
+                    self.diagnostics()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 
-    async fn request(&self, request: Request) -> Response {
-        self.client(ClientKind::Other)
-            .await
-            .request(request)
-            .await
-            .unwrap()
+    async fn request(&mut self, request: Request) -> Response {
+        let client = self.client.as_mut().expect("connected");
+        match client.request(request).await {
+            Ok(response) => response,
+            Err(error) => panic!("request failed: {error}\n{}", self.diagnostics()),
+        }
     }
 
-    async fn wait_status(&self, predicate: impl Fn(&AgentStatus) -> bool) -> AgentStatus {
+    async fn wait_status(&mut self, predicate: impl Fn(&AgentStatus) -> bool) -> AgentStatus {
         let deadline = tokio::time::Instant::now() + TIMEOUT;
         loop {
             if let Response::Status { status } = self.request(Request::GetStatus).await
@@ -206,14 +257,15 @@ impl AgentProcess {
                 return *status;
             }
             assert!(
-                tokio::time::Instant::now() < deadline,
-                "condition not reached in time"
+                tokio::time::Instant::now() <= deadline,
+                "condition not reached in time\n{}",
+                self.diagnostics()
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
 
-    async fn tap(&self, device: &DeviceId, control: ControlId) {
+    async fn tap(&mut self, device: &DeviceId, control: ControlId) {
         for input in [ControlInput::Press, ControlInput::Release] {
             self.request(Request::SimulateInput {
                 device: device.clone(),
@@ -226,11 +278,13 @@ impl AgentProcess {
 
     async fn stop(mut self) {
         self.request(Request::Shutdown).await;
+        self.client = None;
         let deadline = tokio::time::Instant::now() + TIMEOUT;
         while self.child.try_wait().unwrap().is_none() {
             assert!(
-                tokio::time::Instant::now() < deadline,
-                "the agent did not stop"
+                tokio::time::Instant::now() <= deadline,
+                "the agent did not stop\n{}",
+                self.diagnostics()
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -274,15 +328,12 @@ fn page(status: &AgentStatus) -> Option<&str> {
 async fn the_mock_agent_navigates_runs_workflows_and_switches_profiles() {
     let dir = TempDir::new("deckpilot-mock");
     let (paths, key_material, work, home) = data(&dir);
-    let agent = AgentProcess::start(&paths);
+    let mut agent = AgentProcess::start(&paths, &dir).await;
     agent
-        .client(ClientKind::Desktop)
-        .await
         .request(Request::Unlock {
             key: KeyMaterial::new(key_material.to_hex()),
         })
-        .await
-        .unwrap();
+        .await;
     let status = agent
         .wait_status(|s| {
             s.devices
@@ -298,7 +349,7 @@ async fn the_mock_agent_navigates_runs_workflows_and_switches_profiles() {
         LayoutStatus::Compatible { .. }
     ));
     assert_eq!(page(&status), Some("Home"));
-    let mut events = agent.client(ClientKind::Other).await;
+    let mut events = agent.connect(ClientKind::Other).await;
     events.subscribe().await.unwrap();
 
     // Folder, its own key, then the automatic Back on the first free key.
