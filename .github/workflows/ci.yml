@@ -94,9 +94,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p deckpilot-storage --features sqlcipher --locked
 
-  # Builds the Linux .deb with the release configuration (bundled agent,
-  # udev rule) to catch packaging mistakes before a release. Nothing is
-  # signed or published.
+  # Builds the Linux .deb and .rpm with the release configuration (bundled
+  # agent, udev rule) and their updater artifacts, signed with a throwaway
+  # key, to catch packaging mistakes before a release. Nothing is published.
   package-linux:
     name: Package check (Linux .deb)
     runs-on: ubuntu-22.04
@@ -115,6 +115,8 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Throwaway updater key (not the release key)
+        run: tools/ci/throwaway-updater-key.sh
       - name: Build and stage the agent
         run: |
           cargo build --release --locked -p deckpilot-agent
@@ -124,28 +126,14 @@ jobs:
         run: >
           pnpm --filter @deckpilot/desktop tauri build --bundles deb,rpm
           --config src-tauri/tauri.release.conf.json
-          --config '{"bundle":{"createUpdaterArtifacts":false}}'
-      - name: The package contains the app, the agent and the udev rule
-        run: |
-          deb=$(find target/release/bundle/deb -name '*.deb' | head -n 1)
-          contents=$(dpkg-deb --contents "$deb")
-          echo "$contents"
-          # dpkg-deb lists paths with or without a leading "./".
-          for path in usr/bin/deckpilot-agent usr/lib/udev/rules.d/70-deckpilot-streamdeck.rules 'usr/share/applications/.*\.desktop'; do
-            echo "$contents" | grep -q -E " (\./)?$path\$" || { echo "::error::$deb lacks $path"; exit 1; }
-          done
-          echo "$deb contains the app, the agent and the udev rule"
-          rpm=$(find target/release/bundle/rpm -name '*.rpm' | head -n 1)
-          files=$(rpm -qlp "$rpm")
-          echo "$files"
-          for path in /usr/bin/deckpilot-agent /usr/lib/udev/rules.d/70-deckpilot-streamdeck.rules; do
-            echo "$files" | grep -q -x -F "$path" || { echo "::error::$rpm lacks $path"; exit 1; }
-          done
-          echo "$rpm contains the app, the agent and the udev rule"
+          --config "$THROWAWAY_UPDATER_CONFIG"
+      - name: Names, versions, app, agent, udev rule and updater signatures
+        run: tools/ci/check-packages.sh linux
 
   # Builds the Windows installers with the release configuration, the way
   # the release workflow does (agent built in a bash step with Strawberry
-  # Perl for OpenSSL), and checks that both contain the agent. Unsigned.
+  # Perl for OpenSSL), with updater signatures from a throwaway key, and
+  # checks their contents. Not code-signed; nothing is published.
   package-windows:
     name: Package check (Windows installers)
     runs-on: windows-latest
@@ -167,6 +155,9 @@ jobs:
         shell: pwsh
         run: |
           "OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Throwaway updater key (not the release key)
+        shell: bash
+        run: tools/ci/throwaway-updater-key.sh
       - name: Build and stage the agent
         shell: bash
         run: |
@@ -178,22 +169,19 @@ jobs:
         run: >
           pnpm --filter @deckpilot/desktop tauri build --bundles nsis,msi
           --config src-tauri/tauri.release.conf.json
-          --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          --config "$THROWAWAY_UPDATER_CONFIG"
       - name: Extract the installers
         shell: pwsh
         run: |
-          $nsis = Get-ChildItem target/release/bundle/nsis/*.exe | Select-Object -First 1
-          & 7z x -y "-o$env:RUNNER_TEMP\nsis" $nsis.FullName | Out-Null
-          $msi = Get-ChildItem target/release/bundle/msi/*.msi | Select-Object -First 1
-          $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @("/a", "`"$($msi.FullName)`"", "/qn", "TARGETDIR=`"$env:RUNNER_TEMP\msi`"")
+          $version = (Get-Content apps/desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $nsis = "target/release/bundle/nsis/DeckPilot_${version}_x64-setup.exe"
+          $msi = "target/release/bundle/msi/DeckPilot_${version}_x64_en-US.msi"
+          foreach ($file in @($nsis, $msi)) {
+            if (-not (Test-Path $file)) { Write-Error "expected $file"; exit 1 }
+          }
+          & 7z x -y "-o$env:RUNNER_TEMP\nsis" (Resolve-Path $nsis).Path | Out-Null
+          $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @("/a", "`"$((Resolve-Path $msi).Path)`"", "/qn", "TARGETDIR=`"$env:RUNNER_TEMP\msi`"")
           if ($process.ExitCode -ne 0) { Write-Error "administrative MSI extraction failed: $($process.ExitCode)"; exit 1 }
-      - name: Both installers contain the app and the agent
+      - name: Names, versions, app, agent and updater signatures
         shell: bash
-        run: |
-          for kind in nsis msi; do
-            files=$(find "$RUNNER_TEMP/$kind" -type f -iname '*.exe' | sed 's#.*/##' | sort -u)
-            echo "$kind: $(echo $files)"
-            echo "$files" | grep -q -i -x "deckpilot-agent.exe" || { echo "::error::the $kind installer lacks deckpilot-agent.exe"; exit 1; }
-            [ "$(echo "$files" | grep -v -i -x "deckpilot-agent.exe" | grep -v -i "uninstall" | grep -c .)" -ge 1 ] \
-              || { echo "::error::the $kind installer lacks the application executable"; exit 1; }
-          done
+        run: tools/ci/check-packages.sh windows "$RUNNER_TEMP"
