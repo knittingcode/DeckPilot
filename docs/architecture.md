@@ -182,8 +182,10 @@ configuration from storage, apply one change through the domain model,
 persist it and notify the agent. Runtime changes and action execution are
 forwarded to the agent; a background task subscribes to agent events and
 forwards them to the window. The core sections are Dashboard, Action
-Library, Workflows, Profiles, Device Models, Layout Designer, Connected
-Devices and Settings (appearance, modules, agent, updates); further pages come
+Library, Workflows, Profiles, Layout Designer and Settings (appearance,
+devices, modules, agent, updates). Settings › Devices shows the connected
+devices and the supported models; the former Device Models page and links
+to it lead there. Further pages come
 from enabled modules (Projects, including this machine's resource mappings).
 Profile-scoped pages show the profile they edit and are re-created when
 another profile is chosen, so an open editor never writes to a different
