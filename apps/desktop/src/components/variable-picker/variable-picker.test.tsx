@@ -227,6 +227,41 @@ describe("inserting", () => {
     expect(input.selectionStart).toBe("hello {{ shared.paths.root }}".length)
   })
 
+  it("offers and inserts canonical ids, with their owner", async () => {
+    const legacy = agent.variables.find((v) => v.entry.reference === "system.project.current.key")
+    if (!legacy) throw new Error("the legacy id is listed")
+    agent.variables.push({
+      entry: {
+        ...legacy.entry,
+        reference: "projects.current.key",
+        group: "module",
+        owner: { kind: "module", module: "projects" },
+        readOnly: true,
+      },
+      resolve: legacy.resolve,
+    })
+    legacy.entry = {
+      ...legacy.entry,
+      owner: { kind: "module", module: "projects" },
+      deprecated: { canonical: "projects.current.key", since: "0.6.0" },
+    }
+    const onChange = vi.fn()
+    const { user } = renderField(message, text(""), onChange)
+    const search = await openPicker(user, /insert a variable into message/i)
+    await user.type(search, "project key")
+    await waitFor(() => {
+      expect(optionLabels()).toEqual([expect.stringContaining("projects.current.key")])
+    })
+    expect(screen.getByRole("group", { name: "Modules" })).toBeInTheDocument()
+    expect(screen.getByLabelText("Variable details")).toHaveTextContent("projects module")
+    expect(screen.getByLabelText("Variable details")).toHaveTextContent("Read-only")
+    await user.click(screen.getByRole("option", { name: /projects\.current\.key/ }))
+    expect(onChange).toHaveBeenLastCalledWith({
+      type: "template",
+      value: "{{ projects.current.key }}",
+    })
+  })
+
   it("saves a whole-value reference, never the previewed value", async () => {
     const onChange = vi.fn()
     const { user } = renderField(retries, { type: "integer", value: 0 }, onChange)
