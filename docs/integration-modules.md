@@ -625,3 +625,55 @@ are not shown and do not fail. macOS cannot report that notifications are
 denied for the helper; they are then counted as shown.
 
 Error codes: `notification-not-shown`.
+
+## Testing the GitHub, GitLab and Jira modules
+
+**Stand-ins (always run).** Each module's own tests and
+`crates/deckpilot-modules/tests/integration_services.rs` run the actions
+against small HTTP and HTTPS servers on 127.0.0.1 started by the tests; no
+other host is contacted and no real token is used. They cover refused
+connections, unknown hosts, error statuses, a self-signed certificate,
+invalid and insecure addresses, redirects to another origin, expired
+tokens, rate limits, paging, answers of another shape, slow servers,
+cancellation, servers that repeat the token, and disabled modules. They run
+with `cargo test`.
+
+**Smoke tests against real services (optional, off by default).**
+`crates/deckpilot-modules/tests/live_smoke.rs` checks that the modules
+still work with the real APIs. Its tests are ignored by default and, even
+when ignored tests are run, do nothing unless `DECKPILOT_SMOKE=1` and the
+service's variables are set. They are not run in CI.
+
+- Use **isolated test accounts** and **read-only tokens** made for this
+  (a fine-grained GitHub token with read access, a GitLab token with
+  `read_api`, a Jira API token of a test user). Never use personal or
+  production credentials.
+- Only action types whose effect is `readOnly` are run (checked before
+  each run); they send only `GET` requests. Nothing is created, changed or
+  deleted. Each run also sends one request with a made-up token and
+  expects `unauthorized`.
+- Only statuses and error codes are printed, never outputs; every result is
+  checked for the token.
+
+| Variable | Service | |
+| -------- | ------- | - |
+| `DECKPILOT_SMOKE` | all | `1` to run at all |
+| `DECKPILOT_SMOKE_ALLOW_PRIVATE` | all | `1` when the server is on a private network |
+| `DECKPILOT_SMOKE_GITHUB_TOKEN` | GitHub | required |
+| `DECKPILOT_SMOKE_GITHUB_API_URL` | GitHub | default `https://api.github.com` |
+| `DECKPILOT_SMOKE_GITHUB_REPOSITORY` | GitHub | `owner/name`; also reads the repository, its pull requests and the checks of its default branch |
+| `DECKPILOT_SMOKE_GITLAB_TOKEN` | GitLab | required |
+| `DECKPILOT_SMOKE_GITLAB_API_URL` | GitLab | default `https://gitlab.com/api/v4` |
+| `DECKPILOT_SMOKE_GITLAB_PROJECT` | GitLab | `group/project`; also reads the project, its merge requests and the pipeline of its default branch |
+| `DECKPILOT_SMOKE_JIRA_SITE` | Jira | required, e.g. `https://test-team.atlassian.net` |
+| `DECKPILOT_SMOKE_JIRA_CREDENTIAL` | Jira | required: `email:api-token` (Cloud) or a personal access token (Data Center) |
+| `DECKPILOT_SMOKE_JIRA_DEPLOYMENT` | Jira | `cloud` (default) or `data-center` |
+| `DECKPILOT_SMOKE_JIRA_ISSUE` | Jira | an issue key to read |
+| `DECKPILOT_SMOKE_JIRA_FILTER` | Jira | a saved filter's number to read |
+
+```sh
+DECKPILOT_SMOKE=1 DECKPILOT_SMOKE_GITHUB_TOKEN=… \
+  cargo test -p deckpilot-modules --test live_smoke -- --ignored --nocapture
+```
+
+Services whose variables are not set are skipped with a note.
