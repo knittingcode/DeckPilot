@@ -13,8 +13,8 @@ use deckpilot_core::{
     MachineConfig, ModuleRegistry, Os, ProfileId, ProjectId, Runtime,
 };
 use deckpilot_device::{
-    CombinedBackend, ControlId, DeviceBackend, DeviceEvent, DeviceId, DeviceModel, ModelCatalog,
-    mock::MockBackend,
+    CombinedBackend, ControlId, DeviceBackend, DeviceDescriptor, DeviceEvent, DeviceId,
+    DeviceModel, ModelCatalog, mock::MockBackend,
 };
 use deckpilot_ipc::{
     AgentEvent, AgentPaths, AgentStatus, DeviceInfo, ErrorCode, IpcError, LockReason,
@@ -1310,6 +1310,14 @@ impl Agent {
         })
     }
 
+    /// The vendor-neutral descriptor of a known device: model data from the
+    /// catalog, driver from the backend that provides it.
+    pub(crate) fn device_descriptor(&self, device: &DeviceId) -> Option<DeviceDescriptor> {
+        self.runtime
+            .catalog()
+            .describe(device, Some(self.options.backend.driver(device)))
+    }
+
     fn device_infos(&self) -> Vec<DeviceInfo> {
         self.runtime
             .devices()
@@ -1324,6 +1332,7 @@ impl Agent {
                         .map(|page| page.name.clone())
                 });
                 DeviceInfo {
+                    descriptor: self.device_descriptor(&status.device),
                     model_name: model
                         .map_or_else(|| status.device.model.to_string(), |m| m.name.clone()),
                     layout: self.runtime.layout_status(&status.device.model),
