@@ -789,8 +789,9 @@ async fn module_variables_have_owners_and_follow_the_module() {
             .any(|e| e.reference.to_string() == "system.project.current.key")
     );
 
-    // Disabling the projects module makes its variables unavailable and
-    // says so; the configuration that uses them is kept.
+    // Disabling the projects module makes its canonical ids unavailable
+    // and says so. Legacy ids keep resolving exactly as before, and the
+    // configuration that uses them keeps running.
     let mut events = s.agent.events().await;
     s.agent
         .store()
@@ -810,21 +811,23 @@ async fn module_variables_have_owners_and_follow_the_module() {
     let AgentEvent::SharedVariablesChanged { keys } = changed else {
         unreachable!();
     };
-    for id in ["projects.current.key", "system.project.current.key"] {
-        assert!(keys.iter().any(|k| k == id), "{id} in {keys:?}");
-    }
+    assert!(keys.iter().any(|k| k == "projects.current.key"), "{keys:?}");
     let previews = s
         .preview(s.context(0, ProjectSource::Explicit), &both)
         .await;
-    for preview in previews.as_array().unwrap() {
-        assert_eq!(
-            preview["status"],
-            json!({"status": "unavailable", "owner": "projects"})
-        );
-    }
     assert_eq!(
-        entry_of(&s.list(everything.clone()).await, "projects.current.key").availability,
+        previews[0]["status"],
+        json!({"status": "unavailable", "owner": "projects"})
+    );
+    assert_eq!(previews[1]["status"]["value"]["value"], "SHOP");
+    let listed = s.list(everything.clone()).await;
+    assert_eq!(
+        entry_of(&listed, "projects.current.key").availability,
         ReferenceAvailability::Unavailable
+    );
+    assert_eq!(
+        entry_of(&listed, "system.project.current.key").availability,
+        ReferenceAvailability::Available
     );
     let response = old
         .request(Request::PreviewReferences {
@@ -840,14 +843,10 @@ async fn module_variables_have_owners_and_follow_the_module() {
         panic!("previews");
     };
     assert_eq!(
-        serde_json::to_value(&previews[0].status).unwrap(),
-        json!({"status": "permissionDenied"})
+        serde_json::to_value(&previews[0].status).unwrap()["value"]["value"],
+        "SHOP"
     );
-    let message = s.run(s.greet).await;
-    assert!(
-        message.contains("{{ system.project.current.key }} is unavailable"),
-        "{message}"
-    );
+    assert_eq!(s.run(s.greet).await, "hi shop crew on SHOP");
     let stored = s.agent.store().load_profile(s.work.id).unwrap().unwrap();
     assert_eq!(
         stored.action(s.greet).unwrap().parameters.get("message"),

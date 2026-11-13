@@ -131,9 +131,10 @@ below.
   their namespace (`{{ projects.current.key }}`,
   `{{ workSession.elapsedSeconds }}`), the core keeps only system
   variables, and one resolver serves actions, workflows, keys and previews.
-  `system.project.current.…` and `system.work.session.…` keep working as
-  deprecated aliases and are never rewritten. A variable of a disabled
-  module is reported as unavailable instead of failing silently.
+  `system.project.current.…` and `system.work.session.…` keep working
+  exactly as before, as deprecated aliases that are never rewritten. A
+  module's own ids are reported as unavailable while the module is
+  disabled.
 
 ### Fixed
 

@@ -1043,6 +1043,7 @@ mod reference_tests {
         for invalid in [
             "{{ shared.a.b }}",
             "shared.x",
+            "env.home",
             "env.HOME",
             "steps.x",
             "system.nope",
@@ -1163,7 +1164,7 @@ mod reference_tests {
             );
         }
         assert!(error("required", template("{{ shared.a.b")).contains("not closed"));
-        assert!(error("required", template("{{ env.HOME }}")).contains("not a reference"));
+        assert!(error("required", template("{{ env.home }}")).contains("not a reference"));
         assert_eq!(
             check("required", template("  ")).unwrap_err(),
             vec![ParameterError::Missing("required".into())]

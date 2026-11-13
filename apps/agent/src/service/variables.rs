@@ -358,7 +358,8 @@ pub fn catalog(
 }
 
 /// The ids of registered variables whose availability differs between
-/// two registries, each followed by its legacy aliases.
+/// two registries. Legacy ids are not named: they resolve whatever the
+/// state of the module.
 pub fn changed_availability(before: &VariableRegistry, after: &VariableRegistry) -> Vec<String> {
     let state = |registry: &VariableRegistry| -> BTreeMap<String, bool> {
         registry
@@ -372,17 +373,7 @@ pub fn changed_availability(before: &VariableRegistry, after: &VariableRegistry)
         .chain(new.keys())
         .filter(|id| old.get(*id) != new.get(*id))
         .collect();
-    let mut keys = Vec::new();
-    for id in changed {
-        keys.push(id.clone());
-        keys.extend(
-            deckpilot_core::variables::ALIASES
-                .iter()
-                .filter(|alias| alias.canonical == id.as_str())
-                .map(|alias| alias.alias.path().to_owned()),
-        );
-    }
-    keys
+    changed.into_iter().cloned().collect()
 }
 
 /// A client's context is always a preview: it cannot claim to be a run.
@@ -571,7 +562,7 @@ impl Agent {
 
     /// Announces the core and module variables whose availability differs
     /// between two module registries (a module was enabled or disabled), by
-    /// canonical id and by every legacy alias of it.
+    /// canonical id.
     pub(super) fn publish_module_variables(&self, before: &VariableRegistry) {
         self.publish_variables(changed_availability(before, self.modules.variables()));
     }
