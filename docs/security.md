@@ -256,6 +256,13 @@ explains the migration and offers a password instead.
 3. The files are swapped with renames. The original is kept as
    `deckpilot.unencrypted-backup.db` until the user deletes it in Settings.
    Interrupted migrations are repeated or completed on the next start.
+   On Unix the copy (and an older copy moved aside as
+   `deckpilot.unencrypted-backup-<time>.db`) gets mode `0600`; on Windows
+   it keeps the permissions of the data directory.
+
+An unencrypted database that holds stored credentials (schema 7, which no
+unencrypted release wrote) is refused and left unchanged, because its
+original would keep the secrets in plaintext.
 
 ### Removing the unencrypted copy
 
