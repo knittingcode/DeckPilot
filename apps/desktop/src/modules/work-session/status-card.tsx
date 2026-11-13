@@ -4,9 +4,9 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { api } from "@/lib/api"
+import { toastFailure } from "@/lib/failure"
 import type { ElapsedFormat, WorkSessionSnapshot } from "@/lib/types"
 
-import { toastFailure } from "./failure"
 import {
   STATE_TEXT,
   describeDuration,
