@@ -1,6 +1,8 @@
 # Variables: the unified registry
 
-Status: **in progress**. This document records the audit of the variable code
+Status: **implemented** in three stacked changes: the registry and module
+declarations, the single resolver with protocol 9, and the Variables page
+and picker. This document records the audit of the variable code
 on `main` at `592d5f1` and the target design of the unified variable
 registry. It extends `docs/action-architecture.md` (§4–§11), which stays the
 reference for shared variables, the reference grammar and the resolution
@@ -234,6 +236,12 @@ agent from `Agent::device_descriptor`. No variable source changes.
   variables only, under the existing reference-safety rules. No tabs.
 - The picker uses the same catalog: name, owner, description, type, current
   value when safe, availability; inserts `{{ canonical.id }}`.
+- Implementation: `apps/desktop/src/pages/variables-table.tsx` (the table,
+  inside the settings page `pages/shared-variables.tsx`, which keeps the
+  shared-variable editor) and `apps/desktop/src/lib/variable-catalog.ts`
+  (rows, filters, owners, the app's copy of the aliases for agents before
+  protocol 9). Legacy ids are folded into their canonical row ("also
+  readable as …"). Sensitive values are never requested for the table.
 
 ### 2.7 Live updates
 

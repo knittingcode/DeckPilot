@@ -479,3 +479,29 @@ fn declarations_serialize_for_the_app() {
         serde_json::json!({"kind": "module", "module": "projects"})
     );
 }
+
+/// The app's copy of the aliases, used with agents before protocol 9.
+const FRONTEND_CATALOG: &str =
+    include_str!("../../../../../apps/desktop/src/lib/variable-catalog.ts");
+
+#[test]
+fn the_frontend_mirrors_every_alias() {
+    let compact: String = FRONTEND_CATALOG
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        // Trailing commas of multi-line objects.
+        .replace(",}", "}");
+    for alias in ALIASES {
+        let entry = format!(
+            "\"{}\":{{canonical:\"{}\",owner:\"{}\"}}",
+            alias.alias.path(),
+            alias.canonical,
+            alias.owner
+        );
+        assert!(
+            compact.contains(&entry),
+            "variable-catalog.ts lacks {entry}"
+        );
+    }
+}

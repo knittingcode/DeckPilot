@@ -72,11 +72,20 @@ const CORE_PAGES: SettingsPageEntry[] = [
   },
   {
     id: "variables",
-    title: "Shared Variables",
-    description: "Values that actions and workflows read with {{ shared.… }}",
+    title: "Variables",
+    description: "Every value actions, workflows and keys can read with {{ … }}",
     category: "general",
     icon: Variable,
-    keywords: ["variables", "shared", "values", "references", "secrets", "system"],
+    keywords: [
+      "variables",
+      "shared",
+      "values",
+      "references",
+      "secrets",
+      "system",
+      "module",
+      "owner",
+    ],
     view: view(() =>
       import("@/pages/shared-variables").then((m) => ({ default: m.SharedVariablesSettings })),
     ),
