@@ -749,8 +749,43 @@ export interface DeviceModel {
     keys: { rows: number; columns: number; image: ImageSpec | null } | null
     encoders: { count: number; pressable: boolean } | null
     touch: { zones: number; image: ImageSpec | null; gestures: TouchGesture[] } | null
+    /** Adjustable brightness; absent in data from older versions. */
+    brightness?: boolean
   }
+  /** Legacy single value; `verification` is authoritative. */
   support: "descriptorOnly" | "unverified" | "verified"
+  /** Per-platform verification status with evidence (docs/devices.md). */
+  verification: PlatformVerification[]
+}
+
+export type Platform = "macos" | "windows" | "linux"
+
+export type VerificationLevel =
+  | "unsupported"
+  | "experimental"
+  | "defined"
+  | "driverImplemented"
+  | "automatedTests"
+  | "physicallyVerified"
+
+export interface PlatformVerification {
+  platform: Platform
+  level: VerificationLevel
+  /** `YYYY-MM-DD` */
+  evidenceDate: string | null
+  evidence: string
+}
+
+/** Vendor-neutral description of a device, as the agent reports it. */
+export interface DeviceDescriptor {
+  vendorId: string
+  vendorName: string
+  modelId: string
+  displayName: string
+  serial: string
+  capabilities: DeviceModel["capabilities"]
+  driver: { id: string; version: string } | null
+  verification: PlatformVerification[]
 }
 
 export type FaceStyle = "empty" | "action" | "workflow" | "folder" | "back" | "notice"
@@ -798,6 +833,8 @@ export interface DeviceInfo {
   layout: LayoutStatus
   page: string | null
   source: string
+  /** Absent from older agents. */
+  descriptor?: DeviceDescriptor
 }
 
 export interface ProfileInfo {
