@@ -804,6 +804,7 @@ impl VariableRegistry {
                     owner: Some(owner),
                     read_only: true,
                     deprecated: variable.deprecation(),
+                    declared_scope: registered.map(|r| r.declaration.scope),
                 }
             })
             .collect();
@@ -826,6 +827,7 @@ impl VariableRegistry {
                 owner: Some(registered.owner.clone()),
                 read_only: true,
                 deprecated: None,
+                declared_scope: Some(declaration.scope),
             });
         }
         entries

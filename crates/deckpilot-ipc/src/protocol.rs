@@ -1191,6 +1191,7 @@ mod tests {
                 canonical: VariableId::new("projects.current.key").unwrap(),
                 since: "0.6.0".into(),
             }),
+            declared_scope: Some(deckpilot_core::variables::DeclaredScope::Project),
         };
         let canonical = CatalogEntry {
             reference: VariableRef::parse("projects.current.key").unwrap(),
@@ -1212,7 +1213,7 @@ mod tests {
         let old = serde_json::to_value(&entries[0]).unwrap();
         assert_eq!(old["reference"], "system.project.current.key");
         assert_eq!(old["availability"], "notInContext");
-        for field in ["owner", "readOnly", "deprecated"] {
+        for field in ["owner", "readOnly", "deprecated", "declaredScope"] {
             assert!(old.get(field).is_none(), "{field}");
         }
         let previews = Response::ReferencePreviews {

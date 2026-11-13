@@ -718,6 +718,10 @@ async fn module_variables_have_owners_and_follow_the_module() {
         })
     );
     assert!(canonical.read_only && canonical.deprecated.is_none());
+    assert_eq!(
+        canonical.declared_scope,
+        Some(deckpilot_core::variables::DeclaredScope::Project)
+    );
     let legacy = entry("system.project.current.key");
     assert_eq!(
         legacy.deprecated.unwrap().canonical.as_str(),
@@ -771,6 +775,7 @@ async fn module_variables_have_owners_and_follow_the_module() {
         );
         assert!(entry.get("owner").is_none(), "{entry}");
         assert!(entry.get("deprecated").is_none(), "{entry}");
+        assert!(entry.get("declaredScope").is_none(), "{entry}");
     }
     assert!(
         listed

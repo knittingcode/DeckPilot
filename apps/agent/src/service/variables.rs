@@ -351,6 +351,7 @@ pub fn catalog(
             read_only: definition.module.is_some(),
             owner: Some(owner),
             deprecated: None,
+            declared_scope: None,
         });
     }
     entries

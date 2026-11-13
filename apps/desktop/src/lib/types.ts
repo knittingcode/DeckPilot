@@ -1193,6 +1193,8 @@ export interface CatalogEntry {
   readOnly?: boolean
   /** A legacy id kept as an alias; insert `deprecated.canonical` instead (protocol 9). */
   deprecated?: Deprecation
+  /** For core and module variables: what the value depends on (protocol 9). */
+  declaredScope?: DeclaredScope
 }
 
 // The unified variable registry (deckpilot_core::variables::registry).

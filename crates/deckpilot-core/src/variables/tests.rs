@@ -672,6 +672,7 @@ fn entry(reference: &str, group: VariableGroup, value_type: VariableType) -> Cat
         owner: None,
         read_only: false,
         deprecated: None,
+        declared_scope: None,
     }
 }
 

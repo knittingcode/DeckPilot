@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::registry::{Deprecation, VariableOwner};
+use super::registry::{DeclaredScope, Deprecation, VariableOwner};
 use super::{VariableRef, VariableScope, VariableType};
 use crate::{ModuleId, ParameterKind};
 
@@ -71,6 +71,10 @@ pub struct CatalogEntry {
     /// instead (since protocol 9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deprecated: Option<Deprecation>,
+    /// For core and module variables: what the value depends on (since
+    /// protocol 9). Shared variables have [`CatalogEntry::scope`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_scope: Option<DeclaredScope>,
 }
 
 impl CatalogEntry {
@@ -88,6 +92,7 @@ impl CatalogEntry {
             owner: None,
             read_only: false,
             deprecated: None,
+            declared_scope: None,
             ..self
         })
     }
