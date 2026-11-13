@@ -125,7 +125,10 @@ function ModelCard({ model }: { model: DeviceModel }) {
         ? `${touch.zones} zones${touch.image ? ` of ${touch.image.width} × ${touch.image.height} px` : ""}`
         : "None",
     ],
-    ["Gestures", touch ? touch.gestures.map((g) => GESTURES[g]).join(", ") : "—"],
+    // Key gestures come from DeckPilot's gesture engine and work on every
+    // model with keys; touch gestures are reported by the touch strip.
+    ["Key gestures", keys ? "Click, double click, long press" : "—"],
+    ["Touch gestures", touch ? touch.gestures.map((g) => GESTURES[g]).join(", ") : "—"],
     ["USB identity", model.usb ? `${hex(model.usb.vendorId)}:${hex(model.usb.productId)}` : "—"],
   ]
   return (

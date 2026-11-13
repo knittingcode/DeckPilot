@@ -53,6 +53,11 @@ describe("Settings › Devices", () => {
     expect(within(supported).getByText("macOS: Physically verified")).toBeInTheDocument()
     expect(within(supported).getByText("Windows: Automated tests only")).toBeInTheDocument()
     expect(within(supported).getByText("Linux: Automated tests only")).toBeInTheDocument()
+    // Keys have DeckPilot's gestures; the MK.2 has no touch strip.
+    expect(within(supported).getByText("Key gestures").nextSibling).toHaveTextContent(
+      "Click, double click, long press",
+    )
+    expect(within(supported).getByText("Touch gestures").nextSibling).toHaveTextContent("—")
   })
 
   it("lists only verified models; experimental ones are hidden behind a toggle", async () => {
