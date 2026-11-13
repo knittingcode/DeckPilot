@@ -137,7 +137,10 @@ describe("Workflows page", () => {
     const { user } = await renderWorkflows()
     await user.click(screen.getByRole("button", { name: "Open in graph editor" }))
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith("Unknown step")
+      expect(toast.error).toHaveBeenCalledWith(
+        "The workflow could not be opened in the graph editor",
+        { description: "Unknown step" },
+      )
     })
     expect(screen.queryByRole("region", { name: "Graph editor" })).not.toBeInTheDocument()
   })

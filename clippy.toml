@@ -1,1 +1,1 @@
-doc-valid-idents = ["DeckPilot", "SQLCipher", "SQLite", ".."]
+doc-valid-idents = ["DeckPilot", "SQLCipher", "SQLite", "AppImage", "AppImages", ".."]

@@ -7,6 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 import { TitlebarContext } from "@/hooks/use-titlebar"
 import { AppContext } from "@/lib/app-context"
+import { peekFocus, requestFocus } from "@/lib/focus"
 import { TitlebarStore } from "@/lib/titlebar"
 import type { ActionType, ProfileView, Workflow } from "@/lib/types"
 import { WorkflowsPage } from "@/pages/workflows"
@@ -106,6 +107,14 @@ async function renderPage(workflows: Workflow[]) {
 }
 
 describe("Workflows page selection", () => {
+  it("opens the workflow another page asked for, once", async () => {
+    const evening: Workflow = { ...morning, id: "w-evening", name: "Evening" }
+    requestFocus({ type: "workflow", workflow: "w-evening" })
+    await renderPage([morning, evening])
+    expect(screen.getByLabelText("Name")).toHaveValue("Evening")
+    expect(peekFocus("workflow")).toBeNull()
+  })
+
   it("keeps the current workflow while a duplicate is loading, then opens the copy", async () => {
     const copy: Workflow = { ...morning, id: "w-copy", name: "Morning (copy)" }
     api.duplicateWorkflow.mockResolvedValue(copy)

@@ -56,6 +56,7 @@ import {
   updateStep,
   validateWorkflow,
 } from "@/lib/workflow-model"
+import { runBlockedReason } from "@/workflow-builder/run-model"
 
 const CONDITIONS = [
   { value: "always", label: "Always" },
@@ -103,8 +104,15 @@ export function StepEditor({
   const actions = view.profile.actions
   const actionIds = new Set(actions.map((a) => a.id))
   const dirty = JSON.stringify(workflow) !== JSON.stringify(initial)
-  const canRun =
-    !isNew && !dirty && Boolean(agent?.running) && profiles.activeProfileId === profileId
+  const runBlocked = runBlockedReason({
+    isNew,
+    dirty,
+    agentRunning: Boolean(agent?.running),
+    activeProfileId: profiles.activeProfileId,
+    profileId,
+    profileName: view.profile.name,
+  })
+  const canRun = runBlocked === null
   const usages = view.workflowUsages[workflow.id] ?? []
   // Runs the saved workflow of the editor; shown in the titlebar.
   useTitlebar({
@@ -118,9 +126,7 @@ export function StepEditor({
             placement: "primary",
             disabled: !canRun || running || starting,
             busy: running || starting,
-            hint: canRun
-              ? `Run “${initial.name}”`
-              : "Save first; runs in the agent for the active profile",
+            hint: runBlocked ?? `Run “${initial.name}”`,
             // Runs in the agent in the background; progress and the
             // result arrive as execution events (status bar, below).
             onSelect: () => {

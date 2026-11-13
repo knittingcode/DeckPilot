@@ -2,6 +2,7 @@ import { useState } from "react"
 import { toast } from "sonner"
 
 import { ParameterField } from "@/components/parameter-field"
+import { VariableScopeProvider } from "@/components/variable-picker/scope-provider"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { api } from "@/lib/api"
@@ -23,16 +24,20 @@ export function ModuleSettingsForm({ module }: { module: ModuleInfo }) {
         <CardDescription>{module.description}</CardDescription>
       </CardHeader>
       <CardContent className="grid max-w-xl gap-4">
-        {module.config.map((spec) => (
-          <ParameterField
-            key={spec.key}
-            spec={spec}
-            value={draft[spec.key] ?? initialValue(spec)}
-            onChange={(value) => {
-              setDraft({ ...draft, [spec.key]: value })
-            }}
-          />
-        ))}
+        {/* Module settings are read as saved; no resolver turns references
+            in them into values, so the picker is off here. */}
+        <VariableScopeProvider disabled>
+          {module.config.map((spec) => (
+            <ParameterField
+              key={spec.key}
+              spec={spec}
+              value={draft[spec.key] ?? initialValue(spec)}
+              onChange={(value) => {
+                setDraft({ ...draft, [spec.key]: value })
+              }}
+            />
+          ))}
+        </VariableScopeProvider>
         <div className="flex gap-2">
           <Button
             disabled={!changed || saving}

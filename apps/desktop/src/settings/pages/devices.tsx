@@ -3,6 +3,7 @@ import { useState } from "react"
 import { toast } from "sonner"
 
 import { AgentBadge, AgentCompatibilityNotice, AgentStopped, DeviceRow } from "@/components/agent"
+import { GestureDefaultsCard } from "@/components/gesture-editor/gesture-defaults"
 import { EmptyState, ErrorNotice } from "@/components/page"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -87,6 +88,7 @@ export function DevicesSettings() {
       {agent?.status && (
         <Brightness key={agent.status.brightness} current={agent.status.brightness} />
       )}
+      <GestureDefaultsCard />
     </>
   )
 }
