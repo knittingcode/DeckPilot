@@ -88,6 +88,17 @@ impl MockBackend {
         self.shared.changed.notify_all();
     }
 
+    /// Queues several inputs at once: the device's reader takes them in
+    /// one read, so they all carry the same read time. Tests use this for
+    /// sequences whose gesture must not depend on scheduling (a click held
+    /// for no time at all, a double click with no gap).
+    pub fn send_inputs(&self, id: &DeviceId, inputs: &[(ControlId, ControlInput)]) {
+        if let Some(device) = self.lock().get_mut(id) {
+            device.input.extend(inputs.iter().copied());
+        }
+        self.shared.changed.notify_all();
+    }
+
     /// Queues a press followed by a release.
     pub fn tap(&self, id: &DeviceId, control: ControlId) {
         self.send_input(id, control, ControlInput::Press);
