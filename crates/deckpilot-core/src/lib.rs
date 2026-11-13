@@ -14,6 +14,7 @@ pub mod credentials;
 pub mod device_runtime;
 pub mod execution;
 pub mod face;
+pub mod gesture;
 pub mod graph;
 pub mod history;
 pub mod id;
@@ -30,8 +31,10 @@ pub mod registry;
 pub mod resolution;
 pub mod resource;
 pub mod runtime;
+pub mod stateful;
 pub mod trigger;
 pub mod variables;
+pub mod work_session;
 pub mod workflow;
 
 #[cfg(test)]
@@ -65,7 +68,8 @@ pub use history::{
     safe_event, safe_report,
 };
 pub use id::{
-    ActionInstanceId, ExecutionId, IconId, LayoutId, PageId, ProfileId, ProjectId, WorkflowId,
+    ActionInstanceId, ExecutionId, IconId, LayoutId, PageId, ProfileId, ProjectId, VerificationId,
+    WorkSessionId, WorkflowId,
 };
 pub use layout::{BindingTarget, ControlBinding, DeviceLayout, LayoutIssue, LayoutPage, Trigger};
 pub use module::{
@@ -84,7 +88,7 @@ pub use registry::{ActionHandler, ActionRegistry, RegistryError};
 pub use resource::{
     MachineConfig, MachineResourceBinding, ResolveError, ResourceKey, ResourceKind, ResourceRef,
 };
-pub use runtime::{Engine, EngineError, StepReport, WorkflowReport};
+pub use runtime::{Engine, EngineError, StepReport, WorkflowReport, declared_outputs};
 pub use trigger::{
     EventField, LifecycleEvent, Schedule, Scheduler, TriggerEvent, TriggerKind, TriggerValue,
     WallTime, WorkflowTrigger,

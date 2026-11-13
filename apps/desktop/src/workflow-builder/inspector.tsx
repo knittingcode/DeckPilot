@@ -30,6 +30,7 @@ import type { NodeRun } from "./node-view"
 import { NodeRunReport } from "./run-panel"
 import { type Lookup, actionOf, formatMs } from "./describe"
 import { MappingEditor, OutputSelect } from "./mapping-editor"
+import { VARIABLE_PICKER } from "./variable-reference"
 import {
   type OutputOption,
   VALUE_KIND_LABEL,
@@ -304,11 +305,14 @@ function ActionEditor({ graph, node, lookup, projects, values, onChange }: Inspe
         <Section title="Parameters">
           {type.parameters.map((parameter) => {
             const mode = parameterMode(node, parameter.key)
-            const mappable = parameter.kind.type !== "resource"
+            // A resource comes only from a variable that holds one.
+            const resource = parameter.kind.type === "resource"
             const first = outputs[0]?.reference
-            const fallback: GraphMapping = first
-              ? { type: "output", reference: first }
-              : { type: "template", template: "" }
+            const fallback: GraphMapping = resource
+              ? { type: "variable", reference: "" }
+              : first
+                ? { type: "output", reference: first }
+                : { type: "template", template: "" }
             const mapping = node.mappings?.[parameter.key]
             return (
               <div
@@ -336,7 +340,7 @@ function ActionEditor({ graph, node, lookup, projects, values, onChange }: Inspe
                     <SelectContent>
                       <SelectItem value="action">Action’s value</SelectItem>
                       <SelectItem value="fixed">Value for this node</SelectItem>
-                      {mappable && <SelectItem value="mapped">From earlier nodes</SelectItem>}
+                      <SelectItem value="mapped">From earlier nodes or variables</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -357,6 +361,7 @@ function ActionEditor({ graph, node, lookup, projects, values, onChange }: Inspe
                 {mode === "mapped" && mapping && (
                   <MappingEditor
                     id={`mapping-${parameter.key}`}
+                    picker={VARIABLE_PICKER}
                     mapping={mapping}
                     parameter={parameter}
                     outputs={outputs}
@@ -664,13 +669,14 @@ function ValueRow({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="unset">No value</SelectItem>
-            <SelectItem value="mapped">From earlier nodes</SelectItem>
+            <SelectItem value="mapped">From earlier nodes or variables</SelectItem>
           </SelectContent>
         </Select>
       </div>
       {mapping ? (
         <MappingEditor
           id={`value-${id}`}
+          picker={VARIABLE_PICKER}
           mapping={mapping}
           parameter={parameter}
           outputs={outputs}

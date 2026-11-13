@@ -1,8 +1,8 @@
 //! Renders [`KeyFace`]s into device-independent [`Frame`]s.
 //!
 //! The renderer only needs the target size, so the same code serves any key
-//! or display size. Text uses a built-in 8 x 8 bitmap font (ASCII); other
-//! characters are shown as `?`.
+//! or display size. Text uses a built-in 8 x 8 bitmap font (ASCII, and `…`);
+//! other characters are shown as `?`.
 //!
 //! Live state is drawn as marks that do not depend on any module: an
 //! indicator dot in the top-right corner, a progress bar along the bottom
@@ -23,6 +23,8 @@ use font8x8::legacy::BASIC_LEGACY;
 use crate::icons::{self, Icons};
 
 const GLYPH: u32 = 8;
+/// `…` in one cell (the font is ASCII only), e.g. for "Checking…".
+const ELLIPSIS: [u8; 8] = [0, 0, 0, 0, 0, 0xDB, 0xDB, 0];
 const WHITE: [u8; 3] = [240, 240, 240];
 const MUTED: [u8; 3] = [160, 160, 170];
 const ACCENT: [u8; 3] = [56, 189, 248];
@@ -364,9 +366,13 @@ fn draw_centered_at(
     let width = u32::try_from(text.chars().count()).unwrap_or(0) * GLYPH * scale;
     let mut x = frame.width().saturating_sub(width) / 2 + offset;
     for ch in text.chars() {
-        let glyph = BASIC_LEGACY
-            .get(ch as usize)
-            .or(BASIC_LEGACY.get(usize::from(b'?')));
+        let glyph = if ch == '…' {
+            Some(&ELLIPSIS)
+        } else {
+            BASIC_LEGACY
+                .get(ch as usize)
+                .or(BASIC_LEGACY.get(usize::from(b'?')))
+        };
         if let Some(rows) = glyph {
             for (row, bits) in rows.iter().enumerate() {
                 for column in 0..GLYPH {
@@ -613,5 +619,16 @@ mod tests {
         assert_eq!(wrap("a b c d e f g h i j", 1, 2).len(), 2);
         assert_eq!(truncate("ABCDEFGHIJK", 9), "ABCDEFGH.");
         assert_eq!(wrap("", 9, 4), Vec::<String>::new());
+    }
+
+    #[test]
+    fn an_ellipsis_is_three_dots_not_a_question_mark() {
+        let draw = |text: &str| {
+            let mut frame = Frame::filled(8, 8, [0, 0, 0]);
+            draw_centered_at(&mut frame, text, 0, 1, WHITE, 0);
+            frame
+        };
+        assert_ne!(draw("…"), draw("?"));
+        assert_eq!(lit(&draw("…"), [0, 0, 0]), 12);
     }
 }

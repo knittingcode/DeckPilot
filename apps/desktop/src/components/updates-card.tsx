@@ -20,7 +20,7 @@ import { api, errorMessage } from "@/lib/api"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { useAppContext } from "@/lib/app-context"
 import { formatTimestamp } from "@/lib/format"
-import type { UpdateMode, UpdatePreferences } from "@/lib/types"
+import type { UpdateChannel, UpdateMode, UpdatePreferences } from "@/lib/types"
 
 const MODES: { value: UpdateMode; label: string; description: string }[] = [
   { value: "notifyOnly", label: "Notify me", description: "Show that an update is available." },
@@ -34,6 +34,16 @@ const MODES: { value: UpdateMode; label: string; description: string }[] = [
     label: "Install when idle",
     description:
       "Install automatically after ten minutes without device input. Not recommended until updates have been tested on your system.",
+  },
+]
+
+const CHANNELS: { value: UpdateChannel; label: string; description: string }[] = [
+  { value: "stable", label: "Stable", description: "Only stable releases." },
+  {
+    value: "prerelease",
+    label: "Pre-releases",
+    description:
+      "Also alpha, beta and release-candidate builds, which may have unfinished features or bugs. You move on to the stable release once it is newer; switching back to Stable never installs an older version.",
   },
 ]
 
@@ -198,6 +208,30 @@ export function UpdatesCard() {
             </Select>
             <p className="text-xs text-muted-foreground">
               {MODES.find((m) => m.value === preferences.mode)?.description}
+            </p>
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="update-channel">Update channel</Label>
+            <Select
+              value={preferences.channel}
+              disabled={busy || (phase !== "idle" && phase !== "ready")}
+              onValueChange={(channel) => {
+                savePreferences({ channel: channel as UpdateChannel })
+              }}
+            >
+              <SelectTrigger id="update-channel" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CHANNELS.map((channel) => (
+                  <SelectItem key={channel.value} value={channel.value}>
+                    {channel.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {CHANNELS.find((c) => c.value === preferences.channel)?.description}
             </p>
           </div>
           <div className="grid gap-2">
