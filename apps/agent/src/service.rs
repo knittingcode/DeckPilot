@@ -645,6 +645,9 @@ impl Agent {
         {
             return Err(locked());
         }
+        if let Some(result) = self.handle_work_session_request(&request) {
+            return result;
+        }
         match request {
             Request::GetStatus => Ok(Response::Status {
                 status: Box::new(self.status()),
@@ -676,6 +679,7 @@ impl Agent {
     }
 
     /// Requests that change runtime state.
+    #[allow(clippy::too_many_lines)] // One arm per request.
     fn handle_change(&mut self, request: Request) -> Result<Response, IpcError> {
         if let Some(result) = self.handle_security(&request) {
             return result;
@@ -767,7 +771,13 @@ impl Agent {
             | Request::GetAutostart
             | Request::Subscribe
             | Request::Shutdown
-            | Request::PrepareForUpdate => self.handle_request(request),
+            | Request::PrepareForUpdate
+            | Request::GetWorkSession
+            | Request::ListWorkSessions { .. }
+            | Request::GetWorkSessionSettings { .. }
+            | Request::SaveWorkSessionSettings { .. }
+            | Request::ResolveWorkSessionReview { .. }
+            | Request::ClearWorkSessionNotices { .. } => self.handle_request(request),
             Request::RunWorkflow { .. } => unreachable!("handled by handle_command"),
             Request::Unlock { .. }
             | Request::Lock

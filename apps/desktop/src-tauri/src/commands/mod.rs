@@ -24,6 +24,7 @@ mod shared_variables;
 mod system;
 mod variables;
 pub(crate) mod windows;
+mod work_session;
 mod workflows;
 
 use crate::modules::projects;
@@ -142,6 +143,12 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         agent::list_executions,
         agent::get_execution,
         agent::clear_execution_history,
+        work_session::get_work_session,
+        work_session::list_work_sessions,
+        work_session::resolve_work_session_review,
+        work_session::clear_work_session_notices,
+        work_session::get_work_session_settings,
+        work_session::save_work_session_settings,
         crate::updates::update_state,
         crate::updates::check_for_updates,
         crate::updates::download_update,
