@@ -40,9 +40,12 @@ on:
 permissions:
   contents: read
 
+# Pull requests: a new push cancels the obsolete run. main and manual runs:
+# every commit has a group of its own, so a quick second merge never
+# cancels the check of the first.
 concurrency:
-  group: compatibility-${{ github.ref }}
-  cancel-in-progress: true
+  group: compatibility-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.ref, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   matrix:
@@ -53,11 +56,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Install Linux system dependencies
         run: tools/ci/install-linux-deps.sh
       - name: Install Rust toolchain
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: compatibility
           workspaces: |
