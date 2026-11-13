@@ -46,8 +46,11 @@ export function RunHistory({
   onCancel,
   onClear,
   projectKey,
+  problem = null,
 }: {
   runs: LiveExecution[]
+  /** Why the stored history could not be loaded. */
+  problem?: string | null
   shown: string | null
   now: number
   onShow: (id: string | null) => void
@@ -86,7 +89,13 @@ export function RunHistory({
           />
         )}
       </div>
-      {runs.length === 0 && (
+      {problem && (
+        <p role="alert" className="text-xs text-destructive">
+          Earlier runs could not be loaded: {problem.replace(/\.?$/, ".")} They load again when the
+          agent reconnects.
+        </p>
+      )}
+      {runs.length === 0 && !problem && (
         <p className="text-xs text-muted-foreground">
           No runs yet. Runs started here, from a Stream Deck or while the app was closed appear
           here.
@@ -154,6 +163,7 @@ export function RunHistory({
                   variant="ghost"
                   size="sm"
                   className="h-6 px-1.5 text-xs"
+                  aria-label={`Cancel the run started ${formatTimestamp(Math.floor(run.startedAt / 1000))}`}
                   onClick={() => {
                     onCancel(run.id)
                   }}

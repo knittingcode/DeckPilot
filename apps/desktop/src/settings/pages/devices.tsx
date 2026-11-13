@@ -9,7 +9,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { useTitlebar } from "@/hooks/use-titlebar"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { failureMessage, toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
 
 export function DevicesSettings() {
@@ -31,7 +32,9 @@ export function DevicesSettings() {
             .refreshDevices()
             .then(
               () => toast.success("Devices refreshed"),
-              (e: unknown) => toast.error(errorMessage(e)),
+              (e: unknown) => {
+                toastFailure("The devices were not refreshed", e, "Check that the agent is running")
+              },
             )
             .finally(() => {
               setRefreshing(false)
@@ -122,7 +125,7 @@ function Brightness({ current }: { current: number }) {
             onClick={() => {
               setError(null)
               api.setBrightness(brightness).catch((e: unknown) => {
-                setError(errorMessage(e))
+                setError(failureMessage("The brightness was not changed", e))
               })
             }}
           >

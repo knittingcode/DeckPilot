@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # A merge queue group (gh-readonly-queue/main/...): the required checks
+  # must report for it, under the same names. Inert until the queue is on.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
@@ -11,8 +15,10 @@ permissions:
 # Pull requests: a new push cancels the obsolete run of the same pull
 # request. main: every pushed commit gets its own group, so post-merge runs
 # are never cancelled or replaced; they queue for runners instead.
-# (Only main and pull requests trigger this workflow, so a commit never runs
-# twice for push and pull_request.)
+# Merge queue groups: one group per queue ref and commit, never cancelled
+# here (the queue drops groups it no longer needs). (Only main, pull requests
+# and merge groups trigger this workflow, so a commit never runs twice for
+# push and pull_request.)
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.ref, github.sha) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -50,6 +56,8 @@ jobs:
       - id: paths
         env:
           EVENT_NAME: ${{ github.event_name }}
+          # Merge groups: diff against the group's base commit.
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: tools/ci/changed-paths.sh
 
   frontend:

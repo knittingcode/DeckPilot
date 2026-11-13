@@ -95,7 +95,10 @@ agent on an isolated data directory (`.dev/hardware-test`) with test profiles
 whose keys are labelled `A1`…`A15` and `B1`…`B15` and log every press and
 release, then checks discovery, the model, every key, images, brightness,
 profile and project switching, unplugging, an agent restart and multiple
-devices, asking where only a person can judge. It refuses to start while
+devices. Keys are pressed in the order of their labels, so a key whose image
+and input index disagree (rotation or mirroring) fails the test; it also asks
+where A1, A5 and A15 are and whether the keys are black once the agent
+stopped, asking where only a person can judge. It refuses to start while
 other programs may hold the device (quit `make up` and the Elgato app first)
 and writes `report.md`. `--mock` runs it against a simulated MK.2 to check
 the procedure itself (CI does this on Linux); that is not a hardware test.
@@ -119,6 +122,30 @@ The same steps by hand, with DeckPilot installed (or `make up` with
 
 Record the DeckPilot version, operating system, MK.2 firmware/serial and the
 result of each step. Hardware has **not** been tested by the project yet.
+
+### Physical MK.2 checklist
+
+These points are covered only by simulated devices and unit tests so far,
+and need a real MK.2 on each operating system. "Step" is the step of
+`deckpilot-dev hardware-test` that checks it; manual steps refer to the
+table above.
+
+| # | Check | hardware-test step | Manual |
+| - | ----- | ------------------ | ------ |
+| 1 | The device is discovered by serial number and opened (no conflict with the Elgato app; Linux udev rule, macOS Input Monitoring, Windows built-in HID driver) | Device discovery, Model detection | 1 |
+| 2 | Key images are upright and not mirrored, A1 top left, A5 top right, A15 bottom right | Key images and text | 2 |
+| 3 | Pressing the keys in label order reports the same order (images and input agree on key indices 0–14) | Key press and release (in label order with #67; any order before) | 3 |
+| 4 | Each press and release is reported once; key input arrives at all (input report `0x01`) | Key press and release | 3 |
+| 5 | Full key images arrive intact and a full redraw is quick enough (image reports `0x02 0x07`, 1016-byte pages) | Key images and text, Profile switching | 2, 4 |
+| 6 | Brightness changes visibly at 10 % and 100 % (feature report `0x03 0x08`) | Brightness | 6 |
+| 7 | Unplugging is reported as a disconnect; replugging restores the page, images and brightness | Unplug and replug | 6, 7 |
+| 8 | Keys are black after the agent stops, and stale images are replaced when it starts | Keys cleared on stop (#67), Agent restart | 8 |
+| 9 | Two MK.2s at once: both discovered, own pages, no cross-talk | Multiple devices | — |
+| 10 | Icons, live key states and key-started workflows look and behave as in the simulated tests | — (not part of the procedure) | 2, 3 |
+
+The page part of check 7 needs #62. Checks 4 and 5 matter in particular
+for the protocol implementation in #55 (held until it passes this
+checklist); `main` drives the device through `elgato-streamdeck`.
 
 ## 4. Windows and Linux
 

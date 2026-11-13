@@ -22,18 +22,24 @@ known about the current one. Publishing itself is described in
 3. **CI on main.** All required checks green on the release commit: Rust on
    macOS, Linux and Windows, Frontend, Storage with SQLCipher, Linux and
    Windows packaging, the signing checks, and the Compatibility workflow.
-4. **Signed test release.** An alpha tag (`vX.Y.Z-alpha.N`; the former
+4. **Unsigned installer checks on the tag.** The release workflow's first
+   stage calls the *Packaging* workflow on the tagged commit (`.deb`,
+   `.rpm`, NSIS, MSI with the release configuration and a throwaway updater
+   key, checked by `tools/ci/check-packages.sh`); nothing is signed or
+   drafted unless it passes. A failure here is fixed on `main` and released
+   under a new tag.
+5. **Signed test release.** An alpha tag (`vX.Y.Z-alpha.N`; the former
    `vX.Y.Z-N` test tags no longer start the release workflow, see
    [releasing.md](releasing.md#release-tags-and-the-tag-gate)) runs the real
    release workflow, signs and notarizes, and ends in a **draft** release; verify
    it with `deckpilot-dev verify-release` (see
    [release-validation.md](release-validation.md)).
-5. **Update path.** `update-continuity` workflow (Keychain continuity
+6. **Update path.** `update-continuity` workflow (Keychain continuity
    between two Developer ID signed builds) and
    `tools/release-validation/update-test.sh` (tampered update rejected, real
    update installed, configuration kept) on macOS.
-6. **Manual platform checks** (below) on real hardware where possible.
-7. **Report.** Fill in the table for the version: verified automatically,
+7. **Manual platform checks** (below) on real hardware where possible.
+8. **Report.** Fill in the table for the version: verified automatically,
    verified manually, not verified, blocked, not applicable. Nothing
    untested is marked as passed.
 
@@ -46,36 +52,251 @@ known about the current one. Publishing itself is described in
 | Linux | `.deb`/AppImage install; agent; Secret Service; `notify-send`; process execution |
 | Hardware | a physical Stream Deck MK.2 with `deckpilot-dev hardware-test` |
 
+The macOS MVP acceptance run (15 steps, from installing to updating) is
+[mvp-acceptance.md](mvp-acceptance.md).
+
 ## Report for 0.6.0
 
-State on 2026-11-11, commit `cb222c4` on main (the automated checks on this
-computer ran on `f5d943c`, which differs only in `CHANGELOG.md`). 0.6.0 is
-**not ready to publish**: the signed build, the update path and the manual
-checks below have not been done.
+State on **2026-11-13**, commit
+`1f1de25371785931f89c2eec2895197311716edc` (`1f1de25`) on main. 0.6.0 is
+**not ready to publish**: no signed and notarized 0.6.0 build exists, the
+update path and the manual checks have not been done, and no physical
+MK.2 has been tested. Nothing below was checked by hand; "verified
+automatically" means a test or CI job ran and passed.
+
+### `check.sh` on macOS
+
+`tools/release-readiness/check.sh` on a Mac (Darwin 27.2.0), on a branch
+identical to `1f1de25`, with the default `TMPDIR`
+(`/var/folders/…/T/`). It ran once and exited 0, so no second run with
+`TMPDIR=/tmp` was needed. `--with-compat` was **not** run (the machine was
+busy with other work). The Compatibility workflow on `1f1de25` covers it
+in CI (below).
+
+```
+verified  versions are consistent
+verified  release notes exist
+verified  Rust formatting
+verified  Rust lints
+verified  Rust tests (incl. SQLCipher, migrations, IPC, updater, modules, redaction)
+verified  upgrade from a real 0.5.0 database
+verified  IPC peers of earlier protocols
+verified  frontend format
+verified  frontend lint
+verified  frontend types
+verified  frontend tests
+verified  hardware procedure (simulated MK.2)
+skipped   compatibility with v0.5.0-2 (real binaries) — pass --with-compat (builds the old tag)
+skipped   Linux packaging — CI job 'Package check (Linux .deb)'
+skipped   Windows packaging — CI job 'Package check (Windows installers)'
+skipped   macOS signing and notarization — Release workflow on a test tag, or Signing check workflow
+skipped   signed update and Keychain continuity — update-continuity workflow; tools/release-validation/update-test.sh
+skipped   manual platform checks — see docs/release-readiness.md
+```
+
+The Rust tests reported 1057 passed, 0 failed and 5 ignored (child-process
+helpers, a diagnostic, and a test that queries the real platform). They
+include `agent_and_client_meet_with_a_long_tmpdir` (#54). The simulated
+hardware procedure skipped "Multiple devices" because only one simulated
+device was connected.
+
+### CI on `1f1de25`
+
+| Check | Result | Run |
+| ----- | ------ | --- |
+| Frontend (required) | success | [CI run 43398938268](https://github.com/knittingcode/DeckPilot/actions/runs/43398938268/job/131796655391) |
+| Storage with SQLCipher (required) | success | [CI run 43398938268](https://github.com/knittingcode/DeckPilot/actions/runs/43398938268/job/131796655964) |
+| Rust (ubuntu-latest) (required) | success | [CI run 43398938268](https://github.com/knittingcode/DeckPilot/actions/runs/43398938268/job/131796656557) |
+| Rust (macos-latest) (required) | success | [CI run 43398938268](https://github.com/knittingcode/DeckPilot/actions/runs/43398938268/job/131796655588) |
+| Rust (windows-latest) (required) | success | [CI run 43398938268](https://github.com/knittingcode/DeckPilot/actions/runs/43398938268/job/131796655647) |
+| Updater signing keys match (required) | success | [Signing check run 43398938208](https://github.com/knittingcode/DeckPilot/actions/runs/43398938208/job/131796655145) |
+| Credential store (macOS, Linux, Windows; real system stores, throwaway names) | success | [CI run 43398938268](https://github.com/knittingcode/DeckPilot/actions/runs/43398938268) |
+| Release manifest assembly | success | [CI run 43398938268](https://github.com/knittingcode/DeckPilot/actions/runs/43398938268/job/131796733856) |
+| Compatibility: previous release (v0.5.0-2) with this commit | success | [Compatibility run 43398938221](https://github.com/knittingcode/DeckPilot/actions/runs/43398938221) |
+| Developer ID and notarization credentials | skipped on pushes to main (by design) | [Signing check run 43398938208](https://github.com/knittingcode/DeckPilot/actions/runs/43398938208). Last success was on the pull request of this commit (#67, head `55e8aaf`): [run 43396899637](https://github.com/knittingcode/DeckPilot/actions/runs/43396899637/job/131789912995) |
+| Package check (Linux .deb) | not run on `1f1de25` (no packaging path changed); success on its parent `d9e2905` | [Packaging run 43396604797](https://github.com/knittingcode/DeckPilot/actions/runs/43396604797/job/131789002106) |
+| Package check (Windows installers) | not run on `1f1de25`; success on `d9e2905` | [Packaging run 43396604797](https://github.com/knittingcode/DeckPilot/actions/runs/43396604797/job/131789002225) |
+| Update continuity | never run on main; last success on a pull request branch (`fix/updater-robustness`, `d69c967`, 2026-11-12) | [run 43174801300](https://github.com/knittingcode/DeckPilot/actions/runs/43174801300) |
+| Release (signed, notarized) | not run for 0.6.0; last run `v0.5.0-2` (success, draft) | [run 42875993140](https://github.com/knittingcode/DeckPilot/actions/runs/42875993140) |
+| CodeQL | Analyze (actions, javascript-typescript, python) success; Analyze (rust) was still running when this was written | [run 43398937728](https://github.com/knittingcode/DeckPilot/actions/runs/43398937728) |
+
+`1f1de25` differs from `d9e2905` only in `tools/dev/src/hardware.rs` and
+`docs/release-validation.md`, and neither is packaged. No workflow that
+uses signing secrets was started for this report.
+
+Security alerts (read with `gh api`, open alerts only): code scanning
+**0**, Dependabot **0**.
+
+### Areas
 
 | Area | Status | Evidence |
 | ---- | ------ | -------- |
-| Versions and release notes | verified automatically | `check.sh`: versions are consistent, release notes exist |
-| Rust formatting and lints | verified automatically | `check.sh`; CI on main |
+| Versions and release notes | verified automatically | `check.sh` |
+| Rust formatting and lints | verified automatically | `check.sh`; CI on `1f1de25` |
 | Rust tests (SQLCipher, migrations, IPC, updater, modules, redaction) | verified automatically | `check.sh` on macOS; CI Rust on macOS, Linux and Windows, Storage with SQLCipher |
 | Upgrade from a real 0.5.0-2 database | verified automatically | `check.sh` (`upgrade_from_0_5_0`) |
 | IPC peers of earlier protocols | verified automatically | `check.sh` (`peers`) |
-| Compatibility with v0.5.0-2 (real binaries) | verified automatically | `check.sh --with-compat` on macOS; Compatibility workflow on `d4d099c` |
+| Compatibility with v0.5.0-2 (real binaries) | verified automatically in CI | Compatibility workflow on `1f1de25`; `check.sh --with-compat` was not run locally this time |
 | Frontend format, lint, types and tests | verified automatically | `check.sh`; CI Frontend |
 | Hardware procedure | verified automatically (simulated MK.2 only) | `check.sh` (`hardware-test --mock`) |
-| Linux packaging (`.deb`) | verified automatically | CI on main: Package check (Linux .deb) |
-| Windows packaging (installers) | verified automatically | CI on main: Package check (Windows installers) |
-| Updater signing keys match | verified automatically | required check on every merged pull request |
-| macOS signing and notarization | not verified | needs a test tag through the Release workflow |
-| Signed update and Keychain continuity | not verified | `update-continuity` workflow and `tools/release-validation/update-test.sh` not run for 0.6.0 |
+| Linux packaging (`.deb`) | verified automatically | Packaging on `d9e2905` (no packaged file changed since) |
+| Windows packaging (installers) | verified automatically | Packaging on `d9e2905` (no packaged file changed since) |
+| Updater signing keys match | verified automatically | required check on `1f1de25` |
+| Apple signing credentials | verified automatically | Signing check on #67 (`55e8aaf`) found the certificate and notarization credentials valid. Nothing was signed |
+| macOS signing and notarization of 0.6.0 | not verified | needs a test tag through the Release workflow |
+| Signed update and Keychain continuity | not verified | *Update continuity* has not run on main; `tools/release-validation/update-test.sh` has not run for 0.6.0 |
 | Manual platform checks (macOS, Windows, Linux) | not verified | none done for 0.6.0 |
-| Physical Stream Deck MK.2 | not verified | `deckpilot-dev hardware-test` not run on hardware |
+| Physical Stream Deck MK.2 | not verified | `deckpilot-dev hardware-test` has not run on hardware |
+| MVP acceptance checklist | not passed | [mvp-acceptance.md](mvp-acceptance.md): 8 steps PASS (automated only), 7 NOT VERIFIED, 0 FAIL |
 | GitHub, GitLab and Jira modules against real servers | not verified | tested against local mock servers only |
 
-Known limitation: agents, tests and the compatibility matrix fail with
-"local socket name length exceeds capacity of sun_path" when `TMPDIR` is a
-very long path (macOS limits socket paths to 104 bytes). The default
-temporary folder is short enough.
+### Definition of Done (macOS MVP)
 
-Before publishing: a signed test release (`v0.6.0-alpha.1`, draft), the
-update path from a 0.5.0 build, and the manual checks above.
+| Item | Status | Evidence |
+| ---- | ------ | -------- |
+| No P0 blockers | met, as far as recorded | No open issues, no failing check on `1f1de25`, and `check.sh` found no defect. The open items below are known gaps, not recorded defects. Hardware, the signed build and the update have not been tried, so blockers there would not show yet |
+| Native macOS app works without dev tools | not verified | No 0.6.0 app bundle has been installed and started outside `make up` (acceptance steps 1–2) |
+| Tray consistently opens the UI | not verified | No test covers the tray menu. Only the agent's window requests over IPC are tested (acceptance step 13) |
+| MK.2 works in real use | not verified | Simulated MK.2 only (`hardware-test --mock`, agent tests). No physical device has been tested, and #55 waits for hardware |
+| Actions and variables fully functional | met (automated, simulated device) | Acceptance steps 7–10: the app commands and agent tests named in mvp-acceptance.md. Not yet done in the installed app |
+| Workflows reliable | met (automated, simulated device) | Acceptance step 11: `workflow_e2e.rs` (combined graph, cancellation, triggers and the concurrency limit, a restart during a run), `runs_workflows_over_ipc`, `mock_devices.rs`. Not yet done in the installed app |
+| Config survives restart and update | not verified | Agent restarts and database upgrades are tested (`lifecycle.rs`, `upgrade_from_0_5_0`, `upgrade_from_0_6_0`, `upgrade_work_sessions_from_schema_8`). There has been no real reboot and no signed update for 0.6.0 (acceptance steps 14–15) |
+| Signed and notarized macOS build verified | not verified | Verified for `v0.5.0-2` only; there is no 0.6.0 test release |
+| No critical data-loss or security defects | met, as far as known | 0 open code scanning alerts and 0 open Dependabot alerts; the storage upgrade, backup and secret-redaction tests pass. There has been no security review of 0.6.0 beyond these |
+| Acceptance checklist passes | not met | 7 of 15 steps are NOT VERIFIED ([mvp-acceptance.md](mvp-acceptance.md)) |
+
+### Known open items
+
+- **#55** (draft): the MK.2 HID wire protocol with byte-level tests. It
+  needs a physical MK.2 and the
+  [physical MK.2 checklist](release-validation.md#physical-mk2-checklist)
+  before it can leave draft. `main` drives the device through
+  `elgato-streamdeck`.
+- **#63** (optional read-only smoke tests against real services) and
+  **#78** (reorder, move and copy pages in the layout editor): held by the
+  MVP freeze.
+- **#159–#165**: Dependabot updates waiting for an owner decision (the
+  GitHub Actions group, the npm group, jsdom 31,
+  `@testing-library/jest-dom` 7, `chacha20poly1305` 0.11, `tray-icon` 0.26
+  and `base64` 0.23). Several are major versions, and `chacha20poly1305`
+  and `tray-icon` touch encryption and the tray. See
+  [Security and packaging check](#security-and-packaging-check-2026-11-13)
+  for the classification and CI state of each.
+
+### Owner actions before the first pre-release
+
+1. **Create the `production-release` environment** with a required
+   reviewer and a tag deployment policy
+   ([releasing.md](releasing.md#publication-gate-and-signing-environment-repository-settings)).
+   On 2026-11-13 the repository has no environments.
+2. **Move the signing secrets into it** and run the non-publishing
+   validation
+   ([releasing.md](releasing.md#moving-the-signing-secrets-into-the-environment)).
+3. **Tag ruleset.** A *Release tag protection* ruleset is active on
+   `refs/tags/v*`. It blocks deletion, update and non-fast-forward and has
+   no bypass actors. Confirm that this is the intended rule set for
+   release tags, or extend it (for example, restrict who may create `v*`
+   tags).
+4. **Physical MK.2 checks:** run `deckpilot-dev hardware-test` on a real
+   MK.2 and the
+   [physical MK.2 checklist](release-validation.md#physical-mk2-checklist),
+   and record the results in release-validation.md.
+5. Then make the signed test release `v0.6.0-alpha.1` (draft) with the
+   exact commands in
+   [releasing.md](releasing.md#the-first-pre-release-command-by-command).
+   They were not run for this report. After that, do the manual
+   acceptance run in [mvp-acceptance.md](mvp-acceptance.md) with the build
+   from the draft.
+
+### Security and packaging check (2026-11-13)
+
+A read-only check on `origin/main` at `5569a14`. No setting, secret,
+environment or ruleset was changed and no workflow was started.
+
+| Area | Result | Evidence |
+| ---- | ------ | -------- |
+| SQLCipher and key handling | PASS | `cargo test --locked -p deckpilot-storage -p deckpilot-keystore`: 148 passed, 0 failed (4 ignored: real-Keychain and long-running tests) |
+| Unencrypted copy after the legacy migration | PASS (by design), with residual risk | See below |
+| Secrets in variables, exports and logs | PASS | `no_secrets_in_exports::an_export_never_contains_secrets_or_values_of_this_computer`, `shared_variables::sensitive_values_secrets_and_other_profiles_never_leave`, `keystore::tests::secrets_are_redacted`, `sqlite::tests::database_key_is_redacted`, `crypto::tests::keys_round_trip_through_hex_and_are_redacted`, `credentials::tests::ids_are_validated_and_secrets_never_printed`, the `resolution` redaction tests. No log statement formats a secret |
+| Signing configuration | PASS (static) | `tauri.release.conf.json` adds the agent binary and updater artifacts; `hardenedRuntime: true`, no entitlements (enforced by `.github/scripts/verify-macos-app.sh`); the agent's `Info.plist` fixes `io.github.knittingcode.deckpilot.agent`; notarization and stapling of app and disk image in `release.yml` (build job). The updater public key is injected from `vars.DECKPILOT_UPDATER_PUBKEY` and checked in the binary. Not run: no signing secret was used |
+| Release tag gate | PASS | `tools/release-pipeline/test.sh` 80/80, `test-publication.sh` 65/65, `test-updater-key-pair.sh` 8/8 |
+| Packaging workflows | PASS | Packaging on `main` (push, `d9e2905`) and on the PR of `5569a14` green; Signing check green on `main` at `5569a14`. Update continuity is `workflow_dispatch` only and has never run on `main` (last run: a PR on 2026-11-12, green) |
+| Update channels and signatures | PASS | `deckpilot-update`: 21 passed, among them `stable_installations_never_accept_pre_releases`, `the_prerelease_channel_offers_the_newest_release_of_either_kind`, `rejects_tampered_artifacts_and_bad_input`, `release_artifacts_must_be_signed_for_their_version` |
+| Dependency alerts | PASS | 0 open code scanning alerts, 0 open Dependabot alerts (1 dismissed as tolerable: `glib` 0.18, GHSA-wrw7-89jp-8q8g). `pnpm audit`: no known vulnerabilities. `cargo audit` is not installed and was not run |
+| Release environment | FAIL (owner action) | `production-release` does not exist; see the comparison below |
+
+**Unencrypted copy.** `Vault::encrypt_plaintext_with`
+(`crates/deckpilot-storage/src/vault.rs`) renames the original database to
+`deckpilot.unencrypted-backup.db` (an older copy to
+`deckpilot.unencrypted-backup-<time>.db`) and never deletes it. The agent
+does this on its own at the first start with a system key
+(`apps/agent/src/service/security.rs`), and so does
+`deckpilot-dev seed --encrypt-legacy`; that is where a copy in a development
+data directory comes from. It is documented ([security.md](security.md)),
+shown in Settings → Security and in the status list, and deleted there as a
+sensitive operation (`remove_unencrypted_copies`). Reproduced in a
+temporary directory with test data: the copy holds every profile and,
+because the migration accepts any plaintext database, also the secrets of
+the `credentials` table if the database had one (file mode `0644`, inside
+the data directory). A 0.3 database has no `credentials` table and no
+released version writes plaintext databases, so no user's secrets are
+exposed this way; the copy does hold the old configuration (paths, URLs,
+module settings). Possible hardening, not done: create the copy with mode
+`0600`, and clear the `credentials` table of the copy (or refuse the
+migration) when the plaintext database has one.
+
+**Dependabot pull requests.**
+
+| PR | Update | Kind | CI | Notes |
+| -- | ------ | ---- | -- | ----- |
+| #159 | 7 GitHub Actions (`checkout` 4→7, `setup-node` 4→7, `pnpm/action-setup` 4→6, `tauri-action` 0.6→1.0, `upload-artifact` 4→7, `download-artifact` 4→8, `attest-build-provenance` 2→4) | major | green | Changes the release and signing workflows; needs a test release |
+| #160 | `@xyflow/react` 12.12.1, `lucide-react` | patch/minor | green | |
+| #161 | `jsdom` 27→31 | major (test only) | green | |
+| #162 | `@testing-library/jest-dom` 6→7 | major (test only) | green | |
+| #163 | `chacha20poly1305` 0.10→0.11 | breaking (0.x) | red on all three Rust jobs | Cryptography (export archives). 0.11: `aead` 0.6, `chacha20` 0.10, `poly1305` 0.9, `cipher` 0.5, edition 2024 and MSRV 1.85, `std`/`stream` features removed; no security fix. CI fails because `XNonce::from_slice` is deprecated (`archive.rs:87`, `:144`) under `-D warnings` |
+| #164 | `tray-icon` 0.25→0.26 | breaking (0.x) | green | The agent's tray |
+| #165 | `base64` 0.22→0.23 | breaking (0.x) | red on Windows only | Used for keys and archives. 0.23 adds SIMD engines behind a default-on `simd-unsafe` feature and raises MSRV to 1.71. The Windows failure is `work_session.rs:890` (`sleep_and_clock_jumps_are_flagged_and_drop_the_approval`), unrelated to base64 |
+
+**Release environment: expected and actual.**
+
+| Expected by `release.yml` | Actual on 2026-11-13 |
+| ------------------------- | -------------------- |
+| Environment `production-release` used by `prepare`, the four `build` jobs and `publish`; the *Publication gate* requires at least one required reviewer | No environments (`GET /environments`: `total_count` 0). Pushing a `v*` tag would let GitHub create it **unprotected**: `prepare` and the builds would then read the signing secrets without approval, and only publication would fail closed |
+| Deployment policy: selected branches and tags, tag rule `v*` | n/a |
+| Signing secrets `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY`, as environment secrets (repository secrets work too) | All five exist as repository secrets; no environment secrets |
+| Variables `DECKPILOT_UPDATER_PUBKEY`, `APPLE_SIGNING_IDENTITY`, `APPLE_TEAM_ID`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` (optional `DECKPILOT_ALLOW_UNSIGNED_MACOS`) | All five exist as repository variables; `DECKPILOT_ALLOW_UNSIGNED_MACOS` is not set (unsigned macOS releases are refused) |
+| Release tags protected | Ruleset *Release tag protection* (active, `refs/tags/v*`): deletion, update, non-fast-forward; no bypass actors. Creation is not restricted |
+| Workflow token read-only by default | `default_workflow_permissions: read`, `can_approve_pull_request_reviews: false`; all actions allowed, SHA pinning not required by the repository (pinning is enforced by `check-workflow-gate.py` instead) |
+
+**Owner actions** (to be run by the owner only; nothing here was run):
+
+1. *Owner action.* Create the environment: Settings → Environments → New
+   environment → `production-release` → Required reviewers (add the
+   maintainers; optionally *Prevent self-review*) → Deployment branches and
+   tags: *Selected branches and tags* → Add rule → type *Tag*, `v*`. The
+   equivalent `gh api` calls are in
+   [releasing.md](releasing.md#publication-gate-and-signing-environment-repository-settings).
+2. *Owner action.* Verify it:
+   `gh api repos/knittingcode/DeckPilot/environments/production-release --jq '{reviewers: [.protection_rules[] | select(.type == "required_reviewers") | .reviewers[].reviewer.login], branch_policy: .deployment_branch_policy}'`
+   and
+   `gh api repos/knittingcode/DeckPilot/environments/production-release/deployment-branch-policies --jq '.branch_policies[] | "\(.type) \(.name)"'`
+   (at least one reviewer, only `tag v*`).
+3. *Owner action.* Optionally move the five signing secrets into the
+   environment, run the non-publishing validation, and decide about
+   *Signing check* and *Update continuity* before deleting any repository
+   secret, exactly as in
+   [releasing.md](releasing.md#moving-the-signing-secrets-into-the-environment).
+4. *Owner action.* Optionally restrict who may create release tags:
+   Settings → Rules → Rulesets → *Release tag protection* → enable
+   *Restrict creations* and add the maintainers (or the *Repository admin*
+   role) as bypass actors. Until the environment exists, any account with
+   write access can start stage A with a `v*` tag.
+5. *Owner action.* Decide on #159–#165 (above); #163 needs a code change
+   (replacing the deprecated `XNonce::from_slice` in
+   `crates/deckpilot-portability/src/archive.rs`) before it can merge.
+
+Known limitation: before #54, agents, tests and the compatibility matrix
+failed with "local socket name length exceeds capacity of sun_path" when
+`TMPDIR` was a very long path (macOS limits socket paths to 104 bytes).
+#54 keeps socket paths within that limit, and its test
+(`agent_and_client_meet_with_a_long_tmpdir`) passed in this run.
