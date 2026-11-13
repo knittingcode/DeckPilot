@@ -33,8 +33,9 @@ reviewers=$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | 
 
 custom=$(jq -r '.deployment_branch_policy.custom_branch_policies // false' <<< "$environment")
 protected=$(jq -r '.deployment_branch_policy.protected_branches // false' <<< "$environment")
-[ "$custom" = true ] && [ "$protected" = false ] \
-  || fail "the environment '$name' does not restrict deployments to selected tags; the release is blocked. To allow it, $how"
+if [ "$custom" != true ] || [ "$protected" != false ]; then
+  fail "the environment '$name' does not restrict deployments to selected tags; the release is blocked. To allow it, $how"
+fi
 policies=$("$gh" api "repos/$repository/environments/$name/deployment-branch-policies" \
   --jq '[.branch_policies[]? | "\(.type // "branch") \(.name)"] | sort | join(",")' 2> /dev/null) \
   || fail "the deployment policies of '$name' cannot be read; the release is blocked"
