@@ -95,7 +95,10 @@ agent on an isolated data directory (`.dev/hardware-test`) with test profiles
 whose keys are labelled `A1`…`A15` and `B1`…`B15` and log every press and
 release, then checks discovery, the model, every key, images, brightness,
 profile and project switching, unplugging, an agent restart and multiple
-devices, asking where only a person can judge. It refuses to start while
+devices. Keys are pressed in the order of their labels, so a key whose image
+and input index disagree (rotation or mirroring) fails the test; it also asks
+where A1, A5 and A15 are and whether the keys are black once the agent
+stopped, asking where only a person can judge. It refuses to start while
 other programs may hold the device (quit `make up` and the Elgato app first)
 and writes `report.md`. `--mock` runs it against a simulated MK.2 to check
 the procedure itself (CI does this on Linux); that is not a hardware test.
