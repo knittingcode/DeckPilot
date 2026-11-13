@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::{DeviceDescriptor, DeviceId, DeviceModel, DeviceModelId, DriverInfo, UsbIdentity};
+use crate::{DeviceDescriptor, DeviceId, DeviceModel, DeviceModelId, DriverInfo};
 
 /// Built-in device descriptors.
 pub mod models {
@@ -68,6 +68,7 @@ pub mod models {
                 }),
                 encoders: None,
                 touch: None,
+                brightness: true,
             },
             support: HardwareSupport::DescriptorOnly,
             verification: defined_only(),
@@ -104,6 +105,7 @@ pub mod models {
                         TouchGesture::Swipe,
                     ],
                 }),
+                brightness: true,
             },
             support: HardwareSupport::DescriptorOnly,
             verification: defined_only(),
@@ -142,6 +144,7 @@ pub mod models {
                 }),
                 encoders: None,
                 touch: None,
+                brightness: true,
             },
             support: HardwareSupport::Verified,
             verification: ModelVerification::new([
@@ -193,12 +196,19 @@ impl ModelCatalog {
         self.models.insert(model.id.clone(), model);
     }
 
-    pub fn get(&self, id: &DeviceModelId) -> Option<&DeviceModel> {
-        self.models.get(id)
+    /// Adds a model contributed by a driver, unless the catalog already has
+    /// one with that id: built-in descriptors (and their verification data)
+    /// always win. Returns whether the model was added.
+    pub fn register_missing(&mut self, model: DeviceModel) -> bool {
+        if self.models.contains_key(&model.id) {
+            return false;
+        }
+        self.register(model);
+        true
     }
 
-    pub fn find_by_usb(&self, usb: UsbIdentity) -> Option<&DeviceModel> {
-        self.models.values().find(|model| model.usb == Some(usb))
+    pub fn get(&self, id: &DeviceModelId) -> Option<&DeviceModel> {
+        self.models.get(id)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &DeviceModel> {
@@ -305,22 +315,26 @@ mod tests {
     }
 
     #[test]
-    fn catalog_lookup_by_id_and_usb() {
-        let catalog = ModelCatalog::builtin();
+    fn catalog_lookup_and_driver_models() {
+        let mut catalog = ModelCatalog::builtin();
         let id = DeviceModelId::new(models::STREAM_DECK_MK2_ID);
         assert!(catalog.get(&id).is_some());
-        let found = catalog.find_by_usb(UsbIdentity {
-            vendor_id: 0x0fd9,
-            product_id: 0x0080,
-        });
-        assert_eq!(found.map(|m| &m.id), Some(&id));
-        assert!(
-            catalog
-                .find_by_usb(UsbIdentity {
-                    vendor_id: 1,
-                    product_id: 2
-                })
-                .is_none()
-        );
+
+        // A driver cannot replace a built-in model or its verification data.
+        let imitation = DeviceModel {
+            name: "Imitation".into(),
+            verification: crate::ModelVerification::default(),
+            ..models::stream_deck_mk2()
+        };
+        assert!(!catalog.register_missing(imitation));
+        assert_eq!(catalog.get(&id).unwrap().name, "Stream Deck MK.2");
+        assert!(catalog.get(&id).unwrap().is_supported());
+
+        let other = DeviceModel {
+            id: DeviceModelId::new("acme.pad.p4"),
+            ..models::stream_deck_xl()
+        };
+        assert!(catalog.register_missing(other));
+        assert!(catalog.get(&DeviceModelId::new("acme.pad.p4")).is_some());
     }
 }

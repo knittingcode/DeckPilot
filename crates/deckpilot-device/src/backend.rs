@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use thiserror::Error;
 
-use crate::{ControlId, ControlInput, DeviceId, DeviceModelId, DriverInfo};
+use crate::{ControlId, ControlInput, DeviceId, DeviceModel, DeviceModelId, DriverInfo};
 
 /// An RGB image (8 bits per channel, row-major, no padding).
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -102,7 +102,10 @@ pub enum DeviceError {
     Io(String),
 }
 
-/// Discovers and opens devices of one driver.
+/// A device driver (adapter): discovers and opens devices of one vendor
+/// protocol and translates them to DeckPilot's generic controls, inputs and
+/// frames. Drivers are registered with the agent's backend
+/// ([`CombinedBackend::with`]); nothing else needs to change to add one.
 pub trait DeviceBackend: Send {
     /// Short driver name used in logs.
     fn name(&self) -> &'static str;
@@ -117,6 +120,13 @@ pub trait DeviceBackend: Send {
     /// [`DeviceBackend::name`] only for backends that combine others.
     fn source(&self, _device: &DeviceId) -> &'static str {
         self.name()
+    }
+
+    /// Descriptors of the models this driver can open. They are added to the
+    /// model catalog when the agent starts, unless the catalog already has a
+    /// model with the same id (built-in descriptors win).
+    fn models(&self) -> Vec<DeviceModel> {
+        Vec::new()
     }
 
     /// Version of the driver implementation, reported with each device.
@@ -205,6 +215,10 @@ impl DeviceBackend for CombinedBackend {
         self.owners
             .get(device)
             .map_or_else(|| self.name(), |index| self.backends[*index].source(device))
+    }
+
+    fn models(&self) -> Vec<DeviceModel> {
+        self.backends.iter().flat_map(|b| b.models()).collect()
     }
 
     fn driver(&self, device: &DeviceId) -> DriverInfo {
