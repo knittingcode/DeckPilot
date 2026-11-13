@@ -1000,6 +1000,7 @@ name = "deckpilot-dev"
 version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "ctrlc",
  "deckpilot-core",
  "deckpilot-device",
