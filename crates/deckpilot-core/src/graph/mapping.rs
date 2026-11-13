@@ -241,6 +241,7 @@ pub(crate) fn reference_error(
     let problem = match resolution {
         Resolution::Missing(reason) => ReferenceProblem::Missing(*reason),
         Resolution::PermissionDenied => ReferenceProblem::PermissionDenied,
+        Resolution::Unavailable { owner } => ReferenceProblem::OwnerUnavailable(owner.clone()),
         Resolution::UnavailableUntilRuntime | Resolution::Value { .. } => {
             ReferenceProblem::Unavailable
         }

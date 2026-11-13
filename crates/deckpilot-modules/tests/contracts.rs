@@ -1130,6 +1130,7 @@ mod broken {
                 },
                 migrations: Vec::new(),
                 windows: Vec::new(),
+                variables: Vec::new(),
             },
             launcher: launcher.clone(),
         })

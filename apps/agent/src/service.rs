@@ -13,8 +13,8 @@ use deckpilot_core::{
     MachineConfig, ModuleRegistry, Os, ProfileId, ProjectId, Runtime,
 };
 use deckpilot_device::{
-    CombinedBackend, ControlId, DeviceBackend, DeviceEvent, DeviceId, DeviceModel, ModelCatalog,
-    mock::MockBackend,
+    CombinedBackend, ControlId, DeviceBackend, DeviceDescriptor, DeviceEvent, DeviceId,
+    DeviceModel, ModelCatalog, mock::MockBackend,
 };
 use deckpilot_ipc::{
     AgentEvent, AgentPaths, AgentStatus, DeviceInfo, ErrorCode, IpcError, LockReason,
@@ -1027,8 +1027,10 @@ impl Agent {
             let _ = self.handle.events.send(AgentEvent::ResourceBindingsChanged);
         }
         // Module states may have changed in the configuration app.
+        let before = self.modules.variables().clone();
         self.modules = load_modules(store)?;
         self.update_variable_permissions();
+        self.publish_module_variables(&before);
         self.reload_variables()?;
         self.auto_lock = deckpilot_storage::policy::security_policy(store)?.auto_lock;
         self.runtime
@@ -1047,6 +1049,8 @@ impl Agent {
                 .with_credentials(std::sync::Arc::new(credentials))
                 .with_notifier(std::sync::Arc::new(notifier))
                 .with_variables(self.variables.clone())
+                .with_live_state(self.variables.clone())
+                .with_variable_registry(Arc::new(self.modules.variables().clone()))
                 .with_projects(self.active_projects.clone()),
         );
         // Actions, their modules or bindings may have changed: running
@@ -1306,6 +1310,14 @@ impl Agent {
         })
     }
 
+    /// The vendor-neutral descriptor of a known device: model data from the
+    /// catalog, driver from the backend that provides it.
+    pub(crate) fn device_descriptor(&self, device: &DeviceId) -> Option<DeviceDescriptor> {
+        self.runtime
+            .catalog()
+            .describe(device, Some(self.options.backend.driver(device)))
+    }
+
     fn device_infos(&self) -> Vec<DeviceInfo> {
         self.runtime
             .devices()
@@ -1320,6 +1332,7 @@ impl Agent {
                         .map(|page| page.name.clone())
                 });
                 DeviceInfo {
+                    descriptor: self.device_descriptor(&status.device),
                     model_name: model
                         .map_or_else(|| status.device.model.to_string(), |m| m.name.clone()),
                     layout: self.runtime.layout_status(&status.device.model),

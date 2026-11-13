@@ -30,6 +30,7 @@ const mk2: DeviceModel = {
   usb: null,
   capabilities: { keys: { rows: 3, columns: 5, image: null }, encoders: null, touch: null },
   support: "verified",
+  verification: [],
 }
 
 const key = (index: number): ControlId => ({ kind: "key", index })

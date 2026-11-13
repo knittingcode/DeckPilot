@@ -43,7 +43,6 @@ const PAGES: Record<CorePageId, React.LazyExoticComponent<() => React.JSX.Elemen
   actions: lazy(() => import("@/pages/actions").then((m) => ({ default: m.ActionsPage }))),
   workflows: lazy(() => import("@/pages/workflows").then((m) => ({ default: m.WorkflowsPage }))),
   profiles: lazy(() => import("@/pages/profiles").then((m) => ({ default: m.ProfilesPage }))),
-  models: lazy(() => import("@/pages/models").then((m) => ({ default: m.ModelsPage }))),
   designer: lazy(() =>
     import("@/pages/layout-designer").then((m) => ({ default: m.LayoutDesignerPage })),
   ),
@@ -55,7 +54,6 @@ const PAGE_TITLES: Record<CorePageId, string> = {
   actions: "Action Library",
   workflows: "Workflows",
   profiles: "Profiles",
-  models: "Device Models",
   designer: "Layout Designer",
 }
 

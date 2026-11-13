@@ -13,13 +13,24 @@
 //! Disabling a module only removes its action types from the
 //! [`ActionRegistry`] that executes actions. User configuration that refers to
 //! the module is never touched; it is reported as unavailable instead.
+//!
+//! A module may also declare read-only variables
+//! ([`ModuleManifest::variables`]) inside its variable namespace
+//! ([`crate::variables::module_namespace`]), resolved by its
+//! [`FeatureModule::variable_source`]. They are registered and unregistered
+//! with the module ([`ModuleRegistry::variables`]); while the module is
+//! disabled, references to them resolve as unavailable.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::variables::{
+    VariableDeclaration, VariableRegistry, VariableRegistryError, VariableSource,
+};
 use crate::{
     ActionHandler, ActionParameters, ActionRegistry, ActionType, ActionTypeId, IdentifierError, Os,
     ParameterError, ParameterSpec,
@@ -267,6 +278,9 @@ pub struct ModuleManifest {
     /// Native windows the module can open.
     #[serde(default)]
     pub windows: Vec<ModuleWindow>,
+    /// Read-only variables the module provides, inside its own namespace.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variables: Vec<VariableDeclaration>,
 }
 
 impl ModuleManifest {
@@ -282,6 +296,12 @@ pub trait FeatureModule: Send + Sync {
     /// Creates the handlers for the module's action types. `config` has been
     /// validated against [`ModuleManifest::config`].
     fn action_handlers(&self, config: &ActionParameters) -> Vec<Box<dyn ActionHandler>>;
+
+    /// Resolves the variables of [`ModuleManifest::variables`]. Required
+    /// when the module declares any.
+    fn variable_source(&self) -> Option<Arc<dyn VariableSource>> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -311,6 +331,8 @@ pub enum ModuleError {
     Unsupported(ModuleId),
     #[error("window `{window}` is outside the namespace of module `{module}`")]
     WindowNamespace { module: ModuleId, window: String },
+    #[error(transparent)]
+    Variables(#[from] VariableRegistryError),
     #[error("invalid module configuration: {}", .0.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))]
     InvalidConfig(Vec<ParameterError>),
     #[error(
@@ -374,6 +396,9 @@ struct Entry {
 pub struct ModuleRegistry {
     os: Os,
     modules: BTreeMap<ModuleId, Entry>,
+    /// The core's variables and those of every registered module, kept in
+    /// step with registration and the enabled state.
+    variables: VariableRegistry,
 }
 
 impl fmt::Debug for ModuleRegistry {
@@ -388,6 +413,7 @@ impl fmt::Debug for ModuleRegistry {
                     .map(|(id, entry)| (id, entry.enabled))
                     .collect::<Vec<_>>(),
             )
+            .field("variables", &self.variables)
             .finish()
     }
 }
@@ -397,6 +423,7 @@ impl ModuleRegistry {
         Self {
             os,
             modules: BTreeMap::new(),
+            variables: VariableRegistry::new(),
         }
     }
 
@@ -436,7 +463,11 @@ impl ModuleRegistry {
                 return Err(ModuleError::DuplicateActionType(action_type.id.clone()));
             }
         }
+        // All or nothing: a refused declaration registers nothing.
+        let mut variables = self.variables.clone();
+        variables.register_module(&manifest.id, &manifest.variables, module.variable_source())?;
         let enabled = manifest.enabled_by_default && manifest.supports(self.os);
+        self.variables = variables;
         self.modules.insert(
             manifest.id,
             Entry {
@@ -446,7 +477,40 @@ impl ModuleRegistry {
                 action_types,
             },
         );
+        self.sync_variables();
         Ok(())
+    }
+
+    /// Removes a module and its variables. Configuration that refers to it
+    /// is kept and reported as unavailable. Returns whether it was
+    /// registered.
+    pub fn unregister(&mut self, id: &ModuleId) -> bool {
+        self.variables.unregister_module(id);
+        self.modules.remove(id).is_some()
+    }
+
+    /// The core's variables and those of the registered modules; variables
+    /// of disabled or unsupported modules are marked unavailable.
+    pub fn variables(&self) -> &VariableRegistry {
+        &self.variables
+    }
+
+    /// Marks the variables of every module that cannot run as unavailable.
+    fn sync_variables(&mut self) {
+        for (id, entry) in &self.modules {
+            let manifest = entry.module.manifest();
+            let reason = if entry.enabled {
+                None
+            } else if manifest.supports(self.os) {
+                Some(format!("the {} module is disabled", manifest.name))
+            } else {
+                Some(format!(
+                    "the {} module is not supported on this computer",
+                    manifest.name
+                ))
+            };
+            self.variables.set_available(id, reason);
+        }
     }
 
     fn entry(&self, id: &ModuleId) -> Result<&Entry, ModuleError> {
@@ -497,6 +561,7 @@ impl ModuleRegistry {
         if let Some(entry) = self.modules.get_mut(id) {
             entry.enabled = enabled;
         }
+        self.sync_variables();
         Ok(())
     }
 
@@ -566,6 +631,7 @@ impl ModuleRegistry {
                 }
             }
         }
+        self.sync_variables();
         problems
     }
 
@@ -918,6 +984,139 @@ mod tests {
         );
         let info = registry.modules();
         assert!(!info[1].supported);
+    }
+
+    /// `test.answer`, always 42.
+    struct Answer;
+
+    impl VariableSource for Answer {
+        fn resolve(
+            &self,
+            _: &VariableDeclaration,
+            _: &crate::variables::VariableEnvironment<'_>,
+        ) -> crate::variables::Resolution {
+            crate::variables::Resolution::Value {
+                value: crate::variables::VariableValue::Integer(42),
+                source: crate::variables::ValueSource::System,
+                sensitive: false,
+            }
+        }
+    }
+
+    fn answer() -> VariableDeclaration {
+        VariableDeclaration::new(
+            "test.answer",
+            "Answer",
+            crate::variables::VariableType::Integer,
+            crate::variables::DeclaredScope::Machine,
+        )
+    }
+
+    #[test]
+    fn module_variables_follow_registration_and_the_enabled_state() {
+        use crate::variables::{
+            NoLiveState, Resolution, ResolutionContext, VariableEnvironment, VariableId,
+            VariableOwner,
+        };
+        let mut registry = ModuleRegistry::new(Os::Linux);
+        registry
+            .register(Box::new(
+                TestModule::base().with_variables(vec![answer()], Some(Arc::new(Answer))),
+            ))
+            .unwrap();
+        let profile = crate::Profile::new("Work");
+        let context = ResolutionContext::preview(profile.id);
+        let environment = VariableEnvironment {
+            context: &context,
+            profile: &profile,
+            os: Os::Linux,
+            live: &NoLiveState,
+        };
+        let answer_id = VariableId::new("test.answer").unwrap();
+        let resolve =
+            |registry: &ModuleRegistry| registry.variables().resolve(&answer_id, &environment);
+        assert!(matches!(resolve(&registry), Resolution::Value { .. }));
+        assert_eq!(
+            *registry.variables().get(&answer_id).unwrap().owner,
+            VariableOwner::Module { module: id("test") }
+        );
+        // Disabling keeps the declaration and makes it unavailable.
+        registry.set_enabled(&id("test"), false).unwrap();
+        assert_eq!(
+            registry.variables().get(&answer_id).unwrap().unavailable,
+            Some("the Test module is disabled")
+        );
+        assert_eq!(
+            resolve(&registry),
+            Resolution::Unavailable {
+                owner: "test".into()
+            }
+        );
+        registry.set_enabled(&id("test"), true).unwrap();
+        assert!(matches!(resolve(&registry), Resolution::Value { .. }));
+        // Persisted states disable it as well.
+        let mut states = registry.states();
+        states.get_mut(&id("test")).unwrap().enabled = false;
+        registry.apply_states(&states);
+        assert!(
+            registry
+                .variables()
+                .get(&answer_id)
+                .unwrap()
+                .unavailable
+                .is_some()
+        );
+        // Unregistering removes the variables; references stay readable
+        // and resolve as unavailable.
+        assert!(registry.unregister(&id("test")));
+        assert!(!registry.contains(&id("test")));
+        assert!(registry.variables().get(&answer_id).is_none());
+        assert_eq!(
+            resolve(&registry),
+            Resolution::Unavailable {
+                owner: "test".into()
+            }
+        );
+        assert!(!registry.unregister(&id("test")));
+    }
+
+    #[test]
+    fn module_variables_are_checked_when_the_module_registers() {
+        let mut registry = ModuleRegistry::new(Os::Linux);
+        let outside = VariableDeclaration::new(
+            "git.branch",
+            "Branch",
+            crate::variables::VariableType::String,
+            crate::variables::DeclaredScope::Project,
+        );
+        let error = registry
+            .register(Box::new(
+                TestModule::base().with_variables(vec![outside], Some(Arc::new(Answer))),
+            ))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ModuleError::Variables(VariableRegistryError::Namespace { .. })
+        ));
+        // Nothing of the refused module was registered.
+        assert!(!registry.contains(&id("test")));
+        assert!(!registry.variables().has_module(&id("test")));
+        let error = registry
+            .register(Box::new(
+                TestModule::base().with_variables(vec![answer()], None),
+            ))
+            .unwrap_err();
+        assert_eq!(
+            error,
+            ModuleError::Variables(VariableRegistryError::NoSource(id("test")))
+        );
+        // Only the core's variables are there.
+        assert!(
+            registry
+                .variables()
+                .variables()
+                .all(|v| *v.owner == crate::variables::VariableOwner::Core)
+        );
     }
 
     #[test]

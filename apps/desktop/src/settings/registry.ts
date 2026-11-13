@@ -84,7 +84,7 @@ const CORE_PAGES: SettingsPageEntry[] = [
   {
     id: "devices",
     title: "Devices",
-    description: "Connected Stream Decks, brightness and gesture timing",
+    description: "Connected Stream Decks, supported models, brightness and gesture timing",
     category: "hardware",
     icon: MonitorSmartphone,
     keywords: [
@@ -93,6 +93,9 @@ const CORE_PAGES: SettingsPageEntry[] = [
       "brightness",
       "connected",
       "usb",
+      "models",
+      "device models",
+      "supported",
       "gesture",
       "double click",
       "long press",
