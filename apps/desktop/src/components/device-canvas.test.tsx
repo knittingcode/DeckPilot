@@ -20,6 +20,7 @@ const base: DeviceModel = {
     touch: null,
   },
   support: "unverified",
+  verification: [],
 }
 
 const xl: DeviceModel = {

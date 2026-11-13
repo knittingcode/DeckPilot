@@ -2,6 +2,7 @@ import { Lock } from "lucide-react"
 
 import type { CatalogEntry, ParameterKind, ReferenceStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { ownerLabel, ownerOf } from "@/lib/variable-catalog"
 import {
   AVAILABILITY_LABEL,
   SCOPE_LABEL,
@@ -76,7 +77,9 @@ export function VariableResults({
                       className={cn(
                         "grid cursor-default gap-0.5 rounded-sm px-2 py-1 text-xs",
                         selected && "bg-accent text-accent-foreground",
-                        entry.availability === "notInContext" && "opacity-60",
+                        (entry.availability === "notInContext" ||
+                          entry.availability === "unavailable") &&
+                          "opacity-60",
                       )}
                       // Keep the focus in the field that owns the list.
                       onMouseDown={(e) => {
@@ -218,10 +221,16 @@ export function VariableInspector({
             <dd>{SCOPE_LABEL[entry.scope]}</dd>
           </>
         )}
-        {entry.module && (
+        <dt className="text-muted-foreground">Owner</dt>
+        <dd>{ownerLabel(ownerOf(entry))}</dd>
+        <dt className="text-muted-foreground">Access</dt>
+        <dd>{ownerOf(entry).kind === "user" && !entry.readOnly ? "Editable" : "Read-only"}</dd>
+        {entry.deprecated && (
           <>
-            <dt className="text-muted-foreground">Module</dt>
-            <dd>{entry.module}</dd>
+            <dt className="text-muted-foreground">Deprecated</dt>
+            <dd>
+              Still works; use <code>{formatReference(entry.deprecated.canonical)}</code>
+            </dd>
           </>
         )}
         <dt className="text-muted-foreground">Changes</dt>

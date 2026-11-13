@@ -10,9 +10,11 @@
 //!    invocation (done by the caller, [`crate::Engine`]);
 //! 2. the [`ResolutionContext`] is captured once per run of the action;
 //! 3. every [`ParameterValue::Reference`] and [`ParameterValue::Template`] is
-//!    resolved through a [`ContextResolver`]: `system.` and `workflow.`
-//!    from the explicit context, `shared.` through the injected
-//!    [`VariableResolver`], `steps.` from the run's outputs;
+//!    resolved through a [`ContextResolver`]: core and module variables
+//!    (`system.`, `workflow.`, module namespaces and the legacy aliases)
+//!    through the [`VariableRegistry`] from the explicit context, `shared.`
+//!    through the injected [`VariableResolver`], `steps.` from the run's
+//!    outputs;
 //! 4. each reference is bound to its parameter's kind ([`bind`]) and the
 //!    result is validated by [`crate::ActionType::normalize`];
 //! 5. values of sensitive variables are collected in a [`Redactor`] that
@@ -27,9 +29,9 @@ use deckpilot_device::DeviceId;
 
 use crate::graph::NodeId;
 use crate::variables::{
-    ExpressionPart, MissingReason, ProjectSource, ReferenceError, Resolution, ResolutionContext,
-    ResolutionPhase, SystemVariable, ValueSource, VariableRef, VariableResolver, VariableValue,
-    bind, parse_expression,
+    ExpressionPart, LiveState, MissingReason, ProjectSource, ReferenceError, Resolution,
+    ResolutionContext, ResolutionPhase, SystemVariable, ValueSource, VariableEnvironment,
+    VariableRef, VariableRegistry, VariableResolver, VariableValue, bind, parse_expression,
 };
 use crate::{
     ActionParameters, ActionResult, ActionType, ExecutionId, Os, ParameterKind, ParameterValue,
@@ -114,11 +116,10 @@ impl VariableResolver for NoSharedVariables {
     fn resolve(&self, reference: &VariableRef, _context: &ResolutionContext) -> Resolution {
         match reference {
             VariableRef::Shared(_) => Resolution::Missing(MissingReason::UnknownVariable),
-            // No work session without the agent.
-            VariableRef::System(variable) if variable.work_session().is_some() => {
-                Resolution::Missing(MissingReason::NoValue)
+            // Only shared variables are asked for (see `ContextResolver`).
+            VariableRef::Step(_) | VariableRef::System(_) | VariableRef::Module(_) => {
+                Resolution::UnavailableUntilRuntime
             }
-            VariableRef::Step(_) | VariableRef::System(_) => Resolution::UnavailableUntilRuntime,
         }
     }
 }
@@ -128,9 +129,11 @@ impl VariableResolver for NoSharedVariables {
 /// context's, never the application's active project in its place: a
 /// preview of a run's project is unavailable until the run.
 ///
-/// Work session variables are not in the context: [`ContextResolver`]
-/// asks its shared resolver (the agent's) for them, and here they have no
-/// value.
+/// The core's variables are resolved with this by the
+/// [`VariableRegistry`]. Project values here are those of the legacy
+/// `system.project.current.…` ids, which the registry resolves through the
+/// projects module instead; work session variables are not in the context
+/// and have no value here.
 pub fn system_value(
     variable: SystemVariable,
     profile: &Profile,
@@ -217,10 +220,11 @@ pub fn confine_to_profile(resolution: Resolution, profile: &Profile) -> Resoluti
     }
 }
 
-/// Resolves every root for an action that runs in `profile`: system
-/// variables from the context and the profile, shared variables and the
-/// work session (`system.work.session.…`) through `shared`, node outputs
-/// from `outputs`.
+/// Resolves every root for an action that runs in `profile`: core and
+/// module variables (and the legacy aliases of module variables) through
+/// `registry`, shared variables through `shared`, node outputs from
+/// `outputs`. This one resolver serves key presses, workflow nodes,
+/// triggers, inline invocations, parameter overrides and previews.
 #[derive(Clone, Copy)]
 pub struct ContextResolver<'a> {
     pub profile: &'a Profile,
@@ -228,6 +232,10 @@ pub struct ContextResolver<'a> {
     pub shared: &'a dyn VariableResolver,
     /// The outputs of the run so far; `None` outside a workflow run.
     pub outputs: Option<&'a dyn StepOutputs>,
+    /// The core's and the modules' variables.
+    pub registry: &'a VariableRegistry,
+    /// Live values outside the context, such as the work session.
+    pub live: &'a dyn LiveState,
 }
 
 impl std::fmt::Debug for ContextResolver<'_> {
@@ -244,13 +252,27 @@ impl VariableResolver for ContextResolver<'_> {
             return Resolution::Missing(MissingReason::OtherProfile);
         }
         match reference {
-            // Live values only the agent has, resolved when asked (never
-            // cached); a project of another profile is missing.
-            VariableRef::System(variable) if variable.work_session().is_some() => {
-                confine_to_profile(self.shared.resolve(reference, context), self.profile)
-            }
-            VariableRef::System(variable) => {
-                system_value(*variable, self.profile, self.os, context)
+            // Core and module variables, and the legacy ids of module
+            // variables: computed when asked (never cached); a project of
+            // another profile is missing. Legacy ids resolve as they always
+            // did, whatever the state of the module that owns them now.
+            VariableRef::System(_) | VariableRef::Module(_) => {
+                let environment = VariableEnvironment {
+                    context,
+                    profile: self.profile,
+                    os: self.os,
+                    live: self.live,
+                };
+                let resolution = match reference {
+                    VariableRef::System(variable) => {
+                        self.registry.resolve_legacy(*variable, &environment)
+                    }
+                    VariableRef::Module(id) => self.registry.resolve(id, &environment),
+                    VariableRef::Shared(_) | VariableRef::Step(_) => {
+                        Resolution::Missing(MissingReason::UnknownVariable)
+                    }
+                };
+                confine_to_profile(resolution, self.profile)
             }
             VariableRef::Shared(_) => {
                 confine_to_profile(self.shared.resolve(reference, context), self.profile)

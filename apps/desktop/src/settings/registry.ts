@@ -72,11 +72,20 @@ const CORE_PAGES: SettingsPageEntry[] = [
   },
   {
     id: "variables",
-    title: "Shared Variables",
-    description: "Values that actions and workflows read with {{ shared.… }}",
+    title: "Variables",
+    description: "Every value actions, workflows and keys can read with {{ … }}",
     category: "general",
     icon: Variable,
-    keywords: ["variables", "shared", "values", "references", "secrets", "system"],
+    keywords: [
+      "variables",
+      "shared",
+      "values",
+      "references",
+      "secrets",
+      "system",
+      "module",
+      "owner",
+    ],
     view: view(() =>
       import("@/pages/shared-variables").then((m) => ({ default: m.SharedVariablesSettings })),
     ),
@@ -84,7 +93,7 @@ const CORE_PAGES: SettingsPageEntry[] = [
   {
     id: "devices",
     title: "Devices",
-    description: "Connected Stream Decks, brightness and gesture timing",
+    description: "Connected Stream Decks, supported models, brightness and gesture timing",
     category: "hardware",
     icon: MonitorSmartphone,
     keywords: [
@@ -93,6 +102,9 @@ const CORE_PAGES: SettingsPageEntry[] = [
       "brightness",
       "connected",
       "usb",
+      "models",
+      "device models",
+      "supported",
       "gesture",
       "double click",
       "long press",
