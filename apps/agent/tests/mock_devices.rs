@@ -462,3 +462,102 @@ async fn key_icons_follow_the_active_profile() {
     assert!(shows(&sun), "Work's icon again");
     agent.shutdown().await;
 }
+
+/// The status of `agent` once `predicate` holds.
+async fn wait_until(agent: &TestAgent, predicate: impl Fn(&AgentStatus) -> bool) -> AgentStatus {
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    loop {
+        let status = agent.status().await;
+        if predicate(&status) {
+            return status;
+        }
+        assert!(
+            tokio::time::Instant::now() <= deadline,
+            "condition not reached in time: {status:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// First run (defect D1): the devices are connected before any profile or
+/// layout exists. A layout added to the active profile afterwards, saved
+/// as the configuration app saves it, reaches the connected devices: their
+/// home page is shown and their keys run actions, without switching
+/// profiles again, refreshing devices or restarting the agent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_layout_added_to_the_active_profile_reaches_connected_devices() {
+    let dir = TempDir::new("deckpilot-mock");
+    let paths = AgentPaths::in_dir(dir.path().join("data"));
+    paths.create_dirs().unwrap();
+    let key_material = support::create_database(&paths);
+    let mock = MockBackend::new();
+    let first = mock.plug(&models::stream_deck_mk2(), "MK2-A");
+    let second = mock.plug(&models::stream_deck_mk2(), "MK2-B");
+    let agent = TestAgent::start_unlocked(&paths, &key_material, &mock, None).await;
+    let status = wait_until(&agent, |s| {
+        s.devices
+            .iter()
+            .filter(|d| d.state == ConnectionState::Connected)
+            .count()
+            == 2
+    })
+    .await;
+    assert!(status.active_profile.is_none());
+    assert!(status.devices.iter().all(|d| d.page.is_none()));
+
+    // A new profile, made active as the configuration app creates it.
+    let profile = Profile::new("Work");
+    let store = agent.store();
+    store.save_profile(&profile).unwrap();
+    store.set_active_profile(Some(profile.id)).unwrap();
+    agent.request(Request::ReloadConfiguration).await.unwrap();
+    let status = wait_until(&agent, |s| {
+        s.active_profile
+            .as_ref()
+            .is_some_and(|p| p.id == profile.id)
+    })
+    .await;
+    assert!(status.devices.iter().all(|d| d.page.is_none()));
+
+    // An MK.2 layout with key 0 bound to an action, saved and activated.
+    agent
+        .edit_profile(profile.id, |profile| {
+            let target = log_action(profile, "A key");
+            let mut layout = DeviceLayout::new("Main", models::stream_deck_mk2().id);
+            layout.pages[0].bindings.push(ControlBinding {
+                target,
+                ..press(key(0))
+            });
+            let id = layout.id;
+            profile.layouts.push(layout);
+            profile.activate_layout(id).unwrap();
+        })
+        .await;
+    let status = wait_until(&agent, |s| {
+        s.devices.iter().all(|d| d.page.as_deref() == Some("Home"))
+    })
+    .await;
+    assert!(
+        status
+            .devices
+            .iter()
+            .all(|d| matches!(d.layout, LayoutStatus::Compatible { .. }))
+    );
+
+    // Pressing key 0 on either device runs the action.
+    let mut events = agent.events().await;
+    for device in [&first, &second] {
+        for input in [ControlInput::Press, ControlInput::Release] {
+            agent
+                .request(Request::SimulateInput {
+                    device: device.clone(),
+                    control: key(0),
+                    input,
+                })
+                .await
+                .unwrap();
+        }
+        assert_eq!(next(&mut events, completed).await, "A key");
+    }
+    agent.shutdown().await;
+}

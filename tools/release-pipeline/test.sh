@@ -305,6 +305,12 @@ mutate "installer checks without the pre-release flag" 'del jobs["packaging"]["w
 mutate "installer checks with another MSI version" 'jobs["packaging"]["with"]["msi-version"] = "0.6.0"' "packaging must pass msi-version"
 mutate "installer checks with secrets" 'jobs["packaging"]["secrets"] = "inherit"' "packaging must not pass secrets"
 mutate "no installer checks" 'del jobs["packaging"]; jobs["draft"]["needs"].remove("packaging")' "no job packaging calling"
+mutate "secrets read before the environment check" 'jobs["prepare"]["needs"] = ["validate-tag"]' "job prepare uses the environment or secrets without needing environment-gate"
+mutate "publishing without the environment check" 'jobs["publish"]["needs"] = ["validate-tag", "publish-gate"]; jobs["publish-gate"]["needs"] = ["validate-tag", "verify"]; jobs["verify"]["needs"] = ["validate-tag", "compatibility"]' "job publish uses the environment or secrets without needing environment-gate"
+# shellcheck disable=SC2016 # a literal GitHub expression
+mutate "a new secret-using job without the check" 'jobs["extra"] = {"needs": "validate-tag", "runs-on": "ubuntu-latest", "timeout-minutes": 5, "permissions": {"contents": "read"}, "steps": [{"run": "true", "env": {"K": "${{ secrets.SOME_TOKEN }}"}}]}' "job extra uses the environment or secrets without needing environment-gate"
+mutate "no environment check" 'del jobs["environment-gate"]; [j.__setitem__("needs", [n for n in (j["needs"] if isinstance(j.get("needs"), list) else [j.get("needs")]) if n and n != "environment-gate"]) for j in jobs.values() if j.get("needs")]' "no job environment-gate"
+mutate "an environment check in the environment" 'jobs["environment-gate"]["environment"] = "production-release"' "environment-gate must not use an environment"
 mutate "a job without a timeout" 'del jobs["manifest"]["timeout-minutes"]' "job manifest has no timeout-minutes"
 mutate "an action pinned to a tag" 'jobs["draft"]["steps"][0]["uses"] = "actions/checkout@v4"' "actions/checkout@v4 is not pinned"
 mutate "a cache in a job that holds secrets" 'jobs["build"]["steps"].insert(1, {"uses": "Swatinem/rust-cache@" + "a" * 40})' "job build holds secrets and restores a cache"
