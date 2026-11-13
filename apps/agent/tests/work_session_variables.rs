@@ -32,6 +32,29 @@ const PATHS: [&str; 6] = [
     "system.work.session.canFinish",
 ];
 
+/// The canonical ids the work session module owns, in the order of
+/// [`PATHS`]; the legacy paths are their aliases.
+const CANONICAL: [&str; 6] = [
+    "workSession.id",
+    "workSession.state",
+    "workSession.startedAt",
+    "workSession.elapsedSeconds",
+    "workSession.projectId",
+    "workSession.canFinish",
+];
+
+/// Legacy paths first (deprecated aliases, as older apps listed them),
+/// then the module's canonical ids.
+fn listed_ids() -> Vec<String> {
+    let mut canonical = CANONICAL.map(str::to_owned).to_vec();
+    canonical.sort();
+    PATHS
+        .map(str::to_owned)
+        .into_iter()
+        .chain(canonical)
+        .collect()
+}
+
 struct Setup {
     agent: TestAgent,
     profile: Profile,
@@ -252,6 +275,7 @@ async fn types_are_checked(s: &Setup) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // One session, followed through.
 async fn work_session_variables_follow_the_session_live() {
     let s = setup().await;
     let shop = s.profile.projects[0].id;
@@ -259,7 +283,9 @@ async fn work_session_variables_follow_the_session_live() {
     // Idle: listed (a workflow may be written for later), no values.
     let entries = s.list().await;
     let listed: Vec<String> = entries.iter().map(|e| e.reference.to_string()).collect();
-    assert_eq!(listed, PATHS);
+    assert_eq!(listed, listed_ids());
+    assert!(entries[..6].iter().all(|e| e.deprecated.is_some()));
+    assert!(entries[6..].iter().all(|e| e.deprecated.is_none()));
     assert!(entries.iter().all(|e| e.dynamic
         && !e.sensitive
         && e.availability == ReferenceAvailability::RuntimeOnly));
@@ -283,7 +309,7 @@ async fn work_session_variables_follow_the_session_live() {
     let working = s.wait_state(S::Working).await;
     let mut announced = changed_paths(&mut events).await;
     announced.sort();
-    let mut all = PATHS.map(str::to_owned).to_vec();
+    let mut all = listed_ids();
     all.sort();
     assert_eq!(announced, all);
     assert!(
@@ -296,6 +322,16 @@ async fn work_session_variables_follow_the_session_live() {
     for value in &values[..5] {
         assert_eq!(status(value), "resolved", "{value}");
     }
+    // The canonical ids give the same values as the legacy paths.
+    let canonical: Vec<_> = CANONICAL.iter().map(|id| (*id, None)).collect();
+    let canonical: Vec<Value> = s
+        .preview(&canonical)
+        .await
+        .into_iter()
+        .map(|p| p["status"].clone())
+        .collect();
+    assert_eq!(canonical[1], values[1]);
+    assert_eq!(canonical[4], values[4]);
     assert_eq!(
         values[0]["value"],
         json!({"type": "string", "value": working.session.unwrap().to_string()})

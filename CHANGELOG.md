@@ -127,6 +127,14 @@ below.
   and title position, an icon library with usage counts, PNG and JPEG
   import checked before upload, and previews drawn by the same renderer as
   the device. Changes apply to every selected key and can be undone.
+- One variable registry: modules declare their own read-only variables in
+  their namespace (`{{ projects.current.key }}`,
+  `{{ workSession.elapsedSeconds }}`), the core keeps only system
+  variables, and one resolver serves actions, workflows, keys and previews.
+  `system.project.current.…` and `system.work.session.…` keep working
+  exactly as before, as deprecated aliases that are never rewritten. A
+  module's own ids are reported as unavailable while the module is
+  disabled.
 
 ### Fixed
 

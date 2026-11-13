@@ -11,6 +11,11 @@
 //! | `system`   | `system.project.current.id`          | a read-only system variable     |
 //! |            | `system.work.session.elapsedSeconds` | the active work session (D5)    |
 //! | `workflow` | `workflow.execution.id`              | the running workflow            |
+//! | a module's namespace | `projects.current.key`     | a variable the module declares (see `docs/variables.md`) |
+//!
+//! `system.project.current.…` and `system.work.session.…` are aliases of
+//! `projects.current.…` and `workSession.…` ([`super::ALIASES`]); they keep
+//! their spelling when parsed and printed.
 //!
 //! `steps.` references are parsed by [`crate::graph::Reference::parse`], so
 //! every template valid today parses to the same references.
@@ -20,6 +25,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::registry::{MODULE_NAMESPACES, VariableId};
 use super::{VariableKey, VariableType};
 use crate::graph::Reference;
 use crate::work_session::WorkSessionVariable;
@@ -164,15 +170,22 @@ pub enum VariableRef {
     Step(Reference),
     /// `shared.<key>`.
     Shared(VariableKey),
-    /// `system.…` and `workflow.…`.
+    /// `system.…` and `workflow.…`, including the aliases of module
+    /// variables, which keep their spelling.
     System(SystemVariable),
+    /// `<namespace>.…`: a variable a module declares, by its canonical id,
+    /// in one of the known [`super::registry::MODULE_NAMESPACES`]. While
+    /// the module is disabled or unsupported the reference stays readable
+    /// and resolves as unavailable.
+    Module(VariableId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ExpressionError {
     #[error(
         "`{0}` is not a reference; use {{{{ steps.<node>.output.<key> }}}}, \
-         {{{{ shared.<namespace>.<name> }}}}, {{{{ system.… }}}} or {{{{ workflow.… }}}}"
+         {{{{ shared.<namespace>.<name> }}}}, {{{{ system.… }}}}, {{{{ workflow.… }}}} \
+         or a module variable such as {{{{ projects.current.key }}}}"
     )]
     Invalid(String),
     #[error("a `{{{{` is not closed")]
@@ -195,7 +208,23 @@ impl VariableRef {
             "system" | "workflow" => SystemVariable::from_path(trimmed)
                 .map(Self::System)
                 .ok_or_else(invalid),
+            // A known module's namespace; whether the variable exists and
+            // its module is available is decided when it is resolved.
+            root if MODULE_NAMESPACES.contains(&root) => VariableId::new(trimmed)
+                .map(Self::Module)
+                .map_err(|_| invalid()),
             _ => Err(invalid()),
+        }
+    }
+
+    /// The canonical id of a registered variable: a core or module
+    /// variable, or the canonical id of an alias. `None` for shared
+    /// variables and node outputs.
+    pub fn registered_id(&self) -> Option<VariableId> {
+        match self {
+            Self::System(variable) => Some(variable.canonical()),
+            Self::Module(id) => Some(id.clone()),
+            Self::Shared(_) | Self::Step(_) => None,
         }
     }
 }
@@ -206,6 +235,7 @@ impl fmt::Display for VariableRef {
             Self::Step(reference) => reference.fmt(f),
             Self::Shared(key) => write!(f, "shared.{key}"),
             Self::System(variable) => f.write_str(variable.path()),
+            Self::Module(id) => id.fmt(f),
         }
     }
 }

@@ -159,23 +159,40 @@ mod tests {
             os: Os::Linux,
             live: &live,
         };
-        let resolve = |id: &str| {
+        let resolve = |registry: &ModuleRegistry, id: &str| {
             registry
                 .variables()
                 .resolve(&VariableId::new(id).unwrap(), &environment)
         };
         // Counted until the snapshot, plus the time since while it runs.
         assert!(matches!(
-            resolve("workSession.elapsedSeconds"),
+            resolve(&registry, "workSession.elapsedSeconds"),
             Resolution::Value {
                 value: VariableValue::Integer(65),
                 ..
             }
         ));
         assert!(matches!(
-            resolve("workSession.state"),
+            resolve(&registry, "workSession.state"),
             Resolution::Value { value: VariableValue::String(state), .. } if state == "working"
         ));
         assert_eq!(variables::declarations().len(), 6);
+
+        // Disabled: the canonical ids are unavailable, the legacy ids keep
+        // resolving from the live session as they always did.
+        registry.set_enabled(&module_id(), false).unwrap();
+        assert_eq!(
+            resolve(&registry, "workSession.state"),
+            Resolution::Unavailable {
+                owner: MODULE_ID.into()
+            }
+        );
+        assert!(matches!(
+            registry.variables().resolve_legacy(
+                deckpilot_core::variables::SystemVariable::WorkSessionState,
+                &environment
+            ),
+            Resolution::Value { value: VariableValue::String(state), .. } if state == "working"
+        ));
     }
 }

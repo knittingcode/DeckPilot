@@ -479,3 +479,19 @@ fn declarations_serialize_for_the_app() {
         serde_json::json!({"kind": "module", "module": "projects"})
     );
 }
+
+/// The app's copy of the module namespaces a reference may start with.
+const FRONTEND_VARIABLES: &str = include_str!("../../../../../apps/desktop/src/lib/variables.ts");
+
+#[test]
+fn the_frontend_knows_the_module_namespaces() {
+    let list = MODULE_NAMESPACES
+        .iter()
+        .map(|n| format!("\"{n}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        FRONTEND_VARIABLES.contains(&format!("MODULE_NAMESPACES = [{list}]")),
+        "variables.ts lacks MODULE_NAMESPACES = [{list}]"
+    );
+}
