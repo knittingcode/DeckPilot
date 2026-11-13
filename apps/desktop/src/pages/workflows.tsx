@@ -199,7 +199,11 @@ function WorkflowsView({
                 .then((conversion) => {
                   setConversions((c) => ({ ...c, [current.id]: conversion }))
                 })
-                .catch((e: unknown) => toast.error(errorMessage(e)))
+                .catch((e: unknown) =>
+                  toast.error("The workflow could not be opened in the graph editor", {
+                    description: errorMessage(e),
+                  }),
+                )
             }}
           >
             Open in graph editor
