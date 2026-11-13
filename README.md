@@ -4,10 +4,12 @@ DeckPilot is an open-source, lightweight, cross-platform application for managin
 Stream Deck devices on Linux, macOS and Windows.
 
 > **Status: early development.** DeckPilot consists of a background agent
-> (devices, actions, system tray) and a configuration studio. Support for the
-> Elgato Stream Deck MK.2 is implemented but **has not yet been tested on a
-> physical device**; the XL and Stream Deck + can be designed for but have no
-> driver. See [Known limitations](#known-limitations).
+> (devices, actions, system tray) and a configuration studio. The Elgato
+> Stream Deck MK.2 has been tested on a physical device **on macOS only**;
+> on Windows and Linux its driver is covered by automated tests but has not
+> been tried on hardware. The XL and Stream Deck + can be designed for but
+> have no driver. See [Devices](docs/devices.md) and
+> [Known limitations](#known-limitations).
 
 ## Concepts
 
@@ -90,6 +92,7 @@ See [docs/development.md](docs/development.md) for all commands.
 
 - [Architecture](docs/architecture.md)
 - [Background agent and IPC](docs/background-agent.md)
+- [Devices: models, drivers and verification](docs/devices.md)
 - [Updates](docs/updates.md) and [releasing](docs/releasing.md)
 - [Security and encryption](docs/security.md)
 - [Feature modules](docs/modules.md)
@@ -99,8 +102,9 @@ See [docs/development.md](docs/development.md) for all commands.
 
 ## Known limitations
 
-- The Stream Deck MK.2 driver has **not** been tested on a physical device.
-  Only the MK.2 is supported; other models are not exposed.
+- The Stream Deck MK.2 driver has been tested on a physical device on macOS
+  only, not on Windows or Linux. Only the MK.2 is supported; other models are
+  not exposed. See the [verification status](docs/devices.md#verification-levels).
 - No release has been published yet. The release pipeline and signed updates
   are implemented, but an update between two real releases has not been
   installed end to end; automatic installation stays opt-in until it has.
