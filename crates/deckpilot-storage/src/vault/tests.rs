@@ -454,6 +454,98 @@ fn legacy_databases_can_be_encrypted_with_a_system_key() {
     );
 }
 
+#[cfg(unix)]
+fn mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt as _;
+    fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+#[cfg(unix)]
+#[test]
+fn unencrypted_copies_are_readable_only_by_the_owner() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = Dir::new();
+    let vault = dir.vault();
+    plaintext_database(&vault);
+    // The modes a default umask gives: the original and a copy left by an
+    // earlier migration.
+    fs::set_permissions(vault.database(), fs::Permissions::from_mode(0o644)).unwrap();
+    let legacy = vault.legacy_copy_path();
+    fs::write(&legacy, b"copy of an earlier migration").unwrap();
+    fs::set_permissions(&legacy, fs::Permissions::from_mode(0o644)).unwrap();
+
+    let (_, kept) = vault.encrypt_plaintext(&password("mode")).unwrap();
+    assert_eq!(kept, legacy);
+    let copies = vault.legacy_copies();
+    assert_eq!(copies.len(), 2, "{copies:?}");
+    assert!(
+        copies
+            .iter()
+            .any(|copy| fs::read(copy).unwrap() == b"copy of an earlier migration")
+    );
+    for copy in &copies {
+        assert_eq!(mode(copy), 0o600, "{}", copy.display());
+        for suffix in ["-wal", "-shm"] {
+            let side = sibling(copy, suffix);
+            if side.exists() {
+                assert_eq!(mode(&side), 0o600, "{}", side.display());
+            }
+        }
+    }
+}
+
+/// Every file in `dir` with its contents.
+fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut files: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+#[test]
+fn a_plaintext_database_with_credentials_is_not_migrated() {
+    let dir = Dir::new();
+    let vault = dir.vault();
+    let profile = plaintext_database(&vault);
+    {
+        let connection = Connection::open(vault.database()).unwrap();
+        connection
+            .execute(
+                "INSERT INTO credentials (id, description, secret, updated_at)
+                 VALUES ('http.token', '', 'plain secret 5c1e', 0)",
+                [],
+            )
+            .unwrap();
+    }
+    // Asking for the state creates the (empty) lock file; take the snapshot
+    // after that so that only the migration is compared.
+    assert_eq!(vault.state().unwrap(), DatabaseState::Plaintext);
+    #[cfg(unix)]
+    let before_mode = mode(vault.database());
+    let before = snapshot(&dir.0);
+
+    let error = vault.encrypt_plaintext(&password("refused")).unwrap_err();
+    assert!(error.to_string().contains("credential"), "{error}");
+    let keys = MemoryKeyStore::new();
+    assert!(vault.encrypt_plaintext_system(&keys).is_err());
+
+    assert_eq!(snapshot(&dir.0), before);
+    #[cfg(unix)]
+    assert_eq!(mode(vault.database()), before_mode);
+    assert_eq!(vault.state().unwrap(), DatabaseState::Plaintext);
+    let store = SqliteStore::open(vault.database(), &Encryption::None).unwrap();
+    assert_eq!(
+        store.load_profile(profile.id).unwrap().as_ref(),
+        Some(&profile)
+    );
+}
+
 #[test]
 fn a_missing_database_is_never_recreated_silently() {
     let dir = Dir::new();
