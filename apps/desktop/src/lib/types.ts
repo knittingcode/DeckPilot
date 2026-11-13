@@ -712,6 +712,8 @@ export interface ModuleInfo {
   supported: boolean
   configValues: ActionParameters
   actionTypes: ActionType[]
+  /** Read-only variables the module declares, in its own namespace. */
+  variables?: VariableDeclaration[]
 }
 
 export interface MigrationNote {
@@ -749,8 +751,43 @@ export interface DeviceModel {
     keys: { rows: number; columns: number; image: ImageSpec | null } | null
     encoders: { count: number; pressable: boolean } | null
     touch: { zones: number; image: ImageSpec | null; gestures: TouchGesture[] } | null
+    /** Adjustable brightness; absent in data from older versions. */
+    brightness?: boolean
   }
+  /** Legacy single value; `verification` is authoritative. */
   support: "descriptorOnly" | "unverified" | "verified"
+  /** Per-platform verification status with evidence (docs/devices.md). */
+  verification: PlatformVerification[]
+}
+
+export type Platform = "macos" | "windows" | "linux"
+
+export type VerificationLevel =
+  | "unsupported"
+  | "experimental"
+  | "defined"
+  | "driverImplemented"
+  | "automatedTests"
+  | "physicallyVerified"
+
+export interface PlatformVerification {
+  platform: Platform
+  level: VerificationLevel
+  /** `YYYY-MM-DD` */
+  evidenceDate: string | null
+  evidence: string
+}
+
+/** Vendor-neutral description of a device, as the agent reports it. */
+export interface DeviceDescriptor {
+  vendorId: string
+  vendorName: string
+  modelId: string
+  displayName: string
+  serial: string
+  capabilities: DeviceModel["capabilities"]
+  driver: { id: string; version: string } | null
+  verification: PlatformVerification[]
 }
 
 export type FaceStyle = "empty" | "action" | "workflow" | "folder" | "back" | "notice"
@@ -798,6 +835,8 @@ export interface DeviceInfo {
   layout: LayoutStatus
   page: string | null
   source: string
+  /** Absent from older agents. */
+  descriptor?: DeviceDescriptor
 }
 
 export interface ProfileInfo {
@@ -841,6 +880,8 @@ export type AgentCapability =
   | "backgroundExecutions"
   | "notifications"
   | "variables"
+  | "workSession"
+  | "variableRegistry"
 
 export interface AgentConnection {
   running: boolean
@@ -1143,6 +1184,8 @@ export type ReferenceStatus =
   | { status: "missing"; reason: MissingReason }
   | { status: "typeMismatch"; found: VariableType }
   | { status: "permissionDenied" }
+  /** The owning module is disabled or not installed (protocol 9). */
+  | { status: "unavailable"; owner: string }
   | { status: "invalid"; message: string }
 
 /** A reference (without braces) to preview, and the parameter it fills. */
@@ -1156,9 +1199,18 @@ export interface ReferencePreview {
   status: ReferenceStatus
 }
 
-export type VariableGroup = "shared" | "system" | "profile" | "project" | "workflow" | "stepOutput"
+export type VariableGroup =
+  | "shared"
+  | "system"
+  | "profile"
+  | "project"
+  | "workflow"
+  | "stepOutput"
+  /** Variables a module declares (protocol 9). */
+  | "module"
 
-export type ReferenceAvailability = "available" | "runtimeOnly" | "notInContext"
+/** `unavailable`: the owning module is disabled or missing (protocol 9). */
+export type ReferenceAvailability = "available" | "runtimeOnly" | "notInContext" | "unavailable"
 
 /** Metadata of one reference the picker can insert; never a value. */
 export interface CatalogEntry {
@@ -1172,6 +1224,46 @@ export interface CatalogEntry {
   sensitive?: boolean
   dynamic?: boolean
   availability: ReferenceAvailability
+  /** Who owns it (protocol 9). */
+  owner?: VariableOwner
+  /** Core and module variables are read-only (protocol 9). */
+  readOnly?: boolean
+  /** A legacy id kept as an alias; insert `deprecated.canonical` instead (protocol 9). */
+  deprecated?: Deprecation
+  /** For core and module variables: what the value depends on (protocol 9). */
+  declaredScope?: DeclaredScope
+}
+
+// The unified variable registry (deckpilot_core::variables::registry).
+// See docs/variables.md.
+
+/** Who owns a variable: the core, a module (in its namespace) or the user. */
+export type VariableOwner = { kind: "core" } | { kind: "module"; module: string } | { kind: "user" }
+
+/** What the value of a declared variable depends on. */
+export type DeclaredScope =
+  "machine" | "profile" | "project" | "device" | "workflow" | "execution" | "workSession"
+
+/** What must be in the context for a declared variable to have a value. */
+export type Requirement = "project" | "device" | "workflow" | "execution" | "workSession"
+
+/** A read-only variable the core or a module declares. */
+export interface VariableDeclaration {
+  /** Canonical id, e.g. `projects.current.id`. */
+  id: string
+  name: string
+  description?: string
+  valueType: VariableType
+  scope: DeclaredScope
+  requires?: Requirement[]
+  sensitive?: boolean
+  readOnly: boolean
+}
+
+/** An older id that still resolves, and the id to use instead. */
+export interface Deprecation {
+  canonical: string
+  since: string
 }
 
 export interface CatalogFilter {

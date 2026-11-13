@@ -13,8 +13,8 @@ use deckpilot_core::{
     MachineConfig, ModuleRegistry, Os, ProfileId, ProjectId, Runtime,
 };
 use deckpilot_device::{
-    CombinedBackend, ControlId, DeviceBackend, DeviceEvent, DeviceId, DeviceModel, ModelCatalog,
-    mock::MockBackend,
+    Capability, CombinedBackend, ControlId, DeviceBackend, DeviceDescriptor, DeviceEvent, DeviceId,
+    DeviceModel, ModelCatalog, mock::MockBackend,
 };
 use deckpilot_ipc::{
     AgentEvent, AgentPaths, AgentStatus, DeviceInfo, ErrorCode, IpcError, LockReason,
@@ -265,6 +265,17 @@ struct DeviceSession {
     id: u64,
     io: DeviceIo,
     rendered: BTreeMap<ControlId, KeyFace>,
+    /// The model has adjustable brightness ([`Capability::Brightness`]);
+    /// brightness is only sent to such devices.
+    brightness: bool,
+}
+
+impl DeviceSession {
+    fn set_brightness(&self, percent: u8) {
+        if self.brightness {
+            self.io.set_brightness(percent);
+        }
+    }
 }
 
 pub struct Agent {
@@ -366,9 +377,17 @@ impl Agent {
         // the key from the configuration app. Nothing is read before that.
         let security = security_state(&paths.database)?;
         let modules = deckpilot_modules::builtin(Os::current());
+        // Built-in models, plus models contributed by registered drivers.
+        let mut catalog = ModelCatalog::builtin();
+        for model in options.backend.models() {
+            let id = model.id.clone();
+            if catalog.register_missing(model) {
+                info!(model = %id, driver = options.backend.name(), "driver model registered");
+            }
+        }
         let mut runtime = Runtime::new(
             Engine::new(modules.action_registry()),
-            ModelCatalog::builtin(),
+            catalog,
             MachineConfig::new(Os::current()),
         );
         runtime.set_placeholder(Some("Locked"));
@@ -849,7 +868,7 @@ impl Agent {
         if brightness != self.brightness {
             self.brightness = brightness;
             for session in self.sessions.values() {
-                session.io.set_brightness(brightness);
+                session.set_brightness(brightness);
             }
         }
         self.reload_configuration()?;
@@ -869,7 +888,7 @@ impl Agent {
             .map_err(|e| storage_error(&e))?;
         self.brightness = percent;
         for session in self.sessions.values() {
-            session.io.set_brightness(percent);
+            session.set_brightness(percent);
         }
         self.publish();
         Ok(())
@@ -1027,8 +1046,10 @@ impl Agent {
             let _ = self.handle.events.send(AgentEvent::ResourceBindingsChanged);
         }
         // Module states may have changed in the configuration app.
+        let before = self.modules.variables().clone();
         self.modules = load_modules(store)?;
         self.update_variable_permissions();
+        self.publish_module_variables(&before);
         self.reload_variables()?;
         self.auto_lock = deckpilot_storage::policy::security_policy(store)?.auto_lock;
         self.runtime
@@ -1047,6 +1068,8 @@ impl Agent {
                 .with_credentials(std::sync::Arc::new(credentials))
                 .with_notifier(std::sync::Arc::new(notifier))
                 .with_variables(self.variables.clone())
+                .with_live_state(self.variables.clone())
+                .with_variable_registry(Arc::new(self.modules.variables().clone()))
                 .with_projects(self.active_projects.clone()),
         );
         // Actions, their modules or bindings may have changed: running
@@ -1212,15 +1235,18 @@ impl Agent {
             }
         };
         self.open_failures.remove(&device);
-        io.set_brightness(self.brightness);
-        self.sessions.insert(
-            device.clone(),
-            DeviceSession {
-                id: self.next_session,
-                io,
-                rendered: BTreeMap::new(),
-            },
-        );
+        let session = DeviceSession {
+            id: self.next_session,
+            io,
+            rendered: BTreeMap::new(),
+            brightness: self
+                .runtime
+                .catalog()
+                .get(&device.model)
+                .is_some_and(|model| model.capabilities.supports(Capability::Brightness)),
+        };
+        session.set_brightness(self.brightness);
+        self.sessions.insert(device.clone(), session);
         let _ = self.runtime.handle_event(&DeviceEvent::Connected {
             device: device.clone(),
         });
@@ -1306,6 +1332,14 @@ impl Agent {
         })
     }
 
+    /// The vendor-neutral descriptor of a known device: model data from the
+    /// catalog, driver from the backend that provides it.
+    pub(crate) fn device_descriptor(&self, device: &DeviceId) -> Option<DeviceDescriptor> {
+        self.runtime
+            .catalog()
+            .describe(device, Some(self.options.backend.driver(device)))
+    }
+
     fn device_infos(&self) -> Vec<DeviceInfo> {
         self.runtime
             .devices()
@@ -1320,6 +1354,7 @@ impl Agent {
                         .map(|page| page.name.clone())
                 });
                 DeviceInfo {
+                    descriptor: self.device_descriptor(&status.device),
                     model_name: model
                         .map_or_else(|| status.device.model.to_string(), |m| m.name.clone()),
                     layout: self.runtime.layout_status(&status.device.model),

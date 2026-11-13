@@ -120,6 +120,9 @@ describe("navigation", () => {
     expect(locationOf("settings")).toEqual(settings("appearance"))
     expect(locationOf("settings:security")).toEqual(settings("security"))
     expect(locationOf("devices")).toEqual(settings("devices"))
+    // The Device Models page moved into Settings › Devices.
+    expect(locationOf("models")).toEqual(settings("devices"))
+    expect(locationOf("designer")).toEqual(workspace("designer"))
   })
 
   it("persists the history across launches", () => {
@@ -161,5 +164,20 @@ describe("navigation", () => {
     const state = loadNavigation(storage)
     expect(state && current(state)).toEqual(settings("devices"))
     expect(state?.workspace).toBe("actions")
+  })
+
+  it("moves Device Models from a stored workspace page to the settings", () => {
+    const storage = memoryStorage()
+    storage.setItem(
+      "deckpilot.navigation",
+      JSON.stringify({
+        entries: [workspace("designer"), workspace("models")],
+        index: 1,
+        workspace: "models",
+      }),
+    )
+    const state = loadNavigation(storage)
+    expect(state && current(state)).toEqual(settings("devices"))
+    expect(state?.workspace).toBe("designer")
   })
 })

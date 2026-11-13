@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::DeviceCapabilities;
+use crate::{DeviceCapabilities, ModelVerification};
 
 /// Stable identifier of a device model, for example `elgato.streamdeck.mk2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -16,6 +16,12 @@ impl DeviceModelId {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// The vendor segment of the id: model ids are `<vendor>.<family>.<model>`,
+    /// so `elgato.streamdeck.mk2` belongs to `elgato`.
+    pub fn vendor(&self) -> &str {
+        self.0.split('.').next().unwrap_or_default()
     }
 }
 
@@ -33,10 +39,11 @@ pub struct UsbIdentity {
     pub product_id: u16,
 }
 
-/// How well a model is supported.
+/// How well a model is supported, as one value for all platforms.
 ///
-/// A descriptor based on public documentation is not the same as a model that
-/// has been exercised on a physical device, and the distinction is kept explicit.
+/// Kept for compatibility with clients that read it; the per-platform
+/// [`ModelVerification`] in [`DeviceModel::verification`] is authoritative.
+/// `Verified` means tested on a physical device on at least one platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum HardwareSupport {
@@ -58,4 +65,15 @@ pub struct DeviceModel {
     pub usb: Option<UsbIdentity>,
     pub capabilities: DeviceCapabilities,
     pub support: HardwareSupport,
+    /// Per-platform verification status, with evidence. Absent in data from
+    /// older versions, which then reads as [`crate::VerificationLevel::Defined`].
+    #[serde(default)]
+    pub verification: ModelVerification,
+}
+
+impl DeviceModel {
+    /// Listed as supported: physically verified on at least one platform.
+    pub fn is_supported(&self) -> bool {
+        self.verification.is_supported()
+    }
 }

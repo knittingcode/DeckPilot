@@ -385,9 +385,32 @@ build jobs), and before publication.
 
 The workflow does not create or change the environment. GitHub creates a
 named environment, **unprotected**, the first time a job refers to it, so
-its mere existence proves nothing: the *Publication gate* job checks that
-`production-release` exists **and requires a reviewer**, and otherwise
-fails, so nothing is published. Until the secrets are moved (below), the
+its mere existence proves nothing. Therefore the *Protected release
+environment* job (`environment-gate`) runs right after the tag gate and
+**before any job that names the environment or reads a secret**: it names
+no environment, reads no secret, has `contents: read` only, and runs
+`tools/release-pipeline/check-environment.sh production-release`, which
+requires that
+
+- the environment **exists** (a missing one is never created by this job);
+- it has **at least one required reviewer**;
+- its deployment policy allows **tags `v*` and nothing else**: *Selected
+  branches and tags* (not *Protected branches*, not *No restriction*), with
+  exactly one rule, of type tag, named `v*`.
+
+Otherwise it fails and nothing else runs: `prepare`, the builds and
+`publish` need it (directly or through `needs`), so no signing secret is
+read and GitHub never gets to create the environment unprotected. A
+release pushed before the owner has set the environment up therefore stops
+at this job (re-run it once the environment is in place). The *Publication
+gate* job runs the same check again right before publication, in case the
+environment was changed while the release waited.
+`tools/release-pipeline/check-workflow-gate.py` refuses a workflow in which
+any job that uses the environment or a secret other than `GITHUB_TOKEN`
+does not reach `environment-gate` through `needs`; the cases (missing,
+auto-created without rules, wait timer only, no tag restriction, branch or
+extra rules, unreadable policies) are tested by
+`tools/release-pipeline/test-publication.sh`. Until the secrets are moved (below), the
 jobs keep reading the repository-level secrets — a job in an environment
 sees repository secrets too, and environment secrets take precedence over
 repository secrets of the same name.
@@ -472,6 +495,7 @@ are typed or piped from the offline copies, never echoed or logged.
 | ----------- | ----- | ---------- |
 | The tag gate | nothing created | Fix the cause (wait for CI, tag a commit on `main`, fix the version) and push a **new** tag; delete a wrong tag only if no release exists for it: `git push origin :refs/tags/<tag>` |
 | Stage A (a build, signing, notarization, manifest, checksums) | a draft, possibly incomplete | Re-run the failed jobs (`gh run rerun <run-id> --failed`): the draft of the same commit is reused and its assets replaced. For a clean retry, discard the draft and run again: `tools/release-pipeline/discard-draft.sh <tag>` (refuses published releases; keeps the tag), then `gh workflow run release.yml --ref <tag>` |
+| Protected release environment (`environment-gate`) | nothing created, no secret read | Set up `production-release` (above: reviewers, tag rule `v*` only), then `gh run rerun <run-id> --failed` |
 | Publication gate | a complete draft | Create or protect the `production-release` environment (above), then `gh run rerun <run-id> --failed` |
 | Stage B before publishing | a complete draft, unpublished | Re-run the failed jobs, or `gh workflow run release.yml --ref <tag> -f publish_only=true` (skips stage A, publishes the existing draft after the same checks). Every check runs again; nothing is published until all pass |
 | Stage B after publishing (verification of the public release) | published | Never delete a published release. Find the cause (for example an asset removed by hand), fix it without replacing published assets, and re-run: for an already published release of the same commit `publish.sh` changes nothing and only verifies again. If the release itself is wrong, publish a new version |

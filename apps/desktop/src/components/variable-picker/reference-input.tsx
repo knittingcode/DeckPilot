@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import type { ParameterKind } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { insertedReference } from "@/lib/variable-catalog"
 import { TEMPLATE_KIND, autocompleteAt, insertReference } from "@/lib/variables"
 
 import { useVariableScope } from "./scope"
@@ -128,7 +129,7 @@ export function ReferenceInput({
         // Home and End keep moving the cursor in the text.
         if (e.key === "Home" || e.key === "End") return
         browser.handleKey(e, (entry) => {
-          insert(entry.reference, autocomplete.start, cursor ?? value.length)
+          insert(insertedReference(entry), autocomplete.start, cursor ?? value.length)
         })
       },
     }),
@@ -163,7 +164,7 @@ export function ReferenceInput({
             kind={kind}
             browser={browser}
             onPick={(entry) => {
-              insert(entry.reference, autocomplete.start, cursor ?? value.length)
+              insert(insertedReference(entry), autocomplete.start, cursor ?? value.length)
             }}
           />
         </div>
