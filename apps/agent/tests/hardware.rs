@@ -55,7 +55,7 @@ fn profile() -> Profile {
     folder.bindings.push(ControlBinding::new(
         key(2),
         Trigger::Press,
-        BindingTarget::Action { action: next_id },
+        BindingTarget::action(next_id),
     ));
     layout.pages[0].bindings.push(ControlBinding::new(
         key(5),

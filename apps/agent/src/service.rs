@@ -981,6 +981,8 @@ impl Agent {
         self.update_variable_permissions();
         self.reload_variables()?;
         self.auto_lock = deckpilot_storage::policy::security_policy(store)?.auto_lock;
+        self.runtime
+            .set_gesture_defaults(deckpilot_storage::gestures::gesture_defaults(store)?);
         let (profile, project) = load_active(store)?;
         // Credentials are loaded with the configuration, so the app asks
         // for a reload after changing one.
