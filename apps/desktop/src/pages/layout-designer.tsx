@@ -27,7 +27,8 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { useAsync } from "@/hooks/use-async"
 import { LayoutEditor } from "@/layout-editor/editor"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
 import { useFocusTarget } from "@/lib/focus"
 import { SUPPORT } from "@/lib/format"
@@ -203,14 +204,16 @@ function LayoutToolbar({
 }) {
   const { refresh } = useAppContext()
   const [creating, setCreating] = useState(false)
-  const run = (operation: () => Promise<string | undefined>, message: string) => {
+  const run = (operation: () => Promise<string | undefined>, message: string, failed: string) => {
     operation().then(
       (id) => {
         toast.success(message)
         onChanged(id)
         refresh()
       },
-      (e: unknown) => toast.error(errorMessage(e)),
+      (e: unknown) => {
+        toastFailure(failed, e)
+      },
     )
   }
   return (
@@ -248,6 +251,7 @@ function LayoutToolbar({
                 run(
                   () => api.duplicateLayout(profileId, current.id, `${current.name} (copy)`),
                   "Layout duplicated",
+                  `“${current.name}” was not duplicated`,
                 )
               }}
             >
@@ -258,10 +262,14 @@ function LayoutToolbar({
               disabled={current.id === activeForModel}
               title="Use this layout for the model"
               onClick={() => {
-                run(async () => {
-                  await api.activateLayout(profileId, current.id)
-                  return current.id
-                }, "Layout activated")
+                run(
+                  async () => {
+                    await api.activateLayout(profileId, current.id)
+                    return current.id
+                  },
+                  "Layout activated",
+                  `“${current.name}” was not made active`,
+                )
               }}
             >
               <Star /> {current.id === activeForModel ? "Active" : "Make active"}
@@ -275,10 +283,14 @@ function LayoutToolbar({
               title={`Delete “${current.name}”?`}
               description="The layout and its pages are removed. Actions and workflows stay in the library."
               onConfirm={() => {
-                run(async () => {
-                  await api.deleteLayout(profileId, current.id)
-                  return undefined
-                }, "Layout deleted")
+                run(
+                  async () => {
+                    await api.deleteLayout(profileId, current.id)
+                    return undefined
+                  },
+                  "Layout deleted",
+                  `“${current.name}” was not deleted`,
+                )
               }}
             />
           </>
@@ -295,6 +307,7 @@ function LayoutToolbar({
           run(
             async () => (await api.createLayout(profileId, model.id, name, generate)).id,
             "Layout created",
+            `“${name}” was not created`,
           )
         }}
       />

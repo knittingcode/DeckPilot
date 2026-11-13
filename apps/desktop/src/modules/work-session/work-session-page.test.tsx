@@ -261,6 +261,26 @@ describe("Work Session settings", () => {
     expect(screen.getByRole("button", { name: "Save settings" })).toBeDisabled()
   })
 
+  it("shows only the backend's message of a failure, never other parts of the error", async () => {
+    const secret = "s3cr3t-session-token"
+    const error = Object.assign(new Error("the verification workflow is not valid"), {
+      stack: `Error: at invoke (token=${secret})`,
+      cause: { token: secret },
+    })
+    const { user } = await renderPage()
+    const approval = await screen.findByLabelText("Approval lasts (minutes)")
+    await user.clear(approval)
+    await user.type(approval, "15")
+    api.saveWorkSessionSettings.mockRejectedValue(error)
+    await user.click(screen.getByRole("button", { name: "Save settings" }))
+    expect(toast.error).toHaveBeenCalledWith("The work session settings were not saved", {
+      description:
+        "The verification workflow is not valid. Unlock DeckPilot if it is locked, then try again.",
+    })
+    expect(JSON.stringify(toast.error.mock.calls)).not.toContain(secret)
+    expect(document.body).not.toHaveTextContent(secret)
+  })
+
   it("says what failed when saving does not work", async () => {
     const { user } = await renderPage()
     const approval = await screen.findByLabelText("Approval lasts (minutes)")
