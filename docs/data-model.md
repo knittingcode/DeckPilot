@@ -425,6 +425,12 @@ a run and are never stored.
   execution > project > profile > global > default and resolves a
   `projectId`/`profileId` naming another profile as missing. A value changed
   later is seen by the next snapshot.
+- Exports (payload version 2) carry the user's definitions and the values
+  of the exported profiles and their projects; global values only with the
+  application settings; values and defaults of sensitive variables never
+  (decision D5, see [security.md](security.md#encrypted-exports)). An import
+  creates missing definitions (origin `import`), keeps existing ones, and
+  sets values in the same transaction as the profiles.
 
 ### Provenance
 
@@ -437,7 +443,9 @@ profile documents are not changed. An item is *edited* when its canonical
 JSON differs from the snapshot (`provenance_status`). Rows go away with the
 item (saving a profile without it) and with the profile.
 
-Only newly created data gets provenance. Data from before schema 8 —
+The development seed (`tools/dev`) records a row for every action, workflow,
+layout and project it creates (catalog `dev-seed`, keys such as
+`work.action.next-project`). Only newly created data gets provenance. Data from before schema 8 —
 including seeded data of development databases, such as the
 `v0.5.0-2` fixture — has none and is treated as the user's: nothing removes
 it automatically.

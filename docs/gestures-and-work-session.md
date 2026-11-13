@@ -553,19 +553,33 @@ picker code of its own. Open pickers refresh on `workSessionChanged`
 
 ```jsonc
 { "type": "getWorkSession" }                         → { "type": "workSession", "snapshot": WorkSessionSnapshot }
-{ "type": "listWorkSessions", "limit": n, "before"?: ms } → { "type": "workSessions", "entries": WorkSessionSummary[] }
-{ "type": "resolveWorkSessionReview", "session": id, "review": n, "count": bool } → workSession
-{ "type": "clearWorkSessionNotices", "session": id } → workSession
+{ "type": "listWorkSessions", "limit": n /* 1–100 */, "before"?: ms } → { "type": "workSessions", "entries": WorkSessionSummary[] }
+{ "type": "getWorkSessionSettings", "profile": id } → { "type": "workSessionSettings", "settings": WorkSessionSettings }
+{ "type": "saveWorkSessionSettings", "settings": WorkSessionSettings } → workSessionSettings
+{ "type": "resolveWorkSessionReview", "session": id, "review": n, "count": bool } → { "type": "workSessionEntry", "entry": WorkSessionSummary }
+{ "type": "clearWorkSessionNotices", "session": id | null } → workSession
 // event, protocol ≥ 8 only:
 { "type": "workSessionChanged", "snapshot": WorkSessionSnapshot }
 ```
 
 - There is **no request that starts, verifies or finishes a session**
-  (D11): session operations come only from the key. Tests drive them with
-  `simulateInput`.
-- Settings use the existing configuration pattern: the app writes
-  `work_session_settings` after validating the workflow and the contract,
-  then calls `notify_reload`.
+  (D11): session operations come only from the key. Tests drive them
+  through the agent's `test-hooks` entry point until key bindings do.
+- The shapes are in `crates/deckpilot-ipc/src/work_session.rs` and mirrored
+  in `apps/desktop/src/lib/types.ts`. A `WorkSessionSummary` carries the
+  session's intervals, reviews, transitions, last verification and notice,
+  and its counted `elapsedMs`. Verification details are sent at most 200
+  characters long and notice messages at most 500; sensitive details are
+  never stored, so never sent.
+- Settings go through the agent, which owns the session: it checks the
+  workflows against the profile (the start workflow needs no inputs a
+  session cannot fill; the verification workflow fulfils the contract),
+  writes `work_session_settings` and drops an approval when they changed
+  (D9). `clearWorkSessionNotices` without a session clears the notice an
+  idle session shows. `workSessionChanged` is also sent when only the
+  counted time changed (a gap excluded or counted again).
+- Disabling the `work-session` module is refused while a session is
+  active.
 - Tauri (W5): `get_work_session`,
   `list_work_sessions`, `resolve_work_session_review`,
   `clear_work_session_notices`, `get_work_session_settings`,

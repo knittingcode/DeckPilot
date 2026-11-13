@@ -10,6 +10,7 @@ import {
   controlsOf,
   defaultTrigger,
   page as findPage,
+  pageParents,
   sameControl,
   sameTrigger,
   setBinding,
@@ -442,18 +443,13 @@ export function parseControlKey(key: string): ControlId | null {
 // ---------------------------------------------------------------------------
 // Pages
 
-/** The page "back" returns to from `pageId`: the first page opening it, else home. */
+/**
+ * The page "back" returns to from `pageId` when it was not opened from a
+ * folder key: its folder in the page tree, else home.
+ */
 export function parentPage(layout: DeviceLayout, pageId: string): string {
   if (pageId === layout.homePage) return pageId
-  const opener = layout.pages.find((p) =>
-    p.bindings.some((b) => b.target.type === "openPage" && b.target.page === pageId),
-  )
-  return opener?.id ?? layout.homePage
-}
-
-/** Whether a folder page has a binding to leave it. */
-export function hasBack(layout: DeviceLayout, pageId: string): boolean {
-  return findPage(layout, pageId)?.bindings.some((b) => b.target.type === "back") ?? false
+  return pageParents(layout).get(pageId) ?? layout.homePage
 }
 
 /** Keys of controls with at least one binding on a page. */

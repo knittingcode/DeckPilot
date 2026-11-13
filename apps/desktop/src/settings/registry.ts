@@ -10,6 +10,7 @@ import {
   ScrollText,
   Server,
   ShieldCheck,
+  Variable,
   type LucideIcon,
 } from "lucide-react"
 import { lazy } from "react"
@@ -68,6 +69,17 @@ const CORE_PAGES: SettingsPageEntry[] = [
     icon: RefreshCw,
     keywords: ["version", "release", "download", "install", "upgrade"],
     view: view(() => import("./pages/updates").then((m) => ({ default: m.UpdatesSettings }))),
+  },
+  {
+    id: "variables",
+    title: "Shared Variables",
+    description: "Values that actions and workflows read with {{ shared.… }}",
+    category: "general",
+    icon: Variable,
+    keywords: ["variables", "shared", "values", "references", "secrets", "system"],
+    view: view(() =>
+      import("@/pages/shared-variables").then((m) => ({ default: m.SharedVariablesSettings })),
+    ),
   },
   {
     id: "devices",
