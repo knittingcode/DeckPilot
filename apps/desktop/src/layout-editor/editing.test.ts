@@ -37,6 +37,7 @@ const mk2: DeviceModel = {
     touch: null,
   },
   support: "unverified",
+  verification: [],
 }
 
 const plus: DeviceModel = {
