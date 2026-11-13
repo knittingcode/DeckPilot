@@ -278,11 +278,12 @@ impl Runtime {
         });
         let devices: Vec<DeviceId> = self.navigation.keys().cloned().collect();
         for device in devices {
+            // A device with no pages (connected before its model had a
+            // layout) is not valid once a layout exists: it goes home.
+            let stack = &self.navigation[&device];
             let valid = match self.layout_for(&device.model) {
-                Some(layout) => self.navigation[&device]
-                    .iter()
-                    .all(|page| layout.page(*page).is_some()),
-                None => self.navigation[&device].is_empty(),
+                Some(_) => self.pages_exist(&device, stack),
+                None => stack.is_empty(),
             };
             if !valid {
                 self.reset_navigation(&device);
@@ -1254,6 +1255,59 @@ mod tests {
             runtime.current_page(&device()),
             Some(f.profile.layouts[0].home_page)
         );
+    }
+
+    #[test]
+    fn reload_sends_devices_without_pages_to_a_new_layout_home() {
+        // A device connected while the profile had no layout has no pages.
+        let f = fixture();
+        let layout = f.profile.layouts[0].clone();
+        let home = layout.home_page;
+        let mut bare = f.profile.clone();
+        bare.layouts.clear();
+        let other = DeviceId {
+            model: device().model,
+            serial: "OTHER".into(),
+        };
+        let mut runtime = runtime();
+        connect(&mut runtime, &device());
+        runtime.set_profile(Some(bare.clone()), None);
+        connect(&mut runtime, &other);
+        assert_eq!(runtime.current_page(&device()), None);
+        assert_eq!(runtime.current_page(&other), None);
+        assert!(matches!(
+            runtime.handle_event(&press(0)).unwrap(),
+            RuntimeOutcome::Ignored { .. }
+        ));
+
+        // The layout is added to the active profile: every device goes home
+        // and its keys work.
+        let mut with_layout = bare.clone();
+        with_layout.layouts.push(layout.clone());
+        with_layout.activate_layout(layout.id).unwrap();
+        runtime.reload_profile(with_layout.clone());
+        assert_eq!(runtime.current_page(&device()), Some(home));
+        assert_eq!(runtime.current_page(&other), Some(home));
+        assert!(matches!(
+            runtime.handle_event(&press(0)).unwrap(),
+            RuntimeOutcome::Action { action, .. } if action == f.next
+        ));
+
+        // A valid stack is still kept by a reload.
+        runtime.handle_event(&press(1)).unwrap();
+        let folder = runtime.current_page(&device());
+        assert_ne!(folder, Some(home));
+        runtime.reload_profile(with_layout.clone());
+        assert_eq!(runtime.current_page(&device()), folder);
+        assert_eq!(runtime.current_page(&other), Some(home));
+
+        // Removed: no pages. Added again: home again.
+        runtime.reload_profile(bare);
+        assert_eq!(runtime.current_page(&device()), None);
+        assert_eq!(runtime.current_page(&other), None);
+        runtime.reload_profile(with_layout);
+        assert_eq!(runtime.current_page(&device()), Some(home));
+        assert_eq!(runtime.current_page(&other), Some(home));
     }
 
     /// Key 3 of the home page: click runs the CMS selector as saved, double

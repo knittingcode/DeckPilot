@@ -5,7 +5,8 @@ import { ParameterField } from "@/components/parameter-field"
 import { VariableScopeProvider } from "@/components/variable-picker/scope-provider"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
 import { initialValue } from "@/lib/parameters"
 import type { ActionParameters, ModuleInfo } from "@/lib/types"
@@ -50,7 +51,9 @@ export function ModuleSettingsForm({ module }: { module: ModuleInfo }) {
                     refresh()
                     toast.success(`${module.name} settings saved`)
                   },
-                  (e: unknown) => toast.error(errorMessage(e)),
+                  (e: unknown) => {
+                    toastFailure(`${module.name} settings were not saved`, e)
+                  },
                 )
                 .finally(() => {
                   setSaving(false)
