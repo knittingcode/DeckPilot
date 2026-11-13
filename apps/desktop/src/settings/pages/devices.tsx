@@ -4,6 +4,7 @@ import { toast } from "sonner"
 
 import { AgentBadge, AgentCompatibilityNotice, AgentStopped, DeviceRow } from "@/components/agent"
 import { GestureDefaultsCard } from "@/components/gesture-editor/gesture-defaults"
+import { SupportedModels } from "@/components/supported-models"
 import { EmptyState, ErrorNotice } from "@/components/page"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -54,8 +55,8 @@ export function DevicesSettings() {
             </CardTitle>
             <CardDescription>
               Devices appear automatically when connected. Simulated devices are for development and
-              testing. The Stream Deck MK.2 driver has not been verified on hardware yet; on Linux,
-              a udev rule is required for access.
+              testing. Which models were tested on hardware, and on which platforms, is shown under
+              Supported Models. On Linux, a udev rule is required for access.
             </CardDescription>
           </div>
         </CardHeader>
@@ -89,6 +90,7 @@ export function DevicesSettings() {
         <Brightness key={agent.status.brightness} current={agent.status.brightness} />
       )}
       <GestureDefaultsCard />
+      <SupportedModels />
     </>
   )
 }

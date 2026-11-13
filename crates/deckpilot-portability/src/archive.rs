@@ -61,6 +61,32 @@ fn cipher_for(header: &Header, password: &Password) -> Result<XChaCha20Poly1305,
     XChaCha20Poly1305::new_from_slice(key.as_bytes()).map_err(|_| PortabilityError::Crypto)
 }
 
+/// The AEAD itself: `ciphertext || 16-byte tag`, with `aad` authenticated.
+/// The nonce is a fixed-size array, so it cannot be shorter or longer than
+/// the 24 bytes of `XChaCha20`, and `XNonce::from` converts it without a
+/// runtime length check.
+fn encrypt(
+    cipher: &XChaCha20Poly1305,
+    nonce: &[u8; NONCE_LEN],
+    aad: &[u8],
+    msg: &[u8],
+) -> Result<Vec<u8>, PortabilityError> {
+    cipher
+        .encrypt(&XNonce::from(*nonce), Payload { msg, aad })
+        .map_err(|_| PortabilityError::Crypto)
+}
+
+fn decrypt(
+    cipher: &XChaCha20Poly1305,
+    nonce: &[u8; NONCE_LEN],
+    aad: &[u8],
+    msg: &[u8],
+) -> Result<Vec<u8>, PortabilityError> {
+    cipher
+        .decrypt(&XNonce::from(*nonce), Payload { msg, aad })
+        .map_err(|_| PortabilityError::WrongPasswordOrDamaged)
+}
+
 /// Encrypts `plaintext` with a key derived from `password`.
 pub fn seal(
     plaintext: &[u8],
@@ -82,15 +108,7 @@ pub fn seal(
     };
     let header_text = serde_json::to_string(&header)?;
     let cipher = cipher_for(&header, password)?;
-    let ciphertext = cipher
-        .encrypt(
-            XNonce::from_slice(&nonce),
-            Payload {
-                msg: plaintext,
-                aad: header_text.as_bytes(),
-            },
-        )
-        .map_err(|_| PortabilityError::Crypto)?;
+    let ciphertext = encrypt(&cipher, &nonce, header_text.as_bytes(), plaintext)?;
     let envelope = Envelope {
         header: header_text,
         ciphertext: BASE64.encode(ciphertext),
@@ -130,24 +148,16 @@ pub fn open(
     let header = read_header(bytes)?;
     let envelope: Envelope =
         serde_json::from_slice(bytes).map_err(|_| PortabilityError::NotAnArchive)?;
-    let nonce = BASE64
+    let nonce: [u8; NONCE_LEN] = BASE64
         .decode(&header.nonce)
         .ok()
-        .filter(|nonce| nonce.len() == NONCE_LEN)
+        .and_then(|nonce| nonce.try_into().ok())
         .ok_or(PortabilityError::NotAnArchive)?;
     let ciphertext = BASE64
         .decode(&envelope.ciphertext)
         .map_err(|_| PortabilityError::NotAnArchive)?;
     let cipher = cipher_for(&header, password)?;
-    let plaintext = cipher
-        .decrypt(
-            XNonce::from_slice(&nonce),
-            Payload {
-                msg: &ciphertext,
-                aad: envelope.header.as_bytes(),
-            },
-        )
-        .map_err(|_| PortabilityError::WrongPasswordOrDamaged)?;
+    let plaintext = decrypt(&cipher, &nonce, envelope.header.as_bytes(), &ciphertext)?;
     Ok((header, Zeroizing::new(plaintext)))
 }
 
@@ -295,5 +305,111 @@ mod tests {
         assert_eq!(second.len(), NONCE_LEN);
         assert_ne!(first, second);
         assert_ne!(first, vec![0u8; NONCE_LEN]);
+    }
+
+    fn unhex(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// The `XChaCha20-Poly1305` test vector of draft-irtf-cfrg-xchacha-03,
+    /// section A.3.1. `chacha20poly1305` 0.10 produced exactly these bytes;
+    /// any later version must too, or archives would stop opening.
+    #[test]
+    fn the_aead_matches_the_xchacha20poly1305_reference_vector() {
+        let key: Vec<u8> = (0x80..=0x9f).collect();
+        let nonce: [u8; NONCE_LEN] = std::array::from_fn(|i| 0x40 + u8::try_from(i).unwrap());
+        let aad = unhex("50515253c0c1c2c3c4c5c6c7");
+        let plaintext = b"Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.";
+        let expected = unhex(concat!(
+            "bd6d179d3e83d43b9576579493c0e939572a1700252bfaccbed2902c21396cbb",
+            "731c7f1b0b4aa6440bf3a82f4eda7e39ae64c6708c54c216cb96b72e1213b452",
+            "2f8c9ba40db5d945b11b69b982c1bb9e3f3fac2bc369488f76b2383565d3fff9",
+            "21f9664c97637da9768812f615c68b13b52e",
+            // The 16-byte Poly1305 tag, appended to the ciphertext.
+            "c0875924c1c7987947deafd8780acf49",
+        ));
+        let cipher = XChaCha20Poly1305::new_from_slice(&key).unwrap();
+        let ciphertext = encrypt(&cipher, &nonce, &aad, plaintext).unwrap();
+        assert_eq!(ciphertext, expected);
+        assert_eq!(ciphertext.len(), plaintext.len() + 16);
+        let opened = decrypt(&cipher, &nonce, &aad, &expected).unwrap();
+        assert_eq!(opened.as_slice(), plaintext.as_slice());
+    }
+
+    /// An archive sealed by DeckPilot 0.6.0 with `chacha20poly1305` 0.10
+    /// (the fixture password protects nothing else).
+    const ARCHIVE_CHACHA_0_10: &[u8] =
+        include_bytes!("../tests/fixtures/archive-chacha20poly1305-0.10.deckpilot");
+    /// Its plaintext, byte for byte (non-ASCII text included).
+    const ARCHIVE_CHACHA_0_10_PLAINTEXT: &[u8] =
+        include_bytes!("../tests/fixtures/archive-chacha20poly1305-0.10.plaintext");
+    const FIXTURE_PASSWORD: &str = "fixture: not a real password";
+
+    #[test]
+    fn archives_sealed_with_chacha20poly1305_0_10_open_byte_identically() {
+        let (header, plaintext) = open(ARCHIVE_CHACHA_0_10, &password(FIXTURE_PASSWORD)).unwrap();
+        assert_eq!(plaintext.as_slice(), ARCHIVE_CHACHA_0_10_PLAINTEXT);
+        assert_eq!(header.cipher, CIPHER);
+        assert_eq!(header.created_at, 1_763_000_000);
+        assert_eq!(BASE64.decode(&header.nonce).unwrap().len(), NONCE_LEN);
+
+        // Encrypting the same plaintext again with the archive's own key,
+        // nonce and header reproduces its ciphertext exactly: the wire
+        // format (ciphertext || tag, header text as associated data) is
+        // unchanged. This reuses a nonce on purpose, only to compare bytes;
+        // `seal` always draws a fresh one.
+        let envelope: serde_json::Value = serde_json::from_slice(ARCHIVE_CHACHA_0_10).unwrap();
+        let header_text = envelope["header"].as_str().unwrap();
+        let ciphertext = BASE64
+            .decode(envelope["ciphertext"].as_str().unwrap())
+            .unwrap();
+        let nonce: [u8; NONCE_LEN] = BASE64.decode(&header.nonce).unwrap().try_into().unwrap();
+        let cipher = cipher_for(&header, &password(FIXTURE_PASSWORD)).unwrap();
+        let again = encrypt(
+            &cipher,
+            &nonce,
+            header_text.as_bytes(),
+            ARCHIVE_CHACHA_0_10_PLAINTEXT,
+        )
+        .unwrap();
+        assert_eq!(again, ciphertext);
+        assert_eq!(ciphertext.len(), ARCHIVE_CHACHA_0_10_PLAINTEXT.len() + 16);
+
+        // A new archive of the same content round-trips byte for byte, with
+        // a nonce of its own.
+        let resealed = seal(
+            ARCHIVE_CHACHA_0_10_PLAINTEXT,
+            &password(FIXTURE_PASSWORD),
+            KdfParams::for_tests(),
+            1_763_000_000,
+            "0.6.0",
+        )
+        .unwrap();
+        let (new_header, reopened) = open(&resealed, &password(FIXTURE_PASSWORD)).unwrap();
+        assert_eq!(reopened.as_slice(), ARCHIVE_CHACHA_0_10_PLAINTEXT);
+        assert_ne!(new_header.nonce, header.nonce);
+    }
+
+    #[test]
+    fn nonces_of_the_wrong_length_are_refused() {
+        let archive = sealed(b"x");
+        for length in [0, 12, 23, 25, 32] {
+            let mut envelope: serde_json::Value = serde_json::from_slice(&archive).unwrap();
+            let mut header: Header =
+                serde_json::from_str(envelope["header"].as_str().unwrap()).unwrap();
+            header.nonce = BASE64.encode(vec![7u8; length]);
+            envelope["header"] = serde_json::to_string(&header).unwrap().into();
+            let modified = serde_json::to_vec(&envelope).unwrap();
+            assert!(
+                matches!(
+                    open(&modified, &password(export_password())),
+                    Err(PortabilityError::NotAnArchive)
+                ),
+                "a {length}-byte nonce"
+            );
+        }
     }
 }
