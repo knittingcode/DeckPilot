@@ -9,6 +9,8 @@ import type {
   AgentCompatibility,
   AgentConnection,
   AgentStatus,
+  DeviceInfo,
+  DeviceModel,
   ModuleInfo,
   ParameterSpec,
   Profile,
@@ -191,6 +193,36 @@ export function agentConnection(
     appVersion: "0.5.0",
     compatibility: { type: "compatible" },
     status: running ? agentStatus() : null,
+    ...change,
+  }
+}
+
+/** A model of the catalog, the Stream Deck MK.2 unless changed. */
+export function deviceModel(change: Partial<DeviceModel> = {}): DeviceModel {
+  return {
+    id: "elgato.streamdeck.mk2",
+    vendor: "Elgato",
+    name: "Stream Deck MK.2",
+    usb: { vendorId: 0x0fd9, productId: 0x0080 },
+    capabilities: {
+      keys: { rows: 3, columns: 5, image: { width: 72, height: 72, format: "jpeg" } },
+      encoders: null,
+      touch: null,
+    },
+    support: "unverified",
+    ...change,
+  }
+}
+
+/** A connected device as the agent reports it. */
+export function deviceInfo(change: Partial<DeviceInfo> = {}): DeviceInfo {
+  return {
+    id: { model: "elgato.streamdeck.mk2", serial: "SIM-MK2-01" },
+    modelName: "Stream Deck MK.2",
+    state: "connected",
+    layout: { type: "missing" },
+    page: null,
+    source: "mock",
     ...change,
   }
 }
