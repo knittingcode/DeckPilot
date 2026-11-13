@@ -114,7 +114,7 @@ function ReferenceInput({
           onChange(e.target.value)
         }}
       />
-      {Picker && <Picker expected={parameter?.kind} onPick={onChange} />}
+      {Picker && <Picker expected={parameter?.kind} fieldLabel={label} onPick={onChange} />}
     </div>
   )
 }
@@ -148,8 +148,9 @@ export function MappingEditor({
   /** Shared variable definitions, when known, for type checks. */
   definitions?: readonly VariableDefinition[]
   /**
-   * The universal variable picker (workstream F), shown beside every
-   * reference field. Without it references are typed.
+   * The universal variable picker, shown beside every reference field.
+   * Without it (or without the agent's `variables` capability) references
+   * are typed.
    */
   picker?: VariablePicker
   onChange: (mapping: GraphMapping) => void
