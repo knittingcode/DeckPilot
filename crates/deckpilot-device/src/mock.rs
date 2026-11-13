@@ -157,6 +157,10 @@ impl DeviceBackend for MockBackend {
         "mock"
     }
 
+    fn version(&self) -> &'static str {
+        env!("CARGO_PKG_VERSION")
+    }
+
     fn discover(&mut self) -> Result<Vec<DiscoveredDevice>, DeviceError> {
         Ok(self
             .lock()
