@@ -26,6 +26,8 @@
 #   GH             the GitHub CLI (default gh); the tests inject a stub
 #   DECKPILOT_DEV  how to run deckpilot-dev (default: cargo run --locked -q -p deckpilot-dev --)
 #   REQUIRED_CHECKS_FILE  pinned required checks (default: required-checks.txt here)
+#   RELEASE_REF    the ref the workflow runs on (github.ref); if set, it must be
+#                  refs/tags/<tag>
 set -euo pipefail
 
 TAG_PATTERN='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.[1-9][0-9]*)?$'
@@ -46,6 +48,11 @@ fail() {
 # 1. The tag itself.
 [[ "$tag" =~ $TAG_PATTERN ]] \
   || fail "'$tag' is not a release tag: use vX.Y.Z, vX.Y.Z-alpha.N, vX.Y.Z-beta.N or vX.Y.Z-rc.N (no leading zeros, N >= 1)"
+# A run started by hand must run on the tag itself, not on a branch with
+# the tag as a parameter.
+if [ -n "${RELEASE_REF:-}" ] && [ "$RELEASE_REF" != "refs/tags/$tag" ]; then
+  fail "the workflow runs on $RELEASE_REF; run it on the tag: gh workflow run release.yml --ref $tag"
+fi
 version="${tag#v}"
 if [[ "$tag" == *-* ]]; then
   channel=prerelease prerelease=true
