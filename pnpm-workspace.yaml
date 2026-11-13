@@ -1,2 +1,8 @@
 packages:
   - apps/*
+
+overrides:
+  # GHSA-g3hv-75wg-m249 (pattern amplification DoS in minimatch, fixed in
+  # 11.0.1). Only ESLint and typescript-eslint use minimatch, in development;
+  # their ranges still ask for ^10. Remove once they accept a fixed version.
+  "minimatch@>=7.0.0 <11.0.1": 11.0.5
