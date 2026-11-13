@@ -177,6 +177,12 @@ pub enum Resolution {
     Missing(MissingReason),
     /// The caller may not read it.
     PermissionDenied,
+    /// Its owner cannot provide it: the module is disabled, not supported
+    /// here or not installed. The reference itself is kept as it is.
+    Unavailable {
+        /// The module id, or the namespace when no module owns it.
+        owner: String,
+    },
 }
 
 /// Resolves references in an explicit context. The agent holds the real
@@ -293,6 +299,11 @@ pub enum ReferenceStatus {
         found: VariableType,
     },
     PermissionDenied,
+    /// The owner of the variable cannot provide it now (since protocol 9;
+    /// older clients receive `permissionDenied`).
+    Unavailable {
+        owner: String,
+    },
     /// The reference itself is not valid.
     Invalid {
         message: String,
@@ -323,6 +334,7 @@ pub fn preview(resolution: Resolution, expected: Option<&ParameterKind>) -> Refe
         Resolution::UnavailableUntilRuntime => ReferenceStatus::UnavailableUntilRuntime,
         Resolution::Missing(reason) => ReferenceStatus::Missing { reason },
         Resolution::PermissionDenied => ReferenceStatus::PermissionDenied,
+        Resolution::Unavailable { owner } => ReferenceStatus::Unavailable { owner },
     }
 }
 
@@ -376,6 +388,8 @@ pub enum ReferenceProblem {
     },
     PermissionDenied,
     Unavailable,
+    /// The module that owns the variable cannot provide it.
+    OwnerUnavailable(String),
 }
 
 /// A reference that could not be resolved. The message names the parameter
@@ -412,6 +426,10 @@ impl fmt::Display for ReferenceError {
             ReferenceProblem::Unavailable => {
                 write!(f, "{{{{ {reference} }}}} is not available in this run")
             }
+            ReferenceProblem::OwnerUnavailable(owner) => write!(
+                f,
+                "{{{{ {reference} }}}} is unavailable: the `{owner}` module is disabled or not installed"
+            ),
         }
     }
 }
@@ -423,7 +441,9 @@ impl ReferenceError {
             ReferenceProblem::Missing(_) => "reference-missing",
             ReferenceProblem::TypeMismatch { .. } => "reference-type",
             ReferenceProblem::PermissionDenied => "reference-denied",
-            ReferenceProblem::Unavailable => "reference-unavailable",
+            ReferenceProblem::Unavailable | ReferenceProblem::OwnerUnavailable(_) => {
+                "reference-unavailable"
+            }
         }
     }
 }
@@ -451,6 +471,7 @@ pub fn bind(
         Resolution::UnavailableUntilRuntime => Err(error(ReferenceProblem::Unavailable)),
         Resolution::Missing(reason) => Err(error(ReferenceProblem::Missing(reason))),
         Resolution::PermissionDenied => Err(error(ReferenceProblem::PermissionDenied)),
+        Resolution::Unavailable { owner } => Err(error(ReferenceProblem::OwnerUnavailable(owner))),
     }
 }
 

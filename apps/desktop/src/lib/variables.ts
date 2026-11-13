@@ -380,6 +380,12 @@ export function describeStatus(status: ReferenceStatus): StatusDescription {
         label: "Permission denied",
         detail: "This action may not read it.",
       }
+    case "unavailable":
+      return {
+        tone: "error",
+        label: "Unavailable",
+        detail: `The ${status.owner} module is disabled or not installed. The reference is kept.`,
+      }
     case "invalid":
       return { tone: "error", label: "Invalid reference", detail: status.message }
   }

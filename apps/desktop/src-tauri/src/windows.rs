@@ -545,6 +545,7 @@ mod tests {
                     size: WindowSize::Large,
                     blocking: false,
                 }],
+                variables: Vec::new(),
             })))
             .unwrap();
         registry
