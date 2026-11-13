@@ -941,6 +941,7 @@ dependencies = [
  "deckpilot-render",
  "deckpilot-storage",
  "interprocess",
+ "rusqlite",
  "serde_json",
  "tao",
  "thiserror 2.0.21",
