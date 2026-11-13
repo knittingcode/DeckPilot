@@ -712,6 +712,8 @@ export interface ModuleInfo {
   supported: boolean
   configValues: ActionParameters
   actionTypes: ActionType[]
+  /** Read-only variables the module declares, in its own namespace. */
+  variables?: VariableDeclaration[]
 }
 
 export interface MigrationNote {
@@ -1143,6 +1145,8 @@ export type ReferenceStatus =
   | { status: "missing"; reason: MissingReason }
   | { status: "typeMismatch"; found: VariableType }
   | { status: "permissionDenied" }
+  /** The owning module is disabled or not installed (protocol 9). */
+  | { status: "unavailable"; owner: string }
   | { status: "invalid"; message: string }
 
 /** A reference (without braces) to preview, and the parameter it fills. */
@@ -1172,6 +1176,38 @@ export interface CatalogEntry {
   sensitive?: boolean
   dynamic?: boolean
   availability: ReferenceAvailability
+}
+
+// The unified variable registry (deckpilot_core::variables::registry).
+// See docs/variables.md.
+
+/** Who owns a variable: the core, a module (in its namespace) or the user. */
+export type VariableOwner = { kind: "core" } | { kind: "module"; module: string } | { kind: "user" }
+
+/** What the value of a declared variable depends on. */
+export type DeclaredScope =
+  "machine" | "profile" | "project" | "device" | "workflow" | "execution" | "workSession"
+
+/** What must be in the context for a declared variable to have a value. */
+export type Requirement = "project" | "device" | "workflow" | "execution" | "workSession"
+
+/** A read-only variable the core or a module declares. */
+export interface VariableDeclaration {
+  /** Canonical id, e.g. `projects.current.id`. */
+  id: string
+  name: string
+  description?: string
+  valueType: VariableType
+  scope: DeclaredScope
+  requires?: Requirement[]
+  sensitive?: boolean
+  readOnly: boolean
+}
+
+/** An older id that still resolves, and the id to use instead. */
+export interface Deprecation {
+  canonical: string
+  since: string
 }
 
 export interface CatalogFilter {

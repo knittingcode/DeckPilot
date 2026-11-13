@@ -730,6 +730,9 @@ fn the_frontend_mirrors_every_variant() {
         [
             ReferenceStatus::UnavailableUntilRuntime,
             ReferenceStatus::PermissionDenied,
+            ReferenceStatus::Unavailable {
+                owner: String::new(),
+            },
             ReferenceStatus::Missing {
                 reason: MissingReason::NoValue,
             },
@@ -755,6 +758,50 @@ fn the_frontend_mirrors_every_variant() {
                 .to_owned()
         }),
     );
+    for name in names {
+        assert!(
+            FRONTEND_TYPES.contains(&format!("\"{name}\"")),
+            "types.ts lacks \"{name}\""
+        );
+    }
+}
+
+#[test]
+fn the_frontend_mirrors_the_registry() {
+    let names = [
+        DeclaredScope::Machine,
+        DeclaredScope::Profile,
+        DeclaredScope::Project,
+        DeclaredScope::Device,
+        DeclaredScope::Workflow,
+        DeclaredScope::Execution,
+        DeclaredScope::WorkSession,
+    ]
+    .map(|s| s.name().to_owned())
+    .into_iter()
+    .chain(
+        [
+            Requirement::Project,
+            Requirement::Device,
+            Requirement::Workflow,
+            Requirement::Execution,
+            Requirement::WorkSession,
+        ]
+        .map(|r| {
+            serde_json::to_value(r)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned()
+        }),
+    )
+    .chain([VariableOwner::Core, VariableOwner::User].map(|o| {
+        serde_json::to_value(o).unwrap()["kind"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }))
+    .chain(["module".to_owned()]);
     for name in names {
         assert!(
             FRONTEND_TYPES.contains(&format!("\"{name}\"")),
