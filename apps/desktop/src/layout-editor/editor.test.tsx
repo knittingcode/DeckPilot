@@ -46,6 +46,7 @@ const plus: DeviceModel = {
     touch: { zones: 4, image: null, gestures: ["tap"] },
   },
   support: "unverified",
+  verification: [],
 }
 
 const layout: DeviceLayout = {
