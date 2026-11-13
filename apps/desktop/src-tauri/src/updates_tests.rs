@@ -36,16 +36,31 @@ enum Reply {
     Ok(Vec<u8>),
     /// Announces the full length, sends half and closes the connection.
     Truncated(Vec<u8>),
-    /// Sends the headers and half of the body, then nothing for a while.
+    /// Sends the headers and half of the body, then nothing for
+    /// `STALL` (far longer than the short read timeout of the tests that
+    /// use it).
     Stalled(Vec<u8>),
     Status(u16),
 }
 
+/// How long a stalled reply sends nothing.
+const STALL: Duration = Duration::from_secs(30);
+/// Read timeout of the stalled cases: a stall must end the request well
+/// before `STALL`.
+const SHORT_READ_TIMEOUT: Duration = Duration::from_secs(2);
+/// Timeouts of every other request: generous, so that a slow, busy CI
+/// runner (Windows) never turns a normal response into a timeout.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// A minimal HTTP/1.1 server on 127.0.0.1 with replies that can be changed
-/// between requests.
+/// between requests. It is listening when `start` returns, serves every
+/// connection on its own thread (a stalled one never blocks the next), and
+/// records what it saw for failure messages.
 struct Server {
     port: u16,
     replies: Arc<Mutex<HashMap<String, Reply>>>,
+    events: Arc<Mutex<Vec<String>>>,
 }
 
 impl Server {
@@ -53,14 +68,30 @@ impl Server {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let replies: Arc<Mutex<HashMap<String, Reply>>> = Arc::default();
-        let shared = replies.clone();
+        let events: Arc<Mutex<Vec<String>>> = Arc::default();
+        let (shared, seen) = (replies.clone(), events.clone());
         std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let replies = shared.clone();
-                std::thread::spawn(move || serve(stream, &replies));
+            // Keeps accepting after failed accepts too.
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(stream) => {
+                        let (replies, seen) = (shared.clone(), seen.clone());
+                        std::thread::spawn(move || serve(stream, &replies, &seen));
+                    }
+                    Err(error) => record(&seen, &format!("accept failed: {error}")),
+                }
             }
         });
-        Self { port, replies }
+        Self {
+            port,
+            replies,
+            events,
+        }
+    }
+
+    /// Everything the server saw so far, one line per event.
+    fn seen(&self) -> String {
+        self.events.lock().unwrap().join("\n")
     }
 
     fn url(&self, path: &str) -> String {
@@ -75,12 +106,30 @@ impl Server {
     }
 }
 
-fn serve(mut stream: TcpStream, replies: &Mutex<HashMap<String, Reply>>) {
+fn record(events: &Mutex<Vec<String>>, event: &str) {
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    events.lock().unwrap().push(format!("{at} {event}"));
+}
+
+fn serve(
+    mut stream: TcpStream,
+    replies: &Mutex<HashMap<String, Reply>>,
+    events: &Mutex<Vec<String>>,
+) {
     let mut request = Vec::new();
     let mut buffer = [0u8; 1024];
     while !request.windows(4).any(|w| w == b"\r\n\r\n") {
         match stream.read(&mut buffer) {
-            Ok(0) | Err(_) => return,
+            Ok(0) => {
+                record(events, "connection closed before a complete request");
+                return;
+            }
+            Err(error) => {
+                record(events, &format!("reading the request failed: {error}"));
+                return;
+            }
             Ok(n) => request.extend_from_slice(&buffer[..n]),
         }
     }
@@ -92,10 +141,17 @@ fn serve(mut stream: TcpStream, replies: &Mutex<HashMap<String, Reply>>) {
         .get(&path)
         .cloned()
         .unwrap_or(Reply::Status(404));
+    let kind = match &reply {
+        Reply::Ok(_) => "ok".to_owned(),
+        Reply::Truncated(_) => "truncated".to_owned(),
+        Reply::Stalled(_) => "stalled".to_owned(),
+        Reply::Status(code) => format!("status {code}"),
+    };
+    record(events, &format!("GET {path}: {kind}"));
     let head = |status: &str, length: usize| {
         format!("HTTP/1.1 {status}\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n")
     };
-    let _ = match reply {
+    let result = match reply {
         Reply::Ok(body) => stream
             .write_all(head("200 OK", body.len()).as_bytes())
             .and_then(|()| stream.write_all(&body)),
@@ -107,11 +163,18 @@ fn serve(mut stream: TcpStream, replies: &Mutex<HashMap<String, Reply>>) {
                 .write_all(head("200 OK", body.len()).as_bytes())
                 .and_then(|()| stream.write_all(&body[..body.len() / 2]))
                 .and_then(|()| stream.flush());
-            std::thread::sleep(Duration::from_secs(10));
+            std::thread::sleep(STALL);
             sent
         }
         Reply::Status(code) => stream.write_all(head(&format!("{code} Failure"), 0).as_bytes()),
     };
+    match result {
+        Ok(()) => record(events, &format!("GET {path}: {kind} sent")),
+        Err(error) => record(
+            events,
+            &format!("GET {path}: {kind}, writing failed: {error}"),
+        ),
+    }
 }
 
 /// A minisign key pair made for one test.
@@ -200,8 +263,8 @@ impl Harness {
             key: keys.public.clone(),
             endpoint: Endpoint::Manifest(server.url("latest.json")),
             channel: Channel::Stable,
-            connect_timeout: Duration::from_secs(5),
-            read_timeout: Duration::from_secs(1),
+            connect_timeout: CONNECT_TIMEOUT,
+            read_timeout: READ_TIMEOUT,
             executable: Some(dir.join("DeckPilot.app/Contents/MacOS/deckpilot-desktop")),
         };
         Self {
@@ -230,8 +293,25 @@ impl Harness {
             .map_err(|e| e.to_string())
     }
 
+    /// Checks with the short read timeout of the stalled cases (the
+    /// update found carries the timeouts of the check into its download).
+    fn check_with_short_timeout(&mut self) -> Result<Option<String>, String> {
+        self.source.read_timeout = SHORT_READ_TIMEOUT;
+        let result = self.check();
+        self.source.read_timeout = READ_TIMEOUT;
+        result
+    }
+
     fn download(&self) -> Result<(), String> {
         tauri::async_runtime::block_on(download(self.handle())).map_err(|e| e.to_string())
+    }
+
+    /// A download that must succeed; otherwise fails with what the server
+    /// saw.
+    fn download_ok(&self) {
+        if let Err(error) = self.download() {
+            panic!("{error}\nthe test server saw:\n{}", self.server.seen());
+        }
     }
 
     fn phase(&self) -> Phase {
@@ -257,7 +337,11 @@ impl Harness {
     /// The failure left the updater idle, showing `message`, with no
     /// package kept, and ready for the next attempt.
     fn assert_failed_cleanly(&self, error: &str, expected: &str) {
-        assert!(error.contains(expected), "{error}");
+        assert!(
+            error.contains(expected),
+            "{error}\nexpected: {expected}\nthe test server saw:\n{}",
+            self.server.seen()
+        );
         assert_eq!(self.phase(), Phase::Idle);
         assert!(may_start(self.phase()));
         assert_eq!(self.shown_error().as_deref(), Some(error));
@@ -280,7 +364,7 @@ fn a_correctly_signed_update_is_downloaded_and_verified() {
 
     assert_eq!(h.check(), Ok(Some(VERSION.to_owned())));
     assert_eq!(h.phase(), Phase::Idle);
-    h.download().unwrap();
+    h.download_ok();
     assert_eq!(h.phase(), Phase::Ready);
     assert_eq!(h.shown_error(), None);
     assert_eq!(
@@ -347,7 +431,7 @@ fn the_prerelease_channel_offers_the_newest_release_and_moves_on_to_stable() {
     );
     h.server.reply("package", Reply::Ok(package.clone()));
     assert_eq!(h.check(), Ok(Some(alpha.to_owned())));
-    h.download().unwrap();
+    h.download_ok();
     assert_eq!(h.phase(), Phase::Ready);
 
     // Once the stable release is out, it is what the channel offers.
@@ -436,7 +520,7 @@ fn a_malformed_signature_is_rejected() {
 
 #[test]
 fn interrupted_downloads_fail_cleanly_and_can_be_retried() {
-    let h = Harness::new();
+    let mut h = Harness::new();
     let package = vec![7u8; 256 * 1024];
     let signature = sign(&h.keys, &package, VERSION);
     h.offer(&package, &signature);
@@ -449,24 +533,27 @@ fn interrupted_downloads_fail_cleanly_and_can_be_retried() {
 
     // The server stops sending: the read timeout ends the download instead
     // of keeping the updater busy forever.
+    h.check_with_short_timeout().unwrap();
     h.server.reply("package", Reply::Stalled(package.clone()));
     let started = Instant::now();
     let error = h.download().unwrap_err();
     assert!(
-        started.elapsed() < Duration::from_secs(8),
-        "{:?}",
-        started.elapsed()
+        started.elapsed() < STALL / 2,
+        "{:?}\nthe test server saw:\n{}",
+        started.elapsed(),
+        h.server.seen()
     );
     h.assert_failed_cleanly(&error, "stopped responding");
 
-    // The server refuses.
+    // The server refuses (checked again with the normal timeouts).
+    h.check().unwrap();
     h.server.reply("package", Reply::Status(503));
     let error = h.download().unwrap_err();
     h.assert_failed_cleanly(&error, "could not be reached or refused");
 
     // Nothing partial was kept: the next attempt starts over and succeeds.
     h.server.reply("package", Reply::Ok(package.clone()));
-    h.download().unwrap();
+    h.download_ok();
     assert_eq!(h.phase(), Phase::Ready);
     assert_eq!(
         h.handle().state::<UpdateManager>().lock().bytes.as_deref(),
@@ -476,7 +563,7 @@ fn interrupted_downloads_fail_cleanly_and_can_be_retried() {
 
 #[test]
 fn failed_checks_leave_the_updater_usable() {
-    let h = Harness::new();
+    let mut h = Harness::new();
     let cases = [
         (
             Reply::Ok(b"<html>Sign in to the network</html>".to_vec()),
@@ -489,9 +576,18 @@ fn failed_checks_leave_the_updater_usable() {
         ),
     ];
     for (reply, expected) in cases {
+        let stalled = matches!(reply, Reply::Stalled(_));
         h.server.reply("latest.json", reply);
-        let error = h.check().unwrap_err();
-        assert!(error.contains(expected), "{error}");
+        let error = if stalled {
+            h.check_with_short_timeout().unwrap_err()
+        } else {
+            h.check().unwrap_err()
+        };
+        assert!(
+            error.contains(expected),
+            "{error}\nexpected: {expected}\nthe test server saw:\n{}",
+            h.server.seen()
+        );
         assert_eq!(h.phase(), Phase::Idle);
         assert_eq!(h.shown_error().as_deref(), Some(&error[..]));
         assert!(h.log().contains(&error));
@@ -595,7 +691,7 @@ mod install {
         h.source.executable = Some(executable);
         h.offer(package, &sign(&h.keys, package, VERSION));
         h.check().unwrap();
-        h.download().unwrap();
+        h.download_ok();
     }
 
     /// A real agent with a simulated device on its own runtime.

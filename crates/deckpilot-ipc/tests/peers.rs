@@ -124,7 +124,7 @@ async fn a_protocol_4_agent_is_used_with_protocol_4_only() {
         .await
         .unwrap();
     // The client stepped down from its own protocol until accepted.
-    assert_eq!(*peer.hellos.lock().unwrap(), [7, 6, 5, 4]);
+    assert_eq!(*peer.hellos.lock().unwrap(), [8, 7, 6, 5, 4]);
     assert_eq!(client.protocol(), 4);
     assert_eq!(client.agent_protocol(), 4);
     assert_eq!(client.agent_version(), "0.5.0-2");
@@ -183,7 +183,7 @@ async fn agents_older_than_protocol_4_need_replacing() {
         "{refused:?}"
     );
     // It never went below the oldest protocol the app works with.
-    assert_eq!(*peer.hellos.lock().unwrap(), [7, 6, 5, 4]);
+    assert_eq!(*peer.hellos.lock().unwrap(), [8, 7, 6, 5, 4]);
     // Protocol 1 still works for stopping it during an update.
     let mut stopper = AgentClient::connect_with_protocol(&peer.paths, ClientKind::Desktop, 1)
         .await
@@ -248,7 +248,7 @@ async fn a_protocol_6_agent_is_never_asked_about_variables() {
     let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
         .await
         .unwrap();
-    assert_eq!(*peer.hellos.lock().unwrap(), [7, 6]);
+    assert_eq!(*peer.hellos.lock().unwrap(), [8, 7, 6]);
     assert_eq!(client.protocol(), 6);
     assert!(client.supports(Capability::Notifications));
     assert!(!client.supports(Capability::Variables));
@@ -271,6 +271,59 @@ async fn a_protocol_6_agent_is_never_asked_about_variables() {
                 Err(ClientError::Unsupported {
                     needs: 7,
                     protocol: 6,
+                    ..
+                })
+            ),
+            "{refused:?}"
+        );
+    }
+    // Refused before anything was sent.
+    assert_eq!(peer.received.lock().unwrap().len(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_protocol_7_agent_is_never_asked_about_the_work_session() {
+    let peer = peer(7, "0.6.0");
+    let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    assert_eq!(*peer.hellos.lock().unwrap(), [8, 7]);
+    assert_eq!(client.protocol(), 7);
+    assert!(client.supports(Capability::Variables));
+    assert!(!client.supports(Capability::WorkSession));
+    let profile = deckpilot_core::ProfileId::new();
+    for request in [
+        Request::GetWorkSession,
+        Request::ListWorkSessions {
+            limit: 10,
+            before: None,
+        },
+        Request::GetWorkSessionSettings { profile },
+        Request::SaveWorkSessionSettings {
+            settings: Box::new(deckpilot_ipc::work_session::WorkSessionSettings {
+                profile,
+                start_workflow: None,
+                verification_workflow: None,
+                approval_ttl_seconds: 600,
+                review_gap_seconds: 900,
+                elapsed_format: deckpilot_ipc::work_session::ElapsedFormat::Minutes,
+                updated_at_ms: None,
+            }),
+        },
+        Request::ResolveWorkSessionReview {
+            session: deckpilot_core::WorkSessionId::new(),
+            review: 1,
+            count: false,
+        },
+        Request::ClearWorkSessionNotices { session: None },
+    ] {
+        let refused = client.request(request).await;
+        assert!(
+            matches!(
+                &refused,
+                Err(ClientError::Unsupported {
+                    needs: 8,
+                    protocol: 7,
                     ..
                 })
             ),
