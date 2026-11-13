@@ -48,11 +48,12 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Run on a tag only: `gh workflow run release.yml --ref <tag>`. Started on
+  # a branch, the gate refuses it (the ref must be refs/tags/<release tag>)
+  # before any job that holds a secret, and the production-release
+  # environment's deployment rule allows tags v* only.
   workflow_dispatch:
     inputs:
-      tag:
-        description: Existing release tag, e.g. v0.6.0-alpha.1
-        required: true
       publish_only:
         description: Skip stage A and run stage B (publish and verify) on the existing draft or published release
         type: boolean
@@ -63,12 +64,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
-  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  TAG: ${{ github.ref_name }}
 
 jobs:
   # The release gate (tools/release-pipeline/validate-tag.sh): the tag is
@@ -79,6 +80,7 @@ jobs:
   validate-tag:
     name: Validate the release tag
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       checks: read
@@ -90,7 +92,7 @@ jobs:
       msi_version: ${{ steps.gate.outputs.msi_version }}
       manifest: ${{ steps.gate.outputs.manifest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: refs/tags/${{ env.TAG }}
           fetch-depth: 0
@@ -104,12 +106,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
+          RELEASE_REF: ${{ github.ref }}
         run: tools/release-pipeline/validate-tag.sh "$TAG"
 
   prepare:
     name: Check configuration and release notes
     needs: validate-tag
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Reads the signing secrets (presence and form only).
     environment: production-release
     # Reads only; the draft is created by the draft job.
@@ -119,7 +123,7 @@ jobs:
       macos-signing: ${{ steps.macos.outputs.signing }}
       notes: ${{ steps.notes.outputs.notes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.validate-tag.outputs.sha }}
       - name: Install Rust toolchain
@@ -185,7 +189,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.validate-tag.outputs.sha }}
           fetch-depth: 0
@@ -203,12 +207,13 @@ jobs:
     needs: [validate-tag, prepare]
     if: ${{ !inputs.publish_only }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     outputs:
       release-id: ${{ steps.draft.outputs.release_id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.validate-tag.outputs.sha }}
           persist-credentials: false
@@ -242,13 +247,14 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     permissions:
       contents: write
       # Build provenance attestations for the release artifacts.
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.validate-tag.outputs.sha }}
       - name: Install Linux system dependencies
@@ -259,14 +265,12 @@ jobs:
         run: |
           rustup toolchain install
           rustup target add ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: release-${{ matrix.target }}
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      # No cache: this job holds the signing secrets, and caches written by
+      # other workflows (pull requests included) must not feed its build.
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
-          cache: pnpm
       - run: pnpm install --frozen-lockfile
       # The vendored OpenSSL (SQLCipher) is configured with Perl. Bash steps
       # on Windows would find Git's minimal Perl, which lacks modules the
@@ -328,7 +332,7 @@ jobs:
             { echo "$name<<$delimiter"; echo "${!name}"; echo "$delimiter"; } >> "$GITHUB_ENV"
           done
       - name: Build and upload the application
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -364,7 +368,7 @@ jobs:
           "target/${{ matrix.target }}/release/bundle"
           "$RUNNER_TEMP/updater-fragment/${{ matrix.target }}.json"
       - name: Upload the updater manifest fragment
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: updater-fragment-${{ matrix.target }}
           path: ${{ runner.temp }}/updater-fragment/${{ matrix.target }}.json
@@ -464,7 +468,7 @@ jobs:
             > "$RUNNER_TEMP/signing/${{ matrix.target }}.json"
           echo "### ${{ matrix.target }}: packages carry no code signature (updater artifacts are signed)" >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the signing record
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: signing-${{ matrix.target }}
           path: ${{ runner.temp }}/signing/${{ matrix.target }}.json
@@ -473,7 +477,7 @@ jobs:
       # Signed statement that these files were built by this workflow from
       # this tag; verify with `gh attestation verify <file> --repo <owner/repo>`.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
             target/${{ matrix.target }}/release/bundle/**/*.dmg
@@ -497,15 +501,16 @@ jobs:
     name: Assemble the update manifest
     needs: [validate-tag, prepare, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Attaches the manifest to the draft.
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.validate-tag.outputs.sha }}
       - name: Download the updater manifest fragments
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: updater-fragment-*
           merge-multiple: true
@@ -529,11 +534,12 @@ jobs:
     name: Verify the draft and attach checksums
     needs: [validate-tag, prepare, draft, compatibility, manifest]
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     # Attaches release-meta.json, the notes and SHA256SUMS to the draft.
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.validate-tag.outputs.sha }}
       - name: Install Rust toolchain
@@ -568,7 +574,7 @@ jobs:
           done
           [ -z "$missing" ] || { echo "::error::$MANIFEST has no update for:$missing"; exit 1; }
       - name: Download the signing records
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: signing-*
           merge-multiple: true
@@ -622,10 +628,11 @@ jobs:
     needs: [validate-tag, verify]
     if: ${{ always() && needs.validate-tag.result == 'success' && (needs.verify.result == 'success' || (inputs.publish_only && needs.verify.result == 'skipped')) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.validate-tag.outputs.sha }}
           persist-credentials: false
@@ -642,11 +649,12 @@ jobs:
     name: Publish and verify
     needs: [validate-tag, publish-gate]
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     environment: production-release
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.validate-tag.outputs.sha }}
           persist-credentials: false
