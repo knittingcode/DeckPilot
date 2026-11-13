@@ -6,7 +6,7 @@ export interface TargetOption {
   value: string
   label: string
   target: BindingTarget
-  kind: "action" | "workflow" | "navigation"
+  kind: "action" | "workflow" | "navigation" | "stateful"
   icon?: string | null
 }
 
@@ -26,6 +26,8 @@ export function encodeTarget(target: BindingTarget | undefined): string {
       return `page:${target.page}`
     case "back":
       return "back"
+    case "stateful":
+      return `stateful:${target.machine}`
   }
 }
 
@@ -37,6 +39,7 @@ export function decodeTarget(value: string): BindingTarget | null {
   if (kind === "action") return { type: "action", action: id }
   if (kind === "workflow") return { type: "workflow", workflow: id }
   if (kind === "page") return { type: "openPage", page: id }
+  if (kind === "stateful" && id === "workSession") return { type: "stateful", machine: id }
   return null
 }
 
@@ -77,4 +80,27 @@ export function targetGroups(
     },
   ]
   return groups.filter((g) => g.options.length > 0)
+}
+
+/**
+ * Targets offered only on gesture rows (single click, double click, long
+ * press), after `targetGroups`: the Work Session controller, a stateful key
+ * with the machine's default rules. It needs no action instance; the agent
+ * asks the work session for the operation its state and the gesture pick.
+ */
+export function gestureOnlyGroups(): TargetGroup[] {
+  const target: BindingTarget = { type: "stateful", machine: "workSession" }
+  return [
+    {
+      label: "Work Session",
+      options: [
+        {
+          value: encodeTarget(target),
+          label: "Work Session controller",
+          target,
+          kind: "stateful",
+        },
+      ],
+    },
+  ]
 }

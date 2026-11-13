@@ -16,6 +16,12 @@ path = "src/lib.rs"
 name = "deckpilot-agent"
 path = "src/main.rs"
 
+[features]
+# Entry points of the work session for agent tests, until key gestures
+# drive them. Never part of a release build: the configuration app has no
+# way to start, verify or finish a session (decision D11).
+test-hooks = []
+
 [dependencies]
 auto-launch.workspace = true
 chrono.workspace = true
@@ -39,6 +45,7 @@ tracing-subscriber.workspace = true
 tray-icon.workspace = true
 
 [dev-dependencies]
+deckpilot-agent = { path = ".", features = ["test-hooks"] }
 deckpilot-render.workspace = true
 zeroize.workspace = true
 deckpilot-modules.workspace = true

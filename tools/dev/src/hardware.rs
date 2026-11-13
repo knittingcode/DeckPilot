@@ -135,7 +135,7 @@ fn test_profile(prefix: &str, keys: u16, catalog: &ModelCatalog) -> Result<Profi
             page.bindings.push(ControlBinding {
                 control: ControlId::Key { index },
                 trigger,
-                target: BindingTarget::Action { action: action.id },
+                target: BindingTarget::action(action.id),
                 label: Some(label.clone()),
                 appearance: None,
             });

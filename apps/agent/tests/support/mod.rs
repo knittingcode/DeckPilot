@@ -103,6 +103,8 @@ pub struct TestAgent {
     pub paths: AgentPaths,
     pub key: DatabaseKey,
     pub mock: MockBackend,
+    /// In-process access, e.g. to the work session.
+    pub handle: deckpilot_agent::AgentHandle,
     task: Option<JoinHandle<Result<(), AgentError>>>,
     stop: Option<oneshot::Sender<()>>,
     /// Ends the test binary if the test hangs.
@@ -126,17 +128,16 @@ impl TestAgent {
         mock: &MockBackend,
         clock: Option<Clock>,
     ) -> Self {
-        Self::start_with_variables(paths, key, mock, clock, None)
+        Self::start_with_gestures(paths, key, mock, clock, None)
     }
 
-    /// [`TestAgent::start`] with shared variables (held in memory until the
-    /// database stores them).
-    pub fn start_with_variables(
+    /// [`TestAgent::start`] with keys put in gesture mode by `gestures`.
+    pub fn start_with_gestures(
         paths: &AgentPaths,
         key: &DatabaseKey,
         mock: &MockBackend,
         clock: Option<Clock>,
-        variables: Option<deckpilot_agent::SharedVariables>,
+        gestures: Option<std::sync::Arc<dyn deckpilot_agent::GestureHooks>>,
     ) -> Self {
         let lock = InstanceLock::acquire_waiting(&paths.lock_file, Duration::from_secs(2)).unwrap();
         let options = AgentOptions {
@@ -155,9 +156,10 @@ impl TestAgent {
             screen_lock: None,
         };
         let mut agent = Agent::start(options, lock).unwrap();
-        if let Some(variables) = variables {
-            agent = agent.with_shared_variables(variables);
+        if let Some(gestures) = gestures {
+            agent = agent.with_gesture_hooks(gestures);
         }
+        let handle = agent.handle();
         let (stop, stopped) = oneshot::channel::<()>();
         let task = tokio::spawn(agent.run(async move {
             let _ = stopped.await;
@@ -166,6 +168,7 @@ impl TestAgent {
             paths: paths.clone(),
             key: key.clone(),
             mock: mock.clone(),
+            handle,
             task: Some(task),
             stop: Some(stop),
             _watchdog: watchdog::Watchdog::new(
