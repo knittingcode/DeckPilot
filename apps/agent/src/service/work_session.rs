@@ -47,7 +47,7 @@ use deckpilot_core::{
 use deckpilot_ipc::SecurityState;
 use deckpilot_storage::SqliteStore;
 use deckpilot_storage::work_sessions::{
-    GapKind, NewWorkSession, Refusal, SessionStatus, Transition, VerificationResult,
+    ElapsedFormat, GapKind, NewWorkSession, Refusal, SessionStatus, Transition, VerificationResult,
     WorkSessionRecord, WorkSessionSettings,
 };
 use tokio::sync::watch;
@@ -309,6 +309,13 @@ impl WorkSessions {
     pub(crate) fn snapshot(&self) -> WorkSessionSnapshot {
         self.snapshot.borrow().clone()
     }
+
+    /// How the active session's profile shows elapsed time on keys.
+    pub(crate) fn elapsed_format(&self) -> ElapsedFormat {
+        self.settings
+            .as_ref()
+            .map_or(ElapsedFormat::Minutes, |s| s.elapsed_format)
+    }
 }
 
 fn millis(time: SystemTime) -> i64 {
@@ -339,7 +346,7 @@ fn comparable(settings: &WorkSessionSettings) -> WorkSessionSettings {
 }
 
 impl Agent {
-    fn wall_ms(&self) -> i64 {
+    pub(super) fn wall_ms(&self) -> i64 {
         millis((self.options.clock)())
     }
 

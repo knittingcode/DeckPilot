@@ -21,7 +21,7 @@ use deckpilot_core::work_session::{
     WorkSessionProblem, WorkSessionSnapshot, WorkSessionState as S,
 };
 use deckpilot_core::{
-    BindingTarget, ControlBinding, DeviceLayout, FaceStyle, KeyFace, PageId, Profile,
+    BindingTarget, ControlBinding, DeviceLayout, FaceStyle, Indicator, KeyFace, PageId, Profile,
     RuntimeOutcome, Trigger, Workflow, WorkflowId,
 };
 use deckpilot_device::mock::MockBackend;
@@ -255,12 +255,22 @@ async fn stays(agent: &TestAgent, before: &WorkSessionSnapshot) {
     );
 }
 
-fn plain_face() -> KeyFace {
-    KeyFace::new(FaceStyle::Action, "Work Session")
+/// The key's face (W4) with `title`, `detail` and `indicator`.
+fn face(title: &str, detail: Option<&str>, indicator: Option<Indicator>) -> KeyFace {
+    KeyFace {
+        detail: detail.map(str::to_owned),
+        indicator,
+        ..KeyFace::new(FaceStyle::Action, title)
+    }
 }
 
-fn hint_face(hint: &str) -> KeyFace {
-    plain_face().with_detail(hint)
+fn idle_face() -> KeyFace {
+    face("Start Work", None, None)
+}
+
+/// Working, in the first minute, with `detail` (a hint or "Working").
+fn working_face(detail: &str, indicator: Indicator) -> KeyFace {
+    face("0:00", Some(detail), Some(indicator))
 }
 
 fn sessions(agent: &TestAgent) -> Vec<deckpilot_storage::work_sessions::WorkSessionSummary> {
@@ -291,7 +301,7 @@ async fn the_key_starts_verifies_and_finishes_a_session() {
     let agent = f.agent().await;
     f.configure(&agent, |s| s.verification_workflow = Some(check_id))
         .await;
-    f.wait_face(&plain_face());
+    f.wait_face(&idle_face());
 
     // Idle: a click starts.
     f.click();
@@ -370,7 +380,7 @@ async fn a_rejected_verification_keeps_working_and_the_timer() {
     // verify; the key says how.
     tokio::time::sleep(SETTLE).await;
     f.long_press().await;
-    f.wait_face(&hint_face("Click to check"));
+    f.wait_face(&working_face("Click to check", Indicator::Warning));
     stays(&agent, &back).await;
     assert_eq!(runs(&agent, check_id).await, 1);
     agent.shutdown().await;
@@ -392,7 +402,7 @@ async fn without_verification_a_click_hints_and_a_long_press_approves() {
     tokio::time::sleep(SETTLE).await;
     // D12: a click does nothing but say how.
     f.click();
-    f.wait_face(&hint_face("Hold to finish"));
+    f.wait_face(&working_face("Hold to finish", Indicator::Ok));
     stays(&agent, &working).await;
     // A long press approves at once; its release does not click, so it
     // does not finish.
@@ -402,7 +412,7 @@ async fn without_verification_a_click_hints_and_a_long_press_approves() {
     f.click();
     stays(&agent, &ready).await;
     // The hint is gone with the state it belonged to.
-    f.wait_face(&plain_face());
+    f.wait_face(&face("Finish Work", Some("0:00"), Some(Indicator::Ok)));
     // A long press in ready approves again at once (D12): a fresh
     // approval with its own arming delay.
     tokio::time::sleep(SETTLE).await;
@@ -489,7 +499,7 @@ async fn a_profile_change_drops_the_press_and_keeps_the_session() {
         })
         .await
         .unwrap();
-    f.wait_face(&plain_face());
+    f.wait_face(&working_face("Working", Indicator::Ok));
     f.long_press().await;
     let ready = wait_state(&agent, S::ReadyToFinish).await;
     assert_eq!(ready.session, working.session);
@@ -518,7 +528,7 @@ async fn a_disconnect_drops_the_press_and_keeps_the_session() {
 
     f.mock.plug(&models::stream_deck_mk2(), "STATEFUL-1");
     f.wait_connected(&agent).await;
-    f.wait_face(&plain_face());
+    f.wait_face(&working_face("Working", Indicator::Ok));
     assert_eq!(snapshot(&agent).session, working.session);
     f.long_press().await;
     let ready = wait_state(&agent, S::ReadyToFinish).await;
@@ -589,7 +599,7 @@ async fn after_a_restart_in_each_state_the_key_does_the_right_thing() {
     let back = snapshot(&agent);
     assert_eq!((back.state, back.approval), (S::Working, None));
     f.click();
-    f.wait_face(&hint_face("Hold to finish"));
+    f.wait_face(&working_face("Hold to finish", Indicator::Warning));
     stays(&agent, &back).await;
     f.long_press().await;
     wait_state(&agent, S::ReadyToFinish).await;
