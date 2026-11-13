@@ -1,9 +1,9 @@
 import { ChevronLeft, ChevronRight } from "lucide-react"
-import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
 import type { Project } from "@/lib/types"
 
@@ -24,7 +24,7 @@ export function ProjectSwitcher({
   const isActiveProfile = profiles.activeProfileId === profileId
   const run = (operation: () => Promise<unknown>) => {
     operation().then(refresh, (error: unknown) => {
-      toast.error(errorMessage(error))
+      toastFailure("The project was not switched", error)
     })
   }
   if (projects.length === 0) {

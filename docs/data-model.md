@@ -118,16 +118,51 @@ bound on this machine, kind mismatch.
 - **DeviceLayout** – `id`, `name`, `model`, `homePage`, `pages` (in
   order), optional `explicitTree` (see [Pages and folders](#pages-and-folders)).
 - **LayoutPage** – `id`, `name`, optional `parent` (the folder it is in),
-  `bindings: ControlBinding[]`.
+  `bindings: ControlBinding[]`, optional `gestures: KeyGestureSettings[]`
+  (`control`, optional `doubleClickMs` 150–1000, optional `longPressMs`
+  300–5000; unset values use this computer's defaults, setting
+  `gestures.defaults`, 300 and 700 ms).
 - **ControlBinding** – `control`, `trigger` (`press`, `release`,
-  `rotateClockwise`, `rotateCounterClockwise`, `touch { gesture }`), `target`
-  (`action`, `workflow`, `openPage`, `back`), optional `label`, optional
-  `appearance` (see [Key appearance](#key-appearance)).
+  `rotateClockwise`, `rotateCounterClockwise`, `touch { gesture }`, `click`,
+  `doubleClick`, `longPress`), `target` (`action { action, overrides? }`,
+  `workflow`, `openPage`, `back`, `stateful { machine, rules? }`), optional
+  `label`, optional `appearance`
+  (see [Key appearance](#key-appearance)).
 
 Folders are pages opened with `openPage` and left with `back`. Layout
 validation checks that controls and triggers exist on the model, that each
 control/trigger pair is bound at most once per page, that targets exist and
 that icons a binding shows are in the profile (`MissingIcon`).
+
+**Gestures** (see `docs/gestures-and-work-session.md`). `press` and
+`release` are raw edges and fire at once; every binding from before 0.7 is
+one and stays one. `click`, `doubleClick` and `longPress` are recognized by
+the agent's gesture engine, each with its own target; a control on a page
+uses one kind or the other (`MixedTriggers`), and gestures need a control
+that can be pressed and released. A click fires on the press when nothing
+else is bound, on the release when a long press is, and after the
+double-click window only when a double click is. `overrides` of an action
+target replace some of the saved instance's parameters for that binding
+only, with literals, `reference` or `template` values resolved when it
+fires (no node outputs); they are checked like a workflow node's
+overrides when the layout is saved (`InvalidOverrides`). A key's face shows
+its `press` binding, else its `click` binding. Deleting an action is refused
+while any binding, of any trigger, runs it.
+
+**Stateful keys** (`deckpilot_core::stateful`). A `stateful` target asks a
+built-in state machine for an operation; the only machine is `workSession`.
+`rules` is a list of `{ state, gesture, operation }` with the machine's own
+names (`idle`, `working`, … and `start`, `verify`, `finish`, …), and no
+expressions; without `rules` the machine's default table applies and is not
+stored. The agent picks the rule from the machine's state at the press of
+the gesture and lets the machine apply it, so the binding never sets state.
+Validation: a stateful target only on `click`, `doubleClick` or `longPress`
+(`StatefulNeedsGesture`); every stateful binding of a key has the same
+machine and rules (`InconsistentStateful`); and each rule's operation is
+allowed in its state, each `(state, gesture)` appears once, its gesture is
+bound to the machine on that key, and `finish` is only a `click`
+(`InvalidStateful`). A stateful key references no action, workflow or
+project, and travels with its layout on export and import unchanged.
 
 A profile uses its first layout for a model. `DeviceLayout::generate` creates
 one from the profile's actions and workflows using only the model's
@@ -284,7 +319,7 @@ App commands (Tauri):
 | `delete_icon` | `profileId`, `iconId` | — (refused while in use) |
 | `preview_layout` | as before, plus optional `render` | `ControlFace[]`; with `render: true` each also has `image`, the key as the device shows it (PNG `data:` URL at the model's image size) |
 
-## Storage schema (version 7)
+## Storage schema (version 9)
 
 Migrations run in a transaction each; a failed migration leaves the database
 unchanged.
@@ -304,13 +339,27 @@ unchanged.
   (e.g. an HTTP request's `credential`). They are machine-local: not part of
   profiles, machine configuration or module settings, never exported, and
   never sent to the configuration app after saving.
+- **Migration 8** adds `shared_variables`, `shared_variable_values` and
+  `provenance` (see [Shared variables](#shared-variables) and
+  [Provenance](#provenance)). It is additive: no profile document is
+  rewritten, and no provenance or variable is created for existing data.
+- **Migration 9** adds the work session tables `work_session_settings`,
+  `work_sessions`, `work_session_intervals`, `work_session_reviews` and
+  `work_session_transitions` (see [Work sessions](#work-sessions)). It is
+  additive: the new tables start empty and nothing else changes.
 
 Since version 0.4 the database is encrypted with SQLCipher; see
 [security.md](security.md). Every upgrade of an existing database is
 preceded by an integrity check and a verified, encrypted backup in
 `backups/`, runs in one `IMMEDIATE` transaction that re-reads the version
 (two processes opening an old database at once cannot both migrate it), and
-is verified afterwards.
+is verified afterwards. The upgrade is recorded in `migration_history` as
+`unverified` in the same transaction and becomes `ok` only once the
+committed database passes its integrity check. If the check fails (or the
+process stops before it ran), the database stays upgraded but is refused
+with `MigrationFailed`, naming the backup, on every start until a check
+passes; it is never used unchecked, and nothing is upgraded or backed up
+again. Restoring the named backup returns to the previous state.
 
 | Table              | Purpose                                              |
 | ------------------ | ---------------------------------------------------- |
@@ -327,6 +376,14 @@ is verified afterwards.
 | `module_schemas`   | Schema version of each module's own tables            |
 | `workflow_executions` | Execution history: summary and safe node reports     |
 | `credentials`      | Named secrets with a description; this computer only  |
+| `shared_variables` | Shared variable definitions: key, type, allowed scopes, default, `sensitive`, declaring module, origin |
+| `shared_variable_values` | Values per scope key: global, a profile, or a project of that profile |
+| `provenance`       | Where seeded or imported items came from, with a snapshot as created |
+| `work_session_settings` | Per profile: start and verification workflow, approval lifetime, review threshold, elapsed format |
+| `work_sessions`    | Work sessions: state, times, last verification, approval, heartbeat, notice; at most one active |
+| `work_session_intervals` | Counted stretches of time of a session |
+| `work_session_reviews` | Gaps of uncertain time flagged for review, and how they were resolved |
+| `work_session_transitions` | Audit log of every state change of a session |
 
 Constraints keep projects inside their profile:
 
@@ -338,6 +395,131 @@ Constraints keep projects inside their profile:
   disappear with the project.
 - Saving a profile whose project id belongs to another profile fails
   (`ProjectOfAnotherProfile`) and writes nothing.
+
+### Shared variables
+
+Definitions are database-wide (`shared_variables`, keyed by the variable key
+without `shared.`, e.g. `projects.favorite`); values live in
+`shared_variable_values`, at most one per scope key (unique index over key,
+scope, profile and project). Values of the execution scope exist only during
+a run and are never stored.
+
+- Every write is checked with `VariableDefinition::check_value`: the value's
+  type and that the definition allows the scope. A definition without scopes
+  or with a default of the wrong type is refused.
+- A profile value needs an existing profile. A project value references
+  `projects (profile_id, id)` with a composite foreign key, so it can only
+  name a project of its own profile, and disappears with the project or the
+  profile. `projectId`/`profileId` values of a profile or project must name
+  that profile's own data.
+- Keys follow `VariableKey` (2–4 segments, lowercase start); the reserved
+  roots `steps`, `system` and `workflow` cannot be keys at all, also not
+  through a crafted row (unreadable rows are ignored). Keys a module
+  declares (`declare_module_variables`, `module_id` set) belong to the
+  module: a user variable cannot take, change or delete them, and a module
+  cannot take a key a user variable or another module holds (reported, the
+  holder is left alone). Users may use a module's group for other keys
+  (`projects.favorite`).
+- Changing a definition so that stored values would no longer fit (another
+  type, a scope removed) is refused (`VariableValuesConflict`); values are
+  never dropped silently. Deleting a variable deletes its values.
+- A variable that is still used cannot be deleted, and its type cannot
+  change (`VariableInUse`, with every use). `shared_variable_references`
+  lists the uses in all profiles: reference and template parameter values
+  of actions, step and node overrides, workflow mappings (template and
+  whole-value), key and action labels, inline actions of bindings, and —
+  indirectly — the triggers of the workflows that use it. Plain text
+  values are never parsed, so `{{` in them is no use.
+- A `secretRef` value is the name of a credential, never the secret, which
+  stays in `credentials`. `sensitive` marks values that are only ever shown
+  redacted.
+- Values are literals and are never expanded again: `"{{ shared.a.b }}"`
+  stored as a value is that text, so values cannot form cycles.
+- `SqliteStore::shared_variables_for(profile)` returns a snapshot of the
+  definitions, the global values and the values of that profile and its
+  projects (never another profile's); its `resolve` applies the precedence
+  execution > project > profile > global > default and resolves a
+  `projectId`/`profileId` naming another profile as missing. A value changed
+  later is seen by the next snapshot.
+- Exports (payload version 2) carry the user's definitions and the values
+  of the exported profiles and their projects; global values only with the
+  application settings; values and defaults of sensitive variables never
+  (decision D5, see [security.md](security.md#encrypted-exports)). An import
+  creates missing definitions (origin `import`), keeps existing ones, and
+  sets values in the same transaction as the profiles.
+
+### Provenance
+
+`provenance` records items the user did not create: `(profile_id, entity,
+entity_id)` with `entity` one of `action`, `workflow`, `layout`, `project`,
+`variable`, the `origin` (`seed`, `import`, `migration`), the catalog and a
+stable `seed_key`, and `snapshot`, the canonical JSON of the item without
+its id (keys sorted) as created. No row means the user created the item;
+profile documents are not changed. An item is *edited* when its canonical
+JSON differs from the snapshot (`provenance_status`). Rows go away with the
+item (saving a profile without it) and with the profile.
+
+The development seed (`tools/dev`) records a row for every action, workflow,
+layout and project it creates (catalog `dev-seed`, keys such as
+`work.action.next-project`). Only newly created data gets provenance. Data from before schema 8 —
+including seeded data of development databases, such as the
+`v0.5.0-2` fixture — has none and is treated as the user's: nothing removes
+it automatically.
+
+### Work sessions
+
+The work session the agent runs (design: `docs/gestures-and-work-session.md`
+§5–§6; contract: `deckpilot_core::work_session`). The store
+(`crates/deckpilot-storage/src/work_sessions.rs`, methods on `SqliteStore`)
+applies the transitions T1–T11 of the core table and nothing else. Times are
+wall-clock milliseconds supplied by the agent.
+
+- **One active session per database** (decision D7): `work_sessions.active`
+  is `1` exactly while the state is not `stopped` or `aborted` (a `CHECK`),
+  and unique. A second start is refused (`AnotherSessionActive`), also for a
+  writer that bypasses the API.
+- **Transitions** are one `IMMEDIATE` transaction each: the session is read,
+  checked to be the expected session in the expected state (and, for
+  results and approvals, the current verification id), updated with a
+  compare-and-set on `(id, state)`, and logged in
+  `work_session_transitions` (`idle → starting` for T1, `starting →
+  aborted` for T3, `stopping → stopped` for T11). A request that does not
+  match changes nothing and answers `Refused` (`UnknownSession`,
+  `WrongState`, `StaleVerification`, `ApprovalExpired`,
+  `ApprovalFromAnotherBoot`); a request already applied answers `Repeated`.
+  So a result of an older verification, or an approval of an older session,
+  can never move the current one.
+- **Final stop** (T10): only from `readyToFinish`, with the session's
+  current approval, given to the same agent instance (`approval_boot`), at
+  most `approval_ttl_seconds` old (decision D9: 600 by default) and not from
+  the future. It fixes `stopped_at` and closes the open interval in the same
+  transaction. The same approval again answers `Repeated` ("already
+  finished"), also after T11, because the approval id is kept.
+- **Elapsed time is never stored.** It is the sum of `work_session_intervals`
+  (`elapsed_ms` of the contract, an open interval counting up to now, a
+  negative one as zero). The heartbeat only moves `last_alive_at`.
+  Interval 1 opens at T2 (the start workflow is not counted, D10).
+- **Gaps** (decision D8): a gap longer than `review_gap_seconds` (900 by
+  default) while the timer runs is recorded in `work_session_reviews`
+  (`agentDown`, `sleep`, `clockBack`, `clockForward`) with the notice
+  `needsReview`, and stays counted. *Excluded* cuts it out of the
+  intervals; *counted* on an excluded gap adds it back (except where another
+  excluded gap still applies, and never before the start or after the stop),
+  joining the split intervals again. Both rewrite the session's intervals in
+  one transaction; elapsed time stays a plain sum. A clock set back added no
+  time and cannot be excluded. The notice goes once no review is open.
+- **Notices** (`problem`, `problem_message`, `problem_at`) belong to their
+  session. While no session is active, the notice to show is that of the
+  newest session (`idle_work_session_notice`, e.g. `startFailed` after T3);
+  clearing it clears the notices of all finished and aborted sessions.
+- **Verification details** are kept only as the non-sensitive text of the
+  contract, without control characters and at most 200 characters.
+- **Retention**: the newest 1000 finished or aborted sessions are kept, with
+  their intervals, reviews and log; the active session is never removed.
+- `work_session_settings` belongs to its profile (cascade). Sessions have no
+  foreign key to the profile, so history outlives it; deleting a profile
+  that has the active session is refused (`WorkSessionActive`).
+- Machine-local runtime state: not exported.
 
 ### Migration 3
 
@@ -386,6 +568,29 @@ layout bindings stay as they are.
 A test migrates every case and checks that ids, order and layout bindings are
 unchanged.
 
+## Deleting actions safely
+
+An action is deleted only when nothing uses it. `SqliteStore::
+action_references` lists every use in the profile: layout bindings (layout,
+page, control, trigger), steps of step-list workflows, action nodes of graph
+workflows, and — as indirect uses — the triggers of each workflow that runs
+the action. `delete_action` refuses with `ActionInUse` and that list while
+any use remains, and changes nothing.
+
+Uses are removed only by an explicit choice, for all uses or for selected
+ones (each must still be a current use, else nothing changes):
+
+- `replace_action_references(from, to)` points bindings, steps and nodes at
+  another action of the profile. Step overrides and node overrides and
+  mappings are kept when both actions have the same type, and cleared
+  (reported in `clearedSettings`) when the type differs.
+- `unbind_action` clears the key bindings (the control becomes empty) and
+  removes the steps. Graph nodes are refused: they are part of a connected
+  graph, so they are replaced or removed in the workflow editor.
+
+Each operation loads, changes and saves the profile in one transaction.
+Triggers are never changed here; they follow their workflow.
+
 ## Compatibility between versions
 
 - A DeckPilot build reads every older schema and upgrades it; it **refuses to
@@ -404,21 +609,86 @@ unchanged.
   credentials stored since). The backup is encrypted with the key in use at
   the time; after a later switch between password and system key, the
   backup still needs the old protection. Schema 7 cannot be opened by
-  0.5.0 (schema 5): the 0.5.0 agent refuses it and changes nothing.
+  0.5.0 (schema 5): the 0.5.0 agent refuses it and changes nothing; schema
+  8 cannot be opened by 0.6.0 (schema 7) in the same way. Going back from
+  schema 8 means restoring the `deckpilot-schema7-…` backup; shared
+  variables and everything else changed after the upgrade are lost. A
+  build at schema 8 refuses schema 9 the same way; going back means
+  restoring the `deckpilot-schema8-…` backup, which loses the work
+  sessions recorded since.
+- Profile documents are written in document version 5 from schema 8 on.
+  Version 4 documents (and older) are read unchanged and are not rewritten
+  by the upgrade.
 - A wrong key or password never reinitializes, upgrades or backs up the
   database; the file stays byte-identical.
+- A newer schema is refused before anything is written to the file — the
+  version is read before the journal mode is switched to WAL, which would
+  rewrite the header.
+- A damaged file that opens with the right key (truncated, damaged pages) is
+  reported as damaged (`Corrupt`), not as a wrong password, and is left as it
+  is. A file whose first page does not authenticate cannot be told apart
+  from a wrong key and is reported as one; it is not written either.
 
 Tested with a real database created by the 0.5.0-2 tools
 (`crates/deckpilot-storage/tests/upgrade_from_0_5_0.rs`, fixture in
-`tests/fixtures/v0.5.0-2/`): the upgrade from schema 5 to 7 keeps profiles,
+`tests/fixtures/v0.5.0-2/`): the upgrade from schema 5 to 9 keeps profiles,
 projects and their resources, actions, step workflows, layouts, the active
 profile and default project, machine bindings and settings; it is preceded
 by an encrypted backup that can be restored; reopening does not upgrade or
 back up again; graph workflows, execution history and credentials added
 afterwards are kept (and secrets are never readable in the file); a wrong
-key changes nothing; a newer schema is refused without changes. The real
+key changes nothing; a newer schema is refused without changes, also in
+rollback-journal mode; a truncated or damaged copy is reported as damaged
+and left byte-identical, without side files or backups. The real
 0.5.0-2 agent given a schema 7 database is tested by
 `tools/compat/matrix.sh` ([Compatibility](compatibility.md)).
+The storage unit tests in `src/upgrade_tests.rs` compare the same fixture row
+by row: every row and table definition of schema 5 is unchanged after the
+upgrade, which only adds `workflow_executions`, `credentials`,
+`shared_variables`, `shared_variable_values`, `provenance` and the five
+work session tables (all empty) and one `migration_history` row, and opening the upgraded database again
+changes nothing. They also make the upgrade fail at injected points (after
+migrations 6, 7, 8 and 9, just before the commit, and while the backup is
+written) and kill a child process at the same points with the transaction
+open: in every case the database is still the schema 5 fixture row for row,
+the backup made before the upgrade is complete and holds that state, an
+unverified backup copy is never left under a backup's name (it is written as
+`….db.partial` and renamed once verified), and the next start upgrades
+normally. A failed integrity check after the commit (injected) leaves the
+database at schema 9 marked `unverified` and refused, row for row
+unchanged by each refused start, with the backup intact; it is accepted and
+marked `ok` once a check passes, and restoring the named backup returns to
+the fixture row for row. A process killed between the commit and the check
+is verified on the next start.
+
+The same unit tests run on a 0.6.0 database (schema 7,
+`tests/fixtures/v0.6.0/`, created by the 0.6.0 tools with a workflow run, a
+credential, an active project and launches added so that every schema 7
+table has rows): every row is kept, the upgrade adds only the empty
+schema 8 and 9 tables, failures and kills after migration 8 or 9 or before
+the commit leave the schema 7 database and its backup intact, and the next
+start upgrades. `tests/upgrade_from_0_6_0.rs` checks the data through the API,
+that shared variables work on the upgraded database, that the
+`deckpilot-schema7-…` backup restores the 0.6.0 state (losing what changed
+afterwards), and that a newer schema is refused without changes.
+
+They run a third time on a schema 8 database (`tests/fixtures/schema8/`:
+the 0.6.0 fixture upgraded by `main` at schema 8, plus shared variables
+with global, profile and project values and a provenance row, so that
+every schema 8 table has rows): every row is kept, the upgrade adds only
+the five empty work session tables, and failures and kills after migration
+9, before the commit or while the backup is written leave the schema 8
+database and its backup intact. `tests/upgrade_work_sessions_from_schema_8.rs`
+checks the variables and provenance through the API, that a work session on
+the upgraded database survives a reopen (which neither upgrades nor backs
+up again), that the `deckpilot-schema8-…` backup restores the schema 8 state
+(losing the session), and that schema 10 is refused without changes. The
+store's own tests (`src/work_sessions/tests.rs`) cover every transition and
+refusal, the one-active-session constraint, the idempotent final stop (also
+from two connections at once), approval lifetime and boot, stale and old
+sessions' results, gaps, exclusion and re-inclusion, retention, and a
+restart in each persisted state followed by its recovery transition.
+
 Upgrades from schemas 1 to 4 are covered by the storage unit tests
 (`migrates_a_version_one_database_without_losing_data`,
 `upgrades_are_preceded_by_a_verified_encrypted_backup`); no database from a

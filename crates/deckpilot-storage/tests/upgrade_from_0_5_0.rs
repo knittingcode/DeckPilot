@@ -81,7 +81,7 @@ fn the_fixture_is_a_schema_5_database() {
     let store = open(&copy);
     let history = store.migration_history().unwrap();
     let upgrade = history.last().unwrap();
-    assert_eq!((upgrade.from_version, upgrade.to_version), (5, 7));
+    assert_eq!((upgrade.from_version, upgrade.to_version), (5, 9));
     assert_eq!(upgrade.result, "ok");
 }
 
@@ -89,7 +89,7 @@ fn the_fixture_is_a_schema_5_database() {
 fn upgrading_keeps_every_kind_of_data() {
     let copy = copy();
     let store = open(&copy);
-    assert_eq!(store.schema_version().unwrap(), 7);
+    assert_eq!(store.schema_version().unwrap(), 9);
     assert_eq!(
         store.schema_version().unwrap(),
         SqliteStore::supported_schema_version()
@@ -254,13 +254,18 @@ fn a_wrong_key_changes_nothing() {
     assert_eq!(open(&copy).list_profiles().unwrap().len(), 3);
 }
 
+/// A schema version from a DeckPilot newer than this build.
+fn newer() -> u32 {
+    SqliteStore::supported_schema_version() + 1
+}
+
 #[test]
 fn a_newer_schema_is_refused_and_left_alone() {
     let copy = copy();
     let store = open(&copy);
     store
         .connection_for_tests()
-        .pragma_update(None, "user_version", 8)
+        .pragma_update(None, "user_version", newer())
         .unwrap();
     drop(store);
     let before = digest(&copy.database());
@@ -269,13 +274,119 @@ fn a_newer_schema_is_refused_and_left_alone() {
     assert!(
         matches!(
             refused,
-            Err(StorageError::UnsupportedSchema {
-                found: 8,
-                supported: 7
-            })
+            Err(StorageError::UnsupportedSchema { found, supported: 9 })
+                if found == newer()
         ),
         "{refused:?}"
     );
     assert!(digest(&copy.database()) == before, "the file changed");
     assert_eq!(backups(&copy), backups_before);
+}
+
+/// A raw SQLCipher connection to the copy, without DeckPilot's open (which
+/// would upgrade it).
+fn raw(copy: &Copy) -> rusqlite::Connection {
+    let connection = rusqlite::Connection::open(copy.database()).unwrap();
+    let literal = format!("x'{}'", key(copy).to_hex().as_str());
+    connection.pragma_update(None, "key", literal).unwrap();
+    connection
+}
+
+/// The files next to the database, so that a refused open can be shown not
+/// to have created any (`-wal`, `-shm`, `backups/`).
+fn files(copy: &Copy) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(&copy.0)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        // Taken (and created) by `Vault::unlock` to derive the key.
+        .filter(|name| name != "deckpilot.vault.lock")
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn a_newer_schema_is_refused_before_the_journal_mode_is_touched() {
+    // A database in rollback-journal mode, as `sqlcipher_export` writes
+    // backups and as a newer DeckPilot might use: switching it to WAL
+    // would rewrite its header before the version is even looked at.
+    let copy = copy();
+    {
+        let connection = raw(&copy);
+        connection
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+        connection
+            .pragma_update(None, "user_version", newer())
+            .unwrap();
+    }
+    let before = digest(&copy.database());
+    let files_before = files(&copy);
+    let refused = SqliteStore::open(copy.database(), &Encryption::Key(key(&copy)));
+    assert!(
+        matches!(
+            refused,
+            Err(StorageError::UnsupportedSchema { found, supported: 9 })
+                if found == newer()
+        ),
+        "{refused:?}"
+    );
+    assert!(digest(&copy.database()) == before, "the file changed");
+    assert_eq!(files(&copy), files_before);
+    let mode: String = raw(&copy)
+        .pragma_query_value(None, "journal_mode", |row| row.get(0))
+        .unwrap();
+    assert_eq!(mode, "delete");
+}
+
+/// A copy whose database is the fixture with `damage` applied.
+fn damaged(damage: impl FnOnce(&mut Vec<u8>)) -> (Copy, Vec<u8>) {
+    let copy = copy();
+    let mut bytes = digest(&copy.database());
+    damage(&mut bytes);
+    std::fs::write(copy.database(), &bytes).unwrap();
+    (copy, bytes)
+}
+
+#[test]
+fn a_damaged_database_is_reported_as_damaged_and_left_alone() {
+    let fixture_key = key(&copy());
+    let truncated = damaged(|bytes| bytes.truncate(bytes.len() / 2));
+    // Pages after the first are damaged: found by the integrity check that
+    // precedes the upgrade, before the backup.
+    let overwritten = damaged(|bytes| {
+        bytes[40_000..40_100].iter_mut().for_each(|b| *b ^= 0xff);
+    });
+    for (copy, bytes) in [truncated, overwritten] {
+        // The password is right: the user must not be told otherwise.
+        let opened = SqliteStore::open(copy.database(), &Encryption::Key(fixture_key.clone()));
+        assert!(
+            matches!(opened, Err(StorageError::Corrupt(_))),
+            "{opened:?}"
+        );
+        assert!(digest(&copy.database()) == bytes, "the file changed");
+        assert_eq!(files(&copy), ["deckpilot.db", "deckpilot.vault.json"]);
+    }
+    let (copy, _) = damaged(|bytes| bytes.truncate(bytes.len() / 2));
+    let unlocked = Vault::new(copy.database()).unlock(&Password::new(PASSWORD));
+    assert!(
+        matches!(unlocked, Err(StorageError::Corrupt(_))),
+        "{unlocked:?}"
+    );
+}
+
+#[test]
+fn a_file_that_is_not_a_database_is_never_overwritten() {
+    // Indistinguishable from a wrong key: the first page does not
+    // authenticate. Either way nothing is written.
+    let fixture_key = key(&copy());
+    let (copy, bytes) = damaged(|bytes| *bytes = vec![7; 8192]);
+    let opened = SqliteStore::open(copy.database(), &Encryption::Key(fixture_key));
+    assert!(
+        matches!(opened, Err(StorageError::InvalidKey)),
+        "{opened:?}"
+    );
+    assert!(digest(&copy.database()) == bytes, "the file changed");
+    assert_eq!(files(&copy), ["deckpilot.db", "deckpilot.vault.json"]);
 }

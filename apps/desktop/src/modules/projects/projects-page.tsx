@@ -57,7 +57,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAsync } from "@/hooks/use-async"
 import { useEditingProfile } from "@/hooks/use-profile"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { failureMessage, toastFailure } from "@/lib/failure"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { useAppContext } from "@/lib/app-context"
 import { RESOURCE_KIND_LABELS } from "@/lib/format"
@@ -161,9 +162,9 @@ function ProjectCycle({
   const onDragEnd = (event: DragEndEvent) => {
     const to = projects.findIndex((p) => p.id === event.over?.id)
     if (to < 0 || event.active.id === event.over?.id) return
-    api
-      .moveProject(profileId, String(event.active.id), to)
-      .then(changed, (e: unknown) => toast.error(errorMessage(e)))
+    api.moveProject(profileId, String(event.active.id), to).then(changed, (e: unknown) => {
+      toastFailure("The project was not moved", e)
+    })
   }
   const statusOf = (key: string) => checks.find((c) => c.key === key)?.status ?? "unbound"
   const isActiveProfile = profiles.activeProfileId === profileId
@@ -192,7 +193,7 @@ function ProjectCycle({
                 checked: project.id === view.activeProjectId,
                 onSelect: () => {
                   api.selectProject(profileId, project.id).then(changed, (e: unknown) => {
-                    toast.error(errorMessage(e))
+                    toastFailure(`${project.key} was not selected`, e)
                   })
                 },
               })),
@@ -238,7 +239,9 @@ function ProjectCycle({
                       toast.success("Default project saved")
                       changed()
                     })
-                    .catch((e: unknown) => toast.error(errorMessage(e)))
+                    .catch((e: unknown) => {
+                      toastFailure("The default project was not saved", e)
+                    })
                 }}
               >
                 <SelectTrigger id="default-project" className="w-full">
@@ -306,7 +309,9 @@ function ProjectCycle({
                             toast.success("Project deleted")
                             changed()
                           })
-                          .catch((e: unknown) => toast.error(errorMessage(e)))
+                          .catch((e: unknown) => {
+                            toastFailure(`${project.key} was not deleted`, e)
+                          })
                       }}
                     />
                   ))}
@@ -464,7 +469,7 @@ function CopyProjectForm({
         onDone()
       })
       .catch((e: unknown) => {
-        setError(errorMessage(e))
+        setError(failureMessage(`${project.key} was not copied`, e))
       })
   }
   return (
@@ -548,7 +553,7 @@ function ProjectForm({
       toast.success("Project saved")
       onDone()
     } catch (e) {
-      setError(errorMessage(e))
+      setError(failureMessage("The project was not saved", e))
     }
   }
   return (
@@ -712,9 +717,9 @@ function MachineResources({ checks, onChange }: { checks: ResourceCheck[]; onCha
                 description="Actions using this resource cannot resolve it on this machine until it is mapped again."
                 confirmLabel="Remove"
                 onConfirm={() => {
-                  api
-                    .removeResourceBinding(check.key)
-                    .then(onChange, (e: unknown) => toast.error(errorMessage(e)))
+                  api.removeResourceBinding(check.key).then(onChange, (e: unknown) => {
+                    toastFailure(`The mapping for ${check.key} was not removed`, e)
+                  })
                 }}
               />
             )}
@@ -754,7 +759,7 @@ function BindingForm({ check, onDone }: { check: ResourceCheck | null; onDone: (
       const picked = await openDialog({ directory: kind === "directory", multiple: false })
       if (typeof picked === "string") setValue(picked)
     } catch (e) {
-      setError(errorMessage(e))
+      setError(failureMessage("The file browser did not open", e, "Type the path instead"))
     }
   }
   const submit = async (event: React.SyntheticEvent<HTMLFormElement>) => {
@@ -764,7 +769,7 @@ function BindingForm({ check, onDone }: { check: ResourceCheck | null; onDone: (
       toast.success("Mapping saved")
       onDone()
     } catch (e) {
-      setError(errorMessage(e))
+      setError(failureMessage(`The mapping for ${key} was not saved`, e))
     }
   }
   return (
