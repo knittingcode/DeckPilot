@@ -2,9 +2,9 @@ import { listen } from "@tauri-apps/api/event"
 import { useCallback, useEffect, useState } from "react"
 
 import { api } from "@/lib/api"
+import { failureMessage } from "@/lib/failure"
 import type { ElapsedFormat, WorkSessionSnapshot } from "@/lib/types"
 
-import { failureMessage } from "./failure"
 import {
   WORK_SESSION_EVENT,
   isNotSupported,

@@ -8,9 +8,9 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { useAsync } from "@/hooks/use-async"
 import { api } from "@/lib/api"
+import { failureMessage, toastFailure } from "@/lib/failure"
 import type { WorkSessionReview, WorkSessionSummary } from "@/lib/types"
 
-import { failureMessage, toastFailure } from "./failure"
 import {
   RECORD_TEXT,
   REVIEW_KIND_TEXT,
