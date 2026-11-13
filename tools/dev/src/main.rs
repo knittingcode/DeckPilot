@@ -294,7 +294,8 @@ fn seed_command(
         seed::encrypt_legacy(paths).map_err(|e| e.to_string())?;
         println!("encrypted the development database with the development password");
     }
-    let mut seeded = seed::seed(paths, password).map_err(|e| e.to_string())?;
+    let mut seeded = seed::seed(paths, seed::MissingDatabase::from_password_flag(password))
+        .map_err(|e| e.to_string())?;
     // A system-managed database is seeded with the key of the running agent.
     if !seeded {
         seeded = seed_through_agent(paths)?;
@@ -691,7 +692,7 @@ fn up(paths: &DevPaths, devices: &str, foreground: bool, locked: bool) -> Result
         clean_stale(paths, &session);
     }
     doctor()?;
-    if seed::seed(paths, false).map_err(|e| e.to_string())? {
+    if seed::seed(paths, seed::MissingDatabase::LeaveToAgent).map_err(|e| e.to_string())? {
         println!("seeded the development database with demonstration data");
     }
     build_agent(paths)?;
@@ -834,7 +835,7 @@ fn status(paths: &DevPaths) {
 fn foreground_agent(paths: &DevPaths, devices: &str) -> Result<(), String> {
     paths.ensure_isolated()?;
     paths.create().map_err(|e| e.to_string())?;
-    seed::seed(paths, false).map_err(|e| e.to_string())?;
+    seed::seed(paths, seed::MissingDatabase::LeaveToAgent).map_err(|e| e.to_string())?;
     let mut command = Command::new("cargo");
     command
         .args(["run", "-p", "deckpilot-agent", "--"])
