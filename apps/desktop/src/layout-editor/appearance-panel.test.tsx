@@ -42,6 +42,7 @@ const plus: DeviceModel = {
     touch: null,
   },
   support: "unverified",
+  verification: [],
 }
 
 const press = (index: number, action: string, appearance?: ControlBinding["appearance"]) =>
