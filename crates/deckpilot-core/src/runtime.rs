@@ -97,7 +97,8 @@ impl Engine {
             variables: std::sync::Arc::new(NoSharedVariables),
             projects: std::sync::Arc::new(crate::variables::doubles::FixedProjects::default()),
             variable_registry: std::sync::Arc::new(crate::variables::VariableRegistry::new()),
-            live: std::sync::Arc::new(crate::variables::NoLiveState),
+            // Devices described by the built-in catalog; no work session.
+            live: std::sync::Arc::new(deckpilot_device::ModelCatalog::builtin()),
         }
     }
 
