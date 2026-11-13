@@ -714,7 +714,7 @@ fn validate_gesture_settings(
 mod tests {
     use super::*;
     use deckpilot_device::{
-        DeviceModel, EncoderSpec, HardwareSupport, KeyGrid, TouchSurface, models,
+        DeviceModel, EncoderSpec, HardwareSupport, KeyGrid, ModelVerification, TouchSurface, models,
     };
 
     fn catalog() -> ModelCatalog {
@@ -741,6 +741,7 @@ mod tests {
                 }),
             },
             support: HardwareSupport::DescriptorOnly,
+            verification: ModelVerification::default(),
         });
         catalog
     }
