@@ -36,8 +36,9 @@ struct Demo {
     unused: ActionInstanceId,
 }
 
-/// `hello` is on two keys, in two steps (one with overrides) and in a graph
-/// node (with overrides) of a workflow with a trigger.
+/// `hello` is on two keys (a press, and a long press with overrides), in
+/// two steps (one with overrides) and in a graph node (with overrides) of
+/// a workflow with a trigger.
 fn demo() -> Demo {
     let mut profile = Profile::new("Demo");
     let hello = action("Hello", "general.log");
@@ -50,13 +51,21 @@ fn demo() -> Demo {
 
     let mut layout = DeviceLayout::new("Main", models::stream_deck_mk2().id);
     let page = &mut layout.pages[0];
-    for (index, action) in [(0, hello), (1, bye), (2, hello)] {
+    for (index, action) in [(0, hello), (1, bye)] {
         page.bindings.push(ControlBinding::new(
             key(index),
             Trigger::Press,
-            BindingTarget::Action { action },
+            BindingTarget::action(action),
         ));
     }
+    page.bindings.push(ControlBinding::new(
+        key(2),
+        Trigger::LongPress,
+        BindingTarget::Action {
+            action: hello,
+            overrides: message(),
+        },
+    ));
     profile.layouts.push(layout);
 
     let mut steps = Workflow::new("Steps")
@@ -169,9 +178,17 @@ fn replacing_moves_every_use_and_then_the_action_can_go() {
     let bindings = &profile.layouts[0].pages[0].bindings;
     assert_eq!(bindings.len(), 3);
     assert!(
-        bindings
+        bindings[..2]
             .iter()
-            .all(|b| b.target == BindingTarget::Action { action: demo.bye })
+            .all(|b| b.target == BindingTarget::action(demo.bye))
+    );
+    // The long press keeps its overrides.
+    assert_eq!(
+        bindings[2].target,
+        BindingTarget::Action {
+            action: demo.bye,
+            overrides: message(),
+        }
     );
     store.delete_action(demo.profile.id, demo.hello).unwrap();
     // The profile is still consistent.
@@ -191,8 +208,18 @@ fn replacing_with_another_type_clears_the_old_types_settings() {
     let change = store
         .replace_action_references(demo.profile.id, demo.hello, demo.other, &Selection::All)
         .unwrap();
-    assert_eq!(change.cleared_settings.len(), 2);
+    // The long press binding, the step and the node had settings of the
+    // old type.
+    assert_eq!(change.cleared_settings.len(), 3);
+    assert!(matches!(
+        &change.cleared_settings[0],
+        ReferenceSite::Binding { control, trigger: Trigger::LongPress, .. } if *control == key(2)
+    ));
     let profile = store.load_profile(demo.profile.id).unwrap().unwrap();
+    assert_eq!(
+        profile.layouts[0].pages[0].bindings[2].target,
+        BindingTarget::action(demo.other)
+    );
     assert!(profile.workflows[0].steps[2].overrides.is_empty());
     let node = &profile.workflows[1].graph.as_ref().unwrap().nodes[1];
     assert!(matches!(

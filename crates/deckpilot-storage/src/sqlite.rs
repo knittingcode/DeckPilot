@@ -2471,7 +2471,7 @@ mod tests {
                     index: u16::try_from(index).unwrap(),
                 },
                 trigger: Trigger::Press,
-                target: BindingTarget::Action { action: *action },
+                target: BindingTarget::action(*action),
                 label: None,
                 appearance: None,
             });

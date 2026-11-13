@@ -87,10 +87,22 @@ fn profile() -> Profile {
     let mut binding = ControlBinding::new(
         ControlId::Key { index: 0 },
         Trigger::Press,
-        BindingTarget::Action { action: ids.0 },
+        BindingTarget::action(ids.0),
     );
     binding.label = Some("Root: {{ shared.paths.root }}".into());
     layout.pages[0].bindings.push(binding);
+    // A gesture binding's parameter overrides.
+    layout.pages[0].bindings.push(ControlBinding::new(
+        ControlId::Key { index: 1 },
+        Trigger::LongPress,
+        BindingTarget::Action {
+            action: ids.2,
+            overrides: ActionParameters::new().with(
+                "message",
+                ParameterValue::Template("in {{ shared.paths.root }}".into()),
+            ),
+        },
+    ));
     profile.layouts.push(layout);
     profile
 }
@@ -114,6 +126,7 @@ fn every_kind_of_use_is_found() {
             ("Graph", "graph.nodes[1].mappings.message"),
             ("Graph", "triggers[0]"),
             ("Main", "Home › label"),
+            ("Main", "Home › target.overrides.message"),
         ]
     );
     assert!(matches!(
@@ -154,7 +167,7 @@ fn a_used_variable_is_never_deleted() {
     let Err(StorageError::VariableInUse(uses)) = refused else {
         panic!("{refused:?}");
     };
-    assert_eq!(uses.len(), 8);
+    assert_eq!(uses.len(), 9);
     assert_eq!(uses[0].profile_name, "Work");
     assert!(store.shared_variable(&key("paths.root")).unwrap().is_some());
     // The unused one goes.
@@ -204,7 +217,7 @@ fn uses_in_every_profile_are_listed() {
     let uses = store
         .shared_variable_references(&key("paths.root"))
         .unwrap();
-    assert_eq!(uses.len(), 16);
+    assert_eq!(uses.len(), 18);
     let mut profiles: Vec<_> = uses.iter().map(|u| u.profile).collect();
     profiles.dedup();
     assert_eq!(profiles.len(), 2);

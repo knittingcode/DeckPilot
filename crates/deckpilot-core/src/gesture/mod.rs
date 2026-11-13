@@ -2,8 +2,10 @@
 //!
 //! The types the gesture engine, the layout model and the gesture editor
 //! share (see `docs/gestures-and-work-session.md`), and the engine itself
-//! ([`engine`]). Until bindings can name gestures, every key is in raw mode
-//! and fires on the raw press or release.
+//! ([`engine`]). A key is in gesture mode when its page binds `click`,
+//! `doubleClick` or `longPress` to it ([`crate::Trigger`]); every other key,
+//! including every key of layouts from before gestures, is in raw mode and
+//! fires on the raw press or release.
 //!
 //! The timing rules, which the engine implements:
 //!

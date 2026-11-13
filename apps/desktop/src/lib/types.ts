@@ -339,15 +339,25 @@ export type ControlId =
   | { kind: "encoder"; index: number }
   | { kind: "touchZone"; index: number }
 
+/**
+ * `press`/`release` are raw edges and fire at once. `click`,
+ * `doubleClick` and `longPress` are gestures (see
+ * docs/gestures-and-work-session.md); a control uses one kind or the other
+ * on a page, never both.
+ */
 export type Trigger =
   | { type: "press" }
   | { type: "release" }
   | { type: "rotateClockwise" }
   | { type: "rotateCounterClockwise" }
   | { type: "touch"; gesture: TouchGesture }
+  | { type: "click" }
+  | { type: "doubleClick" }
+  | { type: "longPress" }
 
 export type BindingTarget =
-  | { type: "action"; action: string }
+  /** `overrides` replace some of the instance's parameters for this binding only. */
+  | { type: "action"; action: string; overrides?: ActionParameters }
   | { type: "workflow"; workflow: string }
   | { type: "openPage"; page: string }
   | { type: "back" }
@@ -405,6 +415,8 @@ export interface LayoutPage {
   /** The folder the page is in; Back returns there. See `explicitTree`. */
   parent?: string | null
   bindings: ControlBinding[]
+  /** Gesture timings of controls that differ from the machine's defaults. */
+  gestures?: KeyGestureSettings[]
 }
 
 export interface DeviceLayout {
