@@ -37,6 +37,11 @@ tools/dev (deckpilot-dev): development supervisor, seed data, release checks
 Hardware-independent description of control surfaces.
 
 - `DeviceModel`, `DeviceModelId`, `UsbIdentity`, `HardwareSupport`
+- `ModelVerification`: per-platform verification level with evidence
+  (see [devices.md](devices.md))
+- `DeviceDescriptor`: vendor-neutral description of one device (vendor, model,
+  serial, capabilities, driver, verification), the device context for code
+  outside the drivers
 - `DeviceCapabilities` with optional `KeyGrid`, `EncoderSpec` and `TouchSurface`;
   validates whether a control exists and whether an input can occur on it
 - `ControlId` (`Key`, `Encoder`, `TouchZone`) and `ControlInput` (`Press`,
@@ -44,7 +49,7 @@ Hardware-independent description of control surfaces.
 - `DeviceEvent` (`Connected`, `Disconnected`, `Input`) and `DeviceId`
   (model + serial)
 - `DeviceRegistry` tracks connection state of multiple devices across hotplug
-- `ModelCatalog` with the built-in Stream Deck MK.2 descriptor
+- `ModelCatalog` with the built-in Stream Deck descriptors (MK.2, XL, +)
 - `DeviceBackend` (discover, open) and `DeviceHandle` (read input, set images
   and brightness, flush): the driver interface
 - `Frame`: device-independent RGB image; drivers convert it to their format

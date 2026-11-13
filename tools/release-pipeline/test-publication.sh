@@ -204,18 +204,51 @@ run assets.log "$here/check-assets.sh" "$work/assets.txt" --final && ok "a pre-r
 { cat "$work/assets.txt"; echo latest.json; } > "$work/a.txt"
 expect_failure "a pre-release with latest.json" "contains latest.json" "$here/check-assets.sh" "$work/a.txt"
 
-echo "== publication gate"
+echo "== environment gate (before any secret) and publication gate"
+envfile="$STUB_DIR/environments/production-release.json"
+# environment <protection rules JSON> [<custom: true|false> <protected: true|false>]
+environment() {
+  jq -n --argjson rules "$1" --argjson custom "${2:-true}" --argjson protected "${3:-false}" \
+    '{name: "production-release", protection_rules: $rules,
+      deployment_branch_policy: {custom_branch_policies: $custom, protected_branches: $protected}}' > "$envfile"
+}
+# policies <type:name>...: the environment's deployment policies.
+policies() {
+  local spec list="[]"
+  for spec in "$@"; do
+    list=$(jq --arg t "${spec%%:*}" --arg n "${spec#*:}" '. + [{type: $t, name: $n}]' <<< "$list")
+  done
+  jq -n --argjson p "$list" '{total_count: ($p | length), branch_policies: $p}' > "$STUB_DIR/environments/production-release-policies.json"
+}
+reviewer='[{"type": "required_reviewers", "reviewers": [{"type": "User", "reviewer": {"login": "maintainer"}}]}]'
 fresh
-expect_failure "no production-release environment" "does not exist" "$here/check-environment.sh"
+expect_failure "no production-release environment (as before the owner creates it)" "does not exist" "$here/check-environment.sh"
 echo '{"name": "release", "protection_rules": [{"type": "required_reviewers", "reviewers": [{"type": "User"}]}]}' > "$STUB_DIR/environments/release.json"
 expect_failure "a protected environment of another name does not count" "'production-release' does not exist" "$here/check-environment.sh"
-echo '{"name": "production-release", "protection_rules": []}' > "$STUB_DIR/environments/production-release.json"
-expect_failure "an environment without reviewers" "requires no reviewer" "$here/check-environment.sh" production-release
-echo '{"name": "production-release", "protection_rules": [{"type": "wait_timer", "wait_timer": 5}]}' > "$STUB_DIR/environments/production-release.json"
+# What GitHub creates when a job first names the environment: no rules.
+environment '[]' false false
+expect_failure "an auto-created, unprotected environment" "requires no reviewer" "$here/check-environment.sh" production-release
+environment '[{"type": "wait_timer", "wait_timer": 5}]'
+policies tag:v*
 expect_failure "an environment with only a wait timer" "requires no reviewer" "$here/check-environment.sh" production-release
-echo '{"name": "production-release", "protection_rules": [{"type": "required_reviewers", "reviewers": [{"type": "User", "reviewer": {"login": "maintainer"}}]}]}' \
-  > "$STUB_DIR/environments/production-release.json"
-run env.log "$here/check-environment.sh" production-release && ok "an environment with a required reviewer" || bad "environment: $(cat "$work/env.log")"
+environment "$reviewer" false false
+expect_failure "reviewers, but deployments from any ref" "does not restrict deployments" "$here/check-environment.sh" production-release
+environment "$reviewer" false true
+expect_failure "reviewers, but deployments from protected branches" "does not restrict deployments" "$here/check-environment.sh" production-release
+environment "$reviewer"
+policies
+expect_failure "custom policies, but none" "from 'nothing'" "$here/check-environment.sh" production-release
+policies tag:v* branch:main
+expect_failure "tags v* and a branch" "not only tags v*" "$here/check-environment.sh" production-release
+policies tag:*
+expect_failure "every tag" "not only tags v*" "$here/check-environment.sh" production-release
+policies branch:v*
+expect_failure "branches named v*" "not only tags v*" "$here/check-environment.sh" production-release
+policies tag:v*
+run env.log "$here/check-environment.sh" production-release && grep -q "deploys tags v\* only" "$work/env.log" \
+  && ok "reviewers and tags v* only" || bad "environment: $(cat "$work/env.log")"
+rm "$STUB_DIR/environments/production-release-policies.json"
+expect_failure "unreadable deployment policies" "cannot be read" "$here/check-environment.sh" production-release
 
 echo "== publication"
 # expect_draft <what> <message> <tag>: publication refused, still a draft.

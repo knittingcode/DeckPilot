@@ -231,6 +231,10 @@ Every template valid today parses to the same references (tested in
 
 ## 6. System variables
 
+Ownership, module-declared variables and the canonical ids that replace
+`system.project.current.…` and `system.work.session.…` (kept as aliases) are
+described in [`variables.md`](variables.md).
+
 Resolved from the explicit `ResolutionContext`, never from global state:
 
 | Reference | Type | From |

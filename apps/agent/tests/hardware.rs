@@ -301,3 +301,48 @@ async fn keys_are_blanked_on_shutdown_and_stale_images_replaced_on_start() {
     assert!(wait_frames(&mock, &device, &home));
     agent.shutdown().await;
 }
+
+/// Each device in the status carries its vendor-neutral descriptor. The
+/// verification status is the registry's static data: a simulated device
+/// never makes a model physically verified.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_status_describes_devices_without_vendor_types() {
+    let dir = TempDir::new("deckpilot-hw");
+    let (paths, key_material) = support::data_dir(&dir, &profile(), &[]);
+    let mock = MockBackend::new();
+    let mk2 = mock.plug(&models::stream_deck_mk2(), "MK2-A");
+    let xl = mock.plug(&models::stream_deck_xl(), "XL-A");
+    let agent = TestAgent::start_unlocked(&paths, &key_material, &mock, None).await;
+    let status = wait_status(&agent, |s| connected(s, &mk2) && connected(s, &xl)).await;
+
+    let describe = |device: &DeviceId| {
+        status
+            .devices
+            .iter()
+            .find(|d| d.id == *device)
+            .and_then(|d| d.descriptor.clone())
+            .expect("a descriptor")
+    };
+    let descriptor = describe(&mk2);
+    assert_eq!(descriptor.vendor_id, "elgato");
+    assert_eq!(descriptor.model_id, mk2.model);
+    assert_eq!(descriptor.display_name, "Stream Deck MK.2");
+    assert_eq!(descriptor.serial, "MK2-A");
+    assert_eq!(descriptor.device_id(), mk2);
+    assert_eq!(descriptor.capabilities.controls().len(), 15);
+    let driver = descriptor.driver.expect("the driver");
+    assert_eq!(driver.id, "mock");
+    assert_eq!(driver.version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        descriptor.verification,
+        models::stream_deck_mk2().verification
+    );
+
+    let xl = describe(&xl);
+    assert!(
+        !xl.verification.is_supported(),
+        "simulation verifies nothing"
+    );
+    assert_eq!(xl.verification, models::stream_deck_xl().verification);
+    agent.shutdown().await;
+}

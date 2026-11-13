@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use thiserror::Error;
 
-use crate::{ControlId, ControlInput, DeviceId, DeviceModelId};
+use crate::{ControlId, ControlInput, DeviceId, DeviceModelId, DriverInfo};
 
 /// An RGB image (8 bits per channel, row-major, no padding).
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -118,6 +118,20 @@ pub trait DeviceBackend: Send {
     fn source(&self, _device: &DeviceId) -> &'static str {
         self.name()
     }
+
+    /// Version of the driver implementation, reported with each device.
+    fn version(&self) -> &'static str {
+        "unknown"
+    }
+
+    /// The driver that provides `device`: [`DeviceBackend::source`] and its
+    /// [`DeviceBackend::version`].
+    fn driver(&self, device: &DeviceId) -> DriverInfo {
+        DriverInfo {
+            id: self.source(device).to_owned(),
+            version: self.version().to_owned(),
+        }
+    }
 }
 
 /// Several backends behind one interface, e.g. USB devices plus simulated
@@ -191,6 +205,16 @@ impl DeviceBackend for CombinedBackend {
         self.owners
             .get(device)
             .map_or_else(|| self.name(), |index| self.backends[*index].source(device))
+    }
+
+    fn driver(&self, device: &DeviceId) -> DriverInfo {
+        match self.owners.get(device) {
+            Some(index) => self.backends[*index].driver(device),
+            None => DriverInfo {
+                id: self.name().to_owned(),
+                version: self.version().to_owned(),
+            },
+        }
     }
 }
 
@@ -298,6 +322,9 @@ mod tests {
         let found = combined.discover().unwrap();
         assert_eq!(found.len(), 1, "a failing backend does not hide the others");
         assert_eq!(combined.source(&id), "mock");
+        let driver = combined.driver(&id);
+        assert_eq!(driver.id, "mock");
+        assert_eq!(driver.version, env!("CARGO_PKG_VERSION"));
         assert!(combined.open(&id).is_ok());
 
         let mut only_failing = CombinedBackend::default().with(Box::new(Failing));
