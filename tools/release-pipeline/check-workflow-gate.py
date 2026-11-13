@@ -11,6 +11,8 @@ Fails unless:
   * the workflow-level permissions grant no write access, so only jobs that
     ask for it explicitly can write; every job declares its permissions and
     only the draft, build, manifest, verify and publish jobs may write;
+  * every job has timeout-minutes, every action is pinned to a commit SHA,
+    and no job in the environment restores a cache;
   * the protected environment is `production-release`: `publish` runs in
     it, behind `publish-gate`; besides it only the jobs that need the
     signing secrets (prepare, build) do, and every job that references a
@@ -30,6 +32,8 @@ ENVIRONMENT = "production-release"
 # Jobs that may run in the environment: those that need the signing
 # secrets, and publication.
 ENVIRONMENT_JOBS = {"prepare", "build", PUBLISHER}
+PINNED = re.compile(r"^[^@]+@[0-9a-f]{40}$")
+CACHES = {"Swatinem/rust-cache", "actions/cache"}
 SIGNING_SECRET = re.compile(r"secrets\.(APPLE_|TAURI_SIGNING_)")
 # Jobs that may write to the repository: the draft and its assets (stage
 # A), and publication (stage B).
@@ -75,6 +79,20 @@ def check(path):
             return False
         seen.add(name)
         return any(reaches_gate(n, seen) for n in needs_of(jobs[name]))
+
+    # Every job ends; every action is pinned to a commit; the jobs that hold
+    # signing secrets restore no cache written by other workflows.
+    for name, job in jobs.items():
+        if not isinstance(job.get("timeout-minutes"), int):
+            problems.append(f"job {name} has no timeout-minutes")
+        for step in job.get("steps", []):
+            uses = step.get("uses")
+            if uses and not PINNED.match(uses):
+                problems.append(f"job {name}: {uses} is not pinned to a commit SHA")
+            if job.get("environment") and uses and uses.split("@")[0] in CACHES:
+                problems.append(f"job {name} holds secrets and restores a cache ({uses})")
+            if job.get("environment") and (step.get("with") or {}).get("cache"):
+                problems.append(f"job {name} holds secrets and restores a cache ({uses})")
 
     # Stage B: `publish` publishes, in the protected environment, behind the
     # job that checks that environment. Signing secrets only in jobs that run

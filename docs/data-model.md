@@ -118,16 +118,51 @@ bound on this machine, kind mismatch.
 - **DeviceLayout** – `id`, `name`, `model`, `homePage`, `pages` (in
   order), optional `explicitTree` (see [Pages and folders](#pages-and-folders)).
 - **LayoutPage** – `id`, `name`, optional `parent` (the folder it is in),
-  `bindings: ControlBinding[]`.
+  `bindings: ControlBinding[]`, optional `gestures: KeyGestureSettings[]`
+  (`control`, optional `doubleClickMs` 150–1000, optional `longPressMs`
+  300–5000; unset values use this computer's defaults, setting
+  `gestures.defaults`, 300 and 700 ms).
 - **ControlBinding** – `control`, `trigger` (`press`, `release`,
-  `rotateClockwise`, `rotateCounterClockwise`, `touch { gesture }`), `target`
-  (`action`, `workflow`, `openPage`, `back`), optional `label`, optional
-  `appearance` (see [Key appearance](#key-appearance)).
+  `rotateClockwise`, `rotateCounterClockwise`, `touch { gesture }`, `click`,
+  `doubleClick`, `longPress`), `target` (`action { action, overrides? }`,
+  `workflow`, `openPage`, `back`, `stateful { machine, rules? }`), optional
+  `label`, optional `appearance`
+  (see [Key appearance](#key-appearance)).
 
 Folders are pages opened with `openPage` and left with `back`. Layout
 validation checks that controls and triggers exist on the model, that each
 control/trigger pair is bound at most once per page, that targets exist and
 that icons a binding shows are in the profile (`MissingIcon`).
+
+**Gestures** (see `docs/gestures-and-work-session.md`). `press` and
+`release` are raw edges and fire at once; every binding from before 0.7 is
+one and stays one. `click`, `doubleClick` and `longPress` are recognized by
+the agent's gesture engine, each with its own target; a control on a page
+uses one kind or the other (`MixedTriggers`), and gestures need a control
+that can be pressed and released. A click fires on the press when nothing
+else is bound, on the release when a long press is, and after the
+double-click window only when a double click is. `overrides` of an action
+target replace some of the saved instance's parameters for that binding
+only, with literals, `reference` or `template` values resolved when it
+fires (no node outputs); they are checked like a workflow node's
+overrides when the layout is saved (`InvalidOverrides`). A key's face shows
+its `press` binding, else its `click` binding. Deleting an action is refused
+while any binding, of any trigger, runs it.
+
+**Stateful keys** (`deckpilot_core::stateful`). A `stateful` target asks a
+built-in state machine for an operation; the only machine is `workSession`.
+`rules` is a list of `{ state, gesture, operation }` with the machine's own
+names (`idle`, `working`, … and `start`, `verify`, `finish`, …), and no
+expressions; without `rules` the machine's default table applies and is not
+stored. The agent picks the rule from the machine's state at the press of
+the gesture and lets the machine apply it, so the binding never sets state.
+Validation: a stateful target only on `click`, `doubleClick` or `longPress`
+(`StatefulNeedsGesture`); every stateful binding of a key has the same
+machine and rules (`InconsistentStateful`); and each rule's operation is
+allowed in its state, each `(state, gesture)` appears once, its gesture is
+bound to the machine on that key, and `finish` is only a `click`
+(`InvalidStateful`). A stateful key references no action, workflow or
+project, and travels with its layout on export and import unchanged.
 
 A profile uses its first layout for a model. `DeviceLayout::generate` creates
 one from the profile's actions and workflows using only the model's

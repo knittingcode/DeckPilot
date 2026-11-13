@@ -21,6 +21,7 @@ import type {
   DeviceLayout,
   DeviceModel,
   ExportResult,
+  GestureTimings,
   ImportOptions,
   ImportPreview,
   ImportSummary,
@@ -42,13 +43,20 @@ import type {
   ResolutionContext,
   ResourceCheck,
   ResourceKind,
+  ScopeKey,
+  SharedVariable,
   UpdateInfo,
   UpdatePreferences,
   ReferenceChangeResult,
   ReferenceSelection,
   UpdateState,
+  VariableDefinition,
+  VariableValue,
   Workflow,
   WorkflowReport,
+  WorkSessionSettings,
+  WorkSessionSnapshot,
+  WorkSessionSummary,
 } from "./types"
 
 export interface ActionInput {
@@ -136,6 +144,22 @@ export const api = {
   setCredential: (id: string, description: string, secret: string | null) =>
     invoke<CredentialInfo[]>("set_credential", { id, description, secret }),
   deleteCredential: (id: string) => invoke<CredentialInfo[]>("delete_credential", { id }),
+
+  /**
+   * Shared variables with the values that apply to `profileId` (global
+   * ones only without a profile); sensitive values are left out.
+   */
+  listSharedVariables: (profileId: string | null) =>
+    invoke<SharedVariable[]>("list_shared_variables", { profileId }),
+  /** Creates or updates a definition; keys cannot be renamed. Refuses retyping a used variable. */
+  saveSharedVariable: (definition: VariableDefinition) =>
+    invoke<null>("save_shared_variable", { definition }),
+  /** Refused while the variable is used. */
+  deleteSharedVariable: (key: string) => invoke<null>("delete_shared_variable", { key }),
+  setSharedVariableValue: (key: string, scope: ScopeKey, value: VariableValue) =>
+    invoke<null>("set_shared_variable_value", { key, scope, value }),
+  clearSharedVariableValue: (key: string, scope: ScopeKey) =>
+    invoke<null>("clear_shared_variable_value", { key, scope }),
 
   listProfiles: () => invoke<ProfilesView>("list_profiles"),
   getProfile: (profileId: string) => invoke<ProfileView>("get_profile", { profileId }),
@@ -234,6 +258,10 @@ export const api = {
   setResourceBinding: (key: string, kind: ResourceKind, value: string) =>
     invoke<MachineConfig>("set_resource_binding", { key, kind, value }),
   removeResourceBinding: (key: string) => invoke<MachineConfig>("remove_resource_binding", { key }),
+  /** This computer's default gesture timings (`gestures.defaults`). */
+  getGestureDefaults: () => invoke<GestureTimings>("get_gesture_defaults"),
+  setGestureDefaults: (timings: GestureTimings) =>
+    invoke<GestureTimings>("set_gesture_defaults", { timings }),
   checkResources: (profileId: string) => invoke<ResourceCheck[]>("check_resources", { profileId }),
 
   createLayout: (profileId: string, modelId: string, name: string, generate: boolean) =>
@@ -295,6 +323,25 @@ export const api = {
   installUpdate: () => invoke<null>("install_update"),
   setUpdatePreferences: (preferences: UpdatePreferences) =>
     invoke<UpdateState>("set_update_preferences", { preferences }),
+
+  // Work sessions (protocol 8, docs/gestures-and-work-session.md §9). There
+  // is deliberately no command that starts, verifies or finishes a session:
+  // only its key does (D11). With an agent below protocol 8 they reject with
+  // "not supported".
+  getWorkSession: () => invoke<WorkSessionSnapshot>("get_work_session"),
+  /** Newest first; `before`: only sessions requested before this time (ms). */
+  listWorkSessions: (limit: number, before?: number) =>
+    invoke<WorkSessionSummary[]>("list_work_sessions", { limit, before }),
+  /** Keeps a flagged gap counted (`count`) or excludes it from the session (D8). */
+  resolveWorkSessionReview: (session: string, review: number, count: boolean) =>
+    invoke<WorkSessionSummary>("resolve_work_session_review", { session, review, count }),
+  clearWorkSessionNotices: (session: string | null) =>
+    invoke<WorkSessionSnapshot>("clear_work_session_notices", { session }),
+  getWorkSessionSettings: (profileId: string) =>
+    invoke<WorkSessionSettings>("get_work_session_settings", { profileId }),
+  /** Validates the workflows against their contracts before it writes. */
+  saveWorkSessionSettings: (profileId: string, settings: WorkSessionSettings) =>
+    invoke<WorkSessionSettings>("save_work_session_settings", { profileId, settings }),
 }
 
 /** Backend event carrying the latest {@link AgentConnection}. */
