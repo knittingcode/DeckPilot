@@ -5,6 +5,8 @@
 //! against the public key compiled into the app. This crate contains the
 //! parts that are independent of Tauri and testable on their own:
 //!
+//! * [`channel`]: release tags, their kind (stable, pre-release, test
+//!   build) and the update channels;
 //! * [`manifest`]: the `latest.json` format, validation and selection of
 //!   the artifact for this platform;
 //! * [`signature`]: signature verification, also used by the release
@@ -13,6 +15,7 @@
 //!   safe;
 //! * [`compatibility`]: whether a running agent fits the application.
 
+pub mod channel;
 pub mod compatibility;
 pub mod manifest;
 pub mod policy;
@@ -25,6 +28,11 @@ pub const REPOSITORY: &str = "knittingcode/DeckPilot";
 /// never points at drafts or pre-releases, which makes it the stable channel.
 pub const STABLE_ENDPOINT: &str =
     "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json";
+
+/// The release list the prerelease channel chooses from (newest first).
+/// The stable channel does not use it.
+pub const RELEASES_API: &str =
+    "https://api.github.com/repos/knittingcode/DeckPilot/releases?per_page=30";
 
 /// Prefix that every artifact URL in a manifest must have.
 pub const DOWNLOAD_PREFIX: &str = "https://github.com/knittingcode/DeckPilot/releases/download/";

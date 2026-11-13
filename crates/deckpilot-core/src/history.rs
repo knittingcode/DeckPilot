@@ -72,6 +72,9 @@ pub enum ExecutionTrigger {
     Schedule,
     /// A lifecycle event, such as a device connecting.
     Lifecycle,
+    /// The start or end-verification workflow of a work session (see
+    /// [`crate::work_session`]); older readers see [`Self::Other`].
+    WorkSession,
     /// A kind this version does not know.
     #[serde(other)]
     Other,

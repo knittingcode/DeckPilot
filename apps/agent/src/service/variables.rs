@@ -4,132 +4,230 @@
 //!
 //! The agent is the only place that resolves references against real data;
 //! the configuration app asks it (`listVariables`, `previewReferences`).
-//! Until the configuration database stores shared variables (workstream E),
-//! the set is held in memory: empty in production, filled by tests through
-//! [`Agent::with_shared_variables`].
+//! Shared variables come from the configuration database: per profile, a
+//! snapshot of every definition with the global values and those of the
+//! profile and its projects ([`SqliteStore::shared_variables_for`]). Runs
+//! read the snapshots taken at the last reload; previews read the database
+//! directly.
+//!
+//! The work session variables (`system.work.session.…`, D5) are answered
+//! here too, from the work session's live snapshot at the moment of the
+//! resolution: elapsed time is the counted time of the snapshot plus the
+//! time since it was taken while the timer runs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{PoisonError, RwLock};
+use std::time::UNIX_EPOCH;
 
 use deckpilot_core::resolution::ContextResolver;
 use deckpilot_core::variables::{
-    CatalogEntry, CatalogFilter, DefinitionIssue, MissingReason, PreviewItem, ProjectResolver,
-    ProjectSource, ReferenceAvailability, ReferencePreview, Resolution, ResolutionContext,
-    ResolutionPhase, ScopeKey, SystemVariable, ValueSource, VariableDefinition, VariableGroup,
-    VariableKey, VariableRef, VariableResolver, VariableScope, VariableValue, preview_reference,
-    select_value,
+    CatalogEntry, CatalogFilter, MissingReason, PreviewItem, ProjectResolver, ProjectSource,
+    ReferenceAvailability, ReferencePreview, Resolution, ResolutionContext, ResolutionPhase,
+    SystemVariable, ValueSource, VariableGroup, VariableKey, VariableRef, VariableResolver,
+    VariableScope, VariableValue, preview_reference, select_value,
 };
+use deckpilot_core::work_session::{WorkSessionSnapshot, WorkSessionVariable};
 use deckpilot_core::{ModuleId, Profile, ProfileId, ProjectId};
 use deckpilot_ipc::{AgentEvent, ErrorCode, IpcError, Response, SecurityState};
-use deckpilot_storage::ConfigStore;
+use deckpilot_storage::{ConfigStore, SharedVariables, SqliteStore, StorageError};
+use tokio::sync::watch;
 
-use super::{Agent, locked, storage_error};
+use super::{Agent, Clock, locked, storage_error};
 
-/// Definitions and values of shared variables.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SharedVariables {
-    definitions: BTreeMap<VariableKey, VariableDefinition>,
-    values: BTreeMap<VariableKey, Vec<(ScopeKey, VariableValue)>>,
+/// The live work session for resolutions: the published snapshot and the
+/// agent's wall clock.
+#[derive(Clone)]
+pub struct WorkSessionSource {
+    snapshot: watch::Receiver<WorkSessionSnapshot>,
+    clock: Clock,
 }
 
-impl SharedVariables {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Adds or replaces a definition. A definition with problems is refused.
-    pub fn define(&mut self, definition: VariableDefinition) -> Result<(), DefinitionIssue> {
-        if let Some(issue) = definition.issues().into_iter().next() {
-            return Err(issue);
-        }
-        self.definitions.insert(definition.key.clone(), definition);
-        Ok(())
-    }
-
-    /// Sets the value of `key` at `scope`, replacing an earlier one there.
-    /// Execution values are never stored.
-    pub fn set(
-        &mut self,
-        key: &VariableKey,
-        scope: ScopeKey,
-        value: VariableValue,
-    ) -> Result<(), String> {
-        let definition = self
-            .definitions
-            .get(key)
-            .ok_or_else(|| format!("`{key}` is not defined"))?;
-        if scope.scope() == VariableScope::Execution {
-            return Err("execution values exist only during a run".into());
-        }
-        definition
-            .check_value(&scope, &value)
-            .map_err(|issue| issue.to_string())?;
-        let values = self.values.entry(key.clone()).or_default();
-        values.retain(|(existing, _)| *existing != scope);
-        values.push((scope, value));
-        Ok(())
-    }
-
-    pub fn definitions(&self) -> impl Iterator<Item = &VariableDefinition> {
-        self.definitions.values()
-    }
-
-    fn values_of<'a>(
-        &'a self,
-        key: &VariableKey,
-    ) -> impl Iterator<Item = (&'a ScopeKey, &'a VariableValue)> + 'a {
-        self.values
-            .get(key)
-            .into_iter()
-            .flatten()
-            .map(|(scope, value)| (scope, value))
-    }
-
-    /// Keys whose definition or values differ from `other`.
-    pub fn changed_keys(&self, other: &Self) -> Vec<String> {
-        let keys: BTreeSet<&VariableKey> = self
-            .definitions
-            .keys()
-            .chain(other.definitions.keys())
-            .collect();
-        keys.into_iter()
-            .filter(|key| {
-                self.definitions.get(*key) != other.definitions.get(*key)
-                    || self.values.get(*key) != other.values.get(*key)
-            })
-            .map(ToString::to_string)
-            .collect()
+impl std::fmt::Debug for WorkSessionSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkSessionSource")
+            .field("snapshot", &*self.snapshot.borrow())
+            .finish_non_exhaustive()
     }
 }
 
-/// The agent's variable store: what runs and previews read. Values are read
-/// when a reference is resolved, so a run after a change sees the new
-/// value; nothing is cached.
+impl WorkSessionSource {
+    pub fn new(snapshot: watch::Receiver<WorkSessionSnapshot>, clock: Clock) -> Self {
+        Self { snapshot, clock }
+    }
+
+    /// `variable` now.
+    fn resolve(&self, variable: WorkSessionVariable) -> Resolution {
+        let now_ms = (self.clock)()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+        work_session_value(variable, &self.snapshot.borrow(), now_ms)
+    }
+}
+
+/// The value of a work session variable from `snapshot` at `now_ms`.
+/// Without a session every one is `missing(noValue)` (§8.1).
+pub fn work_session_value(
+    variable: WorkSessionVariable,
+    snapshot: &WorkSessionSnapshot,
+    now_ms: i64,
+) -> Resolution {
+    let Some(session) = snapshot.session else {
+        return Resolution::Missing(MissingReason::NoValue);
+    };
+    let value = match variable {
+        WorkSessionVariable::Id => Some(VariableValue::String(session.to_string())),
+        WorkSessionVariable::State => Some(VariableValue::String(snapshot.state.name().to_owned())),
+        WorkSessionVariable::StartedAt => snapshot
+            .started_at_ms
+            .and_then(rfc3339)
+            .map(VariableValue::String),
+        WorkSessionVariable::ElapsedSeconds => {
+            let mut elapsed = snapshot.elapsed_ms;
+            if snapshot.state.timer_running() {
+                // A wall clock that went back adds nothing.
+                let since = u64::try_from(now_ms - snapshot.as_of_ms).unwrap_or(0);
+                elapsed = elapsed.saturating_add(since);
+            }
+            Some(VariableValue::Integer(
+                i64::try_from(elapsed / 1000).unwrap_or(i64::MAX),
+            ))
+        }
+        WorkSessionVariable::ProjectId => match snapshot.project {
+            Some(project) => Some(VariableValue::ProjectId(project)),
+            None => return Resolution::Missing(MissingReason::NoProject),
+        },
+        WorkSessionVariable::CanFinish => snapshot
+            .verification
+            .as_ref()
+            .and_then(|v| v.outcome.as_ref())
+            .map(|outcome| VariableValue::Boolean(outcome.can_finish)),
+    };
+    // Nothing of a session is sensitive; verification details are not a
+    // variable.
+    value.map_or(Resolution::Missing(MissingReason::NoValue), |value| {
+        Resolution::Value {
+            value,
+            source: ValueSource::System,
+            sensitive: false,
+        }
+    })
+}
+
+/// RFC 3339 in UTC, to the second.
+fn rfc3339(ms: i64) -> Option<String> {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+}
+
+/// The work session variables whose value differs between two snapshots;
+/// elapsed time only when the timer starts or stops, since clients count
+/// it on their own.
+pub fn changed_work_session_variables(
+    before: &WorkSessionSnapshot,
+    after: &WorkSessionSnapshot,
+) -> Vec<String> {
+    let can_finish = |s: &WorkSessionSnapshot| {
+        s.verification
+            .as_ref()
+            .and_then(|v| v.outcome.as_ref())
+            .map(|o| o.can_finish)
+    };
+    let same_session = before.session == after.session;
+    WorkSessionVariable::ALL
+        .into_iter()
+        .filter(|variable| {
+            !same_session
+                || match variable {
+                    WorkSessionVariable::Id => false,
+                    WorkSessionVariable::State => before.state != after.state,
+                    WorkSessionVariable::StartedAt => before.started_at_ms != after.started_at_ms,
+                    WorkSessionVariable::ElapsedSeconds => {
+                        before.state.timer_running() != after.state.timer_running()
+                    }
+                    WorkSessionVariable::ProjectId => before.project != after.project,
+                    WorkSessionVariable::CanFinish => can_finish(before) != can_finish(after),
+                }
+        })
+        .map(|variable| variable.path().to_owned())
+        .collect()
+}
+
+/// Resolves `shared.` references against one profile's snapshot, and the
+/// work session variables from the live session. Variables declared by a
+/// disabled module cannot be read.
+struct SnapshotResolver<'a> {
+    snapshot: Option<&'a SharedVariables>,
+    disabled: &'a BTreeSet<ModuleId>,
+    work_session: Option<&'a WorkSessionSource>,
+}
+
+impl VariableResolver for SnapshotResolver<'_> {
+    /// Shared and work session variables only; other system variables
+    /// and node outputs are resolved by [`ContextResolver`] from the
+    /// context itself.
+    fn resolve(&self, reference: &VariableRef, context: &ResolutionContext) -> Resolution {
+        if let VariableRef::System(variable) = reference
+            && let Some(variable) = variable.work_session()
+        {
+            return self
+                .work_session
+                .map_or(Resolution::Missing(MissingReason::NoValue), |source| {
+                    source.resolve(variable)
+                });
+        }
+        let VariableRef::Shared(key) = reference else {
+            return Resolution::UnavailableUntilRuntime;
+        };
+        let Some(snapshot) = self.snapshot else {
+            return Resolution::Missing(MissingReason::UnknownVariable);
+        };
+        let declared_by_disabled = snapshot
+            .definition(key)
+            .and_then(|definition| definition.module.as_ref())
+            .is_some_and(|module| self.disabled.contains(module));
+        if declared_by_disabled {
+            return Resolution::PermissionDenied;
+        }
+        // Execution values are never stored; runs do not set any yet (D7).
+        snapshot.resolve(key, context, &[])
+    }
+}
+
+/// The agent's shared variables for runs: one snapshot per profile, taken
+/// at the last reload. A run started after a reload reads the new values.
 #[derive(Debug, Default)]
 pub struct VariableStore {
-    variables: RwLock<SharedVariables>,
+    snapshots: RwLock<BTreeMap<ProfileId, SharedVariables>>,
     /// Variables declared by these modules cannot be read while the module
     /// is disabled.
     disabled_modules: RwLock<BTreeSet<ModuleId>>,
+    /// The live work session; none in stores made for tests.
+    work_session: Option<WorkSessionSource>,
 }
 
 impl VariableStore {
-    pub fn snapshot(&self) -> SharedVariables {
-        self.variables
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+    /// A store whose resolutions read the work session from `source`.
+    pub fn with_work_session(source: WorkSessionSource) -> Self {
+        Self {
+            work_session: Some(source),
+            ..Self::default()
+        }
     }
 
-    /// Replaces the set and returns the keys that changed.
-    pub fn replace(&self, variables: SharedVariables) -> Vec<String> {
+    /// Takes new snapshots of every profile and returns the keys whose
+    /// definition or values changed.
+    pub fn reload(&self, store: &SqliteStore) -> Result<Vec<String>, StorageError> {
+        let mut snapshots = BTreeMap::new();
+        for profile in store.list_profiles()? {
+            snapshots.insert(profile.id, store.shared_variables_for(profile.id)?);
+        }
         let mut current = self
-            .variables
+            .snapshots
             .write()
             .unwrap_or_else(PoisonError::into_inner);
-        let changed = variables.changed_keys(&current);
-        *current = variables;
-        changed
+        let changed = changed_keys(&current, &snapshots);
+        *current = snapshots;
+        Ok(changed)
     }
 
     pub fn set_disabled_modules(&self, modules: BTreeSet<ModuleId>) {
@@ -139,42 +237,58 @@ impl VariableStore {
             .unwrap_or_else(PoisonError::into_inner) = modules;
     }
 
-    fn denied(&self, definition: &VariableDefinition) -> bool {
-        definition.module.as_ref().is_some_and(|module| {
-            self.disabled_modules
-                .read()
-                .unwrap_or_else(PoisonError::into_inner)
-                .contains(module)
-        })
+    fn disabled(&self) -> BTreeSet<ModuleId> {
+        self.disabled_modules
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
 impl VariableResolver for VariableStore {
-    /// Shared variables only; system variables and node outputs are
-    /// resolved by [`ContextResolver`] from the context itself.
     fn resolve(&self, reference: &VariableRef, context: &ResolutionContext) -> Resolution {
-        let VariableRef::Shared(key) = reference else {
-            return Resolution::UnavailableUntilRuntime;
-        };
-        let variables = self
-            .variables
+        let snapshots = self
+            .snapshots
             .read()
             .unwrap_or_else(PoisonError::into_inner);
-        let Some(definition) = variables.definitions.get(key) else {
-            return Resolution::Missing(MissingReason::UnknownVariable);
-        };
-        if self.denied(definition) {
-            return Resolution::PermissionDenied;
+        let disabled = self.disabled();
+        SnapshotResolver {
+            snapshot: snapshots.get(&context.profile),
+            disabled: &disabled,
+            work_session: self.work_session.as_ref(),
         }
-        match select_value(definition, variables.values_of(key), context) {
-            Some((value, source)) => Resolution::Value {
-                value: value.clone(),
-                source,
-                sensitive: definition.sensitive,
-            },
-            None => Resolution::Missing(MissingReason::NoValue),
+        .resolve(reference, context)
+    }
+}
+
+/// Keys whose definition, or values in any profile, differ.
+fn changed_keys(
+    old: &BTreeMap<ProfileId, SharedVariables>,
+    new: &BTreeMap<ProfileId, SharedVariables>,
+) -> Vec<String> {
+    let profiles: BTreeSet<&ProfileId> = old.keys().chain(new.keys()).collect();
+    let mut keys = BTreeSet::new();
+    for profile in profiles {
+        let (before, after) = (old.get(profile), new.get(profile));
+        let candidates: BTreeSet<&VariableKey> = before
+            .into_iter()
+            .chain(after)
+            .flat_map(|snapshot| snapshot.definitions().map(|d| &d.key))
+            .collect();
+        for key in candidates {
+            let definition =
+                |s: Option<&SharedVariables>| s.and_then(|s| s.definition(key)).cloned();
+            let values =
+                |s: Option<&SharedVariables>| s.map(|s| s.values(key).to_vec()).unwrap_or_default();
+            // A profile that appears or disappears changes no definition.
+            let redefined =
+                before.is_some() && after.is_some() && definition(before) != definition(after);
+            if redefined || values(before) != values(after) {
+                keys.insert(key.to_string());
+            }
         }
     }
+    keys.into_iter().collect()
 }
 
 /// The application's active project of each profile, as the agent last
@@ -210,14 +324,24 @@ pub(super) struct ContextWatch {
 }
 
 /// Every reference available in `context`, metadata only. Node outputs are
-/// listed by the app from the graph being edited.
-pub fn catalog(variables: &SharedVariables, context: &ResolutionContext) -> Vec<CatalogEntry> {
+/// listed by the app from the graph being edited. `work_session`: whether
+/// a work session is active now.
+pub fn catalog(
+    variables: &SharedVariables,
+    context: &ResolutionContext,
+    work_session: bool,
+) -> Vec<CatalogEntry> {
     let mut entries: Vec<CatalogEntry> = SystemVariable::ALL
         .into_iter()
-        .map(|variable| system_entry(variable, context))
+        .map(|variable| system_entry(variable, context, work_session))
         .collect();
     for definition in variables.definitions() {
-        let selected = select_value(definition, variables.values_of(&definition.key), context);
+        let values = variables.values(&definition.key);
+        let selected = select_value(
+            definition,
+            values.iter().map(|(scope, value)| (scope, value)),
+            context,
+        );
         let scope = match &selected {
             Some((_, ValueSource::Scope { scope })) => Some(scope.scope()),
             _ => None,
@@ -259,10 +383,23 @@ pub fn catalog(variables: &SharedVariables, context: &ResolutionContext) -> Vec<
     entries
 }
 
-fn system_entry(variable: SystemVariable, context: &ResolutionContext) -> CatalogEntry {
+fn system_entry(
+    variable: SystemVariable,
+    context: &ResolutionContext,
+    work_session: bool,
+) -> CatalogEntry {
     let preview = context.phase == ResolutionPhase::Preview;
     let availability = match variable {
         _ if variable.runtime_only() => ReferenceAvailability::RuntimeOnly,
+        // Listed without a session too: a workflow that reads them runs
+        // during one.
+        _ if variable.work_session().is_some() => {
+            if work_session {
+                ReferenceAvailability::Available
+            } else {
+                ReferenceAvailability::RuntimeOnly
+            }
+        }
         SystemVariable::ProjectCurrentId
         | SystemVariable::ProjectCurrentKey
         | SystemVariable::ProjectCurrentName
@@ -313,13 +450,22 @@ fn as_preview(context: &ResolutionContext) -> ResolutionContext {
 }
 
 impl Agent {
-    /// Uses `variables` as the shared variables, before the agent runs.
-    /// A stand-in until the configuration database stores them.
-    #[must_use]
-    pub fn with_shared_variables(self, variables: SharedVariables) -> Self {
-        let changed = self.variables.replace(variables);
+    /// Takes new snapshots of the shared variables after the configuration
+    /// changed, and announces the keys that changed.
+    pub(super) fn reload_variables(&self) -> Result<(), StorageError> {
+        let Some(store) = self.store.as_ref() else {
+            return Ok(());
+        };
+        let changed = self.variables.reload(store)?;
         self.publish_variables(changed);
-        self
+        Ok(())
+    }
+
+    /// The shared variables of `profile` as the database holds them now.
+    fn current_variables(&self, profile: ProfileId) -> Result<SharedVariables, IpcError> {
+        self.store()?
+            .shared_variables_for(profile)
+            .map_err(|e| storage_error(&e))
     }
 
     /// The profile a client's context names: the active one, or one from
@@ -346,7 +492,8 @@ impl Agent {
         // does not exist is not.
         self.context_profile(context.profile)?;
         let context = as_preview(context);
-        let entries = catalog(&self.variables.snapshot(), &context)
+        let active = self.work_session_snapshot().session.is_some();
+        let entries = catalog(&self.current_variables(context.profile)?, &context, active)
             .into_iter()
             .filter(|entry| filter.matches(entry))
             .collect();
@@ -360,10 +507,17 @@ impl Agent {
     ) -> Result<Response, IpcError> {
         let profile = self.context_profile(context.profile)?;
         let context = as_preview(context);
+        let variables = self.current_variables(profile.id)?;
+        let disabled = self.variables.disabled();
+        let shared = SnapshotResolver {
+            snapshot: Some(&variables),
+            disabled: &disabled,
+            work_session: self.variables.work_session.as_ref(),
+        };
         let resolver = ContextResolver {
             profile: &profile,
             os: self.runtime.machine().os,
-            shared: self.variables.as_ref(),
+            shared: &shared,
             outputs: None,
         };
         let previews: Vec<ReferencePreview> = items
@@ -402,6 +556,17 @@ impl Agent {
             project,
             source: ProjectSource::Application,
         });
+    }
+
+    /// Announces the work session variables whose value changed, as
+    /// `sharedVariablesChanged` with their paths: protocol 7 pickers and
+    /// previews refresh on it, with no polling (§8.1).
+    pub(super) fn publish_work_session_variables(
+        &self,
+        before: &WorkSessionSnapshot,
+        after: &WorkSessionSnapshot,
+    ) {
+        self.publish_variables(changed_work_session_variables(before, after));
     }
 
     /// Announces changed shared variables (keys only).
@@ -448,172 +613,137 @@ impl Agent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use deckpilot_core::variables::VariableType;
+    use deckpilot_core::variables::{ScopeKey, VariableDefinition, VariableType, VariableValue};
     use deckpilot_core::{Project, ProjectKey};
 
     fn key(text: &str) -> VariableKey {
         VariableKey::new(text).unwrap()
     }
 
-    fn profile() -> Profile {
+    fn store() -> (SqliteStore, Profile) {
+        let store = SqliteStore::open_in_memory().unwrap();
         let mut profile = Profile::new("Work");
         profile
             .projects
             .push(Project::new(ProjectKey::new("SHOP").unwrap(), "Shop"));
-        profile
+        store.save_profile(&profile).unwrap();
+        (store, profile)
+    }
+
+    fn name(store: &VariableStore, context: &ResolutionContext) -> Resolution {
+        store.resolve(&VariableRef::parse("shared.team.name").unwrap(), context)
     }
 
     #[test]
-    fn a_change_is_seen_by_the_next_resolution() {
-        let profile = profile();
-        let store = VariableStore::default();
-        let mut variables = SharedVariables::new();
-        variables
-            .define(VariableDefinition::new(
-                key("team.name"),
-                VariableType::String,
-                &[VariableScope::Global, VariableScope::Profile],
-            ))
-            .unwrap();
-        variables
-            .set(
-                &key("team.name"),
-                ScopeKey::Global,
-                VariableValue::String("one".into()),
-            )
-            .unwrap();
-        assert_eq!(store.replace(variables.clone()), ["team.name"]);
-        let reference = VariableRef::parse("shared.team.name").unwrap();
+    fn a_reload_brings_the_new_value_and_names_the_changed_keys() {
+        let (db, profile) = store();
+        db.save_shared_variable(&VariableDefinition::new(
+            key("team.name"),
+            VariableType::String,
+            &[VariableScope::Global, VariableScope::Profile],
+        ))
+        .unwrap();
+        db.set_shared_variable_value(
+            &key("team.name"),
+            &ScopeKey::Global,
+            &VariableValue::String("one".into()),
+        )
+        .unwrap();
+        let variables = VariableStore::default();
+        assert_eq!(variables.reload(&db).unwrap(), ["team.name"]);
         let context = ResolutionContext::preview(profile.id);
-        let value = |store: &VariableStore| match store.resolve(&reference, &context) {
-            Resolution::Value {
-                value: VariableValue::String(text),
-                ..
-            } => text,
-            other => panic!("{other:?}"),
-        };
-        assert_eq!(value(&store), "one");
-        variables
-            .set(
-                &key("team.name"),
-                ScopeKey::Profile {
-                    profile: profile.id,
-                },
-                VariableValue::String("two".into()),
-            )
-            .unwrap();
-        assert_eq!(store.replace(variables.clone()), ["team.name"]);
-        assert_eq!(value(&store), "two");
-        assert_eq!(store.replace(variables), Vec::<String>::new());
-    }
-
-    #[test]
-    fn values_are_checked_and_never_stored_for_a_run() {
-        let mut variables = SharedVariables::new();
-        variables
-            .define(VariableDefinition::new(
-                key("team.size"),
-                VariableType::Integer,
-                &[VariableScope::Global, VariableScope::Execution],
-            ))
-            .unwrap();
-        assert!(
-            variables
-                .set(
-                    &key("team.size"),
-                    ScopeKey::Global,
-                    VariableValue::String("x".into())
-                )
-                .is_err()
-        );
-        assert!(
-            variables
-                .set(
-                    &key("team.size"),
-                    ScopeKey::Execution {
-                        execution: deckpilot_core::ExecutionId::new()
-                    },
-                    VariableValue::Integer(1)
-                )
-                .is_err()
-        );
-        assert!(
-            variables
-                .set(&key("nope.x"), ScopeKey::Global, VariableValue::Integer(1))
-                .is_err()
-        );
-        assert!(
-            variables
-                .define(VariableDefinition::new(
-                    key("team.empty"),
-                    VariableType::Integer,
-                    &[]
-                ))
-                .is_err()
+        assert!(matches!(
+            name(&variables, &context),
+            Resolution::Value { value: VariableValue::String(text), .. } if text == "one"
+        ));
+        db.set_shared_variable_value(
+            &key("team.name"),
+            &ScopeKey::Profile {
+                profile: profile.id,
+            },
+            &VariableValue::String("two".into()),
+        )
+        .unwrap();
+        // Until the reload, runs keep the snapshot they had.
+        assert!(matches!(
+            name(&variables, &context),
+            Resolution::Value { value: VariableValue::String(text), .. } if text == "one"
+        ));
+        assert_eq!(variables.reload(&db).unwrap(), ["team.name"]);
+        assert!(matches!(
+            name(&variables, &context),
+            Resolution::Value { value: VariableValue::String(text), .. } if text == "two"
+        ));
+        assert_eq!(variables.reload(&db).unwrap(), Vec::<String>::new());
+        // A profile the agent does not know resolves nothing.
+        assert_eq!(
+            name(&variables, &ResolutionContext::preview(ProfileId::new())),
+            Resolution::Missing(MissingReason::UnknownVariable)
         );
     }
 
     #[test]
     fn variables_of_disabled_modules_are_denied() {
-        let store = VariableStore::default();
+        let (db, profile) = store();
         let module = ModuleId::new("projects").unwrap();
-        let mut variables = SharedVariables::new();
-        variables
-            .define(VariableDefinition {
-                module: Some(module.clone()),
-                default: Some(VariableValue::Boolean(true)),
-                ..VariableDefinition::new(
-                    key("projects.flag"),
-                    VariableType::Boolean,
-                    &[VariableScope::Global],
-                )
-            })
+        let conflicts = db
+            .declare_module_variables(
+                &module,
+                &[VariableDefinition {
+                    default: Some(VariableValue::Boolean(true)),
+                    ..VariableDefinition::new(
+                        key("projects.flag"),
+                        VariableType::Boolean,
+                        &[VariableScope::Global],
+                    )
+                }],
+            )
             .unwrap();
-        store.replace(variables);
+        assert!(conflicts.is_empty(), "{conflicts:?}");
+        let variables = VariableStore::default();
+        variables.reload(&db).unwrap();
         let reference = VariableRef::parse("shared.projects.flag").unwrap();
-        let context = ResolutionContext::preview(ProfileId::new());
+        let context = ResolutionContext::preview(profile.id);
         assert!(matches!(
-            store.resolve(&reference, &context),
+            variables.resolve(&reference, &context),
             Resolution::Value { .. }
         ));
-        store.set_disabled_modules(BTreeSet::from([module]));
+        variables.set_disabled_modules(BTreeSet::from([module]));
         assert_eq!(
-            store.resolve(&reference, &context),
+            variables.resolve(&reference, &context),
             Resolution::PermissionDenied
         );
     }
 
     #[test]
     fn the_catalog_lists_metadata_for_the_context() {
-        let profile = profile();
+        let (db, profile) = store();
         let shop = profile.projects[0].id;
-        let mut variables = SharedVariables::new();
-        variables
-            .define(VariableDefinition {
-                sensitive: true,
-                ..VariableDefinition::new(
-                    key("vault.pin"),
-                    VariableType::String,
-                    &[VariableScope::Project],
-                )
-            })
-            .unwrap();
-        variables
-            .set(
-                &key("vault.pin"),
-                ScopeKey::Project {
-                    profile: profile.id,
-                    project: shop,
-                },
-                VariableValue::String("s3cr3t".into()),
+        db.save_shared_variable(&VariableDefinition {
+            sensitive: true,
+            ..VariableDefinition::new(
+                key("vault.pin"),
+                VariableType::String,
+                &[VariableScope::Project],
             )
-            .unwrap();
+        })
+        .unwrap();
+        db.set_shared_variable_value(
+            &key("vault.pin"),
+            &ScopeKey::Project {
+                profile: profile.id,
+                project: shop,
+            },
+            &VariableValue::String("s3cr3t".into()),
+        )
+        .unwrap();
+        let variables = db.shared_variables_for(profile.id).unwrap();
         let without = ResolutionContext::preview(profile.id);
         let with = without
             .clone()
             .with_project(Some(shop), ProjectSource::Application);
         let entry = |context: &ResolutionContext, reference: &str| {
-            catalog(&variables, context)
+            catalog(&variables, context, false)
                 .into_iter()
                 .find(|e| e.reference.to_string() == reference)
                 .unwrap()
@@ -623,7 +753,7 @@ mod tests {
         assert_eq!(pin.scope, Some(VariableScope::Project));
         assert!(pin.sensitive);
         assert_eq!(pin.availability, ReferenceAvailability::Available);
-        let json = serde_json::to_string(&catalog(&variables, &with)).unwrap();
+        let json = serde_json::to_string(&catalog(&variables, &with, false)).unwrap();
         assert!(!json.contains("s3cr3t"), "metadata only");
         assert_eq!(
             entry(&without, "shared.vault.pin").availability,
@@ -644,5 +774,212 @@ mod tests {
             entry(&with, "workflow.execution.id").group,
             VariableGroup::Workflow
         );
+    }
+
+    fn session(state: deckpilot_core::work_session::WorkSessionState) -> WorkSessionSnapshot {
+        use deckpilot_core::work_session::{VerificationOutcome, VerificationRecord};
+        WorkSessionSnapshot {
+            state,
+            session: Some(deckpilot_core::WorkSessionId::new()),
+            profile: Some(ProfileId::new()),
+            project: Some(ProjectId::new()),
+            // 2026-11-12T08:00:00Z
+            started_at_ms: Some(1_794_470_400_000),
+            elapsed_ms: 125_400,
+            as_of_ms: 10_000,
+            verification: Some(VerificationRecord {
+                id: deckpilot_core::VerificationId::new(),
+                outcome: Some(VerificationOutcome {
+                    can_finish: true,
+                    details: Some("token=abc".into()),
+                }),
+                at_ms: 9_000,
+            }),
+            approval: None,
+            notices: Vec::new(),
+        }
+    }
+
+    fn value(
+        variable: WorkSessionVariable,
+        snapshot: &WorkSessionSnapshot,
+        now: i64,
+    ) -> VariableValue {
+        match work_session_value(variable, snapshot, now) {
+            Resolution::Value {
+                value,
+                source: ValueSource::System,
+                sensitive: false,
+            } => value,
+            other => panic!("{variable:?}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn work_session_values_follow_the_snapshot() {
+        use deckpilot_core::work_session::WorkSessionState as S;
+        // Without a session every variable is missing (§8.1).
+        let idle = WorkSessionSnapshot::idle(5);
+        for variable in WorkSessionVariable::ALL {
+            assert_eq!(
+                work_session_value(variable, &idle, 5),
+                Resolution::Missing(MissingReason::NoValue),
+                "{variable:?}"
+            );
+        }
+        let working = session(S::Working);
+        for variable in WorkSessionVariable::ALL {
+            // Every value has its declared type.
+            assert_eq!(
+                value(variable, &working, 10_000).value_type(),
+                variable.value_type(),
+                "{variable:?}"
+            );
+        }
+        assert_eq!(
+            value(WorkSessionVariable::Id, &working, 0),
+            VariableValue::String(working.session.unwrap().to_string())
+        );
+        assert_eq!(
+            value(WorkSessionVariable::State, &working, 0),
+            VariableValue::String("working".into())
+        );
+        assert_eq!(
+            value(WorkSessionVariable::StartedAt, &working, 0),
+            VariableValue::String("2026-11-12T08:00:00Z".into())
+        );
+        assert_eq!(
+            value(WorkSessionVariable::ProjectId, &working, 0),
+            VariableValue::ProjectId(working.project.unwrap())
+        );
+        assert_eq!(
+            value(WorkSessionVariable::CanFinish, &working, 0),
+            VariableValue::Boolean(true)
+        );
+        // Elapsed time is computed when resolved: the timer runs on from
+        // the snapshot, never backwards.
+        let elapsed = |snapshot: &WorkSessionSnapshot, now| {
+            value(WorkSessionVariable::ElapsedSeconds, snapshot, now)
+        };
+        assert_eq!(elapsed(&working, 10_000), VariableValue::Integer(125));
+        assert_eq!(elapsed(&working, 70_000), VariableValue::Integer(185));
+        assert_eq!(elapsed(&working, 0), VariableValue::Integer(125));
+        for state in [S::VerifyingEnd, S::ReadyToFinish] {
+            assert_eq!(
+                elapsed(&session(state), 70_000),
+                VariableValue::Integer(185)
+            );
+        }
+        // Not counted before the start succeeded or once stopping.
+        for state in [S::Starting, S::Stopping] {
+            assert_eq!(
+                elapsed(&session(state), 70_000),
+                VariableValue::Integer(125)
+            );
+        }
+        // Not verified yet, no project, no start time: no value.
+        let bare = WorkSessionSnapshot {
+            verification: None,
+            project: None,
+            started_at_ms: None,
+            ..session(S::Starting)
+        };
+        assert_eq!(
+            work_session_value(WorkSessionVariable::CanFinish, &bare, 0),
+            Resolution::Missing(MissingReason::NoValue)
+        );
+        assert_eq!(
+            work_session_value(WorkSessionVariable::StartedAt, &bare, 0),
+            Resolution::Missing(MissingReason::NoValue)
+        );
+        assert_eq!(
+            work_session_value(WorkSessionVariable::ProjectId, &bare, 0),
+            Resolution::Missing(MissingReason::NoProject)
+        );
+        // Verification details are never a value.
+        let all: Vec<_> = WorkSessionVariable::ALL
+            .map(|v| format!("{:?}", work_session_value(v, &working, 0)))
+            .to_vec();
+        assert!(!all.join(" ").contains("token=abc"));
+    }
+
+    #[test]
+    fn only_changed_work_session_variables_are_announced() {
+        use deckpilot_core::work_session::WorkSessionState as S;
+        let working = session(S::Working);
+        let paths = |before: &WorkSessionSnapshot, after: &WorkSessionSnapshot| {
+            changed_work_session_variables(before, after)
+        };
+        // Time passing is not a change clients are told about.
+        let later = WorkSessionSnapshot {
+            elapsed_ms: 999_000,
+            as_of_ms: 999_000,
+            ..working.clone()
+        };
+        assert_eq!(paths(&working, &later), Vec::<String>::new());
+        // A new or ended session changes everything.
+        assert_eq!(
+            paths(&WorkSessionSnapshot::idle(0), &working).len(),
+            WorkSessionVariable::ALL.len()
+        );
+        assert_eq!(
+            paths(&working, &WorkSessionSnapshot::idle(0)).len(),
+            WorkSessionVariable::ALL.len()
+        );
+        let verifying = WorkSessionSnapshot {
+            verification: None,
+            ..session(S::VerifyingEnd)
+        };
+        let verifying = WorkSessionSnapshot {
+            session: working.session,
+            project: working.project,
+            ..verifying
+        };
+        assert_eq!(
+            paths(&working, &verifying),
+            ["system.work.session.state", "system.work.session.canFinish"]
+        );
+        let stopping = WorkSessionSnapshot {
+            state: S::Stopping,
+            ..working.clone()
+        };
+        assert_eq!(
+            paths(&working, &stopping),
+            [
+                "system.work.session.state",
+                "system.work.session.elapsedSeconds"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_catalog_lists_the_work_session_with_or_without_one() {
+        let (db, profile) = store();
+        let variables = db.shared_variables_for(profile.id).unwrap();
+        let context = ResolutionContext::preview(profile.id);
+        for active in [false, true] {
+            let entries: Vec<CatalogEntry> = catalog(&variables, &context, active)
+                .into_iter()
+                .filter(|e| e.reference.to_string().starts_with("system.work.session."))
+                .collect();
+            assert_eq!(entries.len(), WorkSessionVariable::ALL.len());
+            for (entry, variable) in entries.iter().zip(WorkSessionVariable::ALL) {
+                assert_eq!(entry.reference.to_string(), variable.path());
+                assert_eq!(entry.value_type, variable.value_type());
+                assert_eq!(entry.description, variable.description());
+                assert_eq!(entry.group, VariableGroup::System);
+                assert!(entry.dynamic && !entry.sensitive);
+                assert_eq!(
+                    entry.availability,
+                    if active {
+                        ReferenceAvailability::Available
+                    } else {
+                        ReferenceAvailability::RuntimeOnly
+                    }
+                );
+                // Listed by default, so a workflow can be written while idle.
+                assert!(CatalogFilter::default().matches(entry));
+            }
+        }
     }
 }
