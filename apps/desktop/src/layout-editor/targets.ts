@@ -6,7 +6,7 @@ export interface TargetOption {
   value: string
   label: string
   target: BindingTarget
-  kind: "action" | "workflow" | "navigation"
+  kind: "action" | "workflow" | "navigation" | "stateful"
   icon?: string | null
 }
 
@@ -84,12 +84,23 @@ export function targetGroups(
 
 /**
  * Targets offered only on gesture rows (single click, double click, long
- * press), after `targetGroups`. This is the slot for the Work Session
- * controller (workstream G4): a "Work Session controller" group whose
- * option encodes the stateful `BindingTarget` once the contract in
- * `lib/types.ts` has one, with `encodeTarget`/`decodeTarget` extended to
- * match. Until then there are none.
+ * press), after `targetGroups`: the Work Session controller, a stateful key
+ * with the machine's default rules. It needs no action instance; the agent
+ * asks the work session for the operation its state and the gesture pick.
  */
 export function gestureOnlyGroups(): TargetGroup[] {
-  return []
+  const target: BindingTarget = { type: "stateful", machine: "workSession" }
+  return [
+    {
+      label: "Work Session",
+      options: [
+        {
+          value: encodeTarget(target),
+          label: "Work Session controller",
+          target,
+          kind: "stateful",
+        },
+      ],
+    },
+  ]
 }
