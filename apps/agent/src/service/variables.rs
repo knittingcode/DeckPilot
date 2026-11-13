@@ -150,6 +150,9 @@ pub struct VariableStore {
     disabled_modules: RwLock<BTreeSet<ModuleId>>,
     /// The live work session; none in stores made for tests.
     work_session: Option<WorkSessionSource>,
+    /// Descriptors of the devices the agent knows, with their driver
+    /// (`Agent::device_descriptor`), for the device slot of resolutions.
+    devices: RwLock<BTreeMap<deckpilot_device::DeviceId, deckpilot_device::DeviceDescriptor>>,
 }
 
 impl VariableStore {
@@ -175,6 +178,19 @@ impl VariableStore {
         let changed = changed_keys(&current, &snapshots);
         *current = snapshots;
         Ok(changed)
+    }
+
+    /// Records how `device` is described, or forgets it.
+    pub fn set_device(
+        &self,
+        device: deckpilot_device::DeviceId,
+        descriptor: Option<deckpilot_device::DeviceDescriptor>,
+    ) {
+        let mut devices = self.devices.write().unwrap_or_else(PoisonError::into_inner);
+        match descriptor {
+            Some(descriptor) => devices.insert(device, descriptor),
+            None => devices.remove(&device),
+        };
     }
 
     pub fn set_disabled_modules(&self, modules: BTreeSet<ModuleId>) {
@@ -209,6 +225,17 @@ impl VariableResolver for VariableStore {
 
 /// The live state of core and module variables: the work session now.
 impl LiveState for VariableStore {
+    fn device(
+        &self,
+        device: &deckpilot_device::DeviceId,
+    ) -> Option<deckpilot_device::DeviceDescriptor> {
+        self.devices
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(device)
+            .cloned()
+    }
+
     fn work_session(&self) -> Option<WorkSessionSnapshot> {
         self.work_session
             .as_ref()
@@ -543,6 +570,12 @@ impl Agent {
     }
 
     pub(super) fn publish_device_context(&self, device: Option<deckpilot_device::DeviceId>) {
+        // The device slot of resolutions reads the agent's descriptor,
+        // with the driver that provides the device.
+        if let Some(device) = &device {
+            self.variables
+                .set_device(device.clone(), self.device_descriptor(device));
+        }
         let _ = self
             .handle
             .events
@@ -606,6 +639,50 @@ mod tests {
 
     fn name(store: &VariableStore, context: &ResolutionContext) -> Resolution {
         store.resolve(&VariableRef::parse("shared.team.name").unwrap(), context)
+    }
+
+    #[test]
+    fn the_device_slot_reads_the_agents_descriptor() {
+        use deckpilot_core::variables::{VariableEnvironment, VariableId};
+        use deckpilot_device::{DeviceId, DeviceModelId, DriverInfo, ModelCatalog, models};
+        let (_, profile) = store();
+        let device = DeviceId {
+            model: DeviceModelId::new(models::STREAM_DECK_MK2_ID),
+            serial: "VARIABLES-1".into(),
+        };
+        let driver = DriverInfo {
+            id: "mock".into(),
+            version: "1".into(),
+        };
+        let variables = VariableStore::default();
+        assert_eq!(variables.device(&device), None);
+        // What `Agent::device_descriptor` gives: the catalog's model data
+        // and the driver of the backend.
+        let descriptor = ModelCatalog::builtin()
+            .describe(&device, Some(driver.clone()))
+            .unwrap();
+        variables.set_device(device.clone(), Some(descriptor.clone()));
+        assert_eq!(variables.device(&device), Some(descriptor.clone()));
+        let context = ResolutionContext::preview(profile.id).with_device(Some(device.clone()));
+        let environment = VariableEnvironment {
+            context: &context,
+            profile: &profile,
+            os: deckpilot_core::Os::Linux,
+            live: &variables,
+        };
+        let slot = environment.device().unwrap();
+        assert_eq!(slot.display_name(), Some(descriptor.display_name.clone()));
+        assert_eq!(slot.reference_id(), device.to_string());
+        assert!(matches!(
+            builtin().variables().resolve(
+                &VariableId::new("system.device.current.id").unwrap(),
+                &environment
+            ),
+            Resolution::Value { value: deckpilot_core::variables::VariableValue::String(id), .. }
+                if id == device.to_string()
+        ));
+        variables.set_device(device.clone(), None);
+        assert_eq!(variables.device(&device), None);
     }
 
     #[test]

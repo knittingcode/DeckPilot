@@ -754,6 +754,18 @@ async fn module_variables_have_owners_and_follow_the_module() {
         .preview(ResolutionContext::preview(s.work.id), &both)
         .await;
     assert_eq!(active[0]["status"]["value"]["value"], "SHOP");
+    // The connected device, through the agent's descriptor.
+    let device = deckpilot_device::DeviceId {
+        model: models::stream_deck_mk2().id,
+        serial: "VARIABLES-1".into(),
+    };
+    let previews = s
+        .preview(
+            ResolutionContext::preview(s.work.id).with_device(Some(device.clone())),
+            &[("system.device.current.id", None)],
+        )
+        .await;
+    assert_eq!(previews[0]["status"]["value"]["value"], device.to_string());
 
     // A protocol 8 client gets the catalog it knew.
     let mut old = AgentClient::connect_with_protocol(&s.agent.paths, ClientKind::Desktop, 8)
