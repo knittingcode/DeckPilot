@@ -23,7 +23,8 @@ pub use import::{
     ConflictResolution, ImportMode, ImportOptions, ImportPreview, ImportSummary, plan, preview,
 };
 pub use payload::{
-    AppSettings, ExportOptions, ModuleExport, PAYLOAD_VERSION, Payload, UpdateSettings, export,
+    AppSettings, ExportOptions, ExportedValue, ModuleExport, PAYLOAD_VERSION, Payload,
+    UpdateSettings, VariablesExport, export,
 };
 
 #[derive(Debug, Error)]
