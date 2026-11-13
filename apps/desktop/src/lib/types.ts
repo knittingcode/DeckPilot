@@ -1234,3 +1234,52 @@ export type WorkSessionVariable =
   | "system.work.session.elapsedSeconds"
   | "system.work.session.projectId"
   | "system.work.session.canFinish"
+
+// Shared Variables settings page (workstream D). Mirrors of the variable
+// store (deckpilot_storage::variables, variable_references); the Tauri
+// commands come with the store.
+
+/** One place that uses a shared variable. */
+export type VariableUse =
+  /** A parameter or the label of an action instance. */
+  | { type: "action"; action: string }
+  /** A step, node, input or other part of a workflow. */
+  | { type: "workflow"; workflow: string; node?: string }
+  /** The label (or inline action) of a layout binding. */
+  | { type: "binding"; layout: string; page: string; control: ControlId; trigger: Trigger }
+  /** A trigger of a workflow that uses the variable; follows the workflow. */
+  | {
+      type: "trigger"
+      workflow: string
+      index: number
+      kind: { type: "schedule"; schedule: Schedule } | { type: "lifecycle"; event: LifecycleEvent }
+    }
+
+/** A use of a shared variable, with names for display. */
+export interface VariableReference {
+  profile: string
+  profileName: string
+  use: VariableUse
+  /** The action, workflow or layout name. */
+  ownerName: string
+  /** Where inside it, e.g. `parameters.project_id`. */
+  path: string
+}
+
+/** A value of a shared variable at one scope. */
+export interface SharedVariableValue {
+  scope: ScopeKey
+  /** Left out for sensitive variables: their values are never sent. */
+  value?: VariableValue
+}
+
+/**
+ * A shared variable as the settings page shows it: the definition, the
+ * values that apply to the profile being edited (global, the profile, its
+ * projects) and every use in any profile.
+ */
+export interface SharedVariable {
+  definition: VariableDefinition
+  values: SharedVariableValue[]
+  references: VariableReference[]
+}

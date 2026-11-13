@@ -42,11 +42,15 @@ import type {
   ResolutionContext,
   ResourceCheck,
   ResourceKind,
+  ScopeKey,
+  SharedVariable,
   UpdateInfo,
   UpdatePreferences,
   ReferenceChangeResult,
   ReferenceSelection,
   UpdateState,
+  VariableDefinition,
+  VariableValue,
   Workflow,
   WorkflowReport,
 } from "./types"
@@ -136,6 +140,22 @@ export const api = {
   setCredential: (id: string, description: string, secret: string | null) =>
     invoke<CredentialInfo[]>("set_credential", { id, description, secret }),
   deleteCredential: (id: string) => invoke<CredentialInfo[]>("delete_credential", { id }),
+
+  /**
+   * Shared variables with the values that apply to `profileId` (global
+   * ones only without a profile); sensitive values are left out.
+   */
+  listSharedVariables: (profileId: string | null) =>
+    invoke<SharedVariable[]>("list_shared_variables", { profileId }),
+  /** Creates or updates a definition; keys cannot be renamed. Refuses retyping a used variable. */
+  saveSharedVariable: (definition: VariableDefinition) =>
+    invoke<null>("save_shared_variable", { definition }),
+  /** Refused while the variable is used. */
+  deleteSharedVariable: (key: string) => invoke<null>("delete_shared_variable", { key }),
+  setSharedVariableValue: (key: string, scope: ScopeKey, value: VariableValue) =>
+    invoke<null>("set_shared_variable_value", { key, scope, value }),
+  clearSharedVariableValue: (key: string, scope: ScopeKey) =>
+    invoke<null>("clear_shared_variable_value", { key, scope }),
 
   listProfiles: () => invoke<ProfilesView>("list_profiles"),
   getProfile: (profileId: string) => invoke<ProfileView>("get_profile", { profileId }),
