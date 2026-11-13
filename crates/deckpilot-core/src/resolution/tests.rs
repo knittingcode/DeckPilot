@@ -784,3 +784,93 @@ fn key_states_resolve_references_too() {
             .is_none()
     );
 }
+
+/// Answers only the work session variables, like the agent's resolver.
+struct Session(crate::ProjectId);
+
+impl VariableResolver for Session {
+    fn resolve(&self, reference: &VariableRef, _context: &ResolutionContext) -> Resolution {
+        match reference {
+            VariableRef::System(SystemVariable::WorkSessionProjectId) => Resolution::Value {
+                value: VariableValue::ProjectId(self.0),
+                source: ValueSource::System,
+                sensitive: false,
+            },
+            VariableRef::System(SystemVariable::WorkSessionElapsedSeconds) => Resolution::Value {
+                value: VariableValue::Integer(65),
+                source: ValueSource::System,
+                sensitive: false,
+            },
+            _ => Resolution::Missing(MissingReason::NoValue),
+        }
+    }
+}
+
+#[test]
+fn work_session_variables_come_from_the_shared_resolver() {
+    use crate::work_session::WorkSessionVariable;
+
+    let f = Fixture::new();
+    let context = Invocation::default().context(&f.profile, None);
+    for variable in WorkSessionVariable::ALL {
+        let system = SystemVariable::from(variable);
+        assert_eq!(system.work_session(), Some(variable));
+        assert_eq!(system.path(), variable.path());
+        assert_eq!(system.value_type(), variable.value_type());
+        assert!(system.dynamic() && !system.runtime_only());
+        // Nothing in the context knows a session.
+        assert_eq!(
+            system_value(system, &f.profile, Os::Linux, &context),
+            Resolution::Missing(MissingReason::NoValue)
+        );
+        assert_eq!(
+            NoSharedVariables.resolve(&VariableRef::System(system), &context),
+            Resolution::Missing(MissingReason::NoValue)
+        );
+    }
+    let resolve = |session: &Session, text: &str| {
+        ContextResolver {
+            profile: &f.profile,
+            os: Os::Linux,
+            shared: session,
+            outputs: None,
+        }
+        .resolve(&VariableRef::parse(text).unwrap(), &context)
+    };
+    let own = Session(f.profile.projects[0].id);
+    assert!(matches!(
+        resolve(&own, "system.work.session.elapsedSeconds"),
+        Resolution::Value {
+            value: VariableValue::Integer(65),
+            ..
+        }
+    ));
+    assert!(matches!(
+        resolve(&own, "system.work.session.projectId"),
+        Resolution::Value { value: VariableValue::ProjectId(id), .. } if id == own.0
+    ));
+    // A session started in another profile names none of these projects.
+    let foreign = Session(crate::ProjectId::new());
+    assert_eq!(
+        resolve(&foreign, "system.work.session.projectId"),
+        Resolution::Missing(MissingReason::OtherProfile)
+    );
+    // In a template, through the whole pipeline.
+    let found = resolve_parameters(
+        Probe::new().definition(),
+        &ActionParameters::new().with(
+            "message",
+            template("{{ system.work.session.elapsedSeconds }}s"),
+        ),
+        &ContextResolver {
+            profile: &f.profile,
+            os: Os::Linux,
+            shared: &own,
+            outputs: None,
+        },
+        &context,
+        &f.profile,
+    )
+    .unwrap();
+    assert_eq!(found.parameters.text("message"), Some("65s"));
+}

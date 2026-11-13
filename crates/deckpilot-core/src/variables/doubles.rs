@@ -179,6 +179,13 @@ impl MemoryVariables {
                 Some(execution) => value(VariableValue::String(execution.to_string())),
                 None => Resolution::Missing(MissingReason::NoExecution),
             },
+            // There is no work session outside the agent.
+            SystemVariable::WorkSessionId
+            | SystemVariable::WorkSessionState
+            | SystemVariable::WorkSessionStartedAt
+            | SystemVariable::WorkSessionElapsedSeconds
+            | SystemVariable::WorkSessionProjectId
+            | SystemVariable::WorkSessionCanFinish => Resolution::Missing(MissingReason::NoValue),
         }
     }
 }
