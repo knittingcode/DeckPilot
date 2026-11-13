@@ -1,10 +1,9 @@
-import { Lock, Plus, Save, Search, Trash2 } from "lucide-react"
+import { Plus, Save, Trash2 } from "lucide-react"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { EmptyState, ErrorNotice, Loading } from "@/components/page"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -20,12 +19,12 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useAsync } from "@/hooks/use-async"
+import { VariablesTable } from "@/pages/variables-table"
 import { api, errorMessage } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
 import {
   RESOURCE_KINDS,
   STORED_SCOPES,
-  SYSTEM_VARIABLES,
   VALUE_TYPES,
   type ValueDraft,
   describeVariableReference,
@@ -38,7 +37,6 @@ import {
   sameScope,
   scopeLabel,
   slotsFor,
-  typeLabel,
 } from "@/lib/shared-variables"
 import type {
   CredentialInfo,
@@ -61,9 +59,12 @@ interface Data {
 const NEW = "__new__"
 
 /**
- * Shared variables: named, typed values that actions and workflows read
- * with `{{ shared.<key> }}`, set globally, per profile or per project.
- * System variables are listed read-only. Sensitive values are only ever
+ * Variables: one table of every variable, whoever owns it (DeckPilot, a
+ * module or the user), with search and owner, type and scope filters
+ * (docs/variables.md). Core and module variables are read-only; shared
+ * variables — named, typed values that actions and workflows read with
+ * `{{ shared.<key> }}`, set globally, per profile or per project — are
+ * created, edited and deleted here. Sensitive values are only ever
  * written here, never shown; a stored-credential variable holds the name
  * of a credential, never its secret.
  */
@@ -83,7 +84,6 @@ export function SharedVariablesSettings() {
     `${profileId ?? ""}:${revision}:${generation}`,
   )
   const [selected, setSelected] = useState<string | null>(null)
-  const [query, setQuery] = useState("")
   const reload = () => {
     setGeneration((g) => g + 1)
   }
@@ -91,25 +91,20 @@ export function SharedVariablesSettings() {
   if (data.state.status === "loading") return <Loading />
   if (data.state.status === "error") return <ErrorNotice error={data.state.error} />
   const { variables, projects, credentials } = data.state.data
-  const needle = query.trim().toLowerCase()
-  const shown = variables.filter(({ definition: d }) =>
-    `shared.${d.key} ${d.label ?? ""} ${d.description ?? ""} ${typeLabel(d.valueType)}`
-      .toLowerCase()
-      .includes(needle),
-  )
   const current =
     selected && selected !== NEW ? variables.find((v) => v.definition.key === selected) : undefined
 
   return (
     <>
       <p className="text-sm text-muted-foreground">
-        Values that actions and workflows read with {"{{ shared.<key> }}"}. A value set for a
-        project wins over the profile&apos;s, which wins over the global one.
+        Every value actions, workflows and keys can read. Insert one with {"{{ reference }}"}. For
+        shared variables, a value set for a project wins over the profile&apos;s, which wins over
+        the global one.
       </p>
       <Card>
         <CardHeader className="gap-3">
           <div className="flex items-center justify-between gap-2">
-            <CardTitle>Shared variables</CardTitle>
+            <CardTitle>Variables</CardTitle>
             <Button
               type="button"
               size="sm"
@@ -120,63 +115,14 @@ export function SharedVariablesSettings() {
               <Plus /> New variable
             </Button>
           </div>
-          <div className="relative">
-            <Search className="absolute top-2.5 left-2 size-4 text-muted-foreground" />
-            <Input
-              className="pl-8"
-              placeholder="Search variables"
-              aria-label="Search variables"
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value)
-              }}
-            />
-          </div>
         </CardHeader>
-        <CardContent>
-          {variables.length === 0 ? (
+        <CardContent className="grid gap-3">
+          {variables.length === 0 && (
             <EmptyState title="No shared variables yet">
               Create one to use the same value in several actions and workflows.
             </EmptyState>
-          ) : shown.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No variables match.</p>
-          ) : (
-            <ul className="grid gap-1" aria-label="Shared variables">
-              {shown.map(({ definition: d, references }) => (
-                <li key={d.key}>
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none data-[selected=true]:bg-accent"
-                    data-selected={selected === d.key}
-                    onClick={() => {
-                      setSelected(d.key)
-                    }}
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-mono">shared.{d.key}</span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {d.label ? `${d.label} · ` : ""}
-                        {typeLabel(d.valueType)}
-                      </span>
-                    </span>
-                    {d.sensitive && (
-                      <Badge variant="outline">
-                        <Lock /> Sensitive
-                      </Badge>
-                    )}
-                    {references.filter(isDirectUse).length > 0 && (
-                      <Badge
-                        variant="secondary"
-                        title={`Used ${references.filter(isDirectUse).length} time(s)`}
-                      >
-                        {references.filter(isDirectUse).length}
-                      </Badge>
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
           )}
+          <VariablesTable shared={variables} selected={selected} onEdit={setSelected} />
         </CardContent>
       </Card>
 
@@ -199,39 +145,7 @@ export function SharedVariablesSettings() {
           }}
         />
       )}
-
-      <SystemVariables />
     </>
-  )
-}
-
-/**
- * Read-only references DeckPilot provides. The list is the known set; the
- * variable picker shows their current values from the agent.
- */
-function SystemVariables() {
-  const entries = SYSTEM_VARIABLES
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>System variables</CardTitle>
-        <CardDescription>Read-only values DeckPilot provides when an action runs.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <ul className="grid gap-2 text-sm" aria-label="System variables">
-          {entries.map((entry) => (
-            <li key={entry.reference} className="grid">
-              <span className="font-mono">{`{{ ${entry.reference} }}`}</span>
-              <span className="text-xs text-muted-foreground">
-                {entry.label} · {typeLabel(entry.valueType)}
-                {entry.availability === "runtimeOnly" ? " · only while a workflow runs" : ""}
-                {entry.description ? ` — ${entry.description}` : ""}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </CardContent>
-    </Card>
   )
 }
 
