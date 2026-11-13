@@ -77,8 +77,11 @@ export function needsConversion(
   pageId: string,
   control: ControlId,
   gesture: Gesture,
+  target?: BindingTarget | null,
 ): boolean {
-  return gesture !== "click" && keyMode(layout, pageId, control) === "raw"
+  if (keyMode(layout, pageId, control) !== "raw") return false
+  // A stateful target needs a gesture trigger, a single click too.
+  return gesture !== "click" || target?.type === "stateful"
 }
 
 function mapPage(
@@ -135,7 +138,11 @@ export function setGesture(
   gesture: Gesture,
   target: BindingTarget | null,
 ): DeviceLayout {
-  const trigger = triggerFor(keyMode(layout, pageId, control), gesture)
+  const mode = keyMode(layout, pageId, control)
+  // Stateful targets are only valid on gestures: on an empty key the single
+  // click is a `click` (alone it still fires on the press).
+  const trigger: Trigger =
+    target?.type === "stateful" && mode === "empty" ? { type: gesture } : triggerFor(mode, gesture)
   return mapPage(layout, pageId, (page) => {
     const index = page.bindings.findIndex(
       (b) => sameControl(b.control, control) && b.trigger.type === trigger.type,

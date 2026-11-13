@@ -90,6 +90,10 @@ describe("gesture model", () => {
     expect(needsConversion(l, "home", key(0), "longPress")).toBe(true)
     expect(needsConversion(l, "home", key(0), "click")).toBe(false)
     expect(needsConversion(l, "home", key(2), "longPress")).toBe(false)
+    // A stateful target needs gestures, also on the single click.
+    const workSession = { type: "stateful", machine: "workSession" } as const
+    expect(needsConversion(l, "home", key(0), "click", workSession)).toBe(true)
+    expect(triggers(setGesture(l, "home", key(2), "click", workSession), key(2))).toEqual(["click"])
 
     const { layout: converted, removed } = convertToGestures(l, "home", key(0))
     expect(removed.map((b) => b.trigger.type)).toEqual(["release"])
