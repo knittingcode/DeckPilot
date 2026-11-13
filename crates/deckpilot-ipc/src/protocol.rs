@@ -20,7 +20,7 @@ use deckpilot_core::{
     ExecutionRecord, ExecutionSummary, LayoutStatus, ProfileId, Project, ProjectId, WorkSessionId,
     WorkflowId, WorkflowReport,
 };
-use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId};
+use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceDescriptor, DeviceId};
 
 use crate::work_session::{MAX_WORK_SESSION_LIST, WorkSessionSettings, WorkSessionSummary};
 
@@ -792,6 +792,11 @@ pub struct DeviceInfo {
     /// Backend providing the device: `elgato-hid` for USB, `mock` for
     /// simulated devices.
     pub source: String,
+    /// Vendor-neutral description of the device: vendor, model, serial,
+    /// capabilities, driver and verification status. Absent from older
+    /// agents and for models the agent does not know.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub descriptor: Option<DeviceDescriptor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1134,6 +1139,42 @@ mod tests {
             Response::ActionResult { result }
         );
         assert_eq!(Response::Ok.for_protocol(1), Response::Ok);
+    }
+
+    /// The descriptor is an additive field: older agents send none, and
+    /// older clients ignore it.
+    #[test]
+    fn device_info_descriptor_is_optional_both_ways() {
+        let old = serde_json::json!({
+            "id": {"model": "elgato.streamdeck.mk2", "serial": "A1"},
+            "modelName": "Stream Deck MK.2",
+            "state": "connected",
+            "layout": {"type": "missing"},
+            "page": null,
+            "source": "elgato-hid",
+        });
+        let info: DeviceInfo = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(info.descriptor, None);
+        assert_eq!(serde_json::to_value(&info).unwrap(), old);
+
+        let catalog = deckpilot_device::ModelCatalog::builtin();
+        let descriptor = catalog
+            .describe(
+                &info.id,
+                Some(deckpilot_device::DriverInfo {
+                    id: "elgato-hid".into(),
+                    version: "0.6.0".into(),
+                }),
+            )
+            .unwrap();
+        let new = DeviceInfo {
+            descriptor: Some(descriptor),
+            ..info
+        };
+        let json = serde_json::to_value(&new).unwrap();
+        assert_eq!(json["descriptor"]["vendorId"], "elgato");
+        assert_eq!(json["descriptor"]["driver"]["id"], "elgato-hid");
+        assert_eq!(serde_json::from_value::<DeviceInfo>(json).unwrap(), new);
     }
 
     #[test]
