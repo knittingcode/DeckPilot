@@ -120,6 +120,8 @@ export interface BuilderProps {
   /** Shown above the canvas, e.g. the workflow switcher. */
   toolbar?: ReactNode
   canRun: boolean
+  /** Why the workflow cannot run (with what to do); shown on the Run button. */
+  runBlocked?: string | null
   running: boolean
   onRun: () => void
   onCancelRun?: () => void
@@ -203,6 +205,7 @@ function Builder({
   workflowPanel,
   toolbar,
   canRun,
+  runBlocked,
   running,
   onRun,
   onCancelRun,
@@ -385,7 +388,9 @@ function Builder({
         toast.success("Workflow saved")
         onSaved(saved.id)
       })
-      .catch((e: unknown) => toast.error(errorMessage(e)))
+      .catch((e: unknown) =>
+        toast.error("The workflow was not saved", { description: errorMessage(e) }),
+      )
       .finally(() => {
         setSaving(false)
       })
@@ -442,8 +447,8 @@ function Builder({
         })
       })
       .catch((e: unknown) => {
-        toast.error(errorMessage(e), {
-          description: "Create the action in the Action Library first.",
+        toast.error("The action was not created", {
+          description: `${errorMessage(e)} You can create it in the Action Library instead.`,
         })
       })
   }
@@ -506,7 +511,7 @@ function Builder({
             ? "Save first; runs in the agent for the active profile"
             : canRun
               ? `Run “${initial.name}” in the agent`
-              : "Runs in the agent for the active profile",
+              : (runBlocked ?? "Runs in the agent for the active profile"),
         onSelect: running ? onCancelRun : onRun,
       },
     ],
@@ -905,7 +910,11 @@ function Builder({
                                 toast.success("Workflow duplicated")
                                 onSaved(copy.id)
                               })
-                              .catch((e: unknown) => toast.error(errorMessage(e)))
+                              .catch((e: unknown) =>
+                                toast.error("The workflow was not duplicated", {
+                                  description: errorMessage(e),
+                                }),
+                              )
                           }}
                         >
                           <Copy /> Duplicate
@@ -934,7 +943,11 @@ function Builder({
                                 toast.success("Workflow deleted")
                                 onDeleted()
                               })
-                              .catch((e: unknown) => toast.error(errorMessage(e)))
+                              .catch((e: unknown) =>
+                                toast.error("The workflow was not deleted", {
+                                  description: errorMessage(e),
+                                }),
+                              )
                           }}
                         />
                       </div>
