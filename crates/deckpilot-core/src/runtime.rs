@@ -68,6 +68,10 @@ pub struct Engine {
     variables: std::sync::Arc<dyn VariableResolver>,
     /// The application's active project per profile.
     projects: std::sync::Arc<dyn ProjectResolver>,
+    /// The core's and the modules' variables.
+    variable_registry: std::sync::Arc<crate::variables::VariableRegistry>,
+    /// Live values outside the context (the agent's work session).
+    live: std::sync::Arc<dyn crate::variables::LiveState>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -92,7 +96,29 @@ impl Engine {
             notifier: std::sync::Arc::new(crate::notify::NoNotifier),
             variables: std::sync::Arc::new(NoSharedVariables),
             projects: std::sync::Arc::new(crate::variables::doubles::FixedProjects::default()),
+            variable_registry: std::sync::Arc::new(crate::variables::VariableRegistry::new()),
+            live: std::sync::Arc::new(crate::variables::NoLiveState),
         }
+    }
+
+    /// The engine with the variables of the core and of the registered
+    /// modules ([`crate::ModuleRegistry::variables`]). Without it only the
+    /// core's variables resolve; module variables are unavailable.
+    #[must_use]
+    pub fn with_variable_registry(
+        self,
+        variable_registry: std::sync::Arc<crate::variables::VariableRegistry>,
+    ) -> Self {
+        Self {
+            variable_registry,
+            ..self
+        }
+    }
+
+    /// The engine with live values, such as the agent's work session.
+    #[must_use]
+    pub fn with_live_state(self, live: std::sync::Arc<dyn crate::variables::LiveState>) -> Self {
+        Self { live, ..self }
     }
 
     /// The engine with the shared variables actions may reference.
@@ -107,9 +133,9 @@ impl Engine {
         Self { projects, ..self }
     }
 
-    /// The resolver for references of actions in `profile`: system
-    /// variables from the context, shared variables from this engine's
-    /// store, node outputs from `outputs`.
+    /// The resolver for references of actions in `profile`: core and
+    /// module variables from the registry, shared variables from this
+    /// engine's store, node outputs from `outputs`.
     pub fn resolver<'a>(
         &'a self,
         profile: &'a Profile,
@@ -121,6 +147,8 @@ impl Engine {
             os: machine.os,
             shared: self.variables.as_ref(),
             outputs,
+            registry: &self.variable_registry,
+            live: self.live.as_ref(),
         }
     }
 

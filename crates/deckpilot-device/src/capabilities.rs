@@ -78,6 +78,24 @@ pub struct TouchSurface {
     pub gestures: Vec<TouchGesture>,
 }
 
+/// A family of capabilities that core code drives generically. Drivers
+/// implement them through [`crate::DeviceHandle`]; models declare them in
+/// [`DeviceCapabilities`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Capability {
+    /// Keys that report press and release.
+    Keys,
+    /// Keys that show images.
+    KeyDisplays,
+    /// Rotary encoders (dials).
+    Dials,
+    /// A touch-sensitive strip, split into zones.
+    TouchStrip,
+    /// Adjustable display brightness.
+    Brightness,
+}
+
 /// Everything a device model can do. Each control family is optional so that
 /// models with only keys, only encoders, or any combination can be described.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,9 +104,37 @@ pub struct DeviceCapabilities {
     pub keys: Option<KeyGrid>,
     pub encoders: Option<EncoderSpec>,
     pub touch: Option<TouchSurface>,
+    /// Whether the display brightness can be set. The agent only sends
+    /// brightness to devices that have it.
+    #[serde(default)]
+    pub brightness: bool,
 }
 
 impl DeviceCapabilities {
+    pub fn supports(&self, capability: Capability) -> bool {
+        match capability {
+            Capability::Keys => self.keys.is_some_and(|grid| grid.key_count() > 0),
+            Capability::KeyDisplays => self.keys.is_some_and(|grid| grid.image.is_some()),
+            Capability::Dials => self.encoders.is_some_and(|spec| spec.count > 0),
+            Capability::TouchStrip => self.touch.as_ref().is_some_and(|touch| touch.zones > 0),
+            Capability::Brightness => self.brightness,
+        }
+    }
+
+    /// The capability families of this model, in a stable order.
+    pub fn families(&self) -> Vec<Capability> {
+        [
+            Capability::Keys,
+            Capability::KeyDisplays,
+            Capability::Dials,
+            Capability::TouchStrip,
+            Capability::Brightness,
+        ]
+        .into_iter()
+        .filter(|capability| self.supports(*capability))
+        .collect()
+    }
+
     /// All addressable controls of the device in a stable order.
     pub fn controls(&self) -> Vec<ControlId> {
         let keys = self.keys.map_or(0, |grid| grid.key_count());
@@ -174,7 +220,25 @@ mod tests {
                 image: None,
                 gestures: vec![TouchGesture::Tap, TouchGesture::Swipe],
             }),
+            brightness: false,
         }
+    }
+
+    #[test]
+    fn capability_families() {
+        assert_eq!(
+            plus_like().families(),
+            vec![Capability::Keys, Capability::Dials, Capability::TouchStrip]
+        );
+        let none = DeviceCapabilities::default();
+        assert_eq!(none.families(), Vec::<Capability>::new());
+        let json = serde_json::to_value(plus_like()).unwrap();
+        assert_eq!(json["brightness"], false);
+        // Data without the field (older versions) reads as no brightness.
+        let mut old = json;
+        old.as_object_mut().unwrap().remove("brightness");
+        let back: DeviceCapabilities = serde_json::from_value(old).unwrap();
+        assert_eq!(back, plus_like());
     }
 
     #[test]

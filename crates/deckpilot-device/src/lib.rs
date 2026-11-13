@@ -9,9 +9,11 @@ mod backend;
 mod capabilities;
 mod catalog;
 mod control;
+mod descriptor;
 mod event;
 mod model;
 mod registry;
+mod verification;
 
 #[cfg(feature = "mock")]
 pub mod mock;
@@ -21,11 +23,13 @@ pub use backend::{
     KeyStateTracker,
 };
 pub use capabilities::{
-    DeviceCapabilities, EncoderSpec, ImageFormat, ImageSpec, ImageTransform, KeyGrid, TouchGesture,
-    TouchSurface,
+    Capability, DeviceCapabilities, EncoderSpec, ImageFormat, ImageSpec, ImageTransform, KeyGrid,
+    TouchGesture, TouchSurface,
 };
 pub use catalog::{ModelCatalog, models};
 pub use control::{ControlId, ControlInput, ControlKind, InputError};
+pub use descriptor::{DeviceDescriptor, DriverInfo};
 pub use event::{DeviceEvent, DeviceId};
 pub use model::{DeviceModel, DeviceModelId, HardwareSupport, UsbIdentity};
 pub use registry::{ConnectionState, DeviceRegistry, DeviceStatus};
+pub use verification::{ModelVerification, Platform, PlatformVerification, VerificationLevel};

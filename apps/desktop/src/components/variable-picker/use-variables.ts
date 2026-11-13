@@ -20,6 +20,8 @@ import {
   matchesFilter,
 } from "@/lib/variables"
 
+import { withoutDeprecated } from "@/lib/variable-catalog"
+
 import type { VariableScope } from "./scope"
 
 /** Delay between the last key typed into a search and the request. */
@@ -229,7 +231,10 @@ export function useVariableBrowser(
   kind: ParameterKind | undefined,
   enabled = true,
 ): BrowserState {
-  const catalog = useVariableCatalog(scope, query, kind, enabled)
+  const listed = useVariableCatalog(scope, query, kind, enabled)
+  // The picker offers canonical ids only, when the agent lists them
+  // (protocol 9); legacy ids keep working but are not inserted any more.
+  const catalog = { ...listed, entries: withoutDeprecated(listed.entries) }
   const groups = groupEntries(catalog.entries)
   const ordered = groups.flatMap((g) => g.entries)
   const [activeReference, setActive] = useState<string | null>(null)

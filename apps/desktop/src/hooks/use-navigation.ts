@@ -12,6 +12,7 @@ import {
   forward,
   initialNavigation,
   loadNavigation,
+  locationOf,
   openSettings,
   push,
   sanitize,
@@ -56,8 +57,14 @@ export function useNavigation(exists: ((location: Location) => boolean) | null) 
       })
     }
     return {
+      // Old page names (e.g. `models`) lead to where the page moved.
       navigate: (page: string) => {
-        setState((previous) => push(previous, { mode: "workspace", page }))
+        const location = locationOf(page)
+        setState((previous) =>
+          location.mode === "settings"
+            ? openSettings(previous, location.page)
+            : push(previous, location),
+        )
       },
       go: (location: Location) => {
         setState((previous) =>

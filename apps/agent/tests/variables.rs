@@ -687,3 +687,197 @@ async fn graph_runs_resolve_mappings_and_instance_references() {
     );
     agent.shutdown().await;
 }
+
+/// The unified registry over IPC: owners and canonical ids for protocol 9,
+/// the old catalog for older clients, and a disabled module's variables
+/// unavailable (never lost) until it is enabled again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // One module, disabled and enabled again.
+async fn module_variables_have_owners_and_follow_the_module() {
+    use deckpilot_core::variables::{VariableGroup, VariableOwner};
+    let s = setup().await;
+    let projects = ModuleId::new("projects").unwrap();
+    let everything = CatalogFilter {
+        include_unavailable: true,
+        ..CatalogFilter::default()
+    };
+    let entries = s.list(everything.clone()).await;
+    let entry = |reference: &str| {
+        entries
+            .iter()
+            .find(|e| e.reference.to_string() == reference)
+            .unwrap_or_else(|| panic!("{reference} is listed"))
+            .clone()
+    };
+    let canonical = entry("projects.current.key");
+    assert_eq!(canonical.group, VariableGroup::Module);
+    assert_eq!(
+        canonical.owner,
+        Some(VariableOwner::Module {
+            module: projects.clone()
+        })
+    );
+    assert!(canonical.read_only && canonical.deprecated.is_none());
+    assert_eq!(
+        canonical.declared_scope,
+        Some(deckpilot_core::variables::DeclaredScope::Project)
+    );
+    let legacy = entry("system.project.current.key");
+    assert_eq!(
+        legacy.deprecated.unwrap().canonical.as_str(),
+        "projects.current.key"
+    );
+    assert_eq!(entry("system.platform").owner, Some(VariableOwner::Core));
+    let team = entry("shared.team.name");
+    assert_eq!(team.owner, Some(VariableOwner::User));
+    assert!(!team.read_only);
+    assert_eq!(
+        entry("shared.docker.flag").owner,
+        Some(VariableOwner::Module {
+            module: ModuleId::new("docker").unwrap()
+        })
+    );
+
+    // Both spellings resolve alike.
+    let both = [
+        ("projects.current.key", None),
+        ("system.project.current.key", None),
+    ];
+    let previews = s
+        .preview(s.context(0, ProjectSource::Explicit), &both)
+        .await;
+    assert_eq!(previews[0]["status"], previews[1]["status"]);
+    assert_eq!(previews[0]["status"]["value"]["value"], "SHOP");
+    // A preview of the application's project without naming one sees the
+    // active project, as a key press would.
+    let active = s
+        .preview(ResolutionContext::preview(s.work.id), &both)
+        .await;
+    assert_eq!(active[0]["status"]["value"]["value"], "SHOP");
+
+    // A protocol 8 client gets the catalog it knew.
+    let mut old = AgentClient::connect_with_protocol(&s.agent.paths, ClientKind::Desktop, 8)
+        .await
+        .unwrap();
+    assert!(!old.supports(Capability::VariableRegistry));
+    let response = old
+        .request(Request::ListVariables {
+            context: Box::new(s.context(0, ProjectSource::Application)),
+            filter: Box::new(everything.clone()),
+        })
+        .await
+        .unwrap();
+    let Response::Variables { entries: listed } = response else {
+        panic!("variables");
+    };
+    let json = serde_json::to_value(&listed).unwrap();
+    for entry in json.as_array().unwrap() {
+        let reference = entry["reference"].as_str().unwrap();
+        assert!(
+            ["system.", "workflow.", "shared."]
+                .iter()
+                .any(|root| reference.starts_with(root)),
+            "{reference}"
+        );
+        assert!(entry.get("owner").is_none(), "{entry}");
+        assert!(entry.get("deprecated").is_none(), "{entry}");
+        assert!(entry.get("declaredScope").is_none(), "{entry}");
+    }
+    assert!(
+        listed
+            .iter()
+            .any(|e| e.reference.to_string() == "system.project.current.key")
+    );
+
+    // Disabling the projects module makes its canonical ids unavailable
+    // and says so. Legacy ids keep resolving exactly as before, and the
+    // configuration that uses them keeps running.
+    let mut events = s.agent.events().await;
+    s.agent
+        .store()
+        .set_module_state(
+            &projects,
+            &ModuleSettings {
+                enabled: false,
+                config: ActionParameters::new(),
+            },
+        )
+        .unwrap();
+    s.agent.request(Request::ReloadConfiguration).await.unwrap();
+    let changed = next_matching(&mut events, "sharedVariablesChanged", |e| {
+        matches!(e, AgentEvent::SharedVariablesChanged { keys } if keys.iter().any(|k| k.starts_with("projects.")))
+    })
+    .await;
+    let AgentEvent::SharedVariablesChanged { keys } = changed else {
+        unreachable!();
+    };
+    assert!(keys.iter().any(|k| k == "projects.current.key"), "{keys:?}");
+    let previews = s
+        .preview(s.context(0, ProjectSource::Explicit), &both)
+        .await;
+    assert_eq!(
+        previews[0]["status"],
+        json!({"status": "unavailable", "owner": "projects"})
+    );
+    assert_eq!(previews[1]["status"]["value"]["value"], "SHOP");
+    let listed = s.list(everything.clone()).await;
+    assert_eq!(
+        entry_of(&listed, "projects.current.key").availability,
+        ReferenceAvailability::Unavailable
+    );
+    assert_eq!(
+        entry_of(&listed, "system.project.current.key").availability,
+        ReferenceAvailability::Available
+    );
+    let response = old
+        .request(Request::PreviewReferences {
+            context: Box::new(s.context(0, ProjectSource::Explicit)),
+            items: vec![PreviewItem {
+                reference: "system.project.current.key".into(),
+                expected: None,
+            }],
+        })
+        .await
+        .unwrap();
+    let Response::ReferencePreviews { previews } = response else {
+        panic!("previews");
+    };
+    assert_eq!(
+        serde_json::to_value(&previews[0].status).unwrap()["value"]["value"],
+        "SHOP"
+    );
+    assert_eq!(s.run(s.greet).await, "hi shop crew on SHOP");
+    let stored = s.agent.store().load_profile(s.work.id).unwrap().unwrap();
+    assert_eq!(
+        stored.action(s.greet).unwrap().parameters.get("message"),
+        Some(&ParameterValue::Template(
+            "hi {{ shared.team.name }} on {{ system.project.current.key }}".into()
+        ))
+    );
+
+    // Enabled again, the same references resolve.
+    s.agent
+        .store()
+        .set_module_state(
+            &projects,
+            &ModuleSettings {
+                enabled: true,
+                config: ActionParameters::new(),
+            },
+        )
+        .unwrap();
+    s.agent.request(Request::ReloadConfiguration).await.unwrap();
+    assert_eq!(s.run(s.greet).await, "hi shop crew on SHOP");
+    s.agent.shutdown().await;
+}
+
+fn entry_of(
+    entries: &[deckpilot_core::variables::CatalogEntry],
+    reference: &str,
+) -> deckpilot_core::variables::CatalogEntry {
+    entries
+        .iter()
+        .find(|e| e.reference.to_string() == reference)
+        .unwrap()
+        .clone()
+}
