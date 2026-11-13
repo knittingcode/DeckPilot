@@ -13,6 +13,7 @@
 pub mod catalog;
 pub mod doubles;
 pub mod expression;
+pub mod registry;
 pub mod resolution;
 
 use std::collections::BTreeSet;
@@ -30,6 +31,11 @@ pub use catalog::{CatalogEntry, CatalogFilter, ReferenceAvailability, VariableGr
 pub use expression::{
     ExpressionError, ExpressionPart, SystemVariable, VariableRef, parse_expression,
     references_in_expression,
+};
+pub use registry::{
+    ALIASES, ContextDevice, DeclaredScope, Deprecation, LiveState, MODULE_NAMESPACES, NoLiveState,
+    Requirement, VariableAlias, VariableDeclaration, VariableEnvironment, VariableId,
+    VariableOwner, VariableRegistry, VariableRegistryError, VariableSource, module_namespace,
 };
 pub use resolution::{
     DeviceContext, ExecutionDependencies, MissingReason, PreviewItem, ProjectResolver,

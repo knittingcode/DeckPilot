@@ -218,6 +218,21 @@ describe("navigation hook", () => {
     expect(second.result.current.canGoBack).toBe(true)
   })
 
+  it("redirects links to the former Device Models page to Settings › Devices", () => {
+    const { result } = renderHook(() => useNavigation(() => true))
+    act(() => {
+      result.current.navigate("designer")
+    })
+    act(() => {
+      result.current.navigate("models")
+    })
+    expect(result.current.location).toEqual({ mode: "settings", page: "devices" })
+    act(() => {
+      result.current.closeSettings()
+    })
+    expect(result.current.location).toEqual({ mode: "workspace", page: "designer" })
+  })
+
   it("leaves pages that disappear, e.g. of a disabled module", () => {
     let exists: (location: { page: string }) => boolean = () => true
     const { result, rerender } = renderHook(({ check }) => useNavigation(check), {

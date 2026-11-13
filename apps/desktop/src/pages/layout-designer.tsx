@@ -31,8 +31,8 @@ import { api } from "@/lib/api"
 import { toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
 import { useFocusTarget } from "@/lib/focus"
-import { SUPPORT } from "@/lib/format"
-import type { DeviceLayout, DeviceModel } from "@/lib/types"
+import type { DeviceLayout, DeviceModel, Platform } from "@/lib/types"
+import { LEVELS, PLATFORM_LABELS, currentPlatform, verificationOn } from "@/lib/verification"
 
 export function LayoutDesignerPage() {
   return (
@@ -153,13 +153,7 @@ function Designer({ initialProfileId }: { initialProfileId: string }) {
         </CardContent>
       </Card>
 
-      {model.support !== "verified" && (
-        <Alert>
-          <Info />
-          <AlertTitle>{SUPPORT[model.support].label}</AlertTitle>
-          <AlertDescription>{SUPPORT[model.support].detail}</AlertDescription>
-        </Alert>
-      )}
+      <VerificationNotice model={model} />
 
       {layout ? (
         <LayoutEditor
@@ -369,5 +363,26 @@ function NewLayoutDialog({
         </form>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** Shown unless the model was tested on a physical device on this platform. */
+export function VerificationNotice({
+  model,
+  platform = currentPlatform(),
+}: {
+  model: DeviceModel
+  platform?: Platform
+}) {
+  const entry = verificationOn(model, platform)
+  if (entry.level === "physicallyVerified") return null
+  return (
+    <Alert>
+      <Info />
+      <AlertTitle>
+        {LEVELS[entry.level].label} on {PLATFORM_LABELS[platform]}
+      </AlertTitle>
+      <AlertDescription>{entry.evidence || LEVELS[entry.level].detail}</AlertDescription>
+    </Alert>
   )
 }

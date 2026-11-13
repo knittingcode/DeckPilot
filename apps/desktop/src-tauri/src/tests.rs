@@ -251,8 +251,27 @@ fn lists_static_catalogs() {
     );
     let models = h.ok("list_device_models", json!({}));
     assert_eq!(models[0]["id"], "elgato.streamdeck.mk2");
-    assert_eq!(models[0]["support"], "unverified");
+    assert_eq!(models[0]["support"], "verified");
     assert_eq!(models.as_array().unwrap().len(), 3);
+    // Per-platform verification with evidence; only the MK.2 on macOS was
+    // tested on a physical device.
+    let verification = models[0]["verification"].as_array().unwrap();
+    assert_eq!(verification.len(), 3);
+    assert_eq!(verification[0]["platform"], "macos");
+    assert_eq!(verification[0]["level"], "physicallyVerified");
+    assert_eq!(verification[0]["evidenceDate"], "2026-11-13");
+    for entry in &verification[1..] {
+        assert_eq!(entry["level"], "automatedTests");
+    }
+    for model in &models.as_array().unwrap()[1..] {
+        assert!(
+            model["verification"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|e| e["level"] == "defined")
+        );
+    }
 }
 
 fn new_profile(h: &Harness, name: &str) -> String {

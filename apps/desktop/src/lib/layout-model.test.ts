@@ -26,6 +26,7 @@ const mk2: DeviceModel = {
     touch: null,
   },
   support: "unverified",
+  verification: [],
 }
 
 const xl: DeviceModel = {
@@ -43,6 +44,7 @@ const plus: DeviceModel = {
     touch: { zones: 4, image: null, gestures: ["tap", "longPress", "swipe"] },
   },
   support: "descriptorOnly",
+  verification: [],
 }
 
 const layout = (): DeviceLayout => ({

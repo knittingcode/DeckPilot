@@ -237,9 +237,12 @@ which automatic updates use to wait until the deck is idle.
 
 | Model             | USB ID      | Status                                  |
 | ----------------- | ----------- | --------------------------------------- |
-| Stream Deck MK.2  | `0fd9:0080` | Driver implemented, **not yet tested on a physical device** |
+| Stream Deck MK.2  | `0fd9:0080` | Physically verified on macOS (2026-11-13); Windows and Linux: automated tests only, **not tested on a physical device** |
 | Stream Deck XL    | `0fd9:006c` | Layout design only (descriptor, no driver) |
 | Stream Deck +     | `0fd9:0084` | Layout design only (descriptor, no driver) |
+
+The per-platform status, its levels and evidence are static data in the model
+registry; see [Devices](devices.md#verification-levels).
 
 The driver (`crates/deckpilot-hid`) uses `elgato-streamdeck` on top of
 `hidapi`. The MK.2 descriptor (15 keys in 5 × 3, 72 × 72 px JPEG, mirrored on

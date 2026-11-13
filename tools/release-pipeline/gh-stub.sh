@@ -6,6 +6,8 @@
 #   check-runs-<sha>.json      GET repos/<repo>/commits/<sha>/check-runs (missing: none)
 #   tags/<tag>                 the commit of a tag (GET repos/<repo>/commits/<tag>)
 #   environments/<name>.json   GET repos/<repo>/environments/<name> (missing: 404)
+#   environments/<name>-policies.json
+#                              GET .../environments/<name>/deployment-branch-policies
 #   releases/<id>.json         releases: GET (list, latest), POST, PATCH, DELETE
 #   assets/<id>/<name>         their assets (`gh release download`)
 #   latest                     the tag GitHub would call latest
@@ -103,6 +105,12 @@ case "$method $path" in
     tag="${path##*/commits/}"
     [ -f "$dir/tags/$tag" ] || not_found
     jq -n --arg sha "$(cat "$dir/tags/$tag")" '{sha: $sha}' | answer
+    ;;
+  "GET repos/"*/environments/*/deployment-branch-policies)
+    name="${path##*/environments/}"
+    name="${name%/deployment-branch-policies}"
+    [ -f "$dir/environments/$name-policies.json" ] || not_found
+    answer < "$dir/environments/$name-policies.json"
     ;;
   "GET repos/"*/environments/*)
     name="${path##*/environments/}"
