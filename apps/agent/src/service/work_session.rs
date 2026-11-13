@@ -1182,6 +1182,7 @@ impl Agent {
             last.as_of_ms = now;
             last
         };
+        let mut before = None;
         let changed = self.work.snapshot.send_if_modified(|current| {
             let differs = current.state != snapshot.state
                 || current.session != snapshot.session
@@ -1189,10 +1190,16 @@ impl Agent {
                 || current.verification != snapshot.verification
                 || current.notices != snapshot.notices
                 || current.started_at_ms != snapshot.started_at_ms;
-            *current = snapshot;
+            let previous = std::mem::replace(current, snapshot);
+            if differs {
+                before = Some(previous);
+            }
             differs
         });
         if changed {
+            if let Some(before) = before {
+                self.publish_work_session_variables(&before, &self.work.snapshot());
+            }
             self.render_all();
         }
         if changed || force {

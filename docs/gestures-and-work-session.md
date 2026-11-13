@@ -525,8 +525,31 @@ small change, coordinated with A).
 All are dynamic, never cached and `missing(noValue)` without a session.
 W3 adds them as `SystemVariable` variants together with A's agent resolver
 arm and the catalog entries (group System). F's picker lists them with no
-picker code of its own. Open pickers refresh on `workSessionChanged`
-(section 9), with no polling.
+picker code of its own.
+
+As built (W3):
+
+- `ContextResolver` hands these paths to the engine's shared resolver; only
+  the agent's (`service/variables.rs`) answers them, from the published
+  `WorkSessionSnapshot` and the agent's wall clock, at the moment of the
+  resolution. Every other resolver answers `missing(noValue)`.
+- `elapsedSeconds` is the snapshot's `elapsedMs` (the stored intervals)
+  plus the time since `asOfMs` while the timer runs, so a run or preview a
+  minute later sees a minute more without a transition.
+- With a session but no value: `projectId` without a project is
+  `missing(noProject)`; `canFinish` before the first verification and
+  `startedAt` before it is known are `missing(noValue)`. `startedAt` is
+  RFC 3339 UTC to the second (`2026-11-12T08:00:00Z`).
+- Catalog: group System, `dynamic`, never sensitive. Availability is
+  `available` while a session is active and `runtimeOnly` otherwise, so the
+  picker still lists them for a workflow written while idle.
+- Nothing here is sensitive. The verification `details` are not a
+  variable.
+- Refresh: on every transition the agent sends `sharedVariablesChanged`
+  with the paths whose value changed (protocol 7, which pickers already
+  refresh on). Elapsed time alone is never announced; it is named only
+  when the timer starts or stops. Protocol 8 clients also get
+  `workSessionChanged` (section 9, W5). No polling.
 
 ### 8.2 Key state provider
 

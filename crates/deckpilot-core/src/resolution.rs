@@ -114,6 +114,10 @@ impl VariableResolver for NoSharedVariables {
     fn resolve(&self, reference: &VariableRef, _context: &ResolutionContext) -> Resolution {
         match reference {
             VariableRef::Shared(_) => Resolution::Missing(MissingReason::UnknownVariable),
+            // No work session without the agent.
+            VariableRef::System(variable) if variable.work_session().is_some() => {
+                Resolution::Missing(MissingReason::NoValue)
+            }
             VariableRef::Step(_) | VariableRef::System(_) => Resolution::UnavailableUntilRuntime,
         }
     }
@@ -123,6 +127,10 @@ impl VariableResolver for NoSharedVariables {
 /// profile the context names) and this computer. The project is the
 /// context's, never the application's active project in its place: a
 /// preview of a run's project is unavailable until the run.
+///
+/// Work session variables are not in the context: [`ContextResolver`]
+/// asks its shared resolver (the agent's) for them, and here they have no
+/// value.
 pub fn system_value(
     variable: SystemVariable,
     profile: &Profile,
@@ -173,6 +181,12 @@ pub fn system_value(
             Some(execution) => value(VariableValue::String(execution.to_string())),
             None => Resolution::Missing(MissingReason::NoExecution),
         },
+        SystemVariable::WorkSessionId
+        | SystemVariable::WorkSessionState
+        | SystemVariable::WorkSessionStartedAt
+        | SystemVariable::WorkSessionElapsedSeconds
+        | SystemVariable::WorkSessionProjectId
+        | SystemVariable::WorkSessionCanFinish => Resolution::Missing(MissingReason::NoValue),
     }
 }
 
@@ -204,8 +218,9 @@ pub fn confine_to_profile(resolution: Resolution, profile: &Profile) -> Resoluti
 }
 
 /// Resolves every root for an action that runs in `profile`: system
-/// variables from the context and the profile, shared variables through
-/// `shared`, node outputs from `outputs`.
+/// variables from the context and the profile, shared variables and the
+/// work session (`system.work.session.…`) through `shared`, node outputs
+/// from `outputs`.
 #[derive(Clone, Copy)]
 pub struct ContextResolver<'a> {
     pub profile: &'a Profile,
@@ -229,6 +244,11 @@ impl VariableResolver for ContextResolver<'_> {
             return Resolution::Missing(MissingReason::OtherProfile);
         }
         match reference {
+            // Live values only the agent has, resolved when asked (never
+            // cached); a project of another profile is missing.
+            VariableRef::System(variable) if variable.work_session().is_some() => {
+                confine_to_profile(self.shared.resolve(reference, context), self.profile)
+            }
             VariableRef::System(variable) => {
                 system_value(*variable, self.profile, self.os, context)
             }
