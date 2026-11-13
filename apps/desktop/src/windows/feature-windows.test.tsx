@@ -154,6 +154,7 @@ const preview: ImportPreview = {
   warnings: [],
   localProfiles: [["p1", "Work"]],
   settings: { updates: { mode: "notifyOnly", automaticChecks: true, checkIntervalHours: 24 } },
+  variables: { new: [], existing: [], incompatible: [], values: 0, globalValues: 0 },
 }
 
 describe("import window", () => {
@@ -170,6 +171,9 @@ describe("import window", () => {
       renamed: ["Work (imported)"],
       modules: [],
       settings: ["updates"],
+      variables: [],
+      variableValues: 0,
+      skippedValues: [],
     })
     inWindow(<ImportWindow />)
     await user.click(screen.getByRole("button", { name: "Choose file…" }))
@@ -192,6 +196,60 @@ describe("import window", () => {
     expect(await screen.findByText("Import complete")).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Map resources now" }))
     expect(emitTo).toHaveBeenCalledWith("main", "deckpilot://navigate", "projects/projects")
+  })
+
+  it("shows the shared variables an import brings and the values it skipped", async () => {
+    const user = userEvent.setup()
+    dialog.open.mockResolvedValue("/tmp/in.deckpilot")
+    api.previewImport.mockResolvedValue({
+      token: 8,
+      preview: {
+        ...preview,
+        missingResources: [],
+        settings: {},
+        variables: {
+          new: ["paths.root"],
+          existing: ["deploy.target"],
+          incompatible: ["build.jobs"],
+          values: 3,
+          globalValues: 1,
+        },
+      },
+    })
+    api.applyImport.mockResolvedValue({
+      imported: [["p1", "Work"]],
+      removed: [],
+      skipped: [],
+      renamed: [],
+      modules: [],
+      settings: [],
+      variables: ["paths.root"],
+      variableValues: 2,
+      skippedValues: ["`build.jobs`: `build.jobs` holds integer values, not string"],
+    })
+    inWindow(<ImportWindow />)
+    await user.click(screen.getByRole("button", { name: "Choose file…" }))
+    await user.type(await screen.findByLabelText("Export password"), "right{Enter}")
+    const section = await screen.findByLabelText("Shared variables")
+    expect(section).toHaveTextContent("New: paths.root.")
+    expect(section).toHaveTextContent("Already here, kept as they are: deploy.target.")
+    expect(section).toHaveTextContent(
+      "3 values for profiles and projects, 1 global value with the application settings.",
+    )
+    expect(screen.getByText("Some shared variables have another type here")).toBeInTheDocument()
+    // Global values come with the application settings, even without update settings.
+    await user.click(
+      screen.getByLabelText("Apply application settings (global shared variable values)"),
+    )
+    await user.click(screen.getByRole("button", { name: "Import" }))
+    expect(api.applyImport).toHaveBeenCalledWith(8, expect.objectContaining({ appSettings: true }))
+    expect(await screen.findByText("Import complete")).toBeInTheDocument()
+    expect(
+      screen.getByText("Shared variables: paths.root created, 2 values set."),
+    ).toBeInTheDocument()
+    expect(screen.getByRole("list", { name: "Values not imported" })).toHaveTextContent(
+      "`build.jobs`: `build.jobs` holds integer values, not string",
+    )
   })
 
   it("cancels a previewed import when closed", async () => {

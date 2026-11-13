@@ -264,9 +264,10 @@ impl VerificationOutcome {
 
 /// The read-only variables of the active work session.
 ///
-/// Not parsed by [`crate::variables::VariableRef`] yet; the paths are the
-/// ones proposed in the document and become `SystemVariable`s once the
-/// resolver (workstream A) can supply them.
+/// Each is a [`crate::variables::SystemVariable`] (`system.work.session.…`,
+/// D5). Only the agent knows the session: its resolver supplies the values
+/// from the live snapshot, and every other resolver reports
+/// `missing(noValue)`, as for no session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WorkSessionVariable {

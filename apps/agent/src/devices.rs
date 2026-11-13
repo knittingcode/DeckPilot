@@ -30,6 +30,9 @@ pub enum DeviceSignal {
         device: DeviceId,
         control: ControlId,
         input: ControlInput,
+        /// When the input was read: gesture timing uses this, not the time
+        /// the service task gets to it.
+        at: Instant,
     },
     /// The I/O thread ended. `error` is `None` when it was asked to close.
     Closed {
@@ -142,6 +145,7 @@ fn io_loop(
     loop {
         match handle.read_input(READ_TIMEOUT) {
             Ok(events) => {
+                let at = Instant::now();
                 for (control, input) in events {
                     let device = handle.id().clone();
                     let signal = DeviceSignal::Input {
@@ -149,6 +153,7 @@ fn io_loop(
                         device,
                         control,
                         input,
+                        at,
                     };
                     if signals.send(signal).is_err() {
                         return None;

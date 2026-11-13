@@ -1,36 +1,69 @@
 /**
  * Structured data mappings. The engine's format stays the same
- * (`{{ steps.<node>.output.<key> }}` inside text, or one output reference);
- * the editor works on its parts. Nothing is evaluated here: the engine
- * resolves mappings when a node runs.
+ * (`{{ steps.<node>.output.<key> }}` and other references inside text, one
+ * output reference, or one variable reference); the editor works on its
+ * parts. Nothing is evaluated here: the engine resolves mappings when a
+ * node runs.
  */
 import type {
   GraphMapping,
   GraphReference,
   ParameterKind,
   ValueKind,
+  VariableDefinition,
+  VariableValue,
   WorkflowGraph,
 } from "@/lib/types"
 
 import { type Lookup, actionOf, nodeOutputs } from "./describe"
 import { VARIABLES_NODE, upstream } from "./graph"
+import {
+  assignable,
+  expects,
+  referenceSyntaxProblem,
+  referenceType,
+  rendersAsText,
+} from "./variable-reference"
 
-export type Segment = { type: "text"; text: string } | { type: "output"; reference: GraphReference }
+export type Segment =
+  | { type: "text"; text: string }
+  | { type: "output"; reference: GraphReference }
+  /** A shared, system or workflow variable, without braces. */
+  | { type: "variable"; reference: string }
 
 const REFERENCE = /\{\{\s*steps\.([a-z][a-z0-9_]*)\.output\.([A-Za-z0-9_.-]+)\s*\}\}/g
+const VARIABLE = /\{\{\s*((?:shared|system|workflow)\.[A-Za-z0-9_.]+)\s*\}\}/g
 
-/** The parts of a template: plain text and output references. */
+/**
+ * The parts of a template: plain text, output references and variable
+ * references. Anything else in braces stays text, so editing never changes
+ * what was typed.
+ */
 export function parseTemplate(template: string): Segment[] {
+  const found: { index: number; length: number; segment: Segment }[] = []
+  for (const match of template.matchAll(REFERENCE)) {
+    found.push({
+      index: match.index,
+      length: match[0].length,
+      segment: { type: "output", reference: { node: match[1] ?? "", output: match[2] ?? "" } },
+    })
+  }
+  for (const match of template.matchAll(VARIABLE)) {
+    const reference = match[1] ?? ""
+    if (referenceSyntaxProblem(reference) !== null) continue
+    found.push({
+      index: match.index,
+      length: match[0].length,
+      segment: { type: "variable", reference },
+    })
+  }
+  found.sort((a, b) => a.index - b.index)
   const segments: Segment[] = []
   let last = 0
-  for (const match of template.matchAll(REFERENCE)) {
-    const index = match.index
+  for (const { index, length, segment } of found) {
     if (index > last) segments.push({ type: "text", text: template.slice(last, index) })
-    segments.push({
-      type: "output",
-      reference: { node: match[1] ?? "", output: match[2] ?? "" },
-    })
-    last = index + match[0].length
+    segments.push(segment)
+    last = index + length
   }
   if (last < template.length) segments.push({ type: "text", text: template.slice(last) })
   return segments
@@ -38,16 +71,96 @@ export function parseTemplate(template: string): Segment[] {
 
 export function serializeTemplate(segments: Segment[]): string {
   return segments
-    .map((s) =>
-      s.type === "text" ? s.text : `{{ steps.${s.reference.node}.output.${s.reference.output} }}`,
-    )
+    .map((s) => {
+      switch (s.type) {
+        case "text":
+          return s.text
+        case "output":
+          return `{{ steps.${s.reference.node}.output.${s.reference.output} }}`
+        case "variable":
+          return `{{ ${s.reference.trim()} }}`
+      }
+    })
     .join("")
 }
 
-/** References a mapping uses. */
+/** `steps.<node>.output.<key>` as a reference, or `undefined`. */
+function stepReference(reference: string): GraphReference | undefined {
+  const match = /^steps\.([a-z][a-z0-9_]*)\.output\.([A-Za-z0-9_]+)$/.exec(reference.trim())
+  return match ? { node: match[1] ?? "", output: match[2] ?? "" } : undefined
+}
+
+/** Node outputs a mapping uses. */
 export function mappingReferences(mapping: GraphMapping): GraphReference[] {
   if (mapping.type === "output") return [mapping.reference]
+  if (mapping.type === "variable") {
+    const step = stepReference(mapping.reference)
+    return step ? [step] : []
+  }
   return parseTemplate(mapping.template).flatMap((s) => (s.type === "output" ? [s.reference] : []))
+}
+
+/** Shared, system and workflow variables a mapping uses. */
+export function mappingVariables(mapping: GraphMapping): string[] {
+  if (mapping.type === "output") return []
+  if (mapping.type === "variable") {
+    return stepReference(mapping.reference) ? [] : [mapping.reference.trim()]
+  }
+  return parseTemplate(mapping.template).flatMap((s) =>
+    s.type === "variable" ? [s.reference] : [],
+  )
+}
+
+/**
+ * Problems of the variables in `mapping` that can be told before the run:
+ * syntax, unknown shared variables (when the definitions are known), types
+ * that cannot fill the parameter, credential names or resources in text.
+ * Mirrors the engine's validation.
+ */
+export function variableProblems(
+  mapping: GraphMapping,
+  parameter: ParameterKind | undefined,
+  definitions?: readonly VariableDefinition[],
+): string[] {
+  const problems: string[] = []
+  const known = (reference: string) => {
+    const syntax = referenceSyntaxProblem(reference)
+    if (syntax) {
+      problems.push(syntax)
+      return undefined
+    }
+    const type = referenceType(reference, definitions)
+    if (!type && definitions && reference.startsWith("shared.")) {
+      problems.push(`there is no shared variable “${reference.slice("shared.".length)}”`)
+    }
+    return type
+  }
+  if (mapping.type === "variable") {
+    if (stepReference(mapping.reference)) return problems
+    const type = known(mapping.reference)
+    if (type && parameter && !assignable(type, parameter)) {
+      problems.push(
+        `{{ ${mapping.reference.trim()} }} is a ${type.type} value, the parameter expects ${expects(parameter)}`,
+      )
+    }
+    if (mapping.default && parameter && !assignable(valueType(mapping.default), parameter)) {
+      problems.push(
+        `the default is a ${mapping.default.type} value, the parameter expects ${expects(parameter)}`,
+      )
+    }
+  } else if (mapping.type === "template") {
+    for (const reference of mappingVariables(mapping)) {
+      const type = known(reference)
+      if (type && !rendersAsText(type)) {
+        problems.push(`{{ ${reference} }} is a ${type.type} value and cannot be part of text`)
+      }
+    }
+  }
+  return problems
+}
+
+function valueType(value: VariableValue) {
+  return value.type === "resource" ? { type: "resource" as const } : { type: value.type }
 }
 
 export interface OutputOption {
@@ -208,7 +321,21 @@ export function previewMapping(
     const known = values[mapping.reference.node]?.[mapping.reference.output]
     return known ?? mapping.default ?? value(mapping.reference)
   }
+  if (mapping.type === "variable") {
+    const step = stepReference(mapping.reference)
+    // Variable values are previewed by the variable picker, never here.
+    return step ? value(step) : `‹${mapping.reference.trim()}›`
+  }
   return parseTemplate(mapping.template)
-    .map((s) => (s.type === "text" ? s.text : value(s.reference)))
+    .map((s) => {
+      switch (s.type) {
+        case "text":
+          return s.text
+        case "output":
+          return value(s.reference)
+        case "variable":
+          return `‹${s.reference}›`
+      }
+    })
     .join("")
 }
