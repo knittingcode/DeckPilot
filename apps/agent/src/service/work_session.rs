@@ -1203,13 +1203,13 @@ impl Agent {
             }
             differs
         });
-        if changed {
-            if let Some(before) = before {
-                self.publish_work_session_variables(&before, &self.work.snapshot());
-            }
-            self.render_all();
+        if let Some(before) = before {
+            self.publish_work_session_variables(&before, &self.work.snapshot());
         }
         if changed || force {
+            // A decided gap changes the counted time alone: work session
+            // keys show it at once, not at their next elapsed-time redraw.
+            self.render_all();
             let snapshot = deckpilot_ipc::work_session::bounded_snapshot(self.work.snapshot());
             let _ = self
                 .handle
