@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { toastFailure } from "@/lib/failure"
 import { CAPABILITIES } from "@/lib/capabilities"
 import { useAppContext } from "@/lib/app-context"
 import { osLabel } from "@/lib/format"
@@ -45,7 +46,9 @@ export function ModulesSettings() {
           refresh()
           toast.success(`${module.name} ${enabled ? "enabled" : "disabled"}`)
         },
-        (e: unknown) => toast.error(errorMessage(e)),
+        (e: unknown) => {
+          toastFailure(`${module.name} was not ${enabled ? "enabled" : "disabled"}`, e)
+        },
       )
       .finally(() => {
         setPending(null)
