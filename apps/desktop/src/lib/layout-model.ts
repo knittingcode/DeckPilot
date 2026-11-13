@@ -171,20 +171,113 @@ export function renamePage(layout: DeviceLayout, pageId: string, name: string): 
   return mapPage(layout, pageId, (p) => ({ ...p, name }))
 }
 
-/** Removes a page and every binding that opens it. The home page stays. */
+/**
+ * Removes a page and every binding that opens it. The home page stays.
+ * Pages stored inside it move up to its folder (or the top level), so the
+ * layout keeps a valid page tree.
+ */
 export function deletePage(layout: DeviceLayout, pageId: string): DeviceLayout {
   if (pageId === layout.homePage) return layout
+  const folder = pageParents(layout).get(pageId)
   return {
     ...layout,
     pages: layout.pages
       .filter((p) => p.id !== pageId)
-      .map((p) => ({
-        ...p,
-        bindings: p.bindings.filter(
+      .map((p) => {
+        const bindings = p.bindings.filter(
           (b) => !(b.target.type === "openPage" && b.target.page === pageId),
-        ),
-      })),
+        )
+        // `undefined` is not serialized: the page is then top level.
+        return p.parent === pageId ? { ...p, parent: folder, bindings } : { ...p, bindings }
+      }),
   }
+}
+
+/** Whether making `parent` the folder of `page` would make a cycle. */
+function createsCycle(parents: Map<string, string>, page: string, parent: string): boolean {
+  let current: string | undefined = parent
+  let steps = 0
+  while (current !== undefined) {
+    if (current === page || steps > parents.size) return true
+    current = parents.get(current)
+    steps += 1
+  }
+  return false
+}
+
+/**
+ * The folder of every page that is in one, as the agent sees it
+ * (`DeviceLayout::page_parents`): a valid stored parent wins; layouts
+ * without `explicitTree` infer the rest in a breadth-first walk from the
+ * home page through `openPage` bindings.
+ */
+export function pageParents(layout: DeviceLayout): Map<string, string> {
+  const exists = new Set(layout.pages.map((p) => p.id))
+  const parents = new Map<string, string>()
+  for (const p of layout.pages) {
+    if (
+      p.parent &&
+      p.id !== layout.homePage &&
+      exists.has(p.parent) &&
+      !createsCycle(parents, p.id, p.parent)
+    ) {
+      parents.set(p.id, p.parent)
+    }
+  }
+  if (layout.explicitTree) return parents
+  const explicit = new Set(parents.keys())
+  const visited = new Set([layout.homePage])
+  const queue = [layout.homePage]
+  for (let current = queue.shift(); current !== undefined; current = queue.shift()) {
+    const p = page(layout, current)
+    if (!p) continue
+    const opened = p.bindings.flatMap((b) => (b.target.type === "openPage" ? [b.target.page] : []))
+    const children = layout.pages
+      .filter((c) => explicit.has(c.id) && parents.get(c.id) === current)
+      .map((c) => c.id)
+    for (const target of [...opened, ...children]) {
+      if (!exists.has(target) || visited.has(target)) continue
+      visited.add(target)
+      if (
+        target !== layout.homePage &&
+        !parents.has(target) &&
+        !createsCycle(parents, target, current)
+      ) {
+        parents.set(target, current)
+      }
+      queue.push(target)
+    }
+  }
+  return parents
+}
+
+/** The folders a page is in, the nearest first. */
+export function ancestors(layout: DeviceLayout, pageId: string): string[] {
+  const parents = pageParents(layout)
+  const out: string[] = []
+  for (let id = parents.get(pageId); id !== undefined && !out.includes(id); id = parents.get(id)) {
+    out.push(id)
+  }
+  return out
+}
+
+/**
+ * Whether a page inside a folder can be left on the device: it has a Back
+ * binding or one that opens one of its folders. Pages in no folder need
+ * none. Without one the agent adds an automatic Back on the first free key.
+ */
+export function hasWayBack(layout: DeviceLayout, pageId: string): boolean {
+  const folders = ancestors(layout, pageId)
+  if (folders.length === 0) return true
+  const p = page(layout, pageId)
+  return (
+    !p ||
+    p.bindings.some(
+      (b) =>
+        b.target.type === "back" ||
+        (b.target.type === "openPage" && folders.includes(b.target.page)),
+    )
+  )
 }
 
 export function targetLabel(
@@ -202,6 +295,8 @@ export function targetLabel(
       return `Open “${page(layout, target.page)?.name ?? "missing page"}”`
     case "back":
       return "Back"
+    case "stateful":
+      return "Work Session"
   }
 }
 

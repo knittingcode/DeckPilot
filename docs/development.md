@@ -201,7 +201,7 @@ they report as skipped:
 | Job | Runs on a pull request that changes |
 | --- | ----------------------------------- |
 | Package check (Linux .deb), Package check (Windows installers), in the Packaging workflow | files that affect bundling: `apps/desktop/src-tauri/` `tauri*.json`, `build.rs`, `Cargo.toml`, `capabilities/`, `icons/`, `app-icon.svg`; `apps/agent/` `build.rs`, `Cargo.toml`, `Info.plist`; `packaging/`, `tools/ci/`, `.github/workflows/`, `Cargo.lock`, `Cargo.toml`, `apps/desktop/package.json` |
-| Credential store (3 platforms) | `crates/deckpilot-keystore/`, `.github/workflows/ci.yml` |
+| Credential store (3 platforms) | `crates/deckpilot-keystore/`, `tools/ci/with-keyring.sh`, `.github/workflows/ci.yml` |
 | Release manifest assembly | `tools/ci/`, `.github/workflows/release.yml`, `.github/workflows/ci.yml` |
 | Compatibility (own workflow) | its path filter in `compatibility.yml` |
 

@@ -21,16 +21,21 @@
 
 pub mod credentials;
 pub mod crypto;
+mod engine;
 pub mod executions;
+pub mod gestures;
 mod legacy;
 pub mod policy;
 mod project_actions;
 pub mod provenance;
+pub mod references;
 mod sqlite;
 #[cfg(all(test, feature = "sqlcipher"))]
 mod upgrade_tests;
+pub mod variable_references;
 pub mod variables;
 pub mod vault;
+pub mod work_sessions;
 
 use deckpilot_core::{
     MachineConfig, ModuleId, ModuleSettings, ModuleStates, Profile, ProfileId, ProjectId,
@@ -51,8 +56,11 @@ pub use variables::{SharedVariables, StoredValue, StoredVariable, VariableOrigin
 /// parameters (`project_id`, a resource name for `projects.resolve-resource`).
 /// Version 5 marks documents that may contain the shapes of the action
 /// architecture (references and templates in parameters, inline
-/// invocations, graph version 2); version 4 documents decode unchanged, and
-/// a DeckPilot that reads at most version 4 refuses them.
+/// invocations, graph version 2) and of gestures (`click`, `doubleClick` and
+/// `longPress` triggers, page `gestures` timings, binding `overrides`,
+/// `stateful` targets);
+/// version 4 documents decode unchanged, and a DeckPilot that reads at most
+/// version 4 refuses them.
 pub const DOCUMENT_VERSION: u32 = 5;
 
 /// A change a schema migration made to user data beyond a plain format
@@ -89,6 +97,10 @@ pub enum StorageError {
     UnsupportedDocument(u32),
     #[error("database encryption is not available in this build")]
     EncryptionUnavailable,
+    /// SQLCipher is linked but not usable on a connection (or plain SQLite
+    /// was linked): nothing is opened, backed up or migrated.
+    #[error("database encryption is incomplete: {0}")]
+    SqlCipherIncomplete(String),
     #[error("the database could not be opened with the provided key")]
     InvalidKey,
     #[error("profile does not exist")]
@@ -144,6 +156,17 @@ pub enum StorageError {
     VariableValuesConflict { key: String, count: usize },
     #[error(transparent)]
     Variable(#[from] deckpilot_core::variables::DefinitionIssue),
+    /// The profile has the active work session.
+    #[error("finish the work session first")]
+    WorkSessionActive,
+    /// The variable is still used; nothing was changed. Remove or replace
+    /// the listed references first.
+    #[error("the variable is still used in {} place(s); remove those references first", .0.len())]
+    VariableInUse(Vec<variable_references::VariableReference>),
+    /// The action is still used; nothing was deleted. Replace or unbind
+    /// the listed uses first.
+    #[error("the action is still used in {} place(s); replace or unbind those first", .0.len())]
+    ActionInUse(Vec<references::ActionReference>),
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;

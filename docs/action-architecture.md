@@ -215,7 +215,7 @@ One grammar: `{{ <root>.<path> }}`, plain substitution, closed set of roots
 |---|---|---|
 | `steps` | `steps.<node>.output.<key>` | unchanged; parsed by `graph::Reference::parse`; `steps.vars.output.<key>` stays the workflow-variable form |
 | `shared` | `shared.<namespace>.<name>` | shared variables |
-| `system` | `system.project.current.id` / `.key` / `.name`, `system.profile.current.id` / `.name`, `system.device.current.id`, `system.platform` | read-only |
+| `system` | `system.project.current.id` / `.key` / `.name`, `system.profile.current.id` / `.name`, `system.device.current.id`, `system.platform`, `system.work.session.{id,state,startedAt,elapsedSeconds,projectId,canFinish}` | read-only; the work session ones from the agent's live session (gestures-and-work-session.md §8.1) |
 | `workflow` | `workflow.id`, `workflow.execution.id` | read-only, runtime |
 
 A whole-value reference (`ParameterValue::Reference`, `Mapping::Variable`)
@@ -344,7 +344,7 @@ Events (A emits; agents on protocol 7 only):
 ```jsonc
 { "type": "projectChanged", "profile": id, "project": id|null, "source": ProjectSource }
 { "type": "profileChanged", "profile": id }
-{ "type": "sharedVariablesChanged", "keys": string[] }           // no values
+{ "type": "sharedVariablesChanged", "keys": string[] }           // no values; also `system.work.session.*` paths
 { "type": "resourceBindingsChanged" }
 { "type": "deviceContextChanged", "device": DeviceId|null }
 { "type": "executionContextChanged", "execution": id, "project": id|null }

@@ -24,6 +24,20 @@ fn catalog() -> ModelCatalog {
     ModelCatalog::builtin()
 }
 
+/// The export password of this test run: generated, so that it is never a
+/// constant that could pass for (or be reused as) a real credential.
+fn export_password() -> &'static str {
+    static PASSWORD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PASSWORD.get_or_init(generated_password)
+}
+
+/// A new random password, different from every other one.
+fn generated_password() -> String {
+    let mut bytes = [0u8; 16];
+    deckpilot_storage::crypto::random_bytes(&mut bytes).unwrap();
+    format!("test-export-{:032x}", u128::from_le_bytes(bytes))
+}
+
 /// A profile with a project mapped to `shop.repo`, an action and a workflow.
 fn profile(name: &str) -> Profile {
     let mut profile = Profile::new(name);
@@ -70,9 +84,13 @@ fn exported(store: &SqliteStore) -> Payload {
 }
 
 fn round_trip(payload: &Payload) -> Payload {
-    let bytes =
-        payload::seal(payload, &Password::new("export pw"), KdfParams::for_tests()).unwrap();
-    payload::open(&bytes, &Password::new("export pw")).unwrap()
+    let bytes = payload::seal(
+        payload,
+        &Password::new(export_password()),
+        KdfParams::for_tests(),
+    )
+    .unwrap();
+    payload::open(&bytes, &Password::new(export_password())).unwrap()
 }
 
 fn apply(store: &SqliteStore, payload: &Payload, options: &ImportOptions) -> ImportSummary {
@@ -325,6 +343,7 @@ fn module_settings_follow_the_portability_contract() {
             "notifications",
             "projects",
             "system",
+            "work-session",
             "workspace"
         ]
     );
@@ -336,7 +355,7 @@ fn module_settings_follow_the_portability_contract() {
     assert_eq!(projects.config.text("somethingLocal"), None);
     let system = &stored[&ModuleId::new("system").unwrap()];
     assert_eq!(system.config.boolean("allowCommands"), Some(false));
-    assert_eq!(stored.len(), 10);
+    assert_eq!(stored.len(), 11);
 }
 
 #[test]
@@ -417,9 +436,14 @@ fn invalid_exports_are_rejected_before_anything_is_written() {
         version: PAYLOAD_VERSION_FOR_TESTS + 1,
         ..base
     };
-    let bytes = payload::seal(&newer, &Password::new("pw"), KdfParams::for_tests()).unwrap();
+    let bytes = payload::seal(
+        &newer,
+        &Password::new(export_password()),
+        KdfParams::for_tests(),
+    )
+    .unwrap();
     assert!(matches!(
-        payload::open(&bytes, &Password::new("pw")),
+        payload::open(&bytes, &Password::new(export_password())),
         Err(PortabilityError::UnsupportedVersion(_))
     ));
     assert_eq!(names(&store), ["Work"]);
@@ -463,6 +487,7 @@ fn portable_application_settings_travel_without_local_state() {
         automatic_checks: false,
         check_interval_hours: 72,
         last_check: Some(1_000),
+        channel: deckpilot_update::channel::Channel::Prerelease,
     };
     source
         .set_setting(
@@ -479,7 +504,9 @@ fn portable_application_settings_travel_without_local_state() {
     assert_eq!(updates.mode, UpdateMode::DownloadAndAsk);
     assert_eq!(updates.check_interval_hours, 72);
     let text = serde_json::to_string(&payload).unwrap();
+    // Neither the last check nor the update channel is portable.
     assert!(!text.contains("lastCheck") && !text.contains("autoLock"));
+    assert!(!text.contains("channel") && !text.contains("prerelease"));
     let without = payload::export(&source, &modules(), None, NONE, 1, "x").unwrap();
     assert!(without.settings.is_empty());
 
@@ -616,4 +643,185 @@ fn crafted_icons_are_refused() {
     let old: Profile = serde_json::from_value(old).unwrap();
     assert_eq!(old.icons, []);
     assert_eq!(old.validate(&catalog()), []);
+}
+
+/// Click, double click with parameter overrides (a shared variable
+/// reference and a project), long press on a workflow, and a key's own
+/// timings.
+fn with_gestures(store: &SqliteStore, profile: &Profile) -> Profile {
+    use deckpilot_core::gesture::KeyGestureSettings;
+    use deckpilot_core::variables::VariableRef;
+    use deckpilot_core::{BindingTarget, ControlBinding, DeviceLayout, Trigger};
+    use deckpilot_device::{ControlId, models};
+
+    let mut profile = profile.clone();
+    let action = profile.actions[0].id;
+    let workflow = profile.workflows[0].id;
+    let shop = profile.projects[0].id;
+    let key = ControlId::Key { index: 2 };
+    let mut layout = DeviceLayout::new("Main", models::stream_deck_mk2().id);
+    layout.pages[0].bindings = vec![
+        ControlBinding::new(key, Trigger::Click, BindingTarget::action(action)),
+        ControlBinding::new(
+            key,
+            Trigger::DoubleClick,
+            BindingTarget::Action {
+                action,
+                overrides: ActionParameters::new()
+                    .with("project_id", ParameterValue::Project(shop))
+                    .with(
+                        "resource",
+                        ParameterValue::Reference(VariableRef::parse("shared.repo.role").unwrap()),
+                    ),
+            },
+        ),
+        ControlBinding::new(
+            key,
+            Trigger::LongPress,
+            BindingTarget::Workflow { workflow },
+        ),
+    ];
+    layout.pages[0].gestures.push(KeyGestureSettings {
+        control: key,
+        double_click_ms: Some(450),
+        long_press_ms: None,
+    });
+    profile.layouts.push(layout);
+    store.save_profile(&profile).unwrap();
+    profile
+}
+
+#[test]
+fn gesture_bindings_travel_with_their_profile() {
+    use deckpilot_core::BindingTarget;
+
+    let (source, profiles) = store_with(&["Work"]);
+    let work = with_gestures(&source, &profiles[0]);
+    let payload = round_trip(&exported(&source));
+    assert_eq!(payload.profiles[0].layouts, work.layouts);
+
+    let target = SqliteStore::open_in_memory().unwrap();
+    apply(
+        &target,
+        &payload,
+        &ImportOptions {
+            profiles: vec![work.id],
+            ..ImportOptions::default()
+        },
+    );
+    assert_eq!(target.load_profile(work.id).unwrap().unwrap(), work);
+
+    // As a copy: the bindings point to the copy's action, workflow and
+    // project; the overrides and timings are kept.
+    let summary = apply(
+        &target,
+        &payload,
+        &ImportOptions {
+            profiles: vec![work.id],
+            conflicts: BTreeMap::from([(work.id, ConflictResolution::KeepBoth)]),
+            ..ImportOptions::default()
+        },
+    );
+    let copy = target.load_profile(summary.imported[0].0).unwrap().unwrap();
+    assert_ne!(copy.id, work.id);
+    assert_eq!(copy.validate(&catalog()), []);
+    let page = &copy.layouts[0].pages[0];
+    assert_eq!(page.gestures, work.layouts[0].pages[0].gestures);
+    let BindingTarget::Action { action, overrides } = &page.bindings[1].target else {
+        panic!("the double click runs an action");
+    };
+    assert_eq!(*action, copy.actions[0].id);
+    assert_eq!(overrides.project("project_id"), Some(copy.projects[0].id));
+    assert_eq!(
+        overrides.get("resource"),
+        Some(&ParameterValue::Reference(
+            deckpilot_core::variables::VariableRef::parse("shared.repo.role").unwrap()
+        ))
+    );
+    assert_eq!(
+        page.bindings[2].target,
+        BindingTarget::Workflow {
+            workflow: copy.workflows[0].id
+        }
+    );
+}
+
+/// A work session key with its own rules travels with its layout, also
+/// into a copy, where it refers to nothing that would need remapping.
+#[test]
+fn stateful_keys_travel_with_their_profile() {
+    use deckpilot_core::gesture::Gesture;
+    use deckpilot_core::stateful::{StatefulBinding, StatefulRule, WorkSessionOperation};
+    use deckpilot_core::work_session::WorkSessionState;
+    use deckpilot_core::{BindingTarget, ControlBinding, DeviceLayout, Trigger};
+    use deckpilot_device::{ControlId, models};
+
+    let (source, profiles) = store_with(&["Work"]);
+    let mut work = profiles[0].clone();
+    let key = ControlId::Key { index: 7 };
+    let session = BindingTarget::Stateful(StatefulBinding::WorkSession {
+        rules: vec![
+            StatefulRule::new(
+                WorkSessionState::Idle,
+                Gesture::Click,
+                WorkSessionOperation::Start,
+            ),
+            StatefulRule::new(
+                WorkSessionState::ReadyToFinish,
+                Gesture::Click,
+                WorkSessionOperation::Finish,
+            ),
+            StatefulRule::new(
+                WorkSessionState::ReadyToFinish,
+                Gesture::LongPress,
+                WorkSessionOperation::Verify,
+            ),
+        ],
+    });
+    let defaults = BindingTarget::Stateful(StatefulBinding::work_session());
+    let mut layout = DeviceLayout::new("Main", models::stream_deck_mk2().id);
+    layout.pages[0].bindings = vec![
+        ControlBinding::new(key, Trigger::Click, session.clone()),
+        ControlBinding::new(key, Trigger::LongPress, session.clone()),
+        ControlBinding::new(
+            ControlId::Key { index: 8 },
+            Trigger::Click,
+            defaults.clone(),
+        ),
+    ];
+    work.layouts.push(layout);
+    assert_eq!(work.validate(&catalog()), []);
+    source.save_profile(&work).unwrap();
+
+    let payload = round_trip(&exported(&source));
+    assert_eq!(payload.profiles[0].layouts, work.layouts);
+    let target = SqliteStore::open_in_memory().unwrap();
+    apply(
+        &target,
+        &payload,
+        &ImportOptions {
+            profiles: vec![work.id],
+            ..ImportOptions::default()
+        },
+    );
+    assert_eq!(target.load_profile(work.id).unwrap().unwrap(), work);
+
+    let summary = apply(
+        &target,
+        &payload,
+        &ImportOptions {
+            profiles: vec![work.id],
+            conflicts: BTreeMap::from([(work.id, ConflictResolution::KeepBoth)]),
+            ..ImportOptions::default()
+        },
+    );
+    let copy = target.load_profile(summary.imported[0].0).unwrap().unwrap();
+    assert_ne!(copy.id, work.id);
+    assert_eq!(copy.validate(&catalog()), []);
+    let targets: Vec<_> = copy.layouts[0].pages[0]
+        .bindings
+        .iter()
+        .map(|b| b.target.clone())
+        .collect();
+    assert_eq!(targets, [session.clone(), session, defaults]);
 }

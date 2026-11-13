@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::channel::Channel;
+
 /// Setting under which [`UpdatePreferences`] are stored (JSON).
 pub const PREFERENCES_SETTING: &str = "update.preferences";
 
@@ -31,6 +33,9 @@ pub struct UpdatePreferences {
     pub check_interval_hours: u32,
     /// Seconds since the Unix epoch of the last completed check.
     pub last_check: Option<u64>,
+    /// Stable (the default) or prerelease; preferences stored before
+    /// channels existed are stable.
+    pub channel: Channel,
 }
 
 impl Default for UpdatePreferences {
@@ -40,6 +45,7 @@ impl Default for UpdatePreferences {
             automatic_checks: true,
             check_interval_hours: 24,
             last_check: None,
+            channel: Channel::Stable,
         }
     }
 }
@@ -254,5 +260,9 @@ mod tests {
             serde_json::from_str(r#"{"mode":"downloadAndAsk"}"#).unwrap();
         assert_eq!(prefs.mode, UpdateMode::DownloadAndAsk);
         assert_eq!(prefs.check_interval_hours, 24);
+        assert_eq!(prefs.channel, Channel::Stable);
+        let pre: UpdatePreferences = serde_json::from_str(r#"{"channel":"prerelease"}"#).unwrap();
+        assert_eq!(pre.channel, Channel::Prerelease);
+        assert!(serde_json::from_str::<UpdatePreferences>(r#"{"channel":"nightly"}"#).is_err());
     }
 }

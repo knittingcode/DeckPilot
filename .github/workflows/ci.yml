@@ -159,12 +159,11 @@ jobs:
         run: |
           timeout 600 sudo apt-get update -o Acquire::ForceIPv4=true
           timeout 600 sudo apt-get install -y --no-install-recommends -o Acquire::ForceIPv4=true gnome-keyring dbus
+      # In a D-Bus session with an unlocked keyring that answers before the
+      # tests start; see tools/ci/with-keyring.sh.
       - name: Test (Linux, in a D-Bus session with an unlocked keyring)
         if: runner.os == 'Linux'
-        run: |
-          dbus-run-session -- sh -c '
-            echo "ci-keyring" | gnome-keyring-daemon --daemonize --unlock --components=secrets >/dev/null &&
-            cargo test -p deckpilot-keystore --locked -- --nocapture'
+        run: tools/ci/with-keyring.sh cargo test -p deckpilot-keystore --locked -- --nocapture
       - name: Test
         if: runner.os != 'Linux'
         run: cargo test -p deckpilot-keystore --locked -- --nocapture

@@ -306,7 +306,7 @@ impl Agent {
                 continue;
             };
             match target {
-                BindingTarget::Action { action } => {
+                BindingTarget::Action { action, .. } => {
                     let Some(policy) = self
                         .runtime
                         .profile()
@@ -324,6 +324,13 @@ impl Agent {
                         *face = std::mem::replace(face, KeyFace::empty())
                             .with_indicator(Indicator::Running)
                             .with_progress(Some(percent));
+                    }
+                }
+                BindingTarget::Stateful(_) => {
+                    // The machine's face is W4's; a hint the last gesture
+                    // left is shown under it.
+                    if let Some(hint) = self.stateful_hint(device, control) {
+                        *face = std::mem::replace(face, KeyFace::empty()).with_detail(hint);
                     }
                 }
                 BindingTarget::OpenPage { .. } | BindingTarget::Back => {}

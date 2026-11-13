@@ -20,8 +20,11 @@ mod modules;
 pub(crate) mod portability;
 mod profiles;
 pub(crate) mod security;
+mod shared_variables;
 mod system;
+mod variables;
 pub(crate) mod windows;
+mod work_session;
 mod workflows;
 
 use crate::modules::projects;
@@ -74,6 +77,11 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         credentials::list_credentials,
         credentials::set_credential,
         credentials::delete_credential,
+        shared_variables::list_shared_variables,
+        shared_variables::save_shared_variable,
+        shared_variables::delete_shared_variable,
+        shared_variables::set_shared_variable_value,
+        shared_variables::clear_shared_variable_value,
         profiles::list_profiles,
         profiles::get_profile,
         profiles::create_profile,
@@ -84,6 +92,9 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         actions::update_action,
         actions::duplicate_action,
         actions::delete_action,
+        actions::action_references,
+        actions::replace_action_references,
+        actions::unbind_action_references,
         workflows::save_workflow,
         workflows::duplicate_workflow,
         workflows::delete_workflow,
@@ -97,6 +108,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         projects::copy_project,
         projects::cycle_project,
         projects::select_project,
+        variables::list_variables,
+        variables::preview_references,
         machine::get_machine_config,
         machine::set_resource_binding,
         machine::remove_resource_binding,
@@ -130,6 +143,12 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         agent::list_executions,
         agent::get_execution,
         agent::clear_execution_history,
+        work_session::get_work_session,
+        work_session::list_work_sessions,
+        work_session::resolve_work_session_review,
+        work_session::clear_work_session_notices,
+        work_session::get_work_session_settings,
+        work_session::save_work_session_settings,
         crate::updates::update_state,
         crate::updates::check_for_updates,
         crate::updates::download_update,

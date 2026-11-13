@@ -31,6 +31,7 @@ pub mod registry;
 pub mod resolution;
 pub mod resource;
 pub mod runtime;
+pub mod stateful;
 pub mod trigger;
 pub mod variables;
 pub mod work_session;
@@ -87,7 +88,7 @@ pub use registry::{ActionHandler, ActionRegistry, RegistryError};
 pub use resource::{
     MachineConfig, MachineResourceBinding, ResolveError, ResourceKey, ResourceKind, ResourceRef,
 };
-pub use runtime::{Engine, EngineError, StepReport, WorkflowReport};
+pub use runtime::{Engine, EngineError, StepReport, WorkflowReport, declared_outputs};
 pub use trigger::{
     EventField, LifecycleEvent, Schedule, Scheduler, TriggerEvent, TriggerKind, TriggerValue,
     WallTime, WorkflowTrigger,
