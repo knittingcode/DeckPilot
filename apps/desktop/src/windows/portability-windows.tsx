@@ -17,7 +17,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { NAVIGATE_EVENT, api, errorMessage } from "@/lib/api"
+import { NAVIGATE_EVENT, api } from "@/lib/api"
+import { failureMessage } from "@/lib/failure"
 import { RESOURCE_KIND_LABELS } from "@/lib/format"
 import { newPasswordReady } from "@/lib/passwords"
 import { isCancelled, useSensitive } from "@/lib/sensitive"
@@ -47,7 +48,9 @@ function useLoaded<T>(load: () => Promise<T>) {
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
     load().then(setData, (e: unknown) => {
-      setError(errorMessage(e))
+      setError(
+        failureMessage("The profiles could not be loaded", e, "Close the window and try again"),
+      )
     })
     // Loaded once per window.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -118,7 +121,7 @@ function ExportForm({ profiles }: { profiles: ProfilesView }) {
       setPassword("")
       setConfirmation("")
     } catch (e) {
-      if (!isCancelled(e)) setError(errorMessage(e))
+      if (!isCancelled(e)) setError(failureMessage("The configuration was not exported", e))
     } finally {
       setBusy(false)
     }
@@ -290,7 +293,7 @@ function ChooseFile({
             if (typeof path === "string") onChosen(path)
           },
           (e: unknown) => {
-            setError(errorMessage(e))
+            setError(failureMessage("The file could not be chosen", e))
           },
         )
       }}
@@ -332,7 +335,13 @@ function ImportPassword({
             onPreview(result.token, result.preview)
           })
           .catch((e: unknown) => {
-            setError(errorMessage(e))
+            setError(
+              failureMessage(
+                "The file could not be opened",
+                e,
+                "Check the export password and that the file is a DeckPilot export",
+              ),
+            )
             setPassword("")
           })
           .finally(() => {
@@ -408,7 +417,7 @@ function ImportChoices({
           .applyImport(token, { mode, profiles: selected, conflicts, moduleSettings, appSettings })
           .then(onDone)
           .catch((e: unknown) => {
-            setError(errorMessage(e))
+            setError(failureMessage("Nothing was imported", e))
           })
           .finally(() => {
             setBusy(false)

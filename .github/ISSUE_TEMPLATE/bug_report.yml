@@ -1,0 +1,59 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security vulnerabilities are reported privately, not here: see SECURITY.md.
+        Do not paste secrets, tokens, passwords or private paths; logs never need them.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: DeckPilot version or commit
+      placeholder: e.g. 0.6.0, or the commit of main
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: Operating system version
+      placeholder: e.g. macOS 26.1, Windows 11 24H2, Ubuntu 24.04
+  - type: input
+    id: device
+    attributes:
+      label: Stream Deck model
+      description: Leave empty if no device is involved.
+      placeholder: e.g. Stream Deck MK.2
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: From the agent or app log; remove anything private first.
+      render: text

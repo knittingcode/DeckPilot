@@ -278,6 +278,19 @@ tag; that push starts the release workflow.
      notes for the version (they become the release notes and the notes
      shown by the in-app updater), and that macOS signing is configured (or
      explicitly waived);
+   - runs the full installer checks of the *Packaging* workflow on the
+     tagged commit, unsigned and without any secret (`packaging` job, which
+     calls `.github/workflows/packaging.yml`): Linux `.deb` and `.rpm`,
+     Windows NSIS and MSI, built with the release configuration and a
+     throwaway updater key, checked by `tools/ci/check-packages.sh` (names,
+     versions, application, bundled agent, udev rule, updater signatures).
+     The draft, and with it every signed build and the publication, waits
+     for them. The called workflow builds the run's commit, which the gate
+     checked is the tag's (`RUN_SHA`): a tag moved after the push is
+     refused. The job passes the gate's `prerelease` and `msi_version`
+     (inputs `prerelease` and `msi-version`), so a pre-release builds no
+     `.rpm` (RPM refuses `-` in versions) and its MSI gets the same numeric
+     version as the signed build (WiX refuses `0.6.0-alpha.1`);
    - runs the real-binary compatibility matrix against the previous release
      (`tools/compat/matrix.sh`, baseline in
      `tools/release-pipeline/compat-baseline`): database migration and IPC
