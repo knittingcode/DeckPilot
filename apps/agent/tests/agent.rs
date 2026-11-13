@@ -765,15 +765,17 @@ async fn single_instance_shutdown_and_client_reconnect() {
         "keys are blanked"
     );
     agent.watchdog.step("connecting to the stopped agent");
-    assert!(matches!(
-        within(
-            "connecting to the stopped agent",
-            TIMEOUT,
-            AgentClient::connect(&paths, ClientKind::Other)
-        )
-        .await,
-        Err(ClientError::NotRunning)
-    ));
+    let stopped = within(
+        "connecting to the stopped agent",
+        TIMEOUT,
+        AgentClient::connect(&paths, ClientKind::Other),
+    )
+    .await;
+    assert!(
+        matches!(stopped, Err(ClientError::NotRunning)),
+        "connecting to the stopped agent: {:?}",
+        stopped.map(|_| "connected")
+    );
 
     // A restarted agent accepts clients again and restores the selection.
     // It starts locked, like after a reboot, until the app unlocks it.
@@ -838,7 +840,7 @@ async fn configuration_reload_updates_the_device_without_restart() {
         .push(deckpilot_core::ControlBinding {
             control: ControlId::Key { index: 5 },
             trigger: deckpilot_core::Trigger::Press,
-            target: deckpilot_core::BindingTarget::Action { action },
+            target: deckpilot_core::BindingTarget::action(action),
             label: Some("{project.name}".into()),
             appearance: None,
         });
@@ -2270,6 +2272,17 @@ async fn only_permitted_runs_change_the_active_project_and_never_over_a_newer_ch
     );
     let workflow_id = workflow.id;
     profile.workflows.push(workflow);
+    // The same, waiting long enough that the user's choice below certainly
+    // arrives while it runs, also on a slow runner.
+    let mut slow = select_wait_announce(
+        &mut profile,
+        "CMR",
+        3000,
+        deckpilot_core::ProjectScope::Application,
+    );
+    slow.name = "Work on CMR slowly".into();
+    let slow_id = slow.id;
+    profile.workflows.push(slow);
     agent.store().save_profile(&profile).unwrap();
     let mut events = agent.client().await;
     events.subscribe().await.unwrap();
@@ -2283,10 +2296,13 @@ async fn only_permitted_runs_change_the_active_project_and_never_over_a_newer_ch
         Some(deckpilot_core::ProjectScope::Application)
     );
     let (_, done) = execution_events(&mut events, run.id).await;
-    assert!(matches!(
-        done.project,
-        Some(deckpilot_core::ProjectOutcome::Applied { .. })
-    ));
+    assert!(
+        matches!(
+            done.project,
+            Some(deckpilot_core::ProjectOutcome::Applied { .. })
+        ),
+        "{done:?}"
+    );
     agent
         .wait_for_status(|s| active_key(s) == Some("CMR"))
         .await;
@@ -2304,17 +2320,44 @@ async fn only_permitted_runs_change_the_active_project_and_never_over_a_newer_ch
         .request(Request::SelectProject { project: shop })
         .await
         .unwrap();
-    let run = start_workflow(&mut client, workflow_id).await;
+    let run = start_workflow(&mut client, slow_id).await;
+    // The run is waiting (its project already selected in its own
+    // context) when the user picks another one.
+    let mut early = Vec::new();
+    loop {
+        let event = within("the run's wait to begin", TIMEOUT, events.next_event())
+            .await
+            .unwrap();
+        let waiting = matches!(
+            &event,
+            AgentEvent::ExecutionProgress {
+                execution,
+                event: deckpilot_core::graph::ExecutionEvent::NodeStarted { node },
+                ..
+            } if *execution == run.id && node.as_str() == "wait"
+        );
+        assert!(
+            !matches!(&event, AgentEvent::ExecutionFinished { execution } if execution.id == run.id),
+            "the run ended before it waited: {event:?}"
+        );
+        early.push(event);
+        if waiting {
+            break;
+        }
+    }
     client
         .request(Request::SelectProject { project: cms })
         .await
         .unwrap();
-    let (_, done) = execution_events(&mut events, run.id).await;
-    match done.project {
+    let (later, done) = execution_events(&mut events, run.id).await;
+    match &done.project {
         Some(deckpilot_core::ProjectOutcome::NotApplied { reason, .. }) => {
             assert!(reason.contains("changed during the run"), "{reason}");
         }
-        other => panic!("unexpected {other:?}"),
+        other => panic!(
+            "expected the run not to change the user's newer choice, got {other:?}; \
+             run: {done:?}; events: {early:?} {later:?}"
+        ),
     }
     assert_eq!(active_key(&agent.status().await), Some("CMS"));
     agent.shutdown().await;
@@ -2776,9 +2819,14 @@ async fn http_requests_use_stored_credentials_and_keep_bodies_out_of_history() {
     assert_eq!(green.status, deckpilot_core::graph::NodeStatus::Succeeded);
     let stored = serde_json::to_string(&record).unwrap();
     let live = serde_json::to_string(&events).unwrap();
-    for secret in ["t0ken-secret", "b0dy-secret", "\"value\":\"green\""] {
-        assert!(!stored.contains(secret), "{secret} in history");
-        assert!(!live.contains(secret), "{secret} in events");
+    // Failure messages name what leaked, never the value itself.
+    for (what, value) in [
+        ("the credential", "t0ken-secret"),
+        ("the response body", "b0dy-secret"),
+        ("the extracted value", "\"value\":\"green\""),
+    ] {
+        assert!(!stored.contains(value), "{what} is in the history");
+        assert!(!live.contains(value), "{what} is in the events");
     }
     drop(client);
     agent.shutdown().await;
@@ -3014,7 +3062,7 @@ async fn module_states_are_shown_and_not_refreshed_more_often_than_allowed() {
         .push(deckpilot_core::ControlBinding {
             control: key,
             trigger: deckpilot_core::Trigger::Press,
-            target: deckpilot_core::BindingTarget::Action { action: status.id },
+            target: deckpilot_core::BindingTarget::action(status.id),
             label: None,
             appearance: None,
         });
@@ -3429,16 +3477,20 @@ fn a_hanging_test_ends_the_test_binary_with_its_step() {
                 .build()
                 .unwrap();
             runtime.spawn(async { std::thread::sleep(Duration::from_secs(30)) });
-            let watchdog = Watchdog::new("the hanging test", Duration::from_millis(300));
+            // Long enough for the panic to be reported and unwound before
+            // the limit, also on a slow runner (Windows CI took over 250 ms).
+            let watchdog = Watchdog::new("the hanging test", Duration::from_secs(3));
             watchdog.step("asserting");
-            std::thread::sleep(Duration::from_millis(50));
             panic!("the assertion failed");
         }
         _ => {}
     }
     for (mode, step) in [
         ("block", "`blocking forever`"),
-        ("panic", "`panicked, then did not finish, after: asserting`"),
+        (
+            "panic",
+            "`panicked, then did not finish, after: asserting; the panic: panicked at",
+        ),
     ] {
         let started = std::time::Instant::now();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -3455,6 +3507,14 @@ fn a_hanging_test_ends_the_test_binary_with_its_step() {
             stderr.contains("the hanging test hung") && stderr.contains(step),
             "{mode}: {stderr}"
         );
+        if mode == "panic" {
+            // What panicked is shown, although the harness captured the
+            // test's output and never printed it.
+            assert!(
+                stderr.contains("[panic in") && stderr.contains("the assertion failed"),
+                "{stderr}"
+            );
+        }
         assert!(started.elapsed() < Duration::from_secs(20), "{mode}");
     }
 }

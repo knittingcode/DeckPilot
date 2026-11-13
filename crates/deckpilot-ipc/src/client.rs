@@ -57,13 +57,33 @@ impl ClientError {
     /// macOS and Windows, but often a reset on Linux when the agent exits while
     /// a request is in flight.
     fn from_io(error: io::Error) -> Self {
+        // Windows: `ERROR_PIPE_NOT_CONNECTED`, the server end of the pipe
+        // was closed.
+        #[cfg(windows)]
+        if error.raw_os_error() == Some(233) {
+            return Self::Closed;
+        }
         match error.kind() {
             io::ErrorKind::ConnectionReset
             | io::ErrorKind::ConnectionAborted
             | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::NotConnected
             | io::ErrorKind::UnexpectedEof => Self::Closed,
             _ => Self::Io(error),
         }
+    }
+}
+
+/// An error while sending the `hello` or waiting for its answer. A
+/// connection torn down at that point, however the platform reports it
+/// (end of stream, reset, broken pipe, or `ENOTCONN` on macOS when the
+/// peer closed before the `hello` was written), belongs to an agent that is
+/// stopping (on Windows the pipe of a stopped agent can still be opened for
+/// a moment): nothing runs that could serve this client.
+fn handshake_error(error: ClientError) -> ClientError {
+    match error {
+        ClientError::Closed => ClientError::NotRunning,
+        other => other,
     }
 }
 
@@ -81,6 +101,29 @@ pub struct AgentClient {
     protocol: u32,
     capabilities: Vec<Capability>,
     events: VecDeque<AgentEvent>,
+}
+
+impl Drop for AgentClient {
+    fn drop(&mut self) {
+        // Nothing is left to deliver: close the connection at once (see
+        // `SharedStream::skip_flush_on_close`).
+        self.writer.skip_flush_on_close();
+    }
+}
+
+/// Whether an agent holds the instance lock of `paths`. A lock that can be
+/// taken (and is released again at once) means no agent runs; one that
+/// cannot be checked counts as held.
+fn agent_holds_lock(paths: &AgentPaths) -> bool {
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .open(&paths.lock_file)
+    {
+        Ok(file) => !matches!(file.try_lock(), Ok(())),
+        // No lock file: no agent ever ran here.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(_) => true,
+    }
 }
 
 impl AgentClient {
@@ -123,6 +166,10 @@ impl AgentClient {
                 io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
                     ClientError::NotRunning
                 }
+                // An endpoint that stayed busy (on Windows, the pipe of an
+                // agent that is gone, still held open by someone) while no
+                // agent holds the instance lock: nothing runs.
+                io::ErrorKind::TimedOut if !agent_holds_lock(paths) => ClientError::NotRunning,
                 _ => ClientError::Io(error),
             })?;
         let token = token::read(&paths.token_file).map_err(|error| match error.kind() {
@@ -158,13 +205,7 @@ impl AgentClient {
                 "the agent did not answer the handshake",
             ))
         })?
-        // Closed before it answered: an agent that is stopping (on Windows
-        // the pipe instance of a stopped agent can still be opened for a
-        // moment). Nothing runs that could serve this client.
-        .map_err(|error| match error {
-            ClientError::Closed => ClientError::NotRunning,
-            other => other,
-        })?;
+        .map_err(handshake_error)?;
         match welcome {
             ServerMessage::Welcome {
                 agent_version,
@@ -292,20 +333,72 @@ pub async fn request_once(
 mod tests {
     use super::*;
 
+    const TEARDOWN: [io::ErrorKind; 5] = [
+        io::ErrorKind::ConnectionReset,
+        io::ErrorKind::ConnectionAborted,
+        io::ErrorKind::BrokenPipe,
+        io::ErrorKind::NotConnected,
+        io::ErrorKind::UnexpectedEof,
+    ];
+
     #[test]
     fn peer_teardown_is_reported_as_closed() {
-        for kind in [
-            io::ErrorKind::ConnectionReset,
-            io::ErrorKind::ConnectionAborted,
-            io::ErrorKind::BrokenPipe,
-            io::ErrorKind::UnexpectedEof,
-        ] {
+        for kind in TEARDOWN {
             let error = ClientError::from(FrameError::Io(io::Error::from(kind)));
             assert!(matches!(error, ClientError::Closed), "{kind:?}");
         }
+        // As the OS reports it: `ENOTCONN` (57 on macOS) for a write after
+        // the peer closed.
+        #[cfg(target_os = "macos")]
+        assert!(matches!(
+            ClientError::from(FrameError::Io(io::Error::from_raw_os_error(57))),
+            ClientError::Closed
+        ));
         let other = ClientError::from(FrameError::Io(io::Error::from(
             io::ErrorKind::PermissionDenied,
         )));
         assert!(matches!(other, ClientError::Io(_)));
+    }
+
+    #[test]
+    fn a_connection_torn_down_during_the_hello_means_no_agent_runs() {
+        for kind in TEARDOWN {
+            let error = handshake_error(ClientError::from(FrameError::Io(io::Error::from(kind))));
+            assert!(matches!(error, ClientError::NotRunning), "{kind:?}");
+        }
+        // Other failures are reported as they are.
+        let other = handshake_error(ClientError::from(FrameError::Io(io::Error::from(
+            io::ErrorKind::PermissionDenied,
+        ))));
+        assert!(matches!(other, ClientError::Io(_)));
+    }
+
+    #[test]
+    fn the_instance_lock_tells_whether_an_agent_runs() {
+        let dir = std::env::temp_dir().join(format!(
+            "deckpilot-ipc-lock-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = AgentPaths::in_dir(&dir);
+        // Never ran here.
+        assert!(!agent_holds_lock(&paths));
+        // Ran and stopped (the file stays).
+        std::fs::write(&paths.lock_file, b"").unwrap();
+        assert!(!agent_holds_lock(&paths));
+        // Running: the lock is held.
+        let held = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&paths.lock_file)
+            .unwrap();
+        held.try_lock().unwrap();
+        assert!(agent_holds_lock(&paths));
+        // The check itself does not keep the lock.
+        drop(held);
+        let again = std::fs::File::open(&paths.lock_file).unwrap();
+        assert!(again.try_lock().is_ok());
+        drop(again);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

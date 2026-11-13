@@ -12,14 +12,12 @@ publish.workspace = true
 base64.workspace = true
 deckpilot-device.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", default-features = false, features = ["process", "std"] }
-
-[dev-dependencies]
-serde_json.workspace = true
 
 [lints]
 workspace = true

@@ -8,18 +8,33 @@ name: Compatibility
 on:
   pull_request:
     paths:
-      - crates/deckpilot-ipc/**
-      - crates/deckpilot-storage/**
+      # The agent and the client (deckpilot-dev) with every crate they are
+      # built from: types of deckpilot-core and others travel over IPC and
+      # into the database, and dependency or toolchain updates change them
+      # too.
+      - crates/**
       - apps/agent/**
+      - tools/dev/**
       - tools/compat/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
       - .github/workflows/compatibility.yml
   push:
     branches: [main]
     paths:
-      - crates/deckpilot-ipc/**
-      - crates/deckpilot-storage/**
+      # The agent and the client (deckpilot-dev) with every crate they are
+      # built from: types of deckpilot-core and others travel over IPC and
+      # into the database, and dependency or toolchain updates change them
+      # too.
+      - crates/**
       - apps/agent/**
+      - tools/dev/**
       - tools/compat/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .github/workflows/compatibility.yml
   workflow_dispatch:
 
 permissions:
@@ -48,4 +63,7 @@ jobs:
           workspaces: |
             . -> target
             ${{ runner.temp }}/compat/old-tree -> target
+          # Saved by main only (about 1 GB): per-pull-request copies filled
+          # the repository's 10 GB cache storage and evicted main's caches.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: tools/compat/matrix.sh v0.5.0-2 "$RUNNER_TEMP/compat"

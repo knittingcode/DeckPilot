@@ -28,6 +28,8 @@ function isEmpty(value: ParameterValue): boolean {
     case "text":
     case "choice":
     case "project":
+    case "reference":
+    case "template":
       return value.value.trim() === ""
     case "resource":
       return value.value.type === "fixed"
@@ -71,6 +73,10 @@ export function describeValue(value: ParameterValue, projects: Project[] = []): 
       return value.value.type === "fixed" ? value.value.key : `active project › ${value.value.role}`
     case "project":
       return projects.find((p) => p.id === value.value)?.key ?? "a project of another profile"
+    case "reference":
+      return `{{ ${value.value} }}`
+    case "template":
+      return value.value
   }
 }
 

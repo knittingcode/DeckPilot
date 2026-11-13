@@ -35,6 +35,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { VariableScopeProvider } from "@/components/variable-picker/scope-provider"
+import { useEditorShortcuts } from "@/hooks/use-editor-shortcuts"
 import { useStatusItem } from "@/hooks/use-status"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { IS_MAC } from "@/hooks/use-navigation"
@@ -55,6 +57,7 @@ import type {
   WorkflowTrigger,
   WorkflowVariable,
 } from "@/lib/types"
+import { shortcutLabel } from "@/lib/shortcuts"
 import { cn } from "@/lib/utils"
 
 import { type CatalogEntry, DRAG_TYPE, actionEntry, flowEntries, moduleGroups } from "./catalog"
@@ -117,6 +120,8 @@ export interface BuilderProps {
   /** Shown above the canvas, e.g. the workflow switcher. */
   toolbar?: ReactNode
   canRun: boolean
+  /** Why the workflow cannot run (with what to do); shown on the Run button. */
+  runBlocked?: string | null
   running: boolean
   onRun: () => void
   onCancelRun?: () => void
@@ -187,13 +192,6 @@ function ToolButton({
   )
 }
 
-function isEditable(target: EventTarget | null) {
-  return (
-    target instanceof HTMLElement &&
-    (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
-  )
-}
-
 function Builder({
   profileId,
   view,
@@ -207,6 +205,7 @@ function Builder({
   workflowPanel,
   toolbar,
   canRun,
+  runBlocked,
   running,
   onRun,
   onCancelRun,
@@ -389,7 +388,9 @@ function Builder({
         toast.success("Workflow saved")
         onSaved(saved.id)
       })
-      .catch((e: unknown) => toast.error(errorMessage(e)))
+      .catch((e: unknown) =>
+        toast.error("The workflow was not saved", { description: errorMessage(e) }),
+      )
       .finally(() => {
         setSaving(false)
       })
@@ -446,8 +447,8 @@ function Builder({
         })
       })
       .catch((e: unknown) => {
-        toast.error(errorMessage(e), {
-          description: "Create the action in the Action Library first.",
+        toast.error("The action was not created", {
+          description: `${errorMessage(e)} You can create it in the Action Library instead.`,
         })
       })
   }
@@ -476,36 +477,8 @@ function Builder({
   }
 
   // Keyboard shortcuts of the editor (deleting is handled by the canvas).
-  const handlers = useRef({ doUndo, doRedo, doCopy, doPaste, save })
-  useEffect(() => {
-    handlers.current = { doUndo, doRedo, doCopy, doPaste, save }
-  })
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const mod = IS_MAC ? event.metaKey : event.ctrlKey
-      if (!mod) return
-      const key = event.key.toLowerCase()
-      if (key === "s") {
-        event.preventDefault()
-        handlers.current.save()
-        return
-      }
-      if (isEditable(event.target)) return
-      if (key === "z" && !event.shiftKey) handlers.current.doUndo()
-      else if ((key === "z" && event.shiftKey) || key === "y") handlers.current.doRedo()
-      else if (key === "c") handlers.current.doCopy()
-      else if (key === "v") handlers.current.doPaste()
-      else return
-      event.preventDefault()
-    }
-    window.addEventListener("keydown", onKey)
-    return () => {
-      window.removeEventListener("keydown", onKey)
-    }
-  }, [])
+  useEditorShortcuts({ undo: doUndo, redo: doRedo, copy: doCopy, paste: doPaste, save })
 
-  const shortcut = (key: string, shift = false) =>
-    IS_MAC ? `${shift ? "⇧" : ""}⌘${key}` : `Ctrl+${shift ? "Shift+" : ""}${key}`
   useTitlebar({
     actions: [
       {
@@ -522,7 +495,7 @@ function Builder({
           : errors.length > 0
             ? `Fix ${errors.length} problem${errors.length === 1 ? "" : "s"} to save`
             : workflow.name
-              ? `Save (${shortcut("S")})`
+              ? `Save (${shortcutLabel("S")})`
               : "Give the workflow a name",
       },
       {
@@ -538,7 +511,7 @@ function Builder({
             ? "Save first; runs in the agent for the active profile"
             : canRun
               ? `Run “${initial.name}” in the agent`
-              : "Runs in the agent for the active profile",
+              : (runBlocked ?? "Runs in the agent for the active profile"),
         onSelect: running ? onCancelRun : onRun,
       },
     ],
@@ -734,7 +707,7 @@ function Builder({
         <div className="flex items-center" role="toolbar" aria-label="Edit">
           <ToolButton
             label="Undo"
-            shortcut={shortcut("Z")}
+            shortcut={shortcutLabel("Z")}
             disabled={state.past.length === 0}
             onClick={doUndo}
           >
@@ -742,7 +715,7 @@ function Builder({
           </ToolButton>
           <ToolButton
             label="Redo"
-            shortcut={shortcut("Z", true)}
+            shortcut={shortcutLabel("Z", true)}
             disabled={state.future.length === 0}
             onClick={doRedo}
           >
@@ -837,152 +810,168 @@ function Builder({
           </ReactFlow>
         </div>
         {panels.inspector && (
-          <aside
-            className="w-68 shrink-0 overflow-x-hidden overflow-y-auto border-l"
-            aria-label="Inspector"
+          // References in this workflow resolve in its runs, which have their
+          // own project: the picker never shows the active project as theirs.
+          <VariableScopeProvider
+            context={{ workflow: initial.id, projectSource: "execution" }}
+            names={{ workflow: name.trim() || initial.name }}
           >
-            {node ? (
-              <NodeInspector
-                graph={graph}
-                node={node}
-                issues={issues.filter((i) => i.node === node.id)}
-                lookup={lookup}
-                projects={view.profile.projects}
-                loopTargets={loopTargets}
-                onChange={(update) => {
-                  change(updateNode(graph, node.id, update))
-                }}
-                onDelete={() => {
-                  change(removeNodes(graph, [node.id]))
-                  selectOnly([])
-                }}
-                run={run?.[node.id]}
-                values={runValues}
-              />
-            ) : (
-              <div className="grid">
-                <div className="grid gap-3 px-4 py-3">
-                  <h2 className="text-sm font-semibold">Workflow</h2>
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="workflow-name" className="text-xs">
-                      Name
-                    </Label>
-                    <Input
-                      id="workflow-name"
-                      value={name}
-                      onChange={(e) => {
-                        setName(e.target.value)
-                      }}
-                    />
-                  </div>
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="workflow-description" className="text-xs">
-                      Description
-                    </Label>
-                    <Textarea
-                      id="workflow-description"
-                      rows={2}
-                      value={description}
-                      onChange={(e) => {
-                        setDescription(e.target.value)
-                      }}
-                    />
-                  </div>
-                  <ProjectScopeSetting
-                    scope={projectScope}
-                    selectsProjects={selectsProjects(graph, actions, types)}
-                    onChange={setProjectScope}
-                  />
-                  <IssueList issues={graphIssues} />
-                  {errors.length > 0 && graphIssues.length === 0 && (
-                    <p className="text-xs text-destructive">
-                      {errors.length} problem{errors.length === 1 ? "" : "s"} on nodes; select a
-                      node to see it.
-                    </p>
-                  )}
-                  {selected.length > 1 && (
-                    <p className="text-xs text-muted-foreground">
-                      {selected.length} nodes selected. Copy with {shortcut("C")}, delete with ⌫.
-                    </p>
-                  )}
-                  {notes.length > 0 && (
-                    <div className="grid gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs">
-                      <p className="font-medium">Converted from steps</p>
-                      <p className="text-muted-foreground">
-                        Review these differences, then save. The steps are kept.
-                      </p>
-                      <ul className="list-disc pl-4">
-                        {notes.map((note) => (
-                          <li key={note}>{note}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {!isNew && (
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          api
-                            .duplicateWorkflow(profileId, initial.id, `${initial.name} (copy)`)
-                            .then((copy) => {
-                              toast.success("Workflow duplicated")
-                              onSaved(copy.id)
-                            })
-                            .catch((e: unknown) => toast.error(errorMessage(e)))
-                        }}
-                      >
-                        <Copy /> Duplicate
-                      </Button>
-                      <ConfirmDialog
-                        trigger={
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            disabled={(view.workflowUsages[initial.id] ?? []).length > 0}
-                            title={
-                              (view.workflowUsages[initial.id] ?? []).length > 0
-                                ? "Used by a layout or another workflow"
-                                : undefined
-                            }
-                          >
-                            <Trash2 /> Delete
-                          </Button>
-                        }
-                        title={`Delete “${initial.name}”?`}
-                        description="The workflow and its graph are removed from this profile."
-                        onConfirm={() => {
-                          api
-                            .deleteWorkflow(profileId, initial.id)
-                            .then(() => {
-                              toast.success("Workflow deleted")
-                              onDeleted()
-                            })
-                            .catch((e: unknown) => toast.error(errorMessage(e)))
+            <aside
+              className="w-68 shrink-0 overflow-x-hidden overflow-y-auto border-l"
+              aria-label="Inspector"
+            >
+              {node ? (
+                <NodeInspector
+                  graph={graph}
+                  node={node}
+                  issues={issues.filter((i) => i.node === node.id)}
+                  lookup={lookup}
+                  projects={view.profile.projects}
+                  loopTargets={loopTargets}
+                  onChange={(update) => {
+                    change(updateNode(graph, node.id, update))
+                  }}
+                  onDelete={() => {
+                    change(removeNodes(graph, [node.id]))
+                    selectOnly([])
+                  }}
+                  run={run?.[node.id]}
+                  values={runValues}
+                />
+              ) : (
+                <div className="grid">
+                  <div className="grid gap-3 px-4 py-3">
+                    <h2 className="text-sm font-semibold">Workflow</h2>
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="workflow-name" className="text-xs">
+                        Name
+                      </Label>
+                      <Input
+                        id="workflow-name"
+                        value={name}
+                        onChange={(e) => {
+                          setName(e.target.value)
                         }}
                       />
                     </div>
-                  )}
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="workflow-description" className="text-xs">
+                        Description
+                      </Label>
+                      <Textarea
+                        id="workflow-description"
+                        rows={2}
+                        value={description}
+                        onChange={(e) => {
+                          setDescription(e.target.value)
+                        }}
+                      />
+                    </div>
+                    <ProjectScopeSetting
+                      scope={projectScope}
+                      selectsProjects={selectsProjects(graph, actions, types)}
+                      onChange={setProjectScope}
+                    />
+                    <IssueList issues={graphIssues} />
+                    {errors.length > 0 && graphIssues.length === 0 && (
+                      <p className="text-xs text-destructive">
+                        {errors.length} problem{errors.length === 1 ? "" : "s"} on nodes; select a
+                        node to see it.
+                      </p>
+                    )}
+                    {selected.length > 1 && (
+                      <p className="text-xs text-muted-foreground">
+                        {selected.length} nodes selected. Copy with {shortcutLabel("C")}, delete
+                        with ⌫.
+                      </p>
+                    )}
+                    {notes.length > 0 && (
+                      <div className="grid gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs">
+                        <p className="font-medium">Converted from steps</p>
+                        <p className="text-muted-foreground">
+                          Review these differences, then save. The steps are kept.
+                        </p>
+                        <ul className="list-disc pl-4">
+                          {notes.map((note) => (
+                            <li key={note}>{note}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {!isNew && (
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            api
+                              .duplicateWorkflow(profileId, initial.id, `${initial.name} (copy)`)
+                              .then((copy) => {
+                                toast.success("Workflow duplicated")
+                                onSaved(copy.id)
+                              })
+                              .catch((e: unknown) =>
+                                toast.error("The workflow was not duplicated", {
+                                  description: errorMessage(e),
+                                }),
+                              )
+                          }}
+                        >
+                          <Copy /> Duplicate
+                        </Button>
+                        <ConfirmDialog
+                          trigger={
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={(view.workflowUsages[initial.id] ?? []).length > 0}
+                              title={
+                                (view.workflowUsages[initial.id] ?? []).length > 0
+                                  ? "Used by a layout or another workflow"
+                                  : undefined
+                              }
+                            >
+                              <Trash2 /> Delete
+                            </Button>
+                          }
+                          title={`Delete “${initial.name}”?`}
+                          description="The workflow and its graph are removed from this profile."
+                          onConfirm={() => {
+                            api
+                              .deleteWorkflow(profileId, initial.id)
+                              .then(() => {
+                                toast.success("Workflow deleted")
+                                onDeleted()
+                              })
+                              .catch((e: unknown) =>
+                                toast.error("The workflow was not deleted", {
+                                  description: errorMessage(e),
+                                }),
+                              )
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  <WorkflowInterfaceEditor
+                    inputs={inputs}
+                    outputs={outputs}
+                    onInputs={setInputs}
+                    onOutputs={setOutputs}
+                  />
+                  <VariablesEditor variables={variables} onChange={setVariables} />
+                  <TriggersEditor
+                    triggers={triggers}
+                    paused={triggersPaused}
+                    inputs={inputs}
+                    onTriggers={setTriggers}
+                    onPaused={setTriggersPaused}
+                  />
+                  {workflowPanel}
                 </div>
-                <WorkflowInterfaceEditor
-                  inputs={inputs}
-                  outputs={outputs}
-                  onInputs={setInputs}
-                  onOutputs={setOutputs}
-                />
-                <VariablesEditor variables={variables} onChange={setVariables} />
-                <TriggersEditor
-                  triggers={triggers}
-                  paused={triggersPaused}
-                  inputs={inputs}
-                  onTriggers={setTriggers}
-                  onPaused={setTriggersPaused}
-                />
-                {workflowPanel}
-              </div>
-            )}
-          </aside>
+              )}
+            </aside>
+          </VariableScopeProvider>
         )}
       </div>
       <p className={cn("sr-only")} aria-live="polite">

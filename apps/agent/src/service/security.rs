@@ -308,6 +308,7 @@ impl Agent {
         // Workflows do not keep running on a locked configuration.
         self.cancel_all_executions();
         self.states.reset();
+        self.invalidate_gestures(deckpilot_core::gesture::GestureCancel::Locked);
         self.store = None;
         self.key = None;
         self.security =

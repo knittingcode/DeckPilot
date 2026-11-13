@@ -21,9 +21,15 @@ deckpilot-module-github.workspace = true
 deckpilot-module-gitlab.workspace = true
 deckpilot-module-jira.workspace = true
 deckpilot-module-workspace.workspace = true
+deckpilot-module-work-session.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 deckpilot-device.workspace = true
+# The stand-in HTTPS server of the integration tests.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde_json.workspace = true
+url.workspace = true
 
 [lints]
 workspace = true
