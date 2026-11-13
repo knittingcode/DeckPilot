@@ -197,7 +197,7 @@ export function agentConnection(
   }
 }
 
-/** A model of the catalog, the Stream Deck MK.2 unless changed. */
+/** A model of the catalog, the Stream Deck MK.2 (verified on macOS) unless changed. */
 export function deviceModel(change: Partial<DeviceModel> = {}): DeviceModel {
   return {
     id: "elgato.streamdeck.mk2",
@@ -209,7 +209,27 @@ export function deviceModel(change: Partial<DeviceModel> = {}): DeviceModel {
       encoders: null,
       touch: null,
     },
-    support: "unverified",
+    support: "verified",
+    verification: [
+      {
+        platform: "macos",
+        level: "physicallyVerified",
+        evidenceDate: "2026-11-13",
+        evidence: "Physical Stream Deck MK.2 on macOS.",
+      },
+      {
+        platform: "windows",
+        level: "automatedTests",
+        evidenceDate: "2026-11-13",
+        evidence: "Automated tests only.",
+      },
+      {
+        platform: "linux",
+        level: "automatedTests",
+        evidenceDate: "2026-11-13",
+        evidence: "Automated tests only.",
+      },
+    ],
     ...change,
   }
 }
