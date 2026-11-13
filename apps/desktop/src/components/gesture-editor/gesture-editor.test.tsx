@@ -11,7 +11,10 @@ import { api, resetApi } from "@/test/api-mock"
 
 vi.mock("@/lib/api", async () => (await import("@/test/api-mock")).apiModule)
 vi.mock("sonner", async () => (await import("@/test/toast")).sonnerModule)
-vi.mock("@/lib/app-context", () => ({
+// The real module (with `AppContext`, which the variable picker reads), but a
+// fixed `useAppContext` for the editor.
+vi.mock("@/lib/app-context", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/app-context")>()),
   useAppContext: () => ({
     profiles: { activeProfileId: null, profiles: [] },
     refresh: vi.fn(),
