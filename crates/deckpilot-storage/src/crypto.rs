@@ -45,6 +45,16 @@ pub fn random_bytes(buffer: &mut [u8]) -> Result<(), CryptoError> {
     getrandom::fill(buffer).map_err(|_| CryptoError::Random)
 }
 
+/// `N` bytes from the operating system's secure random generator, e.g. a
+/// nonce. The array never holds anything but random bytes: it is written
+/// by the generator from uninitialized memory, not pre-filled with a
+/// constant.
+pub fn random_array<const N: usize>() -> Result<[u8; N], CryptoError> {
+    let mut buffer = [std::mem::MaybeUninit::<u8>::uninit(); N];
+    let filled = getrandom::fill_uninit(&mut buffer).map_err(|_| CryptoError::Random)?;
+    <[u8; N]>::try_from(&*filled).map_err(|_| CryptoError::Random)
+}
+
 /// A password typed by the user. Zeroized when dropped, never printed.
 #[derive(Clone)]
 pub struct Password(Zeroizing<String>);
@@ -281,6 +291,14 @@ mod tests {
         let other_salt = KdfParams::for_tests();
         assert!(!a.matches(&other_salt.derive(&password).unwrap()));
         assert!(!a.matches(&params.derive(&Password::new("wrong horse")).unwrap()));
+    }
+
+    #[test]
+    fn random_arrays_are_fresh_for_every_call() {
+        let a: [u8; 24] = random_array().unwrap();
+        let b: [u8; 24] = random_array().unwrap();
+        assert_ne!(a, b);
+        assert_ne!(a, [0u8; 24]);
     }
 
     #[test]

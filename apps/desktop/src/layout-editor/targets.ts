@@ -26,6 +26,8 @@ export function encodeTarget(target: BindingTarget | undefined): string {
       return `page:${target.page}`
     case "back":
       return "back"
+    case "stateful":
+      return `stateful:${target.machine}`
   }
 }
 
@@ -37,6 +39,7 @@ export function decodeTarget(value: string): BindingTarget | null {
   if (kind === "action") return { type: "action", action: id }
   if (kind === "workflow") return { type: "workflow", workflow: id }
   if (kind === "page") return { type: "openPage", page: id }
+  if (kind === "stateful" && id === "workSession") return { type: "stateful", machine: id }
   return null
 }
 
@@ -77,4 +80,16 @@ export function targetGroups(
     },
   ]
   return groups.filter((g) => g.options.length > 0)
+}
+
+/**
+ * Targets offered only on gesture rows (single click, double click, long
+ * press), after `targetGroups`. This is the slot for the Work Session
+ * controller (workstream G4): a "Work Session controller" group whose
+ * option encodes the stateful `BindingTarget` once the contract in
+ * `lib/types.ts` has one, with `encodeTarget`/`decodeTarget` extended to
+ * match. Until then there are none.
+ */
+export function gestureOnlyGroups(): TargetGroup[] {
+  return []
 }

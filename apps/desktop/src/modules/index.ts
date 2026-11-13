@@ -5,9 +5,10 @@ import type { ModuleInfo } from "@/lib/types"
 import { httpModule } from "./http"
 import { projectsModule } from "./projects"
 import type { FrontendModule } from "./types"
+import { workSessionModule } from "./work-session"
 
 /** Every module with a user interface. Modules without one need no entry. */
-const FRONTEND_MODULES: FrontendModule[] = [projectsModule, httpModule]
+const FRONTEND_MODULES: FrontendModule[] = [projectsModule, httpModule, workSessionModule]
 
 /** Page id used in navigation for a module page, e.g. `projects/projects`. */
 export type ModulePageId = `${string}/${string}`

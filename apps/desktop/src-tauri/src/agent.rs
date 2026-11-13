@@ -29,6 +29,9 @@ pub const NOTIFICATION_EVENT: &str = "agent-notification";
 /// `deviceContextChanged`, `executionContextChanged`), so the variable
 /// picker refreshes its previews. Agents before protocol 7 send none.
 pub const VARIABLES_EVENT: &str = "agent-variables";
+/// Event with the work session's snapshot whenever it changes. Agents
+/// before protocol 8 send none.
+pub const WORK_SESSION_EVENT: &str = "agent-work-session";
 
 /// Overrides the agent executable.
 const AGENT_BIN_ENV: &str = "DECKPILOT_AGENT_BIN";
@@ -388,6 +391,9 @@ async fn subscribe<R: Runtime>(app: &AppHandle<R>, paths: &AgentPaths) -> Result
             | AgentEvent::DeviceContextChanged { .. }
             | AgentEvent::ExecutionContextChanged { .. }) => {
                 let _ = app.emit(VARIABLES_EVENT, event);
+            }
+            AgentEvent::WorkSessionChanged { snapshot } => {
+                let _ = app.emit(WORK_SESSION_EVENT, snapshot);
             }
         }
     }
