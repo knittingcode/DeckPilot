@@ -9,6 +9,7 @@
 mod hardware;
 mod logs;
 mod package;
+mod prepare;
 mod process;
 mod release;
 mod seed;
@@ -69,6 +70,11 @@ Commands:
                          (public key from DECKPILOT_UPDATER_PUBKEY)
   check-updater-key      Check that DECKPILOT_UPDATER_PUBKEY is a valid public key
   release-notes          Print the CHANGELOG.md section of the current version
+  prepare-release <version> [--local]
+                         On a new branch from origin/main: set the version,
+                         move the CHANGELOG \"Unreleased\" notes into its
+                         section, validate, commit, push and open a pull
+                         request (--local: commit only). Never creates a tag
   release-tag <tag>      Classify a release tag (vX.Y.Z, -alpha.N, -beta.N, -rc.N):
                          version, channel, manifest; fails for any other tag
   hardware-test [--mock] [--dir <data-dir>] [--force]
@@ -967,6 +973,7 @@ fn run(args: &[String]) -> Result<(), String> {
             println!("all versions are {version}");
             Ok(())
         }
+        Some("prepare-release") => prepare::command(&paths.root, &args[1..]),
         Some("validation") => validation::command(&args[1..]),
         Some("hardware-test") => hardware::command(&paths.root, &args[1..]),
         Some("package") => {
