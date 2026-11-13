@@ -6,76 +6,29 @@
 
 mod support;
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use deckpilot_agent::service::work_session::RunPurpose;
-use deckpilot_agent::{
-    Clock, Ignored, PressContext, WorkSessionOperation as Op, WorkSessionOutcome,
-};
+use deckpilot_agent::{Ignored, PressContext, WorkSessionOperation as Op, WorkSessionOutcome};
 use deckpilot_core::gesture::Gesture;
 use deckpilot_core::graph::{ValueKind, WorkflowOutput};
 use deckpilot_core::work_session::{
     VerificationOutcome, WorkSessionProblem, WorkSessionSnapshot, WorkSessionState as S,
 };
-use deckpilot_core::{Profile, VerificationId, WorkSessionId, Workflow, WorkflowId};
+use deckpilot_core::{
+    ExecutionState, Profile, VerificationId, WorkSessionId, Workflow, WorkflowId,
+};
 use deckpilot_device::mock::MockBackend;
 use deckpilot_device::{ConnectionState, DeviceId, models};
-use deckpilot_ipc::{AgentPaths, KeyMaterial, Request};
+use deckpilot_ipc::{AgentClient, AgentEvent, AgentPaths, KeyMaterial, Request};
 use deckpilot_storage::DatabaseKey;
 use deckpilot_storage::work_sessions::{
     GapKind, NewWorkSession, SessionStatus, VerificationResult, WorkSessionSettings,
 };
 use serde_json::json;
-use support::{TIMEOUT, TempDir, TestAgent, data_dir, graph, graph_workflow, waiting_workflow};
-
-/// The wall clock of the agent, moved by `offset` milliseconds so tests can
-/// make it jump while monotonic time goes on.
-///
-/// Between jumps it advances with the monotonic clock (`Instant`), not with
-/// the system clock: the agent measures a jump as the wall delta minus the
-/// monotonic delta, and the system clock does not keep step with `Instant`
-/// exactly (time synchronisation corrects it, notably on Windows runners),
-/// which would add or remove a few milliseconds of its own.
-#[derive(Clone)]
-struct Jump {
-    base: SystemTime,
-    start: Instant,
-    offset: Arc<AtomicI64>,
-}
-
-impl Default for Jump {
-    fn default() -> Self {
-        Self {
-            base: SystemTime::now(),
-            start: Instant::now(),
-            offset: Arc::default(),
-        }
-    }
-}
-
-impl Jump {
-    fn now(&self) -> SystemTime {
-        let ms = self.offset.load(Ordering::SeqCst);
-        let shift = Duration::from_millis(ms.unsigned_abs());
-        let now = self.base + self.start.elapsed();
-        if ms >= 0 { now + shift } else { now - shift }
-    }
-
-    fn clock(&self) -> Clock {
-        let jump = self.clone();
-        Arc::new(move || jump.now())
-    }
-
-    fn by(&self, ms: i64) {
-        self.offset.fetch_add(ms, Ordering::SeqCst);
-    }
-
-    fn now_ms(&self) -> i64 {
-        i64::try_from(self.now().duration_since(UNIX_EPOCH).unwrap().as_millis()).unwrap()
-    }
-}
+use support::{
+    Jump, TIMEOUT, TempDir, TestAgent, data_dir, graph, graph_workflow, waiting_workflow,
+};
 
 const MINUTE: i64 = 60_000;
 
@@ -229,6 +182,24 @@ async fn wait_state(agent: &TestAgent, state: S) -> WorkSessionSnapshot {
 
 fn has_notice(snapshot: &WorkSessionSnapshot, problem: WorkSessionProblem) -> bool {
     snapshot.notices.iter().any(|n| n.problem == problem)
+}
+
+/// The next announced change to `state`. Every change is announced in
+/// order, so a state the session passed through on its way is seen even
+/// if the snapshot has moved on by the time the test looks.
+async fn next_state(events: &mut AgentClient, state: S) -> WorkSessionSnapshot {
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    loop {
+        let event = tokio::time::timeout_at(deadline, events.next_event())
+            .await
+            .unwrap_or_else(|_| panic!("{} was not announced", state.name()))
+            .unwrap();
+        if let AgentEvent::WorkSessionChanged { snapshot } = event
+            && snapshot.state == state
+        {
+            return *snapshot;
+        }
+    }
 }
 
 /// Starts a session without a start workflow and long-presses it to
@@ -433,12 +404,16 @@ async fn the_start_workflow_runs_first_and_its_failure_leaves_idle_with_the_erro
     // (D10).
     f.configure(&agent, |s| s.start_workflow = Some(fast_id))
         .await;
+    // Read from the announced changes: the 300 ms start workflow may have
+    // ended by the time the test looks at the snapshot.
+    let mut events = agent.events().await;
     assert_eq!(
         op(&agent, Op::Start, Gesture::Click).await,
         WorkSessionOutcome::Applied
     );
-    assert_eq!(snapshot(&agent).state, S::Starting);
-    let working = wait_state(&agent, S::Working).await;
+    let starting = next_state(&mut events, S::Starting).await;
+    let working = next_state(&mut events, S::Working).await;
+    assert_eq!(starting.session, working.session);
     let record = store
         .work_session(working.session.unwrap())
         .unwrap()
@@ -1116,12 +1091,14 @@ async fn a_long_press_in_ready_verifies_again_with_a_fresh_approval() {
     let first = ready.approval.expect("approved");
 
     // In ready, a long press runs the check again and drops the approval.
+    // The announced changes are read rather than the snapshot: the 300 ms
+    // check may already have ended by the time the test looks.
+    let mut events = agent.events().await;
     assert_eq!(
         op(&agent, Op::Verify, Gesture::LongPress).await,
         WorkSessionOutcome::Applied
     );
-    let checking = snapshot(&agent);
-    assert_eq!(checking.state, S::VerifyingEnd);
+    let checking = next_state(&mut events, S::VerifyingEnd).await;
     assert_eq!(checking.approval, None);
     assert_ne!(current_check(&checking), first);
     let again = wait_state(&agent, S::ReadyToFinish).await;
@@ -1136,27 +1113,53 @@ async fn a_long_press_in_ready_verifies_again_with_a_fresh_approval() {
     assert_eq!(snapshot(&agent).approval, again.approval);
 
     // Verifying again can also say no: back to working, timer running,
-    // and no approval left to finish with.
+    // and no approval left to finish with. The check now runs until it is
+    // cancelled, so the "no" is certainly handed in while it is under way
+    // (with 300 ms, a slow runner let the real "yes" arrive first).
+    // Changing the workflow is not a settings change: the approval stays.
+    agent
+        .edit_profile(f.profile.id, |profile| {
+            let mut slow = verification("Check", Some("true"), "", 600_000);
+            slow.id = check_id;
+            profile.workflows = vec![slow];
+        })
+        .await;
+    assert_eq!(snapshot(&agent).approval, again.approval);
+    let mut events = agent.events().await;
     assert_eq!(
         op(&agent, Op::Verify, Gesture::LongPress).await,
         WorkSessionOutcome::Applied
     );
-    let third = current_check(&snapshot(&agent));
-    agent
-        .handle
-        .work_session_run_ended(
+    let third = current_check(&next_state(&mut events, S::VerifyingEnd).await);
+    let runs = agent.wait_for_runs(check_id, |r| r.len() == 3).await;
+    let run = runs
+        .iter()
+        .find(|r| r.state == ExecutionState::Running)
+        .expect("the third check runs")
+        .id;
+    let ended = |can_finish| {
+        agent.handle.work_session_run_ended(
             RunPurpose::Verify {
                 session,
                 verification: third,
             },
-            Some(false),
+            can_finish,
         )
-        .await;
+    };
+    ended(Some(false)).await;
     let working = wait_state(&agent, S::Working).await;
     assert_eq!((working.session, working.approval), (Some(session), None));
-    // The real run's late "yes" is not applied.
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    // A late "yes" of that check is not applied, nor is the end of the
+    // real run.
+    ended(Some(true)).await;
     assert_eq!(snapshot(&agent).state, S::Working);
+    agent
+        .request(Request::CancelExecution { execution: run })
+        .await
+        .unwrap();
+    agent.wait_finished(run).await;
+    assert_eq!(snapshot(&agent).state, S::Working);
+    assert_eq!(snapshot(&agent).approval, None);
     assert_ne!(
         press(&agent, Op::Finish, Gesture::Click, &armed(&again)).await,
         WorkSessionOutcome::Applied
