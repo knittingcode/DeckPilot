@@ -18,7 +18,14 @@ unencrypted mode.
 
 Not encrypted: `deckpilot.vault.json` (which protection is used, with its
 non-secret parameters), logs (which never contain configuration values,
-keys or passwords), and the IPC token file (protected by file permissions).
+keys or passwords), the IPC token file (protected by file permissions),
+and `deckpilot.unencrypted-backup*.db`: the original of a database from an
+earlier, unencrypted version, kept after its migration until the user
+deletes it (see
+[Encrypting a configuration from an earlier version](#encrypting-a-configuration-from-an-earlier-version)).
+That copy holds everything the old database held, in plaintext. It is
+protected only by the data directory's permissions (`0700` when DeckPilot
+creates the directory) and is not removed automatically.
 
 ## Protection modes
 
@@ -193,8 +200,11 @@ two minutes and used up by one operation: exporting the configuration,
 switching the unlock method, changing these settings, and deleting the
 unencrypted copy of a legacy database. Changing the password requires the
 current password. Switching profiles or projects, device operations and
-running workflows never ask. (DeckPilot does not store credentials for
-modules yet; when it does, viewing or removing them will be sensitive too.)
+running workflows never ask. Module credentials (schema 7, for example the
+*Credentials* card of the HTTP module's settings) are not a sensitive
+operation: the app never reads a secret
+back, but adding, replacing or removing a credential does not ask for
+authentication.
 
 How the user is verified:
 

@@ -179,7 +179,9 @@ Security alerts (read with `gh api`, open alerts only): code scanning
   GitHub Actions group, the npm group, jsdom 31,
   `@testing-library/jest-dom` 7, `chacha20poly1305` 0.11, `tray-icon` 0.26
   and `base64` 0.23). Several are major versions, and `chacha20poly1305`
-  and `tray-icon` touch encryption and the tray.
+  and `tray-icon` touch encryption and the tray. See
+  [Security and packaging check](#security-and-packaging-check-2026-11-13)
+  for the classification and CI state of each.
 
 ### Owner actions before the first pre-release
 
@@ -205,6 +207,93 @@ Security alerts (read with `gh api`, open alerts only): code scanning
    They were not run for this report. After that, do the manual
    acceptance run in [mvp-acceptance.md](mvp-acceptance.md) with the build
    from the draft.
+
+### Security and packaging check (2026-11-13)
+
+A read-only check on `origin/main` at `5569a14`. No setting, secret,
+environment or ruleset was changed and no workflow was started.
+
+| Area | Result | Evidence |
+| ---- | ------ | -------- |
+| SQLCipher and key handling | PASS | `cargo test --locked -p deckpilot-storage -p deckpilot-keystore`: 148 passed, 0 failed (4 ignored: real-Keychain and long-running tests) |
+| Unencrypted copy after the legacy migration | PASS (by design), with residual risk | See below |
+| Secrets in variables, exports and logs | PASS | `no_secrets_in_exports::an_export_never_contains_secrets_or_values_of_this_computer`, `shared_variables::sensitive_values_secrets_and_other_profiles_never_leave`, `keystore::tests::secrets_are_redacted`, `sqlite::tests::database_key_is_redacted`, `crypto::tests::keys_round_trip_through_hex_and_are_redacted`, `credentials::tests::ids_are_validated_and_secrets_never_printed`, the `resolution` redaction tests. No log statement formats a secret |
+| Signing configuration | PASS (static) | `tauri.release.conf.json` adds the agent binary and updater artifacts; `hardenedRuntime: true`, no entitlements (enforced by `.github/scripts/verify-macos-app.sh`); the agent's `Info.plist` fixes `io.github.knittingcode.deckpilot.agent`; notarization and stapling of app and disk image in `release.yml` (build job). The updater public key is injected from `vars.DECKPILOT_UPDATER_PUBKEY` and checked in the binary. Not run: no signing secret was used |
+| Release tag gate | PASS | `tools/release-pipeline/test.sh` 80/80, `test-publication.sh` 65/65, `test-updater-key-pair.sh` 8/8 |
+| Packaging workflows | PASS | Packaging on `main` (push, `d9e2905`) and on the PR of `5569a14` green; Signing check green on `main` at `5569a14`. Update continuity is `workflow_dispatch` only and has never run on `main` (last run: a PR on 2026-11-12, green) |
+| Update channels and signatures | PASS | `deckpilot-update`: 21 passed, among them `stable_installations_never_accept_pre_releases`, `the_prerelease_channel_offers_the_newest_release_of_either_kind`, `rejects_tampered_artifacts_and_bad_input`, `release_artifacts_must_be_signed_for_their_version` |
+| Dependency alerts | PASS | 0 open code scanning alerts, 0 open Dependabot alerts (1 dismissed as tolerable: `glib` 0.18, GHSA-wrw7-89jp-8q8g). `pnpm audit`: no known vulnerabilities. `cargo audit` is not installed and was not run |
+| Release environment | FAIL (owner action) | `production-release` does not exist; see the comparison below |
+
+**Unencrypted copy.** `Vault::encrypt_plaintext_with`
+(`crates/deckpilot-storage/src/vault.rs`) renames the original database to
+`deckpilot.unencrypted-backup.db` (an older copy to
+`deckpilot.unencrypted-backup-<time>.db`) and never deletes it. The agent
+does this on its own at the first start with a system key
+(`apps/agent/src/service/security.rs`), and so does
+`deckpilot-dev seed --encrypt-legacy`; that is where a copy in a development
+data directory comes from. It is documented ([security.md](security.md)),
+shown in Settings → Security and in the status list, and deleted there as a
+sensitive operation (`remove_unencrypted_copies`). Reproduced in a
+temporary directory with test data: the copy holds every profile and,
+because the migration accepts any plaintext database, also the secrets of
+the `credentials` table if the database had one (file mode `0644`, inside
+the data directory). A 0.3 database has no `credentials` table and no
+released version writes plaintext databases, so no user's secrets are
+exposed this way; the copy does hold the old configuration (paths, URLs,
+module settings). Possible hardening, not done: create the copy with mode
+`0600`, and clear the `credentials` table of the copy (or refuse the
+migration) when the plaintext database has one.
+
+**Dependabot pull requests.**
+
+| PR | Update | Kind | CI | Notes |
+| -- | ------ | ---- | -- | ----- |
+| #159 | 7 GitHub Actions (`checkout` 4→7, `setup-node` 4→7, `pnpm/action-setup` 4→6, `tauri-action` 0.6→1.0, `upload-artifact` 4→7, `download-artifact` 4→8, `attest-build-provenance` 2→4) | major | green | Changes the release and signing workflows; needs a test release |
+| #160 | `@xyflow/react` 12.12.1, `lucide-react` | patch/minor | green | |
+| #161 | `jsdom` 27→31 | major (test only) | green | |
+| #162 | `@testing-library/jest-dom` 6→7 | major (test only) | green | |
+| #163 | `chacha20poly1305` 0.10→0.11 | breaking (0.x) | red on all three Rust jobs | Cryptography (export archives). 0.11: `aead` 0.6, `chacha20` 0.10, `poly1305` 0.9, `cipher` 0.5, edition 2024 and MSRV 1.85, `std`/`stream` features removed; no security fix. CI fails because `XNonce::from_slice` is deprecated (`archive.rs:87`, `:144`) under `-D warnings` |
+| #164 | `tray-icon` 0.25→0.26 | breaking (0.x) | green | The agent's tray |
+| #165 | `base64` 0.22→0.23 | breaking (0.x) | red on Windows only | Used for keys and archives. 0.23 adds SIMD engines behind a default-on `simd-unsafe` feature and raises MSRV to 1.71. The Windows failure is `work_session.rs:890` (`sleep_and_clock_jumps_are_flagged_and_drop_the_approval`), unrelated to base64 |
+
+**Release environment: expected and actual.**
+
+| Expected by `release.yml` | Actual on 2026-11-13 |
+| ------------------------- | -------------------- |
+| Environment `production-release` used by `prepare`, the four `build` jobs and `publish`; the *Publication gate* requires at least one required reviewer | No environments (`GET /environments`: `total_count` 0). Pushing a `v*` tag would let GitHub create it **unprotected**: `prepare` and the builds would then read the signing secrets without approval, and only publication would fail closed |
+| Deployment policy: selected branches and tags, tag rule `v*` | n/a |
+| Signing secrets `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY`, as environment secrets (repository secrets work too) | All five exist as repository secrets; no environment secrets |
+| Variables `DECKPILOT_UPDATER_PUBKEY`, `APPLE_SIGNING_IDENTITY`, `APPLE_TEAM_ID`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` (optional `DECKPILOT_ALLOW_UNSIGNED_MACOS`) | All five exist as repository variables; `DECKPILOT_ALLOW_UNSIGNED_MACOS` is not set (unsigned macOS releases are refused) |
+| Release tags protected | Ruleset *Release tag protection* (active, `refs/tags/v*`): deletion, update, non-fast-forward; no bypass actors. Creation is not restricted |
+| Workflow token read-only by default | `default_workflow_permissions: read`, `can_approve_pull_request_reviews: false`; all actions allowed, SHA pinning not required by the repository (pinning is enforced by `check-workflow-gate.py` instead) |
+
+**Owner actions** (to be run by the owner only; nothing here was run):
+
+1. *Owner action.* Create the environment: Settings → Environments → New
+   environment → `production-release` → Required reviewers (add the
+   maintainers; optionally *Prevent self-review*) → Deployment branches and
+   tags: *Selected branches and tags* → Add rule → type *Tag*, `v*`. The
+   equivalent `gh api` calls are in
+   [releasing.md](releasing.md#publication-gate-and-signing-environment-repository-settings).
+2. *Owner action.* Verify it:
+   `gh api repos/knittingcode/DeckPilot/environments/production-release --jq '{reviewers: [.protection_rules[] | select(.type == "required_reviewers") | .reviewers[].reviewer.login], branch_policy: .deployment_branch_policy}'`
+   and
+   `gh api repos/knittingcode/DeckPilot/environments/production-release/deployment-branch-policies --jq '.branch_policies[] | "\(.type) \(.name)"'`
+   (at least one reviewer, only `tag v*`).
+3. *Owner action.* Optionally move the five signing secrets into the
+   environment, run the non-publishing validation, and decide about
+   *Signing check* and *Update continuity* before deleting any repository
+   secret, exactly as in
+   [releasing.md](releasing.md#moving-the-signing-secrets-into-the-environment).
+4. *Owner action.* Optionally restrict who may create release tags:
+   Settings → Rules → Rulesets → *Release tag protection* → enable
+   *Restrict creations* and add the maintainers (or the *Repository admin*
+   role) as bypass actors. Until the environment exists, any account with
+   write access can start stage A with a `v*` tag.
+5. *Owner action.* Decide on #159–#165 (above); #163 needs a code change
+   (replacing the deprecated `XNonce::from_slice` in
+   `crates/deckpilot-portability/src/archive.rs`) before it can merge.
 
 Known limitation: before #54, agents, tests and the compatibility matrix
 failed with "local socket name length exceeds capacity of sun_path" when
