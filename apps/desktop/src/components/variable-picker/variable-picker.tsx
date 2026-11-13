@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import type { ParameterKind } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { insertedReference } from "@/lib/variable-catalog"
 import { describeContext } from "@/lib/variables"
 
 import { type VariableScope, useVariableScope } from "./scope"
@@ -102,7 +103,7 @@ function PickerBody({
           }}
           onKeyDown={(e) => {
             browser.handleKey(e, (entry) => {
-              onPick(entry.reference)
+              onPick(insertedReference(entry))
             })
           }}
         />
@@ -116,7 +117,7 @@ function PickerBody({
         kind={kind}
         browser={browser}
         onPick={(entry) => {
-          onPick(entry.reference)
+          onPick(insertedReference(entry))
         }}
       />
     </div>
