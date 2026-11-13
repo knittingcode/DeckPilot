@@ -630,6 +630,20 @@ fn start_agent_with(
     paths: &AgentPaths,
     keys: Option<MemoryKeyStore>,
 ) -> (tokio::runtime::Runtime, MockBackend) {
+    let (runtime, mock, _) = launch_agent(paths, keys);
+    (runtime, mock)
+}
+
+/// As `start_agent_with`, also giving in-process access to the agent (e.g.
+/// to press a work session key).
+fn launch_agent(
+    paths: &AgentPaths,
+    keys: Option<MemoryKeyStore>,
+) -> (
+    tokio::runtime::Runtime,
+    MockBackend,
+    deckpilot_agent::AgentHandle,
+) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -654,11 +668,13 @@ fn start_agent_with(
     };
     paths.create_dirs().unwrap();
     let lock = InstanceLock::acquire(&paths.lock_file).unwrap();
-    runtime.block_on(async {
+    let handle = runtime.block_on(async {
         let agent = Agent::start(options, lock).unwrap();
+        let handle = agent.handle();
         tokio::spawn(agent.run(std::future::pending()));
+        handle
     });
-    (runtime, mock)
+    (runtime, mock, handle)
 }
 
 fn wait_for(h: &Harness, predicate: impl Fn(&Value) -> bool) -> Value {
@@ -776,6 +792,7 @@ fn fresh_installation_has_an_empty_action_library() {
             "notifications",
             "projects",
             "system",
+            "work-session",
             "workspace"
         ]
     );
@@ -2586,6 +2603,183 @@ fn restarting_the_agent_never_ends_running_workflows_silently() {
         json!({ "executionId": execution["id"] }),
     );
     wait_for(&h, |s| s["status"]["runningExecutions"] == 0);
+}
+
+/// The work session commands (protocol 8) against a real agent: state,
+/// settings, history, notices and the `agent-work-session` event. The
+/// session is operated from the "key" (the agent's test entry point):
+/// there is no command for it (D11).
+#[allow(clippy::too_many_lines)] // One session, followed through.
+#[test]
+fn the_work_session_is_read_and_configured_through_the_agent() {
+    use deckpilot_agent::{WorkSessionOperation, WorkSessionOutcome};
+    use deckpilot_core::gesture::Gesture;
+    use tauri::Listener;
+
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    h.ok("set_active_profile", json!({ "profileId": profile_id }));
+    let start = h.ok(
+        "save_workflow",
+        json!({ "profileId": profile_id, "workflow": {
+            "id": deckpilot_core::WorkflowId::new(), "name": "Prepare", "steps": [],
+            "graph": { "version": 1, "nodes": [{"id": "start", "type": "trigger"}], "edges": [] }
+        } }),
+    );
+
+    // Without an agent the page is told to start it.
+    let error = h.error("get_work_session", json!({}));
+    assert!(error.contains("start the DeckPilot agent"), "{error}");
+
+    let (runtime, _mock, agent) = launch_agent(&h.paths, None);
+    h.unlock();
+    wait_for(&h, |s| {
+        s["running"] == true && s["status"]["activeProfile"]["name"] == "Work"
+    });
+    let status = h.ok("agent_status", json!({}));
+    assert!(
+        status["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("workSession"))
+    );
+    // The page appears: the backend reports the module and its page.
+    let modules = h.ok("list_modules", json!({}));
+    let module = modules
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "work-session")
+        .unwrap()
+        .clone();
+    assert_eq!(module["enabled"], true);
+    assert_eq!(module["actionTypes"], json!([]));
+    assert_eq!(module["pages"][0]["id"], "work-session");
+
+    let idle = h.ok("get_work_session", json!({}));
+    assert_eq!(idle["state"], "idle");
+    assert!(idle["asOfMs"].as_i64().unwrap() > 0);
+
+    // Settings: defaults, then saved; a field the agent does not store is
+    // refused rather than dropped.
+    let defaults = h.ok(
+        "get_work_session_settings",
+        json!({ "profileId": profile_id }),
+    );
+    assert_eq!(
+        defaults,
+        json!({
+            "profile": profile_id,
+            "startWorkflow": null,
+            "verificationWorkflow": null,
+            "approvalTtlSeconds": 600,
+            "reviewGapSeconds": 900,
+            "elapsedFormat": "minutes",
+        })
+    );
+    let settings = json!({
+        "startWorkflow": start["id"],
+        "verificationWorkflow": null,
+        "approvalTtlSeconds": 300,
+        "reviewGapSeconds": 600,
+        "elapsedFormat": "seconds",
+    });
+    let mut with_timings = settings.clone();
+    with_timings["doubleClickMs"] = json!(250);
+    assert!(
+        h.call(
+            "save_work_session_settings",
+            json!({ "profileId": profile_id, "settings": with_timings }),
+        )
+        .is_err()
+    );
+    let invalid = h.error(
+        "save_work_session_settings",
+        json!({ "profileId": profile_id, "settings": {
+            "startWorkflow": null, "verificationWorkflow": start["id"],
+            "approvalTtlSeconds": 300, "reviewGapSeconds": 600, "elapsedFormat": "minutes",
+        } }),
+    );
+    assert!(invalid.contains("canFinish"), "{invalid}");
+    let saved = h.ok(
+        "save_work_session_settings",
+        json!({ "profileId": profile_id, "settings": settings }),
+    );
+    assert_eq!(saved["startWorkflow"], start["id"]);
+    assert_eq!(saved["elapsedFormat"], "seconds");
+    assert!(saved["updatedAtMs"].as_i64().is_some());
+    // What the page got back can be sent again as it is.
+    h.ok(
+        "save_work_session_settings",
+        json!({ "profileId": profile_id, "settings": saved }),
+    );
+    assert_eq!(
+        h.ok(
+            "get_work_session_settings",
+            json!({ "profileId": profile_id }),
+        )["approvalTtlSeconds"],
+        300
+    );
+
+    // The key starts a session; the app hears of it.
+    let (sender, received) = std::sync::mpsc::channel::<Value>();
+    let app = h.window.app_handle().clone();
+    app.listen(crate::agent::WORK_SESSION_EVENT, move |event| {
+        let _ = sender.send(serde_json::from_str(event.payload()).unwrap());
+    });
+    crate::agent::spawn_bridge(app, h.paths.clone());
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let started = runtime.block_on(agent.work_session_operation(
+        WorkSessionOperation::Start,
+        Gesture::Click,
+        None,
+    ));
+    assert_eq!(started, Some(WorkSessionOutcome::Applied));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let working = loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        let snapshot = received.recv_timeout(left).expect("agent-work-session");
+        if snapshot["state"] == "working" {
+            break snapshot;
+        }
+    };
+    let session = working["session"].as_str().unwrap().to_owned();
+    let current = h.ok("get_work_session", json!({}));
+    assert_eq!(current["state"], "working");
+    assert_eq!(current["session"], session.as_str());
+
+    let history = h.ok("list_work_sessions", json!({ "limit": 10 }));
+    assert_eq!(history.as_array().unwrap().len(), 1);
+    assert_eq!(history[0]["session"], session.as_str());
+    assert_eq!(history[0]["state"], "working");
+    assert_eq!(history[0]["intervals"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        h.ok(
+            "list_work_sessions",
+            json!({ "limit": 10, "before": history[0]["requestedAtMs"] }),
+        ),
+        json!([])
+    );
+    assert!(h.call("list_work_sessions", json!({ "limit": 0 })).is_err());
+    let missing = h.error(
+        "resolve_work_session_review",
+        json!({ "session": session, "review": 1, "count": false }),
+    );
+    assert!(missing.contains("no such review"), "{missing}");
+    let cleared = h.ok("clear_work_session_notices", json!({ "session": session }));
+    assert_eq!(cleared["state"], "working");
+    let cleared = h.ok("clear_work_session_notices", json!({ "session": null }));
+    assert_eq!(cleared["state"], "working");
+
+    // Work sessions cannot be turned off while one is active.
+    let refused = h.error(
+        "set_module_enabled",
+        json!({ "moduleId": "work-session", "enabled": false }),
+    );
+    assert!(refused.contains("a work session is active"), "{refused}");
+
+    h.ok("stop_agent", json!({}));
+    wait_for(&h, |s| s["running"] == false);
 }
 
 // One scenario through every step of the safe deletion.

@@ -28,7 +28,7 @@ use deckpilot_core::{
 };
 use deckpilot_modules::{
     builtin, docker, general, git, github, gitlab, http, jira, notifications, projects, system,
-    workspace,
+    work_session, workspace,
 };
 
 /// The planted secret: no result may ever contain it.
@@ -147,6 +147,7 @@ fn modules(launcher: &Arc<RecordingLauncher>) -> Vec<Box<dyn FeatureModule>> {
         Box::new(notifications::NotificationsModule::new()),
         Box::new(projects::ProjectsModule::new()),
         Box::new(system::SystemModule::with_launcher(opener.clone())),
+        Box::new(work_session::WorkSessionModule::new()),
         Box::new(workspace::WorkspaceModule::with_launcher(opener)),
     ]
 }

@@ -55,6 +55,7 @@ fn builtin_modules_register_with_namespaced_action_types() {
             "notifications",
             "projects",
             "system",
+            "work-session",
             "workspace"
         ]
     );
@@ -135,8 +136,11 @@ fn navigation_pages_come_from_enabled_modules() {
         .into_iter()
         .map(|(module, page)| format!("{module}/{}", page.id))
         .collect();
-    assert_eq!(pages, ["projects/projects"]);
+    assert_eq!(pages, ["projects/projects", "work-session/work-session"]);
     registry.set_enabled(&projects_id(), false).unwrap();
+    registry
+        .set_enabled(&work_session::module_id(), false)
+        .unwrap();
     assert_eq!(registry.pages(), Vec::new());
 }
 
