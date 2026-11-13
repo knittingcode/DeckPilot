@@ -202,11 +202,14 @@ answers with another type than declared provides nothing, and whole-value
 references keep their native type (`bind`), with no implicit string
 conversion for typed parameters.
 
-**Device slot.** The device in the context is read only through the
-`DeviceDescriptor` trait (`VariableEnvironment::device`). It is implemented
-by today's `DeviceId`; the generic device descriptor of the device
-refactoring (Agent A) will implement it, so variable sources do not change
-when it lands.
+**Device slot.** The device in the context is read only through the small
+`ContextDevice` trait (`VariableEnvironment::device`: `device_id()`,
+`display_name()`). It is implemented by today's `DeviceId`. The generic
+`deckpilot_device::DeviceDescriptor` of the device refactoring (PR #175:
+vendor, model, display name, serial, capabilities, driver, verification)
+will implement it once it lands: in the core the descriptor comes from
+`DeviceContext::current_device()` and the model catalog's `describe`, in the
+agent from `Agent::device_descriptor`. No variable source changes.
 
 ### 2.5 IPC (protocol 9)
 

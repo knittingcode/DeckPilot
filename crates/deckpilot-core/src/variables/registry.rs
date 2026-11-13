@@ -394,11 +394,14 @@ impl LiveState for NoLiveState {}
 
 /// The device in the context, as variables see it.
 ///
-/// This is the device slot of the resolver. Today it is implemented by
-/// [`DeviceId`] (`model#serial`); the generic device descriptor of the
-/// device refactoring will implement it too, without changing any
-/// variable source.
-pub trait DeviceDescriptor: Send + Sync {
+/// This is the device slot of the resolver, kept small and generic on
+/// purpose. Today it is implemented by [`DeviceId`] (`model#serial`). The
+/// generic `deckpilot_device::DeviceDescriptor` of the device refactoring
+/// (vendor, model, display name, serial, capabilities, driver) will
+/// implement it as well once it lands, so `system.device.current.id` and
+/// later device variables can read the descriptor without any variable
+/// source changing.
+pub trait ContextDevice: Send + Sync {
     /// Stable id, the value of `system.device.current.id`.
     fn device_id(&self) -> String;
 
@@ -408,7 +411,7 @@ pub trait DeviceDescriptor: Send + Sync {
     }
 }
 
-impl DeviceDescriptor for DeviceId {
+impl ContextDevice for DeviceId {
     fn device_id(&self) -> String {
         self.to_string()
     }
@@ -455,12 +458,12 @@ impl<'a> VariableEnvironment<'a> {
     }
 
     /// The device in the context (the device slot, see
-    /// [`DeviceDescriptor`]).
-    pub fn device(&self) -> Option<&'a dyn DeviceDescriptor> {
+    /// [`ContextDevice`]).
+    pub fn device(&self) -> Option<&'a dyn ContextDevice> {
         self.context
             .device
             .as_ref()
-            .map(|device| device as &dyn DeviceDescriptor)
+            .map(|device| device as &dyn ContextDevice)
     }
 }
 
