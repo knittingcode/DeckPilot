@@ -337,3 +337,46 @@ fn unknown_profiles_are_refused() {
         Err(StorageError::UnknownProfile)
     ));
 }
+
+/// A work session key uses no action: it is never listed, and replacing,
+/// unbinding or deleting actions leaves it as it is.
+#[test]
+fn stateful_keys_are_not_action_uses_and_survive_changes() {
+    use deckpilot_core::stateful::StatefulBinding;
+
+    let store = SqliteStore::open_in_memory().unwrap();
+    let mut demo = demo();
+    let session = BindingTarget::Stateful(StatefulBinding::work_session());
+    let page = &mut demo.profile.layouts[0].pages[0];
+    page.bindings.extend([
+        ControlBinding::new(key(9), Trigger::Click, session.clone()),
+        ControlBinding::new(key(9), Trigger::LongPress, session.clone()),
+    ]);
+    store.save_profile(&demo.profile).unwrap();
+    let id = demo.profile.id;
+    let stateful = |store: &SqliteStore| -> Vec<BindingTarget> {
+        store.load_profile(id).unwrap().unwrap().layouts[0].pages[0]
+            .bindings
+            .iter()
+            .filter(|b| b.control == key(9))
+            .map(|b| b.target.clone())
+            .collect()
+    };
+
+    for action in [demo.hello, demo.bye, demo.other, demo.unused] {
+        assert!(store.action_references(id, action).unwrap().iter().all(
+            |r| !matches!(&r.site, ReferenceSite::Binding { control, .. } if *control == key(9))
+        ));
+    }
+    store.delete_action(id, demo.unused).unwrap();
+    let sites: Vec<_> = store
+        .action_references(id, demo.bye)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.site)
+        .collect();
+    store
+        .unbind_action(id, demo.bye, &Selection::Sites(sites))
+        .unwrap();
+    assert_eq!(stateful(&store), [session.clone(), session]);
+}

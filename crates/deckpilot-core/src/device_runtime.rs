@@ -16,6 +16,7 @@ use deckpilot_device::{
 };
 
 use crate::gesture::{BoundGestures, Gesture, GestureTimings};
+use crate::stateful::StatefulBinding;
 use crate::{
     ActionInstanceId, ActionRegistry, ActionResult, ActiveProjectContext, BindingTarget,
     ControlBinding, CycleDirection, DeviceLayout, Engine, EngineError, FaceStyle, KeyFace,
@@ -69,6 +70,14 @@ pub enum RuntimeOutcome {
     /// running one in place).
     WorkflowRequested {
         workflow: WorkflowId,
+    },
+    /// A gesture of a stateful key. The runtime does not know the
+    /// machine's state: the caller picks the operation from the state at
+    /// the press (see [`StatefulBinding`]) and lets the machine's owner
+    /// apply it.
+    StatefulRequested {
+        binding: StatefulBinding,
+        gesture: Gesture,
     },
 }
 
@@ -167,8 +176,29 @@ impl Runtime {
             .map(|binding| binding.target.clone());
         match target {
             None => ignored("gesture is not bound"),
+            Some(BindingTarget::Stateful(binding)) => {
+                Ok(RuntimeOutcome::StatefulRequested { binding, gesture })
+            }
             Some(target) => self.dispatch(device, target),
         }
+    }
+
+    /// The stateful binding of `control` on the page `device` shows, if the
+    /// control has one; its state is captured when a press starts a
+    /// gesture.
+    pub fn stateful_binding(
+        &self,
+        device: &DeviceId,
+        control: ControlId,
+    ) -> Option<&StatefulBinding> {
+        let layout = self.layout_for(&device.model)?;
+        let page = layout.page(self.current_page(device)?)?;
+        page.bindings
+            .iter()
+            .find_map(|binding| match &binding.target {
+                BindingTarget::Stateful(stateful) if binding.control == control => Some(stateful),
+                _ => None,
+            })
     }
 
     /// Sets the text devices show while no profile is loaded.
@@ -578,6 +608,11 @@ impl Runtime {
                     }),
                 }
             }
+            // Refused when a layout is saved: the state at the press
+            // belongs to a gesture.
+            BindingTarget::Stateful(_) => Ok(RuntimeOutcome::Ignored {
+                reason: "a stateful key reacts to gestures only".into(),
+            }),
         }
     }
 }
@@ -687,6 +722,16 @@ fn face_for(
         BindingTarget::Back => KeyFace::new(
             FaceStyle::Back,
             binding.label.clone().unwrap_or_else(|| "Back".into()),
+        ),
+        // The machine's own face (its state) is the agent's; this is the
+        // face without it, e.g. in the layout designer's preview.
+        BindingTarget::Stateful(stateful) => KeyFace::new(
+            FaceStyle::Action,
+            render_label(
+                binding.label.as_deref().unwrap_or(stateful.name()),
+                &profile.name,
+                project,
+            ),
         ),
     }
 }
@@ -1324,6 +1369,58 @@ mod tests {
             RuntimeOutcome::Ignored { .. }
         ));
         assert_eq!(runtime.key_gestures(&device(), key), None);
+    }
+
+    #[test]
+    fn stateful_gestures_are_handed_to_the_caller() {
+        let mut f = fixture();
+        let home = f.profile.layouts[0].home_page;
+        let key = ControlId::Key { index: 4 };
+        let stateful = StatefulBinding::work_session();
+        let page = f.profile.layouts[0].page_mut(home).unwrap();
+        page.bindings.extend([
+            ControlBinding::new(
+                key,
+                Trigger::Click,
+                BindingTarget::Stateful(stateful.clone()),
+            ),
+            ControlBinding::new(
+                key,
+                Trigger::LongPress,
+                BindingTarget::Stateful(stateful.clone()),
+            ),
+            // Refused when saved; does nothing if it gets through.
+            ControlBinding::new(
+                ControlId::Key { index: 5 },
+                Trigger::Press,
+                BindingTarget::Stateful(stateful.clone()),
+            ),
+        ]);
+        let mut runtime = runtime();
+        runtime.set_profile(Some(f.profile.clone()), None);
+        connect(&mut runtime, &device());
+
+        assert_eq!(runtime.stateful_binding(&device(), key), Some(&stateful));
+        assert_eq!(
+            runtime.stateful_binding(&device(), ControlId::Key { index: 0 }),
+            None
+        );
+        for gesture in [Gesture::Click, Gesture::LongPress] {
+            assert_eq!(
+                runtime.dispatch_gesture(&device(), key, gesture).unwrap(),
+                RuntimeOutcome::StatefulRequested {
+                    binding: stateful.clone(),
+                    gesture
+                }
+            );
+        }
+        assert!(matches!(
+            runtime.handle_event(&press(5)).unwrap(),
+            RuntimeOutcome::Ignored { .. }
+        ));
+        // Without the machine's state: its name.
+        let faces = runtime.faces(&device());
+        assert_eq!(faces[4].1, KeyFace::new(FaceStyle::Action, "Work Session"));
     }
 
     #[test]

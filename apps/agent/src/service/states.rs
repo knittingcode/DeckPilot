@@ -29,6 +29,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use deckpilot_core::stateful::{StateMachine, WorkSessionMachine};
 use deckpilot_core::{
     ActionInstanceId, BindingTarget, ButtonState, CancellationToken, Engine, Indicator, KeyFace,
     MachineConfig, Profile, ProjectId, RefreshPolicy, StateError, StateSnapshot,
@@ -287,8 +288,9 @@ fn spawn_call(
 }
 
 impl Agent {
-    /// `faces` of `device` with live states and running workflows applied;
-    /// records which keys with live state the device shows.
+    /// `faces` of `device` with live states, running workflows and the work
+    /// session applied; records which keys with live state the device
+    /// shows.
     pub(super) fn decorate_faces(
         &mut self,
         device: &DeviceId,
@@ -297,6 +299,7 @@ impl Agent {
     ) {
         let project = self.runtime.active_project_id();
         let mut shown = BTreeSet::new();
+        let mut session_keys = BTreeSet::new();
         for (control, target) in self.runtime.shown_targets(device) {
             let Some(face) = faces
                 .iter_mut()
@@ -326,10 +329,22 @@ impl Agent {
                             .with_progress(Some(percent));
                     }
                 }
+                BindingTarget::Stateful(binding) => {
+                    if binding.machine() == WorkSessionMachine::ID {
+                        // The session's state, with a hint the last
+                        // gesture left as the detail line.
+                        session_keys.insert(control);
+                        let base = std::mem::replace(face, KeyFace::empty());
+                        *face = self.work_session_key_face(device, control, base);
+                    } else if let Some(hint) = self.stateful_hint(device, control) {
+                        *face = std::mem::replace(face, KeyFace::empty()).with_detail(hint);
+                    }
+                }
                 BindingTarget::OpenPage { .. } | BindingTarget::Back => {}
             }
         }
         self.states.set_shown(device, shown);
+        self.session_faces.set_shown(device, session_keys);
     }
 
     /// Starts the provider calls that are due.

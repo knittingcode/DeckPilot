@@ -35,10 +35,12 @@ use crate::render;
 mod executions;
 mod gestures;
 mod security;
+mod stateful;
 mod states;
 mod triggers;
 pub mod variables;
 pub mod work_session;
+mod work_session_faces;
 
 pub use gestures::GestureHooks;
 pub use security::{AUTO_LOCK_CHECK, Clock, system_clock};
@@ -153,6 +155,11 @@ pub(crate) enum Command {
     },
     /// A tagged run "ended" with `canFinish` (`None`: it failed), e.g. a
     /// late result of an older verification.
+    /// When the elapsed time on work session keys is redrawn next.
+    #[cfg(feature = "test-hooks")]
+    WorkSessionFaceDue {
+        reply: oneshot::Sender<Option<i64>>,
+    },
     #[cfg(feature = "test-hooks")]
     WorkSessionRunEnded {
         purpose: work_session::RunPurpose,
@@ -216,6 +223,18 @@ impl AgentHandle {
             })
             .ok()?;
         outcome.await.ok()
+    }
+
+    /// When the elapsed time on work session keys is redrawn next
+    /// (wall-clock ms of the agent's clock); `None`: never, as no such key
+    /// is shown or its timer stands. Tests only.
+    #[cfg(feature = "test-hooks")]
+    pub async fn work_session_face_due(&self) -> Option<i64> {
+        let (reply, due) = oneshot::channel();
+        self.commands
+            .send(Command::WorkSessionFaceDue { reply })
+            .ok()?;
+        due.await.ok().flatten()
     }
 
     /// Hands the work session the end of a tagged run as the execution
@@ -299,6 +318,8 @@ pub struct Agent {
     states: states::ButtonStates,
     /// Pending key gestures.
     gestures: gestures::Gestures,
+    /// Press-time states and hints of stateful keys.
+    stateful: stateful::StatefulKeys,
     /// Rendered key images by face and size.
     frames: render::FrameCache,
     /// Decoded icons of the active profile.
@@ -311,6 +332,8 @@ pub struct Agent {
     context_watch: variables::ContextWatch,
     /// The work session (one per database).
     work: work_session::WorkSessions,
+    /// Work session keys shown, and when their elapsed time changes.
+    session_faces: work_session_faces::WorkSessionFaces,
     handle: AgentHandle,
     commands: mpsc::UnboundedReceiver<Command>,
     signals_tx: mpsc::UnboundedSender<DeviceSignal>,
@@ -407,12 +430,14 @@ impl Agent {
             triggers: triggers::Triggers::default(),
             states: states::ButtonStates::default(),
             gestures: gestures::Gestures::default(),
+            stateful: stateful::StatefulKeys::default(),
             frames: render::FrameCache::new(FRAME_CACHE),
             icons: render::Icons::default(),
             variables,
             active_projects: Arc::default(),
             context_watch: variables::ContextWatch::default(),
             work,
+            session_faces: work_session_faces::WorkSessionFaces::default(),
             handle,
             commands,
             signals_tx,
@@ -455,6 +480,12 @@ impl Agent {
                 || tokio::time::Instant::now() + Duration::from_secs(3600),
                 tokio::time::Instant::from_std,
             );
+            // Sleeps until the elapsed time on a shown work session key
+            // changes, if any.
+            let face_due = self.next_work_session_face_due().map_or_else(
+                || tokio::time::Instant::now() + Duration::from_secs(3600),
+                tokio::time::Instant::from_std,
+            );
             let flow = tokio::select! {
                 () = &mut shutdown => Flow::Stop,
                 Some(command) = self.commands.recv() => self.handle_command(command),
@@ -481,6 +512,10 @@ impl Agent {
                 }
                 () = tokio::time::sleep_until(gesture_due) => {
                     self.on_gesture_deadline();
+                    Flow::Continue
+                }
+                () = tokio::time::sleep_until(face_due) => {
+                    self.on_work_session_face_due();
                     Flow::Continue
                 }
             };
@@ -567,6 +602,11 @@ impl Agent {
                     press,
                 });
                 let _ = reply.send(outcome);
+                Flow::Continue
+            }
+            #[cfg(feature = "test-hooks")]
+            Command::WorkSessionFaceDue { reply } => {
+                let _ = reply.send(self.work_session_face_due());
                 Flow::Continue
             }
             #[cfg(feature = "test-hooks")]
@@ -1197,6 +1237,7 @@ impl Agent {
         }
         self.forget_gestures(device);
         self.states.forget_device(device);
+        self.session_faces.forget_device(device);
         let _ = self.runtime.handle_event(&DeviceEvent::Disconnected {
             device: device.clone(),
         });

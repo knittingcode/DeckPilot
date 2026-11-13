@@ -31,6 +31,7 @@ pub mod registry;
 pub mod resolution;
 pub mod resource;
 pub mod runtime;
+pub mod stateful;
 pub mod trigger;
 pub mod variables;
 pub mod work_session;
