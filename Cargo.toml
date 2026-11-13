@@ -68,7 +68,7 @@ tauri-build = "2"
 auto-launch = "0.6"
 ctrlc = "3"
 argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
-base64 = "0.22"
+base64 = "0.23"
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 dirs = "7"
 elgato-streamdeck = { version = "0.14", default-features = false }
