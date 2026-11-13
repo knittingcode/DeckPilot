@@ -1,8 +1,10 @@
-//! The agent executable with `--mock-devices mk2`, driven only over IPC as
-//! the configuration app and `deckpilot-dev hardware-test --mock` drive it:
-//! folder navigation with the automatic Back key, a workflow started by a
-//! key press, and profile switching. Plus, in process, key icons following
-//! a profile switch. Simulated devices and temporary data only.
+//! The agent executable with `--mock-devices mk2 --no-usb`, driven only
+//! over IPC as the configuration app and `deckpilot-dev hardware-test
+//! --mock` drive it: folder navigation with the automatic Back key, a
+//! workflow started by a key press, and profile switching. Plus, in
+//! process, key icons following a profile switch. Simulated devices and
+//! temporary data only; a Stream Deck plugged into the machine is never
+//! opened.
 
 mod support;
 
@@ -175,7 +177,9 @@ impl AgentProcess {
     async fn start(paths: &AgentPaths, dir: &TempDir) -> Self {
         let stderr = dir.path().join("agent-stderr.log");
         let child = Command::new(env!("CARGO_BIN_EXE_deckpilot-agent"))
-            .args(["--headless", "--mock-devices", "mk2"])
+            // `--no-usb`: a Stream Deck plugged into the test machine must
+            // neither appear here nor be drawn on.
+            .args(["--headless", "--mock-devices", "mk2", "--no-usb"])
             .env(deckpilot_ipc::paths::DATA_DIR_ENV, &paths.data_dir)
             .env("RUST_BACKTRACE", "1")
             .stdin(Stdio::null())
@@ -341,6 +345,7 @@ async fn the_mock_agent_navigates_runs_workflows_and_switches_profiles() {
                 .any(|d| d.state == ConnectionState::Connected && d.page.is_some())
         })
         .await;
+    assert_eq!(status.devices.len(), 1, "only the simulated MK.2");
     let device = status.devices[0].id.clone();
     assert_eq!(device.serial, "SIM-MK2-01");
     assert_eq!(status.devices[0].source, "mock");

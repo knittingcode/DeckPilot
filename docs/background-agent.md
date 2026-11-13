@@ -280,6 +280,7 @@ cargo run -p deckpilot-agent                    # tray + USB devices
 cargo run -p deckpilot-agent -- --headless      # no tray
 cargo run -p deckpilot-agent -- --mock-devices  # simulated MK.2
 cargo run -p deckpilot-agent -- --mock-devices mk2,xl,plus
+cargo run -p deckpilot-agent -- --mock-devices --no-usb  # simulated only
 DECKPILOT_DATA_DIR=/tmp/deckpilot-dev cargo run -p deckpilot-agent -- --mock-devices
 ```
 
@@ -318,6 +319,13 @@ Automated tests never need hardware:
 
 With `--mock-devices`, the agent can also be exercised manually: the
 simulated MK.2 accepts `simulateInput` requests.
+
+Simulated devices are added next to USB devices. Tests that start the agent
+executable (`apps/agent/tests/mock_devices.rs`, `deckpilot-dev hardware-test
+--mock`) also pass `--no-usb`, so a Stream Deck plugged into the machine
+running them is neither found nor drawn on. In-process tests use a
+`MockBackend` alone and never open USB devices. A normal agent always opens
+them.
 
 ### Hardware test procedure
 
