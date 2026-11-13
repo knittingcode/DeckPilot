@@ -12,6 +12,7 @@ pub mod actions;
 pub mod catalog;
 pub mod resources;
 pub mod switching;
+pub mod variables;
 
 use deckpilot_core::{
     ActionHandler, ActionParameters, Capability, FeatureModule, ModuleId, ModuleManifest,
@@ -85,6 +86,7 @@ impl ProjectsModule {
                     sql: String::new(),
                 }],
                 windows: Vec::new(),
+                variables: variables::declarations(),
             },
         }
     }
@@ -104,5 +106,11 @@ impl FeatureModule for ProjectsModule {
     fn action_handlers(&self, config: &ActionParameters) -> Vec<Box<dyn ActionHandler>> {
         let wrap = config.boolean(WRAP_AROUND).unwrap_or(true);
         actions::handlers(wrap)
+    }
+
+    fn variable_source(
+        &self,
+    ) -> Option<std::sync::Arc<dyn deckpilot_core::variables::VariableSource>> {
+        Some(std::sync::Arc::new(variables::ProjectVariables))
     }
 }

@@ -1166,6 +1166,7 @@ dependencies = [
 name = "deckpilot-module-work-session"
 version = "0.6.0"
 dependencies = [
+ "chrono",
  "deckpilot-core",
 ]
 
