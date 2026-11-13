@@ -28,6 +28,7 @@
 #   REQUIRED_CHECKS_FILE  pinned required checks (default: required-checks.txt here)
 #   RELEASE_REF    the ref the workflow runs on (github.ref); if set, it must be
 #                  refs/tags/<tag>
+#   RUN_SHA        the run's commit (github.sha); if set, it must be the tag's
 set -euo pipefail
 
 TAG_PATTERN='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.[1-9][0-9]*)?$'
@@ -65,6 +66,12 @@ fi
 sha=$(git rev-parse --verify --quiet "refs/tags/$tag^{commit}") \
   || fail "tag $tag does not exist in this checkout"
 head=$(git rev-parse HEAD)
+# The run's commit (github.sha), which jobs without an explicit ref (the
+# called Packaging workflow) build, must be the tag's commit too: a tag
+# moved after the push is refused.
+if [ -n "${RUN_SHA:-}" ] && [ "$RUN_SHA" != "$sha" ]; then
+  fail "the run is for commit $RUN_SHA, but $tag now points to $sha; the tag was moved"
+fi
 [ "$head" = "$sha" ] || fail "the checkout is at $head, not at the tagged commit $sha"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || fail "the checkout of $tag is modified"
 git rev-parse --verify --quiet "$main_ref^{commit}" > /dev/null \
