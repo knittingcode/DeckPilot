@@ -41,7 +41,7 @@ pub use resolution::{
     DeviceContext, ExecutionDependencies, MissingReason, PreviewItem, ProjectResolver,
     ProjectSource, ReferenceError, ReferencePreview, ReferenceProblem, ReferenceStatus, Resolution,
     ResolutionContext, ResolutionPhase, ResourceResolver, ValueSource, VariableResolver, bind,
-    preview, preview_reference, select_value,
+    current_descriptor, preview, preview_reference, select_value,
 };
 
 /// The type of a shared variable, a system variable or a resolved reference.

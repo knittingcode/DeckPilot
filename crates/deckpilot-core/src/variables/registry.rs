@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use deckpilot_device::DeviceId;
+use deckpilot_device::{DeviceDescriptor, DeviceId, ModelCatalog};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -384,6 +384,11 @@ pub trait LiveState: Send + Sync {
         None
     }
 
+    /// The generic descriptor of `device`, if it is known.
+    fn device(&self, _device: &DeviceId) -> Option<DeviceDescriptor> {
+        None
+    }
+
     /// Wall clock, milliseconds since the Unix epoch.
     fn now_ms(&self) -> i64 {
         std::time::SystemTime::now()
@@ -398,18 +403,26 @@ pub struct NoLiveState;
 
 impl LiveState for NoLiveState {}
 
+/// The core's live state: devices described by the model catalog
+/// (`ModelCatalog::describe`, without a driver), and no work session. The
+/// agent's live state adds the driver (`Agent::device_descriptor`) and the
+/// session.
+impl LiveState for ModelCatalog {
+    fn device(&self, device: &DeviceId) -> Option<DeviceDescriptor> {
+        self.describe(device, None)
+    }
+}
+
 /// The device in the context, as variables see it.
 ///
 /// This is the device slot of the resolver, kept small and generic on
-/// purpose. Today it is implemented by [`DeviceId`] (`model#serial`). The
-/// generic `deckpilot_device::DeviceDescriptor` of the device refactoring
-/// (vendor, model, display name, serial, capabilities, driver) will
-/// implement it as well once it lands, so `system.device.current.id` and
-/// later device variables can read the descriptor without any variable
-/// source changing.
+/// purpose. It is implemented by the generic [`DeviceDescriptor`] (vendor,
+/// model, display name, serial, capabilities, driver), which the live state
+/// supplies ([`LiveState::device`]), and by the bare [`DeviceId`]
+/// (`model#serial`) for a device nobody can describe.
 pub trait ContextDevice: Send + Sync {
-    /// Stable id, the value of `system.device.current.id`.
-    fn device_id(&self) -> String;
+    /// Stable id, the value of `system.device.current.id`: `model#serial`.
+    fn reference_id(&self) -> String;
 
     /// A name for people, if the device has one.
     fn display_name(&self) -> Option<String> {
@@ -418,8 +431,18 @@ pub trait ContextDevice: Send + Sync {
 }
 
 impl ContextDevice for DeviceId {
-    fn device_id(&self) -> String {
+    fn reference_id(&self) -> String {
         self.to_string()
+    }
+}
+
+impl ContextDevice for DeviceDescriptor {
+    fn reference_id(&self) -> String {
+        self.device_id().to_string()
+    }
+
+    fn display_name(&self) -> Option<String> {
+        Some(self.display_name.clone())
     }
 }
 
@@ -464,12 +487,14 @@ impl<'a> VariableEnvironment<'a> {
     }
 
     /// The device in the context (the device slot, see
-    /// [`ContextDevice`]).
-    pub fn device(&self) -> Option<&'a dyn ContextDevice> {
-        self.context
-            .device
-            .as_ref()
-            .map(|device| device as &dyn ContextDevice)
+    /// [`ContextDevice`]): its descriptor from the live state, or its bare
+    /// id when nobody can describe it.
+    pub fn device(&self) -> Option<Box<dyn ContextDevice>> {
+        let device = self.context.device.as_ref()?;
+        Some(match self.live.device(device) {
+            Some(descriptor) => Box::new(descriptor),
+            None => Box::new(device.clone()),
+        })
     }
 }
 
@@ -1009,7 +1034,7 @@ impl VariableSource for CoreVariables {
             // The device slot: whatever describes the device in the context.
             Some(SystemVariable::DeviceCurrentId) => match environment.device() {
                 Some(device) => Resolution::Value {
-                    value: super::VariableValue::String(device.device_id()),
+                    value: super::VariableValue::String(device.reference_id()),
                     source: super::ValueSource::System,
                     sensitive: false,
                 },

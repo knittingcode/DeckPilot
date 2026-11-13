@@ -389,9 +389,54 @@ fn the_environment_gives_the_project_and_device_of_the_context() {
     };
     let with_device = active.with_device(Some(device));
     let environment = environment(&with_device, &profile);
+    // An unknown model: nobody can describe it, the bare id stands in.
     let descriptor = environment.device().unwrap();
-    assert_eq!(descriptor.device_id(), "elgato.mk2#A1");
+    assert_eq!(descriptor.reference_id(), "elgato.mk2#A1");
     assert_eq!(descriptor.display_name(), None);
+}
+
+#[test]
+fn the_device_slot_reads_the_generic_descriptor() {
+    use crate::variables::{DeviceContext, current_descriptor, doubles::FixedDevice};
+    use deckpilot_device::{DeviceModelId, ModelCatalog, models};
+    let profile = testing::with_projects("Work", &[]);
+    let device = DeviceId {
+        model: DeviceModelId::new(models::STREAM_DECK_MK2_ID),
+        serial: "A1".into(),
+    };
+    let catalog = ModelCatalog::builtin();
+    // In the core: the current device, described by the catalog.
+    let fixed = FixedDevice(Some(device.clone()));
+    let described = current_descriptor(&fixed, &catalog).unwrap();
+    assert_eq!(described.device_id(), fixed.current_device().unwrap());
+    assert_eq!(described.driver, None);
+    assert!(current_descriptor(&FixedDevice(None), &catalog).is_none());
+
+    let context = ResolutionContext::preview(profile.id).with_device(Some(device.clone()));
+    let environment = VariableEnvironment {
+        context: &context,
+        profile: &profile,
+        os: Os::Linux,
+        live: &catalog,
+    };
+    let slot = environment.device().unwrap();
+    assert_eq!(slot.reference_id(), device.to_string());
+    assert_eq!(
+        slot.display_name().as_deref(),
+        Some(described.display_name.as_str())
+    );
+    // `system.device.current.id` keeps its value: `model#serial`.
+    assert_eq!(
+        VariableRegistry::new().resolve(
+            &VariableId::new("system.device.current.id").unwrap(),
+            &environment
+        ),
+        Resolution::Value {
+            value: VariableValue::String(format!("{}#A1", models::STREAM_DECK_MK2_ID)),
+            source: ValueSource::System,
+            sensitive: false,
+        }
+    );
 }
 
 #[test]
