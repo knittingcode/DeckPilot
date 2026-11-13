@@ -56,6 +56,8 @@ use tracing::{debug, info, warn};
 use super::Agent;
 use super::triggers::Launch;
 
+mod ipc;
+
 /// A finish click whose press comes earlier than this after entering
 /// `readyToFinish` is ignored (D9).
 pub const ARMING_DELAY: Duration = Duration::from_secs(1);
@@ -1163,9 +1165,16 @@ impl Agent {
         self.heartbeat(true);
     }
 
-    /// Publishes the session as it is now and redraws keys. W4 (faces) and
-    /// W5 (the `workSessionChanged` event) hook in here.
+    /// Publishes the session as it is now, redraws keys and announces it
+    /// to protocol 8 clients (`workSessionChanged`) when it changed. W4
+    /// (faces) hooks in here.
     pub(crate) fn work_session_changed(&mut self) {
+        self.publish_work_session(false);
+    }
+
+    /// [`Agent::work_session_changed`]; `force` also announces a change of
+    /// counted time alone (a decided gap), which the app cannot derive.
+    fn publish_work_session(&mut self, force: bool) {
         let now = self.wall_ms();
         let snapshot = if let Some(store) = self.store.as_ref() {
             build_snapshot(store, self.work.record.as_ref(), now)
@@ -1180,6 +1189,7 @@ impl Agent {
             last.as_of_ms = now;
             last
         };
+        let mut before = None;
         let changed = self.work.snapshot.send_if_modified(|current| {
             let differs = current.state != snapshot.state
                 || current.session != snapshot.session
@@ -1187,11 +1197,26 @@ impl Agent {
                 || current.verification != snapshot.verification
                 || current.notices != snapshot.notices
                 || current.started_at_ms != snapshot.started_at_ms;
-            *current = snapshot;
+            let previous = std::mem::replace(current, snapshot);
+            if differs {
+                before = Some(previous);
+            }
             differs
         });
         if changed {
+            if let Some(before) = before {
+                self.publish_work_session_variables(&before, &self.work.snapshot());
+            }
             self.render_all();
+        }
+        if changed || force {
+            let snapshot = deckpilot_ipc::work_session::bounded_snapshot(self.work.snapshot());
+            let _ = self
+                .handle
+                .events
+                .send(deckpilot_ipc::AgentEvent::WorkSessionChanged {
+                    snapshot: Box::new(snapshot),
+                });
         }
     }
 }

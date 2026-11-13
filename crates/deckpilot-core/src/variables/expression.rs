@@ -9,6 +9,7 @@
 //! | `steps`    | `steps.git_status.output.branch`     | an earlier node's output (unchanged; `steps.vars.output.<key>` is a workflow variable) |
 //! | `shared`   | `shared.projects.favorite`           | a shared variable               |
 //! | `system`   | `system.project.current.id`          | a read-only system variable     |
+//! |            | `system.work.session.elapsedSeconds` | the active work session (D5)    |
 //! | `workflow` | `workflow.execution.id`              | the running workflow            |
 //!
 //! `steps.` references are parsed by [`crate::graph::Reference::parse`], so
@@ -21,6 +22,7 @@ use thiserror::Error;
 
 use super::{VariableKey, VariableType};
 use crate::graph::Reference;
+use crate::work_session::WorkSessionVariable;
 
 /// A read-only value taken from the context of the resolution, never set by
 /// the user.
@@ -38,10 +40,19 @@ pub enum SystemVariable {
     Platform,
     WorkflowId,
     WorkflowExecutionId,
+    /// `system.work.session.…`: the active work session, resolved by the
+    /// agent from its live snapshot (`docs/gestures-and-work-session.md`
+    /// §8.1).
+    WorkSessionId,
+    WorkSessionState,
+    WorkSessionStartedAt,
+    WorkSessionElapsedSeconds,
+    WorkSessionProjectId,
+    WorkSessionCanFinish,
 }
 
 impl SystemVariable {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 15] = [
         Self::ProjectCurrentId,
         Self::ProjectCurrentKey,
         Self::ProjectCurrentName,
@@ -51,7 +62,26 @@ impl SystemVariable {
         Self::Platform,
         Self::WorkflowId,
         Self::WorkflowExecutionId,
+        Self::WorkSessionId,
+        Self::WorkSessionState,
+        Self::WorkSessionStartedAt,
+        Self::WorkSessionElapsedSeconds,
+        Self::WorkSessionProjectId,
+        Self::WorkSessionCanFinish,
     ];
+
+    /// The work session variable this is, if it is one.
+    pub fn work_session(self) -> Option<WorkSessionVariable> {
+        Some(match self {
+            Self::WorkSessionId => WorkSessionVariable::Id,
+            Self::WorkSessionState => WorkSessionVariable::State,
+            Self::WorkSessionStartedAt => WorkSessionVariable::StartedAt,
+            Self::WorkSessionElapsedSeconds => WorkSessionVariable::ElapsedSeconds,
+            Self::WorkSessionProjectId => WorkSessionVariable::ProjectId,
+            Self::WorkSessionCanFinish => WorkSessionVariable::CanFinish,
+            _ => return None,
+        })
+    }
 
     /// The reference path, without braces.
     pub fn path(self) -> &'static str {
@@ -65,6 +95,14 @@ impl SystemVariable {
             Self::Platform => "system.platform",
             Self::WorkflowId => "workflow.id",
             Self::WorkflowExecutionId => "workflow.execution.id",
+            Self::WorkSessionId
+            | Self::WorkSessionState
+            | Self::WorkSessionStartedAt
+            | Self::WorkSessionElapsedSeconds
+            | Self::WorkSessionProjectId
+            | Self::WorkSessionCanFinish => {
+                self.work_session().map_or("", WorkSessionVariable::path)
+            }
         }
     }
 
@@ -72,7 +110,9 @@ impl SystemVariable {
         match self {
             Self::ProjectCurrentId => VariableType::ProjectId,
             Self::ProfileCurrentId => VariableType::ProfileId,
-            _ => VariableType::String,
+            _ => self
+                .work_session()
+                .map_or(VariableType::String, WorkSessionVariable::value_type),
         }
     }
 
@@ -87,6 +127,14 @@ impl SystemVariable {
             Self::Platform => "Operating system of this computer",
             Self::WorkflowId => "Id of the running workflow",
             Self::WorkflowExecutionId => "Id of this run of the workflow",
+            Self::WorkSessionId
+            | Self::WorkSessionState
+            | Self::WorkSessionStartedAt
+            | Self::WorkSessionElapsedSeconds
+            | Self::WorkSessionProjectId
+            | Self::WorkSessionCanFinish => self
+                .work_session()
+                .map_or("", WorkSessionVariable::description),
         }
     }
 
@@ -96,8 +144,8 @@ impl SystemVariable {
         matches!(self, Self::WorkflowExecutionId)
     }
 
-    /// The value changes with the context (project, device, run), so the
-    /// picker refreshes it on context events.
+    /// The value changes with the context (project, device, run) or the
+    /// work session, so the picker refreshes it on context events.
     pub fn dynamic(self) -> bool {
         !matches!(self, Self::Platform)
     }
@@ -167,6 +215,19 @@ impl TryFrom<String> for VariableRef {
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::parse(&value)
+    }
+}
+
+impl From<WorkSessionVariable> for SystemVariable {
+    fn from(variable: WorkSessionVariable) -> Self {
+        match variable {
+            WorkSessionVariable::Id => Self::WorkSessionId,
+            WorkSessionVariable::State => Self::WorkSessionState,
+            WorkSessionVariable::StartedAt => Self::WorkSessionStartedAt,
+            WorkSessionVariable::ElapsedSeconds => Self::WorkSessionElapsedSeconds,
+            WorkSessionVariable::ProjectId => Self::WorkSessionProjectId,
+            WorkSessionVariable::CanFinish => Self::WorkSessionCanFinish,
+        }
     }
 }
 

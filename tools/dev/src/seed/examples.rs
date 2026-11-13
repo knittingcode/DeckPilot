@@ -28,7 +28,7 @@ pub(super) fn actions(b: &mut Builder<'_>) -> Result<WorkActions> {
     Ok(WorkActions {
         project: b.action(
             "Active project",
-            projects::actions::active_id(),
+            projects::actions::current_id(),
             &none(),
             "folder-kanban",
             Some("{project.key}"),

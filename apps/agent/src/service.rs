@@ -383,6 +383,9 @@ impl Agent {
         let (events, _) = broadcast::channel(512);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (work, work_session) = work_session::WorkSessions::new((options.clock)());
+        let variables = Arc::new(variables::VariableStore::with_work_session(
+            variables::WorkSessionSource::new(work_session.clone(), options.clock.clone()),
+        ));
         let handle = AgentHandle {
             commands: commands_tx,
             events,
@@ -430,7 +433,7 @@ impl Agent {
             stateful: stateful::StatefulKeys::default(),
             frames: render::FrameCache::new(FRAME_CACHE),
             icons: render::Icons::default(),
-            variables: Arc::default(),
+            variables,
             active_projects: Arc::default(),
             context_watch: variables::ContextWatch::default(),
             work,
@@ -681,6 +684,9 @@ impl Agent {
         {
             return Err(locked());
         }
+        if let Some(result) = self.handle_work_session_request(&request) {
+            return result;
+        }
         match request {
             Request::GetStatus => Ok(Response::Status {
                 status: Box::new(self.status()),
@@ -712,6 +718,7 @@ impl Agent {
     }
 
     /// Requests that change runtime state.
+    #[allow(clippy::too_many_lines)] // One arm per request.
     fn handle_change(&mut self, request: Request) -> Result<Response, IpcError> {
         if let Some(result) = self.handle_security(&request) {
             return result;
@@ -803,7 +810,13 @@ impl Agent {
             | Request::GetAutostart
             | Request::Subscribe
             | Request::Shutdown
-            | Request::PrepareForUpdate => self.handle_request(request),
+            | Request::PrepareForUpdate
+            | Request::GetWorkSession
+            | Request::ListWorkSessions { .. }
+            | Request::GetWorkSessionSettings { .. }
+            | Request::SaveWorkSessionSettings { .. }
+            | Request::ResolveWorkSessionReview { .. }
+            | Request::ClearWorkSessionNotices { .. } => self.handle_request(request),
             Request::RunWorkflow { .. } => unreachable!("handled by handle_command"),
             Request::Unlock { .. }
             | Request::Lock
