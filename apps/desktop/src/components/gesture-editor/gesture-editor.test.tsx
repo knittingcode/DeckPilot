@@ -186,7 +186,10 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe("gesture editor", () => {
-  it("adds and removes single click, double click and long press", async () => {
+  // Adding and removing are separate tests: each select round trip
+  // re-renders the whole editor, and eight of them plus a save in one test
+  // made it the slowest of the suite, close to the 5 s limit under load.
+  it("adds single click, double click and long press", async () => {
     const user = renderEditor()
     await user.click(key("Key 3"))
     expect(screen.getByRole("heading", { name: "Gestures" })).toBeInTheDocument()
@@ -201,6 +204,40 @@ describe("gesture editor", () => {
       "placeholder",
       "Default (350)",
     )
+  })
+
+  it("removes gestures until a single click is the immediate press again", async () => {
+    const keyThree = { kind: "key", index: 2 } as const
+    const withGestures: DeviceLayout = {
+      ...layout,
+      pages: layout.pages.map((page) => {
+        if (page.id !== "home") return page
+        return {
+          ...page,
+          bindings: [
+            ...page.bindings,
+            {
+              control: keyThree,
+              trigger: { type: "click" },
+              target: { type: "action", action: "shop" },
+            },
+            {
+              control: keyThree,
+              trigger: { type: "doubleClick" },
+              target: { type: "workflow", workflow: "deploy" },
+            },
+            {
+              control: keyThree,
+              trigger: { type: "longPress" },
+              target: { type: "action", action: "mail" },
+            },
+          ],
+        }
+      }),
+    }
+    const user = renderEditor(withGestures)
+    await user.click(key("Key 3"))
+    expect(describes("Key 3")).toBe("Key 3: Click: Shop · Double click: Deploy · Long press: Mail")
 
     await choose(user, "Double click", "Nothing")
     expect(screen.getByRole("note")).toHaveTextContent("when the key is released")
@@ -213,12 +250,14 @@ describe("gesture editor", () => {
     await choose(user, "Single click (immediate)", "Mail")
     expect(describes("Key 3")).toBe("Key 3: Press: Mail")
     const saved = await save(user)
-    expect(saved.pages[0]?.bindings.at(-1)).toEqual({
-      control: { kind: "key", index: 2 },
-      trigger: { type: "press" },
-      target: { type: "action", action: "mail" },
-      label: null,
-    })
+    expect(saved.pages[0]?.bindings.filter((b) => b.control.index === 2)).toEqual([
+      {
+        control: keyThree,
+        trigger: { type: "press" },
+        target: { type: "action", action: "mail" },
+        label: null,
+      },
+    ])
   })
 
   it("asks before turning a press into a click and changes nothing on cancel", async () => {
