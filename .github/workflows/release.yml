@@ -110,9 +110,34 @@ jobs:
           RUN_SHA: ${{ github.sha }}
         run: tools/release-pipeline/validate-tag.sh "$TAG"
 
+  # Before anything that names the production-release environment or reads
+  # a signing secret: the environment exists, requires a reviewer and
+  # deploys tags v* only (tools/release-pipeline/check-environment.sh).
+  # GitHub would otherwise create it, unprotected, when prepare first names
+  # it, and prepare and the builds would read the secrets without approval.
+  # This job names no environment and reads no secret.
+  environment-gate:
+    name: Protected release environment
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate-tag.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: tools/release-pipeline
+      - name: production-release exists, requires a reviewer, deploys tags v* only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: tools/release-pipeline/check-environment.sh production-release
+
   prepare:
     name: Check configuration and release notes
-    needs: validate-tag
+    needs: [validate-tag, environment-gate]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Reads the signing secrets (presence and form only).
@@ -250,7 +275,7 @@ jobs:
 
   build:
     name: Build (${{ matrix.target }})
-    needs: [validate-tag, prepare, draft]
+    needs: [validate-tag, environment-gate, prepare, draft]
     # Signs (updater key, Developer ID) and notarizes.
     environment: production-release
     strategy:
@@ -644,8 +669,8 @@ jobs:
   # have done so — so its existence alone proves nothing.)
   publish-gate:
     name: Publication gate
-    needs: [validate-tag, verify]
-    if: ${{ always() && needs.validate-tag.result == 'success' && (needs.verify.result == 'success' || (inputs.publish_only && needs.verify.result == 'skipped')) }}
+    needs: [validate-tag, environment-gate, verify]
+    if: ${{ always() && needs.validate-tag.result == 'success' && needs.environment-gate.result == 'success' && (needs.verify.result == 'success' || (inputs.publish_only && needs.verify.result == 'skipped')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -655,7 +680,7 @@ jobs:
         with:
           ref: ${{ needs.validate-tag.outputs.sha }}
           persist-credentials: false
-      - name: The production-release environment requires a reviewer
+      - name: production-release still requires a reviewer and tags v* only
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -666,7 +691,7 @@ jobs:
   # publishes; re-runnable.
   publish:
     name: Publish and verify
-    needs: [validate-tag, publish-gate]
+    needs: [validate-tag, environment-gate, publish-gate]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: production-release
