@@ -246,10 +246,28 @@ impl Engine {
         action: ActionInstanceId,
         invocation: &Invocation,
     ) -> Result<ActionResult, EngineError> {
+        self.run_action_with(profile, machine, context, action, None, invocation)
+    }
+
+    /// [`Engine::run_action_from`] with values that replace some of the
+    /// instance's parameters for this run, e.g. a key binding's
+    /// overrides. They go through the same resolution and checks.
+    pub fn run_action_with(
+        &self,
+        profile: &Profile,
+        machine: &MachineConfig,
+        context: &mut ActiveProjectContext,
+        action: ActionInstanceId,
+        overrides: Option<&ActionParameters>,
+        invocation: &Invocation,
+    ) -> Result<ActionResult, EngineError> {
         let instance = profile
             .action(action)
             .ok_or(EngineError::UnknownAction(action))?;
-        self.execute(profile, machine, context, instance, None, None, invocation)
+        let overrides = overrides.filter(|o| !o.is_empty());
+        self.execute(
+            profile, machine, context, instance, overrides, None, invocation,
+        )
     }
 
     /// Runs the steps of a workflow in order. Effects of a step are applied

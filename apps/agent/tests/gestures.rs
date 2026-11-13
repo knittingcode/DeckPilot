@@ -3,9 +3,11 @@
 //! synthetic instants; these tests check the wiring with real time and
 //! generous margins.
 //!
-//! Layouts cannot bind gestures yet, so the hooks put keys 0 to 4 in
-//! gesture mode on every page and record what fires. Key 5 stays raw: on
-//! the home page it opens a folder, in the folder it goes back.
+//! The hooks put keys 0 to 4 in gesture mode on every page, in place of
+//! the page's bindings, and record what fires; the layout binds no
+//! gestures to them, so nothing runs. Key 5 stays raw: on the home page it
+//! opens a folder, in the folder it goes back. Gestures bound by layouts
+//! are tested in `gesture_bindings.rs`.
 
 mod support;
 
