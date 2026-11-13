@@ -644,3 +644,104 @@ fn crafted_icons_are_refused() {
     assert_eq!(old.icons, []);
     assert_eq!(old.validate(&catalog()), []);
 }
+
+/// Click, double click with parameter overrides (a shared variable
+/// reference and a project), long press on a workflow, and a key's own
+/// timings.
+fn with_gestures(store: &SqliteStore, profile: &Profile) -> Profile {
+    use deckpilot_core::gesture::KeyGestureSettings;
+    use deckpilot_core::variables::VariableRef;
+    use deckpilot_core::{BindingTarget, ControlBinding, DeviceLayout, Trigger};
+    use deckpilot_device::{ControlId, models};
+
+    let mut profile = profile.clone();
+    let action = profile.actions[0].id;
+    let workflow = profile.workflows[0].id;
+    let shop = profile.projects[0].id;
+    let key = ControlId::Key { index: 2 };
+    let mut layout = DeviceLayout::new("Main", models::stream_deck_mk2().id);
+    layout.pages[0].bindings = vec![
+        ControlBinding::new(key, Trigger::Click, BindingTarget::action(action)),
+        ControlBinding::new(
+            key,
+            Trigger::DoubleClick,
+            BindingTarget::Action {
+                action,
+                overrides: ActionParameters::new()
+                    .with("project_id", ParameterValue::Project(shop))
+                    .with(
+                        "resource",
+                        ParameterValue::Reference(VariableRef::parse("shared.repo.role").unwrap()),
+                    ),
+            },
+        ),
+        ControlBinding::new(
+            key,
+            Trigger::LongPress,
+            BindingTarget::Workflow { workflow },
+        ),
+    ];
+    layout.pages[0].gestures.push(KeyGestureSettings {
+        control: key,
+        double_click_ms: Some(450),
+        long_press_ms: None,
+    });
+    profile.layouts.push(layout);
+    store.save_profile(&profile).unwrap();
+    profile
+}
+
+#[test]
+fn gesture_bindings_travel_with_their_profile() {
+    use deckpilot_core::BindingTarget;
+
+    let (source, profiles) = store_with(&["Work"]);
+    let work = with_gestures(&source, &profiles[0]);
+    let payload = round_trip(&exported(&source));
+    assert_eq!(payload.profiles[0].layouts, work.layouts);
+
+    let target = SqliteStore::open_in_memory().unwrap();
+    apply(
+        &target,
+        &payload,
+        &ImportOptions {
+            profiles: vec![work.id],
+            ..ImportOptions::default()
+        },
+    );
+    assert_eq!(target.load_profile(work.id).unwrap().unwrap(), work);
+
+    // As a copy: the bindings point to the copy's action, workflow and
+    // project; the overrides and timings are kept.
+    let summary = apply(
+        &target,
+        &payload,
+        &ImportOptions {
+            profiles: vec![work.id],
+            conflicts: BTreeMap::from([(work.id, ConflictResolution::KeepBoth)]),
+            ..ImportOptions::default()
+        },
+    );
+    let copy = target.load_profile(summary.imported[0].0).unwrap().unwrap();
+    assert_ne!(copy.id, work.id);
+    assert_eq!(copy.validate(&catalog()), []);
+    let page = &copy.layouts[0].pages[0];
+    assert_eq!(page.gestures, work.layouts[0].pages[0].gestures);
+    let BindingTarget::Action { action, overrides } = &page.bindings[1].target else {
+        panic!("the double click runs an action");
+    };
+    assert_eq!(*action, copy.actions[0].id);
+    assert_eq!(overrides.project("project_id"), Some(copy.projects[0].id));
+    assert_eq!(
+        overrides.get("resource"),
+        Some(&ParameterValue::Reference(
+            deckpilot_core::variables::VariableRef::parse("shared.repo.role").unwrap()
+        ))
+    );
+    assert_eq!(
+        page.bindings[2].target,
+        BindingTarget::Workflow {
+            workflow: copy.workflows[0].id
+        }
+    );
+}

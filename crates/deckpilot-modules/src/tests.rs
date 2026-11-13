@@ -294,7 +294,7 @@ fn deck_profile(
     let bind = |index, action, label: Option<&str>| ControlBinding {
         control: ControlId::Key { index },
         trigger: Trigger::Press,
-        target: BindingTarget::Action { action },
+        target: BindingTarget::action(action),
         label: label.map(Into::into),
         appearance: None,
     };
