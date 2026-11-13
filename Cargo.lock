@@ -930,6 +930,7 @@ version = "0.6.0"
 dependencies = [
  "auto-launch",
  "chrono",
+ "deckpilot-agent",
  "deckpilot-core",
  "deckpilot-device",
  "deckpilot-hid",
@@ -1162,6 +1163,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "deckpilot-module-work-session"
+version = "0.6.0"
+dependencies = [
+ "deckpilot-core",
+]
+
+[[package]]
 name = "deckpilot-module-workspace"
 version = "0.6.0"
 dependencies = [
@@ -1187,6 +1195,7 @@ dependencies = [
  "deckpilot-module-notifications",
  "deckpilot-module-projects",
  "deckpilot-module-system",
+ "deckpilot-module-work-session",
  "deckpilot-module-workspace",
  "rustls",
  "serde_json",

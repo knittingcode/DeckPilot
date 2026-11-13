@@ -32,6 +32,7 @@ import {
   controlKey,
   controlLabel,
   page as findPage,
+  hasWayBack,
   targetLabel,
   triggerLabel,
 } from "@/lib/layout-model"
@@ -43,7 +44,6 @@ import { ControlMenu } from "./control-menu"
 import {
   boundControls,
   folderOf,
-  hasBack,
   orderedControls,
   parseControlKey,
   type DragSource,
@@ -52,7 +52,8 @@ import { Inspector } from "./inspector"
 import { LibraryPanel } from "./library-panel"
 import { PageBar } from "./page-bar"
 import { targetGroups } from "./targets"
-import { shortcutLabel, useEditorShortcuts } from "./use-editor-shortcuts"
+import { useEditorShortcuts } from "@/hooks/use-editor-shortcuts"
+import { shortcutLabel } from "@/lib/shortcuts"
 import { useIcons } from "./use-icons"
 import { useLayoutEditing } from "./use-layout-editing"
 
@@ -148,6 +149,9 @@ export function LayoutEditor({
     cut: commands.cut,
     paste: commands.paste,
     duplicate: commands.duplicate,
+    save: () => {
+      if (dirty) void save()
+    },
   })
 
   const pageBindings = useMemo(() => findPage(draft, pageId)?.bindings ?? [], [draft, pageId])
@@ -351,10 +355,10 @@ export function LayoutEditor({
                 choose in the inspector.
               </EmptyState>
             )}
-            {isFolderPage && !hasBack(draft, pageId) && (
+            {isFolderPage && !hasWayBack(draft, pageId) && (
               <p className="text-xs text-muted-foreground" role="note">
-                This folder has no “Back” binding, so it cannot be left on the device. Drag “Back”
-                from the library onto a control.
+                This folder has no “Back” binding. On the device, DeckPilot adds one on its first
+                free key. To choose the key, drag “Back” from the library onto a control.
               </p>
             )}
             <div className="flex flex-wrap items-center gap-2 text-sm">

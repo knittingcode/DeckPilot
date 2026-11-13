@@ -68,7 +68,7 @@ pub struct ActionReference {
 }
 
 fn targets(target: &BindingTarget, id: ActionInstanceId) -> bool {
-    matches!(target, BindingTarget::Action { action } if *action == id)
+    target.action_id() == Some(id)
 }
 
 /// Every place in `profile` that uses action `id`: layout bindings,
@@ -155,8 +155,8 @@ pub enum Selection {
 pub struct ReferenceChange {
     /// Sites that were changed.
     pub changed: Vec<ReferenceSite>,
-    /// Steps and nodes whose parameter overrides and mappings were removed
-    /// because the replacement has another action type.
+    /// Bindings, steps and nodes whose parameter overrides (and mappings)
+    /// were removed because the replacement has another action type.
     pub cleared_settings: Vec<ReferenceSite>,
 }
 
@@ -197,10 +197,10 @@ fn selected(
     }
 }
 
-/// Points the selected uses of action `from` at action `to`. Overrides and
-/// mappings of steps and nodes are kept when both have the same action
-/// type and removed otherwise (they belong to the old type's parameters);
-/// the result lists where.
+/// Points the selected uses of action `from` at action `to`. Overrides of
+/// bindings and steps, and overrides and mappings of nodes, are kept when
+/// both have the same action type and removed otherwise (they belong to
+/// the old type's parameters); the result lists where.
 pub fn replace_action(
     profile: &mut Profile,
     from: ActionInstanceId,
@@ -233,8 +233,14 @@ pub fn replace_action(
                     .flat_map(|p| &mut p.bindings)
                     .filter(|b| b.control == *control && b.trigger == *trigger)
                 {
-                    if targets(&binding.target, from) {
-                        binding.target = BindingTarget::Action { action: to };
+                    if let BindingTarget::Action { action, overrides } = &mut binding.target
+                        && *action == from
+                    {
+                        *action = to;
+                        if !same_type && !overrides.is_empty() {
+                            *overrides = ActionParameters::new();
+                            change.cleared_settings.push(site.clone());
+                        }
                     }
                 }
             }

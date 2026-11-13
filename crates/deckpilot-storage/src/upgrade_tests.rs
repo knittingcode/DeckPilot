@@ -1,6 +1,7 @@
 //! Upgrades of real databases checked row by row — 0.5.0-2
-//! (`tests/fixtures/v0.5.0-2`, schema 5) and 0.6.0 (`tests/fixtures/v0.6.0`,
-//! schema 7) — and upgrades that fail or are killed half-way.
+//! (`tests/fixtures/v0.5.0-2`, schema 5), 0.6.0 (`tests/fixtures/v0.6.0`,
+//! schema 7) and `main` before schema 9 (`tests/fixtures/schema8`) — and
+//! upgrades that fail or are killed half-way.
 //!
 //! These are unit tests because failures are injected at points inside the
 //! upgrade ([`Failpoint`]), which only test builds have. A killed process is
@@ -37,9 +38,25 @@ const V0_6_0: Fixture = Fixture {
     dir: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/v0.6.0"),
     version: 7,
 };
-const FIXTURES: [Fixture; 2] = [V0_5_0, V0_6_0];
+/// The 0.6.0 fixture upgraded by `main` before schema 9 (shared variables
+/// and provenance, #97), plus shared variables with global, profile and
+/// project values and a provenance row, so that every schema 8 table has
+/// rows.
+const SCHEMA_8: Fixture = Fixture {
+    dir: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/schema8"),
+    version: 8,
+};
+const FIXTURES: [Fixture; 3] = [V0_5_0, V0_6_0, SCHEMA_8];
 /// The schema this build upgrades to.
-const CURRENT: u32 = 8;
+const CURRENT: u32 = 9;
+/// The tables schema 9 adds, all empty after the upgrade.
+const SCHEMA_9_TABLES: [&str; 5] = [
+    "work_session_reviews",
+    "work_session_settings",
+    "work_session_transitions",
+    "work_session_intervals",
+    "work_sessions",
+];
 /// The development password the fixtures were created with.
 const PASSWORD: &str = "deckpilot-dev";
 /// The database the child process upgrades.
@@ -250,6 +267,9 @@ fn every_row_is_kept(fixture: Fixture) {
             "workflow_executions",
         ]);
     }
+    if fixture.version >= 8 {
+        filled.extend(["shared_variables", "shared_variable_values", "provenance"]);
+    }
     for table in filled {
         assert!(!original.tables[table].1.is_empty(), "{table} is empty");
     }
@@ -274,7 +294,10 @@ fn every_row_is_kept(fixture: Fixture) {
         .filter(|table| !original.tables.contains_key(*table))
         .map(String::as_str)
         .collect();
-    let mut expected = BTreeSet::from(["provenance", "shared_variable_values", "shared_variables"]);
+    let mut expected = BTreeSet::from(SCHEMA_9_TABLES);
+    if fixture.version < 8 {
+        expected.extend(["provenance", "shared_variable_values", "shared_variables"]);
+    }
     if fixture.version < 6 {
         expected.insert("workflow_executions");
     }
@@ -283,9 +306,9 @@ fn every_row_is_kept(fixture: Fixture) {
     }
     assert_eq!(added, expected, "{fixture:?}");
     // The new tables start empty: no provenance is invented for existing
-    // (seeded) data, and no variable is created.
-    for table in ["provenance", "shared_variable_values", "shared_variables"] {
-        assert!(upgraded.tables[table].1.is_empty(), "{table}");
+    // (seeded) data, no variable and no work session is created.
+    for table in &expected {
+        assert!(upgraded.tables[*table].1.is_empty(), "{table}");
     }
     drop(store);
 
@@ -527,5 +550,52 @@ fn a_process_killed_before_the_check_is_verified_on_the_next_start() {
         assert_next_start_upgrades(&copy);
         assert_eq!(last_result(&copy), "ok");
         assert_eq!(copy.backup_files().len(), 1);
+    }
+}
+
+/// Gestures (`docs/gestures-and-work-session.md`, section 3.3): every
+/// binding of a released version decodes unchanged and stays a raw press,
+/// which fires at once; nothing is converted to a gesture.
+#[test]
+fn bindings_of_released_versions_stay_raw_and_unchanged() {
+    use crate::ConfigStore;
+    use deckpilot_core::{BindingTarget, Trigger};
+
+    for fixture in FIXTURES {
+        let copy = copy(fixture);
+        let store = copy.open().unwrap();
+        let mut bindings = 0;
+        let mut presses = 0;
+        for summary in store.list_profiles().unwrap() {
+            let profile = store.load_profile(summary.id).unwrap().unwrap();
+            let stored: String = store
+                .connection_for_tests()
+                .query_row(
+                    "SELECT document FROM profiles WHERE id = ?1",
+                    [summary.id.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let stored: serde_json::Value = serde_json::from_str(&stored).unwrap();
+            assert_eq!(
+                serde_json::to_value(&profile.layouts).unwrap(),
+                stored["layouts"],
+                "{fixture:?}"
+            );
+            for page in profile.layouts.iter().flat_map(|l| &l.pages) {
+                assert_eq!(page.gestures, []);
+                for binding in &page.bindings {
+                    bindings += 1;
+                    assert_eq!(binding.trigger.gesture(), None, "{fixture:?}");
+                    presses += usize::from(binding.trigger == Trigger::Press);
+                    assert!(!page.bound_gestures(binding.control).any());
+                    if let BindingTarget::Action { overrides, .. } = &binding.target {
+                        assert_eq!(*overrides, deckpilot_core::ActionParameters::new());
+                    }
+                }
+            }
+        }
+        assert!(bindings >= 10, "{fixture:?}: {bindings} bindings");
+        assert!(presses >= 10, "{fixture:?}: {presses} presses");
     }
 }

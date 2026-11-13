@@ -23,6 +23,7 @@ pub mod credentials;
 pub mod crypto;
 mod engine;
 pub mod executions;
+pub mod gestures;
 mod legacy;
 pub mod policy;
 mod project_actions;
@@ -34,6 +35,7 @@ mod upgrade_tests;
 pub mod variable_references;
 pub mod variables;
 pub mod vault;
+pub mod work_sessions;
 
 use deckpilot_core::{
     MachineConfig, ModuleId, ModuleSettings, ModuleStates, Profile, ProfileId, ProjectId,
@@ -54,8 +56,10 @@ pub use variables::{SharedVariables, StoredValue, StoredVariable, VariableOrigin
 /// parameters (`project_id`, a resource name for `projects.resolve-resource`).
 /// Version 5 marks documents that may contain the shapes of the action
 /// architecture (references and templates in parameters, inline
-/// invocations, graph version 2); version 4 documents decode unchanged, and
-/// a DeckPilot that reads at most version 4 refuses them.
+/// invocations, graph version 2) and of gestures (`click`, `doubleClick` and
+/// `longPress` triggers, page `gestures` timings, binding `overrides`);
+/// version 4 documents decode unchanged, and a DeckPilot that reads at most
+/// version 4 refuses them.
 pub const DOCUMENT_VERSION: u32 = 5;
 
 /// A change a schema migration made to user data beyond a plain format
@@ -151,6 +155,9 @@ pub enum StorageError {
     VariableValuesConflict { key: String, count: usize },
     #[error(transparent)]
     Variable(#[from] deckpilot_core::variables::DefinitionIssue),
+    /// The profile has the active work session.
+    #[error("finish the work session first")]
+    WorkSessionActive,
     /// The variable is still used; nothing was changed. Remove or replace
     /// the listed references first.
     #[error("the variable is still used in {} place(s); remove those references first", .0.len())]

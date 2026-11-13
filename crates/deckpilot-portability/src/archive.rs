@@ -21,7 +21,7 @@ use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use deckpilot_storage::crypto::{KdfParams, Password, random_bytes};
+use deckpilot_storage::crypto::{KdfParams, Password, random_array};
 
 use crate::PortabilityError;
 
@@ -69,8 +69,8 @@ pub fn seal(
     created_at: i64,
     app_version: &str,
 ) -> Result<Vec<u8>, PortabilityError> {
-    let mut nonce = [0u8; NONCE_LEN];
-    random_bytes(&mut nonce)?;
+    // A fresh random nonce for every archive (never a fixed or reused one).
+    let nonce: [u8; NONCE_LEN] = random_array()?;
     let header = Header {
         format: FORMAT.into(),
         version: FORMAT_VERSION,
@@ -159,10 +159,24 @@ mod tests {
         Password::new(text)
     }
 
+    /// The export password of this test run: generated, so that it is never a
+    /// constant that could pass for (or be reused as) a real credential.
+    fn export_password() -> &'static str {
+        static PASSWORD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        PASSWORD.get_or_init(generated_password)
+    }
+
+    /// A new random password, different from every other one.
+    fn generated_password() -> String {
+        let mut bytes = [0u8; 16];
+        deckpilot_storage::crypto::random_bytes(&mut bytes).unwrap();
+        format!("test-export-{:032x}", u128::from_le_bytes(bytes))
+    }
+
     fn sealed(data: &[u8]) -> Vec<u8> {
         seal(
             data,
-            &password("export password"),
+            &password(export_password()),
             KdfParams::for_tests(),
             0,
             "0.4.0",
@@ -173,12 +187,14 @@ mod tests {
     #[test]
     fn round_trips_with_the_right_password() {
         let archive = sealed(b"{\"hello\":1}");
-        let (header, plaintext) = open(&archive, &password("export password")).unwrap();
+        let (header, plaintext) = open(&archive, &password(export_password())).unwrap();
         assert_eq!(plaintext.as_slice(), b"{\"hello\":1}");
         assert_eq!(header.format, FORMAT);
         assert_eq!(header.kdf.algorithm, "argon2id");
-        // Nothing of the content is visible.
-        assert!(!archive.windows(5).any(|w| w == b"hello"));
+        // Nothing of the content is visible. The needle has quotes, which
+        // base64 text never contains, so it cannot match by chance (a bare
+        // word like `hello` could).
+        assert!(!archive.windows(7).any(|w| w == b"\"hello\""));
         // Every archive has its own salt and nonce.
         assert_ne!(sealed(b"same").as_slice(), sealed(b"same").as_slice());
     }
@@ -187,7 +203,7 @@ mod tests {
     fn wrong_passwords_and_tampering_are_rejected() {
         let archive = sealed(b"secret configuration");
         assert!(matches!(
-            open(&archive, &password("wrong password")),
+            open(&archive, &password(&generated_password())),
             Err(PortabilityError::WrongPasswordOrDamaged)
         ));
 
@@ -200,7 +216,7 @@ mod tests {
         envelope["ciphertext"] = BASE64.encode(ciphertext).into();
         let tampered = serde_json::to_vec(&envelope).unwrap();
         assert!(matches!(
-            open(&tampered, &password("export password")),
+            open(&tampered, &password(export_password())),
             Err(PortabilityError::WrongPasswordOrDamaged)
         ));
 
@@ -213,7 +229,7 @@ mod tests {
         envelope["header"] = header.into();
         let tampered = serde_json::to_vec(&envelope).unwrap();
         assert!(matches!(
-            open(&tampered, &password("export password")),
+            open(&tampered, &password(export_password())),
             Err(PortabilityError::WrongPasswordOrDamaged)
         ));
     }
@@ -221,16 +237,19 @@ mod tests {
     #[test]
     fn malformed_and_oversized_input_is_rejected_early() {
         assert!(matches!(
-            open(b"not json", &password("x")),
+            open(b"not json", &password(&generated_password())),
             Err(PortabilityError::NotAnArchive)
         ));
         assert!(matches!(
-            open(b"{\"header\":\"{}\",\"ciphertext\":\"\"}", &password("x")),
+            open(
+                b"{\"header\":\"{}\",\"ciphertext\":\"\"}",
+                &password(&generated_password())
+            ),
             Err(PortabilityError::NotAnArchive)
         ));
         let huge = vec![b' '; MAX_ARCHIVE_BYTES + 1];
         assert!(matches!(
-            open(&huge, &password("x")),
+            open(&huge, &password(&generated_password())),
             Err(PortabilityError::TooLarge)
         ));
         // Expensive key derivation parameters are refused before deriving.
@@ -242,8 +261,39 @@ mod tests {
         envelope["header"] = serde_json::to_string(&header).unwrap().into();
         let costly = serde_json::to_vec(&envelope).unwrap();
         assert!(matches!(
-            open(&costly, &password("export password")),
+            open(&costly, &password(export_password())),
             Err(PortabilityError::Kdf(_))
         ));
+    }
+
+    /// An archive written by DeckPilot 0.6.0 (before the nonce came from
+    /// `random_array`), with test KDF parameters and a fixture password
+    /// that protects nothing else.
+    const ARCHIVE_0_6_0: &str = r#"{"header":"{\"format\":\"deckpilot-configuration\",\"version\":1,\"cipher\":\"xchacha20poly1305\",\"nonce\":\"nFjfe3BgLBY857Y0AwAH16H7pBurBpl2\",\"kdf\":{\"algorithm\":\"argon2id\",\"version\":19,\"memoryKib\":8192,\"iterations\":1,\"parallelism\":1,\"salt\":\"WomupH3touDcWYAYBTtACQ==\"},\"createdAt\":1700000000,\"appVersion\":\"0.6.0\"}","ciphertext":"bK2PHBoXUhIraUwekBdEXJgbQGaypDXy/XQZI2QciQ=="}"#;
+
+    #[test]
+    fn archives_of_earlier_versions_still_open() {
+        let (header, plaintext) = open(
+            ARCHIVE_0_6_0.as_bytes(),
+            &password("fixture: not a real password"),
+        )
+        .unwrap();
+        assert_eq!(plaintext.as_slice(), b"{\"profiles\":[]}");
+        assert_eq!(header.app_version, "0.6.0");
+        assert_eq!(header.created_at, 1_700_000_000);
+    }
+
+    #[test]
+    fn every_archive_has_a_fresh_full_length_nonce() {
+        let nonce_of = |archive: &[u8]| {
+            let header = read_header(archive).unwrap();
+            BASE64.decode(header.nonce).unwrap()
+        };
+        let first = nonce_of(&sealed(b"same"));
+        let second = nonce_of(&sealed(b"same"));
+        assert_eq!(first.len(), NONCE_LEN);
+        assert_eq!(second.len(), NONCE_LEN);
+        assert_ne!(first, second);
+        assert_ne!(first, vec![0u8; NONCE_LEN]);
     }
 }
