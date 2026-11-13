@@ -65,6 +65,10 @@ impl DeviceBackend for ElgatoBackend {
         "elgato-hid"
     }
 
+    fn version(&self) -> &'static str {
+        env!("CARGO_PKG_VERSION")
+    }
+
     fn discover(&mut self) -> Result<Vec<DiscoveredDevice>, DeviceError> {
         let api = self.api()?;
         elgato_streamdeck::refresh_device_list(api).map_err(|e| DeviceError::Io(e.to_string()))?;
