@@ -22,16 +22,24 @@ known about the current one. Publishing itself is described in
 3. **CI on main.** All required checks green on the release commit: Rust on
    macOS, Linux and Windows, Frontend, Storage with SQLCipher, Linux and
    Windows packaging, the signing checks, and the Compatibility workflow.
-4. **Signed test release.** A test tag (`vX.Y.Z-N`) runs the real release
-   workflow, signs and notarizes, and ends in a **draft** release; verify
+4. **Unsigned installer checks on the tag.** The release workflow's first
+   stage calls the *Packaging* workflow on the tagged commit (`.deb`,
+   `.rpm`, NSIS, MSI with the release configuration and a throwaway updater
+   key, checked by `tools/ci/check-packages.sh`); nothing is signed or
+   drafted unless it passes. A failure here is fixed on `main` and released
+   under a new tag.
+5. **Signed test release.** An alpha tag (`vX.Y.Z-alpha.N`; the former
+   `vX.Y.Z-N` test tags no longer start the release workflow, see
+   [releasing.md](releasing.md#release-tags-and-the-tag-gate)) runs the real
+   release workflow, signs and notarizes, and ends in a **draft** release; verify
    it with `deckpilot-dev verify-release` (see
    [release-validation.md](release-validation.md)).
-5. **Update path.** `update-continuity` workflow (Keychain continuity
+6. **Update path.** `update-continuity` workflow (Keychain continuity
    between two Developer ID signed builds) and
    `tools/release-validation/update-test.sh` (tampered update rejected, real
    update installed, configuration kept) on macOS.
-6. **Manual platform checks** (below) on real hardware where possible.
-7. **Report.** Fill in the table for the version: verified automatically,
+7. **Manual platform checks** (below) on real hardware where possible.
+8. **Report.** Fill in the table for the version: verified automatically,
    verified manually, not verified, blocked, not applicable. Nothing
    untested is marked as passed.
 
@@ -75,5 +83,5 @@ Known limitation: agents, tests and the compatibility matrix fail with
 very long path (macOS limits socket paths to 104 bytes). The default
 temporary folder is short enough.
 
-Before publishing: a signed test release (`v0.6.0-1`, draft only), the
+Before publishing: a signed test release (`v0.6.0-alpha.1`, draft), the
 update path from a 0.5.0 build, and the manual checks above.

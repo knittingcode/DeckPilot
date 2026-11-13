@@ -18,7 +18,8 @@ import type {
 
 /**
  * The binding a key's face shows, as the agent picks it: the press binding,
- * else the first binding of the control (mirrors `shown_binding`).
+ * else the click binding, else the first binding of the control (mirrors
+ * `shown_binding`).
  */
 export function shownBinding(
   layout: DeviceLayout,
@@ -26,7 +27,11 @@ export function shownBinding(
   control: ControlId,
 ): ControlBinding | undefined {
   const bindings = bindingsFor(layout, pageId, control)
-  return bindings.find((b) => b.trigger.type === "press") ?? bindings[0]
+  return (
+    bindings.find((b) => b.trigger.type === "press") ??
+    bindings.find((b) => b.trigger.type === "click") ??
+    bindings[0]
+  )
 }
 
 export function appearanceOf(

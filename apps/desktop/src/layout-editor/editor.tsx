@@ -32,10 +32,20 @@ import {
   controlKey,
   controlLabel,
   page as findPage,
+  hasWayBack,
   targetLabel,
   triggerLabel,
 } from "@/lib/layout-model"
-import type { ControlId, DeviceLayout, DeviceModel, KeyFace, ProfileView } from "@/lib/types"
+import { DEFAULT_TIMINGS } from "@/components/gesture-editor/model"
+import type {
+  ActionType,
+  ControlId,
+  DeviceLayout,
+  DeviceModel,
+  GestureTimings,
+  KeyFace,
+  ProfileView,
+} from "@/lib/types"
 
 import { effectiveUsage } from "./appearance"
 import { AppearancePanel, type IconState } from "./appearance-panel"
@@ -43,7 +53,6 @@ import { ControlMenu } from "./control-menu"
 import {
   boundControls,
   folderOf,
-  hasBack,
   orderedControls,
   parseControlKey,
   type DragSource,
@@ -52,7 +61,8 @@ import { Inspector } from "./inspector"
 import { LibraryPanel } from "./library-panel"
 import { PageBar } from "./page-bar"
 import { targetGroups } from "./targets"
-import { shortcutLabel, useEditorShortcuts } from "./use-editor-shortcuts"
+import { useEditorShortcuts } from "@/hooks/use-editor-shortcuts"
+import { shortcutLabel } from "@/lib/shortcuts"
 import { useIcons } from "./use-icons"
 import { useLayoutEditing } from "./use-layout-editing"
 
@@ -96,6 +106,31 @@ function usePreviewFaces(
   return preview
 }
 
+/** Action types and default gesture timings for the gesture editor. */
+function useGestureContext() {
+  const [types, setTypes] = useState<ActionType[]>([])
+  const [defaults, setDefaults] = useState<GestureTimings>(DEFAULT_TIMINGS)
+  useEffect(() => {
+    let cancelled = false
+    api.listActionTypes().then(
+      (result) => {
+        if (!cancelled) setTypes(result)
+      },
+      () => undefined,
+    )
+    api.getGestureDefaults().then(
+      (result) => {
+        if (!cancelled) setDefaults(result)
+      },
+      () => undefined,
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return { types, defaults }
+}
+
 export function LayoutEditor({
   profileId,
   view,
@@ -119,6 +154,7 @@ export function LayoutEditor({
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved)
   const { actions, workflows, projects } = view.profile
   const library = useIcons(profileId)
+  const gestureContext = useGestureContext()
   const { faces, images } = usePreviewFaces(
     profileId,
     draft,
@@ -148,6 +184,9 @@ export function LayoutEditor({
     cut: commands.cut,
     paste: commands.paste,
     duplicate: commands.duplicate,
+    save: () => {
+      if (dirty) void save()
+    },
   })
 
   const pageBindings = useMemo(() => findPage(draft, pageId)?.bindings ?? [], [draft, pageId])
@@ -157,7 +196,7 @@ export function LayoutEditor({
       if (binding.target.type === "action") {
         const id = binding.target.action
         const key = controlKey(binding.control)
-        if (!map.has(key) || binding.trigger.type === "press") {
+        if (!map.has(key) || binding.trigger.type === "press" || binding.trigger.type === "click") {
           map.set(key, actions.find((a) => a.id === id)?.icon)
         }
       }
@@ -351,10 +390,10 @@ export function LayoutEditor({
                 choose in the inspector.
               </EmptyState>
             )}
-            {isFolderPage && !hasBack(draft, pageId) && (
+            {isFolderPage && !hasWayBack(draft, pageId) && (
               <p className="text-xs text-muted-foreground" role="note">
-                This folder has no “Back” binding, so it cannot be left on the device. Drag “Back”
-                from the library onto a control.
+                This folder has no “Back” binding. On the device, DeckPilot adds one on its first
+                free key. To choose the key, drag “Back” from the library onto a control.
               </p>
             )}
             <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -392,6 +431,10 @@ export function LayoutEditor({
           focus={selection.focus}
           groups={groups}
           folder={folder}
+          profile={view.profile}
+          types={gestureContext.types}
+          gestureDefaults={gestureContext.defaults}
+          issues={errors}
           onChange={commands.change}
           onClear={commands.clear}
           onOpenFolder={() => {

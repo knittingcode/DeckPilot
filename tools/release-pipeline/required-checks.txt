@@ -1,0 +1,10 @@
+# Checks that must have passed on the exact tagged commit before a release
+# is built (tools/release-pipeline/validate-tag.sh). Pinned copy of the
+# required status checks of main's "Protect main" ruleset; the gate also
+# adds whatever the ruleset requires at release time. One name per line.
+Frontend
+Storage with SQLCipher
+Rust (ubuntu-latest)
+Rust (macos-latest)
+Rust (windows-latest)
+Updater signing keys match

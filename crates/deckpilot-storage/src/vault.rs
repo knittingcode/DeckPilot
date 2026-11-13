@@ -444,7 +444,7 @@ impl Vault {
 
     /// Opens a raw connection with `key` and checks that the key is right.
     fn try_key(&self, key: &DatabaseKey) -> Result<()> {
-        let connection = Connection::open(&self.database)?;
+        let connection = crate::engine::open(&self.database)?;
         apply_key(&connection, &Encryption::Key(key.clone()))
     }
 
@@ -567,7 +567,7 @@ impl Vault {
     /// `protection`.
     fn rekey(&self, old: &DatabaseKey, new: &DatabaseKey, protection: &Protection) -> Result<()> {
         let _lock = self.lock()?;
-        let source = Connection::open(&self.database)?;
+        let source = crate::engine::open(&self.database)?;
         apply_key(&source, &Encryption::Key(old.clone()))?;
         let version: u32 = source.pragma_query_value(None, "user_version", |row| row.get(0))?;
         export_database(&source, &self.replacement(), Some(new))?;
@@ -653,7 +653,7 @@ impl Vault {
                 "there is no unencrypted database to migrate".into(),
             ));
         }
-        let source = Connection::open(&self.database)?;
+        let source = crate::engine::open(&self.database)?;
         check_integrity(&source)?;
         // Fold the write-ahead log into the main file so that nothing is left
         // behind in side files.
@@ -665,7 +665,7 @@ impl Vault {
 
         let verified = verify_copy(&self.replacement(), &Encryption::Key(key.clone()), version)
             .and_then(|()| {
-                let copy = Connection::open(self.replacement())?;
+                let copy = crate::engine::open(&self.replacement())?;
                 apply_key(&copy, &Encryption::Key(key.clone()))?;
                 if row_counts(&copy)? == counts {
                     Ok(())

@@ -618,6 +618,33 @@ fn updates_report_their_configuration_and_store_preferences() {
     assert_eq!(launch["encryption"]["passwordRequired"], true);
 }
 
+#[test]
+fn gesture_defaults_are_a_validated_machine_setting() {
+    let h = Harness::new();
+    assert_eq!(
+        h.ok("get_gesture_defaults", json!({})),
+        json!({ "doubleClickMs": 300, "longPressMs": 700 })
+    );
+    let saved = h.ok(
+        "set_gesture_defaults",
+        json!({ "timings": { "doubleClickMs": 450, "longPressMs": 1200 } }),
+    );
+    assert_eq!(saved, json!({ "doubleClickMs": 450, "longPressMs": 1200 }));
+    let refused = h
+        .call(
+            "set_gesture_defaults",
+            json!({ "timings": { "doubleClickMs": 50, "longPressMs": 1200 } }),
+        )
+        .unwrap_err();
+    assert!(
+        refused
+            .as_str()
+            .unwrap()
+            .contains("between 150 and 1000 ms")
+    );
+    assert_eq!(h.ok("get_gesture_defaults", json!({})), saved);
+}
+
 /// Starts a real agent with a simulated MK.2 on its own runtime, without a
 /// credential store.
 fn start_agent(paths: &AgentPaths) -> (tokio::runtime::Runtime, MockBackend) {
@@ -630,6 +657,20 @@ fn start_agent_with(
     paths: &AgentPaths,
     keys: Option<MemoryKeyStore>,
 ) -> (tokio::runtime::Runtime, MockBackend) {
+    let (runtime, mock, _) = launch_agent(paths, keys);
+    (runtime, mock)
+}
+
+/// As `start_agent_with`, also giving in-process access to the agent (e.g.
+/// to press a work session key).
+fn launch_agent(
+    paths: &AgentPaths,
+    keys: Option<MemoryKeyStore>,
+) -> (
+    tokio::runtime::Runtime,
+    MockBackend,
+    deckpilot_agent::AgentHandle,
+) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -654,11 +695,13 @@ fn start_agent_with(
     };
     paths.create_dirs().unwrap();
     let lock = InstanceLock::acquire(&paths.lock_file).unwrap();
-    runtime.block_on(async {
+    let handle = runtime.block_on(async {
         let agent = Agent::start(options, lock).unwrap();
+        let handle = agent.handle();
         tokio::spawn(agent.run(std::future::pending()));
+        handle
     });
-    (runtime, mock)
+    (runtime, mock, handle)
 }
 
 fn wait_for(h: &Harness, predicate: impl Fn(&Value) -> bool) -> Value {
@@ -776,6 +819,7 @@ fn fresh_installation_has_an_empty_action_library() {
             "notifications",
             "projects",
             "system",
+            "work-session",
             "workspace"
         ]
     );
@@ -803,14 +847,34 @@ fn fresh_installation_has_an_empty_action_library() {
     assert_eq!(
         types,
         [
-            "projects.next",
-            "projects.previous",
+            "projects.cycle",
             "projects.select",
-            "projects.active",
+            "projects.current",
             "projects.repository",
             "projects.documentation",
-            "projects.resolve-resource"
+            "projects.resolve-resource",
+            "projects.next",
+            "projects.previous",
+            "projects.active",
         ]
+    );
+    // Replaced types are marked, so the app does not offer them for new
+    // actions; the flag is left out for every other type.
+    let deprecated: Vec<_> = module("projects")["actionTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["deprecated"] == true)
+        .map(|t| t["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        deprecated,
+        ["projects.next", "projects.previous", "projects.active"]
+    );
+    assert!(
+        module("projects")["actionTypes"][0]
+            .get("deprecated")
+            .is_none()
     );
     assert_eq!(h.ok("migration_notes", json!({})), json!([]));
 }
@@ -1321,6 +1385,68 @@ fn legacy_databases_are_encrypted_on_request() {
     assert_eq!(status["legacyCopies"], json!([]));
 }
 
+/// The export file reveals nothing of its content: neither the plaintext
+/// header nor the (base64-decoded) ciphertext contains any of `hidden`,
+/// which the decrypted payload must contain, and none of `machine` (values
+/// of this computer) is even in the decrypted payload.
+///
+/// Pass structured strings of the payload (with quotes, dots or slashes,
+/// which base64 never produces), so a random match is practically
+/// impossible: a short word such as "Work" matches base64 text by chance
+/// now and then.
+fn assert_export_hides(bytes: &[u8], password: &str, hidden: &[&str], machine: &[&str]) {
+    use base64::Engine as _;
+    let contains = |haystack: &[u8], needle: &str| {
+        haystack
+            .windows(needle.len())
+            .any(|w| w == needle.as_bytes())
+    };
+
+    let envelope: Value = serde_json::from_slice(bytes).unwrap();
+    let mut fields: Vec<&str> = envelope
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    fields.sort_unstable();
+    assert_eq!(fields, ["ciphertext", "header"]);
+    let header = envelope["header"].as_str().unwrap();
+    let ciphertext = base64::engine::general_purpose::STANDARD
+        .decode(envelope["ciphertext"].as_str().unwrap())
+        .unwrap();
+
+    let payload = deckpilot_portability::payload::open(
+        bytes,
+        &deckpilot_storage::crypto::Password::new(password),
+    )
+    .unwrap();
+    let plaintext = serde_json::to_string(&payload).unwrap();
+    for needle in hidden {
+        // Meaningful: the payload holds exactly this text.
+        assert!(plaintext.contains(needle), "{needle} is not in the payload");
+        assert!(!header.contains(needle), "the header shows {needle}");
+        assert!(
+            !contains(&ciphertext, needle),
+            "the ciphertext shows {needle}"
+        );
+        assert!(!contains(bytes, needle), "the file shows {needle}");
+    }
+    // Machine values are never exported at all.
+    for value in machine {
+        assert!(!plaintext.contains(value), "the payload holds {value}");
+        assert!(!contains(bytes, value), "the file shows {value}");
+    }
+}
+
+/// A fresh export password for one test, generated so that it is never a
+/// constant that could pass for (or be reused as) a real credential.
+fn generated_export_password() -> String {
+    let mut bytes = [0u8; 16];
+    deckpilot_storage::crypto::random_bytes(&mut bytes).unwrap();
+    format!("test-export-{:032x}", u128::from_le_bytes(bytes))
+}
+
 #[test]
 fn configuration_round_trips_through_an_encrypted_export() {
     let h = Harness::new();
@@ -1335,16 +1461,20 @@ fn configuration_round_trips_through_an_encrypted_export() {
     );
     let file = h.paths.data_dir.join("work.deckpilot");
     let path = file.display().to_string();
+    let export_password = generated_export_password();
     h.ok("authenticate", json!({ "password": PASSWORD }));
     let result = h.ok(
         "export_configuration",
-        json!({ "request": { "path": path, "password": "export secret", "confirmation": "export secret", "profiles": null, "includeModuleSettings": true } }),
+        json!({ "request": { "path": path, "password": export_password, "confirmation": export_password, "profiles": null, "includeModuleSettings": true } }),
     );
     assert_eq!(result["profiles"], 1);
     let bytes = std::fs::read(&file).unwrap();
-    for visible in [&b"Work"[..], b"SHOP", b"/private/machine/path"] {
-        assert!(!bytes.windows(visible.len()).any(|w| w == visible));
-    }
+    assert_export_hides(
+        &bytes,
+        &export_password,
+        &[r#""name":"Work""#, r#""key":"SHOP""#, "shop.repository"],
+        &["/private/machine/path"],
+    );
 
     assert!(
         h.error(
@@ -1362,7 +1492,7 @@ fn configuration_round_trips_through_an_encrypted_export() {
     assert!(
         h.call(
             "preview_import",
-            json!({ "path": tampered_path.display().to_string(), "password": "export secret" })
+            json!({ "path": tampered_path.display().to_string(), "password": export_password })
         )
         .is_err()
     );
@@ -1370,7 +1500,7 @@ fn configuration_round_trips_through_an_encrypted_export() {
     // Importing into the same installation: a conflict, kept as a copy.
     let preview = h.ok(
         "preview_import",
-        json!({ "path": path, "password": "export secret" }),
+        json!({ "path": path, "password": export_password }),
     );
     assert_eq!(
         preview["preview"]["profiles"][0]["conflict"]["type"],
@@ -1532,6 +1662,7 @@ fn a_fresh_install_opens_without_a_password() {
 
 #[test]
 fn sensitive_operations_need_a_fresh_authentication() {
+    let export_password = generated_export_password();
     let paths = Harness::temp_paths();
     let keys = MemoryKeyStore::new();
     let (_runtime, _mock) = start_agent_with(&paths, Some(keys));
@@ -1543,7 +1674,7 @@ fn sensitive_operations_need_a_fresh_authentication() {
         let path = h.paths.data_dir.join("all.deckpilot").display().to_string();
         h.call(
             "export_configuration",
-            json!({ "request": { "path": path, "password": "export secret", "confirmation": "export secret", "profiles": null, "includeModuleSettings": true } }),
+            json!({ "request": { "path": path, "password": export_password, "confirmation": export_password, "profiles": null, "includeModuleSettings": true } }),
         )
     };
     assert_eq!(export().unwrap_err(), "authentication required");
@@ -1849,11 +1980,17 @@ fn rich_profile(h: &Harness, name: &str) -> deckpilot_core::Profile {
     profile
 }
 
-fn export_to(h: &Harness, file: &std::path::Path, password: Option<&str>) -> Value {
+/// Exports everything to `file`, protected by `export_password`.
+fn export_to(
+    h: &Harness,
+    file: &std::path::Path,
+    password: Option<&str>,
+    export_password: &str,
+) -> Value {
     h.ok("authenticate", json!({ "password": password }));
     h.ok(
         "export_configuration",
-        json!({ "request": { "path": file.display().to_string(), "password": "export secret", "confirmation": "export secret", "profiles": null, "includeModuleSettings": true, "includeAppSettings": true } }),
+        json!({ "request": { "path": file.display().to_string(), "password": export_password, "confirmation": export_password, "profiles": null, "includeModuleSettings": true, "includeAppSettings": true } }),
     )
 }
 
@@ -1865,6 +2002,7 @@ fn database_is_encrypted(paths: &AgentPaths) -> bool {
 #[test]
 fn a_system_key_installation_moves_to_a_password_installation() {
     use deckpilot_storage::ConfigStore as _;
+    let export_password = generated_export_password();
 
     // Source: system-managed key, Touch ID.
     let source_paths = Harness::temp_paths();
@@ -1885,17 +2023,20 @@ fn a_system_key_installation_moves_to_a_password_installation() {
         json!({ "preferences": { "mode": "downloadAndAsk", "automaticChecks": false, "checkIntervalHours": 48, "lastCheck": null } }),
     );
     let file = source.paths.data_dir.join("work.deckpilot");
-    let result = export_to(&source, &file, None);
+    let result = export_to(&source, &file, None, &export_password);
     assert_eq!(result["profiles"], 1);
     let bytes = std::fs::read(&file).unwrap();
-    for secret in [
-        &b"Work"[..],
-        b"SHOP",
-        b"/source/machine/shop",
-        b"downloadAndAsk",
-    ] {
-        assert!(!bytes.windows(secret.len()).any(|w| w == secret));
-    }
+    assert_export_hides(
+        &bytes,
+        &export_password,
+        &[
+            r#""name":"Work""#,
+            r#""key":"SHOP""#,
+            "shop.repository",
+            r#""mode":"downloadAndAsk""#,
+        ],
+        &["/source/machine/shop"],
+    );
     assert_eq!(source_keys.ids().len(), 1);
 
     // Target: password protection, its own binding for the same resource.
@@ -1914,7 +2055,7 @@ fn a_system_key_installation_moves_to_a_password_installation() {
     );
     let preview = target.ok(
         "preview_import",
-        json!({ "path": file.display().to_string(), "password": "export secret" }),
+        json!({ "path": file.display().to_string(), "password": export_password }),
     );
     assert_eq!(
         preview["preview"]["settings"]["updates"]["mode"],
@@ -1965,18 +2106,19 @@ fn a_system_key_installation_moves_to_a_password_installation() {
 
     // And back: a password installation exports as well.
     let back = target.paths.data_dir.join("back.deckpilot");
-    export_to(&target, &back, Some(PASSWORD));
+    export_to(&target, &back, Some(PASSWORD), &export_password);
     assert!(back.exists());
     assert_eq!(source_keys.ids().len(), 1, "no credential was touched");
 }
 
 #[test]
 fn replacing_with_selected_profiles() {
+    let export_password = generated_export_password();
     let source = Harness::new();
     let home = rich_profile(&source, "Home");
     let work = rich_profile(&source, "Work 2");
     let file = source.paths.data_dir.join("both.deckpilot");
-    export_to(&source, &file, Some(PASSWORD));
+    export_to(&source, &file, Some(PASSWORD), &export_password);
 
     let target = Harness::new();
     let local = new_profile(&target, "Local");
@@ -1986,7 +2128,7 @@ fn replacing_with_selected_profiles() {
     );
     let preview = target.ok(
         "preview_import",
-        json!({ "path": file.display().to_string(), "password": "export secret" }),
+        json!({ "path": file.display().to_string(), "password": export_password }),
     );
     assert_eq!(preview["preview"]["localProfiles"][0][0], json!(local));
     let summary = target.ok(
@@ -2054,17 +2196,18 @@ fn hostile_archives_are_rejected_without_changes() {
 
 #[test]
 fn a_failed_import_changes_nothing_and_can_be_retried() {
+    let export_password = generated_export_password();
     let source = Harness::new();
     rich_profile(&source, "Imported");
     let file = source.paths.data_dir.join("one.deckpilot");
-    export_to(&source, &file, Some(PASSWORD));
+    export_to(&source, &file, Some(PASSWORD), &export_password);
 
     let target = Harness::new();
     new_profile(&target, "Existing");
     let preview = |h: &Harness| {
         h.ok(
             "preview_import",
-            json!({ "path": file.display().to_string(), "password": "export secret" }),
+            json!({ "path": file.display().to_string(), "password": export_password }),
         )
     };
     let first = preview(&target);
@@ -2113,6 +2256,7 @@ fn a_failed_import_changes_nothing_and_can_be_retried() {
 
 #[test]
 fn credentials_are_never_read_back_or_exported() {
+    let export_password = generated_export_password();
     let source = Harness::new();
     new_profile(&source, "Work");
     let listed = source.ok(
@@ -2143,11 +2287,11 @@ fn credentials_are_never_read_back_or_exported() {
     );
 
     let file = source.paths.data_dir.join("credentials.deckpilot");
-    export_to(&source, &file, Some(PASSWORD));
+    export_to(&source, &file, Some(PASSWORD), &export_password);
     let target = Harness::new();
     let preview = target.ok(
         "preview_import",
-        json!({ "path": file.display().to_string(), "password": "export secret" }),
+        json!({ "path": file.display().to_string(), "password": export_password }),
     );
     let profile = preview["preview"]["profiles"][0]["id"].clone();
     target.ok(
@@ -2486,4 +2630,599 @@ fn restarting_the_agent_never_ends_running_workflows_silently() {
         json!({ "executionId": execution["id"] }),
     );
     wait_for(&h, |s| s["status"]["runningExecutions"] == 0);
+}
+
+/// The work session commands (protocol 8) against a real agent: state,
+/// settings, history, notices and the `agent-work-session` event. The
+/// session is operated from the "key" (the agent's test entry point):
+/// there is no command for it (D11).
+#[allow(clippy::too_many_lines)] // One session, followed through.
+#[test]
+fn the_work_session_is_read_and_configured_through_the_agent() {
+    use deckpilot_agent::{WorkSessionOperation, WorkSessionOutcome};
+    use deckpilot_core::gesture::Gesture;
+    use tauri::Listener;
+
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    h.ok("set_active_profile", json!({ "profileId": profile_id }));
+    let start = h.ok(
+        "save_workflow",
+        json!({ "profileId": profile_id, "workflow": {
+            "id": deckpilot_core::WorkflowId::new(), "name": "Prepare", "steps": [],
+            "graph": { "version": 1, "nodes": [{"id": "start", "type": "trigger"}], "edges": [] }
+        } }),
+    );
+
+    // Without an agent the page is told to start it.
+    let error = h.error("get_work_session", json!({}));
+    assert!(error.contains("start the DeckPilot agent"), "{error}");
+
+    let (runtime, _mock, agent) = launch_agent(&h.paths, None);
+    h.unlock();
+    wait_for(&h, |s| {
+        s["running"] == true && s["status"]["activeProfile"]["name"] == "Work"
+    });
+    let status = h.ok("agent_status", json!({}));
+    assert!(
+        status["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("workSession"))
+    );
+    // The page appears: the backend reports the module and its page.
+    let modules = h.ok("list_modules", json!({}));
+    let module = modules
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "work-session")
+        .unwrap()
+        .clone();
+    assert_eq!(module["enabled"], true);
+    assert_eq!(module["actionTypes"], json!([]));
+    assert_eq!(module["pages"][0]["id"], "work-session");
+
+    let idle = h.ok("get_work_session", json!({}));
+    assert_eq!(idle["state"], "idle");
+    assert!(idle["asOfMs"].as_i64().unwrap() > 0);
+
+    // Settings: defaults, then saved; a field the agent does not store is
+    // refused rather than dropped.
+    let defaults = h.ok(
+        "get_work_session_settings",
+        json!({ "profileId": profile_id }),
+    );
+    assert_eq!(
+        defaults,
+        json!({
+            "profile": profile_id,
+            "startWorkflow": null,
+            "verificationWorkflow": null,
+            "approvalTtlSeconds": 600,
+            "reviewGapSeconds": 900,
+            "elapsedFormat": "minutes",
+        })
+    );
+    let settings = json!({
+        "startWorkflow": start["id"],
+        "verificationWorkflow": null,
+        "approvalTtlSeconds": 300,
+        "reviewGapSeconds": 600,
+        "elapsedFormat": "seconds",
+    });
+    let mut with_timings = settings.clone();
+    with_timings["doubleClickMs"] = json!(250);
+    assert!(
+        h.call(
+            "save_work_session_settings",
+            json!({ "profileId": profile_id, "settings": with_timings }),
+        )
+        .is_err()
+    );
+    let invalid = h.error(
+        "save_work_session_settings",
+        json!({ "profileId": profile_id, "settings": {
+            "startWorkflow": null, "verificationWorkflow": start["id"],
+            "approvalTtlSeconds": 300, "reviewGapSeconds": 600, "elapsedFormat": "minutes",
+        } }),
+    );
+    assert!(invalid.contains("canFinish"), "{invalid}");
+    let saved = h.ok(
+        "save_work_session_settings",
+        json!({ "profileId": profile_id, "settings": settings }),
+    );
+    assert_eq!(saved["startWorkflow"], start["id"]);
+    assert_eq!(saved["elapsedFormat"], "seconds");
+    assert!(saved["updatedAtMs"].as_i64().is_some());
+    // What the page got back can be sent again as it is.
+    h.ok(
+        "save_work_session_settings",
+        json!({ "profileId": profile_id, "settings": saved }),
+    );
+    assert_eq!(
+        h.ok(
+            "get_work_session_settings",
+            json!({ "profileId": profile_id }),
+        )["approvalTtlSeconds"],
+        300
+    );
+
+    // The key starts a session; the app hears of it.
+    let (sender, received) = std::sync::mpsc::channel::<Value>();
+    let app = h.window.app_handle().clone();
+    app.listen(crate::agent::WORK_SESSION_EVENT, move |event| {
+        let _ = sender.send(serde_json::from_str(event.payload()).unwrap());
+    });
+    crate::agent::spawn_bridge(app, h.paths.clone());
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let started = runtime.block_on(agent.work_session_operation(
+        WorkSessionOperation::Start,
+        Gesture::Click,
+        None,
+    ));
+    assert_eq!(started, Some(WorkSessionOutcome::Applied));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let working = loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        let snapshot = received.recv_timeout(left).expect("agent-work-session");
+        if snapshot["state"] == "working" {
+            break snapshot;
+        }
+    };
+    let session = working["session"].as_str().unwrap().to_owned();
+    let current = h.ok("get_work_session", json!({}));
+    assert_eq!(current["state"], "working");
+    assert_eq!(current["session"], session.as_str());
+
+    let history = h.ok("list_work_sessions", json!({ "limit": 10 }));
+    assert_eq!(history.as_array().unwrap().len(), 1);
+    assert_eq!(history[0]["session"], session.as_str());
+    assert_eq!(history[0]["state"], "working");
+    assert_eq!(history[0]["intervals"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        h.ok(
+            "list_work_sessions",
+            json!({ "limit": 10, "before": history[0]["requestedAtMs"] }),
+        ),
+        json!([])
+    );
+    assert!(h.call("list_work_sessions", json!({ "limit": 0 })).is_err());
+    let missing = h.error(
+        "resolve_work_session_review",
+        json!({ "session": session, "review": 1, "count": false }),
+    );
+    assert!(missing.contains("no such review"), "{missing}");
+    let cleared = h.ok("clear_work_session_notices", json!({ "session": session }));
+    assert_eq!(cleared["state"], "working");
+    let cleared = h.ok("clear_work_session_notices", json!({ "session": null }));
+    assert_eq!(cleared["state"], "working");
+
+    // Work sessions cannot be turned off while one is active.
+    let refused = h.error(
+        "set_module_enabled",
+        json!({ "moduleId": "work-session", "enabled": false }),
+    );
+    assert!(refused.contains("a work session is active"), "{refused}");
+
+    h.ok("stop_agent", json!({}));
+    wait_for(&h, |s| s["running"] == false);
+}
+
+// One scenario through every step of the safe deletion.
+#[allow(clippy::too_many_lines)]
+#[test]
+fn referenced_actions_are_replaced_or_unbound_before_they_are_deleted() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    let hello = log_action(&h, &profile_id, "Hello", "hi");
+    let other = log_action(&h, &profile_id, "Other", "ho");
+    let ids = json!({ "profileId": profile_id, "actionId": hello["id"] });
+
+    // Used on a key, in a step workflow and in a graph node of a workflow
+    // with a trigger.
+    let mut layout = h.ok(
+        "create_layout",
+        json!({ "profileId": profile_id, "modelId": "elgato.streamdeck.mk2", "name": "Main", "generate": false }),
+    );
+    layout["pages"][0]["bindings"] = json!([{
+        "control": { "kind": "key", "index": 0 },
+        "trigger": { "type": "press" },
+        "target": { "type": "action", "action": hello["id"] }
+    }]);
+    let layout = h.ok(
+        "save_layout",
+        json!({ "profileId": profile_id, "layout": layout }),
+    );
+    h.ok(
+        "save_workflow",
+        json!({
+            "profileId": profile_id,
+            "workflow": {
+                "id": "00000000-0000-4000-8000-000000000001",
+                "name": "Steps",
+                "steps": [{ "action": hello["id"], "onFailure": "stop" }]
+            }
+        }),
+    );
+    let policy = json!({ "onError": "stop", "retry": { "attempts": 0, "backoffMs": 0 } });
+    h.ok(
+        "save_workflow",
+        json!({
+            "profileId": profile_id,
+            "workflow": {
+                "id": "00000000-0000-4000-8000-000000000002",
+                "name": "Morning",
+                "steps": [],
+                "triggers": [{ "type": "schedule", "schedule": { "every": "daily", "at": "09:00" } }],
+                "graph": {
+                    "version": 1,
+                    "nodes": [
+                        { "id": "start", "type": "trigger", "position": { "x": 0, "y": 0 } },
+                        { "id": "say", "label": "Say hello", "type": "action", "action": hello["id"],
+                          "policy": policy, "position": { "x": 200, "y": 0 } }
+                    ],
+                    "edges": [{ "from": "start", "port": "out", "to": "say" }]
+                }
+            }
+        }),
+    );
+
+    let references = h.ok("action_references", ids.clone());
+    let sites: Vec<&Value> = references
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| &r["site"])
+        .collect();
+    let kinds: Vec<&str> = sites.iter().map(|s| s["type"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["binding", "step", "node", "trigger"]);
+    assert_eq!(references[0]["ownerName"], "Main");
+    assert_eq!(references[2]["detail"], "Say hello");
+    let (binding, step, node, trigger) = (sites[0], sites[1], sites[2], sites[3]);
+
+    // Deleting is refused while anything uses it, and changes nothing.
+    let refused = h.error("delete_action", ids.clone());
+    assert!(refused.contains("still used in 4 place(s)"), "{refused}");
+    assert_eq!(h.ok("action_references", ids.clone()), references);
+
+    // A graph node cannot be unbound; a trigger is never changed itself.
+    let sites_of = |list: &[&Value]| json!({ "type": "sites", "sites": list });
+    let error = h.error(
+        "unbind_action_references",
+        json!({ "profileId": profile_id, "actionId": hello["id"], "selection": sites_of(&[node]) }),
+    );
+    assert!(error.contains("cannot be unbound"), "{error}");
+    let error = h.error(
+        "replace_action_references",
+        json!({ "profileId": profile_id, "actionId": hello["id"], "replacement": other["id"],
+                "selection": sites_of(&[trigger]) }),
+    );
+    assert!(error.contains("trigger"), "{error}");
+    assert_eq!(h.ok("action_references", ids.clone()), references);
+
+    // Replace the step and the node, unbind the key.
+    let change = h.ok(
+        "replace_action_references",
+        json!({ "profileId": profile_id, "actionId": hello["id"], "replacement": other["id"],
+                "selection": sites_of(&[step, node]) }),
+    );
+    assert_eq!(change["changed"], json!([step, node]));
+    // Same action type: nothing was cleared.
+    assert_eq!(change["clearedSettings"], json!([]));
+    let change = h.ok(
+        "unbind_action_references",
+        json!({ "profileId": profile_id, "actionId": hello["id"], "selection": sites_of(&[binding]) }),
+    );
+    assert_eq!(change["changed"], json!([binding]));
+
+    assert_eq!(h.ok("action_references", ids.clone()), json!([]));
+    h.ok("delete_action", ids);
+
+    // The other action now has the step, the node and with it the trigger;
+    // the key is empty.
+    let moved = h.ok(
+        "action_references",
+        json!({ "profileId": profile_id, "actionId": other["id"] }),
+    );
+    let kinds: Vec<&str> = moved
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["site"]["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["step", "node", "trigger"]);
+    let view = h.ok("get_profile", json!({ "profileId": profile_id }));
+    let page = view["profile"]["layouts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == layout["id"])
+        .unwrap()["pages"][0]
+        .clone();
+    assert_eq!(page["bindings"], json!([]));
+}
+
+#[test]
+fn the_variable_picker_reads_catalog_and_previews_from_the_agent() {
+    let h = Harness::new();
+    let profile = h.ok(
+        "create_profile",
+        json!({ "name": "Work", "description": "" }),
+    );
+    let context = json!({ "profile": profile["id"] });
+    let items = json!([
+        { "reference": "system.profile.current.name" },
+        { "reference": "shared.nothing.here" },
+        { "reference": "not a reference" },
+    ]);
+
+    // Without an agent there are no values; the picker shows metadata only.
+    for (cmd, args) in [
+        (
+            "list_variables",
+            json!({ "context": context, "filter": {} }),
+        ),
+        (
+            "preview_references",
+            json!({ "context": context, "items": items }),
+        ),
+    ] {
+        let error = h.error(cmd, args);
+        assert!(error.starts_with("not supported"), "{cmd}: {error}");
+    }
+
+    let (_runtime, _mock) = start_agent(&h.paths);
+    h.unlock();
+    wait_for(&h, |s| s["running"] == true);
+
+    let entries = h.ok(
+        "list_variables",
+        json!({ "context": context, "filter": { "groups": ["system"] } }),
+    );
+    let entries = entries.as_array().unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["reference"] == "system.platform" && e.get("value").is_none()),
+        "{entries:?}"
+    );
+    assert!(entries.iter().all(|e| e["group"] == "system"));
+    // The filter is optional.
+    assert!(
+        h.ok("list_variables", json!({ "context": context }))
+            .as_array()
+            .is_some()
+    );
+
+    let previews = h.ok(
+        "preview_references",
+        json!({ "context": context, "items": items }),
+    );
+    let previews = previews.as_array().unwrap();
+    assert_eq!(previews.len(), 3);
+    assert_eq!(previews[0]["reference"], "system.profile.current.name");
+    assert_eq!(previews[0]["status"]["status"], "resolved");
+    assert_eq!(previews[0]["status"]["value"]["value"], "Work");
+    assert_eq!(previews[1]["status"]["status"], "missing");
+    assert_eq!(previews[2]["status"]["status"], "invalid");
+
+    assert_eq!(
+        h.ok(
+            "preview_references",
+            json!({ "context": context, "items": [] })
+        ),
+        json!([])
+    );
+    let many: Vec<Value> = (0..=deckpilot_ipc::MAX_PREVIEW_ITEMS)
+        .map(|_| json!({ "reference": "system.platform" }))
+        .collect();
+    let error = h.error(
+        "preview_references",
+        json!({ "context": context, "items": many }),
+    );
+    assert!(error.contains("at most"), "{error}");
+
+    h.ok("stop_agent", json!({}));
+    wait_for(&h, |s| s["running"] == false);
+}
+
+// One scenario through the Shared Variables page's commands.
+#[allow(clippy::too_many_lines)]
+#[test]
+fn shared_variables_are_managed_without_revealing_secrets() {
+    let h = Harness::new();
+    let work = new_profile(&h, "Work");
+    let home = new_profile(&h, "Home");
+    let shop = h.ok(
+        "create_project",
+        json!({ "profileId": work, "project": { "key": "SHOP", "name": "Shop" } }),
+    );
+    let other = h.ok(
+        "create_project",
+        json!({ "profileId": home, "project": { "key": "GARDEN", "name": "Garden" } }),
+    );
+
+    let root = json!({
+        "key": "paths.root",
+        "label": "Code root",
+        "valueType": { "type": "string" },
+        "scopes": ["global", "project"],
+        "default": { "type": "string", "value": "~" }
+    });
+    h.ok("save_shared_variable", json!({ "definition": root }));
+    h.ok(
+        "save_shared_variable",
+        json!({ "definition": {
+            "key": "deploy.token",
+            "valueType": { "type": "string" },
+            "scopes": ["profile"],
+            "sensitive": true,
+            "default": { "type": "string", "value": "default-secret" }
+        } }),
+    );
+    h.ok(
+        "save_shared_variable",
+        json!({ "definition": {
+            "key": "github.token",
+            "valueType": { "type": "secretRef" },
+            "scopes": ["global"]
+        } }),
+    );
+
+    // Invalid definitions and values are refused.
+    let reserved = h.call(
+        "save_shared_variable",
+        json!({ "definition": { "key": "system.x", "valueType": { "type": "string" }, "scopes": ["global"] } }),
+    );
+    assert!(reserved.is_err());
+    let no_scope = h.error(
+        "save_shared_variable",
+        json!({ "definition": { "key": "a.b", "valueType": { "type": "string" }, "scopes": [] } }),
+    );
+    assert!(no_scope.contains("no scope"), "{no_scope}");
+
+    let set = |key: &str, scope: Value, value: Value| {
+        h.call(
+            "set_shared_variable_value",
+            json!({ "key": key, "scope": scope, "value": value }),
+        )
+    };
+    let text = |value: &str| json!({ "type": "string", "value": value });
+    let project_scope = json!({ "kind": "project", "profile": work, "project": shop["id"] });
+    set("paths.root", json!({ "kind": "global" }), text("~/code")).unwrap();
+    set("paths.root", project_scope.clone(), text("~/code/shop")).unwrap();
+    set(
+        "deploy.token",
+        json!({ "kind": "profile", "profile": work }),
+        text("hunter2-secret"),
+    )
+    .unwrap();
+    set(
+        "github.token",
+        json!({ "kind": "global" }),
+        json!({ "type": "secretRef", "value": "github" }),
+    )
+    .unwrap();
+    // Wrong type, a scope the definition does not allow, another profile's
+    // project, an execution value.
+    assert!(
+        set(
+            "paths.root",
+            json!({ "kind": "global" }),
+            json!({ "type": "integer", "value": 1 })
+        )
+        .is_err()
+    );
+    assert!(
+        set(
+            "paths.root",
+            json!({ "kind": "profile", "profile": work }),
+            text("x")
+        )
+        .is_err()
+    );
+    assert!(
+        set(
+            "paths.root",
+            json!({ "kind": "project", "profile": work, "project": other["id"] }),
+            text("x")
+        )
+        .is_err()
+    );
+    let execution = h.error(
+        "set_shared_variable_value",
+        json!({ "key": "paths.root", "scope": { "kind": "execution", "execution": "00000000-0000-4000-8000-000000000009" }, "value": text("x") }),
+    );
+    assert!(execution.contains("only during a run"), "{execution}");
+
+    let listed = h.ok("list_shared_variables", json!({ "profileId": work }));
+    // Neither the sensitive value nor its default reaches the app.
+    let raw = listed.to_string();
+    assert!(!raw.contains("hunter2-secret"), "{raw}");
+    assert!(!raw.contains("default-secret"), "{raw}");
+    let find = |list: &Value, key: &str| {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["definition"]["key"] == key)
+            .unwrap()
+            .clone()
+    };
+    let token = find(&listed, "deploy.token");
+    assert_eq!(token["values"][0]["scope"]["kind"], "profile");
+    assert!(token["values"][0].get("value").is_none());
+    assert!(token["definition"].get("default").is_none());
+    let paths = find(&listed, "paths.root");
+    assert_eq!(paths["definition"]["default"]["value"], "~");
+    let values: Vec<&Value> = paths["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| &v["value"]["value"])
+        .collect();
+    assert_eq!(values, ["~/code", "~/code/shop"]);
+    assert_eq!(
+        find(&listed, "github.token")["values"][0]["value"],
+        json!({ "type": "secretRef", "value": "github" })
+    );
+    // Another profile sees the global values only.
+    let home_view = h.ok("list_shared_variables", json!({ "profileId": home }));
+    assert_eq!(
+        find(&home_view, "paths.root")["values"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(find(&home_view, "deploy.token")["values"], json!([]));
+    let no_profile = h.ok("list_shared_variables", json!({ "profileId": null }));
+    assert_eq!(
+        find(&no_profile, "paths.root")["values"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // An action uses the variable: it cannot be deleted, and the use is listed.
+    let action = h.ok(
+        "create_action",
+        json!({
+            "profileId": work,
+            "action": {
+                "name": "Where",
+                "actionType": "general.log",
+                "parameters": { "message": { "type": "template", "value": "in {{ shared.paths.root }}" } }
+            }
+        }),
+    );
+    let paths = find(
+        &h.ok("list_shared_variables", json!({ "profileId": work })),
+        "paths.root",
+    );
+    assert_eq!(paths["references"][0]["use"]["type"], "action");
+    assert_eq!(paths["references"][0]["ownerName"], "Where");
+    assert_eq!(paths["references"][0]["profileName"], "Work");
+    let refused = h.error("delete_shared_variable", json!({ "key": "paths.root" }));
+    assert!(refused.contains("still used"), "{refused}");
+
+    h.ok(
+        "delete_action",
+        json!({ "profileId": work, "actionId": action["id"] }),
+    );
+    h.ok(
+        "clear_shared_variable_value",
+        json!({ "key": "paths.root", "scope": project_scope }),
+    );
+    // Clearing twice is fine.
+    h.ok(
+        "clear_shared_variable_value",
+        json!({ "key": "paths.root", "scope": project_scope }),
+    );
+    h.ok("delete_shared_variable", json!({ "key": "paths.root" }));
+    let missing = h.error("delete_shared_variable", json!({ "key": "paths.root" }));
+    assert!(missing.contains("not found"), "{missing}");
+    let left = h.ok("list_shared_variables", json!({ "profileId": work }));
+    assert_eq!(left.as_array().unwrap().len(), 2);
 }

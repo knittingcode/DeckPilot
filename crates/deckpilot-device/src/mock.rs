@@ -50,7 +50,9 @@ impl MockBackend {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Attaches a device of `model` with the given serial number.
+    /// Attaches a device of `model` with the given serial number. Like a
+    /// real device after a power cycle, it starts blank and with its own
+    /// default brightness (reported as `None`).
     pub fn plug(&self, model: &DeviceModel, serial: &str) -> DeviceId {
         let id = DeviceId {
             model: model.id.clone(),
@@ -64,6 +66,7 @@ impl MockBackend {
         device.input.clear();
         device.frames.clear();
         device.pending.clear();
+        device.brightness = None;
         drop(devices);
         self.shared.changed.notify_all();
         id
@@ -81,6 +84,17 @@ impl MockBackend {
     pub fn send_input(&self, id: &DeviceId, control: ControlId, input: ControlInput) {
         if let Some(device) = self.lock().get_mut(id) {
             device.input.push_back((control, input));
+        }
+        self.shared.changed.notify_all();
+    }
+
+    /// Queues several inputs at once: the device's reader takes them in
+    /// one read, so they all carry the same read time. Tests use this for
+    /// sequences whose gesture must not depend on scheduling (a click held
+    /// for no time at all, a double click with no gap).
+    pub fn send_inputs(&self, id: &DeviceId, inputs: &[(ControlId, ControlInput)]) {
+        if let Some(device) = self.lock().get_mut(id) {
+            device.input.extend(inputs.iter().copied());
         }
         self.shared.changed.notify_all();
     }

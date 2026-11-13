@@ -6,16 +6,20 @@ Nothing here publishes a release or touches the release signing keys.
 
 ## 1. Signed test release (CI)
 
-A test tag runs the real release workflow: the same build, signing and
-notarization as a final release, ending in a **draft** release.
+A pre-release tag runs the real release workflow: the same build, signing
+and notarization as a final release, ending in a **draft** release. (The
+0.5.0 test releases used `vX.Y.Z-N` tags; those no longer start the
+workflow, see [releasing.md](releasing.md#release-tags-and-the-tag-gate).)
 
-1. Set the version to the test version, e.g. `0.5.0-1` (Windows installers
-   accept only numeric pre-release identifiers), and push the commit. RPM
-   does not accept `-` in versions, so test releases build `.deb` and the
+1. Set the version to the pre-release version, e.g. `0.6.0-alpha.1`, merge
+   it to `main` and wait for the required checks on the merge commit. The
+   MSI gets a numeric version computed by the tag gate (`0.6.0.1`). RPM
+   does not accept `-` in versions, so pre-releases build `.deb` and the
    AppImage on Linux; final versions build all packages.
-2. Tag and push: `git tag v0.5.0-1 && git push origin v0.5.0-1`.
-3. The workflow refuses to continue if versions, release notes (a test
-   version uses the notes of `0.5.0`), updater or Apple signing are not in
+2. Tag that commit and push: `git tag -s v0.6.0-alpha.1 <sha> -m "DeckPilot 0.6.0-alpha.1" && git push origin v0.6.0-alpha.1`.
+3. The workflow refuses to continue if the tag, its commit, versions, the
+   required checks, release notes (a pre-release uses the notes of
+   `0.6.0`), updater or Apple signing are not in
    order. A tag with a pre-release suffix becomes a pre-release, so even if
    it were published it would never become the release the app updates to
    (the app only reads `releases/latest`).
@@ -66,7 +70,23 @@ Developer ID (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
 `APPLE_SIGNING_IDENTITY`); the builds are never notarized. The *Update
 continuity* workflow (`.github/workflows/update-continuity.yml`) runs it on a
 macOS runner with a temporary keychain: no Apple submission, no release,
-nothing public.
+nothing public. It runs only when started by hand
+(`gh workflow run "Update continuity" --ref main`), never on pull requests:
+it builds the app (dependency installation, build scripts) in the job that
+holds the certificate, so it runs only for a reviewed ref, without
+restoring caches of other workflows.
+
+The *Signing check* workflow holds the release secrets on every pull
+request, so its jobs run only code that is already trusted: a sparse
+checkout of `.github/scripts` — on pull requests from the **base commit**
+(already on `main`), not from the pull request — and nothing else (no
+dependency installation, no build, no cache). A pull request that changes
+`updater-key-pair.py`, `apple-certificate.sh` or `apple-api-key.sh` is
+therefore checked with the previous versions against the real secrets, and
+its own versions are tested only with throwaway keys
+(`tools/release-pipeline/test-updater-key-pair.sh` in the *Release pipeline
+tests*); the new versions meet the secrets first on the push to `main`
+after review.
 
 ## 3. Stream Deck MK.2 (physical device)
 
@@ -89,7 +109,7 @@ The same steps by hand, with DeckPilot installed (or `make up` with
 | 2 | Activate a profile with an MK.2 layout | Key images appear within a second; the active page is shown |
 | 3 | Press and release a key bound to an action | The action runs once; a workflow summary appears for failures |
 | 4 | Switch profiles (app and tray) | Layout and images change; no restart |
-| 5 | Switch projects (key bound to `projects.next`) | The active project changes and persists after a restart |
+| 5 | Switch projects (key bound to `projects.cycle`) | The active project changes, the key shows it at once, and it persists after a restart |
 | 6 | Change brightness in the app | The device follows immediately and keeps it after reconnecting |
 | 7 | Unplug, wait, plug in again | "Disconnected", then the same layout and page again within ~2 s |
 | 8 | Restart the agent (tray → Quit, start DeckPilot) | Images return; profile, project and brightness are restored |
@@ -167,6 +187,8 @@ signature. Manual checks on real machines:
 | App/agent compatibility | By design, tested | Same version required: the app detects a mismatching agent and offers to restart it with the bundled one; the update stops the agent before replacing files and starts the new one (update test) |
 | SQLCipher migrations | Tested | A newer schema is refused; upgrades run after a verified encrypted backup, in one transaction (storage tests) |
 | Failed updates | Tested | A rejected or failed update leaves the installed version and its agent running (update test); the downloaded update stays ready to retry |
+| Interrupted and stalled downloads | Tested | Connection closed early, stalled (60 s read timeout), server errors: the download fails, nothing partial is kept, the next attempt starts over; a stalled check or download no longer blocks the updater (desktop `updates_tests.rs`, loopback server, throwaway keys) |
+| Failure diagnostics | Tested | Each failure says what happened, the state of the installation and what to do; it is shown and appended to `updates.log` in the log directory (no key material) |
 | Release artifact integrity | Verified | Draft-only releases; checksums verified in the release workflow; attestations (`gh attestation verify`) |
 | Certificate expiry | Checked | The signing check fails on an expired Developer ID certificate and warns 60 days ahead. Shipped apps keep working after expiry: signatures carry a secure timestamp and the notarization ticket is stapled |
 | Updater key | Not rotated | The minisign key has no expiry; losing it means installations cannot verify updates (keep the offline backup, see [releasing.md](releasing.md)) |

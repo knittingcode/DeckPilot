@@ -14,10 +14,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { GestureEditor } from "@/components/gesture-editor/gesture-editor"
+import { DEFAULT_TIMINGS, controlIssues } from "@/components/gesture-editor/model"
 import {
+  acceptsGestures,
   bindingsFor,
   controlKey,
   controlLabel,
+  page as findPage,
   removeBinding,
   sameTrigger,
   setBinding,
@@ -25,9 +29,16 @@ import {
   triggerKey,
   triggerLabel,
 } from "@/lib/layout-model"
-import type { ControlId, DeviceLayout, DeviceModel } from "@/lib/types"
+import type {
+  ActionType,
+  ControlId,
+  DeviceLayout,
+  DeviceModel,
+  GestureTimings,
+  Profile,
+} from "@/lib/types"
 
-import { decodeTarget, encodeTarget, type TargetGroup } from "./targets"
+import { decodeTarget, encodeTarget, gestureOnlyGroups, type TargetGroup } from "./targets"
 
 interface InspectorProps {
   model: DeviceModel
@@ -37,6 +48,13 @@ interface InspectorProps {
   focus: ControlId | null
   groups: TargetGroup[]
   folder: string | undefined
+  /** For the gesture editor: targets' names and parameter overrides. */
+  profile?: Pick<Profile, "actions" | "workflows" | "projects">
+  types?: ActionType[]
+  /** This computer's default gesture timings. */
+  gestureDefaults?: GestureTimings
+  /** Messages of the last failed save; those about the control show inline. */
+  issues?: string[]
   /** Commits a change; `group` merges consecutive edits into one undo step. */
   onChange: (layout: DeviceLayout, group?: string) => void
   onClear: () => void
@@ -99,8 +117,19 @@ function ControlInspector({
   onOpenFolder,
   onClose,
   appearance,
+  profile,
+  types = [],
+  gestureDefaults = DEFAULT_TIMINGS,
+  issues = [],
 }: InspectorProps & { control: ControlId }) {
   const bindings = bindingsFor(draft, pageId, control)
+  const gestures = acceptsGestures(model, control)
+  // Press and release are edited as gestures (single click is the press).
+  const triggers = supportedTriggers(model, control).filter(
+    (t) => !gestures || (t.type !== "press" && t.type !== "release"),
+  )
+  const page = findPage(draft, pageId)
+  const controlMessages = page ? controlIssues(issues, page, control) : []
   return (
     <Card className="h-fit">
       <CardHeader className="flex flex-row items-center gap-2">
@@ -110,7 +139,31 @@ function ControlInspector({
         </Button>
       </CardHeader>
       <CardContent className="grid gap-4">
-        {supportedTriggers(model, control).map((trigger) => {
+        {gestures && (
+          <GestureEditor
+            key={`${pageId}:${controlKey(control)}`}
+            draft={draft}
+            pageId={pageId}
+            control={control}
+            profile={profile ?? { actions: [], workflows: [], projects: [] }}
+            groups={groups}
+            gestureGroups={gestureOnlyGroups()}
+            encode={encodeTarget}
+            decode={decodeTarget}
+            types={types}
+            defaults={gestureDefaults}
+            issues={controlMessages}
+            onChange={onChange}
+          />
+        )}
+        {!gestures && controlMessages.length > 0 && (
+          <ul className="grid gap-1 text-xs text-destructive" role="alert">
+            {controlMessages.map((issue) => (
+              <li key={issue}>{issue}</li>
+            ))}
+          </ul>
+        )}
+        {triggers.map((trigger) => {
           const binding = bindings.find((b) => sameTrigger(b.trigger, trigger))
           const id = `${controlKey(control)}-${triggerKey(trigger)}`
           return (
