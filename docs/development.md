@@ -232,6 +232,14 @@ Callers may pass both as inputs (`prerelease`, `msi-version`); otherwise they
 are derived from the version. `tools/ci/test-check-packages.sh` tests this on
 fake packages in the "Release manifest assembly" job.
 
+Merge queue (prepared, not enabled): `ci.yml` and `signing-check.yml` also
+run for `merge_group` events, so the required checks would report for queue
+groups under their usual names. The optional jobs then compare the group's
+base commit with its head (every pull request in the group). The signing
+job runs the scripts of the group's base commit, as it does on pull
+requests. GitHub offers merge queues only for repositories owned by an
+organization, so this needs the repository to move to one first.
+
 Runs and caches:
 
 - A new push to a pull request cancels its obsolete run. Runs for commits on
