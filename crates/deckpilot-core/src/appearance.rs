@@ -371,4 +371,49 @@ pub(crate) mod tests {
         assert!(serde_json::from_value::<Icon>(huge).is_err());
         assert!(icon.png.data_url().starts_with("data:image/png;base64,"));
     }
+
+    /// Icon data is stored in profile documents and exports, so its text
+    /// must never change: standard alphabet (`+` and `/`), `=` padding, and
+    /// strict decoding. The vectors are those of RFC 4648 section 10 and all
+    /// 256 byte values, as `base64` 0.22 wrote them.
+    #[test]
+    fn icon_data_encoding_is_fixed() {
+        const ALL_BYTES: &str = concat!(
+            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0BB",
+            "QkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn+AgYKD",
+            "hIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TF",
+            "xsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t/g4eLj5OXm5+jp6uvs7e7v8PHy8/T19vf4+fr7/P3+/w==",
+        );
+        let all_bytes: Vec<u8> = (0..=255).collect();
+        let vectors: [(&[u8], &str); 9] = [
+            (b"", ""),
+            (b"f", "Zg=="),
+            (b"fo", "Zm8="),
+            (b"foo", "Zm9v"),
+            (b"foob", "Zm9vYg=="),
+            (b"fooba", "Zm9vYmE="),
+            (b"foobar", "Zm9vYmFy"),
+            (&[0xfb, 0xff], "+/8="),
+            (&all_bytes, ALL_BYTES),
+        ];
+        for (bytes, text) in vectors {
+            let data = IconData::new(bytes.to_vec());
+            assert_eq!(serde_json::to_value(&data).unwrap(), text);
+            assert_eq!(
+                data.data_url(),
+                format!("data:image/png;base64,{text}"),
+                "{text}"
+            );
+            let decoded: IconData = serde_json::from_value(text.into()).unwrap();
+            assert_eq!(decoded.bytes(), bytes, "{text}");
+        }
+        // Strict decoding: missing padding, non-zero trailing bits, the
+        // URL-safe alphabet and whitespace are all refused.
+        for text in ["Zg", "Zm8", "Zh==", "Zm9=", "-_8=", "Zm9v\n", " Zm9v"] {
+            assert!(
+                serde_json::from_value::<IconData>(text.into()).is_err(),
+                "{text:?} was accepted"
+            );
+        }
+    }
 }
