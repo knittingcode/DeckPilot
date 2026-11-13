@@ -53,7 +53,9 @@ fn fixture(favorite: impl Fn(&Profile) -> Option<ProjectId>) -> Fixture {
         );
     }
     Fixture {
-        engine: Engine::new(modules.action_registry()).with_variables(Arc::new(variables)),
+        engine: Engine::new(modules.action_registry())
+            .with_variables(Arc::new(variables))
+            .with_variable_registry(Arc::new(modules.variables().clone())),
         profile,
         machine: MachineConfig::new(Os::Linux),
     }
@@ -102,12 +104,15 @@ fn a_shared_project_variable_selects_its_project() {
 #[test]
 fn the_current_project_reference_keeps_the_selection() {
     let mut f = fixture(|_| None);
-    let current = f.reference("system.project.current.id");
     let cmr = f.profile.projects[1].id;
-    let mut context = ActiveProjectContext::restore(&f.profile, Some(cmr));
-    let result = f.press(current, &mut context);
-    assert!(result.is_success(), "{}", result.message);
-    assert_eq!(context.project_id(), Some(cmr));
+    // The legacy id and the module's own id, both typed project ids.
+    for text in ["system.project.current.id", "projects.current.id"] {
+        let current = f.reference(text);
+        let mut context = ActiveProjectContext::restore(&f.profile, Some(cmr));
+        let result = f.press(current, &mut context);
+        assert!(result.is_success(), "{text}: {}", result.message);
+        assert_eq!(context.project_id(), Some(cmr));
+    }
 }
 
 #[test]
@@ -142,7 +147,9 @@ fn another_profiles_project_never_becomes_active() {
     });
     let mut modules = ModuleRegistry::new(Os::Linux);
     modules.register(Box::new(ProjectsModule::new())).unwrap();
-    f.engine = Engine::new(modules.action_registry()).with_variables(Arc::new(variables));
+    f.engine = Engine::new(modules.action_registry())
+        .with_variables(Arc::new(variables))
+        .with_variable_registry(Arc::new(modules.variables().clone()));
     let favorite = f.reference("shared.projects.favorite");
     let mut context = ActiveProjectContext::new(&f.profile);
     let before = context.project_id();

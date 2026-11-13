@@ -15,6 +15,11 @@ use crate::{
     ParameterSpec, Progress, Workflow,
 };
 
+/// The core's variables and stand-ins for the projects and work session
+/// modules.
+static REGISTRY: std::sync::LazyLock<crate::variables::VariableRegistry> =
+    std::sync::LazyLock::new(crate::variables::doubles::builtin_registry);
+
 /// Reports what it received: every parameter in its data, the message as
 /// its message and progress, and what its context tells it.
 struct Probe(ActionType);
@@ -239,6 +244,7 @@ impl Fixture {
         Engine::new(registry)
             .with_variables(Arc::new(self.variables()))
             .with_projects(Arc::new(active))
+            .with_variable_registry(Arc::new(crate::variables::doubles::builtin_registry()))
     }
 
     fn add(&mut self, parameters: ActionParameters) -> ActionInstanceId {
@@ -316,6 +322,124 @@ fn whole_value_references_keep_their_type() {
         Some(0),
     );
     assert_eq!(result.data["project"], f.profile.projects[0].id.to_string());
+}
+
+#[test]
+fn legacy_ids_and_canonical_ids_resolve_alike() {
+    let mut f = Fixture::new();
+    for (legacy, canonical) in [
+        ("system.project.current.id", "projects.current.id"),
+        ("system.project.current.key", "projects.current.key"),
+        ("system.project.current.name", "projects.current.name"),
+    ] {
+        let old = f.run(message(template(&format!("{{{{ {legacy} }}}}"))), Some(1));
+        let new = f.run(
+            message(template(&format!("{{{{ {canonical} }}}}"))),
+            Some(1),
+        );
+        assert!(old.is_success(), "{}", old.message);
+        assert_eq!(old.message, new.message, "{legacy}");
+    }
+    // Whole-value references keep the native type for both spellings.
+    for text in ["system.project.current.id", "projects.current.id"] {
+        let result = f.run(
+            ActionParameters::new().with("project", reference(text)),
+            Some(0),
+        );
+        assert_eq!(result.data["project"], f.profile.projects[0].id.to_string());
+    }
+    // The stored spelling is kept: nothing is rewritten when saved again.
+    let stored = serde_json::to_value(reference("system.project.current.key")).unwrap();
+    assert_eq!(stored["value"], "system.project.current.key");
+    let VariableRef::System(alias) = VariableRef::parse("system.project.current.key").unwrap()
+    else {
+        panic!("a legacy id");
+    };
+    assert_eq!(alias.canonical().as_str(), "projects.current.key");
+}
+
+#[test]
+fn legacy_ids_keep_working_while_their_module_is_disabled() {
+    let f = Fixture::new();
+    let projects = ModuleId::new("projects").unwrap();
+    let mut disabled = crate::variables::doubles::builtin_registry();
+    disabled.set_available(&projects, Some("the Projects module is disabled".into()));
+    let missing = crate::variables::VariableRegistry::new();
+    let context = Invocation::default().context(&f.profile, Some(f.profile.projects[1].id));
+    for registry in [&disabled, &missing] {
+        let resolver = ContextResolver {
+            profile: &f.profile,
+            os: Os::Linux,
+            shared: &NoSharedVariables,
+            outputs: None,
+            registry,
+            live: &crate::variables::NoLiveState,
+        };
+        let resolve = |text: &str| resolver.resolve(&VariableRef::parse(text).unwrap(), &context);
+        // As on main: the core resolves the project in the context.
+        for (variable, value) in [
+            (
+                SystemVariable::ProjectCurrentKey,
+                "system.project.current.key",
+            ),
+            (
+                SystemVariable::ProjectCurrentName,
+                "system.project.current.name",
+            ),
+            (
+                SystemVariable::ProjectCurrentId,
+                "system.project.current.id",
+            ),
+        ] {
+            assert_eq!(
+                resolve(value),
+                system_value(variable, &f.profile, Os::Linux, &context),
+                "{value}"
+            );
+        }
+        assert!(matches!(
+            resolve("system.project.current.key"),
+            Resolution::Value { value: VariableValue::String(key), .. } if key == "CMR"
+        ));
+        // Without a session, as without the agent on main.
+        assert_eq!(
+            resolve("system.work.session.state"),
+            Resolution::Missing(MissingReason::NoValue)
+        );
+        // The canonical id follows its module.
+        assert_eq!(
+            resolve("projects.current.key"),
+            Resolution::Unavailable {
+                owner: "projects".into()
+            }
+        );
+    }
+}
+
+#[test]
+fn variables_of_an_unavailable_module_fail_without_losing_the_reference() {
+    let mut f = Fixture::new();
+    let id = f.add(message(template("on {{ projects.current.key }}")));
+    // An engine whose registry lacks the projects module, as when it is
+    // disabled: the reference is reported, the configuration is kept.
+    let engine = Engine::new({
+        let mut registry = ActionRegistry::default();
+        registry.register(Box::new(Probe::new())).unwrap();
+        registry
+    });
+    let mut projects = ActiveProjectContext::new(&f.profile);
+    let result = engine
+        .run_action(&f.profile, &f.machine, &mut projects, id)
+        .unwrap();
+    assert_eq!(result.code.as_deref(), Some("reference-unavailable"));
+    assert_eq!(
+        result.message,
+        "parameter `message`: {{ projects.current.key }} is unavailable: the `projects` module is disabled or not installed"
+    );
+    assert_eq!(
+        f.profile.action(id).unwrap().parameters.get("message"),
+        Some(&template("on {{ projects.current.key }}"))
+    );
 }
 
 #[test]
@@ -430,6 +554,80 @@ fn sensitive_values_are_redacted_from_results_and_progress() {
     assert!(result.message.contains("[redacted]"));
 }
 
+/// `projects.token`, a sensitive module variable.
+struct Vault;
+
+impl crate::variables::VariableSource for Vault {
+    fn resolve(
+        &self,
+        _: &crate::variables::VariableDeclaration,
+        _: &crate::variables::VariableEnvironment<'_>,
+    ) -> Resolution {
+        // The source forgets to say it is sensitive; the declaration does.
+        Resolution::Value {
+            value: VariableValue::String("t0k3n".into()),
+            source: ValueSource::System,
+            sensitive: false,
+        }
+    }
+}
+
+#[test]
+fn sensitive_module_variables_are_redacted_like_shared_ones() {
+    use crate::variables::{DeclaredScope, PreviewItem, VariableDeclaration, preview_reference};
+    let f = Fixture::new();
+    let mut registry = crate::variables::VariableRegistry::new();
+    registry
+        .register_module(
+            &ModuleId::new("projects").unwrap(),
+            &[VariableDeclaration {
+                sensitive: true,
+                ..VariableDeclaration::new(
+                    "projects.token",
+                    "Token",
+                    VariableType::String,
+                    DeclaredScope::Machine,
+                )
+            }],
+            Some(Arc::new(Vault)),
+        )
+        .unwrap();
+    let resolver = ContextResolver {
+        profile: &f.profile,
+        os: Os::Linux,
+        shared: &NoSharedVariables,
+        outputs: None,
+        registry: &registry,
+        live: &crate::variables::NoLiveState,
+    };
+    let context = Invocation::default().context(&f.profile, None);
+    let parameters = resolve_parameters(
+        Probe::new().definition(),
+        &message(template("use {{ projects.token }}")),
+        &resolver,
+        &context,
+        &f.profile,
+    )
+    .unwrap();
+    assert_eq!(
+        parameters.redactor.redact("got t0k3n back"),
+        "got [redacted] back"
+    );
+    let preview = preview_reference(
+        &resolver,
+        &PreviewItem {
+            reference: "projects.token".into(),
+            expected: None,
+        },
+        &ResolutionContext::preview(f.profile.id),
+    );
+    assert!(!format!("{preview:?}").contains("t0k3n"));
+    assert!(matches!(
+        preview.status,
+        crate::variables::ReferenceStatus::Redacted { .. }
+    ));
+}
+
 #[test]
 fn resolved_values_are_never_expanded_again() {
     // A value that looks like a reference to itself is text: no cycle.
@@ -463,6 +661,8 @@ fn values_never_cross_profiles() {
         os: Os::Linux,
         shared: &foreign,
         outputs: None,
+        registry: &REGISTRY,
+        live: &crate::variables::NoLiveState,
     };
     let context = Invocation::default().context(&f.profile, None);
     let failure = resolve_parameters(
@@ -543,6 +743,8 @@ fn node_outputs_are_injected_and_converted() {
         os: Os::Linux,
         shared: &variables,
         outputs: Some(&outputs),
+        registry: &REGISTRY,
+        live: &crate::variables::NoLiveState,
     };
     let context = Invocation::default()
         .with_workflow(crate::WorkflowId::new())
@@ -585,6 +787,8 @@ fn node_outputs_are_injected_and_converted() {
     // Outside a run there are no outputs.
     let resolver = ContextResolver {
         outputs: None,
+        registry: &REGISTRY,
+        live: &crate::variables::NoLiveState,
         ..resolver
     };
     let failure = resolve_parameters(
@@ -715,6 +919,8 @@ fn defaults_that_are_references_are_resolved() {
         os: Os::Linux,
         shared: &variables,
         outputs: None,
+        registry: &REGISTRY,
+        live: &crate::variables::NoLiveState,
     };
     let found = resolve_parameters(
         &definition,
@@ -749,6 +955,8 @@ fn previews_of_a_run_do_not_use_the_active_project() {
         os: Os::MacOs,
         shared: &variables,
         outputs: None,
+        registry: &REGISTRY,
+        live: &crate::variables::NoLiveState,
     };
     assert!(matches!(
         resolver.resolve(&reference, &explicit),
@@ -785,29 +993,76 @@ fn key_states_resolve_references_too() {
     );
 }
 
-/// Answers only the work session variables, like the agent's resolver.
+/// The live session the agent would have.
 struct Session(crate::ProjectId);
 
-impl VariableResolver for Session {
-    fn resolve(&self, reference: &VariableRef, _context: &ResolutionContext) -> Resolution {
-        match reference {
-            VariableRef::System(SystemVariable::WorkSessionProjectId) => Resolution::Value {
-                value: VariableValue::ProjectId(self.0),
-                source: ValueSource::System,
-                sensitive: false,
-            },
-            VariableRef::System(SystemVariable::WorkSessionElapsedSeconds) => Resolution::Value {
-                value: VariableValue::Integer(65),
-                source: ValueSource::System,
-                sensitive: false,
-            },
-            _ => Resolution::Missing(MissingReason::NoValue),
-        }
+impl crate::variables::LiveState for Session {
+    fn work_session(&self) -> Option<crate::work_session::WorkSessionSnapshot> {
+        Some(crate::work_session::WorkSessionSnapshot {
+            state: crate::work_session::WorkSessionState::Working,
+            session: Some(crate::WorkSessionId::new()),
+            project: Some(self.0),
+            elapsed_ms: 65_000,
+            ..crate::work_session::WorkSessionSnapshot::idle(0)
+        })
     }
 }
 
+/// A registry whose work session variables come from the live state, as
+/// the work session module's do.
+fn session_registry() -> crate::variables::VariableRegistry {
+    use crate::variables::{
+        ALIASES, DeclaredScope, VariableDeclaration, VariableEnvironment, VariableSource,
+    };
+    struct FromLive;
+    impl VariableSource for FromLive {
+        fn resolve(
+            &self,
+            declaration: &VariableDeclaration,
+            environment: &VariableEnvironment<'_>,
+        ) -> Resolution {
+            let Some(snapshot) = environment.live.work_session() else {
+                return Resolution::Missing(MissingReason::NoValue);
+            };
+            let value = match declaration.id.as_str() {
+                "workSession.projectId" => VariableValue::ProjectId(snapshot.project.unwrap()),
+                "workSession.elapsedSeconds" => {
+                    VariableValue::Integer(i64::try_from(snapshot.elapsed_ms / 1000).unwrap())
+                }
+                _ => return Resolution::Missing(MissingReason::NoValue),
+            };
+            Resolution::Value {
+                value,
+                source: ValueSource::System,
+                sensitive: false,
+            }
+        }
+    }
+    let mut registry = crate::variables::VariableRegistry::new();
+    let declarations: Vec<VariableDeclaration> = ALIASES
+        .iter()
+        .filter(|alias| alias.owner == "work-session")
+        .map(|alias| {
+            VariableDeclaration::new(
+                alias.canonical,
+                alias.canonical,
+                alias.alias.value_type(),
+                DeclaredScope::WorkSession,
+            )
+        })
+        .collect();
+    registry
+        .register_module(
+            &ModuleId::new("work-session").unwrap(),
+            &declarations,
+            Some(Arc::new(FromLive)),
+        )
+        .unwrap();
+    registry
+}
+
 #[test]
-fn work_session_variables_come_from_the_shared_resolver() {
+fn work_session_variables_come_from_the_live_state() {
     use crate::work_session::WorkSessionVariable;
 
     let f = Fixture::new();
@@ -823,28 +1078,40 @@ fn work_session_variables_come_from_the_shared_resolver() {
             system_value(system, &f.profile, Os::Linux, &context),
             Resolution::Missing(MissingReason::NoValue)
         );
+        // Without live state there is no session either.
         assert_eq!(
-            NoSharedVariables.resolve(&VariableRef::System(system), &context),
+            f.engine(None)
+                .resolver(&f.profile, &f.machine, None)
+                .resolve(&VariableRef::System(system), &context),
             Resolution::Missing(MissingReason::NoValue)
         );
     }
+    let registry = session_registry();
     let resolve = |session: &Session, text: &str| {
         ContextResolver {
             profile: &f.profile,
             os: Os::Linux,
-            shared: session,
+            shared: &NoSharedVariables,
             outputs: None,
+            registry: &registry,
+            live: session,
         }
         .resolve(&VariableRef::parse(text).unwrap(), &context)
     };
     let own = Session(f.profile.projects[0].id);
-    assert!(matches!(
-        resolve(&own, "system.work.session.elapsedSeconds"),
-        Resolution::Value {
-            value: VariableValue::Integer(65),
-            ..
-        }
-    ));
+    // The legacy id and the canonical id give the same value.
+    for text in [
+        "system.work.session.elapsedSeconds",
+        "workSession.elapsedSeconds",
+    ] {
+        assert!(matches!(
+            resolve(&own, text),
+            Resolution::Value {
+                value: VariableValue::Integer(65),
+                ..
+            }
+        ));
+    }
     assert!(matches!(
         resolve(&own, "system.work.session.projectId"),
         Resolution::Value { value: VariableValue::ProjectId(id), .. } if id == own.0
@@ -852,7 +1119,7 @@ fn work_session_variables_come_from_the_shared_resolver() {
     // A session started in another profile names none of these projects.
     let foreign = Session(crate::ProjectId::new());
     assert_eq!(
-        resolve(&foreign, "system.work.session.projectId"),
+        resolve(&foreign, "workSession.projectId"),
         Resolution::Missing(MissingReason::OtherProfile)
     );
     // In a template, through the whole pipeline.
@@ -865,8 +1132,10 @@ fn work_session_variables_come_from_the_shared_resolver() {
         &ContextResolver {
             profile: &f.profile,
             os: Os::Linux,
-            shared: &own,
+            shared: &NoSharedVariables,
             outputs: None,
+            registry: &registry,
+            live: &own,
         },
         &context,
         &f.profile,
