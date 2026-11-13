@@ -24,7 +24,7 @@ use deckpilot_core::variables::{
     CatalogEntry, CatalogFilter, MissingReason, PreviewItem, ProjectResolver, ProjectSource,
     ReferenceAvailability, ReferencePreview, Resolution, ResolutionContext, ResolutionPhase,
     SystemVariable, ValueSource, VariableGroup, VariableKey, VariableRef, VariableResolver,
-    VariableScope, VariableValue, preview_reference, select_value,
+    VariableScope, preview_reference, select_value,
 };
 use deckpilot_core::work_session::{WorkSessionSnapshot, WorkSessionVariable};
 use deckpilot_core::{ModuleId, Profile, ProfileId, ProjectId};
@@ -64,59 +64,14 @@ impl WorkSessionSource {
     }
 }
 
-/// The value of a work session variable from `snapshot` at `now_ms`.
-/// Without a session every one is `missing(noValue)` (§8.1).
+/// The value of a work session variable from `snapshot` at `now_ms`;
+/// the work session module owns the variables and their resolution.
 pub fn work_session_value(
     variable: WorkSessionVariable,
     snapshot: &WorkSessionSnapshot,
     now_ms: i64,
 ) -> Resolution {
-    let Some(session) = snapshot.session else {
-        return Resolution::Missing(MissingReason::NoValue);
-    };
-    let value = match variable {
-        WorkSessionVariable::Id => Some(VariableValue::String(session.to_string())),
-        WorkSessionVariable::State => Some(VariableValue::String(snapshot.state.name().to_owned())),
-        WorkSessionVariable::StartedAt => snapshot
-            .started_at_ms
-            .and_then(rfc3339)
-            .map(VariableValue::String),
-        WorkSessionVariable::ElapsedSeconds => {
-            let mut elapsed = snapshot.elapsed_ms;
-            if snapshot.state.timer_running() {
-                // A wall clock that went back adds nothing.
-                let since = u64::try_from(now_ms - snapshot.as_of_ms).unwrap_or(0);
-                elapsed = elapsed.saturating_add(since);
-            }
-            Some(VariableValue::Integer(
-                i64::try_from(elapsed / 1000).unwrap_or(i64::MAX),
-            ))
-        }
-        WorkSessionVariable::ProjectId => match snapshot.project {
-            Some(project) => Some(VariableValue::ProjectId(project)),
-            None => return Resolution::Missing(MissingReason::NoProject),
-        },
-        WorkSessionVariable::CanFinish => snapshot
-            .verification
-            .as_ref()
-            .and_then(|v| v.outcome.as_ref())
-            .map(|outcome| VariableValue::Boolean(outcome.can_finish)),
-    };
-    // Nothing of a session is sensitive; verification details are not a
-    // variable.
-    value.map_or(Resolution::Missing(MissingReason::NoValue), |value| {
-        Resolution::Value {
-            value,
-            source: ValueSource::System,
-            sensitive: false,
-        }
-    })
-}
-
-/// RFC 3339 in UTC, to the second.
-fn rfc3339(ms: i64) -> Option<String> {
-    chrono::DateTime::from_timestamp_millis(ms)
-        .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+    deckpilot_modules::work_session::variables::value(variable, snapshot, now_ms)
 }
 
 /// The work session variables whose value differs between two snapshots;
