@@ -5,3 +5,5 @@ pnpm-lock.yaml
 apps/desktop/src-tauri/gen/
 apps/desktop/src-tauri/icons/
 *.md
+# Written by DeckPilot itself and compared byte for byte.
+apps/agent/tests/fixtures/

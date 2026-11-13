@@ -1,0 +1,14 @@
+{
+  "format": 2,
+  "protection": {
+    "mode": "password",
+    "kdf": {
+      "algorithm": "argon2id",
+      "version": 19,
+      "memoryKib": 8192,
+      "iterations": 1,
+      "parallelism": 1,
+      "salt": "vPNXeC5v59oi8NF5Z/yPEA=="
+    }
+  }
+}

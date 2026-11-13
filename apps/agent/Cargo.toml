@@ -30,6 +30,7 @@ deckpilot-device = { workspace = true, features = ["mock"] }
 deckpilot-hid.workspace = true
 deckpilot-ipc.workspace = true
 deckpilot-modules.workspace = true
+rusqlite.workspace = true
 deckpilot-storage.workspace = true
 deckpilot-keystore.workspace = true
 deckpilot-presence.workspace = true
@@ -49,6 +50,7 @@ deckpilot-agent = { path = ".", features = ["test-hooks"] }
 deckpilot-render.workspace = true
 zeroize.workspace = true
 deckpilot-modules.workspace = true
+rusqlite.workspace = true
 serde_json.workspace = true
 
 [lints]
