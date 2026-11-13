@@ -33,6 +33,10 @@ on:
   # (tools/release-pipeline/validate-tag.sh).
   push:
     branches: [main]
+  # A merge queue group: "Updater signing keys match" must report for it.
+  # Inert until the merge queue is enabled.
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
     inputs:
       notarize:
@@ -58,8 +62,9 @@ jobs:
         with:
           # On pull requests the scripts of the base commit (already on
           # main), never the pull request's own: a change to them runs next
-          # to the secrets only after review and merge.
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          # to the secrets only after review and merge. The same for merge
+          # queue groups: the scripts of the group's base commit on main.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.sha }}
           persist-credentials: false
           sparse-checkout: .github/scripts
       # Only for the pull request that introduces the script: its base does

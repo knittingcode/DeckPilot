@@ -59,5 +59,35 @@ else
   failures=$((failures + 1))
 fi
 
+# Merge queue groups: the files between the group's base and its head, here
+# two queued pull requests on top of the base (a throwaway repository).
+repo="$work/merge-group"
+git init --quiet "$repo"
+git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit --quiet --allow-empty -m base
+base=$(git -C "$repo" rev-parse HEAD)
+mkdir -p "$repo/apps/desktop/src" "$repo/crates/deckpilot-keystore/src"
+echo a > "$repo/apps/desktop/src/App.tsx"
+git -C "$repo" add -A
+git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit --quiet -m "first queued pull request"
+echo b > "$repo/crates/deckpilot-keystore/src/lib.rs"
+git -C "$repo" add -A
+git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit --quiet -m "second queued pull request"
+git -C "$repo" remote add origin "$repo"
+# merge_group <base sha> <expected outputs>
+merge_group() {
+  : > "$work/group"
+  (cd "$repo" && GITHUB_OUTPUT="$work/group" EVENT_NAME=merge_group BASE_SHA="$1" "$script" 2> /dev/null)
+  actual=$(sort "$work/group" | tr '\n' ' ')
+  if [ "$actual" = "$2 " ]; then
+    echo "ok   merge group with base ${1:-(none)}: $2"
+  else
+    echo "FAIL merge group with base ${1:-(none)}: got '$actual', expected '$2'"
+    failures=$((failures + 1))
+  fi
+}
+merge_group "$base" "keystore=true packaging=false release_manifest=false"
+merge_group "" "keystore=true packaging=true release_manifest=true"
+merge_group 0000000000000000000000000000000000000000 "keystore=true packaging=true release_manifest=true"
+
 [ "$failures" -eq 0 ] || { echo "$failures case(s) failed"; exit 1; }
 echo "changed paths: all cases passed"

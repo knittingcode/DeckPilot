@@ -66,7 +66,9 @@ describe("Modules settings with the built-in modules", () => {
     const { user, context } = renderWithApp(<ModulesSettings />, { modules: builtInModules() })
     await user.click(screen.getByRole("switch", { name: "Disable HTTP" }))
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith("Module is busy")
+      expect(toast.error).toHaveBeenCalledWith("HTTP was not disabled", {
+        description: "Module is busy.",
+      })
     })
     expect(context.setModules).not.toHaveBeenCalled()
     expect(screen.getByRole("switch", { name: "Disable HTTP" })).toBeChecked()
