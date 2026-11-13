@@ -107,6 +107,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           RELEASE_REF: ${{ github.ref }}
+          RUN_SHA: ${{ github.sha }}
         run: tools/release-pipeline/validate-tag.sh "$TAG"
 
   prepare:
@@ -177,6 +178,24 @@ jobs:
             exit 1
           fi
 
+  # The full installer checks of the Packaging workflow (Linux .deb and
+  # .rpm, Windows NSIS and MSI: names, versions, app, bundled agent, udev
+  # rule, updater signatures by a throwaway key) on the tagged commit,
+  # before anything is signed: the draft and every later job need it. It
+  # builds github.sha, which the gate checked is the tag's commit (RUN_SHA),
+  # and gets no secret. Pre-releases build no .rpm and the MSI gets the
+  # gate's numeric version, as in the signed build.
+  packaging:
+    name: Installer checks (unsigned)
+    needs: validate-tag
+    if: ${{ !inputs.publish_only }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/packaging.yml
+    with:
+      prerelease: ${{ needs.validate-tag.outputs.prerelease == 'true' }}
+      msi-version: ${{ needs.validate-tag.outputs.msi_version }}
+
   # Database migration and IPC compatibility with the previous release's
   # real binaries (tools/compat/matrix.sh, as the Compatibility workflow),
   # for the tagged commit itself.
@@ -204,7 +223,7 @@ jobs:
   # release and a draft of another commit (a moved or reused tag).
   draft:
     name: Create the draft release
-    needs: [validate-tag, prepare]
+    needs: [validate-tag, prepare, packaging]
     if: ${{ !inputs.publish_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
