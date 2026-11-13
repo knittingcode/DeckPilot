@@ -118,16 +118,51 @@ bound on this machine, kind mismatch.
 - **DeviceLayout** – `id`, `name`, `model`, `homePage`, `pages` (in
   order), optional `explicitTree` (see [Pages and folders](#pages-and-folders)).
 - **LayoutPage** – `id`, `name`, optional `parent` (the folder it is in),
-  `bindings: ControlBinding[]`.
+  `bindings: ControlBinding[]`, optional `gestures: KeyGestureSettings[]`
+  (`control`, optional `doubleClickMs` 150–1000, optional `longPressMs`
+  300–5000; unset values use this computer's defaults, setting
+  `gestures.defaults`, 300 and 700 ms).
 - **ControlBinding** – `control`, `trigger` (`press`, `release`,
-  `rotateClockwise`, `rotateCounterClockwise`, `touch { gesture }`), `target`
-  (`action`, `workflow`, `openPage`, `back`), optional `label`, optional
-  `appearance` (see [Key appearance](#key-appearance)).
+  `rotateClockwise`, `rotateCounterClockwise`, `touch { gesture }`, `click`,
+  `doubleClick`, `longPress`), `target` (`action { action, overrides? }`,
+  `workflow`, `openPage`, `back`, `stateful { machine, rules? }`), optional
+  `label`, optional `appearance`
+  (see [Key appearance](#key-appearance)).
 
 Folders are pages opened with `openPage` and left with `back`. Layout
 validation checks that controls and triggers exist on the model, that each
 control/trigger pair is bound at most once per page, that targets exist and
 that icons a binding shows are in the profile (`MissingIcon`).
+
+**Gestures** (see `docs/gestures-and-work-session.md`). `press` and
+`release` are raw edges and fire at once; every binding from before 0.7 is
+one and stays one. `click`, `doubleClick` and `longPress` are recognized by
+the agent's gesture engine, each with its own target; a control on a page
+uses one kind or the other (`MixedTriggers`), and gestures need a control
+that can be pressed and released. A click fires on the press when nothing
+else is bound, on the release when a long press is, and after the
+double-click window only when a double click is. `overrides` of an action
+target replace some of the saved instance's parameters for that binding
+only, with literals, `reference` or `template` values resolved when it
+fires (no node outputs); they are checked like a workflow node's
+overrides when the layout is saved (`InvalidOverrides`). A key's face shows
+its `press` binding, else its `click` binding. Deleting an action is refused
+while any binding, of any trigger, runs it.
+
+**Stateful keys** (`deckpilot_core::stateful`). A `stateful` target asks a
+built-in state machine for an operation; the only machine is `workSession`.
+`rules` is a list of `{ state, gesture, operation }` with the machine's own
+names (`idle`, `working`, … and `start`, `verify`, `finish`, …), and no
+expressions; without `rules` the machine's default table applies and is not
+stored. The agent picks the rule from the machine's state at the press of
+the gesture and lets the machine apply it, so the binding never sets state.
+Validation: a stateful target only on `click`, `doubleClick` or `longPress`
+(`StatefulNeedsGesture`); every stateful binding of a key has the same
+machine and rules (`InconsistentStateful`); and each rule's operation is
+allowed in its state, each `(state, gesture)` appears once, its gesture is
+bound to the machine on that key, and `finish` is only a `click`
+(`InvalidStateful`). A stateful key references no action, workflow or
+project, and travels with its layout on export and import unchanged.
 
 A profile uses its first layout for a model. `DeviceLayout::generate` creates
 one from the profile's actions and workflows using only the model's
@@ -406,6 +441,12 @@ a run and are never stored.
   execution > project > profile > global > default and resolves a
   `projectId`/`profileId` naming another profile as missing. A value changed
   later is seen by the next snapshot.
+- Exports (payload version 2) carry the user's definitions and the values
+  of the exported profiles and their projects; global values only with the
+  application settings; values and defaults of sensitive variables never
+  (decision D5, see [security.md](security.md#encrypted-exports)). An import
+  creates missing definitions (origin `import`), keeps existing ones, and
+  sets values in the same transaction as the profiles.
 
 ### Provenance
 
@@ -418,7 +459,9 @@ profile documents are not changed. An item is *edited* when its canonical
 JSON differs from the snapshot (`provenance_status`). Rows go away with the
 item (saving a profile without it) and with the profile.
 
-Only newly created data gets provenance. Data from before schema 8 —
+The development seed (`tools/dev`) records a row for every action, workflow,
+layout and project it creates (catalog `dev-seed`, keys such as
+`work.action.next-project`). Only newly created data gets provenance. Data from before schema 8 —
 including seeded data of development databases, such as the
 `v0.5.0-2` fixture — has none and is treated as the user's: nothing removes
 it automatically.

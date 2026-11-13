@@ -19,6 +19,8 @@ vi.mock("@/lib/api", () => ({
   api: {
     previewLayout: () => Promise.resolve([]),
     listIcons: () => Promise.resolve([]),
+    listActionTypes: () => Promise.resolve([]),
+    getGestureDefaults: () => Promise.resolve({ doubleClickMs: 300, longPressMs: 700 }),
     saveLayout: (...args: unknown[]) => saveLayout(...args) as unknown,
   },
   errorMessage: (error: unknown) => String(error),
@@ -88,14 +90,14 @@ const view = {
   },
 } as unknown as ProfileView
 
-function renderEditor() {
+function renderEditor(saved: DeviceLayout = layout) {
   const user = userEvent.setup()
   render(
     <LayoutEditor
       profileId="p"
       view={view}
       model={plus}
-      saved={layout}
+      saved={saved}
       onDirtyChange={vi.fn()}
       onSaved={vi.fn()}
     />,
@@ -215,6 +217,39 @@ describe("LayoutEditor", () => {
 
     await user.click(screen.getByRole("button", { name: "Back" }))
     expect(screen.getByRole("tab", { name: "Home" })).toHaveAttribute("aria-selected", "true")
+  })
+
+  it("follows the stored page tree for Back, the location and deleting", async () => {
+    const tree: DeviceLayout = {
+      ...layout,
+      explicitTree: true,
+      pages: [
+        ...layout.pages.map((p) => (p.id === "tools" ? { ...p, parent: "home" } : p)),
+        { id: "git", name: "Git", parent: "tools", bindings: [] },
+      ],
+    }
+    const user = renderEditor(tree)
+    await user.click(screen.getByRole("tab", { name: "Git" }))
+    const location = screen.getByRole("navigation", { name: "Page location" })
+    expect(
+      within(location)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual(["Home", "Tools", "Git"])
+    expect(screen.getByRole("note")).toHaveTextContent("adds one on its first free key")
+
+    // Opened from its tab: Back goes to its folder, not straight home.
+    await user.click(screen.getByRole("button", { name: "Back" }))
+    expect(screen.getByRole("tab", { name: "Tools" })).toHaveAttribute("aria-selected", "true")
+
+    // Deleting "Tools" keeps "Git" in a folder that exists.
+    await user.click(screen.getByRole("button", { name: "Delete page" }))
+    await user.click(screen.getByRole("button", { name: /Save/ }))
+    const [, saved] = saveLayout.mock.calls[0] as [string, DeviceLayout]
+    expect(saved.pages.map((p) => [p.id, p.parent])).toEqual([
+      ["home", undefined],
+      ["git", "home"],
+    ])
   })
 
   it("leaves undo, copy and paste in text fields to the field", async () => {

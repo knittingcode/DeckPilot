@@ -192,7 +192,8 @@ fn values_keep_their_native_type_and_assignability_matches_conversion() {
             assert_eq!(
                 value.value_type().assignable_to(kind),
                 value.to_parameter(kind).is_some(),
-                "{value:?} -> {kind:?}"
+                "{:?} -> {kind:?}",
+                value.value_type()
             );
         }
     }

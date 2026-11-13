@@ -672,13 +672,18 @@ async fn graph_runs_resolve_mappings_and_instance_references() {
         "{:?}",
         message("mapped")
     );
-    let secret = message("secret");
-    assert!(!format!("{record:?}").contains("s3cr3t"));
-    assert_eq!(
-        secret.0,
-        deckpilot_core::graph::NodeStatus::Succeeded,
-        "{secret:?}"
+    // The node that used the sensitive variable: its message is redacted,
+    // and failure messages never print it (it could hold the value if the
+    // redaction broke).
+    let (status, sensitive_message, _) = message("secret");
+    assert!(
+        !format!("{record:?}").contains("s3cr3t"),
+        "the value of the sensitive variable is in the history"
     );
-    assert_eq!(secret.1, "[redacted]");
+    assert_eq!(status, deckpilot_core::graph::NodeStatus::Succeeded);
+    assert!(
+        sensitive_message == "[redacted]",
+        "the message of the node that used the sensitive variable is not redacted"
+    );
     agent.shutdown().await;
 }

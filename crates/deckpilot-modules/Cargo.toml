@@ -21,6 +21,7 @@ deckpilot-module-github.workspace = true
 deckpilot-module-gitlab.workspace = true
 deckpilot-module-jira.workspace = true
 deckpilot-module-workspace.workspace = true
+deckpilot-module-work-session.workspace = true
 
 [dev-dependencies]
 base64.workspace = true

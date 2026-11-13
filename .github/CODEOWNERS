@@ -1,0 +1,4 @@
+# Every path is owned by the maintainer. GitHub requests the code owner's
+# review on pull requests; it is only *required* if the "Protect main"
+# ruleset enables "Require review from Code Owners".
+* @knittingcode

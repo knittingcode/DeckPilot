@@ -222,6 +222,9 @@ export type GraphPredicate =
 export type GraphMapping =
   | { type: "output"; reference: GraphReference; default?: string }
   | { type: "template"; template: string }
+  /** The whole value of a shared, system, workflow or step reference, with
+   * its native type. */
+  | { type: "variable"; reference: string; default?: VariableValue }
 
 export interface ErrorPolicy {
   onError: "stop" | "continue"
@@ -336,18 +339,30 @@ export type ControlId =
   | { kind: "encoder"; index: number }
   | { kind: "touchZone"; index: number }
 
+/**
+ * `press`/`release` are raw edges and fire at once. `click`,
+ * `doubleClick` and `longPress` are gestures (see
+ * docs/gestures-and-work-session.md); a control uses one kind or the other
+ * on a page, never both.
+ */
 export type Trigger =
   | { type: "press" }
   | { type: "release" }
   | { type: "rotateClockwise" }
   | { type: "rotateCounterClockwise" }
   | { type: "touch"; gesture: TouchGesture }
+  | { type: "click" }
+  | { type: "doubleClick" }
+  | { type: "longPress" }
 
 export type BindingTarget =
-  | { type: "action"; action: string }
+  /** `overrides` replace some of the instance's parameters for this binding only. */
+  | { type: "action"; action: string; overrides?: ActionParameters }
   | { type: "workflow"; workflow: string }
   | { type: "openPage"; page: string }
   | { type: "back" }
+  /** Asks a state machine for the operation its rules pick (see `StatefulBinding`). */
+  | ({ type: "stateful" } & StatefulBinding)
 
 /** `#rrggbb`. */
 export type Color = string
@@ -402,6 +417,8 @@ export interface LayoutPage {
   /** The folder the page is in; Back returns there. See `explicitTree`. */
   parent?: string | null
   bindings: ControlBinding[]
+  /** Gesture timings of controls that differ from the machine's defaults. */
+  gestures?: KeyGestureSettings[]
 }
 
 export interface DeviceLayout {
@@ -984,6 +1001,22 @@ export interface ImportPreview {
   localProfiles: [string, string][]
   /** Portable application settings in the export. */
   settings: AppSettings
+  /** Shared variables in the export (deckpilot_portability::VariablesPreview). */
+  variables: ImportVariablesPreview
+}
+
+/** The shared variables an import brings. */
+export interface ImportVariablesPreview {
+  /** Variables that do not exist here and would be created. */
+  new: string[]
+  /** Variables that exist here with the same type; the local definition is kept. */
+  existing: string[]
+  /** Variables whose type differs from the local one; their values are not imported. */
+  incompatible: string[]
+  /** Values of profiles and projects. */
+  values: number
+  /** Global values, applied only with the application settings. */
+  globalValues: number
 }
 
 export type ImportMode = "merge" | "replace"
@@ -1017,6 +1050,12 @@ export interface ImportSummary {
   renamed: string[]
   modules: string[]
   settings: string[]
+  /** Shared variables that were created. */
+  variables: string[]
+  /** Number of shared variable values that were set. */
+  variableValues: number
+  /** Values that were not imported, and why. */
+  skippedValues: string[]
 }
 
 // Shared variables and references (deckpilot_core::variables). Contract
@@ -1204,7 +1243,32 @@ export interface WorkSessionSnapshot {
   notices?: WorkSessionNotice[]
 }
 
-/** Read-only variables of the active work session (proposed paths). */
+/** Operations a work session key can ask for (deckpilot_core::stateful). */
+export type WorkSessionOperation =
+  "start" | "cancelStart" | "verify" | "cancelVerification" | "finish" | "continueWorking"
+
+/** In `state`, `gesture` asks for `operation`. */
+export interface StatefulRule<S, O> {
+  state: S
+  gesture: Gesture
+  operation: O
+}
+
+/**
+ * What a stateful key follows. Without `rules`, the machine's default
+ * table applies: idle click → start; starting long press → cancelStart;
+ * working click and long press → verify (the agent lets through the one
+ * that fits the settings); verifyingEnd long press → cancelVerification;
+ * readyToFinish click → finish, long press → verify again.
+ * Only on click, double click or long press bindings; `finish` only on
+ * click; every stateful binding of a key has the same machine and rules.
+ */
+export type StatefulBinding = {
+  machine: "workSession"
+  rules?: StatefulRule<WorkSessionState, WorkSessionOperation>[]
+}
+
+/** Read-only system variables of the active work session (`missing` without one). */
 export type WorkSessionVariable =
   | "system.work.session.id"
   | "system.work.session.state"
@@ -1212,3 +1276,127 @@ export type WorkSessionVariable =
   | "system.work.session.elapsedSeconds"
   | "system.work.session.projectId"
   | "system.work.session.canFinish"
+
+// Work sessions over protocol 8 (`deckpilot_ipc::work_session`, the Tauri
+// commands in `commands/work_session.rs`). docs/gestures-and-work-session.md §9.
+// No request starts, verifies or finishes a session: only its key does (D11).
+
+/** How keys and the page show elapsed time: `h:mm` (D4) or `h:mm:ss`. */
+export type ElapsedFormat = "minutes" | "seconds"
+
+/** `work_session_settings` of a profile. */
+export interface WorkSessionSettings {
+  /** The profile they belong to: set in answers; when saving, `profileId` decides. */
+  profile?: string
+  /** Runs before the timer starts; `null`: the session starts at once. */
+  startWorkflow: string | null
+  /** Must declare the output `canFinish` (boolean); `null`: hold the key to finish (D12). */
+  verificationWorkflow: string | null
+  /** 60–86400. */
+  approvalTtlSeconds: number
+  /** 60–86400. */
+  reviewGapSeconds: number
+  elapsedFormat: ElapsedFormat
+  /** When last saved; unset for defaults never saved. Ignored when saving. */
+  updatedAtMs?: number
+}
+
+export type WorkSessionReviewKind = "agentDown" | "sleep" | "clockBack" | "clockForward"
+
+/** A gap of uncertain time; counted until the user excludes it (D8). */
+export interface WorkSessionReview {
+  id: number
+  kind: WorkSessionReviewKind
+  fromMs: number
+  toMs: number
+  /** Unset: not reviewed yet (counted). */
+  resolution?: "counted" | "excluded"
+  resolvedAtMs?: number
+}
+
+export interface WorkSessionInterval {
+  seq: number
+  startedAtMs: number
+  /** Unset while the interval is open. */
+  endedAtMs?: number
+  endReason?: "stopped" | "gapExcluded"
+}
+
+export interface WorkSessionTransition {
+  seq: number
+  atMs: number
+  from: string
+  event: string
+  to: string
+}
+
+/** A stored session: the active one, or a finished or aborted one. */
+export type WorkSessionRecordState = Exclude<WorkSessionState, "idle"> | "stopped" | "aborted"
+
+/** One entry of the session history (`listWorkSessions`). */
+export interface WorkSessionSummary {
+  session: string
+  profile: string
+  project?: string
+  state: WorkSessionRecordState
+  requestedAtMs: number
+  startedAtMs?: number
+  stoppedAtMs?: number
+  /** Counted time when the answer was made: the sum of the intervals. */
+  elapsedMs: number
+  intervals: WorkSessionInterval[]
+  reviews: WorkSessionReview[]
+  transitions: WorkSessionTransition[]
+  verification?: VerificationRecord
+  /** The session's last notice, until it is cleared. */
+  notice?: WorkSessionNotice
+}
+
+// Shared Variables settings page (workstream D). Mirrors of the variable
+// store (deckpilot_storage::variables, variable_references); the Tauri
+// commands come with the store.
+
+/** One place that uses a shared variable. */
+export type VariableUse =
+  /** A parameter or the label of an action instance. */
+  | { type: "action"; action: string }
+  /** A step, node, input or other part of a workflow. */
+  | { type: "workflow"; workflow: string; node?: string }
+  /** The label (or inline action) of a layout binding. */
+  | { type: "binding"; layout: string; page: string; control: ControlId; trigger: Trigger }
+  /** A trigger of a workflow that uses the variable; follows the workflow. */
+  | {
+      type: "trigger"
+      workflow: string
+      index: number
+      kind: { type: "schedule"; schedule: Schedule } | { type: "lifecycle"; event: LifecycleEvent }
+    }
+
+/** A use of a shared variable, with names for display. */
+export interface VariableReference {
+  profile: string
+  profileName: string
+  use: VariableUse
+  /** The action, workflow or layout name. */
+  ownerName: string
+  /** Where inside it, e.g. `parameters.project_id`. */
+  path: string
+}
+
+/** A value of a shared variable at one scope. */
+export interface SharedVariableValue {
+  scope: ScopeKey
+  /** Left out for sensitive variables: their values are never sent. */
+  value?: VariableValue
+}
+
+/**
+ * A shared variable as the settings page shows it: the definition, the
+ * values that apply to the profile being edited (global, the profile, its
+ * projects) and every use in any profile.
+ */
+export interface SharedVariable {
+  definition: VariableDefinition
+  values: SharedVariableValue[]
+  references: VariableReference[]
+}
