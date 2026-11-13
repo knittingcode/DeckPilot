@@ -5,6 +5,8 @@ use deckpilot_core::{
     ActionInstance, ActionInstanceId, ActionParameters, ActionTypeId, Profile, ProfileId,
 };
 
+use deckpilot_storage::references::{ActionReference, ReferenceChange, Selection};
+
 use super::modify_profile;
 use crate::error::{CommandError, CommandResult};
 use crate::state::AppState;
@@ -106,15 +108,63 @@ pub fn duplicate_action(
     })
 }
 
-/// Deletes an action that no workflow or layout uses.
+/// Deletes an action that nothing uses: no key binding, workflow step,
+/// graph node (or trigger of such a workflow). While anything does, it is
+/// refused and nothing changes; the uses are removed first with
+/// [`replace_action_references`] or [`unbind_action_references`].
 #[tauri::command]
 pub fn delete_action(
     state: State<'_, AppState>,
     profile_id: ProfileId,
     action_id: ActionInstanceId,
 ) -> CommandResult<()> {
-    modify_profile(&state, profile_id, |profile| {
-        profile.delete_action(action_id)?;
-        Ok(())
-    })
+    state.store()?.delete_action(profile_id, action_id)?;
+    crate::agent::notify_reload(&state.paths);
+    Ok(())
+}
+
+/// Every place that uses an action, with names for display.
+#[tauri::command]
+pub fn action_references(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+    action_id: ActionInstanceId,
+) -> CommandResult<Vec<ActionReference>> {
+    Ok(state.store()?.action_references(profile_id, action_id)?)
+}
+
+/// Points the selected uses of an action at `replacement`, in one change.
+/// Overrides and mappings stay only when both actions have the same type;
+/// the result says where they were removed.
+#[tauri::command]
+pub fn replace_action_references(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+    action_id: ActionInstanceId,
+    replacement: ActionInstanceId,
+    selection: Selection,
+) -> CommandResult<ReferenceChange> {
+    let change =
+        state
+            .store()?
+            .replace_action_references(profile_id, action_id, replacement, &selection)?;
+    crate::agent::notify_reload(&state.paths);
+    Ok(change)
+}
+
+/// Clears the selected key bindings and removes the selected steps that use
+/// an action, in one change. Graph nodes are refused: they are replaced or
+/// removed in the workflow editor.
+#[tauri::command]
+pub fn unbind_action_references(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+    action_id: ActionInstanceId,
+    selection: Selection,
+) -> CommandResult<ReferenceChange> {
+    let change = state
+        .store()?
+        .unbind_action(profile_id, action_id, &selection)?;
+    crate::agent::notify_reload(&state.paths);
+    Ok(change)
 }
