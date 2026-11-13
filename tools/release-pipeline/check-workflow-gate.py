@@ -11,6 +11,9 @@ Fails unless:
   * the workflow-level permissions grant no write access, so only jobs that
     ask for it explicitly can write; every job declares its permissions and
     only the draft, build, manifest, verify and publish jobs may write;
+  * a job `environment-gate` (no environment, no secret, read-only) checks
+    the protected environment, and every job that uses the environment or
+    a secret other than GITHUB_TOKEN reaches it through `needs`;
   * the job `packaging` calls the Packaging workflow without secrets, with
     the gate's `prerelease` and `msi_version`, and `draft` needs it;
   * every job has timeout-minutes (except one that calls a workflow), every action is pinned to a commit SHA,
@@ -34,6 +37,7 @@ ENVIRONMENT = "production-release"
 # Jobs that may run in the environment: those that need the signing
 # secrets, and publication.
 ENVIRONMENT_JOBS = {"prepare", "build", PUBLISHER}
+ENVIRONMENT_GATE = "environment-gate"
 PACKAGING = "packaging"
 PACKAGING_WORKFLOW = "./.github/workflows/packaging.yml"
 PACKAGING_INPUTS = {
@@ -103,6 +107,38 @@ def check(path):
                 problems.append(f"job {name} holds secrets and restores a cache ({uses})")
             if job.get("environment") and (step.get("with") or {}).get("cache"):
                 problems.append(f"job {name} holds secrets and restores a cache ({uses})")
+
+    # Nothing names the protected environment or reads a signing secret
+    # before the environment gate has checked it: GitHub would otherwise
+    # create the environment unprotected and the job would run unapproved.
+    gate_job = jobs.get(ENVIRONMENT_GATE)
+    if gate_job is None:
+        problems.append(f"no job {ENVIRONMENT_GATE}")
+    else:
+        if "environment" in gate_job:
+            problems.append(f"{ENVIRONMENT_GATE} must not use an environment")
+        if re.search(r"secrets\.(?!GITHUB_TOKEN)", yaml.safe_dump(gate_job)):
+            problems.append(f"{ENVIRONMENT_GATE} must not read secrets")
+        for scope, level in (gate_job.get("permissions") or {}).items():
+            if level not in ("read", "none"):
+                problems.append(f"{ENVIRONMENT_GATE} may not have {scope}: {level}")
+
+    def reaches(name, target, seen):
+        if name == target:
+            return True
+        if name in seen or name not in jobs:
+            return False
+        seen.add(name)
+        return any(reaches(n, target, seen) for n in needs_of(jobs[name]))
+
+    for name, job in jobs.items():
+        if name == ENVIRONMENT_GATE:
+            continue
+        holds_secrets = "environment" in job or re.search(
+            r"secrets\.(?!GITHUB_TOKEN)", yaml.safe_dump(job)
+        )
+        if holds_secrets and not reaches(name, ENVIRONMENT_GATE, set()):
+            problems.append(f"job {name} uses the environment or secrets without needing {ENVIRONMENT_GATE}")
 
     # The unsigned installer checks run on the tagged commit before anything
     # is signed: the draft (and through it everything after) needs them, and

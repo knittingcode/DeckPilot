@@ -37,6 +37,55 @@ pub const HANG: Duration = Duration::from_secs(180);
 /// they end).
 pub const REQUEST_LIMIT: Duration = Duration::from_secs(60);
 
+/// The agent's wall clock in tests, moved by an offset (ms) so tests can
+/// make it jump while monotonic time goes on.
+///
+/// Between jumps it advances with the monotonic clock (`Instant`), not with
+/// the system clock: the agent compares the wall delta with the monotonic
+/// delta (sleep and clock jumps) and counts elapsed time on the wall clock,
+/// and the system clock does not keep step with `Instant` exactly (time
+/// synchronisation corrects it, notably on Windows runners).
+#[derive(Clone)]
+pub struct Jump {
+    base: std::time::SystemTime,
+    start: std::time::Instant,
+    offset: std::sync::Arc<std::sync::atomic::AtomicI64>,
+}
+
+impl Default for Jump {
+    fn default() -> Self {
+        Self {
+            base: std::time::SystemTime::now(),
+            start: std::time::Instant::now(),
+            offset: std::sync::Arc::default(),
+        }
+    }
+}
+
+impl Jump {
+    pub fn now(&self) -> std::time::SystemTime {
+        let ms = self.offset.load(std::sync::atomic::Ordering::SeqCst);
+        let shift = Duration::from_millis(ms.unsigned_abs());
+        let now = self.base + self.start.elapsed();
+        if ms >= 0 { now + shift } else { now - shift }
+    }
+
+    pub fn clock(&self) -> Clock {
+        let jump = self.clone();
+        std::sync::Arc::new(move || jump.now())
+    }
+
+    pub fn by(&self, ms: i64) {
+        self.offset
+            .fetch_add(ms, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn now_ms(&self) -> i64 {
+        let since = self.now().duration_since(std::time::UNIX_EPOCH).unwrap();
+        i64::try_from(since.as_millis()).unwrap()
+    }
+}
+
 /// A directory removed when dropped.
 #[derive(Debug)]
 pub struct TempDir(PathBuf);
@@ -139,10 +188,23 @@ impl TestAgent {
         clock: Option<Clock>,
         gestures: Option<std::sync::Arc<dyn deckpilot_agent::GestureHooks>>,
     ) -> Self {
+        Self::start_with_backend(paths, key, mock, Box::new(mock.clone()), clock, gestures)
+    }
+
+    /// [`TestAgent::start_with_gestures`] with the devices of `backend`, e.g.
+    /// a driver defined by a test combined with `mock`.
+    pub fn start_with_backend(
+        paths: &AgentPaths,
+        key: &DatabaseKey,
+        mock: &MockBackend,
+        backend: Box<dyn deckpilot_device::DeviceBackend>,
+        clock: Option<Clock>,
+        gestures: Option<std::sync::Arc<dyn deckpilot_agent::GestureHooks>>,
+    ) -> Self {
         let lock = InstanceLock::acquire_waiting(&paths.lock_file, Duration::from_secs(2)).unwrap();
         let options = AgentOptions {
             paths: paths.clone(),
-            backend: Box::new(mock.clone()),
+            backend,
             mock: Some(mock.clone()),
             rescan_interval: Duration::from_millis(50),
             autostart: None,
