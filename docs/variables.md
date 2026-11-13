@@ -214,13 +214,16 @@ references keep their native type (`bind`), with no implicit string
 conversion for typed parameters.
 
 **Device slot.** The device in the context is read only through the small
-`ContextDevice` trait (`VariableEnvironment::device`: `device_id()`,
-`display_name()`). It is implemented by today's `DeviceId`. The generic
-`deckpilot_device::DeviceDescriptor` of the device refactoring (PR #175:
-vendor, model, display name, serial, capabilities, driver, verification)
-will implement it once it lands: in the core the descriptor comes from
-`DeviceContext::current_device()` and the model catalog's `describe`, in the
-agent from `Agent::device_descriptor`. No variable source changes.
+`ContextDevice` trait (`VariableEnvironment::device`: `reference_id()`,
+`display_name()`). It is implemented by the generic
+`deckpilot_device::DeviceDescriptor`, which the live state supplies
+(`LiveState::device`): in the core the model catalog describes the device
+(`ModelCatalog::describe`; `current_descriptor` does so for the
+`DeviceContext::current_device()` of a run), and in the agent the
+`VariableStore` holds what `Agent::device_descriptor` gives, with the
+driver, updated whenever a device connects or disconnects. A device nobody
+can describe falls back to its bare `DeviceId`. `system.device.current.id`
+keeps its value, `model#serial`.
 
 ### 2.5 IPC (protocol 9)
 

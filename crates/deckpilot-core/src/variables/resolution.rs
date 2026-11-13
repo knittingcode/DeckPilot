@@ -223,6 +223,18 @@ pub trait DeviceContext: Send + Sync {
     fn current_device(&self) -> Option<DeviceId>;
 }
 
+/// The generic descriptor of the device a run was started from: the
+/// current device, described by `catalog`. `None` without a device or for
+/// a model the catalog does not know.
+pub fn current_descriptor(
+    device: &dyn DeviceContext,
+    catalog: &deckpilot_device::ModelCatalog,
+) -> Option<deckpilot_device::DeviceDescriptor> {
+    device
+        .current_device()
+        .and_then(|id| catalog.describe(&id, None))
+}
+
 /// The services an execution depends on, handed to it explicitly; there is
 /// no global registry of services. Cancellation, progress and permissions
 /// stay where they are ([`crate::ExecutionControl`] and the module's
