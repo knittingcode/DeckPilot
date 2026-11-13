@@ -17,7 +17,8 @@
 //!   does not (D7). Finishing needs a single click on the key, the
 //!   approval seen at the press, and the arming delay (D9, D11). Without a
 //!   verification workflow, only a long press verifies, and it passes at
-//!   once (D12).
+//!   once (D12). In `readyToFinish`, where a click finishes, a long press
+//!   verifies again either way (T8).
 //! - **Persistence first.** Every transition is committed by the store
 //!   before the in-memory state changes; the store's compare-and-set
 //!   answers a repeated request (a duplicated click, a late result) with
@@ -73,16 +74,8 @@ pub const CLOCK_BACK: Duration = Duration::from_secs(2);
 pub const NO_VERIFICATION: &str = "no verification configured";
 
 /// The operations of the `workSession` machine that a key binding can ask
-/// for (§4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WorkSessionOperation {
-    Start,
-    CancelStart,
-    Verify,
-    CancelVerification,
-    Finish,
-    ContinueWorking,
-}
+/// for (§4); declared with the machine's rules in the core.
+pub use deckpilot_core::stateful::WorkSessionOperation;
 
 /// The work session as the key saw it when it was pressed. The binding's
 /// rule was picked from `state`; the operation is refused if the session
@@ -355,15 +348,8 @@ impl Agent {
         self.work.snapshot()
     }
 
-    /// The entry point of key gestures (G2/G4) and tests: applies one
-    /// operation, guarded by the state at the press.
-    #[cfg_attr(
-        not(feature = "test-hooks"),
-        allow(
-            dead_code,
-            reason = "called by stateful key bindings once they land (G4)"
-        )
-    )]
+    /// The entry point of stateful keys (`service/stateful.rs`) and tests:
+    /// applies one operation, guarded by the state at the press.
     pub(crate) fn work_session_operation(
         &mut self,
         request: &WorkSessionRequest,
@@ -613,8 +599,12 @@ impl Agent {
             Err(outcome) => return outcome,
         };
         let workflow = settings.verification_workflow;
+        // In readyToFinish a click finishes, so verifying again is a long
+        // press (T8), with or without a verification workflow.
+        let again = record.status == SessionStatus::ReadyToFinish;
         match (workflow, gesture) {
             (None, Gesture::LongPress) | (Some(_), Gesture::Click | Gesture::DoubleClick) => {}
+            (Some(_), Gesture::LongPress) if again => {}
             (None, _) => return WorkSessionOutcome::Ignored(Ignored::HoldToFinish),
             (Some(_), Gesture::LongPress) => {
                 return WorkSessionOutcome::Ignored(Ignored::ClickToCheck);

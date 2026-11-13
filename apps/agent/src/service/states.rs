@@ -326,6 +326,13 @@ impl Agent {
                             .with_progress(Some(percent));
                     }
                 }
+                BindingTarget::Stateful(_) => {
+                    // The machine's face is W4's; a hint the last gesture
+                    // left is shown under it.
+                    if let Some(hint) = self.stateful_hint(device, control) {
+                        *face = std::mem::replace(face, KeyFace::empty()).with_detail(hint);
+                    }
+                }
                 BindingTarget::OpenPage { .. } | BindingTarget::Back => {}
             }
         }

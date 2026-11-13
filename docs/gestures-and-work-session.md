@@ -251,8 +251,17 @@ Work-session default rules:
 | starting | – (shows "Starting…") | cancelStart | – |
 | working | verify (only with a verification workflow) | verify (only without one: passes at once, D12) | – |
 | verifyingEnd | – (shows "Checking…") | cancelVerification | – |
-| readyToFinish | finish | continueWorking | – |
+| readyToFinish | finish | verify again (T8) | – |
 | stopping | – | – | – |
+
+In readyToFinish a long press verifies again: the approval is dropped
+(T8) and the verification workflow runs again, ending in readyToFinish
+with a fresh approval or back in working, as its `canFinish` says. With no
+verification workflow (D12) it approves again at once, with a fresh
+approval and a new arming delay. `continueWorking` (T9) stays available
+for a key's own rules. A key press less than 1 s after an operation was
+applied from a key does nothing, so a double click on Finish does not
+start the next session.
 
 Because long press is bound, a click fires on the release. Double click is
 not bound by default, so a click never waits 300 ms. Without a verification
@@ -276,7 +285,7 @@ else is refused (`InvalidTransition`).
 | T5 | verifyingEnd | VerificationPassed | tag `(session, v)` = current; outputs valid, `canFinish = true` | store outcome; `approval = v`, `approved_at`, `approval_boot` | readyToFinish |
 | T6 | verifyingEnd | VerificationRejected | tag matches; `canFinish = false` | store outcome and details; notice `notReady` | working |
 | T7 | verifyingEnd | VerificationFailed | tag matches; run failed or cancelled, no valid `canFinish`, or interrupted | notice `verificationFailed`/`verificationInterrupted` | working |
-| T8 | readyToFinish | Verify | as T4 | the old approval is dropped and a new `v` is used | verifyingEnd |
+| T8 | readyToFinish | Verify | as T4, by a long press (a click finishes) with or without a verification workflow | the old approval is dropped and a new `v` is used; none configured (D12): T8 + T5 commit together | verifyingEnd |
 | T9 | readyToFinish | ApprovalInvalidated | TTL passed, sleep detected, agent restarted, settings changed, or `continueWorking` | clear approval; notice `approvalExpired`/`approvalInvalidated` | working |
 | T10 | readyToFinish | Finish | **single click on the key only** (D11; the app has no finish); `approval` = current; approval valid; key pressed ≥ arming delay after entering ready | CAS `readyToFinish → stopping` with `stopped_at = now`, close the open interval at `now` | stopping |
 | T11 | stopping | StopCompleted | – | row → `stopped`, clear active marker, event | idle |

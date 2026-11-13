@@ -69,6 +69,13 @@ pub(super) struct Gestures {
     hooks: Option<Arc<dyn GestureHooks>>,
 }
 
+impl Gestures {
+    /// Whether no sequence of the key is under way.
+    pub(super) fn is_idle(&self, device: &DeviceId, connection: u64, control: ControlId) -> bool {
+        self.engine.is_idle(device, connection, control)
+    }
+}
+
 impl Agent {
     /// Puts keys in gesture mode through `hooks`; see [`GestureHooks`].
     #[must_use]
@@ -97,6 +104,7 @@ impl Agent {
             }
             return;
         }
+        self.capture_stateful_press(session, device, control, input, at);
         let Self {
             gestures, runtime, ..
         } = self;
@@ -142,6 +150,7 @@ impl Agent {
     pub(super) fn invalidate_gestures(&mut self, reason: GestureCancel) {
         self.gestures.generation += 1;
         self.gestures.engine.cancel_all(reason);
+        self.stateful.clear();
     }
 
     /// Drops the pending gestures of a device that was disconnected.
@@ -149,6 +158,7 @@ impl Agent {
         self.gestures
             .engine
             .cancel(device, GestureCancel::Disconnected);
+        self.stateful.forget_device(device);
     }
 
     fn handle_gesture_outputs(&mut self, outputs: Vec<GestureOutput>) {
@@ -228,6 +238,10 @@ impl Agent {
             .dispatch_gesture(&fired.device, fired.control, fired.gesture);
         if let (Some(hooks), Ok(outcome)) = (&self.gestures.hooks, &outcome) {
             hooks.dispatched(fired, outcome);
+        }
+        if let Ok(RuntimeOutcome::StatefulRequested { binding, gesture }) = &outcome {
+            self.run_stateful(fired, binding, *gesture);
+            return;
         }
         self.handle_outcome(&fired.device, fired.control, outcome);
     }
