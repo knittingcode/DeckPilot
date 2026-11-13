@@ -10,7 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import type { GraphMapping, GraphReference, ParameterSpec } from "@/lib/types"
+import type { GraphMapping, GraphReference, ParameterSpec, VariableDefinition } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 import {
@@ -21,7 +21,9 @@ import {
   parseTemplate,
   previewMapping,
   serializeTemplate,
+  variableProblems,
 } from "./mapping"
+import type { VariablePicker } from "./variable-reference"
 
 const key = (r: GraphReference) => `${r.node}.${r.output}`
 
@@ -84,10 +86,45 @@ function Message({ level, children }: { level: "warning" | "error"; children: st
   )
 }
 
+/** A typed reference such as `shared.paths.root`, and the picker hook. */
+function ReferenceInput({
+  label,
+  value,
+  parameter,
+  picker: Picker,
+  onChange,
+  className,
+}: {
+  label: string
+  value: string
+  parameter?: ParameterSpec
+  picker?: VariablePicker
+  onChange: (reference: string) => void
+  className?: string
+}) {
+  return (
+    <div className={cn("flex min-w-0 items-center gap-1", className)}>
+      <Input
+        aria-label={label}
+        className="h-7 min-w-0 flex-1 font-mono text-xs"
+        placeholder="shared.paths.root"
+        spellCheck={false}
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value)
+        }}
+      />
+      {Picker && <Picker expected={parameter?.kind} onPick={onChange} />}
+    </div>
+  )
+}
+
 /**
- * A parameter's value from earlier nodes: one output, or text composed of
- * text and outputs. Shows types, compatibility with the parameter, missing
- * references and a preview. Nothing is evaluated here.
+ * A parameter's value from earlier nodes or variables: one output, one
+ * variable (shared, system or workflow, keeping its type), or text composed
+ * of text, outputs and variables. Shows types, compatibility with the
+ * parameter, missing references and a preview. Nothing is evaluated here:
+ * variable values are only ever shown by the variable picker.
  */
 export function MappingEditor({
   id,
@@ -96,6 +133,8 @@ export function MappingEditor({
   outputs,
   problem,
   values,
+  definitions,
+  picker,
   onChange,
 }: {
   id: string
@@ -106,6 +145,13 @@ export function MappingEditor({
   problem: (reference: GraphReference) => string | null
   /** Outputs of the shown run, for the preview. */
   values?: Record<string, Record<string, string>>
+  /** Shared variable definitions, when known, for type checks. */
+  definitions?: readonly VariableDefinition[]
+  /**
+   * The universal variable picker (workstream F), shown beside every
+   * reference field. Without it references are typed.
+   */
+  picker?: VariablePicker
   onChange: (mapping: GraphMapping) => void
 }) {
   // The parts being edited. Kept locally so an empty text part (which
@@ -121,13 +167,20 @@ export function MappingEditor({
   const references =
     mapping.type === "output"
       ? [mapping.reference]
-      : segments.flatMap((s) => (s.type === "output" ? [s.reference] : []))
-  const problems = references.map(problem).filter((p): p is string => p !== null)
+      : mapping.type === "template"
+        ? segments.flatMap((s) => (s.type === "output" ? [s.reference] : []))
+        : []
+  const problems = [
+    ...references.map(problem).filter((p): p is string => p !== null),
+    ...variableProblems(mapping, parameter.kind, definitions),
+  ]
   const kind =
     mapping.type === "output"
       ? (outputs.find((o) => key(o.reference) === key(mapping.reference))?.kind ?? "text")
       : "text-template"
-  const fit = compatibility(parameter.kind, kind)
+  // A variable keeps its type; its fit is checked with the problems above.
+  const fit =
+    mapping.type === "variable" ? { level: "ok" as const } : compatibility(parameter.kind, kind)
   const first = outputs[0]?.reference
 
   return (
@@ -142,8 +195,13 @@ export function MappingEditor({
               template:
                 mapping.type === "output"
                   ? serializeTemplate([{ type: "output", reference: mapping.reference }])
-                  : "",
+                  : mapping.type === "variable"
+                    ? serializeTemplate([{ type: "variable", reference: mapping.reference }])
+                    : "",
             })
+          }
+          if (type === "variable" && mapping.type !== "variable") {
+            onChange({ type: "variable", reference: "" })
           }
         }}
       >
@@ -154,10 +212,21 @@ export function MappingEditor({
           <SelectItem value="output" disabled={outputs.length === 0}>
             One output
           </SelectItem>
-          <SelectItem value="template">Text with outputs</SelectItem>
+          <SelectItem value="variable">One variable</SelectItem>
+          <SelectItem value="template">Text with outputs and variables</SelectItem>
         </SelectContent>
       </Select>
-      {mapping.type === "output" ? (
+      {mapping.type === "variable" ? (
+        <ReferenceInput
+          label="Variable"
+          value={mapping.reference}
+          parameter={parameter}
+          picker={picker}
+          onChange={(reference) => {
+            onChange({ ...mapping, reference })
+          }}
+        />
+      ) : mapping.type === "output" ? (
         <>
           <OutputSelect
             id={id}
@@ -185,7 +254,19 @@ export function MappingEditor({
           )}
           {segments.map((segment, index) => (
             <div key={index} className="flex min-w-0 items-center gap-1" role="listitem">
-              {segment.type === "text" ? (
+              {segment.type === "variable" ? (
+                <ReferenceInput
+                  className="flex-1"
+                  label={`Variable ${index + 1}`}
+                  value={segment.reference}
+                  picker={picker}
+                  onChange={(reference) => {
+                    setSegments(
+                      segments.map((s, i) => (i === index ? { type: "variable", reference } : s)),
+                    )
+                  }}
+                />
+              ) : segment.type === "text" ? (
                 <Input
                   aria-label={`Text ${index + 1}`}
                   className="h-7 min-w-0 flex-1 text-xs"
@@ -244,6 +325,16 @@ export function MappingEditor({
               }}
             >
               <Plus className="size-3" /> Output
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-1.5 text-xs"
+              onClick={() => {
+                setSegments([...segments, { type: "variable", reference: "" }])
+              }}
+            >
+              <Plus className="size-3" /> Variable
             </Button>
           </div>
         </div>
