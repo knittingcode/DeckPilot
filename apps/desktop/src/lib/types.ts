@@ -1250,6 +1250,81 @@ export type WorkSessionVariable =
   | "system.work.session.projectId"
   | "system.work.session.canFinish"
 
+// Work sessions over protocol 8 (`deckpilot_ipc::work_session`, the Tauri
+// commands in `commands/work_session.rs`). docs/gestures-and-work-session.md §9.
+// No request starts, verifies or finishes a session: only its key does (D11).
+
+/** How keys and the page show elapsed time: `h:mm` (D4) or `h:mm:ss`. */
+export type ElapsedFormat = "minutes" | "seconds"
+
+/** `work_session_settings` of a profile. */
+export interface WorkSessionSettings {
+  /** The profile they belong to: set in answers; when saving, `profileId` decides. */
+  profile?: string
+  /** Runs before the timer starts; `null`: the session starts at once. */
+  startWorkflow: string | null
+  /** Must declare the output `canFinish` (boolean); `null`: hold the key to finish (D12). */
+  verificationWorkflow: string | null
+  /** 60–86400. */
+  approvalTtlSeconds: number
+  /** 60–86400. */
+  reviewGapSeconds: number
+  elapsedFormat: ElapsedFormat
+  /** When last saved; unset for defaults never saved. Ignored when saving. */
+  updatedAtMs?: number
+}
+
+export type WorkSessionReviewKind = "agentDown" | "sleep" | "clockBack" | "clockForward"
+
+/** A gap of uncertain time; counted until the user excludes it (D8). */
+export interface WorkSessionReview {
+  id: number
+  kind: WorkSessionReviewKind
+  fromMs: number
+  toMs: number
+  /** Unset: not reviewed yet (counted). */
+  resolution?: "counted" | "excluded"
+  resolvedAtMs?: number
+}
+
+export interface WorkSessionInterval {
+  seq: number
+  startedAtMs: number
+  /** Unset while the interval is open. */
+  endedAtMs?: number
+  endReason?: "stopped" | "gapExcluded"
+}
+
+export interface WorkSessionTransition {
+  seq: number
+  atMs: number
+  from: string
+  event: string
+  to: string
+}
+
+/** A stored session: the active one, or a finished or aborted one. */
+export type WorkSessionRecordState = Exclude<WorkSessionState, "idle"> | "stopped" | "aborted"
+
+/** One entry of the session history (`listWorkSessions`). */
+export interface WorkSessionSummary {
+  session: string
+  profile: string
+  project?: string
+  state: WorkSessionRecordState
+  requestedAtMs: number
+  startedAtMs?: number
+  stoppedAtMs?: number
+  /** Counted time when the answer was made: the sum of the intervals. */
+  elapsedMs: number
+  intervals: WorkSessionInterval[]
+  reviews: WorkSessionReview[]
+  transitions: WorkSessionTransition[]
+  verification?: VerificationRecord
+  /** The session's last notice, until it is cleared. */
+  notice?: WorkSessionNotice
+}
+
 // Shared Variables settings page (workstream D). Mirrors of the variable
 // store (deckpilot_storage::variables, variable_references); the Tauri
 // commands come with the store.
