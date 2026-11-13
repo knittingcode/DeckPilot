@@ -431,3 +431,92 @@ fn workflows_combine_generic_project_actions() {
     );
     assert_eq!(context.project_id(), Some(work.projects[1].id));
 }
+
+/// Who owns which variable among the built-in modules, and that every
+/// legacy id resolves as the canonical id its owner declares.
+#[test]
+fn builtin_variables_have_explicit_owners() {
+    use deckpilot_core::variables::{
+        ALIASES, MissingReason, NoLiveState, ProjectSource, Resolution, ResolutionContext,
+        VariableEnvironment, VariableId, VariableOwner, VariableValue,
+    };
+    let mut registry = builtin(Os::Linux);
+    let owners: Vec<(String, Option<String>)> = registry
+        .variables()
+        .variables()
+        .map(|v| {
+            (
+                v.declaration.id.to_string(),
+                v.owner.module().map(ToString::to_string),
+            )
+        })
+        .collect();
+    let module = |id: &str, owner: &str| (id.to_owned(), Some(owner.to_owned()));
+    let core = |id: &str| (id.to_owned(), None);
+    assert_eq!(
+        owners,
+        [
+            module("projects.current.id", "projects"),
+            module("projects.current.key", "projects"),
+            module("projects.current.name", "projects"),
+            core("system.device.current.id"),
+            core("system.platform"),
+            core("system.profile.current.id"),
+            core("system.profile.current.name"),
+            module("workSession.canFinish", "work-session"),
+            module("workSession.elapsedSeconds", "work-session"),
+            module("workSession.id", "work-session"),
+            module("workSession.projectId", "work-session"),
+            module("workSession.startedAt", "work-session"),
+            module("workSession.state", "work-session"),
+            core("workflow.execution.id"),
+            core("workflow.id"),
+        ]
+    );
+    for alias in ALIASES {
+        let declared = registry
+            .variables()
+            .get(&alias.alias.canonical())
+            .unwrap_or_else(|| panic!("{} is declared", alias.canonical));
+        assert_eq!(
+            *declared.owner,
+            VariableOwner::Module {
+                module: ModuleId::new(alias.owner).unwrap()
+            }
+        );
+        // An alias keeps the type it always had.
+        assert_eq!(declared.declaration.value_type, alias.alias.value_type());
+        assert!(declared.declaration.read_only);
+        assert!(!declared.declaration.sensitive);
+    }
+
+    // The project in the context, through the projects module; disabled,
+    // it is unavailable and nothing is lost.
+    let work = profile("Work", &["SHOP"]);
+    let context = ResolutionContext::preview(work.id)
+        .with_project(Some(work.projects[0].id), ProjectSource::Application);
+    let environment = VariableEnvironment {
+        context: &context,
+        profile: &work,
+        os: Os::Linux,
+        live: &NoLiveState,
+    };
+    let key = VariableId::new("projects.current.key").unwrap();
+    assert!(matches!(
+        registry.variables().resolve(&key, &environment),
+        Resolution::Value { value: VariableValue::String(text), .. } if text == "SHOP"
+    ));
+    registry.set_enabled(&projects_id(), false).unwrap();
+    assert_eq!(
+        registry.variables().resolve(&key, &environment),
+        Resolution::Unavailable {
+            owner: "projects".into()
+        }
+    );
+    // Without a session the work session variables have no value.
+    let state = VariableId::new("workSession.state").unwrap();
+    assert_eq!(
+        registry.variables().resolve(&state, &environment),
+        Resolution::Missing(MissingReason::NoValue)
+    );
+}
