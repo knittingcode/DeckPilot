@@ -407,7 +407,10 @@ gate* job runs the same check again right before publication, in case the
 environment was changed while the release waited.
 `tools/release-pipeline/check-workflow-gate.py` refuses a workflow in which
 any job that uses the environment or a secret other than `GITHUB_TOKEN`
-does not reach `environment-gate` through `needs`; the cases (missing,
+does not need `environment-gate` directly, or has an `if:` with `always()`,
+`failure()` or `cancelled()` (including `!cancelled()`): such a condition
+would run the job although the environment gate failed or was skipped, so
+these jobs keep GitHub's implicit `success()` and fail closed. The cases (missing,
 auto-created without rules, wait timer only, no tag restriction, branch or
 extra rules, unreadable policies) are tested by
 `tools/release-pipeline/test-publication.sh`. Until the secrets are moved (below), the
@@ -493,7 +496,7 @@ are typed or piped from the offline copies, never echoed or logged.
 
 | What failed | State | What to do |
 | ----------- | ----- | ---------- |
-| The tag gate | nothing created | Fix the cause (wait for CI, tag a commit on `main`, fix the version) and push a **new** tag; delete a wrong tag only if no release exists for it: `git push origin :refs/tags/<tag>` |
+| The tag gate | nothing created | Fix the cause (wait for CI, tag a commit on `main`, fix the version) and push a **new** tag. A pushed `v*` tag cannot be deleted or moved: the *Release tag protection* ruleset blocks it and has no bypass actors ([release-readiness.md](release-readiness.md)). Leave the refused tag; only the owner can remove one, by disabling the ruleset temporarily, and only if no release exists for it |
 | Stage A (a build, signing, notarization, manifest, checksums) | a draft, possibly incomplete | Re-run the failed jobs (`gh run rerun <run-id> --failed`): the draft of the same commit is reused and its assets replaced. For a clean retry, discard the draft and run again: `tools/release-pipeline/discard-draft.sh <tag>` (refuses published releases; keeps the tag), then `gh workflow run release.yml --ref <tag>` |
 | Protected release environment (`environment-gate`) | nothing created, no secret read | Set up `production-release` (above: reviewers, tag rule `v*` only), then `gh run rerun <run-id> --failed` |
 | Publication gate | a complete draft | Create or protect the `production-release` environment (above), then `gh run rerun <run-id> --failed` |

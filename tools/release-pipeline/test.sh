@@ -309,6 +309,15 @@ mutate "secrets read before the environment check" 'jobs["prepare"]["needs"] = [
 mutate "publishing without the environment check" 'jobs["publish"]["needs"] = ["validate-tag", "publish-gate"]; jobs["publish-gate"]["needs"] = ["validate-tag", "verify"]; jobs["verify"]["needs"] = ["validate-tag", "compatibility"]' "job publish uses the environment or secrets without needing environment-gate"
 # shellcheck disable=SC2016 # a literal GitHub expression
 mutate "a new secret-using job without the check" 'jobs["extra"] = {"needs": "validate-tag", "runs-on": "ubuntu-latest", "timeout-minutes": 5, "permissions": {"contents": "read"}, "steps": [{"run": "true", "env": {"K": "${{ secrets.SOME_TOKEN }}"}}]}' "job extra uses the environment or secrets without needing environment-gate"
+# Fail closed: a secret-holding job must not run after the environment
+# gate failed or was skipped.
+# shellcheck disable=SC2016 # literal GitHub expressions
+{
+  mutate "signing after a failed environment check (always)" 'jobs["build"]["if"] = "${{ always() }}"' "job build uses the environment or secrets and may not run after a failed dependency"
+  mutate "secrets read after a failed environment check (!cancelled)" 'jobs["prepare"]["if"] = "${{ !cancelled() }}"' "job prepare uses the environment or secrets and may not run after a failed dependency"
+  mutate "publishing after a failed dependency (failure)" 'jobs["publish"]["if"] = "failure() || success()"' "job publish uses the environment or secrets and may not run after a failed dependency"
+  mutate "secrets behind the environment check only through another job" 'jobs["build"]["needs"].remove("environment-gate")' "job build uses the environment or secrets and must need environment-gate directly"
+}
 mutate "no environment check" 'del jobs["environment-gate"]; [j.__setitem__("needs", [n for n in (j["needs"] if isinstance(j.get("needs"), list) else [j.get("needs")]) if n and n != "environment-gate"]) for j in jobs.values() if j.get("needs")]' "no job environment-gate"
 mutate "an environment check in the environment" 'jobs["environment-gate"]["environment"] = "production-release"' "environment-gate must not use an environment"
 mutate "a job without a timeout" 'del jobs["manifest"]["timeout-minutes"]' "job manifest has no timeout-minutes"

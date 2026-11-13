@@ -13,7 +13,9 @@ Fails unless:
     only the draft, build, manifest, verify and publish jobs may write;
   * a job `environment-gate` (no environment, no secret, read-only) checks
     the protected environment, and every job that uses the environment or
-    a secret other than GITHUB_TOKEN reaches it through `needs`;
+    a secret other than GITHUB_TOKEN needs it directly and has no `if:`
+    with always(), failure() or cancelled(), so it is skipped whenever the
+    environment gate did not succeed (fail closed);
   * the job `packaging` calls the Packaging workflow without secrets, with
     the gate's `prerelease` and `msi_version`, and `draft` needs it;
   * every job has timeout-minutes (except one that calls a workflow), every action is pinned to a commit SHA,
@@ -47,6 +49,9 @@ PACKAGING_INPUTS = {
 PINNED = re.compile(r"^[^@]+@[0-9a-f]{40}$")
 CACHES = {"Swatinem/rust-cache", "actions/cache"}
 SIGNING_SECRET = re.compile(r"secrets\.(APPLE_|TAURI_SIGNING_)")
+# Status check functions that let a job run although a dependency failed,
+# was skipped or was cancelled.
+STATUS_OVERRIDE = re.compile(r"\b(always|failure|cancelled)\s*\(")
 # Jobs that may write to the repository: the draft and its assets (stage
 # A), and publication (stage B).
 WRITERS = {"draft", "build", "manifest", "verify", PUBLISHER}
@@ -137,8 +142,23 @@ def check(path):
         holds_secrets = "environment" in job or re.search(
             r"secrets\.(?!GITHUB_TOKEN)", yaml.safe_dump(job)
         )
-        if holds_secrets and not reaches(name, ENVIRONMENT_GATE, set()):
+        if not holds_secrets:
+            continue
+        if not reaches(name, ENVIRONMENT_GATE, set()):
             problems.append(f"job {name} uses the environment or secrets without needing {ENVIRONMENT_GATE}")
+        # Fail closed: `needs` alone does not stop a job. It runs after a
+        # failed or skipped dependency when its `if:` uses always(),
+        # failure() or cancelled() (`!cancelled()` too), and a dependency
+        # reached only through another job is bypassed when that job does.
+        # So the job needs the environment gate itself and keeps the
+        # implicit success() check.
+        elif ENVIRONMENT_GATE not in needs_of(job):
+            problems.append(f"job {name} uses the environment or secrets and must need {ENVIRONMENT_GATE} directly")
+        if STATUS_OVERRIDE.search(str(job.get("if", ""))):
+            problems.append(
+                f"job {name} uses the environment or secrets and may not run after a failed dependency "
+                f"(always(), failure() or cancelled() in its if: {job['if']!r})"
+            )
 
     # The unsigned installer checks run on the tagged commit before anything
     # is signed: the draft (and through it everything after) needs them, and
