@@ -1069,3 +1069,120 @@ async fn disconnects_and_locks_never_stop_the_session() {
     assert_eq!(intervals[0].interval.ended_at_ms, None);
     agent.shutdown().await;
 }
+
+/// The verification id of the session's current check.
+fn current_check(snapshot: &WorkSessionSnapshot) -> VerificationId {
+    snapshot.verification.as_ref().expect("a verification").id
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_long_press_in_ready_verifies_again_with_a_fresh_approval() {
+    // A real check that passes after 300 ms; a "no" is handed in through
+    // the test hook while a run is under way.
+    let check = verification("Check", Some("true"), "", 300);
+    let check_id = check.id;
+    let f = Fixture::new(vec![check]);
+    let agent = f.agent().await;
+    f.configure(&agent, |s| s.verification_workflow = Some(check_id))
+        .await;
+    assert_eq!(
+        op(&agent, Op::Start, Gesture::Click).await,
+        WorkSessionOutcome::Applied
+    );
+    let session = wait_state(&agent, S::Working).await.session.unwrap();
+
+    // A long press in working still does not check (a click does).
+    assert_eq!(
+        op(&agent, Op::Verify, Gesture::LongPress).await,
+        WorkSessionOutcome::Ignored(Ignored::ClickToCheck)
+    );
+    assert_eq!(
+        op(&agent, Op::Verify, Gesture::Click).await,
+        WorkSessionOutcome::Applied
+    );
+    let ready = wait_state(&agent, S::ReadyToFinish).await;
+    let first = ready.approval.expect("approved");
+
+    // In ready, a long press runs the check again and drops the approval.
+    assert_eq!(
+        op(&agent, Op::Verify, Gesture::LongPress).await,
+        WorkSessionOutcome::Applied
+    );
+    let checking = snapshot(&agent);
+    assert_eq!(checking.state, S::VerifyingEnd);
+    assert_eq!(checking.approval, None);
+    assert_ne!(current_check(&checking), first);
+    let again = wait_state(&agent, S::ReadyToFinish).await;
+    assert_eq!(again.approval, Some(current_check(&checking)));
+    assert_eq!(agent.runs(check_id).await.len(), 2);
+    // The old approval cannot finish.
+    wait_armed().await;
+    assert_ne!(
+        press(&agent, Op::Finish, Gesture::Click, &armed(&ready)).await,
+        WorkSessionOutcome::Applied
+    );
+    assert_eq!(snapshot(&agent).approval, again.approval);
+
+    // Verifying again can also say no: back to working, timer running,
+    // and no approval left to finish with.
+    assert_eq!(
+        op(&agent, Op::Verify, Gesture::LongPress).await,
+        WorkSessionOutcome::Applied
+    );
+    let third = current_check(&snapshot(&agent));
+    agent
+        .handle
+        .work_session_run_ended(
+            RunPurpose::Verify {
+                session,
+                verification: third,
+            },
+            Some(false),
+        )
+        .await;
+    let working = wait_state(&agent, S::Working).await;
+    assert_eq!((working.session, working.approval), (Some(session), None));
+    // The real run's late "yes" is not applied.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert_eq!(snapshot(&agent).state, S::Working);
+    assert_ne!(
+        press(&agent, Op::Finish, Gesture::Click, &armed(&again)).await,
+        WorkSessionOutcome::Applied
+    );
+    let intervals = agent.store().work_session_intervals(session).unwrap();
+    assert_eq!(intervals.len(), 1);
+    assert_eq!(intervals[0].interval.ended_at_ms, None);
+    agent.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn without_verification_a_long_press_in_ready_approves_afresh() {
+    let f = Fixture::new(Vec::new());
+    let agent = f.agent().await;
+    let ready = ready_without_verification(&agent).await;
+    wait_armed().await;
+    // D12 again: a new approval at once, with a new arming delay.
+    assert_eq!(
+        op(&agent, Op::Verify, Gesture::LongPress).await,
+        WorkSessionOutcome::Applied
+    );
+    let fresh = wait_for(&agent, "a fresh approval", |s| {
+        s.state == S::ReadyToFinish && s.approval.is_some() && s.approval != ready.approval
+    })
+    .await;
+    assert_eq!(
+        press(&agent, Op::Finish, Gesture::Click, &armed(&fresh)).await,
+        WorkSessionOutcome::Ignored(Ignored::NotArmed)
+    );
+    wait_armed().await;
+    assert_ne!(
+        press(&agent, Op::Finish, Gesture::Click, &armed(&ready)).await,
+        WorkSessionOutcome::Applied
+    );
+    assert_eq!(
+        press(&agent, Op::Finish, Gesture::Click, &armed(&fresh)).await,
+        WorkSessionOutcome::Applied
+    );
+    wait_state(&agent, S::Idle).await;
+    agent.shutdown().await;
+}

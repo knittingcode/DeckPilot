@@ -231,14 +231,46 @@ Without building or publishing anything:
 
   (`read -rs "VAR?prompt"` is zsh; in bash use `read -rsp "Password: " VAR`.)
 
+## Version management
+
+The version in `[workspace.package]` of the root `Cargo.toml` is the one
+authoritative source: every crate, including the agent, inherits it.
+`apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json` (the
+version the updater artifacts are signed for) and the workspace's entries
+in `Cargo.lock` repeat it; `deckpilot-dev set-version <version>` writes all
+of them and `deckpilot-dev check-versions [--tag <tag>]` refuses any
+difference (CI runs it; the tag gate runs it with the tag).
+
+Notes go into `CHANGELOG.md`, either under `## [Unreleased]` or directly
+into the section of the version being developed (`## [X.Y.Z] - Unreleased`).
+A pre-release uses the notes of its `X.Y.Z` section.
+
+`deckpilot-dev prepare-release <version>` prepares a release as a pull
+request and **never creates a tag**:
+
+1. refuses a malformed version (the tag grammar above, and the MSI limits),
+   an existing tag, a version not newer than every existing `v*` tag (local
+   or on `origin`), an existing branch, and uncommitted changes;
+2. creates `release/prepare-v<version>` from `origin/main`;
+3. moves the `## [Unreleased]` notes into the `X.Y.Z` section (a stable
+   release dates it, `## [X.Y.Z] - YYYY-MM-DD`; a pre-release keeps
+   `- Unreleased`) and refuses a release without notes;
+4. `set-version <version>`, then `check-versions --tag v<version>`, as the
+   tag gate will check it;
+5. commits only the five version files, pushes the branch and opens the
+   pull request (`gh pr create`). `--local` stops after the commit.
+
+After the pull request is merged and the required checks have passed on
+the merge commit, a maintainer tags **that commit** by hand and pushes the
+tag; that push starts the release workflow.
+
 ## Release steps
 
-1. Update the version in `Cargo.toml` (`[workspace.package]`),
-   `apps/desktop/package.json` and `apps/desktop/src-tauri/tauri.conf.json`.
-   `cargo run -p deckpilot-dev -- check-versions` confirms they match; CI
-   checks it too.
-2. Merge to `main`, wait until the required checks have passed on the merge
-   commit, then tag that commit:
+1. `cargo run -p deckpilot-dev -- prepare-release <version>` (see
+   [version management](#version-management)), review and merge the pull
+   request.
+2. Wait until the required checks have passed on the merge commit, then tag
+   that commit:
    `git tag -s v0.6.0-alpha.1 <sha> -m "DeckPilot 0.6.0-alpha.1" && git push origin v0.6.0-alpha.1`.
 3. **Stage A** (automatic, no user can see anything yet):
    - validates the tag (see [the tag gate](#release-tags-and-the-tag-gate));
@@ -246,6 +278,19 @@ Without building or publishing anything:
      notes for the version (they become the release notes and the notes
      shown by the in-app updater), and that macOS signing is configured (or
      explicitly waived);
+   - runs the full installer checks of the *Packaging* workflow on the
+     tagged commit, unsigned and without any secret (`packaging` job, which
+     calls `.github/workflows/packaging.yml`): Linux `.deb` and `.rpm`,
+     Windows NSIS and MSI, built with the release configuration and a
+     throwaway updater key, checked by `tools/ci/check-packages.sh` (names,
+     versions, application, bundled agent, udev rule, updater signatures).
+     The draft, and with it every signed build and the publication, waits
+     for them. The called workflow builds the run's commit, which the gate
+     checked is the tag's (`RUN_SHA`): a tag moved after the push is
+     refused. The job passes the gate's `prerelease` and `msi_version`
+     (inputs `prerelease` and `msi-version`), so a pre-release builds no
+     `.rpm` (RPM refuses `-` in versions) and its MSI gets the same numeric
+     version as the signed build (WiX refuses `0.6.0-alpha.1`);
    - runs the real-binary compatibility matrix against the previous release
      (`tools/compat/matrix.sh`, baseline in
      `tools/release-pipeline/compat-baseline`): database migration and IPC
@@ -426,9 +471,9 @@ are typed or piped from the offline copies, never echoed or logged.
 | What failed | State | What to do |
 | ----------- | ----- | ---------- |
 | The tag gate | nothing created | Fix the cause (wait for CI, tag a commit on `main`, fix the version) and push a **new** tag; delete a wrong tag only if no release exists for it: `git push origin :refs/tags/<tag>` |
-| Stage A (a build, signing, notarization, manifest, checksums) | a draft, possibly incomplete | Re-run the failed jobs (`gh run rerun <run-id> --failed`): the draft of the same commit is reused and its assets replaced. For a clean retry, discard the draft and run again: `tools/release-pipeline/discard-draft.sh <tag>` (refuses published releases; keeps the tag), then `gh workflow run release.yml -f tag=<tag>` |
+| Stage A (a build, signing, notarization, manifest, checksums) | a draft, possibly incomplete | Re-run the failed jobs (`gh run rerun <run-id> --failed`): the draft of the same commit is reused and its assets replaced. For a clean retry, discard the draft and run again: `tools/release-pipeline/discard-draft.sh <tag>` (refuses published releases; keeps the tag), then `gh workflow run release.yml --ref <tag>` |
 | Publication gate | a complete draft | Create or protect the `production-release` environment (above), then `gh run rerun <run-id> --failed` |
-| Stage B before publishing | a complete draft, unpublished | Re-run the failed jobs, or `gh workflow run release.yml -f tag=<tag> -f publish_only=true` (skips stage A, publishes the existing draft after the same checks). Every check runs again; nothing is published until all pass |
+| Stage B before publishing | a complete draft, unpublished | Re-run the failed jobs, or `gh workflow run release.yml --ref <tag> -f publish_only=true` (skips stage A, publishes the existing draft after the same checks). Every check runs again; nothing is published until all pass |
 | Stage B after publishing (verification of the public release) | published | Never delete a published release. Find the cause (for example an asset removed by hand), fix it without replacing published assets, and re-run: for an already published release of the same commit `publish.sh` changes nothing and only verifies again. If the release itself is wrong, publish a new version |
 
 All of this is tested without GitHub by `tools/release-pipeline/test-publication.sh`
@@ -437,6 +482,49 @@ draft creation and tag reuse, failed signing and notarization, missing
 artifacts and manifests, channel isolation, the publication gate,
 pre-release versus stable and latest, every check that keeps a draft
 unpublished, idempotent re-runs and recovery.
+
+### The first pre-release, command by command
+
+Once: create the protected `production-release` environment
+([publication gate and signing environment](#publication-gate-and-signing-environment-repository-settings)).
+Then, from an up-to-date, clean checkout of `main`:
+
+```sh
+cargo run -p deckpilot-dev -- prepare-release 0.6.0-alpha.1   # branch, commit, PR; no tag
+gh pr checks --watch <pr-number>                                # the owner approves and merges the PR
+git fetch origin
+sha=$(git rev-parse origin/main)                                # the merge commit
+gh api "repos/knittingcode/DeckPilot/commits/$sha/check-runs" \
+  --jq '.check_runs[] | "\(.name): \(.status) \(.conclusion)"'  # required checks passed?
+git tag -s v0.6.0-alpha.1 "$sha" -m "DeckPilot 0.6.0-alpha.1"
+git push origin v0.6.0-alpha.1                                  # starts stage A
+gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+# Approve "prepare" and the builds (production-release), review the draft,
+# then approve "Publish and verify" in the run (stage B).
+```
+
+### Workflow hardening
+
+- **Runs on tags only.** A push of a `v*` tag, or a manual run *on the
+  tag* (`gh workflow run release.yml --ref <tag>`). Started on a branch,
+  the gate refuses it (`RELEASE_REF` must be `refs/tags/<tag>`) before any
+  job that holds a secret, and the environment's deployment rule allows
+  tags `v*` only.
+- **Pinned actions.** Every action is pinned to a commit SHA (with its
+  version as a comment); update the SHA, not the comment, when upgrading.
+- **No foreign caches next to secrets.** The jobs in `production-release`
+  restore no cache (no Rust cache, no pnpm store cache): caches are written
+  by other workflows, pull requests included, and must not feed a signed
+  build. Release builds are therefore slower.
+- **Timeouts** on every job.
+- The Tauri bundler, which signs, runs the frontend build of the tagged
+  commit's locked dependencies in the build job; that is inherent to
+  signing during bundling. The lockfile is frozen and the commit is
+  reviewed and on `main`.
+
+`tools/release-pipeline/check-workflow-gate.py` enforces the timeouts, the
+pins and the absence of caches in the environment's jobs, next to the
+dependency and permission rules.
 
 ### Dependency on the packaging workflow
 

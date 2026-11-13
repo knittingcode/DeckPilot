@@ -840,7 +840,7 @@ async fn configuration_reload_updates_the_device_without_restart() {
         .push(deckpilot_core::ControlBinding {
             control: ControlId::Key { index: 5 },
             trigger: deckpilot_core::Trigger::Press,
-            target: deckpilot_core::BindingTarget::Action { action },
+            target: deckpilot_core::BindingTarget::action(action),
             label: Some("{project.name}".into()),
             appearance: None,
         });
@@ -2819,9 +2819,14 @@ async fn http_requests_use_stored_credentials_and_keep_bodies_out_of_history() {
     assert_eq!(green.status, deckpilot_core::graph::NodeStatus::Succeeded);
     let stored = serde_json::to_string(&record).unwrap();
     let live = serde_json::to_string(&events).unwrap();
-    for secret in ["t0ken-secret", "b0dy-secret", "\"value\":\"green\""] {
-        assert!(!stored.contains(secret), "{secret} in history");
-        assert!(!live.contains(secret), "{secret} in events");
+    // Failure messages name what leaked, never the value itself.
+    for (what, value) in [
+        ("the credential", "t0ken-secret"),
+        ("the response body", "b0dy-secret"),
+        ("the extracted value", "\"value\":\"green\""),
+    ] {
+        assert!(!stored.contains(value), "{what} is in the history");
+        assert!(!live.contains(value), "{what} is in the events");
     }
     drop(client);
     agent.shutdown().await;
@@ -3057,7 +3062,7 @@ async fn module_states_are_shown_and_not_refreshed_more_often_than_allowed() {
         .push(deckpilot_core::ControlBinding {
             control: key,
             trigger: deckpilot_core::Trigger::Press,
-            target: deckpilot_core::BindingTarget::Action { action: status.id },
+            target: deckpilot_core::BindingTarget::action(status.id),
             label: None,
             appearance: None,
         });

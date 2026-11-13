@@ -17,7 +17,8 @@
 //!   does not (D7). Finishing needs a single click on the key, the
 //!   approval seen at the press, and the arming delay (D9, D11). Without a
 //!   verification workflow, only a long press verifies, and it passes at
-//!   once (D12).
+//!   once (D12). In `readyToFinish`, where a click finishes, a long press
+//!   verifies again either way (T8).
 //! - **Persistence first.** Every transition is committed by the store
 //!   before the in-memory state changes; the store's compare-and-set
 //!   answers a repeated request (a duplicated click, a late result) with
@@ -46,7 +47,7 @@ use deckpilot_core::{
 use deckpilot_ipc::SecurityState;
 use deckpilot_storage::SqliteStore;
 use deckpilot_storage::work_sessions::{
-    GapKind, NewWorkSession, Refusal, SessionStatus, Transition, VerificationResult,
+    ElapsedFormat, GapKind, NewWorkSession, Refusal, SessionStatus, Transition, VerificationResult,
     WorkSessionRecord, WorkSessionSettings,
 };
 use tokio::sync::watch;
@@ -54,6 +55,8 @@ use tracing::{debug, info, warn};
 
 use super::Agent;
 use super::triggers::Launch;
+
+mod ipc;
 
 /// A finish click whose press comes earlier than this after entering
 /// `readyToFinish` is ignored (D9).
@@ -71,16 +74,8 @@ pub const CLOCK_BACK: Duration = Duration::from_secs(2);
 pub const NO_VERIFICATION: &str = "no verification configured";
 
 /// The operations of the `workSession` machine that a key binding can ask
-/// for (§4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WorkSessionOperation {
-    Start,
-    CancelStart,
-    Verify,
-    CancelVerification,
-    Finish,
-    ContinueWorking,
-}
+/// for (§4); declared with the machine's rules in the core.
+pub use deckpilot_core::stateful::WorkSessionOperation;
 
 /// The work session as the key saw it when it was pressed. The binding's
 /// rule was picked from `state`; the operation is refused if the session
@@ -314,6 +309,13 @@ impl WorkSessions {
     pub(crate) fn snapshot(&self) -> WorkSessionSnapshot {
         self.snapshot.borrow().clone()
     }
+
+    /// How the active session's profile shows elapsed time on keys.
+    pub(crate) fn elapsed_format(&self) -> ElapsedFormat {
+        self.settings
+            .as_ref()
+            .map_or(ElapsedFormat::Minutes, |s| s.elapsed_format)
+    }
 }
 
 fn millis(time: SystemTime) -> i64 {
@@ -344,31 +346,17 @@ fn comparable(settings: &WorkSessionSettings) -> WorkSessionSettings {
 }
 
 impl Agent {
-    fn wall_ms(&self) -> i64 {
+    pub(super) fn wall_ms(&self) -> i64 {
         millis((self.options.clock)())
     }
 
     /// The work session as published.
-    #[cfg_attr(
-        not(feature = "test-hooks"),
-        allow(
-            dead_code,
-            reason = "read by work session key faces once they land (W4)"
-        )
-    )]
     pub(crate) fn work_session_snapshot(&self) -> WorkSessionSnapshot {
         self.work.snapshot()
     }
 
-    /// The entry point of key gestures (G2/G4) and tests: applies one
-    /// operation, guarded by the state at the press.
-    #[cfg_attr(
-        not(feature = "test-hooks"),
-        allow(
-            dead_code,
-            reason = "called by stateful key bindings once they land (G4)"
-        )
-    )]
+    /// The entry point of stateful keys (`service/stateful.rs`) and tests:
+    /// applies one operation, guarded by the state at the press.
     pub(crate) fn work_session_operation(
         &mut self,
         request: &WorkSessionRequest,
@@ -618,8 +606,12 @@ impl Agent {
             Err(outcome) => return outcome,
         };
         let workflow = settings.verification_workflow;
+        // In readyToFinish a click finishes, so verifying again is a long
+        // press (T8), with or without a verification workflow.
+        let again = record.status == SessionStatus::ReadyToFinish;
         match (workflow, gesture) {
             (None, Gesture::LongPress) | (Some(_), Gesture::Click | Gesture::DoubleClick) => {}
+            (Some(_), Gesture::LongPress) if again => {}
             (None, _) => return WorkSessionOutcome::Ignored(Ignored::HoldToFinish),
             (Some(_), Gesture::LongPress) => {
                 return WorkSessionOutcome::Ignored(Ignored::ClickToCheck);
@@ -1173,9 +1165,16 @@ impl Agent {
         self.heartbeat(true);
     }
 
-    /// Publishes the session as it is now and redraws keys. W4 (faces) and
-    /// W5 (the `workSessionChanged` event) hook in here.
+    /// Publishes the session as it is now, redraws keys and announces it
+    /// to protocol 8 clients (`workSessionChanged`) when it changed. W4
+    /// (faces) hooks in here.
     pub(crate) fn work_session_changed(&mut self) {
+        self.publish_work_session(false);
+    }
+
+    /// [`Agent::work_session_changed`]; `force` also announces a change of
+    /// counted time alone (a decided gap), which the app cannot derive.
+    fn publish_work_session(&mut self, force: bool) {
         let now = self.wall_ms();
         let snapshot = if let Some(store) = self.store.as_ref() {
             build_snapshot(store, self.work.record.as_ref(), now)
@@ -1190,6 +1189,7 @@ impl Agent {
             last.as_of_ms = now;
             last
         };
+        let mut before = None;
         let changed = self.work.snapshot.send_if_modified(|current| {
             let differs = current.state != snapshot.state
                 || current.session != snapshot.session
@@ -1197,11 +1197,26 @@ impl Agent {
                 || current.verification != snapshot.verification
                 || current.notices != snapshot.notices
                 || current.started_at_ms != snapshot.started_at_ms;
-            *current = snapshot;
+            let previous = std::mem::replace(current, snapshot);
+            if differs {
+                before = Some(previous);
+            }
             differs
         });
-        if changed {
+        if let Some(before) = before {
+            self.publish_work_session_variables(&before, &self.work.snapshot());
+        }
+        if changed || force {
+            // A decided gap changes the counted time alone: work session
+            // keys show it at once, not at their next elapsed-time redraw.
             self.render_all();
+            let snapshot = deckpilot_ipc::work_session::bounded_snapshot(self.work.snapshot());
+            let _ = self
+                .handle
+                .events
+                .send(deckpilot_ipc::AgentEvent::WorkSessionChanged {
+                    snapshot: Box::new(snapshot),
+                });
         }
     }
 }

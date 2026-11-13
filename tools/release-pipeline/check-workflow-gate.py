@@ -11,6 +11,10 @@ Fails unless:
   * the workflow-level permissions grant no write access, so only jobs that
     ask for it explicitly can write; every job declares its permissions and
     only the draft, build, manifest, verify and publish jobs may write;
+  * the job `packaging` calls the Packaging workflow without secrets, with
+    the gate's `prerelease` and `msi_version`, and `draft` needs it;
+  * every job has timeout-minutes (except one that calls a workflow), every action is pinned to a commit SHA,
+    and no job in the environment restores a cache;
   * the protected environment is `production-release`: `publish` runs in
     it, behind `publish-gate`; besides it only the jobs that need the
     signing secrets (prepare, build) do, and every job that references a
@@ -30,6 +34,14 @@ ENVIRONMENT = "production-release"
 # Jobs that may run in the environment: those that need the signing
 # secrets, and publication.
 ENVIRONMENT_JOBS = {"prepare", "build", PUBLISHER}
+PACKAGING = "packaging"
+PACKAGING_WORKFLOW = "./.github/workflows/packaging.yml"
+PACKAGING_INPUTS = {
+    "prerelease": "${{ needs.validate-tag.outputs.prerelease == 'true' }}",
+    "msi-version": "${{ needs.validate-tag.outputs.msi_version }}",
+}
+PINNED = re.compile(r"^[^@]+@[0-9a-f]{40}$")
+CACHES = {"Swatinem/rust-cache", "actions/cache"}
 SIGNING_SECRET = re.compile(r"secrets\.(APPLE_|TAURI_SIGNING_)")
 # Jobs that may write to the repository: the draft and its assets (stage
 # A), and publication (stage B).
@@ -75,6 +87,40 @@ def check(path):
             return False
         seen.add(name)
         return any(reaches_gate(n, seen) for n in needs_of(jobs[name]))
+
+    # Every job ends; every action is pinned to a commit; the jobs that hold
+    # signing secrets restore no cache written by other workflows.
+    for name, job in jobs.items():
+        # A job that calls a reusable workflow cannot have a timeout; the
+        # called workflow's jobs have their own.
+        if "uses" not in job and not isinstance(job.get("timeout-minutes"), int):
+            problems.append(f"job {name} has no timeout-minutes")
+        for step in job.get("steps", []):
+            uses = step.get("uses")
+            if uses and not PINNED.match(uses):
+                problems.append(f"job {name}: {uses} is not pinned to a commit SHA")
+            if job.get("environment") and uses and uses.split("@")[0] in CACHES:
+                problems.append(f"job {name} holds secrets and restores a cache ({uses})")
+            if job.get("environment") and (step.get("with") or {}).get("cache"):
+                problems.append(f"job {name} holds secrets and restores a cache ({uses})")
+
+    # The unsigned installer checks run on the tagged commit before anything
+    # is signed: the draft (and through it everything after) needs them, and
+    # they get no secret.
+    packaging = jobs.get(PACKAGING)
+    if not packaging or packaging.get("uses") != PACKAGING_WORKFLOW:
+        problems.append(f"no job {PACKAGING} calling {PACKAGING_WORKFLOW}")
+    else:
+        if "secrets" in packaging:
+            problems.append(f"{PACKAGING} must not pass secrets")
+        # The gate's classification and MSI version, as the signed build
+        # uses them.
+        inputs = packaging.get("with") or {}
+        for name, expected in PACKAGING_INPUTS.items():
+            if str(inputs.get(name, "")).replace(" ", "") != expected.replace(" ", ""):
+                problems.append(f"{PACKAGING} must pass {name}: {expected}")
+        if PACKAGING not in needs_of(jobs.get("draft", {})):
+            problems.append(f"draft must need {PACKAGING}")
 
     # Stage B: `publish` publishes, in the protected environment, behind the
     # job that checks that environment. Signing secrets only in jobs that run

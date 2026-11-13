@@ -128,6 +128,17 @@ impl TestAgent {
         mock: &MockBackend,
         clock: Option<Clock>,
     ) -> Self {
+        Self::start_with_gestures(paths, key, mock, clock, None)
+    }
+
+    /// [`TestAgent::start`] with keys put in gesture mode by `gestures`.
+    pub fn start_with_gestures(
+        paths: &AgentPaths,
+        key: &DatabaseKey,
+        mock: &MockBackend,
+        clock: Option<Clock>,
+        gestures: Option<std::sync::Arc<dyn deckpilot_agent::GestureHooks>>,
+    ) -> Self {
         let lock = InstanceLock::acquire_waiting(&paths.lock_file, Duration::from_secs(2)).unwrap();
         let options = AgentOptions {
             paths: paths.clone(),
@@ -144,7 +155,10 @@ impl TestAgent {
             notifier: None,
             screen_lock: None,
         };
-        let agent = Agent::start(options, lock).unwrap();
+        let mut agent = Agent::start(options, lock).unwrap();
+        if let Some(gestures) = gestures {
+            agent = agent.with_gesture_hooks(gestures);
+        }
         let handle = agent.handle();
         let (stop, stopped) = oneshot::channel::<()>();
         let task = tokio::spawn(agent.run(async move {

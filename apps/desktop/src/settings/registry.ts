@@ -10,6 +10,7 @@ import {
   ScrollText,
   Server,
   ShieldCheck,
+  Variable,
   type LucideIcon,
 } from "lucide-react"
 import { lazy } from "react"
@@ -70,12 +71,32 @@ const CORE_PAGES: SettingsPageEntry[] = [
     view: view(() => import("./pages/updates").then((m) => ({ default: m.UpdatesSettings }))),
   },
   {
+    id: "variables",
+    title: "Shared Variables",
+    description: "Values that actions and workflows read with {{ shared.… }}",
+    category: "general",
+    icon: Variable,
+    keywords: ["variables", "shared", "values", "references", "secrets", "system"],
+    view: view(() =>
+      import("@/pages/shared-variables").then((m) => ({ default: m.SharedVariablesSettings })),
+    ),
+  },
+  {
     id: "devices",
     title: "Devices",
-    description: "Connected Stream Decks and their brightness",
+    description: "Connected Stream Decks, brightness and gesture timing",
     category: "hardware",
     icon: MonitorSmartphone,
-    keywords: ["stream deck", "hardware", "brightness", "connected", "usb"],
+    keywords: [
+      "stream deck",
+      "hardware",
+      "brightness",
+      "connected",
+      "usb",
+      "gesture",
+      "double click",
+      "long press",
+    ],
     view: view(() => import("./pages/devices").then((m) => ({ default: m.DevicesSettings }))),
   },
   {

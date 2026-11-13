@@ -552,3 +552,50 @@ fn a_process_killed_before_the_check_is_verified_on_the_next_start() {
         assert_eq!(copy.backup_files().len(), 1);
     }
 }
+
+/// Gestures (`docs/gestures-and-work-session.md`, section 3.3): every
+/// binding of a released version decodes unchanged and stays a raw press,
+/// which fires at once; nothing is converted to a gesture.
+#[test]
+fn bindings_of_released_versions_stay_raw_and_unchanged() {
+    use crate::ConfigStore;
+    use deckpilot_core::{BindingTarget, Trigger};
+
+    for fixture in FIXTURES {
+        let copy = copy(fixture);
+        let store = copy.open().unwrap();
+        let mut bindings = 0;
+        let mut presses = 0;
+        for summary in store.list_profiles().unwrap() {
+            let profile = store.load_profile(summary.id).unwrap().unwrap();
+            let stored: String = store
+                .connection_for_tests()
+                .query_row(
+                    "SELECT document FROM profiles WHERE id = ?1",
+                    [summary.id.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let stored: serde_json::Value = serde_json::from_str(&stored).unwrap();
+            assert_eq!(
+                serde_json::to_value(&profile.layouts).unwrap(),
+                stored["layouts"],
+                "{fixture:?}"
+            );
+            for page in profile.layouts.iter().flat_map(|l| &l.pages) {
+                assert_eq!(page.gestures, []);
+                for binding in &page.bindings {
+                    bindings += 1;
+                    assert_eq!(binding.trigger.gesture(), None, "{fixture:?}");
+                    presses += usize::from(binding.trigger == Trigger::Press);
+                    assert!(!page.bound_gestures(binding.control).any());
+                    if let BindingTarget::Action { overrides, .. } = &binding.target {
+                        assert_eq!(*overrides, deckpilot_core::ActionParameters::new());
+                    }
+                }
+            }
+        }
+        assert!(bindings >= 10, "{fixture:?}: {bindings} bindings");
+        assert!(presses >= 10, "{fixture:?}: {presses} presses");
+    }
+}

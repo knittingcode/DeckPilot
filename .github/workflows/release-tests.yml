@@ -9,6 +9,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/release.yml
+      - .github/workflows/packaging.yml
       - .github/workflows/release-tests.yml
       - .github/workflows/signing-check.yml
       - .github/workflows/update-continuity.yml
@@ -16,6 +17,7 @@ on:
       - tools/release-pipeline/**
       - tools/dev/src/release.rs
       - tools/dev/src/versions.rs
+      - tools/dev/src/prepare.rs
       - crates/deckpilot-update/**
   workflow_dispatch:
 

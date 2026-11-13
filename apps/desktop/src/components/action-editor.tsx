@@ -2,11 +2,10 @@ import { Ban, Copy, Play, Save, Trash2, TriangleAlert } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
-import { ConfirmDialog } from "@/components/confirm-dialog"
+import { DeleteActionDialog, ReferenceList } from "@/components/action-references"
 import { IconPicker } from "@/components/icon-picker"
 import { ErrorNotice } from "@/components/page"
 import { ParameterField } from "@/components/parameter-field"
-import { UsageList } from "@/components/usage-list"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -20,17 +19,18 @@ import {
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { failureMessage, toastFailure } from "@/lib/failure"
 import { creatableTypes, moduleOf } from "@/lib/modules"
 import { buildParameters, initialValue, missingRequired } from "@/lib/parameters"
 import type {
   ActionInstance,
+  ActionReference,
   ActionResult,
   ActionType,
   ModuleInfo,
   ParameterValue,
   Project,
-  Usage,
 } from "@/lib/types"
 
 function valuesFor(type: ActionType | undefined, action: ActionInstance | null) {
@@ -44,8 +44,12 @@ function valuesFor(type: ActionType | undefined, action: ActionInstance | null) 
 
 /**
  * Creates or edits one action instance. A new action starts by choosing a
- * module and one of its action types; the form is then generated from the
- * type's parameter schema, and the backend validates again on save.
+ * module and one of its action types (or with `initialType`, chosen
+ * before); the form is then generated from the type's parameter schema,
+ * and the backend validates again on save.
+ *
+ * Deleting a referenced action first replaces or unbinds each reference,
+ * as the user decides for each one.
  *
  * Actions whose module is disabled stay visible but cannot be edited or
  * run until the module is enabled again. They can still be deleted.
@@ -55,25 +59,38 @@ export function ActionEditor({
   modules,
   projects,
   action,
-  usages,
+  initialType,
+  references,
+  candidates = [],
   canRun,
   onSaved,
   onDeleted,
+  onChangeType,
+  onOpenReference,
 }: {
   profileId: string
   modules: ModuleInfo[]
   /** Projects of the profile, for project parameters. */
   projects: Project[]
   action: ActionInstance | null
-  usages: Usage[]
+  /** For a new action: the type chosen before. */
+  initialType?: string
+  /** Every place that uses the action. */
+  references: ActionReference[]
+  /** Actions a reference can use instead when this one is deleted. */
+  candidates?: ActionInstance[]
   canRun: boolean
   onSaved: (action: ActionInstance) => void
   onDeleted: () => void
+  /** For a new action with `initialType`: go back to choosing the type. */
+  onChangeType?: () => void
+  onOpenReference?: (reference: ActionReference) => void
 }) {
   const usable = modules.filter(
     (m) => m.enabled && m.supported && creatableTypes(m.actionTypes).length > 0,
   )
-  const owner = action ? moduleOf(modules, action.actionType) : undefined
+  const chosenType = action?.actionType ?? initialType
+  const owner = chosenType ? moduleOf(modules, chosenType) : undefined
   const unavailable = Boolean(action) && !owner?.enabled
   const [moduleId, setModuleId] = useState(owner?.id ?? (usable.length === 1 ? usable[0]?.id : ""))
   const module = modules.find((m) => m.id === moduleId)
@@ -84,7 +101,7 @@ export function ActionEditor({
     const offered = creatableTypes(m?.actionTypes ?? [])
     return offered.length === 1 ? (offered[0]?.id ?? "") : ""
   }
-  const [typeId, setTypeId] = useState(action?.actionType ?? onlyType(module))
+  const [typeId, setTypeId] = useState(chosenType ?? onlyType(module))
   const type = types.find((t) => t.id === typeId)
   const [name, setName] = useState(action?.name ?? "")
   const [description, setDescription] = useState(action?.description ?? "")
@@ -94,6 +111,7 @@ export function ActionEditor({
   const [submitted, setSubmitted] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<ActionResult | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const missing = type ? missingRequired(type.parameters, values) : []
   const nameMissing = !name.trim()
@@ -117,7 +135,9 @@ export function ActionEditor({
       toast.success(action ? "Action saved" : "Action created")
       onSaved(saved)
     } catch (e) {
-      setError(errorMessage(e))
+      setError(
+        failureMessage(action ? "The action was not saved" : "The action was not created", e),
+      )
     }
   }
 
@@ -128,18 +148,7 @@ export function ActionEditor({
       toast.success("Action duplicated")
       onSaved(copy)
     } catch (e) {
-      toast.error(errorMessage(e))
-    }
-  }
-
-  const remove = async () => {
-    if (!action) return
-    try {
-      await api.deleteAction(profileId, action.id)
-      toast.success("Action deleted")
-      onDeleted()
-    } catch (e) {
-      toast.error(errorMessage(e))
+      toastFailure(`“${action.name}” was not duplicated`, e)
     }
   }
 
@@ -148,7 +157,7 @@ export function ActionEditor({
     try {
       setResult(await api.runAction(profileId, action.id))
     } catch (e) {
-      toast.error(errorMessage(e))
+      toastFailure(`“${action.name}” did not run`, e, "Check that the agent is running")
     }
   }
 
@@ -166,11 +175,18 @@ export function ActionEditor({
           </AlertDescription>
         </Alert>
       )}
-      {action ? (
-        <p className="text-sm text-muted-foreground">
-          {owner?.name ?? "Unknown module"} › {type?.name ?? action.actionType}
-          {type && <span className="block text-xs">{type.description}</span>}
-        </p>
+      {chosenType ? (
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-sm text-muted-foreground">
+            {owner?.name ?? "Unknown module"} › {type?.name ?? chosenType}
+            {type && <span className="block text-xs">{type.description}</span>}
+          </p>
+          {!action && onChangeType && (
+            <Button type="button" size="sm" variant="outline" onClick={onChangeType}>
+              Change type
+            </Button>
+          )}
+        </div>
       ) : (
         <div className="grid items-start gap-4 sm:grid-cols-2">
           <div className="grid gap-2">
@@ -343,16 +359,32 @@ export function ActionEditor({
             >
               <Play /> Run
             </Button>
-            <ConfirmDialog
-              trigger={
-                <Button type="button" variant="ghost" disabled={usages.length > 0}>
-                  <Trash2 /> Delete
-                </Button>
-              }
-              title={`Delete “${action.name}”?`}
-              description="The action is removed from this profile. This cannot be undone."
-              onConfirm={() => void remove()}
-            />
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setDeleting(true)
+              }}
+            >
+              <Trash2 /> Delete
+            </Button>
+            {deleting && (
+              <DeleteActionDialog
+                profileId={profileId}
+                action={action}
+                references={references}
+                candidates={candidates}
+                onOpen={onOpenReference}
+                onClose={() => {
+                  setDeleting(false)
+                }}
+                onDeleted={() => {
+                  setDeleting(false)
+                  toast.success("Action deleted")
+                  onDeleted()
+                }}
+              />
+            )}
           </>
         )}
       </div>
@@ -382,10 +414,11 @@ export function ActionEditor({
           <Separator />
           <div className="grid gap-2">
             <h3 className="text-sm font-medium">Used in</h3>
-            <UsageList usages={usages} />
-            {usages.length > 0 && (
+            <ReferenceList references={references} onOpen={onOpenReference} />
+            {references.length > 0 && (
               <p className="text-xs text-muted-foreground">
-                Remove these references before deleting the action.
+                To delete the action, choose for each reference whether it uses another action or is
+                unbound.
               </p>
             )}
           </div>

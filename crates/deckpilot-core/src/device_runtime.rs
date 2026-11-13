@@ -15,6 +15,8 @@ use deckpilot_device::{
     ControlId, DeviceEvent, DeviceId, DeviceModelId, DeviceRegistry, ModelCatalog,
 };
 
+use crate::gesture::{BoundGestures, Gesture, GestureTimings};
+use crate::stateful::StatefulBinding;
 use crate::{
     ActionInstanceId, ActionRegistry, ActionResult, ActiveProjectContext, BindingTarget,
     ControlBinding, CycleDirection, DeviceLayout, Engine, EngineError, FaceStyle, KeyFace,
@@ -69,6 +71,14 @@ pub enum RuntimeOutcome {
     WorkflowRequested {
         workflow: WorkflowId,
     },
+    /// A gesture of a stateful key. The runtime does not know the
+    /// machine's state: the caller picks the operation from the state at
+    /// the press (see [`StatefulBinding`]) and lets the machine's owner
+    /// apply it.
+    StatefulRequested {
+        binding: StatefulBinding,
+        gesture: Gesture,
+    },
 }
 
 #[derive(Debug)]
@@ -93,6 +103,9 @@ pub struct Runtime {
     /// Shown instead of "No profile" while there is no profile, e.g.
     /// "Locked" while the configuration is encrypted and not unlocked.
     placeholder: Option<String>,
+    /// Gesture timings of controls whose page sets none (a machine
+    /// setting).
+    gesture_defaults: GestureTimings,
 }
 
 impl Runtime {
@@ -106,7 +119,86 @@ impl Runtime {
             navigation: BTreeMap::new(),
             parked: BTreeMap::new(),
             placeholder: None,
+            gesture_defaults: GestureTimings::default(),
         }
+    }
+
+    /// Sets the gesture timings of controls whose page sets none. Values
+    /// outside the allowed ranges are ignored.
+    pub fn set_gesture_defaults(&mut self, defaults: GestureTimings) {
+        self.gesture_defaults = defaults.validate().unwrap_or_default();
+    }
+
+    pub fn gesture_defaults(&self) -> GestureTimings {
+        self.gesture_defaults
+    }
+
+    /// The gestures bound to `control` on the page `device` shows, with
+    /// the control's timings. `None`: raw mode, or nothing is shown.
+    pub fn key_gestures(
+        &self,
+        device: &DeviceId,
+        control: ControlId,
+    ) -> Option<(BoundGestures, GestureTimings)> {
+        let layout = self.layout_for(&device.model)?;
+        let page = layout.page(self.current_page(device)?)?;
+        let bound = page.bound_gestures(control);
+        bound
+            .any()
+            .then(|| (bound, page.gesture_timings(control, self.gesture_defaults)))
+    }
+
+    /// Runs the binding of `control` for a recognized `gesture` on the
+    /// page `device` shows, like a raw input in [`Runtime::handle_event`].
+    /// The caller checks that the gesture was recognized on this page.
+    pub fn dispatch_gesture(
+        &mut self,
+        device: &DeviceId,
+        control: ControlId,
+        gesture: Gesture,
+    ) -> Result<RuntimeOutcome, EngineError> {
+        let ignored = |reason: &str| {
+            Ok(RuntimeOutcome::Ignored {
+                reason: reason.into(),
+            })
+        };
+        if !self.devices.is_connected(device) {
+            return ignored("device is not connected");
+        }
+        if self.session.is_none() {
+            return ignored("no active profile");
+        }
+        let target = self
+            .layout_for(&device.model)
+            .zip(self.current_page(device))
+            .and_then(|(layout, page)| layout.page(page))
+            .and_then(|page| page.gesture_binding(control, gesture))
+            .map(|binding| binding.target.clone());
+        match target {
+            None => ignored("gesture is not bound"),
+            Some(BindingTarget::Stateful(binding)) => {
+                Ok(RuntimeOutcome::StatefulRequested { binding, gesture })
+            }
+            Some(target) => self.dispatch(device, target),
+        }
+    }
+
+    /// The stateful binding of `control` on the page `device` shows, if the
+    /// control has one; its state is captured when a press starts a
+    /// gesture.
+    pub fn stateful_binding(
+        &self,
+        device: &DeviceId,
+        control: ControlId,
+    ) -> Option<&StatefulBinding> {
+        let layout = self.layout_for(&device.model)?;
+        let page = layout.page(self.current_page(device)?)?;
+        page.bindings
+            .iter()
+            .find_map(|binding| match &binding.target {
+                BindingTarget::Stateful(stateful) if binding.control == control => Some(stateful),
+                _ => None,
+            })
     }
 
     /// Sets the text devices show while no profile is loaded.
@@ -260,7 +352,8 @@ impl Runtime {
         let Some(layout) = self.layout_for(model) else {
             return LayoutStatus::Missing;
         };
-        let issues = layout.validate(&self.catalog, profile);
+        let mut issues = layout.validate(&self.catalog, profile);
+        issues.extend(layout.check_overrides(self.engine.registry(), profile));
         if issues.is_empty() {
             LayoutStatus::Compatible {
                 layout: layout.id,
@@ -367,7 +460,7 @@ impl Runtime {
             .into_iter()
             .filter(|control| model.capabilities.has_display(*control))
             .filter_map(|control| {
-                shown_binding(page, control).map(|binding| (control, binding.target))
+                shown_binding(page, control).map(|binding| (control, binding.target.clone()))
             })
             .collect()
     }
@@ -425,7 +518,7 @@ impl Runtime {
                 let mut target = layout
                     .page(page_id)
                     .and_then(|page| page.binding_for(*control, *input))
-                    .map(|binding| binding.target);
+                    .map(|binding| binding.target.clone());
                 // A folder page without a way back gets one on its first
                 // free key.
                 if target.is_none() && matches!(input, deckpilot_device::ControlInput::Press) {
@@ -453,15 +546,17 @@ impl Runtime {
         target: BindingTarget,
     ) -> Result<RuntimeOutcome, EngineError> {
         match target {
-            BindingTarget::Action { action } => {
+            BindingTarget::Action { action, overrides } => {
                 // The key's device is part of the context its references
-                // are resolved in (`system.device.current.id`).
+                // are resolved in (`system.device.current.id`). The
+                // binding's overrides are resolved in the same pipeline.
                 let session = self.session.as_mut().ok_or(EngineError::NoActiveProfile)?;
-                let result = self.engine.run_action_from(
+                let result = self.engine.run_action_with(
                     &session.profile,
                     &self.machine,
                     &mut session.projects,
                     action,
+                    Some(&overrides),
                     &crate::resolution::Invocation::from_device(device.clone()),
                 )?;
                 Ok(RuntimeOutcome::Action { action, result })
@@ -513,6 +608,11 @@ impl Runtime {
                     }),
                 }
             }
+            // Refused when a layout is saved: the state at the press
+            // belongs to a gesture.
+            BindingTarget::Stateful(_) => Ok(RuntimeOutcome::Ignored {
+                reason: "a stateful key reacts to gestures only".into(),
+            }),
         }
     }
 }
@@ -556,12 +656,17 @@ pub fn page_faces(
         .collect()
 }
 
-/// The binding a control's face shows: its press binding, else any.
+/// The binding a control's face shows: its press binding, else its
+/// click binding, else the first.
 fn shown_binding(page: &crate::LayoutPage, control: ControlId) -> Option<&ControlBinding> {
     page.bindings
         .iter()
         .filter(|binding| binding.control == control)
-        .min_by_key(|binding| binding.trigger != Trigger::Press)
+        .min_by_key(|binding| match binding.trigger {
+            Trigger::Press => 0,
+            Trigger::Click => 1,
+            _ => 2,
+        })
 }
 
 fn face_for(
@@ -571,9 +676,9 @@ fn face_for(
     profile: &Profile,
     project: Option<&Project>,
 ) -> KeyFace {
-    match binding.target {
-        BindingTarget::Action { action } => {
-            let Some(instance) = profile.action(action) else {
+    match &binding.target {
+        BindingTarget::Action { action, overrides } => {
+            let Some(instance) = profile.action(*action) else {
                 return KeyFace::new(FaceStyle::Notice, "Missing");
             };
             let template = binding
@@ -587,7 +692,7 @@ fn face_for(
                 .decorate_face(
                     &instance.action_type,
                     KeyFace::new(FaceStyle::Action, label.clone()),
-                    &instance.parameters,
+                    &instance.parameters.overlay(overrides),
                     template,
                     project,
                 )
@@ -595,7 +700,7 @@ fn face_for(
                     KeyFace::new(FaceStyle::Notice, label).with_detail("Unavailable")
                 })
         }
-        BindingTarget::Workflow { workflow } => match profile.workflow(workflow) {
+        BindingTarget::Workflow { workflow } => match profile.workflow(*workflow) {
             Some(definition) => KeyFace::new(
                 FaceStyle::Workflow,
                 render_label(
@@ -611,12 +716,22 @@ fn face_for(
             binding
                 .label
                 .clone()
-                .or_else(|| layout.page(page).map(|p| p.name.clone()))
+                .or_else(|| layout.page(*page).map(|p| p.name.clone()))
                 .unwrap_or_else(|| "Folder".into()),
         ),
         BindingTarget::Back => KeyFace::new(
             FaceStyle::Back,
             binding.label.clone().unwrap_or_else(|| "Back".into()),
+        ),
+        // The machine's own face (its state) is the agent's; this is the
+        // face without it, e.g. in the layout designer's preview.
+        BindingTarget::Stateful(stateful) => KeyFace::new(
+            FaceStyle::Action,
+            render_label(
+                binding.label.as_deref().unwrap_or(stateful.name()),
+                &profile.name,
+                project,
+            ),
         ),
     }
 }
@@ -664,9 +779,9 @@ mod tests {
             appearance: None,
         };
         layout.page_mut(home).unwrap().bindings.extend([
-            bind(0, BindingTarget::Action { action: next_id }),
+            bind(0, BindingTarget::action(next_id)),
             bind(1, BindingTarget::OpenPage { page: folder_id }),
-            bind(2, BindingTarget::Action { action: select_id }),
+            bind(2, BindingTarget::action(select_id)),
         ]);
         layout
             .page_mut(folder_id)
@@ -993,10 +1108,7 @@ mod tests {
         assert_eq!(targets.len(), 3);
         assert_eq!(
             targets[0],
-            (
-                ControlId::Key { index: 0 },
-                BindingTarget::Action { action: f.next }
-            )
+            (ControlId::Key { index: 0 }, BindingTarget::action(f.next))
         );
         runtime.handle_event(&press(1)).unwrap();
         assert_eq!(
@@ -1141,6 +1253,230 @@ mod tests {
         assert_eq!(
             runtime.current_page(&device()),
             Some(f.profile.layouts[0].home_page)
+        );
+    }
+
+    /// Key 3 of the home page: click runs the CMS selector as saved, double
+    /// click runs the same instance with SHOP instead, long press opens the
+    /// folder. Its long press takes 1.2 s.
+    fn gesture_fixture() -> (Fixture, ProjectId) {
+        let mut f = fixture();
+        let shop = f.profile.projects[0].id;
+        let layout = &mut f.profile.layouts[0];
+        let folder = layout.pages[1].id;
+        let home = layout.home_page;
+        let page = layout.page_mut(home).unwrap();
+        let key = ControlId::Key { index: 3 };
+        page.bindings.extend([
+            ControlBinding::new(key, Trigger::Click, BindingTarget::action(f.select_cms)),
+            ControlBinding::new(
+                key,
+                Trigger::DoubleClick,
+                BindingTarget::Action {
+                    action: f.select_cms,
+                    overrides: ActionParameters::new()
+                        .with("project", ParameterValue::Project(shop)),
+                },
+            ),
+            ControlBinding::new(
+                key,
+                Trigger::LongPress,
+                BindingTarget::OpenPage { page: folder },
+            ),
+        ]);
+        page.gestures.push(crate::gesture::KeyGestureSettings {
+            control: key,
+            double_click_ms: None,
+            long_press_ms: Some(1200),
+        });
+        (f, shop)
+    }
+
+    #[test]
+    fn gestures_run_their_own_bindings() {
+        let (f, _) = gesture_fixture();
+        let saved = f.profile.action(f.select_cms).unwrap().parameters.clone();
+        let mut runtime = runtime();
+        runtime.set_profile(Some(f.profile.clone()), None);
+        runtime.set_gesture_defaults(GestureTimings {
+            double_click_ms: 400,
+            long_press_ms: 700,
+        });
+        connect(&mut runtime, &device());
+        let key = ControlId::Key { index: 3 };
+
+        // Keys bound with press stay raw; key 3 is in gesture mode.
+        assert_eq!(
+            runtime.key_gestures(&device(), ControlId::Key { index: 0 }),
+            None
+        );
+        assert_eq!(
+            runtime.key_gestures(&device(), key),
+            Some((
+                BoundGestures {
+                    click: true,
+                    double_click: true,
+                    long_press: true
+                },
+                GestureTimings {
+                    double_click_ms: 400,
+                    long_press_ms: 1200
+                }
+            ))
+        );
+        // A raw edge of a gesture key runs nothing.
+        assert!(matches!(
+            runtime.handle_event(&press(3)).unwrap(),
+            RuntimeOutcome::Ignored { .. }
+        ));
+        assert_eq!(active_key(&runtime), "SHOP");
+
+        let outcome = runtime
+            .dispatch_gesture(&device(), key, Gesture::Click)
+            .unwrap();
+        assert!(matches!(outcome, RuntimeOutcome::Action { action, .. } if action == f.select_cms));
+        assert_eq!(active_key(&runtime), "CMS");
+        // The same instance with the double click's override; the saved
+        // instance is unchanged.
+        runtime
+            .dispatch_gesture(&device(), key, Gesture::DoubleClick)
+            .unwrap();
+        assert_eq!(active_key(&runtime), "SHOP");
+        assert_eq!(
+            runtime
+                .profile()
+                .unwrap()
+                .action(f.select_cms)
+                .unwrap()
+                .parameters,
+            saved
+        );
+        let folder = f.profile.layouts[0].pages[1].id;
+        assert_eq!(
+            runtime
+                .dispatch_gesture(&device(), key, Gesture::LongPress)
+                .unwrap(),
+            RuntimeOutcome::Navigated {
+                device: device(),
+                page: folder
+            }
+        );
+        // Nothing is bound to key 3 in the folder.
+        assert!(matches!(
+            runtime
+                .dispatch_gesture(&device(), key, Gesture::Click)
+                .unwrap(),
+            RuntimeOutcome::Ignored { .. }
+        ));
+        assert_eq!(runtime.key_gestures(&device(), key), None);
+    }
+
+    #[test]
+    fn stateful_gestures_are_handed_to_the_caller() {
+        let mut f = fixture();
+        let home = f.profile.layouts[0].home_page;
+        let key = ControlId::Key { index: 4 };
+        let stateful = StatefulBinding::work_session();
+        let page = f.profile.layouts[0].page_mut(home).unwrap();
+        page.bindings.extend([
+            ControlBinding::new(
+                key,
+                Trigger::Click,
+                BindingTarget::Stateful(stateful.clone()),
+            ),
+            ControlBinding::new(
+                key,
+                Trigger::LongPress,
+                BindingTarget::Stateful(stateful.clone()),
+            ),
+            // Refused when saved; does nothing if it gets through.
+            ControlBinding::new(
+                ControlId::Key { index: 5 },
+                Trigger::Press,
+                BindingTarget::Stateful(stateful.clone()),
+            ),
+        ]);
+        let mut runtime = runtime();
+        runtime.set_profile(Some(f.profile.clone()), None);
+        connect(&mut runtime, &device());
+
+        assert_eq!(runtime.stateful_binding(&device(), key), Some(&stateful));
+        assert_eq!(
+            runtime.stateful_binding(&device(), ControlId::Key { index: 0 }),
+            None
+        );
+        for gesture in [Gesture::Click, Gesture::LongPress] {
+            assert_eq!(
+                runtime.dispatch_gesture(&device(), key, gesture).unwrap(),
+                RuntimeOutcome::StatefulRequested {
+                    binding: stateful.clone(),
+                    gesture
+                }
+            );
+        }
+        assert!(matches!(
+            runtime.handle_event(&press(5)).unwrap(),
+            RuntimeOutcome::Ignored { .. }
+        ));
+        // Without the machine's state: its name.
+        let faces = runtime.faces(&device());
+        assert_eq!(faces[4].1, KeyFace::new(FaceStyle::Action, "Work Session"));
+    }
+
+    #[test]
+    fn faces_show_the_click_binding_with_its_overrides() {
+        let (mut f, shop) = gesture_fixture();
+        let mut runtime = runtime();
+        runtime.set_profile(Some(f.profile.clone()), None);
+        connect(&mut runtime, &device());
+        // Click: the CMS selector, not highlighted while SHOP is active.
+        let faces = runtime.faces(&device());
+        assert_eq!(faces[3].1.style, FaceStyle::Action);
+        assert!(!faces[3].1.highlighted);
+        assert_eq!(
+            runtime.shown_targets(&device())[3],
+            (
+                ControlId::Key { index: 3 },
+                BindingTarget::action(f.select_cms)
+            )
+        );
+
+        // The face of a binding with overrides is drawn with them.
+        let home = f.profile.layouts[0].home_page;
+        let page = f.profile.layouts[0].page_mut(home).unwrap();
+        page.bindings.retain(|b| b.trigger != Trigger::Click);
+        page.bindings.push(ControlBinding::new(
+            ControlId::Key { index: 3 },
+            Trigger::Click,
+            BindingTarget::Action {
+                action: f.select_cms,
+                overrides: ActionParameters::new().with("project", ParameterValue::Project(shop)),
+            },
+        ));
+        runtime.reload_profile(f.profile);
+        assert!(runtime.faces(&device())[3].1.highlighted);
+    }
+
+    #[test]
+    fn layout_status_reports_invalid_overrides() {
+        let (mut f, _) = gesture_fixture();
+        let home = f.profile.layouts[0].home_page;
+        let layout_id = f.profile.layouts[0].id;
+        let page = f.profile.layouts[0].page_mut(home).unwrap();
+        for binding in &mut page.bindings {
+            if let BindingTarget::Action { overrides, .. } = &mut binding.target
+                && !overrides.is_empty()
+            {
+                *overrides = ActionParameters::new().with("nope", ParameterValue::Boolean(true));
+            }
+        }
+        let mut runtime = runtime();
+        runtime.set_profile(Some(f.profile), None);
+        let status = runtime.layout_status(&device().model);
+        assert!(
+            matches!(&status, LayoutStatus::Invalid { layout, issues, .. }
+                if *layout == layout_id && issues.len() == 1 && issues[0].contains("nope")),
+            "{status:?}"
         );
     }
 }

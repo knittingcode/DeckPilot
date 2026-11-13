@@ -8,7 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { useTitlebar } from "@/hooks/use-titlebar"
-import { api, errorMessage } from "@/lib/api"
+import { api } from "@/lib/api"
+import { failureMessage } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
 import { formatTimestamp } from "@/lib/format"
 
@@ -26,10 +27,10 @@ export function AgentSettings() {
     })
   }, [running])
 
-  const run = (operation: () => Promise<unknown>) => {
+  const run = (operation: () => Promise<unknown>, failed: string) => {
     setError(null)
     operation().catch((e: unknown) => {
-      setError(errorMessage(e))
+      setError(failureMessage(failed, e))
     })
   }
   const status = agent?.status
@@ -49,7 +50,13 @@ export function AgentSettings() {
           api
             .agentStatus()
             .then(setAgent, (e: unknown) => {
-              setError(errorMessage(e))
+              setError(
+                failureMessage(
+                  "The agent status could not be read",
+                  e,
+                  "Try again; if the agent does not respond, restart it",
+                ),
+              )
             })
             .finally(() => {
               setRefreshing(false)
@@ -98,7 +105,7 @@ export function AgentSettings() {
                     run(async () => {
                       await api.stopAgent()
                       setAgent(await api.agentStatus())
-                    })
+                    }, "The agent was not stopped")
                   }}
                 >
                   <Square /> Stop agent
@@ -122,9 +129,14 @@ export function AgentSettings() {
               disabled={autostart === null}
               checked={autostart ?? false}
               onCheckedChange={(enabled) => {
-                run(async () => {
-                  setAutostart(await api.setAutostart(enabled))
-                })
+                run(
+                  async () => {
+                    setAutostart(await api.setAutostart(enabled))
+                  },
+                  enabled
+                    ? "Starting the agent at login was not turned on"
+                    : "Starting the agent at login was not turned off",
+                )
               }}
             />
             <Label htmlFor="autostart">Start the agent when I log in</Label>
