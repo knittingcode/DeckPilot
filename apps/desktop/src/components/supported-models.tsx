@@ -1,7 +1,7 @@
 import { DndContext } from "@dnd-kit/core"
 
 import { DeviceCanvas } from "@/components/device-canvas"
-import { ErrorNotice, Loading, Page } from "@/components/page"
+import { ErrorNotice, Loading } from "@/components/page"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -11,13 +11,22 @@ import { useAppContext } from "@/lib/app-context"
 import { SUPPORT, hex } from "@/lib/format"
 import type { DeviceModel, TouchGesture } from "@/lib/types"
 
-export function ModelsPage() {
+/**
+ * The device models of the catalog, in Settings › Devices (formerly the
+ * "Device Models" page of the main navigation).
+ */
+export function SupportedModels() {
   const { state } = useAsync(() => api.listDeviceModels(), "models")
   return (
-    <Page
-      title="Device Models"
-      description="Models you can design layouts for, with or without hardware"
-    >
+    <section aria-labelledby="supported-models" className="grid gap-4">
+      <div className="grid gap-1">
+        <h2 id="supported-models" className="text-base font-semibold">
+          Supported Models
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          Models you can design layouts for, with or without hardware.
+        </p>
+      </div>
       {state.status === "loading" && <Loading />}
       {state.status === "error" && <ErrorNotice error={state.error} />}
       {state.status === "ready" && (
@@ -27,7 +36,7 @@ export function ModelsPage() {
           ))}
         </DndContext>
       )}
-    </Page>
+    </section>
   )
 }
 
