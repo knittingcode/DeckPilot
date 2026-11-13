@@ -6,11 +6,9 @@
 
 mod support;
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
-use deckpilot_agent::{Clock, WorkSessionOperation as Op, WorkSessionOutcome};
+use deckpilot_agent::{WorkSessionOperation as Op, WorkSessionOutcome};
 use deckpilot_core::gesture::Gesture;
 use deckpilot_core::graph::{ValueKind, WorkflowInput, WorkflowOutput};
 use deckpilot_core::work_session::{
@@ -30,33 +28,12 @@ use deckpilot_ipc::{
 };
 use deckpilot_storage::DatabaseKey;
 use serde_json::json;
-use support::{TIMEOUT, TempDir, TestAgent, data_dir, graph, graph_workflow, waiting_workflow};
+use support::{
+    Jump, TIMEOUT, TempDir, TestAgent, data_dir, graph, graph_workflow, waiting_workflow,
+};
 use tokio::io::BufReader;
 
 const MINUTE: i64 = 60_000;
-
-/// The agent's wall clock, moved by `offset` ms from real time.
-#[derive(Clone, Default)]
-struct Jump(Arc<AtomicI64>);
-
-impl Jump {
-    fn clock(&self) -> Clock {
-        let offset = self.0.clone();
-        Arc::new(move || {
-            let ms = offset.load(Ordering::SeqCst);
-            let shift = Duration::from_millis(ms.unsigned_abs());
-            if ms >= 0 {
-                SystemTime::now() + shift
-            } else {
-                SystemTime::now() - shift
-            }
-        })
-    }
-
-    fn by(&self, ms: i64) {
-        self.0.fetch_add(ms, Ordering::SeqCst);
-    }
-}
 
 struct Fixture {
     _dir: TempDir,
