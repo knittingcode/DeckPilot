@@ -163,12 +163,15 @@ fn header<'h>(headers: &'h [(String, String)], name: &str) -> Option<&'h str> {
         .map(|(_, v)| v.trim())
 }
 
-/// How long to wait when Jira answers 429: `Retry-After` in seconds, else
-/// a minute.
+/// How long to wait when Jira answers 429: `Retry-After` (seconds or an
+/// HTTP date), else a minute.
 pub fn rate_limit_wait(status: u16, headers: &[(String, String)]) -> Option<u64> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
     (status == 429).then(|| {
         header(headers, "retry-after")
-            .and_then(|v| v.parse::<u64>().ok())
+            .and_then(|v| client::retry_after(v, now))
             .unwrap_or(60)
     })
 }
@@ -511,5 +514,16 @@ mod tests {
         assert_eq!(rate_limit_wait(429, &headers), Some(12));
         assert_eq!(rate_limit_wait(429, &[]), Some(60));
         assert_eq!(rate_limit_wait(503, &headers), None);
+        // An HTTP date: in the past it is 0, far ahead it is counted.
+        let past = vec![(
+            "Retry-After".to_owned(),
+            "Thu, 01 Jan 2015 00:00:00 GMT".to_owned(),
+        )];
+        assert_eq!(rate_limit_wait(429, &past), Some(0));
+        let ahead = vec![(
+            "Retry-After".to_owned(),
+            "Fri, 31 Dec 9999 23:59:59 GMT".to_owned(),
+        )];
+        assert!(rate_limit_wait(429, &ahead).unwrap() > 60);
     }
 }

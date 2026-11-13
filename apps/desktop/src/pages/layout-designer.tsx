@@ -29,6 +29,7 @@ import { useAsync } from "@/hooks/use-async"
 import { LayoutEditor } from "@/layout-editor/editor"
 import { api, errorMessage } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
+import { useFocusTarget } from "@/lib/focus"
 import { SUPPORT } from "@/lib/format"
 import type { DeviceLayout, DeviceModel } from "@/lib/types"
 
@@ -49,8 +50,10 @@ function Designer({ initialProfileId }: { initialProfileId: string }) {
   const [profileId, setProfileId] = useState(initialProfileId)
   const view = useAsync(() => api.getProfile(profileId), `${profileId}:${revision}`)
   const models = useAsync(() => api.listDeviceModels(), "models").state
+  // Opened from another page (e.g. the references of an action): that layout.
+  const focus = useFocusTarget("layout")
   const [modelId, setModelId] = useState<string | null>(null)
-  const [layoutId, setLayoutId] = useState<string | null>(null)
+  const [layoutId, setLayoutId] = useState<string | null>(focus?.layout ?? null)
   const dirty = useRef(false)
 
   const guard = (change: () => void) => {
@@ -65,8 +68,10 @@ function Designer({ initialProfileId }: { initialProfileId: string }) {
   if (view.state.status === "error") return <ErrorNotice error={view.state.error} />
   if (models.status === "error") return <ErrorNotice error={models.error} />
   const profile = view.state.data.profile
+  const focused = profile.layouts.find((l) => l.id === layoutId)
   const model =
     models.data.find((m) => m.id === modelId) ??
+    models.data.find((m) => m.id === focused?.model) ??
     models.data.find((m) => profile.layouts.some((l) => l.model === m.id)) ??
     models.data[0]
   if (!model) return <EmptyState title="No device models available" />

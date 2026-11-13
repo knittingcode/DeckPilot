@@ -17,7 +17,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { NAVIGATE_EVENT, api, errorMessage } from "@/lib/api"
+import { NAVIGATE_EVENT, api } from "@/lib/api"
+import { failureMessage } from "@/lib/failure"
 import { RESOURCE_KIND_LABELS } from "@/lib/format"
 import { newPasswordReady } from "@/lib/passwords"
 import { isCancelled, useSensitive } from "@/lib/sensitive"
@@ -47,7 +48,9 @@ function useLoaded<T>(load: () => Promise<T>) {
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
     load().then(setData, (e: unknown) => {
-      setError(errorMessage(e))
+      setError(
+        failureMessage("The profiles could not be loaded", e, "Close the window and try again"),
+      )
     })
     // Loaded once per window.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -118,7 +121,7 @@ function ExportForm({ profiles }: { profiles: ProfilesView }) {
       setPassword("")
       setConfirmation("")
     } catch (e) {
-      if (!isCancelled(e)) setError(errorMessage(e))
+      if (!isCancelled(e)) setError(failureMessage("The configuration was not exported", e))
     } finally {
       setBusy(false)
     }
@@ -290,7 +293,7 @@ function ChooseFile({
             if (typeof path === "string") onChosen(path)
           },
           (e: unknown) => {
-            setError(errorMessage(e))
+            setError(failureMessage("The file could not be chosen", e))
           },
         )
       }}
@@ -332,7 +335,13 @@ function ImportPassword({
             onPreview(result.token, result.preview)
           })
           .catch((e: unknown) => {
-            setError(errorMessage(e))
+            setError(
+              failureMessage(
+                "The file could not be opened",
+                e,
+                "Check the export password and that the file is a DeckPilot export",
+              ),
+            )
             setPassword("")
           })
           .finally(() => {
@@ -385,7 +394,9 @@ function ImportChoices({
   const [conflicts, setConflicts] = useState<Record<string, ConflictResolution>>({})
   const ready = preview.modules.some((m) => m.status === "ready")
   const [moduleSettings, setModuleSettings] = useState(ready)
-  const hasSettings = Boolean(preview.settings.updates)
+  const variables = preview.variables
+  // Global variable values travel with the application settings.
+  const hasSettings = Boolean(preview.settings.updates) || variables.globalValues > 0
   const [appSettings, setAppSettings] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -406,7 +417,7 @@ function ImportChoices({
           .applyImport(token, { mode, profiles: selected, conflicts, moduleSettings, appSettings })
           .then(onDone)
           .catch((e: unknown) => {
-            setError(errorMessage(e))
+            setError(failureMessage("Nothing was imported", e))
           })
           .finally(() => {
             setBusy(false)
@@ -546,8 +557,35 @@ function ImportChoices({
               setAppSettings(checked === true)
             }}
           />
-          Apply application settings (updates)
+          Apply application settings ({settingsContent(preview)})
         </label>
+      )}
+
+      {(variables.new.length > 0 || variables.existing.length > 0 || variables.values > 0) && (
+        <div className="grid gap-1 text-sm" aria-label="Shared variables">
+          <h2 className="font-medium">Shared variables</h2>
+          {variables.new.length > 0 && <p>New: {variables.new.join(", ")}.</p>}
+          {variables.existing.length > 0 && (
+            <p>Already here, kept as they are: {variables.existing.join(", ")}.</p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            {plural(variables.values, "value")} for profiles and projects
+            {variables.globalValues > 0
+              ? `, ${plural(variables.globalValues, "global value")} with the application settings`
+              : ""}
+            . Sensitive values are never exported.
+          </p>
+        </div>
+      )}
+      {variables.incompatible.length > 0 && (
+        <Alert>
+          <TriangleAlert />
+          <AlertTitle>Some shared variables have another type here</AlertTitle>
+          <AlertDescription>
+            {variables.incompatible.join(", ")}. Their values are not imported; the variables here
+            are kept.
+          </AlertDescription>
+        </Alert>
       )}
 
       {preview.unknownActionTypes.length > 0 && (
@@ -578,6 +616,19 @@ function ImportChoices({
       )}
     </ModalShell>
   )
+}
+
+function plural(count: number, noun: string) {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`
+}
+
+/** What "application settings" means for this export. */
+function settingsContent(preview: ImportPreview) {
+  const parts = [
+    preview.settings.updates ? "updates" : "",
+    preview.variables.globalValues > 0 ? "global shared variable values" : "",
+  ].filter(Boolean)
+  return parts.join(", ")
 }
 
 function ImportDone({
@@ -619,6 +670,23 @@ function ImportDone({
       )}
       {summary.settings.length > 0 && (
         <p className="text-sm">Application settings applied: {summary.settings.join(", ")}.</p>
+      )}
+      {(summary.variables.length > 0 || summary.variableValues > 0) && (
+        <p className="text-sm">
+          Shared variables:{" "}
+          {summary.variables.length > 0 ? `${summary.variables.join(", ")} created, ` : ""}
+          {plural(summary.variableValues, "value")} set.
+        </p>
+      )}
+      {summary.skippedValues.length > 0 && (
+        <div className="grid gap-1">
+          <h2 className="text-sm font-medium">Shared variable values not imported</h2>
+          <ul className="list-disc pl-5 text-sm" aria-label="Values not imported">
+            {summary.skippedValues.map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        </div>
       )}
       {missing.length > 0 && (
         <div className="grid gap-2">

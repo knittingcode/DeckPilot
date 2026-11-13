@@ -22,14 +22,19 @@ use std::io;
 use std::path::Path;
 
 use interprocess::ConnectWaitMode;
+#[cfg(unix)]
+use interprocess::local_socket::ConnectOptions;
 use interprocess::local_socket::tokio::{Listener, Stream, prelude::*};
-use interprocess::local_socket::{ConnectOptions, ListenerOptions, Name};
+use interprocess::local_socket::{ListenerOptions, Name};
 
 /// Attempts to create the Windows pipe while a previous instance closes:
 /// up to 5 s. Under load (CI runners, a busy computer after an update) the
 /// previous agent's instance can take more than 2 s to go away.
 #[cfg(windows)]
 const LISTEN_RETRIES: u32 = 100;
+/// Between attempts to open a pipe whose instances are all busy.
+#[cfg(windows)]
+const CONNECT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
 #[cfg(windows)]
 const LISTEN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 /// How long a connect waits for a busy endpoint. On Windows a pipe whose
@@ -148,26 +153,96 @@ impl Endpoint {
     }
 
     /// Connects, waiting at most [`CONNECT_WAIT`] for a busy endpoint. A
-    /// timeout is reported as [`io::ErrorKind::TimedOut`].
+    /// timeout is reported as [`io::ErrorKind::TimedOut`]; no agent
+    /// listening as [`io::ErrorKind::NotFound`] (or `ConnectionRefused`).
     pub async fn connect(&self) -> io::Result<Stream> {
-        // The token is sent right after connecting, so the socket must be in
-        // a directory only this user controls. A missing directory means no
-        // agent is running (`NotFound`).
         #[cfg(unix)]
-        unix::verify_private_dir(self.path.parent().unwrap_or(Path::new("/")))?;
-        let options = ConnectOptions::new()
-            .name(self.name()?)
-            .wait_mode(ConnectWaitMode::Timeout(CONNECT_WAIT));
-        match tokio::time::timeout(CONNECT_WAIT * 2, options.connect_tokio()).await {
-            Ok(Ok(stream)) => Ok(stream),
-            Ok(Err(error)) if error.kind() == io::ErrorKind::WouldBlock => {
-                Err(io::Error::new(io::ErrorKind::TimedOut, error))
+        {
+            // The token is sent right after connecting, so the socket must
+            // be in a directory only this user controls. A missing directory
+            // means no agent is running (`NotFound`).
+            unix::verify_private_dir(self.path.parent().unwrap_or(Path::new("/")))?;
+            let options = ConnectOptions::new()
+                .name(self.name()?)
+                .wait_mode(ConnectWaitMode::Timeout(CONNECT_WAIT));
+            match tokio::time::timeout(CONNECT_WAIT * 2, options.connect_tokio()).await {
+                Ok(Ok(stream)) => Ok(stream),
+                Ok(Err(error)) if error.kind() == io::ErrorKind::WouldBlock => {
+                    Err(io::Error::new(io::ErrorKind::TimedOut, error))
+                }
+                Ok(Err(error)) => Err(error),
+                Err(_) => Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "the agent endpoint did not accept the connection",
+                )),
             }
-            Ok(Err(error)) => Err(error),
-            Err(_) => Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "the agent endpoint did not accept the connection",
-            )),
+        }
+        #[cfg(windows)]
+        {
+            self.connect_pipe().await
+        }
+    }
+
+    /// Windows: tries to open the pipe without waiting, and retries on the
+    /// runtime's timer while all its instances are busy.
+    ///
+    /// interprocess's Tokio local-socket connect ignores the wait mode of
+    /// `ConnectOptions` and connects with an unbounded wait: when the pipe
+    /// is busy it runs `WaitNamedPipeW(NMPWAIT_WAIT_FOREVER)` in a loop on
+    /// Tokio's blocking pool (interprocess 2.4.8,
+    /// `os/windows/named_pipe/local_socket/tokio/stream.rs` →
+    /// `connect_by_path`). The pipe of an agent that is going away can stay
+    /// busy indefinitely (a server handle kept open while it is flushed),
+    /// so the connect never returned, and a runtime that shuts down waits
+    /// for its blocking tasks without a limit: the app's or a test's
+    /// runtime could not exit. Instead the pipe is opened here with the
+    /// synchronous named-pipe API and a zero wait, which only calls
+    /// `CreateFileW` (it does not block: it opens an instance, or fails at
+    /// once with "not found" or "busy"), and the handle is then registered
+    /// with Tokio.
+    #[cfg(windows)]
+    async fn connect_pipe(&self) -> io::Result<Stream> {
+        use interprocess::os::windows::named_pipe::local_socket::tokio::Stream as TokioPipe;
+        use interprocess::os::windows::named_pipe::{DuplexPipeStream, pipe_mode};
+        use std::os::windows::io::OwnedHandle;
+
+        let path = format!(r"\\.\pipe\{}", self.pipe);
+        let deadline = tokio::time::Instant::now() + CONNECT_WAIT;
+        loop {
+            let opened = DuplexPipeStream::<pipe_mode::Bytes>::connect_by_path_with_wait_mode(
+                path.as_str(),
+                ConnectWaitMode::Timeout(std::time::Duration::ZERO),
+            )
+            .and_then(|pipe| {
+                OwnedHandle::try_from(pipe)
+                    .map_err(|_| io::Error::other("the pipe handle is shared"))
+            })
+            .and_then(|handle| {
+                TokioPipe::try_from(handle).map_err(|error| {
+                    error
+                        .cause
+                        .unwrap_or_else(|| io::Error::other("cannot use the pipe handle"))
+                })
+            });
+            match opened {
+                Ok(stream) => return Ok(Stream::from(stream)),
+                // All instances busy (the crate reports it as a timeout).
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "the agent endpoint did not accept the connection",
+                        ));
+                    }
+                    tokio::time::sleep(CONNECT_RETRY_DELAY).await;
+                }
+                Err(error) => return Err(error),
+            }
         }
     }
 }

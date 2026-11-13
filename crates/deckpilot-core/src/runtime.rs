@@ -6,11 +6,15 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::graph::executor::{Executor, NestedRun, RunStatus};
+use crate::graph::executor::{Executor, NestedRun, RunServices, RunStatus};
 use crate::graph::{
     CancellationToken, ExecutionEvent, ExecutionLimits, GraphReport, IssueSeverity, MAX_NESTING,
     WorkflowGraph,
 };
+use crate::resolution::{
+    ContextResolver, Invocation, NoSharedVariables, Resolved, StepOutputs, resolve_parameters,
+};
+use crate::variables::{ExecutionDependencies, ProjectResolver, VariableResolver};
 use crate::{
     ActionInstance, ActionInstanceId, ActionParameters, ActionRegistry, ActionResult, ActionStatus,
     ActiveProjectContext, ContextEffect, ExecutionContext, MachineConfig, OnFailure, Profile,
@@ -49,11 +53,29 @@ pub struct WorkflowReport {
 }
 
 /// Executes actions and workflows.
-#[derive(Debug)]
+///
+/// The services an execution depends on are handed to the engine
+/// explicitly ([`Engine::with_variables`], [`Engine::with_projects`],
+/// [`Engine::with_credentials`], [`Engine::with_notifier`]) and passed on to
+/// each action through its [`ExecutionContext`]; there is no global
+/// registry of services.
 pub struct Engine {
     registry: ActionRegistry,
     credentials: std::sync::Arc<dyn crate::CredentialSource>,
     notifier: std::sync::Arc<dyn crate::notify::Notifier>,
+    /// Shared variables; system variables and node outputs are resolved
+    /// from the execution itself.
+    variables: std::sync::Arc<dyn VariableResolver>,
+    /// The application's active project per profile.
+    projects: std::sync::Arc<dyn ProjectResolver>,
+}
+
+impl std::fmt::Debug for Engine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Engine")
+            .field("registry", &self.registry)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for Engine {
@@ -68,6 +90,37 @@ impl Engine {
             registry,
             credentials: std::sync::Arc::new(crate::NoCredentials),
             notifier: std::sync::Arc::new(crate::notify::NoNotifier),
+            variables: std::sync::Arc::new(NoSharedVariables),
+            projects: std::sync::Arc::new(crate::variables::doubles::FixedProjects::default()),
+        }
+    }
+
+    /// The engine with the shared variables actions may reference.
+    #[must_use]
+    pub fn with_variables(self, variables: std::sync::Arc<dyn VariableResolver>) -> Self {
+        Self { variables, ..self }
+    }
+
+    /// The engine with the application's active project of each profile.
+    #[must_use]
+    pub fn with_projects(self, projects: std::sync::Arc<dyn ProjectResolver>) -> Self {
+        Self { projects, ..self }
+    }
+
+    /// The resolver for references of actions in `profile`: system
+    /// variables from the context, shared variables from this engine's
+    /// store, node outputs from `outputs`.
+    pub fn resolver<'a>(
+        &'a self,
+        profile: &'a Profile,
+        machine: &MachineConfig,
+        outputs: Option<&'a dyn StepOutputs>,
+    ) -> ContextResolver<'a> {
+        ContextResolver {
+            profile,
+            os: machine.os,
+            shared: self.variables.as_ref(),
+            outputs,
         }
     }
 
@@ -124,11 +177,24 @@ impl Engine {
     ) -> Option<Result<crate::ButtonState, crate::StateError>> {
         let instance = profile.action(action)?;
         let handler = self.registry.handler(&instance.action_type)?;
-        let Ok(parameters) = handler.definition().normalize(&instance.parameters) else {
-            return Some(Err(crate::StateError::new(
-                "invalid-configuration",
-                "the action's configuration is invalid",
-            )));
+        // A key's state follows the application's active project.
+        let resolution = Invocation::default().context(profile, project.map(|p| p.id));
+        let lookup = self.resolver(profile, machine, None);
+        let resolved = match resolve_parameters(
+            handler.definition(),
+            &instance.parameters,
+            &lookup,
+            &resolution,
+            profile,
+        ) {
+            Ok(resolved) => resolved,
+            Err(failure) => {
+                let result = failure.into_result();
+                return Some(Err(crate::StateError::new(
+                    result.code.as_deref().unwrap_or("invalid-configuration"),
+                    "the action's configuration is invalid",
+                )));
+            }
         };
         if handler.definition().requires_project && project.is_none() {
             return Some(Err(crate::StateError::new(
@@ -138,11 +204,25 @@ impl Engine {
         }
         let ignore = |_: crate::Progress| {};
         let control = crate::ExecutionControl::new(cancel, &ignore);
+        let device = crate::variables::doubles::FixedDevice(None);
+        let dependencies = ExecutionDependencies {
+            variables: &lookup,
+            projects: self.projects.as_ref(),
+            resources: machine,
+            credentials: self.credentials.as_ref(),
+            device: &device,
+        };
         let context = ExecutionContext::new(profile, project, machine)
-            .with_credentials(self.credentials.as_ref())
+            .with_dependencies(dependencies, &resolution)
             .with_control(&control);
         self.registry
-            .button_state(&instance.action_type, &parameters, &context)
+            .button_state(&instance.action_type, &resolved.parameters, &context)
+            .map(|state| {
+                state.map_err(|error| crate::StateError {
+                    message: resolved.redactor.redact(&error.message),
+                    ..error
+                })
+            })
     }
 
     /// Runs one action instance of `profile` and applies its context effects.
@@ -153,10 +233,41 @@ impl Engine {
         context: &mut ActiveProjectContext,
         action: ActionInstanceId,
     ) -> Result<ActionResult, EngineError> {
+        self.run_action_from(profile, machine, context, action, &Invocation::default())
+    }
+
+    /// [`Engine::run_action`] started from `invocation`, e.g. a device's
+    /// key, which its references can read (`system.device.current.id`).
+    pub fn run_action_from(
+        &self,
+        profile: &Profile,
+        machine: &MachineConfig,
+        context: &mut ActiveProjectContext,
+        action: ActionInstanceId,
+        invocation: &Invocation,
+    ) -> Result<ActionResult, EngineError> {
+        self.run_action_with(profile, machine, context, action, None, invocation)
+    }
+
+    /// [`Engine::run_action_from`] with values that replace some of the
+    /// instance's parameters for this run, e.g. a key binding's
+    /// overrides. They go through the same resolution and checks.
+    pub fn run_action_with(
+        &self,
+        profile: &Profile,
+        machine: &MachineConfig,
+        context: &mut ActiveProjectContext,
+        action: ActionInstanceId,
+        overrides: Option<&ActionParameters>,
+        invocation: &Invocation,
+    ) -> Result<ActionResult, EngineError> {
         let instance = profile
             .action(action)
             .ok_or(EngineError::UnknownAction(action))?;
-        self.execute(profile, machine, context, instance, None, None)
+        let overrides = overrides.filter(|o| !o.is_empty());
+        self.execute(
+            profile, machine, context, instance, overrides, None, invocation,
+        )
     }
 
     /// Runs the steps of a workflow in order. Effects of a step are applied
@@ -184,6 +295,7 @@ impl Engine {
             )?;
             return Ok(report.into_steps());
         }
+        let invocation = Invocation::default().with_workflow(workflow);
         let mut report = WorkflowReport {
             workflow,
             status: ActionStatus::Succeeded,
@@ -208,7 +320,15 @@ impl Engine {
             let result = match profile.action(step.action) {
                 Some(instance) => {
                     let overrides = (!step.overrides.is_empty()).then_some(&step.overrides);
-                    self.execute(profile, machine, context, instance, overrides, None)?
+                    self.execute(
+                        profile,
+                        machine,
+                        context,
+                        instance,
+                        overrides,
+                        None,
+                        &invocation,
+                    )?
                 }
                 None => ActionResult::failure("action no longer exists"),
             };
@@ -314,22 +434,76 @@ impl Engine {
         cancel: &CancellationToken,
         on_event: &(dyn Fn(ExecutionEvent) + Sync),
     ) -> Result<GraphReport, EngineError> {
+        self.execute_workflow_as(
+            profile,
+            machine,
+            context,
+            workflow,
+            inputs,
+            &Invocation::default(),
+            cancel,
+            on_event,
+        )
+    }
+
+    /// [`Engine::execute_workflow_with`] for the run `invocation` describes
+    /// (its execution id and the device that started it), which references
+    /// of its actions can read (`workflow.execution.id`,
+    /// `system.device.current.id`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_workflow_as(
+        &self,
+        profile: &Profile,
+        machine: &MachineConfig,
+        context: &mut ActiveProjectContext,
+        workflow: WorkflowId,
+        inputs: &std::collections::BTreeMap<String, String>,
+        invocation: &Invocation,
+        cancel: &CancellationToken,
+        on_event: &(dyn Fn(ExecutionEvent) + Sync),
+    ) -> Result<GraphReport, EngineError> {
         let definition = profile
             .workflow(workflow)
             .ok_or(EngineError::UnknownWorkflow(workflow))?;
+        let invocation = invocation.clone().with_workflow(workflow);
         if definition.graph.is_some() {
             let inputs = workflow_inputs(definition, inputs)?;
+            // Mappings resolve through the same resolver as the actions'
+            // own parameters: this engine's shared variables, system
+            // variables from the run.
+            let resolver = self.resolver(profile, machine, None);
+            let services = RunServices {
+                variables: Some(&resolver),
+                device: invocation.device.as_ref(),
+                execution: invocation.execution,
+            };
             self.run_graph_nested(
-                profile, machine, context, workflow, &inputs, cancel, on_event, 0,
+                profile,
+                machine,
+                context,
+                workflow,
+                &inputs,
+                cancel,
+                on_event,
+                (0, services),
+                &invocation,
             )
         } else {
-            self.run_steps(profile, machine, context, workflow, cancel, on_event)
+            self.run_steps(
+                profile,
+                machine,
+                context,
+                workflow,
+                cancel,
+                on_event,
+                &invocation,
+            )
         }
     }
 
     /// The sequential engine of [`Engine::run_workflow`] with events and
     /// cancellation between steps.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     fn run_steps(
         &self,
         profile: &Profile,
@@ -338,6 +512,7 @@ impl Engine {
         workflow: WorkflowId,
         cancel: &CancellationToken,
         on_event: &(dyn Fn(ExecutionEvent) + Sync),
+        invocation: &Invocation,
     ) -> Result<GraphReport, EngineError> {
         use crate::graph::{NodeId, NodeReport, NodeStatus, StepError};
         let definition = profile
@@ -399,6 +574,7 @@ impl Engine {
                             instance,
                             overrides,
                             Some(&control),
+                            invocation,
                         )?
                     }
                     None => ActionResult::failure("action no longer exists"),
@@ -459,12 +635,62 @@ impl Engine {
             .workflow(workflow)
             .ok_or(EngineError::UnknownWorkflow(workflow))?;
         let inputs = workflow_inputs(definition, &std::collections::BTreeMap::new())?;
+        let resolver = self.resolver(profile, machine, None);
+        let services = RunServices {
+            variables: Some(&resolver),
+            ..RunServices::default()
+        };
         self.run_graph_nested(
-            profile, machine, context, workflow, &inputs, cancel, on_event, 0,
+            profile,
+            machine,
+            context,
+            workflow,
+            &inputs,
+            cancel,
+            on_event,
+            (0, services),
+            &Invocation::default().with_workflow(workflow),
         )
     }
 
+    /// [`Engine::execute_workflow_with`] for a graph workflow whose
+    /// references to shared, system and workflow variables are resolved
+    /// through `services` (see [`crate::graph::RunServices`]); nested
+    /// workflows use the same services and run.
     #[allow(clippy::too_many_arguments)]
+    pub fn execute_graph_with_services(
+        &self,
+        profile: &Profile,
+        machine: &MachineConfig,
+        context: &mut ActiveProjectContext,
+        workflow: WorkflowId,
+        inputs: &std::collections::BTreeMap<String, String>,
+        services: RunServices<'_>,
+        cancel: &CancellationToken,
+        on_event: &(dyn Fn(ExecutionEvent) + Sync),
+    ) -> Result<GraphReport, EngineError> {
+        let definition = profile
+            .workflow(workflow)
+            .ok_or(EngineError::UnknownWorkflow(workflow))?;
+        let inputs = workflow_inputs(definition, inputs)?;
+        self.run_graph_nested(
+            profile,
+            machine,
+            context,
+            workflow,
+            &inputs,
+            cancel,
+            on_event,
+            (0, services),
+            &Invocation {
+                device: services.device.cloned(),
+                workflow: Some(workflow),
+                execution: services.execution,
+            },
+        )
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn run_graph_nested(
         &self,
         profile: &Profile,
@@ -474,7 +700,8 @@ impl Engine {
         inputs: &std::collections::BTreeMap<String, String>,
         cancel: &CancellationToken,
         on_event: &(dyn Fn(ExecutionEvent) + Sync),
-        depth: usize,
+        (depth, services): (usize, RunServices<'_>),
+        invocation: &Invocation,
     ) -> Result<GraphReport, EngineError> {
         let definition = profile
             .workflow(workflow)
@@ -492,15 +719,20 @@ impl Engine {
         let run_action = |instance: &ActionInstance,
                           overrides: &ActionParameters,
                           context: &mut ActiveProjectContext,
-                          control: &crate::ExecutionControl<'_>| {
+                          control: &crate::ExecutionControl<'_>,
+                          outputs: &crate::graph::mapping::Outputs| {
             let overrides = (!overrides.is_empty()).then_some(overrides);
-            self.execute(
+            // The run's node outputs so far, for `steps.` references in the
+            // instance's own parameters; mapped values arrive as literals.
+            self.execute_with_outputs(
                 profile,
                 machine,
                 context,
                 instance,
                 overrides,
                 Some(control),
+                invocation,
+                Some(outputs),
             )
         };
         // Nested workflows report their progress as part of the Loop or
@@ -522,7 +754,8 @@ impl Engine {
                     &values,
                     token,
                     &|_| {},
-                    depth + 1,
+                    (depth + 1, services),
+                    &invocation.clone().with_workflow(nested),
                 )?;
                 let outputs = if report.status == RunStatus::Succeeded {
                     workflow_outputs(inner_graph, &report)
@@ -531,7 +764,15 @@ impl Engine {
                 };
                 (report, outputs)
             } else {
-                let report = self.run_steps(profile, machine, context, nested, token, &|_| {})?;
+                let report = self.run_steps(
+                    profile,
+                    machine,
+                    context,
+                    nested,
+                    token,
+                    &|_| {},
+                    &invocation.clone().with_workflow(nested),
+                )?;
                 (report, std::collections::BTreeMap::new())
             };
             let (report, outputs) = report;
@@ -560,6 +801,7 @@ impl Engine {
             on_event,
             cancel,
             limits: ExecutionLimits::default(),
+            services,
             summary: std::sync::Mutex::new(crate::RunSummary {
                 workflow: Some(workflow),
                 ..crate::RunSummary::default()
@@ -569,6 +811,11 @@ impl Engine {
         .run(context)
     }
 
+    /// One action through the resolution pipeline (see
+    /// [`crate::resolution`]): definition, configured values, captured
+    /// context, references, validation, permissions, execution with
+    /// injected services, redaction, effects.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn execute(
         &self,
         profile: &Profile,
@@ -577,15 +824,43 @@ impl Engine {
         instance: &ActionInstance,
         overrides: Option<&ActionParameters>,
         control: Option<&crate::ExecutionControl<'_>>,
+        invocation: &Invocation,
+    ) -> Result<ActionResult, EngineError> {
+        self.execute_with_outputs(
+            profile, machine, context, instance, overrides, control, invocation, None,
+        )
+    }
+
+    /// [`Engine::execute`] with the outputs of the run so far, for `steps.`
+    /// references in the instance's parameters.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute_with_outputs(
+        &self,
+        profile: &Profile,
+        machine: &MachineConfig,
+        context: &mut ActiveProjectContext,
+        instance: &ActionInstance,
+        overrides: Option<&ActionParameters>,
+        control: Option<&crate::ExecutionControl<'_>>,
+        invocation: &Invocation,
+        outputs: Option<&dyn StepOutputs>,
     ) -> Result<ActionResult, EngineError> {
         let project = context.project(profile)?;
-        let base = ExecutionContext::new(profile, project, machine)
-            .with_credentials(self.credentials.as_ref())
-            .with_notifier(self.notifier.as_ref());
-        let base = match control {
-            Some(control) => base.with_control(control),
-            None => base,
+        // The context is captured once: the run's own project inside a
+        // workflow, never replaced by the application's active project.
+        let resolution = invocation.context(profile, project.map(|p| p.id));
+        let lookup = self.resolver(profile, machine, outputs);
+        let device = crate::variables::doubles::FixedDevice(invocation.device.clone());
+        let dependencies = ExecutionDependencies {
+            variables: &lookup,
+            projects: self.projects.as_ref(),
+            resources: machine,
+            credentials: self.credentials.as_ref(),
+            device: &device,
         };
+        let base = ExecutionContext::new(profile, project, machine)
+            .with_dependencies(dependencies, &resolution)
+            .with_notifier(self.notifier.as_ref());
         let Some(handler) = self.registry.handler(&instance.action_type) else {
             return Ok(self
                 .registry
@@ -600,43 +875,127 @@ impl Engine {
             Some(overrides) => instance.parameters.overlay(overrides),
             None => instance.parameters.clone(),
         };
-        let parameters = match handler.definition().normalize(&configured) {
-            Ok(parameters) => parameters,
-            Err(errors) => {
-                let details: Vec<_> = errors.iter().map(ToString::to_string).collect();
-                return Ok(ActionResult::failure(format!(
-                    "invalid configuration: {}",
-                    details.join("; ")
-                )));
-            }
+        let Resolved {
+            parameters,
+            redactor,
+        } = match resolve_parameters(
+            handler.definition(),
+            &configured,
+            &lookup,
+            &resolution,
+            profile,
+        ) {
+            Ok(resolved) => resolved,
+            Err(failure) => return Ok(failure.into_result()),
         };
+        if let Some((key, reference)) = parameters.references().next() {
+            // Resolution is not wired in yet: a handler must never see an
+            // unresolved value, so the action does not run.
+            return Ok(ActionResult::error(
+                "reference-unavailable",
+                format!(
+                    "parameter `{key}`: {{{{ {reference} }}}} cannot be resolved by this version"
+                ),
+            ));
+        }
         let problems = self
             .registry
             .check_parameters(&instance.action_type, &parameters, profile);
         if !problems.is_empty() {
+            let problems: Vec<String> = problems.iter().map(|p| redactor.redact(p)).collect();
             return Ok(ActionResult::failure(format!(
                 "invalid configuration: {}",
                 problems.join("; ")
             )));
         }
-        let execution = base;
-        let mut result = self
+        // Progress messages leave the action through the run's events:
+        // sensitive values are removed from them too.
+        let redact_progress = |progress: crate::Progress| {
+            if let Some(control) = control {
+                (control.progress)(crate::Progress {
+                    message: redactor.redact(&progress.message),
+                    ..progress
+                });
+            }
+        };
+        let redacted_control = control.map(|control| crate::ExecutionControl {
+            cancel: control.cancel,
+            progress: &redact_progress,
+            summary: control.summary.clone(),
+        });
+        let execution = match &redacted_control {
+            Some(control) => base.with_control(control),
+            None => base,
+        };
+        let result = self
             .registry
             .dispatch(&instance.action_type, &parameters, &execution);
+        let mut result = redactor.redact_result(result);
         if result.is_success() {
-            for effect in &result.effects {
-                // Selection is validated against the active profile, so an
-                // action can never activate another profile's project.
-                let applied = match effect {
-                    ContextEffect::SelectProject { project } => context.select(profile, *project),
-                };
-                if let Err(error) = applied {
-                    result = ActionResult::failure(error.to_string());
-                    break;
+            let requested = std::mem::take(&mut result.effects);
+            for effect in &requested {
+                match apply_effect(profile, context, effect, &mut result) {
+                    Ok(applied) => result.effects.push(applied),
+                    Err(failure) => {
+                        result = failure;
+                        break;
+                    }
                 }
             }
         }
         Ok(result)
+    }
+}
+
+/// Applies `effect` to `context` and returns it as applied. Selection is
+/// validated against the active profile, so an action can never activate
+/// another profile's project.
+///
+/// A cycle steps from the project active *now*: effects are applied one
+/// at a time by whoever owns `context`, so several cycles requested in a
+/// row each move one project on. It is reported as the selection it made,
+/// and `result`'s project data is set to that project.
+fn apply_effect(
+    profile: &Profile,
+    context: &mut ActiveProjectContext,
+    effect: &ContextEffect,
+    result: &mut ActionResult,
+) -> Result<ContextEffect, ActionResult> {
+    match *effect {
+        ContextEffect::SelectProject { project } => context
+            .select(profile, project)
+            .map(|()| ContextEffect::SelectProject { project })
+            .map_err(|error| ActionResult::failure(error.to_string())),
+        ContextEffect::CycleProject {
+            direction,
+            wrap_around,
+        } => {
+            let current = context
+                .project(profile)
+                .map_err(|error| ActionResult::failure(error.to_string()))?
+                .map(|p| p.id);
+            let target =
+                crate::ProjectSwitcher::step(&profile.projects, current, direction, wrap_around)
+                    .map_err(|error| ActionResult::error(error.code(), error.to_string()))?;
+            context
+                .select(profile, target)
+                .map_err(|error| ActionResult::failure(error.to_string()))?;
+            if let Some(project) = profile.project(target) {
+                let id = project.id.to_string();
+                if result.data.get("projectId").is_some_and(|seen| *seen != id) {
+                    // The handler saw another project than the one active now.
+                    result.message = format!("switched to {}", project.key);
+                }
+                result.data.insert("projectId".into(), id);
+                result
+                    .data
+                    .insert("projectKey".into(), project.key.to_string());
+                result
+                    .data
+                    .insert("projectName".into(), project.name.clone());
+            }
+            Ok(ContextEffect::SelectProject { project: target })
+        }
     }
 }
 
@@ -666,6 +1025,20 @@ fn workflow_inputs(
         }
     }
     Ok(values)
+}
+
+/// The declared outputs a top-level run of `definition` set, read from its
+/// report before it is made safe for history (sensitive values included):
+/// empty unless it is a graph workflow whose run succeeded. A nested run
+/// hands its outputs to the calling node the same way.
+pub fn declared_outputs(
+    definition: &crate::Workflow,
+    report: &GraphReport,
+) -> std::collections::BTreeMap<String, String> {
+    match &definition.graph {
+        Some(graph) if report.status == RunStatus::Succeeded => workflow_outputs(graph, report),
+        _ => std::collections::BTreeMap::new(),
+    }
 }
 
 /// The declared outputs a finished run set: the values of its Output nodes
@@ -767,6 +1140,53 @@ mod tests {
 
     fn machine() -> MachineConfig {
         MachineConfig::new(Os::current())
+    }
+
+    #[test]
+    fn a_cycle_steps_from_the_project_active_when_it_is_applied() {
+        let profile = with_projects("Work", &["SHOP", "CMR", "CMS"]);
+        let (cmr, cms) = (profile.projects[1].id, profile.projects[2].id);
+        let cycle = |direction, wrap_around| ContextEffect::CycleProject {
+            direction,
+            wrap_around,
+        };
+        let next = cycle(crate::CycleDirection::Next, true);
+        // The handler saw SHOP and expected CMR, but CMR became active
+        // before the effect was applied: the cycle moves on from CMR.
+        let mut context = ActiveProjectContext::new(&profile);
+        context.select(&profile, cmr).unwrap();
+        let mut result = ActionResult::success("switched to CMR")
+            .with_data("projectId", cmr.to_string())
+            .with_data("projectKey", "CMR");
+        let applied = apply_effect(&profile, &mut context, &next, &mut result).unwrap();
+        assert_eq!(applied, ContextEffect::SelectProject { project: cms });
+        assert_eq!(context.project_id(), Some(cms));
+        assert_eq!(result.data["projectKey"], "CMS");
+        assert_eq!(result.data["projectId"], cms.to_string());
+        assert_eq!(result.message, "switched to CMS");
+
+        // Without wrap-around the end fails with its code and changes nothing.
+        let failure = apply_effect(
+            &profile,
+            &mut context,
+            &cycle(crate::CycleDirection::Next, false),
+            &mut ActionResult::success(""),
+        )
+        .unwrap_err();
+        assert_eq!(failure.code.as_deref(), Some("at-last-project"));
+        assert_eq!(context.project_id(), Some(cms));
+
+        // A context of another profile (the profile changed between the
+        // press and the effect) is never changed.
+        let home = with_projects("Home", &["BLOG"]);
+        assert!(apply_effect(&home, &mut context, &next, &mut ActionResult::success("")).is_err());
+        assert_eq!(context.project_id(), Some(cms));
+
+        let empty = with_projects("Empty", &[]);
+        let mut none = ActiveProjectContext::new(&empty);
+        let failure =
+            apply_effect(&empty, &mut none, &next, &mut ActionResult::success("")).unwrap_err();
+        assert_eq!(failure.code.as_deref(), Some("no-projects"));
     }
 
     #[test]
@@ -1006,5 +1426,107 @@ mod tests {
                 .run_action(&f.profile, &machine(), &mut context, f.log),
             Err(EngineError::Context(_))
         ));
+    }
+
+    #[test]
+    fn unresolved_references_never_reach_a_handler() {
+        let mut f = fixture();
+        let reference = crate::variables::VariableRef::parse("shared.team.greeting").unwrap();
+        let instance = f
+            .engine
+            .registry()
+            .create_instance(
+                "Greet",
+                echo_type(),
+                &ActionParameters::new().with("message", ParameterValue::Reference(reference)),
+            )
+            .unwrap();
+        let id = instance.id;
+        f.profile.actions.push(instance);
+        let mut context = ActiveProjectContext::new(&f.profile);
+        let result = f
+            .engine
+            .run_action(&f.profile, &machine(), &mut context, id)
+            .unwrap();
+        // Without a variable store the variable does not exist.
+        assert!(!result.is_success());
+        assert_eq!(result.code.as_deref(), Some("reference-missing"));
+        assert!(result.message.contains("parameter `message`"));
+        assert!(result.message.contains("{{ shared.team.greeting }}"));
+    }
+
+    #[test]
+    fn a_top_level_run_hands_over_its_declared_outputs() {
+        use crate::graph::{ValueKind, WorkflowOutput};
+        let mut f = fixture();
+        let failing = f
+            .engine
+            .registry()
+            .create_instance(
+                "Fail",
+                echo_type(),
+                &ActionParameters::new().with("message", ParameterValue::Text("fail".into())),
+            )
+            .unwrap();
+        let failing_id = failing.id;
+        f.profile.actions.push(failing);
+        let graph = |can_finish: &str, fail: bool| {
+            let mut nodes = vec![
+                serde_json::json!({"id": "start", "type": "trigger"}),
+                serde_json::json!({"id": "out", "type": "output", "values": {
+                    "canFinish": {"type": "template", "template": can_finish},
+                    "details": {"type": "template", "template": "all checks pass"},
+                }}),
+            ];
+            let mut edges = vec![serde_json::json!({"from": "start", "to": "out"})];
+            if fail {
+                nodes.push(serde_json::json!({
+                    "id": "broken", "type": "action", "action": failing_id
+                }));
+                edges.push(serde_json::json!({"from": "out", "to": "broken"}));
+            }
+            serde_json::from_value(serde_json::json!({
+                "version": 1, "nodes": nodes, "edges": edges
+            }))
+            .unwrap()
+        };
+        let mut run = |can_finish: &str, fail: bool| {
+            let mut workflow = Workflow::new("Check");
+            workflow.outputs = vec![
+                WorkflowOutput::new("canFinish", ValueKind::Boolean),
+                WorkflowOutput::new("details", ValueKind::Text),
+            ];
+            workflow.graph = Some(graph(can_finish, fail));
+            let id = workflow.id;
+            f.profile.workflows.push(workflow);
+            let mut context = ActiveProjectContext::new(&f.profile);
+            let report = f
+                .engine
+                .execute_workflow(
+                    &f.profile,
+                    &machine(),
+                    &mut context,
+                    id,
+                    &CancellationToken::new(),
+                    &|_| {},
+                )
+                .unwrap();
+            declared_outputs(f.profile.workflow(id).unwrap(), &report)
+        };
+        let outputs = run("true", false);
+        assert_eq!(outputs.get("canFinish").map(String::as_str), Some("true"));
+        assert!(outputs.contains_key("details"));
+        // A run that failed hands over nothing, even outputs it had set.
+        assert!(run("false", true).is_empty());
+        // Workflows without a graph have no outputs.
+        let steps = Workflow::new("Steps").step(f.log, OnFailure::Stop);
+        let report = GraphReport {
+            workflow: steps.id,
+            status: RunStatus::Succeeded,
+            duration_ms: 0,
+            nodes: Vec::new(),
+            context_conflict: None,
+        };
+        assert!(declared_outputs(&steps, &report).is_empty());
     }
 }

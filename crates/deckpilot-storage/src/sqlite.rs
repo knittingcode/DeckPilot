@@ -10,7 +10,15 @@ use deckpilot_core::{
     ModuleStates, Profile, ProfileId, Project, ProjectId, ProjectKey,
 };
 
+use deckpilot_core::work_session::WorkSessionNotice;
+use deckpilot_core::{VerificationId, WorkSessionId, WorkflowId};
+
 use crate::executions::{ExecutionQuery, Retention};
+use crate::work_sessions::{
+    GapKind, HistoryQuery, NewWorkSession, ReviewResolution, SessionStatus, StoredInterval,
+    Transition, TransitionRecord, VerificationResult, WorkSessionRecord, WorkSessionReview,
+    WorkSessionSettings, WorkSessionSummary,
+};
 use crate::{
     ConfigStore, DOCUMENT_VERSION, LaunchInfo, MigrationNote, ProfileSummary, Result, StorageError,
 };
@@ -68,6 +76,12 @@ const MIGRATIONS: &[&str] = &[
 ",
     crate::executions::SCHEMA,
     crate::credentials::SCHEMA,
+    // Shared variables and provenance (with `provenance::SCHEMA` below).
+    // Additive: no document is rewritten and no provenance is invented for
+    // existing data.
+    crate::variables::SCHEMA,
+    // Work sessions. Additive: new, empty tables only.
+    crate::work_sessions::SCHEMA,
 ];
 
 /// Runs `step` again while SQLite reports the database busy, for up to
@@ -138,6 +152,16 @@ pub struct ConfigChanges {
     pub module_states: Vec<(ModuleId, ModuleSettings)>,
     /// Application settings (`key`, `value`) written with the rest.
     pub settings: Vec<(String, String)>,
+    /// Shared variables to create (as imported) when no variable with the
+    /// key exists; an existing definition is kept as it is.
+    pub variables: Vec<deckpilot_core::variables::VariableDefinition>,
+    /// Shared variable values to set, after the profiles and variables
+    /// above; each is checked against its definition.
+    pub variable_values: Vec<(
+        deckpilot_core::variables::VariableKey,
+        deckpilot_core::variables::ScopeKey,
+        deckpilot_core::variables::VariableValue,
+    )>,
 }
 
 impl SqliteStore {
@@ -149,13 +173,13 @@ impl SqliteStore {
     /// verified and recorded in `migration_history`.
     pub fn open(path: impl AsRef<Path>, encryption: &Encryption) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let connection = Connection::open(&path)?;
+        let connection = crate::engine::open(&path)?;
         Self::init(connection, Some(path), encryption)
     }
 
     /// Opens a private in-memory database. Useful for tests.
     pub fn open_in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?, None, &Encryption::None)
+        Self::init(crate::engine::open_in_memory()?, None, &Encryption::None)
     }
 
     fn init(
@@ -273,6 +297,7 @@ impl SqliteStore {
                 2 => upgrade_documents(&tx)?,
                 3 => crate::legacy::migrate(&tx)?,
                 4 => crate::project_actions::migrate(&tx)?,
+                8 => tx.execute_batch(crate::provenance::SCHEMA)?,
                 _ => {}
             }
             failpoint(Failpoint::Migration(version + 1))?;
@@ -532,6 +557,9 @@ impl SqliteStore {
             rusqlite::TransactionBehavior::Immediate,
         )?;
         for id in &changes.delete_profiles {
+            if crate::work_sessions::profile_has_active(&tx, *id)? {
+                return Err(StorageError::WorkSessionActive);
+            }
             tx.execute("DELETE FROM profiles WHERE id = ?1", [id.to_string()])?;
             tx.execute(
                 "DELETE FROM workflow_executions WHERE profile_id = ?1",
@@ -559,8 +587,512 @@ impl SqliteStore {
                 params![key, value],
             )?;
         }
+        for definition in &changes.variables {
+            if crate::variables::get(&tx, &definition.key)?.is_none() {
+                crate::variables::save(&tx, definition, crate::variables::VariableOrigin::Import)?;
+            }
+        }
+        for (key, scope, value) in &changes.variable_values {
+            crate::variables::set_value(&tx, key, scope, value)?;
+        }
         tx.commit()?;
         Ok(())
+    }
+}
+
+/// Shared variables (schema 8). See [`crate::variables`].
+impl SqliteStore {
+    /// Every definition this build can read, by key.
+    pub fn shared_variables(&self) -> Result<Vec<crate::variables::StoredVariable>> {
+        crate::variables::list(&self.connection)
+    }
+
+    pub fn shared_variable(
+        &self,
+        key: &deckpilot_core::variables::VariableKey,
+    ) -> Result<Option<crate::variables::StoredVariable>> {
+        crate::variables::get(&self.connection, key)
+    }
+
+    /// Creates or changes a user variable. Refused for a key a module
+    /// declares, for an invalid definition, and when stored values would no
+    /// longer fit (they are never dropped silently). Reserved namespaces
+    /// (`steps`, `system`, `workflow`) cannot be part of a
+    /// [`VariableKey`](deckpilot_core::variables::VariableKey) at all.
+    pub fn save_shared_variable(
+        &self,
+        definition: &deckpilot_core::variables::VariableDefinition,
+    ) -> Result<()> {
+        self.save_shared_variable_from(definition, crate::variables::VariableOrigin::User)
+    }
+
+    /// [`Self::save_shared_variable`] recording where a new definition came
+    /// from (the seed, an import).
+    pub fn save_shared_variable_from(
+        &self,
+        definition: &deckpilot_core::variables::VariableDefinition,
+        origin: crate::variables::VariableOrigin,
+    ) -> Result<()> {
+        let tx = self.write_transaction()?;
+        // A type change would break the references that use the variable
+        // (a project parameter cannot take a string); refused while any
+        // exist.
+        if let Some(existing) = crate::variables::get(&tx, &definition.key)?
+            && existing.definition.value_type != definition.value_type
+        {
+            let references = self.shared_variable_references(&definition.key)?;
+            if !references.is_empty() {
+                return Err(StorageError::VariableInUse(references));
+            }
+        }
+        crate::variables::save(&tx, definition, origin)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Every place in every profile that refers to `shared.<key>`:
+    /// reference and template parameter values, workflow mappings and
+    /// overrides, key labels and inline actions, and the triggers of the
+    /// workflows that use it.
+    pub fn shared_variable_references(
+        &self,
+        key: &deckpilot_core::variables::VariableKey,
+    ) -> Result<Vec<crate::variable_references::VariableReference>> {
+        let mut references = Vec::new();
+        for summary in self.list_profiles()? {
+            if let Some(profile) = self.load_profile(summary.id)? {
+                references.extend(crate::variable_references::variable_references(
+                    &profile, key,
+                ));
+            }
+        }
+        Ok(references)
+    }
+
+    /// Declares the variables of a module. Keys already held by a user
+    /// variable or another module are skipped and returned; nothing of the
+    /// holder changes.
+    pub fn declare_module_variables(
+        &self,
+        module: &ModuleId,
+        definitions: &[deckpilot_core::variables::VariableDefinition],
+    ) -> Result<Vec<crate::variables::DeclarationConflict>> {
+        let tx = self.write_transaction()?;
+        let conflicts = crate::variables::declare(&tx, module, definitions)?;
+        tx.commit()?;
+        Ok(conflicts)
+    }
+
+    /// Deletes a user variable with all its values. Returns whether it
+    /// existed. Refused with [`StorageError::VariableInUse`] while anything
+    /// refers to it.
+    pub fn delete_shared_variable(
+        &self,
+        key: &deckpilot_core::variables::VariableKey,
+    ) -> Result<bool> {
+        let tx = self.write_transaction()?;
+        let references = self.shared_variable_references(key)?;
+        if !references.is_empty() {
+            return Err(StorageError::VariableInUse(references));
+        }
+        let deleted = crate::variables::delete(&tx, key)?;
+        tx.commit()?;
+        Ok(deleted)
+    }
+
+    /// Sets the value of `key` at `scope` (global, a profile or a project
+    /// of that profile), replacing the value there.
+    pub fn set_shared_variable_value(
+        &self,
+        key: &deckpilot_core::variables::VariableKey,
+        scope: &deckpilot_core::variables::ScopeKey,
+        value: &deckpilot_core::variables::VariableValue,
+    ) -> Result<()> {
+        let tx = self.write_transaction()?;
+        crate::variables::set_value(&tx, key, scope, value)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Removes the value at `scope`. Returns whether there was one.
+    pub fn clear_shared_variable_value(
+        &self,
+        key: &deckpilot_core::variables::VariableKey,
+        scope: &deckpilot_core::variables::ScopeKey,
+    ) -> Result<bool> {
+        let tx = self.write_transaction()?;
+        let cleared = crate::variables::clear_value(&tx, key, scope)?;
+        tx.commit()?;
+        Ok(cleared)
+    }
+
+    /// Every stored value of `key`, of all profiles.
+    pub fn shared_variable_values(
+        &self,
+        key: &deckpilot_core::variables::VariableKey,
+    ) -> Result<Vec<crate::variables::StoredValue>> {
+        crate::variables::values_of(&self.connection, key)
+    }
+
+    /// Values of a profile and its projects (no global values).
+    pub fn profile_variable_values(
+        &self,
+        profile: ProfileId,
+    ) -> Result<Vec<crate::variables::StoredValue>> {
+        crate::variables::values_of_profile(&self.connection, profile)
+    }
+
+    pub fn global_variable_values(&self) -> Result<Vec<crate::variables::StoredValue>> {
+        crate::variables::global_values(&self.connection)
+    }
+
+    /// A snapshot of the variables as `profile` sees them, for resolving
+    /// `shared.` references.
+    pub fn shared_variables_for(
+        &self,
+        profile: ProfileId,
+    ) -> Result<crate::variables::SharedVariables> {
+        crate::variables::SharedVariables::load(&self.connection, profile)
+    }
+}
+
+/// Provenance (schema 8). See [`crate::provenance`].
+impl SqliteStore {
+    /// Records (or replaces) provenance rows; all or none.
+    pub fn record_provenance(&self, rows: &[crate::provenance::Provenance]) -> Result<()> {
+        let tx = self.write_transaction()?;
+        crate::provenance::record(&tx, rows)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Provenance rows of a profile.
+    pub fn provenance(&self, profile: ProfileId) -> Result<Vec<crate::provenance::Provenance>> {
+        crate::provenance::list(&self.connection, profile)
+    }
+
+    /// Each item of `profile` with provenance, whether it still exists and
+    /// whether it was edited since it was created.
+    pub fn provenance_status(
+        &self,
+        profile: ProfileId,
+    ) -> Result<Vec<crate::provenance::ProvenanceStatus>> {
+        use crate::provenance::{ProvenanceEntity, ProvenanceStatus, item_snapshot};
+        let Some(document) = self.load_profile(profile)? else {
+            return Err(StorageError::UnknownProfile);
+        };
+        let mut statuses = Vec::new();
+        for row in crate::provenance::list(&self.connection, profile)? {
+            let current = if row.entity == ProvenanceEntity::Variable {
+                match deckpilot_core::variables::VariableKey::new(row.entity_id.clone()) {
+                    Ok(key) => crate::variables::get(&self.connection, &key)?
+                        .map(|stored| crate::provenance::variable_snapshot(&stored.definition))
+                        .transpose()?,
+                    Err(_) => None,
+                }
+            } else {
+                item_snapshot(&document, row.entity, &row.entity_id)?
+            };
+            statuses.push(ProvenanceStatus {
+                exists: current.is_some(),
+                edited: current.is_some_and(|current| current != row.snapshot),
+                provenance: row,
+            });
+        }
+        Ok(statuses)
+    }
+}
+
+/// Safe deletion of actions. See [`crate::references`].
+impl SqliteStore {
+    /// Loads `profile`, applies `change` and saves the result, all in one
+    /// transaction; nothing is written when `change` fails.
+    fn change_profile<T>(
+        &self,
+        profile: ProfileId,
+        change: impl FnOnce(&mut Profile) -> Result<T>,
+    ) -> Result<T> {
+        let tx = self.write_transaction()?;
+        let mut document = self
+            .load_profile(profile)?
+            .ok_or(StorageError::UnknownProfile)?;
+        let result = change(&mut document)?;
+        write_profile(&tx, &document)?;
+        tx.commit()?;
+        Ok(result)
+    }
+
+    /// Every place in `profile` that uses `action`: key bindings, workflow
+    /// steps and nodes, and the triggers of those workflows.
+    pub fn action_references(
+        &self,
+        profile: ProfileId,
+        action: deckpilot_core::ActionInstanceId,
+    ) -> Result<Vec<crate::references::ActionReference>> {
+        let document = self
+            .load_profile(profile)?
+            .ok_or(StorageError::UnknownProfile)?;
+        Ok(crate::references::action_references(&document, action))
+    }
+
+    /// Deletes `action` if nothing uses it; otherwise
+    /// [`StorageError::ActionInUse`] lists the uses and nothing changes.
+    pub fn delete_action(
+        &self,
+        profile: ProfileId,
+        action: deckpilot_core::ActionInstanceId,
+    ) -> Result<deckpilot_core::ActionInstance> {
+        self.change_profile(profile, |document| {
+            crate::references::delete_action(document, action)
+        })
+    }
+
+    /// Points the selected uses of `from` at `to`, in one transaction.
+    pub fn replace_action_references(
+        &self,
+        profile: ProfileId,
+        from: deckpilot_core::ActionInstanceId,
+        to: deckpilot_core::ActionInstanceId,
+        selection: &crate::references::Selection,
+    ) -> Result<crate::references::ReferenceChange> {
+        self.change_profile(profile, |document| {
+            crate::references::replace_action(document, from, to, selection)
+        })
+    }
+
+    /// Removes the selected key bindings and steps that use `action`, in
+    /// one transaction. Graph nodes are refused.
+    pub fn unbind_action(
+        &self,
+        profile: ProfileId,
+        action: deckpilot_core::ActionInstanceId,
+        selection: &crate::references::Selection,
+    ) -> Result<crate::references::ReferenceChange> {
+        self.change_profile(profile, |document| {
+            crate::references::unbind_action(document, action, selection)
+        })
+    }
+}
+
+/// Work sessions (schema 9). See [`crate::work_sessions`]. Every
+/// transition is one `IMMEDIATE` transaction; a refused or repeated request
+/// writes nothing.
+impl SqliteStore {
+    fn work_session_write<T>(&self, write: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        let tx = self.write_transaction()?;
+        let result = write(&tx)?;
+        tx.commit()?;
+        Ok(result)
+    }
+
+    /// The work session settings of `profile` (defaults if never saved).
+    pub fn work_session_settings(&self, profile: ProfileId) -> Result<WorkSessionSettings> {
+        crate::work_sessions::settings(&self.connection, profile)
+    }
+
+    /// Saves the settings of a profile; `at_ms` becomes `updated_at_ms`.
+    pub fn save_work_session_settings(
+        &self,
+        settings: &WorkSessionSettings,
+        at_ms: i64,
+    ) -> Result<WorkSessionSettings> {
+        self.work_session_write(|tx| crate::work_sessions::save_settings(tx, settings, at_ms))
+    }
+
+    /// The active session (at most one, decision D7).
+    pub fn active_work_session(&self) -> Result<Option<WorkSessionRecord>> {
+        crate::work_sessions::active(&self.connection)
+    }
+
+    pub fn work_session(&self, id: WorkSessionId) -> Result<Option<WorkSessionRecord>> {
+        crate::work_sessions::get(&self.connection, id)
+    }
+
+    pub fn work_session_intervals(&self, id: WorkSessionId) -> Result<Vec<StoredInterval>> {
+        crate::work_sessions::intervals(&self.connection, id)
+    }
+
+    /// Counted time at `now_ms`, computed from the persisted intervals.
+    pub fn work_session_elapsed_ms(&self, id: WorkSessionId, now_ms: i64) -> Result<u64> {
+        crate::work_sessions::elapsed(&self.connection, id, now_ms)
+    }
+
+    pub fn work_session_reviews(&self, id: WorkSessionId) -> Result<Vec<WorkSessionReview>> {
+        crate::work_sessions::reviews(&self.connection, id)
+    }
+
+    /// The audit log of a session, oldest first.
+    pub fn work_session_transitions(&self, id: WorkSessionId) -> Result<Vec<TransitionRecord>> {
+        crate::work_sessions::transitions(&self.connection, id)
+    }
+
+    /// Sessions, newest first, with their counted time at `now_ms`.
+    pub fn work_session_history(
+        &self,
+        query: HistoryQuery,
+        now_ms: i64,
+    ) -> Result<Vec<WorkSessionSummary>> {
+        crate::work_sessions::history(&self.connection, query, now_ms)
+    }
+
+    /// T1: creates the session in `starting`. Refused while another
+    /// session is active.
+    pub fn begin_work_session(&self, new: &NewWorkSession) -> Result<Transition> {
+        self.work_session_write(|tx| crate::work_sessions::begin(tx, new))
+    }
+
+    /// Records the execution of the start run. Returns whether the session
+    /// is still starting.
+    pub fn set_work_session_start_execution(
+        &self,
+        id: WorkSessionId,
+        execution: ExecutionId,
+    ) -> Result<bool> {
+        self.work_session_write(|tx| crate::work_sessions::set_start_execution(tx, id, execution))
+    }
+
+    /// Records the execution of the running verification `verification`.
+    /// Returns whether it is still the session's running verification.
+    pub fn set_work_session_verification_execution(
+        &self,
+        id: WorkSessionId,
+        verification: VerificationId,
+        execution: ExecutionId,
+    ) -> Result<bool> {
+        self.work_session_write(|tx| {
+            crate::work_sessions::set_verification_execution(tx, id, verification, execution)
+        })
+    }
+
+    /// T2: opens the first interval at `at_ms`.
+    pub fn work_session_start_succeeded(
+        &self,
+        id: WorkSessionId,
+        at_ms: i64,
+    ) -> Result<Transition> {
+        self.work_session_write(|tx| crate::work_sessions::start_succeeded(tx, id, at_ms))
+    }
+
+    /// T3 with `startFailed` or `startInterrupted`.
+    pub fn work_session_start_failed(
+        &self,
+        id: WorkSessionId,
+        notice: &WorkSessionNotice,
+        at_ms: i64,
+    ) -> Result<Transition> {
+        self.work_session_write(|tx| crate::work_sessions::start_failed(tx, id, notice, at_ms))
+    }
+
+    /// T4 (`from` working) or T8 (`from` readyToFinish).
+    pub fn begin_work_session_verification(
+        &self,
+        id: WorkSessionId,
+        from: SessionStatus,
+        verification: VerificationId,
+        workflow: Option<WorkflowId>,
+        at_ms: i64,
+    ) -> Result<Transition> {
+        self.work_session_write(|tx| {
+            crate::work_sessions::begin_verification(tx, id, from, verification, workflow, at_ms)
+        })
+    }
+
+    /// T5–T7: the result of `verification`, applied only if it is the
+    /// session's current, running verification. A pass records the
+    /// approval for agent instance `boot`.
+    pub fn record_work_session_verification(
+        &self,
+        id: WorkSessionId,
+        verification: VerificationId,
+        result: &VerificationResult,
+        boot: &str,
+        at_ms: i64,
+    ) -> Result<Transition> {
+        self.work_session_write(|tx| {
+            crate::work_sessions::verification_result(tx, id, verification, result, boot, at_ms)
+        })
+    }
+
+    /// T9: drops the approval `approval`.
+    pub fn invalidate_work_session_approval(
+        &self,
+        id: WorkSessionId,
+        approval: VerificationId,
+        notice: Option<&WorkSessionNotice>,
+        at_ms: i64,
+    ) -> Result<Transition> {
+        self.work_session_write(|tx| {
+            crate::work_sessions::invalidate_approval(tx, id, approval, notice, at_ms)
+        })
+    }
+
+    /// T10: the final stop, atomic and idempotent. Only with the current
+    /// approval, given to `boot` within the profile's approval lifetime;
+    /// the same approval again answers [`Transition::Repeated`].
+    pub fn finish_work_session(
+        &self,
+        id: WorkSessionId,
+        approval: VerificationId,
+        boot: &str,
+        at_ms: i64,
+    ) -> Result<Transition> {
+        self.work_session_write(|tx| crate::work_sessions::finish(tx, id, approval, boot, at_ms))
+    }
+
+    /// T11: the session becomes history.
+    pub fn complete_work_session_stop(&self, id: WorkSessionId, at_ms: i64) -> Result<Transition> {
+        self.work_session_write(|tx| crate::work_sessions::complete_stop(tx, id, at_ms))
+    }
+
+    /// The heartbeat: moves `last_alive_at` of the active session only.
+    pub fn touch_work_session(&self, id: WorkSessionId, at_ms: i64) -> Result<bool> {
+        self.work_session_write(|tx| crate::work_sessions::touch(tx, id, at_ms))
+    }
+
+    /// Clears the session's notice. Returns whether there was one.
+    pub fn clear_work_session_problem(&self, id: WorkSessionId) -> Result<bool> {
+        self.work_session_write(|tx| crate::work_sessions::clear_problem(tx, id))
+    }
+
+    /// The notice for an idle snapshot: that of the newest session when no
+    /// session is active and it still has one.
+    pub fn idle_work_session_notice(&self) -> Result<Option<(WorkSessionId, WorkSessionNotice)>> {
+        crate::work_sessions::idle_notice(&self.connection)
+    }
+
+    /// Clears the notices of all finished and aborted sessions (clearing an
+    /// idle snapshot's notice, which names no session). Returns how many.
+    pub fn clear_idle_work_session_notices(&self) -> Result<usize> {
+        self.work_session_write(crate::work_sessions::clear_idle_notices)
+    }
+
+    /// Records a gap longer than the profile's review threshold as a
+    /// review (still counted) with the notice `needsReview`; shorter gaps,
+    /// and gaps of a session whose timer does not run, record nothing.
+    pub fn flag_work_session_gap(
+        &self,
+        id: WorkSessionId,
+        kind: GapKind,
+        from_ms: i64,
+        to_ms: i64,
+        at_ms: i64,
+    ) -> Result<Option<WorkSessionReview>> {
+        self.work_session_write(|tx| {
+            crate::work_sessions::flag_gap(tx, id, kind, from_ms, to_ms, at_ms)
+        })
+    }
+
+    /// Resolves a review or changes its resolution: excluding cuts the gap
+    /// out of the intervals, counting an excluded gap again adds it back.
+    pub fn resolve_work_session_review(
+        &self,
+        review: i64,
+        resolution: ReviewResolution,
+        at_ms: i64,
+    ) -> Result<WorkSessionReview> {
+        self.work_session_write(|tx| {
+            crate::work_sessions::resolve_review(tx, review, resolution, at_ms)
+        })
     }
 }
 
@@ -699,6 +1231,7 @@ fn write_profile(tx: &Connection, profile: &Profile) -> Result<()> {
         ],
     )?;
     SqliteStore::save_projects(tx, profile)?;
+    crate::provenance::prune(tx, profile)?;
     Ok(())
 }
 
@@ -730,6 +1263,9 @@ pub(crate) fn export_database(
     target: &Path,
     key: Option<&DatabaseKey>,
 ) -> Result<()> {
+    // Never attempt the export on a connection that cannot do it: refused
+    // before the target is touched.
+    crate::engine::check_complete(connection)?;
     if target.exists() {
         std::fs::remove_file(target).map_err(StorageError::Io)?;
     }
@@ -760,7 +1296,7 @@ pub(crate) fn export_database(
 
 /// Opens `path` with `encryption` and checks integrity and schema version.
 pub(crate) fn verify_copy(path: &Path, encryption: &Encryption, version: u32) -> Result<()> {
-    let connection = Connection::open(path)?;
+    let connection = crate::engine::open(path)?;
     apply_key(&connection, encryption)?;
     check_integrity(&connection)?;
     let found: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -859,7 +1395,7 @@ fn encode<T: Serialize>(value: &T) -> Result<String> {
 /// Oldest document version that can still be read (and upgraded).
 const MIN_DOCUMENT_VERSION: u32 = 1;
 
-fn constraint_violation(error: &rusqlite::Error) -> bool {
+pub(crate) fn constraint_violation(error: &rusqlite::Error) -> bool {
     matches!(error, rusqlite::Error::SqliteFailure(failure, _)
         if failure.code == rusqlite::ErrorCode::ConstraintViolation)
 }
@@ -980,7 +1516,7 @@ fn decode<T: DeserializeOwned>(version: u32, document: &str) -> Result<T> {
     Ok(serde_json::from_str(document)?)
 }
 
-fn parse_id<T: std::str::FromStr>(value: &str) -> rusqlite::Result<T> {
+pub(crate) fn parse_id<T: std::str::FromStr>(value: &str) -> rusqlite::Result<T> {
     value.parse().map_err(|_| {
         rusqlite::Error::FromSqlConversionFailure(
             0,
@@ -1041,6 +1577,9 @@ impl ConfigStore for SqliteStore {
 
     fn delete_profile(&self, id: ProfileId) -> Result<bool> {
         let tx = self.write_transaction()?;
+        if crate::work_sessions::profile_has_active(&tx, id)? {
+            return Err(StorageError::WorkSessionActive);
+        }
         let deleted = tx.execute("DELETE FROM profiles WHERE id = ?1", [id.to_string()])? > 0;
         tx.execute(
             "DELETE FROM workflow_executions WHERE profile_id = ?1",
@@ -1523,7 +2062,9 @@ mod tests {
             .unwrap()
             .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert!(versions.iter().all(|v| *v == DOCUMENT_VERSION));
+        // Migration 4 is the last one that rewrites documents; schema 8
+        // leaves them at version 4, which decodes unchanged.
+        assert!(versions.iter().all(|v| *v == 4), "{versions:?}");
         drop(store);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1589,7 +2130,19 @@ mod tests {
                 .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
                 .unwrap()
         };
-        assert_eq!(count("projects"), 0);
+        // No demonstration data, no shared variables and no provenance:
+        // only the development tools seed data (`tools/dev`).
+        for table in [
+            "projects",
+            "shared_variables",
+            "shared_variable_values",
+            "provenance",
+            "credentials",
+            "workflow_executions",
+        ] {
+            assert_eq!(count(table), 0, "{table}");
+        }
+        assert_eq!(store.shared_variables().unwrap(), Vec::new());
     }
 
     #[test]
@@ -1918,7 +2471,7 @@ mod tests {
                     index: u16::try_from(index).unwrap(),
                 },
                 trigger: Trigger::Press,
-                target: BindingTarget::Action { action: *action },
+                target: BindingTarget::action(*action),
                 label: None,
                 appearance: None,
             });
@@ -2108,6 +2661,11 @@ mod tests {
                 .execute_batch(
                     "DROP TABLE migration_history; DROP TABLE module_schemas;
                      DROP TABLE workflow_executions; DROP TABLE credentials;
+                     DROP TABLE shared_variable_values; DROP TABLE shared_variables;
+                     DROP TABLE provenance;
+                     DROP TABLE work_session_transitions; DROP TABLE work_session_reviews;
+                     DROP TABLE work_session_intervals; DROP TABLE work_sessions;
+                     DROP TABLE work_session_settings;
                      PRAGMA user_version = 4;",
                 )
                 .unwrap();
@@ -2245,6 +2803,7 @@ mod tests {
             save_profiles: vec![fresh.clone(), thief],
             module_states: Vec::new(),
             settings: Vec::new(),
+            ..ConfigChanges::default()
         };
         // The deletion makes the project free again, so this succeeds…
         store.apply_changes(&changes).unwrap();
@@ -2264,6 +2823,7 @@ mod tests {
                 },
             )],
             settings: vec![("update.preferences".into(), "{}".into())],
+            ..ConfigChanges::default()
         };
         assert!(store.apply_changes(&failing).is_err());
         assert_eq!(store.load_profile(other.id).unwrap(), None);

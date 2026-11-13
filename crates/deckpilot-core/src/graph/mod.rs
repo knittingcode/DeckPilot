@@ -22,12 +22,13 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::variables::{ExpressionError, VariableRef, VariableValue, references_in_expression};
 use crate::{ActionInstanceId, ActionParameters, WorkflowId};
 
 pub use convert::{Conversion, from_steps};
 pub use executor::{
     CancelReason, CancellationToken, ExecutionEvent, ExecutionLimits, GraphReport, NodeReport,
-    NodeStatus, RunStatus, StepError,
+    NodeStatus, RunServices, RunStatus, StepError,
 };
 pub use mapping::{Reference, TemplateError, parse_template, references_in};
 pub use validate::{GraphIssue, IssueSeverity};
@@ -176,9 +177,32 @@ pub enum Mapping {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         default: Option<String>,
     },
-    /// Text with `{{ steps.<node>.output.<key> }}` placeholders. Plain
-    /// substitution only: no expressions, no code.
+    /// Text with `{{ … }}` placeholders: node outputs
+    /// (`steps.<node>.output.<key>`), shared variables (`shared.…`) and
+    /// system variables (`system.…`, `workflow.…`). Plain substitution
+    /// only: no expressions, no code.
     Template { template: String },
+    /// The whole value of a reference with any root (`shared.…`,
+    /// `system.…`, `workflow.…`, `steps.…`), keeping its native type: a
+    /// project id fills a project parameter, an integer an integer one.
+    Variable {
+        reference: VariableRef,
+        /// Used when the reference has no value at run time. Without it, a
+        /// missing value fails the node.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<VariableValue>,
+    },
+}
+
+impl Mapping {
+    /// Every reference the mapping reads, in order.
+    pub fn references(&self) -> Result<Vec<VariableRef>, ExpressionError> {
+        match self {
+            Self::Output { reference, .. } => Ok(vec![VariableRef::Step(reference.clone())]),
+            Self::Template { template } => references_in_expression(template),
+            Self::Variable { reference, .. } => Ok(vec![reference.clone()]),
+        }
+    }
 }
 
 /// What a condition node tests.

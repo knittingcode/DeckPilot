@@ -8,6 +8,7 @@
 
 pub mod fakes;
 pub mod http;
+pub mod watchdog;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -30,6 +31,11 @@ use tokio::task::JoinHandle;
 
 /// Upper bound for conditions to be reached; generous for slow runners.
 pub const TIMEOUT: Duration = Duration::from_secs(20);
+/// A test still running after this hangs: the test binary is ended.
+pub const HANG: Duration = Duration::from_secs(180);
+/// Longest a single request may take (workflow runs are answered when
+/// they end).
+pub const REQUEST_LIMIT: Duration = Duration::from_secs(60);
 
 /// A directory removed when dropped.
 #[derive(Debug)]
@@ -97,8 +103,12 @@ pub struct TestAgent {
     pub paths: AgentPaths,
     pub key: DatabaseKey,
     pub mock: MockBackend,
+    /// In-process access, e.g. to the work session.
+    pub handle: deckpilot_agent::AgentHandle,
     task: Option<JoinHandle<Result<(), AgentError>>>,
     stop: Option<oneshot::Sender<()>>,
+    /// Ends the test binary if the test hangs.
+    _watchdog: watchdog::Watchdog,
 }
 
 impl Drop for TestAgent {
@@ -118,6 +128,17 @@ impl TestAgent {
         mock: &MockBackend,
         clock: Option<Clock>,
     ) -> Self {
+        Self::start_with_gestures(paths, key, mock, clock, None)
+    }
+
+    /// [`TestAgent::start`] with keys put in gesture mode by `gestures`.
+    pub fn start_with_gestures(
+        paths: &AgentPaths,
+        key: &DatabaseKey,
+        mock: &MockBackend,
+        clock: Option<Clock>,
+        gestures: Option<std::sync::Arc<dyn deckpilot_agent::GestureHooks>>,
+    ) -> Self {
         let lock = InstanceLock::acquire_waiting(&paths.lock_file, Duration::from_secs(2)).unwrap();
         let options = AgentOptions {
             paths: paths.clone(),
@@ -134,7 +155,11 @@ impl TestAgent {
             notifier: None,
             screen_lock: None,
         };
-        let agent = Agent::start(options, lock).unwrap();
+        let mut agent = Agent::start(options, lock).unwrap();
+        if let Some(gestures) = gestures {
+            agent = agent.with_gesture_hooks(gestures);
+        }
+        let handle = agent.handle();
         let (stop, stopped) = oneshot::channel::<()>();
         let task = tokio::spawn(agent.run(async move {
             let _ = stopped.await;
@@ -143,8 +168,13 @@ impl TestAgent {
             paths: paths.clone(),
             key: key.clone(),
             mock: mock.clone(),
+            handle,
             task: Some(task),
             stop: Some(stop),
+            _watchdog: watchdog::Watchdog::new(
+                std::thread::current().name().unwrap_or("a test"),
+                HANG,
+            ),
         }
     }
 
@@ -182,7 +212,11 @@ impl TestAgent {
     }
 
     pub async fn request(&self, request: Request) -> Result<Response, ClientError> {
-        self.client().await.request(request).await
+        let what = format!("the {} request", request.name());
+        watchdog::within(&what, REQUEST_LIMIT, async {
+            self.client().await.request(request).await
+        })
+        .await
     }
 
     pub async fn status(&self) -> AgentStatus {
