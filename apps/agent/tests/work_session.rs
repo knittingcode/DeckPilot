@@ -30,38 +30,50 @@ use deckpilot_storage::work_sessions::{
 use serde_json::json;
 use support::{TIMEOUT, TempDir, TestAgent, data_dir, graph, graph_workflow, waiting_workflow};
 
-/// The wall clock of the agent: real time moved by `offset` milliseconds,
-/// so tests can make it jump while monotonic time goes on.
-#[derive(Clone, Default)]
-struct Jump(Arc<AtomicI64>);
+/// The wall clock of the agent, moved by `offset` milliseconds so tests can
+/// make it jump while monotonic time goes on.
+///
+/// Between jumps it advances with the monotonic clock (`Instant`), not with
+/// the system clock: the agent measures a jump as the wall delta minus the
+/// monotonic delta, and the system clock does not keep step with `Instant`
+/// exactly (time synchronisation corrects it, notably on Windows runners),
+/// which would add or remove a few milliseconds of its own.
+#[derive(Clone)]
+struct Jump {
+    base: SystemTime,
+    start: Instant,
+    offset: Arc<AtomicI64>,
+}
+
+impl Default for Jump {
+    fn default() -> Self {
+        Self {
+            base: SystemTime::now(),
+            start: Instant::now(),
+            offset: Arc::default(),
+        }
+    }
+}
 
 impl Jump {
+    fn now(&self) -> SystemTime {
+        let ms = self.offset.load(Ordering::SeqCst);
+        let shift = Duration::from_millis(ms.unsigned_abs());
+        let now = self.base + self.start.elapsed();
+        if ms >= 0 { now + shift } else { now - shift }
+    }
+
     fn clock(&self) -> Clock {
-        let offset = self.0.clone();
-        Arc::new(move || {
-            let ms = offset.load(Ordering::SeqCst);
-            let shift = Duration::from_millis(ms.unsigned_abs());
-            if ms >= 0 {
-                SystemTime::now() + shift
-            } else {
-                SystemTime::now() - shift
-            }
-        })
+        let jump = self.clone();
+        Arc::new(move || jump.now())
     }
 
     fn by(&self, ms: i64) {
-        self.0.fetch_add(ms, Ordering::SeqCst);
+        self.offset.fetch_add(ms, Ordering::SeqCst);
     }
 
     fn now_ms(&self) -> i64 {
-        let real = i64::try_from(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis(),
-        )
-        .unwrap();
-        real + self.0.load(Ordering::SeqCst)
+        i64::try_from(self.now().duration_since(UNIX_EPOCH).unwrap().as_millis()).unwrap()
     }
 }
 

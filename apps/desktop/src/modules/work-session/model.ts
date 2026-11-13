@@ -3,6 +3,7 @@
 // See docs/gestures-and-work-session.md (sections 5 to 10).
 
 import { errorMessage } from "@/lib/api"
+import { sentence } from "@/lib/failure"
 import type {
   ElapsedFormat,
   Workflow,
@@ -15,8 +16,6 @@ import type {
   WorkSessionSnapshot,
   WorkSessionState,
 } from "@/lib/types"
-
-import { sentence } from "./failure"
 
 /** Backend event with the latest {@link WorkSessionSnapshot} (protocol 8). */
 export const WORK_SESSION_EVENT = "agent-work-session"

@@ -655,6 +655,7 @@ impl Vault {
         }
         let source = crate::engine::open(&self.database)?;
         check_integrity(&source)?;
+        refuse_plaintext_credentials(&source)?;
         // Fold the write-ahead log into the main file so that nothing is left
         // behind in side files.
         source.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
@@ -680,10 +681,25 @@ impl Vault {
             return Err(error);
         }
 
+        // The original becomes the unencrypted copy, and an existing copy is
+        // moved aside: both are limited to the owner before any rename, so a
+        // failure leaves the plain database in place.
+        let legacy = self.legacy_copy_path();
+        let restricted = restrict_to_owner(&self.database).and_then(|()| {
+            if legacy.exists() {
+                restrict_to_owner(&legacy)
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(error) = restricted {
+            remove_database(&self.replacement());
+            return Err(error);
+        }
+
         // The parameters can be written now: the state is decided by the
         // database header, which is still plain until the swap.
         Self::write_vault(&self.vault_file(), protection)?;
-        let legacy = self.legacy_copy_path();
         if legacy.exists() {
             let older =
                 legacy.with_file_name(format!("deckpilot.unencrypted-backup-{}.db", timestamp()));
@@ -777,6 +793,59 @@ fn hex(bytes: &[u8]) -> String {
         let _ = write!(out, "{byte:02x}");
         out
     })
+}
+
+/// Refuses to migrate a plaintext database that holds module credentials
+/// (schema 7). No released version wrote one (credentials arrived after
+/// encryption), so this only stops a hand-made or test database from
+/// leaving its secrets in the unencrypted copy. Nothing is changed.
+fn refuse_plaintext_credentials(connection: &Connection) -> Result<()> {
+    let has_table: bool = connection.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'credentials')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_table {
+        return Ok(());
+    }
+    let rows: i64 =
+        connection.query_row("SELECT count(*) FROM credentials", [], |row| row.get(0))?;
+    if rows == 0 {
+        return Ok(());
+    }
+    Err(StorageError::Vault(format!(
+        "the unencrypted database holds {rows} stored credential(s) and was not migrated: \
+         its original would be kept unencrypted with the secrets in it. Nothing was changed"
+    )))
+}
+
+/// Limits `path` and its `-wal`/`-shm` files to the owner (mode `0600`):
+/// they are, or become, an unencrypted copy of the configuration.
+fn restrict_to_owner(path: &Path) -> Result<()> {
+    for file in [
+        path.to_path_buf(),
+        sibling(path, "-wal"),
+        sibling(path, "-shm"),
+    ] {
+        if file.exists() {
+            set_owner_only(&file)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
+fn set_owner_only(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(io)?;
+    }
+    // Windows has no file modes: the copy keeps the ACL it inherits from the
+    // data directory (in the user's profile), as before.
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 /// Rows per table, to compare a copy with its source.
