@@ -33,7 +33,7 @@ pub use expression::{
     references_in_expression,
 };
 pub use registry::{
-    ALIASES, DeclaredScope, Deprecation, DeviceDescriptor, LiveState, NoLiveState, Requirement,
+    ALIASES, ContextDevice, DeclaredScope, Deprecation, LiveState, NoLiveState, Requirement,
     VariableAlias, VariableDeclaration, VariableEnvironment, VariableId, VariableOwner,
     VariableRegistry, VariableRegistryError, VariableSource, module_namespace,
 };
