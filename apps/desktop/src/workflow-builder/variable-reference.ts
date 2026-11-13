@@ -5,9 +5,11 @@
  * `VariableType::assignable_to`. Only metadata: values are resolved by the
  * agent when the node runs (and previewed by the variable picker).
  */
-import type { ReactNode } from "react"
+import { type ReactNode, createElement } from "react"
 
+import { VariablePicker as UniversalVariablePicker } from "@/components/variable-picker/variable-picker"
 import type { ParameterKind, VariableDefinition, VariableType } from "@/lib/types"
+import { TEMPLATE_KIND } from "@/lib/variables"
 
 /** The read-only variables of a run and their types. */
 export const SYSTEM_VARIABLES: Record<string, { type: VariableType; label: string }> = {
@@ -114,19 +116,32 @@ export function expects(kind: ParameterKind): string {
 }
 
 /**
- * Hook for the universal variable picker (workstream F). The editor renders
- * it beside a reference field; it calls `onPick` with a reference without
- * braces. Until the picker exists, references are typed.
+ * Hook for the universal variable picker. The editor renders it beside a
+ * reference field; it calls `onPick` with a reference without braces.
  */
 export type VariablePicker = (props: {
-  /** The kind of the parameter the reference fills, for type filtering. */
+  /**
+   * The kind of the parameter the reference fills, for type filtering;
+   * without one the reference is a part of a text template.
+   */
   expected?: ParameterKind
+  /** The reference field's label, for the picker's accessible names. */
+  fieldLabel?: string
   onPick: (reference: string) => void
 }) => ReactNode
 
 /**
- * The picker the builder shows beside reference fields. `undefined` until
- * workstream F's component lands; F sets it here (one place), and every
- * mapping editor in the inspector picks it up.
+ * The picker the builder shows beside reference fields: the universal
+ * variable picker, in the scope the builder provides (run context and the
+ * graph's step outputs). It lists metadata and redacted previews only, is
+ * hidden while the agent lacks the `variables` capability, and hands back
+ * the reference, which is what the mapping stores.
  */
-export const VARIABLE_PICKER: VariablePicker | undefined = undefined
+export const VARIABLE_PICKER: VariablePicker = ({ expected, fieldLabel = "Variable", onPick }) =>
+  createElement(UniversalVariablePicker, {
+    kind: expected ?? TEMPLATE_KIND,
+    fieldLabel,
+    label: `Choose a variable for ${fieldLabel}`,
+    className: "size-7",
+    onPick,
+  })
