@@ -259,6 +259,61 @@ describe("gesture editor", () => {
     ])
   })
 
+  it("offers the Work Session controller on gestures and saves a stateful target", async () => {
+    const workSession = { type: "stateful", machine: "workSession" } as const
+    const user = renderEditor()
+    await user.click(key("Key 3"))
+
+    // Not on the raw release: a stateful key needs gestures.
+    await user.click(row("Release (immediate)"))
+    expect(await screen.findByRole("option", { name: "Mail" })).toBeInTheDocument()
+    expect(screen.queryByRole("option", { name: "Work Session controller" })).toBeNull()
+    await user.keyboard("{Escape}")
+
+    await choose(user, "Single click (immediate)", "Work Session controller")
+    expect(describes("Key 3")).toBe("Key 3: Click: Work Session")
+    await choose(user, "Long press", "Work Session controller")
+    expect(row("Long press")).toHaveTextContent("Work Session controller")
+
+    const saved = await save(user)
+    expect(saved.pages[0]?.bindings.filter((b) => b.control.index === 2)).toEqual([
+      {
+        control: { kind: "key", index: 2 },
+        trigger: { type: "click" },
+        target: workSession,
+        label: null,
+      },
+      {
+        control: { kind: "key", index: 2 },
+        trigger: { type: "longPress" },
+        target: workSession,
+        label: null,
+      },
+    ])
+    // No action instance stands in for the session.
+    expect(api.createAction).not.toHaveBeenCalled()
+    expect(api.updateAction).not.toHaveBeenCalled()
+  })
+
+  it("asks before a pressed key becomes a Work Session controller", async () => {
+    const user = renderEditor()
+    await user.click(key("Key 1"))
+    await choose(user, "Single click (immediate)", "Work Session controller")
+    const dialog = await screen.findByRole("alertdialog", { name: "Switch Key 1 to gestures?" })
+    expect(dialog).toHaveTextContent("still fires on the press")
+    await user.click(within(dialog).getByRole("button", { name: "Switch to gestures" }))
+
+    const saved = await save(user)
+    expect(saved.pages[0]?.bindings.filter((b) => b.control.index === 0)).toEqual([
+      {
+        control: { kind: "key", index: 0 },
+        trigger: { type: "click" },
+        target: { type: "stateful", machine: "workSession" },
+        label: "Shop",
+      },
+    ])
+  })
+
   it("keeps raw release bindings and says the conversion removes them", async () => {
     const user = renderEditor()
     await user.click(key("Key 1"))

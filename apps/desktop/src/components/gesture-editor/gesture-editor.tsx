@@ -122,7 +122,7 @@ export function GestureEditor(props: GestureEditorProps) {
   const base = `gesture-${controlKey(control)}`
 
   const assign = (gesture: Gesture, target: BindingTarget | null) => {
-    if (target && needsConversion(draft, pageId, control, gesture)) {
+    if (target && needsConversion(draft, pageId, control, gesture, target)) {
       setPending({ gesture, target })
       return
     }
@@ -543,10 +543,18 @@ function ConversionDialog({
           <AlertDialogTitle>Switch {name} to gestures?</AlertDialogTitle>
           <AlertDialogDescription asChild>
             <div className="grid gap-2">
-              <p>
-                {name} acts as soon as it is pressed. To add a {adding}, its single click becomes a
-                gesture: it then fires {after}, so it reacts a little later than now.
-              </p>
+              {pending?.gesture === "click" ? (
+                <p>
+                  {name} acts as soon as it is pressed. A Work Session controller needs gestures, so
+                  its single click becomes a gesture. With no double click or long press it still
+                  fires on the press.
+                </p>
+              ) : (
+                <p>
+                  {name} acts as soon as it is pressed. To add a {adding}, its single click becomes
+                  a gesture: it then fires {after}, so it reacts a little later than now.
+                </p>
+              )}
               {release && (
                 <p>
                   Its release binding (“
