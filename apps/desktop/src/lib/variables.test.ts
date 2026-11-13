@@ -11,6 +11,7 @@ import {
   groupEntries,
   insertReference,
   matchesFilter,
+  referenceRoot,
   stepOutputEntries,
   templateReferences,
 } from "./variables"
@@ -200,5 +201,23 @@ describe("describeStatus", () => {
     expect(describeStatus({ status: "typeMismatch", found: { type: "boolean" } }).detail).toContain(
       "yes/no",
     )
+  })
+})
+
+describe("referenceRoot", () => {
+  it("knows the grammar's roots and module namespaces", () => {
+    expect(referenceRoot("shared.paths.root")).toBe("shared")
+    expect(referenceRoot(" system.project.current.key ")).toBe("system")
+    expect(referenceRoot("steps.a.output.b")).toBe("steps")
+    expect(referenceRoot("projects.current.key")).toBe("module")
+    expect(referenceRoot("workSession.state")).toBe("module")
+    expect(referenceRoot("projects")).toBeNull()
+    expect(referenceRoot("Env.HOME")).toBeNull()
+  })
+
+  it("describes an unavailable module without a value", () => {
+    const status = describeStatus({ status: "unavailable", owner: "projects" })
+    expect(status.label).toBe("Unavailable")
+    expect(status.detail).toContain("projects")
   })
 })

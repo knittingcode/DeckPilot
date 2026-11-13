@@ -10,10 +10,11 @@
 //! read the snapshots taken at the last reload; previews read the database
 //! directly.
 //!
-//! The work session variables (`system.work.session.…`, D5) are answered
-//! here too, from the work session's live snapshot at the moment of the
-//! resolution: elapsed time is the counted time of the snapshot plus the
-//! time since it was taken while the timer runs.
+//! Core and module variables (and their legacy aliases) are resolved
+//! through the module registry's variable registry. The agent supplies the
+//! live state they may need: the work session's snapshot at the moment of
+//! the resolution ([`VariableStore`] is the [`LiveState`]), from which the
+//! work session module computes `workSession.…` (D5).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{PoisonError, RwLock};
@@ -21,10 +22,10 @@ use std::time::UNIX_EPOCH;
 
 use deckpilot_core::resolution::ContextResolver;
 use deckpilot_core::variables::{
-    CatalogEntry, CatalogFilter, MissingReason, PreviewItem, ProjectResolver, ProjectSource,
-    ReferenceAvailability, ReferencePreview, Resolution, ResolutionContext, ResolutionPhase,
-    SystemVariable, ValueSource, VariableGroup, VariableKey, VariableRef, VariableResolver,
-    VariableScope, preview_reference, select_value,
+    CatalogEntry, CatalogFilter, LiveState, MissingReason, PreviewItem, ProjectResolver,
+    ProjectSource, ReferenceAvailability, ReferencePreview, Resolution, ResolutionContext,
+    ResolutionPhase, ValueSource, VariableGroup, VariableKey, VariableOwner, VariableRef,
+    VariableRegistry, VariableResolver, VariableScope, preview_reference, select_value,
 };
 use deckpilot_core::work_session::{WorkSessionSnapshot, WorkSessionVariable};
 use deckpilot_core::{ModuleId, Profile, ProfileId, ProjectId};
@@ -55,12 +56,10 @@ impl WorkSessionSource {
         Self { snapshot, clock }
     }
 
-    /// `variable` now.
-    fn resolve(&self, variable: WorkSessionVariable) -> Resolution {
-        let now_ms = (self.clock)()
+    fn now_ms(&self) -> i64 {
+        (self.clock)()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-        work_session_value(variable, &self.snapshot.borrow(), now_ms)
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
     }
 }
 
@@ -74,9 +73,9 @@ pub fn work_session_value(
     deckpilot_modules::work_session::variables::value(variable, snapshot, now_ms)
 }
 
-/// The work session variables whose value differs between two snapshots;
-/// elapsed time only when the timer starts or stops, since clients count
-/// it on their own.
+/// The work session variables whose value differs between two snapshots,
+/// by canonical id and legacy id; elapsed time only when the timer starts
+/// or stops, since clients count it on their own.
 pub fn changed_work_session_variables(
     before: &WorkSessionSnapshot,
     after: &WorkSessionSnapshot,
@@ -103,33 +102,26 @@ pub fn changed_work_session_variables(
                     WorkSessionVariable::CanFinish => can_finish(before) != can_finish(after),
                 }
         })
-        .map(|variable| variable.path().to_owned())
+        .flat_map(|variable| {
+            [
+                deckpilot_modules::work_session::variables::canonical(variable).to_owned(),
+                variable.path().to_owned(),
+            ]
+        })
         .collect()
 }
 
-/// Resolves `shared.` references against one profile's snapshot, and the
-/// work session variables from the live session. Variables declared by a
-/// disabled module cannot be read.
+/// Resolves `shared.` references against one profile's snapshot.
+/// Variables declared by a disabled module cannot be read.
 struct SnapshotResolver<'a> {
     snapshot: Option<&'a SharedVariables>,
     disabled: &'a BTreeSet<ModuleId>,
-    work_session: Option<&'a WorkSessionSource>,
 }
 
 impl VariableResolver for SnapshotResolver<'_> {
-    /// Shared and work session variables only; other system variables
-    /// and node outputs are resolved by [`ContextResolver`] from the
-    /// context itself.
+    /// Shared variables only; core and module variables and node outputs
+    /// are resolved by [`ContextResolver`].
     fn resolve(&self, reference: &VariableRef, context: &ResolutionContext) -> Resolution {
-        if let VariableRef::System(variable) = reference
-            && let Some(variable) = variable.work_session()
-        {
-            return self
-                .work_session
-                .map_or(Resolution::Missing(MissingReason::NoValue), |source| {
-                    source.resolve(variable)
-                });
-        }
         let VariableRef::Shared(key) = reference else {
             return Resolution::UnavailableUntilRuntime;
         };
@@ -210,9 +202,24 @@ impl VariableResolver for VariableStore {
         SnapshotResolver {
             snapshot: snapshots.get(&context.profile),
             disabled: &disabled,
-            work_session: self.work_session.as_ref(),
         }
         .resolve(reference, context)
+    }
+}
+
+/// The live state of core and module variables: the work session now.
+impl LiveState for VariableStore {
+    fn work_session(&self) -> Option<WorkSessionSnapshot> {
+        self.work_session
+            .as_ref()
+            .map(|source| source.snapshot.borrow().clone())
+    }
+
+    fn now_ms(&self) -> i64 {
+        self.work_session.as_ref().map_or_else(
+            || deckpilot_core::variables::NoLiveState.now_ms(),
+            WorkSessionSource::now_ms,
+        )
     }
 }
 
@@ -278,18 +285,18 @@ pub(super) struct ContextWatch {
     project: Option<ProjectId>,
 }
 
-/// Every reference available in `context`, metadata only. Node outputs are
-/// listed by the app from the graph being edited. `work_session`: whether
-/// a work session is active now.
+/// Every reference available in `context`, metadata only: the core's and
+/// the modules' variables from `registry` (legacy aliases flagged
+/// deprecated), then the shared variables. Node outputs are listed by the
+/// app from the graph being edited. `work_session`: whether a work session
+/// is active now.
 pub fn catalog(
+    registry: &VariableRegistry,
     variables: &SharedVariables,
     context: &ResolutionContext,
     work_session: bool,
 ) -> Vec<CatalogEntry> {
-    let mut entries: Vec<CatalogEntry> = SystemVariable::ALL
-        .into_iter()
-        .map(|variable| system_entry(variable, context, work_session))
-        .collect();
+    let mut entries = registry.catalog(context, work_session);
     for definition in variables.definitions() {
         let values = variables.values(&definition.key);
         let selected = select_value(
@@ -317,6 +324,14 @@ pub fn catalog(
         } else {
             ReferenceAvailability::Available
         };
+        // A module-declared shared variable belongs to its module and is
+        // changed with it only.
+        let owner = match &definition.module {
+            Some(module) => VariableOwner::Module {
+                module: module.clone(),
+            },
+            None => VariableOwner::User,
+        };
         entries.push(CatalogEntry {
             reference: VariableRef::Shared(definition.key.clone()),
             label: if definition.label.is_empty() {
@@ -333,67 +348,40 @@ pub fn catalog(
             dynamic: definition.scopes.len() > 1
                 || definition.scopes.contains(&VariableScope::Project),
             availability,
+            read_only: definition.module.is_some(),
+            owner: Some(owner),
+            deprecated: None,
         });
     }
     entries
 }
 
-fn system_entry(
-    variable: SystemVariable,
-    context: &ResolutionContext,
-    work_session: bool,
-) -> CatalogEntry {
-    let preview = context.phase == ResolutionPhase::Preview;
-    let availability = match variable {
-        _ if variable.runtime_only() => ReferenceAvailability::RuntimeOnly,
-        // Listed without a session too: a workflow that reads them runs
-        // during one.
-        _ if variable.work_session().is_some() => {
-            if work_session {
-                ReferenceAvailability::Available
-            } else {
-                ReferenceAvailability::RuntimeOnly
-            }
-        }
-        SystemVariable::ProjectCurrentId
-        | SystemVariable::ProjectCurrentKey
-        | SystemVariable::ProjectCurrentName
-            if preview && context.project_source == ProjectSource::Execution =>
-        {
-            ReferenceAvailability::RuntimeOnly
-        }
-        SystemVariable::ProjectCurrentId
-        | SystemVariable::ProjectCurrentKey
-        | SystemVariable::ProjectCurrentName
-            if context.project.is_none() =>
-        {
-            ReferenceAvailability::NotInContext
-        }
-        SystemVariable::DeviceCurrentId if context.device.is_none() => {
-            ReferenceAvailability::NotInContext
-        }
-        SystemVariable::WorkflowId if context.workflow.is_none() => {
-            ReferenceAvailability::NotInContext
-        }
-        _ => ReferenceAvailability::Available,
+/// The ids of registered variables whose availability differs between
+/// two registries, each followed by its legacy aliases.
+pub fn changed_availability(before: &VariableRegistry, after: &VariableRegistry) -> Vec<String> {
+    let state = |registry: &VariableRegistry| -> BTreeMap<String, bool> {
+        registry
+            .variables()
+            .map(|v| (v.declaration.id.to_string(), v.unavailable.is_none()))
+            .collect()
     };
-    let group = if variable.path().starts_with("workflow.") {
-        VariableGroup::Workflow
-    } else {
-        VariableGroup::System
-    };
-    CatalogEntry {
-        reference: VariableRef::System(variable),
-        label: variable.path().to_owned(),
-        description: variable.description().to_owned(),
-        group,
-        value_type: variable.value_type(),
-        scope: None,
-        module: None,
-        sensitive: false,
-        dynamic: variable.dynamic(),
-        availability,
+    let (old, new) = (state(before), state(after));
+    let changed: BTreeSet<&String> = old
+        .keys()
+        .chain(new.keys())
+        .filter(|id| old.get(*id) != new.get(*id))
+        .collect();
+    let mut keys = Vec::new();
+    for id in changed {
+        keys.push(id.clone());
+        keys.extend(
+            deckpilot_core::variables::ALIASES
+                .iter()
+                .filter(|alias| alias.canonical == id.as_str())
+                .map(|alias| alias.alias.path().to_owned()),
+        );
     }
+    keys
 }
 
 /// A client's context is always a preview: it cannot claim to be a run.
@@ -448,10 +436,15 @@ impl Agent {
         self.context_profile(context.profile)?;
         let context = as_preview(context);
         let active = self.work_session_snapshot().session.is_some();
-        let entries = catalog(&self.current_variables(context.profile)?, &context, active)
-            .into_iter()
-            .filter(|entry| filter.matches(entry))
-            .collect();
+        let entries = catalog(
+            self.modules.variables(),
+            &self.current_variables(context.profile)?,
+            &context,
+            active,
+        )
+        .into_iter()
+        .filter(|entry| filter.matches(entry))
+        .collect();
         Ok(Response::Variables { entries })
     }
 
@@ -467,13 +460,14 @@ impl Agent {
         let shared = SnapshotResolver {
             snapshot: Some(&variables),
             disabled: &disabled,
-            work_session: self.variables.work_session.as_ref(),
         };
         let resolver = ContextResolver {
             profile: &profile,
             os: self.runtime.machine().os,
             shared: &shared,
             outputs: None,
+            registry: self.modules.variables(),
+            live: self.variables.as_ref(),
         };
         let previews: Vec<ReferencePreview> = items
             .iter()
@@ -514,8 +508,8 @@ impl Agent {
     }
 
     /// Announces the work session variables whose value changed, as
-    /// `sharedVariablesChanged` with their paths: protocol 7 pickers and
-    /// previews refresh on it, with no polling (§8.1).
+    /// `sharedVariablesChanged` with their canonical and legacy ids:
+    /// pickers and previews refresh on it, with no polling (§8.1).
     pub(super) fn publish_work_session_variables(
         &self,
         before: &WorkSessionSnapshot,
@@ -552,6 +546,13 @@ impl Agent {
             .send(AgentEvent::ExecutionContextChanged { execution, project });
     }
 
+    /// Announces the core and module variables whose availability differs
+    /// between two module registries (a module was enabled or disabled), by
+    /// canonical id and by every legacy alias of it.
+    pub(super) fn publish_module_variables(&self, before: &VariableRegistry) {
+        self.publish_variables(changed_availability(before, self.modules.variables()));
+    }
+
     /// Variables of disabled modules cannot be read.
     pub(super) fn update_variable_permissions(&self) {
         let disabled = self
@@ -570,6 +571,10 @@ mod tests {
     use super::*;
     use deckpilot_core::variables::{ScopeKey, VariableDefinition, VariableType, VariableValue};
     use deckpilot_core::{Project, ProjectKey};
+
+    fn builtin() -> deckpilot_core::ModuleRegistry {
+        deckpilot_modules::builtin(deckpilot_core::Os::Linux)
+    }
 
     fn key(text: &str) -> VariableKey {
         VariableKey::new(text).unwrap()
@@ -698,7 +703,7 @@ mod tests {
             .clone()
             .with_project(Some(shop), ProjectSource::Application);
         let entry = |context: &ResolutionContext, reference: &str| {
-            catalog(&variables, context, false)
+            catalog(builtin().variables(), &variables, context, false)
                 .into_iter()
                 .find(|e| e.reference.to_string() == reference)
                 .unwrap()
@@ -708,7 +713,8 @@ mod tests {
         assert_eq!(pin.scope, Some(VariableScope::Project));
         assert!(pin.sensitive);
         assert_eq!(pin.availability, ReferenceAvailability::Available);
-        let json = serde_json::to_string(&catalog(&variables, &with, false)).unwrap();
+        let json = serde_json::to_string(&catalog(builtin().variables(), &variables, &with, false))
+            .unwrap();
         assert!(!json.contains("s3cr3t"), "metadata only");
         assert_eq!(
             entry(&without, "shared.vault.pin").availability,
@@ -872,14 +878,15 @@ mod tests {
             ..working.clone()
         };
         assert_eq!(paths(&working, &later), Vec::<String>::new());
-        // A new or ended session changes everything.
+        // A new or ended session changes everything, named by canonical
+        // and by legacy id.
         assert_eq!(
             paths(&WorkSessionSnapshot::idle(0), &working).len(),
-            WorkSessionVariable::ALL.len()
+            2 * WorkSessionVariable::ALL.len()
         );
         assert_eq!(
             paths(&working, &WorkSessionSnapshot::idle(0)).len(),
-            WorkSessionVariable::ALL.len()
+            2 * WorkSessionVariable::ALL.len()
         );
         let verifying = WorkSessionSnapshot {
             verification: None,
@@ -892,7 +899,12 @@ mod tests {
         };
         assert_eq!(
             paths(&working, &verifying),
-            ["system.work.session.state", "system.work.session.canFinish"]
+            [
+                "workSession.state",
+                "system.work.session.state",
+                "workSession.canFinish",
+                "system.work.session.canFinish"
+            ]
         );
         let stopping = WorkSessionSnapshot {
             state: S::Stopping,
@@ -901,7 +913,9 @@ mod tests {
         assert_eq!(
             paths(&working, &stopping),
             [
+                "workSession.state",
                 "system.work.session.state",
+                "workSession.elapsedSeconds",
                 "system.work.session.elapsedSeconds"
             ]
         );
@@ -913,10 +927,11 @@ mod tests {
         let variables = db.shared_variables_for(profile.id).unwrap();
         let context = ResolutionContext::preview(profile.id);
         for active in [false, true] {
-            let entries: Vec<CatalogEntry> = catalog(&variables, &context, active)
-                .into_iter()
-                .filter(|e| e.reference.to_string().starts_with("system.work.session."))
-                .collect();
+            let entries: Vec<CatalogEntry> =
+                catalog(builtin().variables(), &variables, &context, active)
+                    .into_iter()
+                    .filter(|e| e.reference.to_string().starts_with("system.work.session."))
+                    .collect();
             assert_eq!(entries.len(), WorkSessionVariable::ALL.len());
             for (entry, variable) in entries.iter().zip(WorkSessionVariable::ALL) {
                 assert_eq!(entry.reference.to_string(), variable.path());
@@ -924,6 +939,26 @@ mod tests {
                 assert_eq!(entry.description, variable.description());
                 assert_eq!(entry.group, VariableGroup::System);
                 assert!(entry.dynamic && !entry.sensitive);
+                // A deprecated alias of the work session module's variable.
+                assert_eq!(
+                    entry.deprecated.as_ref().unwrap().canonical.as_str(),
+                    deckpilot_modules::work_session::variables::canonical(variable)
+                );
+                assert_eq!(
+                    entry.module.as_ref().map(ModuleId::as_str),
+                    Some("work-session")
+                );
+                assert!(entry.read_only);
+                let canonical = catalog(builtin().variables(), &variables, &context, active)
+                    .into_iter()
+                    .find(|e| {
+                        e.reference.to_string()
+                            == deckpilot_modules::work_session::variables::canonical(variable)
+                    })
+                    .unwrap();
+                assert_eq!(canonical.group, VariableGroup::Module);
+                assert_eq!(canonical.availability, entry.availability);
+                assert!(canonical.deprecated.is_none());
                 assert_eq!(
                     entry.availability,
                     if active {

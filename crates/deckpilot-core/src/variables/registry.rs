@@ -32,10 +32,11 @@ use deckpilot_device::DeviceId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::catalog::{CatalogEntry, ReferenceAvailability, VariableGroup};
 use super::resolution::{
     MissingReason, ProjectSource, Resolution, ResolutionContext, ResolutionPhase,
 };
-use super::{SystemVariable, VariableType, valid_segment};
+use super::{SystemVariable, VariableRef, VariableType, valid_segment};
 use crate::work_session::WorkSessionSnapshot;
 use crate::{ModuleId, Os, Profile, Project};
 
@@ -752,6 +753,119 @@ impl VariableRegistry {
             other => other,
         }
     }
+}
+
+impl VariableRegistry {
+    /// Catalog entries of every core variable, every alias (flagged
+    /// deprecated) and every module variable in `context`: metadata only,
+    /// never a value. `work_session`: whether a work session is active now.
+    /// Core variables and aliases come first, in the order older clients
+    /// listed them.
+    ///
+    /// # Panics
+    ///
+    /// Never: alias owners are valid module ids (tested).
+    pub fn catalog(&self, context: &ResolutionContext, work_session: bool) -> Vec<CatalogEntry> {
+        let mut entries: Vec<CatalogEntry> = SystemVariable::ALL
+            .into_iter()
+            .map(|variable| {
+                let canonical = variable.canonical();
+                let registered = self.get(&canonical);
+                // Core variables are always registered; an alias whose
+                // module is not installed still names its owner.
+                let owner = registered.map_or_else(
+                    || VariableOwner::Module {
+                        module: ModuleId::new(variable.alias().map_or("", |a| a.owner))
+                            .expect("alias owners are valid module ids"),
+                    },
+                    |r| r.owner.clone(),
+                );
+                CatalogEntry {
+                    reference: VariableRef::System(variable),
+                    label: registered.map_or_else(
+                        || variable.path().to_owned(),
+                        |r| r.declaration.name.clone(),
+                    ),
+                    description: variable.description().to_owned(),
+                    group: if variable.path().starts_with("workflow.") {
+                        VariableGroup::Workflow
+                    } else {
+                        VariableGroup::System
+                    },
+                    value_type: variable.value_type(),
+                    scope: None,
+                    module: owner.module().cloned(),
+                    sensitive: registered.is_some_and(|r| r.declaration.sensitive),
+                    dynamic: variable.dynamic(),
+                    availability: match registered {
+                        Some(registered) => availability(registered, context, work_session),
+                        None => ReferenceAvailability::Unavailable,
+                    },
+                    owner: Some(owner),
+                    read_only: true,
+                    deprecated: variable.deprecation(),
+                }
+            })
+            .collect();
+        for registered in self.variables() {
+            let Some(module) = registered.owner.module() else {
+                continue;
+            };
+            let declaration = registered.declaration;
+            entries.push(CatalogEntry {
+                reference: VariableRef::Module(declaration.id.clone()),
+                label: declaration.name.clone(),
+                description: declaration.description.clone(),
+                group: VariableGroup::Module,
+                value_type: declaration.value_type,
+                scope: None,
+                module: Some(module.clone()),
+                sensitive: declaration.sensitive,
+                dynamic: declaration.scope != DeclaredScope::Machine,
+                availability: availability(registered, context, work_session),
+                owner: Some(registered.owner.clone()),
+                read_only: true,
+                deprecated: None,
+            });
+        }
+        entries
+    }
+}
+
+/// Whether a registered variable can have a value in `context`.
+fn availability(
+    registered: RegisteredVariable<'_>,
+    context: &ResolutionContext,
+    work_session: bool,
+) -> ReferenceAvailability {
+    if registered.unavailable.is_some() {
+        return ReferenceAvailability::Unavailable;
+    }
+    let requires = &registered.declaration.requires;
+    let preview = context.phase == ResolutionPhase::Preview;
+    for requirement in requires {
+        let available = match requirement {
+            Requirement::Execution => return ReferenceAvailability::RuntimeOnly,
+            // Listed without a session too: a workflow that reads them
+            // runs during one.
+            Requirement::WorkSession if !work_session => {
+                return ReferenceAvailability::RuntimeOnly;
+            }
+            Requirement::WorkSession => true,
+            Requirement::Project
+                if preview && context.project_source == ProjectSource::Execution =>
+            {
+                return ReferenceAvailability::RuntimeOnly;
+            }
+            Requirement::Project => context.project.is_some(),
+            Requirement::Device => context.device.is_some(),
+            Requirement::Workflow => context.workflow.is_some(),
+        };
+        if !available {
+            return ReferenceAvailability::NotInContext;
+        }
+    }
+    ReferenceAvailability::Available
 }
 
 /// The variables the core owns, in a stable order.

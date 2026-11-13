@@ -843,6 +843,8 @@ export type AgentCapability =
   | "backgroundExecutions"
   | "notifications"
   | "variables"
+  | "workSession"
+  | "variableRegistry"
 
 export interface AgentConnection {
   running: boolean
@@ -1160,9 +1162,18 @@ export interface ReferencePreview {
   status: ReferenceStatus
 }
 
-export type VariableGroup = "shared" | "system" | "profile" | "project" | "workflow" | "stepOutput"
+export type VariableGroup =
+  | "shared"
+  | "system"
+  | "profile"
+  | "project"
+  | "workflow"
+  | "stepOutput"
+  /** Variables a module declares (protocol 9). */
+  | "module"
 
-export type ReferenceAvailability = "available" | "runtimeOnly" | "notInContext"
+/** `unavailable`: the owning module is disabled or missing (protocol 9). */
+export type ReferenceAvailability = "available" | "runtimeOnly" | "notInContext" | "unavailable"
 
 /** Metadata of one reference the picker can insert; never a value. */
 export interface CatalogEntry {
@@ -1176,6 +1187,12 @@ export interface CatalogEntry {
   sensitive?: boolean
   dynamic?: boolean
   availability: ReferenceAvailability
+  /** Who owns it (protocol 9). */
+  owner?: VariableOwner
+  /** Core and module variables are read-only (protocol 9). */
+  readOnly?: boolean
+  /** A legacy id kept as an alias; insert `deprecated.canonical` instead (protocol 9). */
+  deprecated?: Deprecation
 }
 
 // The unified variable registry (deckpilot_core::variables::registry).

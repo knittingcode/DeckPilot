@@ -501,6 +501,9 @@ impl<'a> Checker<'a> {
                 sensitive: false,
                 value_type: Some(variable.value_type()),
             },
+            // Declared by a module: checked when it is resolved, against
+            // the module registry of the agent that runs it.
+            VariableRef::Module(_) => Found::default(),
             // Without the definitions the variable is checked when it is
             // resolved at run time.
             VariableRef::Shared(key) => match self.shared {
@@ -603,7 +606,7 @@ impl<'a> Checker<'a> {
     /// anything (`check_mapping` did).
     fn peek_type(&self, reference: &VariableRef) -> Option<VariableType> {
         match reference {
-            VariableRef::Step(_) => None,
+            VariableRef::Step(_) | VariableRef::Module(_) => None,
             VariableRef::System(variable) => Some(variable.value_type()),
             VariableRef::Shared(key) => self
                 .shared?

@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::registry::{Deprecation, VariableOwner};
 use super::{VariableRef, VariableScope, VariableType};
 use crate::{ModuleId, ParameterKind};
 
@@ -22,6 +23,8 @@ pub enum VariableGroup {
     Workflow,
     /// Outputs of earlier nodes.
     StepOutput,
+    /// Variables a module declares (since protocol 9).
+    Module,
 }
 
 /// Whether an entry can have a value in the context it was listed for.
@@ -33,6 +36,9 @@ pub enum ReferenceAvailability {
     RuntimeOnly,
     /// Not in this context, e.g. a project variable without a project.
     NotInContext,
+    /// Its owner cannot provide it: the module is disabled, unsupported or
+    /// not installed (since protocol 9; older clients see `notInContext`).
+    Unavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +61,36 @@ pub struct CatalogEntry {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dynamic: bool,
     pub availability: ReferenceAvailability,
+    /// Who owns the variable (since protocol 9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<VariableOwner>,
+    /// Core and module variables cannot be changed (since protocol 9).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+    /// An older id kept as an alias; the picker inserts the canonical id
+    /// instead (since protocol 9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deprecated: Option<Deprecation>,
+}
+
+impl CatalogEntry {
+    /// The entry as a client before protocol 9 knows it, or `None` if such
+    /// a client could not read it (a module root).
+    pub fn for_protocol_8(self) -> Option<Self> {
+        if matches!(self.reference, VariableRef::Module(_)) || self.group == VariableGroup::Module {
+            return None;
+        }
+        Some(Self {
+            availability: match self.availability {
+                ReferenceAvailability::Unavailable => ReferenceAvailability::NotInContext,
+                other => other,
+            },
+            owner: None,
+            read_only: false,
+            deprecated: None,
+            ..self
+        })
+    }
 }
 
 /// What the picker asks for.
@@ -82,7 +118,12 @@ impl CatalogFilter {
         {
             return false;
         }
-        if !self.include_unavailable && entry.availability == ReferenceAvailability::NotInContext {
+        if !self.include_unavailable
+            && matches!(
+                entry.availability,
+                ReferenceAvailability::NotInContext | ReferenceAvailability::Unavailable
+            )
+        {
             return false;
         }
         let haystack = [
@@ -94,7 +135,13 @@ impl CatalogFilter {
             entry
                 .module
                 .as_ref()
+                .or_else(|| entry.owner.as_ref().and_then(VariableOwner::module))
                 .map(ToString::to_string)
+                .unwrap_or_default(),
+            entry
+                .deprecated
+                .as_ref()
+                .map(|d| d.canonical.to_string())
                 .unwrap_or_default(),
         ]
         .join("\n")

@@ -475,13 +475,14 @@ fn check_value(spec: &ParameterSpec, value: &ParameterValue) -> Result<(), Param
 }
 
 /// The type a reference is known to have before it is resolved: system
-/// variables have a fixed type; shared variables are checked when they are
-/// resolved (their definition lives in the store); node outputs are text,
-/// converted to the parameter's kind as mapped values are.
+/// variables (and their aliases) have a fixed type; shared and module
+/// variables are checked when they are resolved (their definitions live in
+/// the store and the module registry); node outputs are text, converted to
+/// the parameter's kind as mapped values are.
 fn static_type(reference: &VariableRef) -> Option<VariableType> {
     match reference {
         VariableRef::System(variable) => Some(variable.value_type()),
-        VariableRef::Shared(_) | VariableRef::Step(_) => None,
+        VariableRef::Shared(_) | VariableRef::Step(_) | VariableRef::Module(_) => None,
     }
 }
 
@@ -1039,7 +1040,13 @@ mod reference_tests {
         .unwrap();
         assert_eq!(spaced, reference("system.platform"));
         // An invalid reference is not a value at all.
-        for invalid in ["{{ shared.a.b }}", "shared.x", "env.home", "system.nope"] {
+        for invalid in [
+            "{{ shared.a.b }}",
+            "shared.x",
+            "env.HOME",
+            "steps.x",
+            "system.nope",
+        ] {
             assert!(
                 serde_json::from_value::<ParameterValue>(
                     serde_json::json!({"type": "reference", "value": invalid})
@@ -1156,7 +1163,7 @@ mod reference_tests {
             );
         }
         assert!(error("required", template("{{ shared.a.b")).contains("not closed"));
-        assert!(error("required", template("{{ env.home }}")).contains("not a reference"));
+        assert!(error("required", template("{{ env.HOME }}")).contains("not a reference"));
         assert_eq!(
             check("required", template("  ")).unwrap_err(),
             vec![ParameterError::Missing("required".into())]

@@ -127,6 +127,57 @@ fn anything_outside_the_grammar_is_rejected() {
 }
 
 #[test]
+fn module_roots_parse_without_knowing_the_modules() {
+    for text in [
+        "projects.current.key",
+        "workSession.elapsedSeconds",
+        "git.repo.branch",
+        // A namespace no module owns parses too: it resolves as
+        // unavailable, so a reference to a missing module stays readable.
+        "someday.value",
+    ] {
+        let parsed = reference(text);
+        assert_eq!(parsed, VariableRef::Module(VariableId::new(text).unwrap()));
+        assert_eq!(parsed.to_string(), text);
+        assert_eq!(parsed.registered_id().unwrap().as_str(), text);
+        assert_eq!(
+            serde_json::from_value::<VariableRef>(json!(text)).unwrap(),
+            parsed
+        );
+    }
+    // The grammar's own roots are never module namespaces.
+    for bad in [
+        "shared.current",
+        "steps.a.b",
+        "system.nope",
+        "workflow.nope",
+    ] {
+        assert!(VariableRef::parse(bad).is_err(), "{bad}");
+    }
+    // A legacy id keeps its spelling and names its canonical id.
+    let legacy = reference("system.work.session.state");
+    assert_eq!(legacy.to_string(), "system.work.session.state");
+    assert_eq!(
+        legacy.registered_id().unwrap().as_str(),
+        "workSession.state"
+    );
+    assert_eq!(
+        reference("system.platform")
+            .registered_id()
+            .unwrap()
+            .as_str(),
+        "system.platform"
+    );
+    assert_eq!(reference("shared.a.b").registered_id(), None);
+    assert_eq!(
+        parse_expression("{{ projects.current.key }}-{{ shared.a.b }}")
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[test]
 fn values_and_types_have_stable_shapes() {
     let project = profile().projects[0].id;
     assert_eq!(
@@ -618,6 +669,9 @@ fn entry(reference: &str, group: VariableGroup, value_type: VariableType) -> Cat
         sensitive: false,
         dynamic: false,
         availability: ReferenceAvailability::Available,
+        owner: None,
+        read_only: false,
+        deprecated: None,
     }
 }
 
@@ -717,6 +771,7 @@ fn the_frontend_mirrors_every_variant() {
             VariableGroup::Project,
             VariableGroup::Workflow,
             VariableGroup::StepOutput,
+            VariableGroup::Module,
         ]
         .map(|g| {
             serde_json::to_value(g)
@@ -801,7 +856,22 @@ fn the_frontend_mirrors_the_registry() {
             .unwrap()
             .to_owned()
     }))
-    .chain(["module".to_owned()]);
+    .chain(["module".to_owned()])
+    .chain(
+        [
+            ReferenceAvailability::Available,
+            ReferenceAvailability::RuntimeOnly,
+            ReferenceAvailability::NotInContext,
+            ReferenceAvailability::Unavailable,
+        ]
+        .map(|a| {
+            serde_json::to_value(a)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned()
+        }),
+    );
     for name in names {
         assert!(
             FRONTEND_TYPES.contains(&format!("\"{name}\"")),

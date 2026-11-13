@@ -841,7 +841,10 @@ async fn variables_and_workflow_steps_see_the_session_the_key_runs() {
             .collect::<Vec<_>>(),
         other => panic!("unexpected {other:?}"),
     };
-    assert_eq!(listed, PATHS);
+    // The legacy paths (deprecated aliases), then the module's own ids.
+    assert_eq!(listed[..6], PATHS);
+    assert!(listed[6..].iter().all(|id| id.starts_with("workSession.")));
+    assert_eq!(listed.len(), 12);
     for value in previews(&agent, &f.profile, &PATHS).await {
         assert_eq!(value["status"], "missing", "{value}");
     }
