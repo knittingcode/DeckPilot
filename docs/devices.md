@@ -151,16 +151,41 @@ Fields are only ever added.
 
 ### Drivers (adapter, strategy, registry)
 
-- **Adapter**: a vendor driver implements `DeviceBackend`/`DeviceHandle` and
-  wraps the vendor's HID/protocol layer. It translates native reports into
-  `ControlId` + `ControlInput` and accepts generic `Frame`s. Each driver
-  reports its id (`name`) and implementation version (`version`).
-- **Strategy**: model-specific behaviour (image size, orientation and
-  encoding, how inputs are reported) is chosen by the adapter per model,
-  driven by the model's `DeviceCapabilities`/`ImageSpec`.
-- **Registry/factory**: drivers are registered with the agent's backend;
-  discovery yields `DeviceId`s that resolve to descriptors.
-- **Capabilities**: keys, dials (encoders), touch strip and brightness are
-  the capability families core works with.
+- **Adapter**: a vendor driver implements `DeviceBackend` (discover, open,
+  `name` = driver id, `version`, `models`) and `DeviceHandle` (read input,
+  set/clear images, brightness, flush). It wraps the vendor's HID/protocol
+  layer, translates native reports into `ControlId` + `ControlInput`, and
+  accepts generic `Frame`s. Image operations are queued and take effect on
+  `flush`, in order; a clear is queued like an image.
+- **Strategy**: model-specific behaviour is chosen per model by the adapter.
+  In `deckpilot-hid`, `SUPPORTED` maps each library device kind to its
+  DeckPilot descriptor, whose `DeviceCapabilities`/`ImageSpec` (grid, image
+  size, orientation, encoding) drive rendering and input translation.
+- **Registry/factory**: drivers are registered with the agent's backend
+  (`CombinedBackend::with`); `default_options` registers the Elgato driver and,
+  in development, the simulated one. Each driver can contribute model
+  descriptors (`DeviceBackend::models`); the agent adds them to its catalog
+  at start unless a built-in model has the same id (`register_missing`), so
+  built-in data and its verification always win. Discovery yields
+  `DeviceId`s; `ModelCatalog::describe` turns them into descriptors.
+- **Capabilities**: `Capability` names the families core drives generically:
+  `keys`, `keyDisplays`, `dials`, `touchStrip`, `brightness`
+  (`DeviceCapabilities::supports`, `families`). The agent sends brightness
+  only to devices whose model has it.
 
-Elgato-specific code lives only in `deckpilot-hid`.
+Adding a vendor needs no change to core: implement the two traits, return
+the model descriptors from `models`, and register the driver. The test
+`apps/agent/tests/fake_vendor.rs` does exactly that with a driver defined only
+in the test: it is discovered, described, its native reports drive a layout
+through generic events, and it receives frames at its model's image size.
+
+### Where vendor code lives
+
+- Elgato protocol types (`elgato_streamdeck`, `hidapi`) are only in
+  `deckpilot-hid`, the Elgato adapter. `crates/deckpilot-core/tests/vendor_neutral.rs`
+  checks that core does not depend on them or on USB ids.
+- The built-in Stream Deck descriptors (and their USB ids, shown in the app)
+  stay in the static model registry in `deckpilot-device`: stored layouts
+  refer to these model ids, and the configuration app designs layouts for
+  them without loading any driver. Discovery by USB id is the adapter's job;
+  the generic catalog no longer offers `find_by_usb`.
