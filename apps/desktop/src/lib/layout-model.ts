@@ -331,6 +331,8 @@ export function targetLabel(
       return `Open “${page(layout, target.page)?.name ?? "missing page"}”`
     case "back":
       return "Back"
+    case "stateful":
+      return "Work Session"
   }
 }
 

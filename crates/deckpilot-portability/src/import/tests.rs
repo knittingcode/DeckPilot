@@ -745,3 +745,83 @@ fn gesture_bindings_travel_with_their_profile() {
         }
     );
 }
+
+/// A work session key with its own rules travels with its layout, also
+/// into a copy, where it refers to nothing that would need remapping.
+#[test]
+fn stateful_keys_travel_with_their_profile() {
+    use deckpilot_core::gesture::Gesture;
+    use deckpilot_core::stateful::{StatefulBinding, StatefulRule, WorkSessionOperation};
+    use deckpilot_core::work_session::WorkSessionState;
+    use deckpilot_core::{BindingTarget, ControlBinding, DeviceLayout, Trigger};
+    use deckpilot_device::{ControlId, models};
+
+    let (source, profiles) = store_with(&["Work"]);
+    let mut work = profiles[0].clone();
+    let key = ControlId::Key { index: 7 };
+    let session = BindingTarget::Stateful(StatefulBinding::WorkSession {
+        rules: vec![
+            StatefulRule::new(
+                WorkSessionState::Idle,
+                Gesture::Click,
+                WorkSessionOperation::Start,
+            ),
+            StatefulRule::new(
+                WorkSessionState::ReadyToFinish,
+                Gesture::Click,
+                WorkSessionOperation::Finish,
+            ),
+            StatefulRule::new(
+                WorkSessionState::ReadyToFinish,
+                Gesture::LongPress,
+                WorkSessionOperation::Verify,
+            ),
+        ],
+    });
+    let defaults = BindingTarget::Stateful(StatefulBinding::work_session());
+    let mut layout = DeviceLayout::new("Main", models::stream_deck_mk2().id);
+    layout.pages[0].bindings = vec![
+        ControlBinding::new(key, Trigger::Click, session.clone()),
+        ControlBinding::new(key, Trigger::LongPress, session.clone()),
+        ControlBinding::new(
+            ControlId::Key { index: 8 },
+            Trigger::Click,
+            defaults.clone(),
+        ),
+    ];
+    work.layouts.push(layout);
+    assert_eq!(work.validate(&catalog()), []);
+    source.save_profile(&work).unwrap();
+
+    let payload = round_trip(&exported(&source));
+    assert_eq!(payload.profiles[0].layouts, work.layouts);
+    let target = SqliteStore::open_in_memory().unwrap();
+    apply(
+        &target,
+        &payload,
+        &ImportOptions {
+            profiles: vec![work.id],
+            ..ImportOptions::default()
+        },
+    );
+    assert_eq!(target.load_profile(work.id).unwrap().unwrap(), work);
+
+    let summary = apply(
+        &target,
+        &payload,
+        &ImportOptions {
+            profiles: vec![work.id],
+            conflicts: BTreeMap::from([(work.id, ConflictResolution::KeepBoth)]),
+            ..ImportOptions::default()
+        },
+    );
+    let copy = target.load_profile(summary.imported[0].0).unwrap().unwrap();
+    assert_ne!(copy.id, work.id);
+    assert_eq!(copy.validate(&catalog()), []);
+    let targets: Vec<_> = copy.layouts[0].pages[0]
+        .bindings
+        .iter()
+        .map(|b| b.target.clone())
+        .collect();
+    assert_eq!(targets, [session.clone(), session, defaults]);
+}

@@ -125,7 +125,8 @@ bound on this machine, kind mismatch.
 - **ControlBinding** – `control`, `trigger` (`press`, `release`,
   `rotateClockwise`, `rotateCounterClockwise`, `touch { gesture }`, `click`,
   `doubleClick`, `longPress`), `target` (`action { action, overrides? }`,
-  `workflow`, `openPage`, `back`), optional `label`, optional `appearance`
+  `workflow`, `openPage`, `back`, `stateful { machine, rules? }`), optional
+  `label`, optional `appearance`
   (see [Key appearance](#key-appearance)).
 
 Folders are pages opened with `openPage` and left with `back`. Layout
@@ -147,6 +148,21 @@ fires (no node outputs); they are checked like a workflow node's
 overrides when the layout is saved (`InvalidOverrides`). A key's face shows
 its `press` binding, else its `click` binding. Deleting an action is refused
 while any binding, of any trigger, runs it.
+
+**Stateful keys** (`deckpilot_core::stateful`). A `stateful` target asks a
+built-in state machine for an operation; the only machine is `workSession`.
+`rules` is a list of `{ state, gesture, operation }` with the machine's own
+names (`idle`, `working`, … and `start`, `verify`, `finish`, …), and no
+expressions; without `rules` the machine's default table applies and is not
+stored. The agent picks the rule from the machine's state at the press of
+the gesture and lets the machine apply it, so the binding never sets state.
+Validation: a stateful target only on `click`, `doubleClick` or `longPress`
+(`StatefulNeedsGesture`); every stateful binding of a key has the same
+machine and rules (`InconsistentStateful`); and each rule's operation is
+allowed in its state, each `(state, gesture)` appears once, its gesture is
+bound to the machine on that key, and `finish` is only a `click`
+(`InvalidStateful`). A stateful key references no action, workflow or
+project, and travels with its layout on export and import unchanged.
 
 A profile uses its first layout for a model. `DeviceLayout::generate` creates
 one from the profile's actions and workflows using only the model's

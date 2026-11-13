@@ -558,7 +558,7 @@ fn remap_layout(
                         *page = *new;
                     }
                 }
-                BindingTarget::Back => {}
+                BindingTarget::Back | BindingTarget::Stateful(_) => {}
             }
         }
     }

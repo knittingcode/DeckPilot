@@ -15,6 +15,7 @@ use deckpilot_device::{
 use crate::gesture::{
     BoundGestures, Gesture, GestureTimingError, GestureTimings, KeyGestureSettings,
 };
+use crate::stateful::{StatefulBinding, StatefulIssue};
 use crate::variables::VariableRef;
 use crate::{
     ActionInstanceId, ActionParameters, ActionRegistry, LayoutId, PageId, ParameterError, Profile,
@@ -120,6 +121,11 @@ pub enum BindingTarget {
     },
     /// Returns to the previously open page.
     Back,
+    /// Asks a built-in state machine for an operation, chosen by the
+    /// machine's state at the press and the gesture (see
+    /// [`crate::stateful`]). Only on gesture triggers; every stateful
+    /// binding of a key carries the same machine and rules.
+    Stateful(StatefulBinding),
 }
 
 impl BindingTarget {
@@ -301,6 +307,22 @@ pub enum LayoutIssue {
         trigger: Trigger,
         reason: String,
     },
+    #[error(
+        "page `{page}`: {control} ({trigger:?}): a stateful key reacts to click, double click or long press"
+    )]
+    StatefulNeedsGesture {
+        page: String,
+        control: ControlId,
+        trigger: Trigger,
+    },
+    #[error("page `{page}`: the stateful bindings of {control} follow different machines or rules")]
+    InconsistentStateful { page: String, control: ControlId },
+    #[error("page `{page}`: {control}: {reason}")]
+    InvalidStateful {
+        page: String,
+        control: ControlId,
+        reason: StatefulIssue,
+    },
     /// A warning ([`DeviceLayout::warnings`]): the runtime shows an
     /// automatic Back key on the page's first free key.
     #[error("page `{page}` has no Back key; an automatic one is shown on its first free key")]
@@ -479,7 +501,7 @@ impl DeviceLayout {
                 BindingTarget::Action { action, .. } => profile.action(*action).is_some(),
                 BindingTarget::Workflow { workflow } => profile.workflow(*workflow).is_some(),
                 BindingTarget::OpenPage { page } => self.page(*page).is_some(),
-                BindingTarget::Back => true,
+                BindingTarget::Back | BindingTarget::Stateful(_) => true,
             };
             if !target_exists {
                 issues.push(LayoutIssue::DanglingTarget {
@@ -506,6 +528,9 @@ impl DeviceLayout {
                     page: name(),
                     control,
                 });
+            }
+            if let BindingTarget::Stateful(stateful) = &binding.target {
+                validate_stateful(page, index, stateful, issues);
             }
         }
         validate_gesture_settings(page, capabilities, issues);
@@ -592,6 +617,64 @@ fn mixes_triggers(page: &LayoutPage, index: usize) -> bool {
         && page.bindings.iter().any(|other| {
             other.control == control && matches!(other.trigger, Trigger::Press | Trigger::Release)
         })
+}
+
+/// A stateful binding: on a gesture trigger, with the same machine and
+/// rules as the key's other stateful bindings, and rules the machine
+/// allows for the gestures the key binds to it. The key's checks are
+/// reported once, at its first stateful binding.
+fn validate_stateful(
+    page: &LayoutPage,
+    index: usize,
+    stateful: &StatefulBinding,
+    issues: &mut Vec<LayoutIssue>,
+) {
+    let binding = &page.bindings[index];
+    let control = binding.control;
+    if binding.trigger.gesture().is_none() {
+        issues.push(LayoutIssue::StatefulNeedsGesture {
+            page: page.name.clone(),
+            control,
+            trigger: binding.trigger,
+        });
+    }
+    let others = page
+        .bindings
+        .iter()
+        .enumerate()
+        .filter_map(|(at, other)| match &other.target {
+            BindingTarget::Stateful(target) if other.control == control => {
+                Some((at, other.trigger, target))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if others.first().map(|(at, _, _)| *at) != Some(index) {
+        return;
+    }
+    if others.iter().any(|(_, _, other)| *other != stateful) {
+        issues.push(LayoutIssue::InconsistentStateful {
+            page: page.name.clone(),
+            control,
+        });
+        return;
+    }
+    let mut bound = BoundGestures::default();
+    for (_, trigger, _) in &others {
+        match trigger.gesture() {
+            Some(Gesture::Click) => bound.click = true,
+            Some(Gesture::DoubleClick) => bound.double_click = true,
+            Some(Gesture::LongPress) => bound.long_press = true,
+            None => {}
+        }
+    }
+    for reason in stateful.issues(bound) {
+        issues.push(LayoutIssue::InvalidStateful {
+            page: page.name.clone(),
+            control,
+            reason,
+        });
+    }
 }
 
 /// Timings set for controls the device has, once each, in range.
@@ -1215,5 +1298,160 @@ mod tests {
             layout.validate(&catalog(), &profile)[..],
             [LayoutIssue::InvalidOverrides { .. }]
         ));
+    }
+
+    fn work_session(rules: &[(WorkSessionState, Gesture, WorkSessionOperation)]) -> BindingTarget {
+        BindingTarget::Stateful(StatefulBinding::WorkSession {
+            rules: rules
+                .iter()
+                .map(|(s, g, o)| StatefulRule::new(*s, *g, *o))
+                .collect(),
+        })
+    }
+
+    use crate::stateful::{StatefulRule, WorkSessionOperation};
+    use crate::work_session::WorkSessionState;
+
+    #[test]
+    fn stateful_bindings_serialize_as_documented() {
+        let binding = bind(
+            key(4),
+            Trigger::Click,
+            work_session(&[(
+                WorkSessionState::Idle,
+                Gesture::Click,
+                WorkSessionOperation::Start,
+            )]),
+        );
+        let json = serde_json::to_value(&binding).unwrap();
+        assert_eq!(
+            json["target"],
+            serde_json::json!({
+                "type": "stateful",
+                "machine": "workSession",
+                "rules": [{"state": "idle", "gesture": "click", "operation": "start"}]
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<ControlBinding>(json).unwrap(),
+            binding
+        );
+        let defaults = BindingTarget::Stateful(StatefulBinding::work_session());
+        let json = serde_json::to_value(&defaults).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"type": "stateful", "machine": "workSession"})
+        );
+        assert_eq!(
+            serde_json::from_value::<BindingTarget>(json).unwrap(),
+            defaults
+        );
+        assert!(
+            serde_json::from_value::<BindingTarget>(
+                serde_json::json!({"type": "stateful", "machine": "script", "code": "1"})
+            )
+            .is_err()
+        );
+        assert_eq!(defaults.action_id(), None);
+    }
+
+    #[test]
+    fn stateful_layouts_are_validated() {
+        use Gesture as G;
+        use WorkSessionOperation as O;
+        use WorkSessionState as S;
+
+        let profile = Profile::new("Work");
+        let mut layout = DeviceLayout::new("Main", DeviceModelId::new(models::STREAM_DECK_MK2_ID));
+        let home = layout.home_page;
+        let defaults = || BindingTarget::Stateful(StatefulBinding::work_session());
+        let page = layout.page_mut(home).unwrap();
+        page.bindings = vec![
+            // Valid: the default rules on click and long press, and own
+            // rules on a key that binds only a double click.
+            bind(key(0), Trigger::Click, defaults()),
+            bind(key(0), Trigger::LongPress, defaults()),
+            bind(
+                key(1),
+                Trigger::DoubleClick,
+                work_session(&[(S::Idle, G::DoubleClick, O::Start)]),
+            ),
+        ];
+        assert_eq!(layout.validate(&catalog(), &profile), []);
+
+        let page = layout.page_mut(home).unwrap();
+        page.bindings = vec![
+            // A raw trigger cannot carry the state of a press.
+            bind(key(2), Trigger::Press, defaults()),
+            // Two bindings of one key with different rules.
+            bind(key(3), Trigger::Click, defaults()),
+            bind(
+                key(3),
+                Trigger::LongPress,
+                work_session(&[(S::Working, G::LongPress, O::Verify)]),
+            ),
+            // Finishing by a long press; a rule for a gesture that goes
+            // elsewhere; an operation the state does not allow.
+            bind(
+                key(4),
+                Trigger::Click,
+                work_session(&[
+                    (S::ReadyToFinish, G::LongPress, O::Finish),
+                    (S::Working, G::Click, O::Start),
+                ]),
+            ),
+            bind(
+                key(4),
+                Trigger::LongPress,
+                work_session(&[
+                    (S::ReadyToFinish, G::LongPress, O::Finish),
+                    (S::Working, G::Click, O::Start),
+                ]),
+            ),
+            bind(
+                key(5),
+                Trigger::Click,
+                work_session(&[(S::Idle, G::LongPress, O::Start)]),
+            ),
+            bind(key(5), Trigger::LongPress, BindingTarget::Back),
+        ];
+        let issues = layout.validate(&catalog(), &profile);
+        assert!(
+            matches!(
+                &issues[..],
+                [
+                    LayoutIssue::StatefulNeedsGesture {
+                        trigger: Trigger::Press,
+                        ..
+                    },
+                    LayoutIssue::InconsistentStateful { control: c3, .. },
+                    LayoutIssue::InvalidStateful {
+                        reason: StatefulIssue::GestureNotAllowed {
+                            gesture: G::LongPress,
+                            ..
+                        },
+                        control: c4,
+                        ..
+                    },
+                    LayoutIssue::InvalidStateful {
+                        reason: StatefulIssue::NotAllowed { .. },
+                        ..
+                    },
+                    LayoutIssue::InvalidStateful {
+                        reason: StatefulIssue::GestureNotBound {
+                            gesture: G::LongPress,
+                            ..
+                        },
+                        control: c5,
+                        ..
+                    },
+                ] if *c3 == key(3) && *c4 == key(4) && *c5 == key(5)
+            ),
+            "{issues:#?}"
+        );
+        assert_eq!(
+            issues[2].to_string(),
+            "page `Home`: key 4: `finish` cannot be asked for by LongPress"
+        );
     }
 }
