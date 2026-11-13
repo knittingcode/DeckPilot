@@ -14,12 +14,15 @@ use deckpilot_core::graph::ExecutionEvent;
 use deckpilot_core::variables::{
     CatalogEntry, CatalogFilter, PreviewItem, ProjectSource, ReferencePreview, ResolutionContext,
 };
+use deckpilot_core::work_session::WorkSessionSnapshot;
 use deckpilot_core::{
     ActionInstanceId, ActionResult, ActionStatus, ContextEffect, CycleDirection, ExecutionId,
-    ExecutionRecord, ExecutionSummary, LayoutStatus, ProfileId, Project, ProjectId, WorkflowId,
-    WorkflowReport,
+    ExecutionRecord, ExecutionSummary, LayoutStatus, ProfileId, Project, ProjectId, WorkSessionId,
+    WorkflowId, WorkflowReport,
 };
 use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId};
+
+use crate::work_session::{MAX_WORK_SESSION_LIST, WorkSessionSettings, WorkSessionSummary};
 
 /// Protocol spoken by this build.
 ///
@@ -45,7 +48,13 @@ use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId};
 /// `resourceBindingsChanged`, `deviceContextChanged`,
 /// `executionContextChanged`). Action results may carry `cycleProject`
 /// effects, which are removed for older clients.
-pub const PROTOCOL_VERSION: u32 = 7;
+///
+/// Version 8: the work session. The agent reports the session
+/// (`getWorkSession`, `workSessionChanged`), its history
+/// (`listWorkSessions`) and settings (`getWorkSessionSettings`,
+/// `saveWorkSessionSettings`), and lets the user clear notices and decide
+/// flagged gaps. No request starts, verifies or finishes a session (D11).
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// Most references one `previewReferences` may ask about.
 pub const MAX_PREVIEW_ITEMS: usize = 200;
@@ -169,10 +178,13 @@ pub enum Capability {
     /// events. Without it the app shows no live values and does not save
     /// references, which the agent could not resolve. Protocol 7.
     Variables,
+    /// The work session: its state, history, settings and events. Without
+    /// it the app explains that the agent is too old. Protocol 8.
+    WorkSession,
 }
 
 impl Capability {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Workflows,
         Self::PrepareForUpdate,
         Self::ModuleNamespaces,
@@ -180,6 +192,7 @@ impl Capability {
         Self::BackgroundExecutions,
         Self::Notifications,
         Self::Variables,
+        Self::WorkSession,
     ];
 
     /// The protocol that introduced the capability.
@@ -191,6 +204,7 @@ impl Capability {
             Self::BackgroundExecutions => 5,
             Self::Notifications => 6,
             Self::Variables => 7,
+            Self::WorkSession => 8,
         }
     }
 
@@ -360,6 +374,41 @@ pub enum Request {
         context: Box<ResolutionContext>,
         items: Vec<PreviewItem>,
     },
+    /// The work session as it is now. Since protocol 8.
+    GetWorkSession,
+    /// Sessions of every profile, newest first: at most `limit`, only
+    /// those requested before `before` (ms) when given. Since protocol 8.
+    ListWorkSessions {
+        limit: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<i64>,
+    },
+    /// The work session settings of `profile` (defaults if never saved).
+    /// Since protocol 8.
+    GetWorkSessionSettings {
+        profile: ProfileId,
+    },
+    /// Saves the work session settings of `settings.profile` after
+    /// checking its workflows: the start workflow needs no inputs a
+    /// session cannot give, the verification workflow must fulfil the
+    /// verification contract. Since protocol 8.
+    SaveWorkSessionSettings {
+        settings: Box<WorkSessionSettings>,
+    },
+    /// Decides a flagged gap of `session`: `count` keeps it counted,
+    /// otherwise it is excluded. Either can be changed again. Since
+    /// protocol 8.
+    ResolveWorkSessionReview {
+        session: WorkSessionId,
+        review: i64,
+        count: bool,
+    },
+    /// Clears the notice of `session`, or, without one, the notice an idle
+    /// session shows. Since protocol 8.
+    ClearWorkSessionNotices {
+        #[serde(default)]
+        session: Option<WorkSessionId>,
+    },
 }
 
 impl Request {
@@ -386,6 +435,13 @@ impl Request {
             Self::PreviewReferences { items, .. } if items.len() > MAX_PREVIEW_ITEMS => Err(
                 format!("at most {MAX_PREVIEW_ITEMS} references can be previewed at once"),
             ),
+            Self::ListWorkSessions { limit, .. }
+                if *limit == 0 || *limit > MAX_WORK_SESSION_LIST =>
+            {
+                Err(format!(
+                    "limit must be between 1 and {MAX_WORK_SESSION_LIST}"
+                ))
+            }
             _ => Ok(()),
         }
     }
@@ -503,6 +559,25 @@ pub enum Response {
     ReferencePreviews {
         previews: Vec<ReferencePreview>,
     },
+    /// Answer to `getWorkSession` and `clearWorkSessionNotices`. Since
+    /// protocol 8.
+    WorkSession {
+        snapshot: Box<WorkSessionSnapshot>,
+    },
+    /// Answer to `listWorkSessions`. Since protocol 8.
+    WorkSessions {
+        entries: Vec<WorkSessionSummary>,
+    },
+    /// Answer to `resolveWorkSessionReview`: the session afterwards. Since
+    /// protocol 8.
+    WorkSessionEntry {
+        entry: Box<WorkSessionSummary>,
+    },
+    /// Answer to `getWorkSessionSettings` and `saveWorkSessionSettings`.
+    /// Since protocol 8.
+    WorkSessionSettings {
+        settings: Box<WorkSessionSettings>,
+    },
     Ok,
 }
 
@@ -608,6 +683,13 @@ pub enum AgentEvent {
         execution: ExecutionId,
         project: Option<ProjectId>,
     },
+    /// The work session changed: its state, verification, approval,
+    /// notices, or its counted time after a decided gap. Elapsed time is
+    /// drawn from `elapsedMs` at `asOfMs`, so the agent does not send one
+    /// per tick. Since protocol 8.
+    WorkSessionChanged {
+        snapshot: Box<WorkSessionSnapshot>,
+    },
 }
 
 impl Request {
@@ -628,6 +710,12 @@ impl Request {
             | Self::RequestWindow { .. }
             | Self::GetLastWorkflowReport => 4,
             Self::ListVariables { .. } | Self::PreviewReferences { .. } => 7,
+            Self::GetWorkSession
+            | Self::ListWorkSessions { .. }
+            | Self::GetWorkSessionSettings { .. }
+            | Self::SaveWorkSessionSettings { .. }
+            | Self::ResolveWorkSessionReview { .. }
+            | Self::ClearWorkSessionNotices { .. } => 8,
             Self::RunWorkflow { .. } | Self::PrepareForUpdate => 2,
             Self::GetStatus
             | Self::ListDevices
@@ -674,6 +762,7 @@ impl AgentEvent {
             | Self::ResourceBindingsChanged
             | Self::DeviceContextChanged { .. }
             | Self::ExecutionContextChanged { .. } => 7,
+            Self::WorkSessionChanged { .. } => 8,
             Self::OpenWindow { .. } => 4,
             Self::State { .. }
             | Self::ActionCompleted { .. }
@@ -905,6 +994,122 @@ mod tests {
             serde_json::to_value(Capability::Variables).unwrap(),
             "variables"
         );
+    }
+
+    #[allow(clippy::too_many_lines)] // Every request and the event.
+    #[test]
+    fn the_work_session_needs_protocol_8() {
+        use crate::work_session::{ElapsedFormat, WorkSessionSettings};
+        use deckpilot_core::work_session::WorkSessionSnapshot;
+        let profile = ProfileId::new();
+        let session = WorkSessionId::new();
+        for (json, name) in [
+            (
+                serde_json::json!({"type": "getWorkSession"}),
+                "getWorkSession",
+            ),
+            (
+                serde_json::json!({"type": "listWorkSessions", "limit": 20, "before": 5}),
+                "listWorkSessions",
+            ),
+            (
+                serde_json::json!({"type": "getWorkSessionSettings", "profile": profile}),
+                "getWorkSessionSettings",
+            ),
+            (
+                serde_json::json!({"type": "saveWorkSessionSettings", "settings": {
+                    "profile": profile, "startWorkflow": null, "verificationWorkflow": null,
+                    "approvalTtlSeconds": 600, "reviewGapSeconds": 900, "elapsedFormat": "seconds",
+                }}),
+                "saveWorkSessionSettings",
+            ),
+            (
+                serde_json::json!({"type": "resolveWorkSessionReview",
+                                   "session": session, "review": 4, "count": false}),
+                "resolveWorkSessionReview",
+            ),
+            (
+                serde_json::json!({"type": "clearWorkSessionNotices", "session": null}),
+                "clearWorkSessionNotices",
+            ),
+            (
+                serde_json::json!({"type": "clearWorkSessionNotices"}),
+                "clearWorkSessionNotices",
+            ),
+        ] {
+            let request: Request = serde_json::from_value(json.clone()).expect(name);
+            assert_eq!(request.since_protocol(), 8, "{name}");
+            assert_eq!(request.name(), name);
+            assert!(request.validate().is_ok(), "{name}");
+        }
+        let save: Request = serde_json::from_value(serde_json::json!({
+            "type": "saveWorkSessionSettings", "settings": {
+                "profile": profile, "approvalTtlSeconds": 600, "reviewGapSeconds": 900,
+                "elapsedFormat": "seconds",
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            save,
+            Request::SaveWorkSessionSettings {
+                settings: Box::new(WorkSessionSettings {
+                    profile,
+                    start_workflow: None,
+                    verification_workflow: None,
+                    approval_ttl_seconds: 600,
+                    review_gap_seconds: 900,
+                    elapsed_format: ElapsedFormat::Seconds,
+                    updated_at_ms: None,
+                })
+            }
+        );
+        // There is no way to operate a session (D11).
+        for operation in [
+            "startWorkSession",
+            "verifyWorkSession",
+            "finishWorkSession",
+            "stopWorkSession",
+        ] {
+            assert!(
+                serde_json::from_value::<Request>(serde_json::json!({"type": operation})).is_err(),
+                "{operation}"
+            );
+        }
+        let list = |limit| Request::ListWorkSessions {
+            limit,
+            before: None,
+        };
+        assert!(list(1).validate().is_ok());
+        assert!(
+            list(crate::work_session::MAX_WORK_SESSION_LIST)
+                .validate()
+                .is_ok()
+        );
+        assert!(list(0).validate().is_err());
+        assert!(
+            list(crate::work_session::MAX_WORK_SESSION_LIST + 1)
+                .validate()
+                .is_err()
+        );
+
+        let event = AgentEvent::WorkSessionChanged {
+            snapshot: Box::new(WorkSessionSnapshot::idle(42)),
+        };
+        assert_eq!(event.since_protocol(), 8);
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"type": "workSessionChanged",
+                               "snapshot": {"state": "idle", "elapsedMs": 0, "asOfMs": 42}})
+        );
+        assert_eq!(serde_json::from_value::<AgentEvent>(json).unwrap(), event);
+        assert!(!Capability::of_protocol(7).contains(&Capability::WorkSession));
+        assert!(Capability::of_protocol(8).contains(&Capability::WorkSession));
+        assert_eq!(
+            serde_json::to_value(Capability::WorkSession).unwrap(),
+            "workSession"
+        );
+        assert_eq!(PROTOCOL_VERSION, 8);
     }
 
     #[test]

@@ -1,8 +1,11 @@
 //! Key gestures: single click, double click and long press.
 //!
-//! Contract only (see `docs/gestures-and-work-session.md`): the types the
-//! gesture engine, the layout model and the gesture editor share. Nothing
-//! uses them yet; key bindings still fire on the raw press or release.
+//! The types the gesture engine, the layout model and the gesture editor
+//! share (see `docs/gestures-and-work-session.md`), and the engine itself
+//! ([`engine`]). A key is in gesture mode when its page binds `click`,
+//! `doubleClick` or `longPress` to it ([`crate::Trigger`]); every other key,
+//! including every key of layouts from before gestures, is in raw mode and
+//! fires on the raw press or release.
 //!
 //! The timing rules, which the engine implements:
 //!
@@ -18,6 +21,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use deckpilot_device::ControlId;
+
+pub mod engine;
+
+pub use engine::{GestureEngine, GestureFired, GestureOutput, KeyContext};
 
 /// A gesture a key binding can react to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

@@ -306,7 +306,7 @@ impl Agent {
                 continue;
             };
             match target {
-                BindingTarget::Action { action } => {
+                BindingTarget::Action { action, .. } => {
                     let Some(policy) = self
                         .runtime
                         .profile()
