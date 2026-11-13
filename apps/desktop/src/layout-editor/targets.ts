@@ -26,6 +26,8 @@ export function encodeTarget(target: BindingTarget | undefined): string {
       return `page:${target.page}`
     case "back":
       return "back"
+    case "stateful":
+      return `stateful:${target.machine}`
   }
 }
 
@@ -37,6 +39,7 @@ export function decodeTarget(value: string): BindingTarget | null {
   if (kind === "action") return { type: "action", action: id }
   if (kind === "workflow") return { type: "workflow", workflow: id }
   if (kind === "page") return { type: "openPage", page: id }
+  if (kind === "stateful" && id === "workSession") return { type: "stateful", machine: id }
   return null
 }
 
