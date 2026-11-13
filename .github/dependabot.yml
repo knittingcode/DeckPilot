@@ -1,0 +1,49 @@
+# Version updates, kept conservative: weekly, minor and patch updates grouped
+# into one pull request per ecosystem, majors one by one, few open pull
+# requests at a time, and a cooldown so that a release is a week old before
+# it is proposed. Security updates (a repository setting) are not limited by
+# open-pull-requests-limit or the cooldown.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      cargo-minor-and-patch:
+        update-types: [minor, patch]
+
+  # The pnpm workspace (apps/*) has a single lockfile at the root.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: ci(deps)
+    groups:
+      github-actions:
+        patterns: ["*"]

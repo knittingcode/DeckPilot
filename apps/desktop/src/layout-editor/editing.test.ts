@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest"
 
+import { canRedo, canUndo, commit, history, redo, undo } from "@/lib/history"
+
 import {
   assignTarget,
-  canRedo,
-  canUndo,
   clearControls,
-  commit,
   controlRows,
   copyControls,
   dropOnControl,
@@ -13,20 +12,16 @@ import {
   emptySelection,
   extendSelection,
   folderOf,
-  hasBack,
-  history,
   moveControl,
   neighbour,
   orderedControls,
   parentPage,
   parseControlKey,
   pasteControls,
-  redo,
   select,
   selectOnly,
   selectedInOrder,
   toggleSelected,
-  undo,
 } from "./editing"
 import { bindingsFor } from "@/lib/layout-model"
 import type { ControlBinding, ControlId, DeviceLayout, DeviceModel } from "@/lib/types"
@@ -315,8 +310,6 @@ describe("pages", () => {
     expect(folderOf(l, "home", key(0))).toBeUndefined()
     expect(parentPage(l, "folder")).toBe("home")
     expect(parentPage(l, "home")).toBe("home")
-    expect(hasBack(l, "folder")).toBe(true)
-    expect(hasBack(layout([]), "folder")).toBe(false)
     expect(parentPage(layout([]), "folder")).toBe("home")
   })
 })

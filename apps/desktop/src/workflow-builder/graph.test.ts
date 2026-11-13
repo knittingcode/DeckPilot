@@ -2,28 +2,24 @@ import { describe, expect, it } from "vitest"
 
 import type { WorkflowGraph } from "@/lib/types"
 
+import { commit, history, redo, replace, settle, undo } from "@/lib/history"
+
 import {
   DEFAULT_POLICY,
   addNode,
   autoLayout,
-  commit,
   connect,
   connectionProblem,
   copy,
   crossings,
   emptyGraph,
   freePosition,
-  history,
   isNodeId,
   layoutOrder,
   nodeId,
   paste,
   reconnect,
-  redo,
   removeNodes,
-  replace,
-  settle,
-  undo,
   upstream,
 } from "./graph"
 

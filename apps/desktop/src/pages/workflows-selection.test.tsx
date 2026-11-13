@@ -6,10 +6,13 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { TitlebarContext } from "@/hooks/use-titlebar"
-import { AppContext, type AppContextValue } from "@/lib/app-context"
+import { AppContext } from "@/lib/app-context"
+import { peekFocus, requestFocus } from "@/lib/focus"
 import { TitlebarStore } from "@/lib/titlebar"
 import type { ActionType, ProfileView, Workflow } from "@/lib/types"
 import { WorkflowsPage } from "@/pages/workflows"
+import { profiles } from "@/test/fixtures"
+import { appContext } from "@/test/render"
 import type { BuilderProps } from "@/workflow-builder/builder"
 
 const api = {
@@ -66,28 +69,7 @@ function view(workflows: Workflow[]): ProfileView {
   }
 }
 
-function context(): AppContextValue {
-  return {
-    profiles: {
-      profiles: [{ id: "profile-1", name: "Work", updatedAt: 0 }],
-      activeProfileId: null,
-    },
-    editingProfileId: "profile-1",
-    setEditingProfileId: vi.fn(),
-    refresh: vi.fn(),
-    revision: 0,
-    agent: null,
-    setAgent: vi.fn(),
-    updates: null,
-    setUpdates: vi.fn(),
-    navigate: vi.fn(),
-    openSettings: vi.fn(),
-    closeSettings: vi.fn(),
-    history: { canGoBack: false, canGoForward: false, back: vi.fn(), forward: vi.fn() },
-    modules: [],
-    setModules: vi.fn(),
-  }
-}
+const context = () => appContext({ profiles: profiles([{ id: "profile-1", name: "Work" }], null) })
 
 beforeAll(() => {
   Element.prototype.hasPointerCapture = () => false
@@ -125,6 +107,14 @@ async function renderPage(workflows: Workflow[]) {
 }
 
 describe("Workflows page selection", () => {
+  it("opens the workflow another page asked for, once", async () => {
+    const evening: Workflow = { ...morning, id: "w-evening", name: "Evening" }
+    requestFocus({ type: "workflow", workflow: "w-evening" })
+    await renderPage([morning, evening])
+    expect(screen.getByLabelText("Name")).toHaveValue("Evening")
+    expect(peekFocus("workflow")).toBeNull()
+  })
+
   it("keeps the current workflow while a duplicate is loading, then opens the copy", async () => {
     const copy: Workflow = { ...morning, id: "w-copy", name: "Morning (copy)" }
     api.duplicateWorkflow.mockResolvedValue(copy)

@@ -135,7 +135,7 @@ fn test_profile(prefix: &str, keys: u16, catalog: &ModelCatalog) -> Result<Profi
             page.bindings.push(ControlBinding {
                 control: ControlId::Key { index },
                 trigger,
-                target: BindingTarget::Action { action: action.id },
+                target: BindingTarget::action(action.id),
                 label: Some(label.clone()),
                 appearance: None,
             });
@@ -336,16 +336,25 @@ fn keys(agent: &Agent, device: &DeviceId, mock: bool, keys: u16) -> Result<Strin
                 }
             }
         } else {
-            println!("  Press and release every key once, in any order (2 minutes).");
+            println!(
+                "  Press and release every key once, in the order of their labels: A1, A2, … A{keys} (2 minutes)."
+            );
         }
         let mut seen = BTreeSet::new();
+        // Labels of the pressed keys, in the order they were pressed.
+        let mut presses = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
         while !wanted.is_subset(&seen) {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             match tokio::time::timeout(remaining, events.next_event()).await {
                 Ok(Ok(AgentEvent::ActionCompleted { name, .. })) => {
-                    if wanted.contains(&name) && seen.insert(name.clone()) && !mock {
-                        println!("    {name}");
+                    if wanted.contains(&name) && seen.insert(name.clone()) {
+                        if !name.ends_with(" released") {
+                            presses.push(name.clone());
+                        }
+                        if !mock {
+                            println!("    {name}");
+                        }
                     }
                 }
                 Ok(Ok(_)) => {}
@@ -356,8 +365,32 @@ fn keys(agent: &Agent, device: &DeviceId, mock: bool, keys: u16) -> Result<Strin
                 }
             }
         }
-        Ok(format!("{keys} keys, press and release each"))
+        match press_order_problem(&presses, keys) {
+            Some(problem) => Err(problem),
+            None => Ok(format!(
+                "{keys} keys, press and release each; the key showing each label reports that key"
+            )),
+        }
     })
+}
+
+/// Checks that keys pressed in the order of their labels (A1, A2, …)
+/// reported the same order. A difference means that the key showing a
+/// label sends another key's index: images and input disagree about the
+/// key order (rotation or mirroring).
+fn press_order_problem(presses: &[String], keys: u16) -> Option<String> {
+    let expected: Vec<String> = (1..=keys).map(|n| format!("A{n}")).collect();
+    let position = presses
+        .iter()
+        .zip(&expected)
+        .position(|(got, want)| got != want)?;
+    Some(format!(
+        "pressed in the order of the labels, the device reported {} instead of {} (press {}); \
+         images and key input disagree, or a key was pressed out of order: run the test again",
+        presses[position],
+        expected[position],
+        position + 1
+    ))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -414,7 +447,10 @@ fn run(root: &Path, options: &Options, report: &mut Report) -> Result<(), String
     }
     report.record(
         "Key images and text",
-        if confirm("Do the 15 keys show A1 … A15, readable?", options.mock) {
+        if confirm(
+            "Do the keys show A1 … A15 left to right, top to bottom (A1 top left, A5 top right, A15 bottom right), upright and not mirrored?",
+            options.mock,
+        ) {
             Outcome::Passed("confirmed".into())
         } else {
             Outcome::Failed("not as expected".into())
@@ -518,8 +554,17 @@ fn run(root: &Path, options: &Options, report: &mut Report) -> Result<(), String
         );
     }
 
-    // 10. Agent restart: profile, project and brightness are restored.
+    // 10. Agent restart: keys are blanked when it stops; profile, project
+    // and brightness are restored when it starts.
     agent.stop();
+    report.record(
+        "Keys cleared on stop",
+        if confirm("The agent has stopped: are all keys black?", options.mock) {
+            Outcome::Passed("confirmed".into())
+        } else {
+            Outcome::Failed("images remained after the agent stopped".into())
+        },
+    );
     let agent = Agent::start(root, &options.dir, options.mock)?;
     agent.unlock(&key)?;
     let restored = agent.wait(
@@ -639,5 +684,32 @@ pub fn command(root: &Path, args: &[String]) -> Result<(), String> {
         Err("hardware test failed".into())
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::press_order_problem;
+
+    fn labels(numbers: &[u16]) -> Vec<String> {
+        numbers.iter().map(|n| format!("A{n}")).collect()
+    }
+
+    #[test]
+    fn presses_in_label_order_pass() {
+        let all: Vec<u16> = (1..=15).collect();
+        assert_eq!(press_order_problem(&labels(&all), 15), None);
+    }
+
+    #[test]
+    fn a_mirrored_or_rotated_key_order_is_reported() {
+        // Rows mirrored: the key showing A1 reports index 4 (A5).
+        let mirrored = [5, 4, 3, 2, 1, 10, 9, 8, 7, 6, 15, 14, 13, 12, 11];
+        let problem = press_order_problem(&labels(&mirrored), 15).unwrap();
+        assert!(problem.contains("reported A5 instead of A1"), "{problem}");
+
+        let rotated: Vec<u16> = (1..=15).rev().collect();
+        let problem = press_order_problem(&labels(&rotated), 15).unwrap();
+        assert!(problem.contains("reported A15 instead of A1"), "{problem}");
     }
 }

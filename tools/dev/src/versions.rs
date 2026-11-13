@@ -148,10 +148,16 @@ pub fn check(root: &Path, tag: Option<&str>) -> Result<String, String> {
             ));
         }
     }
-    if let Some(tag) = tag
-        && tag.trim_start_matches('v') != expected
-    {
-        problems.push(format!("tag {tag} does not match version {expected}"));
+    if let Some(tag) = tag {
+        // Only a well-formed release tag (`docs/releasing.md`) builds a
+        // release, and it must name exactly the version of the sources.
+        match deckpilot_update::channel::ReleaseTag::parse(tag) {
+            Err(error) => problems.push(error.to_string()),
+            Ok(parsed) if parsed.version.to_string() != expected => {
+                problems.push(format!("tag {tag} does not match version {expected}"));
+            }
+            Ok(_) => {}
+        }
     }
     let changelog =
         std::fs::read_to_string(root.join("CHANGELOG.md")).map_err(|e| e.to_string())?;
@@ -175,6 +181,14 @@ mod tests {
         let version = check(&root, None).unwrap();
         assert!(check(&root, Some(&format!("v{version}"))).is_ok());
         assert!(check(&root, Some("v99.0.0")).is_err());
+        // Malformed tags are refused even when the digits match.
+        for tag in [
+            version.clone(),
+            format!("v{version}+build"),
+            format!("V{version}"),
+        ] {
+            assert!(check(&root, Some(&tag)).is_err(), "{tag}");
+        }
     }
 
     #[test]

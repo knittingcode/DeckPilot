@@ -82,6 +82,21 @@ While the session runs:
 - **Window configuration** (`tauri.conf.json`: titlebar style, traffic-light
   position, window sizes) and **capabilities** are read when the window is
   created. Change them, then `make restart`; HMR cannot apply them.
+- **Closing the app window** ends `tauri dev` and its Vite server; the agent
+  keeps running. The tray's **Open DeckPilot** (or `deckpilot-dev open-ui`)
+  starts the app again with its server: the supervisor gives its agent
+  `DECKPILOT_DESKTOP_BIN` pointing at `deckpilot-dev` itself and
+  `DECKPILOT_DEV_UI_LAUNCHER` naming the session's directory, so the agent
+  asks *that* session's supervisor to run `tauri dev` again instead of
+  starting the bare debug app, which has no server to load from. While the
+  app runs, further clicks only bring its window to the front.
+  `deckpilot-dev show` sends the same request as the tray.
+- A debug build of the app started **without its Vite server** (for example
+  `target/debug/deckpilot-desktop` on its own) shows a built-in page naming
+  the server address, the data directory and how to start the server,
+  instead of a blank window. Its Retry button checks again and opens the
+  interface once the server answers. Release builds embed the frontend and
+  never show this page.
 
 | Command        | Purpose                                                        |
 | -------------- | -------------------------------------------------------------- |
@@ -92,6 +107,7 @@ While the session runs:
 | `make logs`    | Follow the agent and app logs (timestamped, colours removed)   |
 | `make agent`   | Run only the agent in the foreground (dev data)                |
 | `make ui`      | Run only the app with HMR in the foreground (dev data)         |
+| `cargo run -p deckpilot-dev -- open-ui` | Start the session's app again if it is not running (what the tray does) |
 | `make seed`    | Seed an empty dev database (`cargo run -p deckpilot-dev -- seed --reset` starts over) |
 | `make clean`   | Remove build output, logs and session files (keeps dev data)   |
 
@@ -110,7 +126,16 @@ it behaves the same on Linux, macOS and Windows:
   devices and releases them), then stops the app's process tree with a
   grace period. No pattern-based process killing is used.
 - Logs are written to `.dev/logs/agent.log`, `ui.log` and `supervisor.log`
-  with a timestamp per line. The agent additionally keeps its own rotating
+  with a timestamp per line. Requests to start the app again are noted in
+  `ui.log` (`[launcher]`) and `supervisor.log`.
+- A second session next to the regular one (the integration preview, or a
+  throwaway session for tests) needs its own directory and port:
+  `DECKPILOT_DEV_DIR` moves `.dev` (data, logs, session file),
+  `DECKPILOT_VITE_PORT` moves the Vite server, and `DECKPILOT_TAURI_CONFIG`
+  names an extra Tauri configuration passed to `tauri dev --config`, whose
+  `devUrl` must use that port (a separate `identifier` also keeps the
+  WebView storage apart). Set them for `up`; the supervisor keeps using
+  them when the tray restarts the app. The agent additionally keeps its own rotating
   log in `.dev/data/logs/`. Credentials are not logged.
 
 ### Windows
@@ -167,6 +192,67 @@ CI (`.github/workflows/ci.yml`) runs the frontend checks on Linux and the
 Rust checks on Linux, macOS and Windows. Agent tests use simulated devices and
 real local IPC; no hardware is needed.
 
+The required checks (Frontend, Storage with SQLCipher, Rust on ubuntu, macos
+and windows, Updater signing keys match) and the Developer ID check run on
+every pull request. The heavier optional jobs run on every push to `main`,
+but on a pull request only when it changes files they depend on; otherwise
+they report as skipped:
+
+| Job | Runs on a pull request that changes |
+| --- | ----------------------------------- |
+| Package check (Linux .deb), Package check (Windows installers), in the Packaging workflow | files that affect bundling: `apps/desktop/src-tauri/` `tauri*.json`, `build.rs`, `Cargo.toml`, `capabilities/`, `icons/`, `app-icon.svg`; `apps/agent/` `build.rs`, `Cargo.toml`, `Info.plist`; `packaging/`, `tools/ci/`, `.github/workflows/`, `Cargo.lock`, `Cargo.toml`, `apps/desktop/package.json` |
+| Credential store (3 platforms) | `crates/deckpilot-keystore/`, `tools/ci/with-keyring.sh`, `.github/workflows/ci.yml` |
+| Release manifest assembly | `tools/ci/`, `.github/workflows/release.yml`, `.github/workflows/ci.yml` |
+| Compatibility (own workflow) | its path filter in `compatibility.yml` |
+
+The "Changed paths" job decides this with `tools/ci/changed-paths.sh` from
+the files between the pull request's merge commit and its base, and tests
+its rules first (`tools/ci/test-changed-paths.sh`). If the changed files
+cannot be determined, every optional job runs. A skipped job can always be
+run locally with the commands of its steps in `ci.yml`.
+
+The Packaging workflow (`packaging.yml`) builds the Linux .deb and .rpm and
+the Windows NSIS and MSI installers with the release configuration and
+updater artifacts signed by a throwaway key, and checks them
+(`tools/ci/check-packages.sh`). Besides pull requests that change the files
+above, it runs on pushes to `main` that change anything under
+`apps/desktop/src-tauri/`, `apps/agent/`, `packaging/` or `tools/ci/`, the
+Cargo manifests or `apps/desktop/package.json` (so plain source changes are
+packaged after they merge), nightly, by hand (Actions → Packaging → Run
+workflow) and when another workflow calls it
+(`uses: ./.github/workflows/packaging.yml`; output `version`, the checked
+version). The release workflow calls it before drafting a release, so tags do
+not start it on their own.
+
+Pre-release versions (`X.Y.Z-alpha.N`, `-beta.N`, `-rc.N`) build no .rpm
+(RPM does not allow "-" in versions), and the MSI gets a numeric version
+(WiX accepts only numbers): `alpha.N` → `X.Y.Z.N`, `beta.N` →
+`X.Y.Z.(20000+N)`, `rc.N` → `X.Y.Z.(40000+N)` (`tools/ci/msi-version.sh`).
+Callers may pass both as inputs (`prerelease`, `msi-version`); otherwise they
+are derived from the version. `tools/ci/test-check-packages.sh` tests this on
+fake packages in the "Release manifest assembly" job.
+
+Merge queue (prepared, not enabled): `ci.yml` and `signing-check.yml` also
+run for `merge_group` events, so the required checks would report for queue
+groups under their usual names. The optional jobs then compare the group's
+base commit with its head (every pull request in the group). The signing
+job runs the scripts of the group's base commit, as it does on pull
+requests. GitHub offers merge queues only for repositories owned by an
+organization, so this needs the repository to move to one first.
+
+Runs and caches:
+
+- A new push to a pull request cancels its obsolete run. Runs for commits on
+  `main` (after a merge) are never cancelled; each commit has its own
+  concurrency group, so they queue for runners.
+- Only runs on `main` save Rust build caches; pull requests restore the cache
+  of `main`. Per-branch caches of about 0.8–1.2 GB each pushed the cache of
+  `main` out of the repository's 10 GB cache storage.
+- CI builds with `CARGO_PROFILE_DEV_DEBUG=line-tables-only` (and the same for
+  the test profile): backtraces keep file and line numbers, while builds,
+  links and caches are smaller. `rust-cache` already sets
+  `CARGO_INCREMENTAL=0`.
+
 ## Conventions
 
 - Clippy runs with `pedantic` lints; CI treats warnings as errors.
@@ -181,6 +267,31 @@ real local IPC; no hardware is needed.
   IPC tests in `apps/desktop/src-tauri/src/tests.rs` call the commands with the
   same argument shapes as `src/lib/api.ts`.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/).
+
+## Pull requests and branches
+
+`main` is protected: changes arrive as squash-merged pull requests whose
+required checks passed on a branch that is up to date with `main`. Every
+change goes through this cycle:
+
+1. Push a feature branch and open a pull request against `main`.
+2. Wait for the required checks; to update a branch, merge `main` into it
+   (no rebase or force-push on shared branches).
+3. Squash-merge: `gh pr merge <number> --squash --delete-branch`.
+4. Check that the remote branch is gone (the repository also deletes head
+   branches on merge): `git ls-remote --heads origin <branch>` prints nothing.
+5. Remove the branch's worktree if one was used and nothing in it is
+   uncommitted or unpushed: `git worktree remove <path>` (it refuses a dirty
+   tree; never force it).
+6. Delete the local branch with `git branch -d <branch>`, which refuses a
+   branch with work that is not on its upstream.
+7. Prune remote-tracking references and update `main`:
+   `git fetch --prune origin && git switch main && git merge --ff-only origin/main`.
+
+A branch that another open pull request uses as its base is deleted only
+after that pull request has been retargeted to `main` and `main` has been
+merged into it. Branches of pull requests closed without merging are kept
+until their owner decides.
 
 ## Adding an action type
 
