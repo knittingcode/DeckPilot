@@ -68,10 +68,22 @@ export function formatReference(reference: string): string {
 
 const ROOTS = ["steps", "shared", "system", "workflow"] as const
 
-/** The root of a reference (`shared`, `system`, …), or `null` for none of them. */
-export function referenceRoot(reference: string): (typeof ROOTS)[number] | null {
-  const root = reference.trim().split(".")[0] ?? ""
-  return (ROOTS as readonly string[]).includes(root) ? (root as (typeof ROOTS)[number]) : null
+/**
+ * Namespaces of the modules that declare variables: the only module roots
+ * a reference may have. Mirrors `MODULE_NAMESPACES` in deckpilot-core
+ * (checked by a Rust test); any other root is not a reference.
+ */
+export const MODULE_NAMESPACES = ["projects", "workSession"]
+
+/**
+ * The root of a reference (`shared`, `system`, …), `module` for a known
+ * module's namespace (`projects.current.key`), or `null` for none of them.
+ */
+export function referenceRoot(reference: string): (typeof ROOTS)[number] | "module" | null {
+  const segments = reference.trim().split(".")
+  const root = segments[0] ?? ""
+  if ((ROOTS as readonly string[]).includes(root)) return root as (typeof ROOTS)[number]
+  return segments.length >= 2 && MODULE_NAMESPACES.includes(root) ? "module" : null
 }
 
 /** `steps.<node>.output.<key>`: outputs of earlier nodes, known only while running. */
@@ -220,6 +232,7 @@ export const GROUPS: { group: VariableGroup; label: string }[] = [
   { group: "system", label: "System" },
   { group: "profile", label: "Profile" },
   { group: "project", label: "Project" },
+  { group: "module", label: "Modules" },
   { group: "workflow", label: "Workflow" },
   { group: "stepOutput", label: "Step outputs" },
 ]
@@ -436,6 +449,7 @@ export const AVAILABILITY_LABEL: Record<CatalogEntry["availability"], string> = 
   available: "Available in this context",
   runtimeOnly: "Only while the workflow runs",
   notInContext: "Not in this context",
+  unavailable: "Its module is disabled or not installed",
 }
 
 /** Names shown for the ids of a context. */

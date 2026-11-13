@@ -32,10 +32,11 @@ use deckpilot_device::DeviceId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::catalog::{CatalogEntry, ReferenceAvailability, VariableGroup};
 use super::resolution::{
     MissingReason, ProjectSource, Resolution, ResolutionContext, ResolutionPhase,
 };
-use super::{SystemVariable, VariableType, valid_segment};
+use super::{SystemVariable, VariableRef, VariableType, valid_segment};
 use crate::work_session::WorkSessionSnapshot;
 use crate::{ModuleId, Os, Profile, Project};
 
@@ -44,6 +45,12 @@ use crate::{ModuleId, Os, Profile, Project};
 pub const RESERVED_ROOTS: &[&str] = &["steps", "shared", "system", "workflow"];
 /// The namespaces the core owns.
 pub const CORE_NAMESPACES: &[&str] = &["system", "workflow"];
+/// The namespaces of the modules that declare variables: the only roots a
+/// module variable reference may have. Any other root is not a reference,
+/// exactly as before the registry (`{{ env.home }}` stays invalid). A
+/// module that declares variables adds its namespace here; the built-in
+/// modules are checked against this list by `deckpilot-modules`.
+pub const MODULE_NAMESPACES: &[&str] = &["projects", "workSession"];
 /// Most segments of a [`VariableId`].
 pub const MAX_ID_SEGMENTS: usize = 6;
 
@@ -733,28 +740,220 @@ impl VariableRegistry {
                 }
             },
         };
-        let declaration = &registered.declaration;
-        match source.resolve(declaration, environment) {
-            Resolution::Value {
-                value,
-                source,
-                sensitive,
-            } => {
-                if value.is_of(declaration.value_type) {
-                    Resolution::Value {
-                        value,
-                        source,
-                        sensitive: sensitive || declaration.sensitive,
-                    }
-                } else {
-                    // A source that breaks its declaration provides nothing
-                    // rather than a value of the wrong type.
-                    Resolution::Missing(MissingReason::NoValue)
-                }
+        checked(&registered.declaration, source.as_ref(), environment)
+    }
+
+    /// The value of a legacy id, exactly as before the registry, whatever
+    /// the state of the module that owns its canonical id: project values
+    /// from the context (the core's resolution), work session values from
+    /// the work session module's source even while the module is disabled,
+    /// and none without that module (as without the agent). Existing
+    /// references keep working; only canonical ids follow their module's
+    /// availability.
+    pub fn resolve_legacy(
+        &self,
+        variable: SystemVariable,
+        environment: &VariableEnvironment<'_>,
+    ) -> Resolution {
+        if variable.alias().is_none() {
+            return self.resolve(&variable.canonical(), environment);
+        }
+        if environment.context.profile != environment.profile.id {
+            return Resolution::Missing(MissingReason::OtherProfile);
+        }
+        if variable.work_session().is_none() {
+            return crate::resolution::system_value(
+                variable,
+                environment.profile,
+                environment.os,
+                environment.context,
+            );
+        }
+        let canonical = variable.canonical();
+        let source = self.variables.get(&canonical).and_then(|registered| {
+            let module = registered.owner.module()?;
+            Some((registered, self.modules.get(module)?))
+        });
+        match source {
+            Some((registered, entry)) => {
+                checked(&registered.declaration, entry.source.as_ref(), environment)
             }
-            other => other,
+            None => Resolution::Missing(MissingReason::NoValue),
         }
     }
+}
+
+/// What `source` gives for `declaration`, with the declared type enforced
+/// and the declared sensitivity applied.
+fn checked(
+    declaration: &VariableDeclaration,
+    source: &dyn VariableSource,
+    environment: &VariableEnvironment<'_>,
+) -> Resolution {
+    match source.resolve(declaration, environment) {
+        Resolution::Value {
+            value,
+            source,
+            sensitive,
+        } => {
+            if value.is_of(declaration.value_type) {
+                Resolution::Value {
+                    value,
+                    source,
+                    sensitive: sensitive || declaration.sensitive,
+                }
+            } else {
+                // A source that breaks its declaration provides nothing
+                // rather than a value of the wrong type.
+                Resolution::Missing(MissingReason::NoValue)
+            }
+        }
+        other => other,
+    }
+}
+
+impl VariableRegistry {
+    /// Catalog entries of every core variable, every alias (flagged
+    /// deprecated) and every module variable in `context`: metadata only,
+    /// never a value. `work_session`: whether a work session is active now.
+    /// Core variables and aliases come first, in the order older clients
+    /// listed them.
+    ///
+    /// # Panics
+    ///
+    /// Never: alias owners are valid module ids (tested).
+    pub fn catalog(&self, context: &ResolutionContext, work_session: bool) -> Vec<CatalogEntry> {
+        let mut entries: Vec<CatalogEntry> = SystemVariable::ALL
+            .into_iter()
+            .map(|variable| {
+                let canonical = variable.canonical();
+                let registered = self.get(&canonical);
+                // Core variables are always registered; an alias whose
+                // module is not installed still names its owner.
+                let owner = registered.map_or_else(
+                    || VariableOwner::Module {
+                        module: ModuleId::new(variable.alias().map_or("", |a| a.owner))
+                            .expect("alias owners are valid module ids"),
+                    },
+                    |r| r.owner.clone(),
+                );
+                CatalogEntry {
+                    reference: VariableRef::System(variable),
+                    label: registered.map_or_else(
+                        || variable.path().to_owned(),
+                        |r| r.declaration.name.clone(),
+                    ),
+                    description: variable.description().to_owned(),
+                    group: if variable.path().starts_with("workflow.") {
+                        VariableGroup::Workflow
+                    } else {
+                        VariableGroup::System
+                    },
+                    value_type: variable.value_type(),
+                    scope: None,
+                    module: owner.module().cloned(),
+                    sensitive: registered.is_some_and(|r| r.declaration.sensitive),
+                    dynamic: variable.dynamic(),
+                    availability: match registered {
+                        // Legacy ids resolve whatever their module's state.
+                        _ if variable.alias().is_some() => {
+                            legacy_availability(variable, context, work_session)
+                        }
+                        Some(registered) => availability(registered, context, work_session),
+                        None => ReferenceAvailability::Unavailable,
+                    },
+                    owner: Some(owner),
+                    read_only: true,
+                    deprecated: variable.deprecation(),
+                    declared_scope: registered.map(|r| r.declaration.scope),
+                }
+            })
+            .collect();
+        for registered in self.variables() {
+            let Some(module) = registered.owner.module() else {
+                continue;
+            };
+            let declaration = registered.declaration;
+            entries.push(CatalogEntry {
+                reference: VariableRef::Module(declaration.id.clone()),
+                label: declaration.name.clone(),
+                description: declaration.description.clone(),
+                group: VariableGroup::Module,
+                value_type: declaration.value_type,
+                scope: None,
+                module: Some(module.clone()),
+                sensitive: declaration.sensitive,
+                dynamic: declaration.scope != DeclaredScope::Machine,
+                availability: availability(registered, context, work_session),
+                owner: Some(registered.owner.clone()),
+                read_only: true,
+                deprecated: None,
+                declared_scope: Some(declaration.scope),
+            });
+        }
+        entries
+    }
+}
+
+/// Whether a legacy id can have a value in `context`, as the catalog said
+/// before the registry.
+fn legacy_availability(
+    variable: SystemVariable,
+    context: &ResolutionContext,
+    work_session: bool,
+) -> ReferenceAvailability {
+    if variable.work_session().is_some() {
+        return if work_session {
+            ReferenceAvailability::Available
+        } else {
+            ReferenceAvailability::RuntimeOnly
+        };
+    }
+    if context.phase == ResolutionPhase::Preview
+        && context.project_source == ProjectSource::Execution
+    {
+        ReferenceAvailability::RuntimeOnly
+    } else if context.project.is_none() {
+        ReferenceAvailability::NotInContext
+    } else {
+        ReferenceAvailability::Available
+    }
+}
+
+/// Whether a registered variable can have a value in `context`.
+fn availability(
+    registered: RegisteredVariable<'_>,
+    context: &ResolutionContext,
+    work_session: bool,
+) -> ReferenceAvailability {
+    if registered.unavailable.is_some() {
+        return ReferenceAvailability::Unavailable;
+    }
+    let requires = &registered.declaration.requires;
+    let preview = context.phase == ResolutionPhase::Preview;
+    for requirement in requires {
+        let available = match requirement {
+            Requirement::Execution => return ReferenceAvailability::RuntimeOnly,
+            // Listed without a session too: a workflow that reads them
+            // runs during one.
+            Requirement::WorkSession if !work_session => {
+                return ReferenceAvailability::RuntimeOnly;
+            }
+            Requirement::WorkSession => true,
+            Requirement::Project
+                if preview && context.project_source == ProjectSource::Execution =>
+            {
+                return ReferenceAvailability::RuntimeOnly;
+            }
+            Requirement::Project => context.project.is_some(),
+            Requirement::Device => context.device.is_some(),
+            Requirement::Workflow => context.workflow.is_some(),
+        };
+        if !available {
+            return ReferenceAvailability::NotInContext;
+        }
+    }
+    ReferenceAvailability::Available
 }
 
 /// The variables the core owns, in a stable order.

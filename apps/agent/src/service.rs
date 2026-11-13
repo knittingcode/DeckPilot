@@ -1027,8 +1027,10 @@ impl Agent {
             let _ = self.handle.events.send(AgentEvent::ResourceBindingsChanged);
         }
         // Module states may have changed in the configuration app.
+        let before = self.modules.variables().clone();
         self.modules = load_modules(store)?;
         self.update_variable_permissions();
+        self.publish_module_variables(&before);
         self.reload_variables()?;
         self.auto_lock = deckpilot_storage::policy::security_policy(store)?.auto_lock;
         self.runtime
@@ -1047,6 +1049,8 @@ impl Agent {
                 .with_credentials(std::sync::Arc::new(credentials))
                 .with_notifier(std::sync::Arc::new(notifier))
                 .with_variables(self.variables.clone())
+                .with_live_state(self.variables.clone())
+                .with_variable_registry(Arc::new(self.modules.variables().clone()))
                 .with_projects(self.active_projects.clone()),
         );
         // Actions, their modules or bindings may have changed: running

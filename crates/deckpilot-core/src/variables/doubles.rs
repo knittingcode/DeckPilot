@@ -213,6 +213,94 @@ impl VariableResolver for MemoryVariables {
                 }),
             VariableRef::Shared(key) => self.shared(key, context),
             VariableRef::System(variable) => self.system(*variable, context),
+            // A canonical module id answers like its legacy alias; other
+            // module variables are not installed here.
+            VariableRef::Module(id) => match super::ALIASES
+                .iter()
+                .find(|alias| alias.canonical == id.as_str())
+            {
+                Some(alias) => self.system(alias.alias, context),
+                None => Resolution::Unavailable {
+                    owner: id.namespace().to_owned(),
+                },
+            },
+        }
+    }
+}
+
+/// A variable registry with the core's variables and stand-ins for the
+/// `projects` and `work-session` modules, which the core cannot depend on:
+/// the project in the context, and no work session (none exists outside
+/// the agent). The real modules are checked against the same aliases in
+/// `deckpilot-modules`.
+///
+/// # Panics
+///
+/// Never: the stand-ins are valid declarations.
+pub fn builtin_registry() -> super::VariableRegistry {
+    use super::registry::{DeclaredScope, Requirement, VariableDeclaration};
+    let mut registry = super::VariableRegistry::new();
+    for owner in ["projects", "work-session"] {
+        let declarations: Vec<VariableDeclaration> = super::ALIASES
+            .iter()
+            .filter(|alias| alias.owner == owner)
+            .map(|alias| {
+                let (scope, requirement) = if owner == "projects" {
+                    (DeclaredScope::Project, Requirement::Project)
+                } else {
+                    (DeclaredScope::WorkSession, Requirement::WorkSession)
+                };
+                VariableDeclaration::new(
+                    alias.canonical,
+                    alias.canonical,
+                    alias.alias.value_type(),
+                    scope,
+                )
+                .describe(alias.alias.description())
+                .requires(requirement)
+            })
+            .collect();
+        registry
+            .register_module(
+                &crate::ModuleId::new(owner).expect("a valid module id"),
+                &declarations,
+                Some(std::sync::Arc::new(StandIn)),
+            )
+            .expect("the stand-ins are valid");
+    }
+    registry
+}
+
+/// Resolves the stand-in module variables of [`builtin_registry`].
+struct StandIn;
+
+impl super::VariableSource for StandIn {
+    fn resolve(
+        &self,
+        declaration: &super::VariableDeclaration,
+        environment: &super::VariableEnvironment<'_>,
+    ) -> Resolution {
+        let Some(alias) = super::ALIASES
+            .iter()
+            .find(|alias| alias.canonical == declaration.id.as_str())
+        else {
+            return Resolution::Missing(MissingReason::UnknownVariable);
+        };
+        if alias.alias.work_session().is_some() {
+            return Resolution::Missing(MissingReason::NoValue);
+        }
+        let project = match environment.project() {
+            Ok(project) => project,
+            Err(resolution) => return resolution,
+        };
+        Resolution::Value {
+            value: match alias.alias {
+                SystemVariable::ProjectCurrentId => VariableValue::ProjectId(project.id),
+                SystemVariable::ProjectCurrentKey => VariableValue::String(project.key.to_string()),
+                _ => VariableValue::String(project.name.clone()),
+            },
+            source: ValueSource::System,
+            sensitive: false,
         }
     }
 }
