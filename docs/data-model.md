@@ -118,16 +118,35 @@ bound on this machine, kind mismatch.
 - **DeviceLayout** – `id`, `name`, `model`, `homePage`, `pages` (in
   order), optional `explicitTree` (see [Pages and folders](#pages-and-folders)).
 - **LayoutPage** – `id`, `name`, optional `parent` (the folder it is in),
-  `bindings: ControlBinding[]`.
+  `bindings: ControlBinding[]`, optional `gestures: KeyGestureSettings[]`
+  (`control`, optional `doubleClickMs` 150–1000, optional `longPressMs`
+  300–5000; unset values use this computer's defaults, setting
+  `gestures.defaults`, 300 and 700 ms).
 - **ControlBinding** – `control`, `trigger` (`press`, `release`,
-  `rotateClockwise`, `rotateCounterClockwise`, `touch { gesture }`), `target`
-  (`action`, `workflow`, `openPage`, `back`), optional `label`, optional
-  `appearance` (see [Key appearance](#key-appearance)).
+  `rotateClockwise`, `rotateCounterClockwise`, `touch { gesture }`, `click`,
+  `doubleClick`, `longPress`), `target` (`action { action, overrides? }`,
+  `workflow`, `openPage`, `back`), optional `label`, optional `appearance`
+  (see [Key appearance](#key-appearance)).
 
 Folders are pages opened with `openPage` and left with `back`. Layout
 validation checks that controls and triggers exist on the model, that each
 control/trigger pair is bound at most once per page, that targets exist and
 that icons a binding shows are in the profile (`MissingIcon`).
+
+**Gestures** (see `docs/gestures-and-work-session.md`). `press` and
+`release` are raw edges and fire at once; every binding from before 0.7 is
+one and stays one. `click`, `doubleClick` and `longPress` are recognized by
+the agent's gesture engine, each with its own target; a control on a page
+uses one kind or the other (`MixedTriggers`), and gestures need a control
+that can be pressed and released. A click fires on the press when nothing
+else is bound, on the release when a long press is, and after the
+double-click window only when a double click is. `overrides` of an action
+target replace some of the saved instance's parameters for that binding
+only, with literals, `reference` or `template` values resolved when it
+fires (no node outputs); they are checked like a workflow node's
+overrides when the layout is saved (`InvalidOverrides`). A key's face shows
+its `press` binding, else its `click` binding. Deleting an action is refused
+while any binding, of any trigger, runs it.
 
 A profile uses its first layout for a model. `DeviceLayout::generate` creates
 one from the profile's actions and workflows using only the model's
