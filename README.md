@@ -99,6 +99,7 @@ See [docs/development.md](docs/development.md) for all commands.
 - [Data model](docs/data-model.md)
 - [Development](docs/development.md)
 - [Roadmap](docs/roadmap.md)
+- [Plugin marketplace architecture (proposed)](docs/marketplace/architecture.md)
 
 ## Known limitations
 

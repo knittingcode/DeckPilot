@@ -1,0 +1,15 @@
+{
+  "//": "Type-checks the design artifacts (sdk.d.ts and the example plugin). Not a package.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": false,
+    "types": [],
+    "paths": { "@deckpilot/plugin-sdk": ["./sdk.d.ts"] }
+  },
+  "include": ["sdk.d.ts", "example-plugin/*.ts"]
+}
