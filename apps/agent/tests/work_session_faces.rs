@@ -9,11 +9,9 @@
 
 mod support;
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-use deckpilot_agent::{Clock, WorkSessionOperation as Op, WorkSessionOutcome};
+use deckpilot_agent::{WorkSessionOperation as Op, WorkSessionOutcome};
 use deckpilot_core::gesture::{Gesture, KeyGestureSettings};
 use deckpilot_core::graph::{ValueKind, WorkflowOutput};
 use deckpilot_core::stateful::StatefulBinding;
@@ -28,7 +26,9 @@ use deckpilot_ipc::{AgentPaths, Request};
 use deckpilot_storage::DatabaseKey;
 use deckpilot_storage::work_sessions::{ElapsedFormat, WorkSessionSettings};
 use serde_json::json;
-use support::{TIMEOUT, TempDir, TestAgent, data_dir, graph, graph_workflow, waiting_workflow};
+use support::{
+    Jump, TIMEOUT, TempDir, TestAgent, data_dir, graph, graph_workflow, waiting_workflow,
+};
 
 /// The work session key.
 const KEY: ControlId = ControlId::Key { index: 0 };
@@ -37,40 +37,6 @@ const FOLDER: ControlId = ControlId::Key { index: 1 };
 const MINUTE: i64 = 60_000;
 /// The key's own colour, kept on every face.
 const BACKGROUND: Color = Color([10, 60, 30]);
-
-/// The agent's wall clock: real time moved by an offset (ms).
-#[derive(Clone, Default)]
-struct Jump(Arc<AtomicI64>);
-
-impl Jump {
-    fn clock(&self) -> Clock {
-        let offset = self.0.clone();
-        Arc::new(move || {
-            let ms = offset.load(Ordering::SeqCst);
-            let shift = Duration::from_millis(ms.unsigned_abs());
-            if ms >= 0 {
-                SystemTime::now() + shift
-            } else {
-                SystemTime::now() - shift
-            }
-        })
-    }
-
-    fn by(&self, ms: i64) {
-        self.0.fetch_add(ms, Ordering::SeqCst);
-    }
-
-    fn now_ms(&self) -> i64 {
-        let real = i64::try_from(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis(),
-        )
-        .unwrap();
-        real + self.0.load(Ordering::SeqCst)
-    }
-}
 
 fn appearance() -> KeyAppearance {
     KeyAppearance {
