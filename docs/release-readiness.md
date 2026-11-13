@@ -60,11 +60,12 @@ The macOS MVP acceptance run (15 steps, from installing to updating) is
 State on **2026-11-13**. The `check.sh` run and the CI table below are for
 commit `1f1de25371785931f89c2eec2895197311716edc` (`1f1de25`); the native,
 physical and security evidence is for `5569a14`; `main` is now at
-`95a30064e5afeeead113f2339aa3d6dabdb454cf` (`95a3006`, docs only since
-`5569a14`). 0.6.0 is **not ready to publish**: no Developer ID signed and
-notarized 0.6.0 build exists, the update path and a real reboot have not
-been tried, the tray icon has not been clicked, and the fixes #169, #170,
-#171 and #172 are not merged. "Verified automatically" means a test or CI
+`c6834890612305fbd5a6e52e80d882e71022916d` (`c683489`), which adds #171
+(`4cddfa2`), #170 (`592d5f1`) and #172 (`c683489`, the D1 fix). 0.6.0 is
+**not ready to publish**: no Developer ID signed and notarized 0.6.0 build
+exists, the update path and a real reboot have not been tried, the tray
+icon has not been clicked, and #169 (environment gate) and #174
+(work-session test races) are still open. "Verified automatically" means a test or CI
 job ran and passed; "native" means the ad-hoc signed `make package` release
 build was run as a macOS app; "physical" means a real Stream Deck MK.2.
 
@@ -151,28 +152,28 @@ Security alerts (read with `gh api`, open alerts only): code scanning
 | Signed update and Keychain continuity | not verified | *Update continuity* has not run on main; `tools/release-validation/update-test.sh` has not run for 0.6.0 |
 | Manual platform checks (macOS, Windows, Linux) | macOS partly verified (native, ad-hoc signed release build); Windows and Linux not verified | macOS: app and agent, system-key storage, tray presence, agent restart, physical MK.2 ([mvp-acceptance.md](mvp-acceptance.md)). Not done: password protection, notifications, opening applications, update, a signed and notarized build |
 | Physical Stream Deck MK.2 | verified (physical, one device) | `hardware-test` with the debug agent from `5569a14`, then real use on the release app: [Physical MK.2 (2026-11-13)](mvp-acceptance.md#physical-mk2-2026-11-13). Multiple devices not verified |
-| MVP acceptance checklist | not passed | [mvp-acceptance.md](mvp-acceptance.md): steps 2–12 PASS (step 9 needs the D1 fix #172, not merged), step 13 partial (ShowWindow PASS, tray click NOT VERIFIED), steps 1, 14 and 15 NOT VERIFIED, no open FAIL |
+| MVP acceptance checklist | not passed | [mvp-acceptance.md](mvp-acceptance.md): steps 2–12 PASS (step 9 with the D1 fix #172 merged as `c683489`), step 13 partial (ShowWindow PASS, tray click NOT VERIFIED), steps 1, 14 and 15 NOT VERIFIED, no open FAIL |
 | GitHub, GitLab and Jira modules against real servers | not verified | tested against local mock servers only |
 
 ### Definition of Done (macOS MVP)
 
 | Item | Status | Evidence |
 | ---- | ------ | -------- |
-| No P0 blockers | not met until #172 is merged | Defect D1 (on a fresh install, a layout added to the already-active profile did not reach connected devices) blocks the first-run path; fixed in #172, open on 2026-11-13. QA-1 (24/24), the native journey and the physical run found no other defect. The signed build, a reboot and the update have not been tried, so blockers there would not show yet |
+| No P0 blockers | met, as far as known | Defect D1 (on a fresh install, a layout added to the already-active profile did not reach connected devices) was the only P0 found; it is fixed in #172, merged as `c683489`, and covered by automated tests with a simulated MK.2 (the native and physical runs were not repeated after the fix). QA-1 (24/24), the native journey and the physical run found no other defect. The signed build, a reboot and the update have not been tried, so blockers there would not show yet |
 | Native macOS app works without dev tools | met (release build, ad-hoc signed) | `make package` on `5569a14`: the React UI renders without dev tools or Vite, encrypted storage is created with a system key and unlocked, quitting the UI leaves the agent running (re-parented to `launchd`), a second agent refuses to start. Isolated `DECKPILOT_DATA_DIR`, Keychain scope "DeckPilot Development". Not Developer ID signed, not notarized, not installed from a disk image |
 | Tray consistently opens the UI | partially verified | Native: the tray icon is present, disappears when the agent stops and returns when it restarts; the `ShowWindow` request (`deckpilot-dev show`) reopens the UI. A click on the tray icon is NOT VERIFIED (the session has no Accessibility permission). Acceptance step 13 |
 | MK.2 works in real use | met for a single device (physical) | MK.2 `A00SA6062K8S7V`, macOS aarch64: `hardware-test` 12 passed, 1 skipped (multiple devices); real use on the release app: `projects.cycle` with wraparound, click, double click, long press, the Work Session key and its live timer. One single click in the first round was not logged and could not be reproduced. Multiple devices not verified. #55 (own HID protocol) is still a draft |
-| Existing MVP features work end to end | met (simulated and physical), with D1 fixed in #172 (not merged) | Native journey on the release build with a simulated MK.2, driven over IPC: profile, 3 projects, shared variables, parameterized actions, gestures, a workflow with a variable reference, Work Session, UI close and reopen, agent restart, persistence, cycle wraparound and execution history PASS; "assign actions to keys" failed (D1). QA-1 (automated, simulated): 24/24 PASS. Physical: keys ran their actions on the release app. The configuration was created over IPC, not by clicks in the window |
+| Existing MVP features work end to end | met (simulated and physical), with D1 fixed in #172 (merged, `c683489`) | Native journey on the release build with a simulated MK.2, driven over IPC: profile, 3 projects, shared variables, parameterized actions, gestures, a workflow with a variable reference, Work Session, UI close and reopen, agent restart, persistence, cycle wraparound and execution history PASS; "assign actions to keys" failed (D1). QA-1 (automated, simulated): 24/24 PASS. Physical: keys ran their actions on the release app. The configuration was created over IPC, not by clicks in the window |
 | Actions and variables fully functional | met (native and automated, simulated device; physical key presses) | Acceptance steps 7–10. QA-1: parameterized action, select by ID, cycle wraparound, variable resolution, Variable Picker, safe deletion and replacement, profile isolation |
-| Workflows reliable | met (native and automated, simulated device; physical, from a key) | Acceptance step 11: `workflow_e2e.rs`, `runs_workflows_over_ipc`, `mock_devices.rs`; QA-1 workflows; Work Session workflows started from the physical key. #171 makes the work-session clock test deterministic (open) |
+| Workflows reliable | met (native and automated, simulated device; physical, from a key) | Acceptance step 11: `workflow_e2e.rs`, `runs_workflows_over_ipc`, `mock_devices.rs`; QA-1 workflows; Work Session workflows started from the physical key. #171 (merged, `4cddfa2`) made the work-session clock test deterministic; #174 (further work-session test races) is still open |
 | Config survives restart and update | partially verified | Agent restart: native, simulated (full persistence) and physical (layout, project and brightness restored). Database upgrades: automated. No real reboot and no signed update for 0.6.0 (acceptance steps 14–15) |
 | Signed and notarized macOS build verified | not verified | Verified for `v0.5.0-2` only; there is no 0.6.0 test release. The native build was ad-hoc signed |
-| No critical data-loss or security defects | met, as far as known; #170 hardens the unencrypted copy (open) | Security and packaging check (#168): SQLCipher, credential redaction, signing configuration, tag gate, packaging workflows and update channels PASS; 0 open code scanning and 0 open Dependabot alerts. #170 creates the unencrypted copy with mode `0600` and refuses a plaintext database that has credentials. No security review of 0.6.0 beyond these |
-| Required CI green | met on `main` at `95a3006` | [CI run 43414247478](https://github.com/knittingcode/DeckPilot/actions/runs/43414247478): Frontend, Storage with SQLCipher, Rust (ubuntu-latest, macos-latest, windows-latest) success; [Signing check run 43414247273](https://github.com/knittingcode/DeckPilot/actions/runs/43414247273): Updater signing keys match success. CodeQL (all four analyses success, run still finishing) and the scheduled Packaging run were in progress when this was written |
+| No critical data-loss or security defects | met, as far as known | Security and packaging check (#168): SQLCipher, credential redaction, signing configuration, tag gate, packaging workflows and update channels PASS; 0 open code scanning and 0 open Dependabot alerts. #170 (merged, `592d5f1`) creates the unencrypted copy with mode `0600` and refuses a plaintext database that has credentials. No security review of 0.6.0 beyond these |
+| Required CI green | met on `95a3006`; not yet complete on `main` at `c683489` | On `c683489` ([CI run 43422946363](https://github.com/knittingcode/DeckPilot/actions/runs/43422946363)): Frontend, Storage with SQLCipher, Rust (ubuntu-latest) and Rust (macos-latest) success, Rust (windows-latest) still running when this was written; [Signing check run 43422946235](https://github.com/knittingcode/DeckPilot/actions/runs/43422946235) and [Compatibility run 43422946370](https://github.com/knittingcode/DeckPilot/actions/runs/43422946370) success. On `95a3006`: [CI run 43414247478](https://github.com/knittingcode/DeckPilot/actions/runs/43414247478): Frontend, Storage with SQLCipher, Rust (ubuntu-latest, macos-latest, windows-latest) success; [Signing check run 43414247273](https://github.com/knittingcode/DeckPilot/actions/runs/43414247273): Updater signing keys match success. CodeQL (all four analyses success, run still finishing) and the scheduled Packaging run were in progress when this was written |
 | Physical results documented | yes | [Physical MK.2 (2026-11-13)](mvp-acceptance.md#physical-mk2-2026-11-13) |
 | Release configuration blockers identified | yes | (1) the `production-release` environment does not exist and the repository has no environments; #169 adds a fail-closed environment-gate job before any job that uses a secret (open; its *Release gate* check fails, as intended, while the environment is missing); (2) no Developer ID signed, notarized 0.6.0 build; (3) *Update continuity* has never run on `main`; (4) the tag ruleset does not restrict who creates `v*` tags; (5) Dependabot #159–#165 wait for an owner decision (#163 fails CI on deprecations, #159 changes the release workflows, #161, #162, #164 and #165 are major or 0.x-breaking) |
 | Acceptance checklist updated | yes | [mvp-acceptance.md](mvp-acceptance.md), 2026-11-13 |
-| Acceptance checklist passes | not met | Steps 1, 14 and 15 NOT VERIFIED, step 13 partial, step 9 needs #172 on `main` |
+| Acceptance checklist passes | not met | Steps 1, 14 and 15 NOT VERIFIED, step 13 partial |
 
 ### Known open items
 
@@ -181,11 +182,12 @@ Security alerts (read with `gh api`, open alerts only): code scanning
   [physical MK.2 checklist](release-validation.md#physical-mk2-checklist)
   before it can leave draft. `main` drives the device through
   `elgato-streamdeck`.
-- **#169** (release environment gate), **#170** (`0600` mode on the
-  unencrypted copy, plaintext credentials refused), **#171**
-  (deterministic work-session clock test) and **#172** (D1: a layout added
-  to the active profile now reaches connected devices): open, not merged
-  on 2026-11-13.
+- **#169** (release environment gate) and **#174** (further work-session
+  test races): open on 2026-11-13. Merged on 2026-11-13: **#170**
+  (`0600` mode on the unencrypted copy, plaintext credentials refused,
+  `592d5f1`), **#171** (deterministic work-session clock test, `4cddfa2`)
+  and **#172** (D1: a layout added to the active profile now reaches
+  connected devices, `c683489`).
 - **#63** (optional read-only smoke tests against real services) and
   **#78** (reorder, move and copy pages in the layout editor): held by the
   MVP freeze.
@@ -261,8 +263,9 @@ the data directory). A 0.3 database has no `credentials` table and no
 released version writes plaintext databases, so no user's secrets are
 exposed this way; the copy does hold the old configuration (paths, URLs,
 module settings). Hardening: #170 creates the copy with mode `0600` and
-refuses the migration when the plaintext database has credentials (open,
-not merged on 2026-11-13).
+refuses the migration when the plaintext database has credentials. It was
+merged on 2026-11-13 as `592d5f1`, after this check, so the `0644`
+finding above describes `5569a14` and no longer applies to `main`.
 
 **Dependabot pull requests.**
 
