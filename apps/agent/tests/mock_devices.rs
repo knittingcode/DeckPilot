@@ -43,7 +43,7 @@ fn log_action(profile: &mut Profile, name: &str) -> BindingTarget {
             &ActionParameters::new().with("message", ParameterValue::Text(name.into())),
         )
         .unwrap();
-    let target = BindingTarget::Action { action: action.id };
+    let target = BindingTarget::action(action.id);
     profile.actions.push(action);
     target
 }
@@ -78,7 +78,7 @@ fn work() -> Profile {
     let next = support::registry()
         .create_instance("Next project", actions::next_id(), &ActionParameters::new())
         .unwrap();
-    let next_target = BindingTarget::Action { action: next.id };
+    let next_target = BindingTarget::action(next.id);
     profile.actions.push(next);
     let a_key = log_action(&mut profile, "A key");
     let in_folder = log_action(&mut profile, "In folder");
