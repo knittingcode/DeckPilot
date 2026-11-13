@@ -23,8 +23,8 @@ pub use backend::{
     KeyStateTracker,
 };
 pub use capabilities::{
-    DeviceCapabilities, EncoderSpec, ImageFormat, ImageSpec, ImageTransform, KeyGrid, TouchGesture,
-    TouchSurface,
+    Capability, DeviceCapabilities, EncoderSpec, ImageFormat, ImageSpec, ImageTransform, KeyGrid,
+    TouchGesture, TouchSurface,
 };
 pub use catalog::{ModelCatalog, models};
 pub use control::{ControlId, ControlInput, ControlKind, InputError};

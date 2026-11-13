@@ -739,6 +739,7 @@ mod tests {
                     image: None,
                     gestures: vec![TouchGesture::Tap],
                 }),
+                brightness: false,
             },
             support: HardwareSupport::DescriptorOnly,
             verification: ModelVerification::default(),
