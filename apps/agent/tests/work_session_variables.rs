@@ -6,11 +6,9 @@
 
 mod support;
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
-use deckpilot_agent::{Clock, WorkSessionOperation as Op, WorkSessionOutcome};
+use deckpilot_agent::{WorkSessionOperation as Op, WorkSessionOutcome};
 use deckpilot_core::gesture::Gesture;
 use deckpilot_core::variables::{
     CatalogEntry, CatalogFilter, PreviewItem, ReferenceAvailability, ResolutionContext,
@@ -23,7 +21,7 @@ use deckpilot_device::mock::MockBackend;
 use deckpilot_ipc::{AgentClient, AgentEvent, Request, Response};
 use deckpilot_modules::general;
 use serde_json::{Value, json};
-use support::{TIMEOUT, TempDir, TestAgent, data_dir};
+use support::{Jump, TIMEOUT, TempDir, TestAgent, data_dir};
 
 const PATHS: [&str; 6] = [
     "system.work.session.id",
@@ -34,18 +32,10 @@ const PATHS: [&str; 6] = [
     "system.work.session.canFinish",
 ];
 
-/// The agent's wall clock, moved forward by tests.
-fn clock(offset: &Arc<AtomicI64>) -> Clock {
-    let offset = offset.clone();
-    Arc::new(move || {
-        SystemTime::now() + Duration::from_millis(offset.load(Ordering::SeqCst).unsigned_abs())
-    })
-}
-
 struct Setup {
     agent: TestAgent,
     profile: Profile,
-    offset: Arc<AtomicI64>,
+    jump: Jump,
     _dir: TempDir,
 }
 
@@ -81,8 +71,8 @@ async fn setup() -> Setup {
     ));
     let (paths, key) = data_dir(&dir, &profile, &[]);
     let mock = MockBackend::new();
-    let offset = Arc::new(AtomicI64::new(0));
-    let agent = TestAgent::start_unlocked(&paths, &key, &mock, Some(clock(&offset))).await;
+    let jump = Jump::default();
+    let agent = TestAgent::start_unlocked(&paths, &key, &mock, Some(jump.clock())).await;
     agent
         .request(Request::SelectProject {
             project: profile.projects[0].id,
@@ -92,7 +82,7 @@ async fn setup() -> Setup {
     Setup {
         agent,
         profile,
-        offset,
+        jump,
         _dir: dir,
     }
 }
@@ -218,7 +208,7 @@ fn status(value: &Value) -> &str {
 /// A minute later, without any transition, previews and runs see the
 /// time: it is computed when read.
 async fn elapsed_is_computed_when_read(s: &Setup) {
-    s.offset.fetch_add(61_000, Ordering::SeqCst);
+    s.jump.by(61_000);
     let elapsed = &s.values().await[3];
     assert!(
         elapsed["value"]["value"].as_i64().unwrap() >= 61,
