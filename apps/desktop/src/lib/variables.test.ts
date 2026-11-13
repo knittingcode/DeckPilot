@@ -212,6 +212,8 @@ describe("referenceRoot", () => {
     expect(referenceRoot("projects.current.key")).toBe("module")
     expect(referenceRoot("workSession.state")).toBe("module")
     expect(referenceRoot("projects")).toBeNull()
+    expect(referenceRoot("env.home")).toBeNull()
+    expect(referenceRoot("git.branch")).toBeNull()
     expect(referenceRoot("Env.HOME")).toBeNull()
   })
 

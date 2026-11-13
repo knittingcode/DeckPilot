@@ -68,18 +68,22 @@ export function formatReference(reference: string): string {
 
 const ROOTS = ["steps", "shared", "system", "workflow"] as const
 
-/** A module namespace: a lowercase start, then letters, digits and `_`. */
-const MODULE_ROOT = /^[a-z][A-Za-z0-9_]*$/
+/**
+ * Namespaces of the modules that declare variables: the only module roots
+ * a reference may have. Mirrors `MODULE_NAMESPACES` in deckpilot-core
+ * (checked by a Rust test); any other root is not a reference.
+ */
+export const MODULE_NAMESPACES = ["projects", "workSession"]
 
 /**
- * The root of a reference (`shared`, `system`, …), `module` for a module's
- * namespace (`projects.current.key`), or `null` for none of them.
+ * The root of a reference (`shared`, `system`, …), `module` for a known
+ * module's namespace (`projects.current.key`), or `null` for none of them.
  */
 export function referenceRoot(reference: string): (typeof ROOTS)[number] | "module" | null {
   const segments = reference.trim().split(".")
   const root = segments[0] ?? ""
   if ((ROOTS as readonly string[]).includes(root)) return root as (typeof ROOTS)[number]
-  return segments.length >= 2 && MODULE_ROOT.test(root) ? "module" : null
+  return segments.length >= 2 && MODULE_NAMESPACES.includes(root) ? "module" : null
 }
 
 /** `steps.<node>.output.<key>`: outputs of earlier nodes, known only while running. */

@@ -513,6 +513,29 @@ fn builtin_variables_have_explicit_owners() {
             owner: "projects".into()
         }
     );
+    // The legacy id keeps resolving as it did before.
+    assert!(matches!(
+        registry.variables().resolve_legacy(
+            deckpilot_core::variables::SystemVariable::ProjectCurrentKey,
+            &environment
+        ),
+        Resolution::Value { value: VariableValue::String(text), .. } if text == "SHOP"
+    ));
+    // Module roots that parse are exactly those of modules that declare
+    // variables.
+    let mut namespaces: Vec<String> = builtin(Os::Linux)
+        .modules()
+        .iter()
+        .filter(|m| !m.manifest.variables.is_empty())
+        .map(|m| deckpilot_core::variables::module_namespace(&m.manifest.id))
+        .collect();
+    namespaces.sort();
+    let mut known: Vec<String> = deckpilot_core::variables::MODULE_NAMESPACES
+        .iter()
+        .map(|n| (*n).to_owned())
+        .collect();
+    known.sort();
+    assert_eq!(namespaces, known);
     // Without a session the work session variables have no value.
     let state = VariableId::new("workSession.state").unwrap();
     assert_eq!(

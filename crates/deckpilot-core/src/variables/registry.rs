@@ -45,6 +45,12 @@ use crate::{ModuleId, Os, Profile, Project};
 pub const RESERVED_ROOTS: &[&str] = &["steps", "shared", "system", "workflow"];
 /// The namespaces the core owns.
 pub const CORE_NAMESPACES: &[&str] = &["system", "workflow"];
+/// The namespaces of the modules that declare variables: the only roots a
+/// module variable reference may have. Any other root is not a reference,
+/// exactly as before the registry (`{{ env.home }}` stays invalid). A
+/// module that declares variables adds its namespace here; the built-in
+/// modules are checked against this list by `deckpilot-modules`.
+pub const MODULE_NAMESPACES: &[&str] = &["projects", "workSession"];
 /// Most segments of a [`VariableId`].
 pub const MAX_ID_SEGMENTS: usize = 6;
 
@@ -734,27 +740,75 @@ impl VariableRegistry {
                 }
             },
         };
-        let declaration = &registered.declaration;
-        match source.resolve(declaration, environment) {
-            Resolution::Value {
-                value,
-                source,
-                sensitive,
-            } => {
-                if value.is_of(declaration.value_type) {
-                    Resolution::Value {
-                        value,
-                        source,
-                        sensitive: sensitive || declaration.sensitive,
-                    }
-                } else {
-                    // A source that breaks its declaration provides nothing
-                    // rather than a value of the wrong type.
-                    Resolution::Missing(MissingReason::NoValue)
-                }
-            }
-            other => other,
+        checked(&registered.declaration, source.as_ref(), environment)
+    }
+
+    /// The value of a legacy id, exactly as before the registry, whatever
+    /// the state of the module that owns its canonical id: project values
+    /// from the context (the core's resolution), work session values from
+    /// the work session module's source even while the module is disabled,
+    /// and none without that module (as without the agent). Existing
+    /// references keep working; only canonical ids follow their module's
+    /// availability.
+    pub fn resolve_legacy(
+        &self,
+        variable: SystemVariable,
+        environment: &VariableEnvironment<'_>,
+    ) -> Resolution {
+        if variable.alias().is_none() {
+            return self.resolve(&variable.canonical(), environment);
         }
+        if environment.context.profile != environment.profile.id {
+            return Resolution::Missing(MissingReason::OtherProfile);
+        }
+        if variable.work_session().is_none() {
+            return crate::resolution::system_value(
+                variable,
+                environment.profile,
+                environment.os,
+                environment.context,
+            );
+        }
+        let canonical = variable.canonical();
+        let source = self.variables.get(&canonical).and_then(|registered| {
+            let module = registered.owner.module()?;
+            Some((registered, self.modules.get(module)?))
+        });
+        match source {
+            Some((registered, entry)) => {
+                checked(&registered.declaration, entry.source.as_ref(), environment)
+            }
+            None => Resolution::Missing(MissingReason::NoValue),
+        }
+    }
+}
+
+/// What `source` gives for `declaration`, with the declared type enforced
+/// and the declared sensitivity applied.
+fn checked(
+    declaration: &VariableDeclaration,
+    source: &dyn VariableSource,
+    environment: &VariableEnvironment<'_>,
+) -> Resolution {
+    match source.resolve(declaration, environment) {
+        Resolution::Value {
+            value,
+            source,
+            sensitive,
+        } => {
+            if value.is_of(declaration.value_type) {
+                Resolution::Value {
+                    value,
+                    source,
+                    sensitive: sensitive || declaration.sensitive,
+                }
+            } else {
+                // A source that breaks its declaration provides nothing
+                // rather than a value of the wrong type.
+                Resolution::Missing(MissingReason::NoValue)
+            }
+        }
+        other => other,
     }
 }
 
@@ -801,6 +855,10 @@ impl VariableRegistry {
                     sensitive: registered.is_some_and(|r| r.declaration.sensitive),
                     dynamic: variable.dynamic(),
                     availability: match registered {
+                        // Legacy ids resolve whatever their module's state.
+                        _ if variable.alias().is_some() => {
+                            legacy_availability(variable, context, work_session)
+                        }
                         Some(registered) => availability(registered, context, work_session),
                         None => ReferenceAvailability::Unavailable,
                     },
@@ -834,6 +892,31 @@ impl VariableRegistry {
             });
         }
         entries
+    }
+}
+
+/// Whether a legacy id can have a value in `context`, as the catalog said
+/// before the registry.
+fn legacy_availability(
+    variable: SystemVariable,
+    context: &ResolutionContext,
+    work_session: bool,
+) -> ReferenceAvailability {
+    if variable.work_session().is_some() {
+        return if work_session {
+            ReferenceAvailability::Available
+        } else {
+            ReferenceAvailability::RuntimeOnly
+        };
+    }
+    if context.phase == ResolutionPhase::Preview
+        && context.project_source == ProjectSource::Execution
+    {
+        ReferenceAvailability::RuntimeOnly
+    } else if context.project.is_none() {
+        ReferenceAvailability::NotInContext
+    } else {
+        ReferenceAvailability::Available
     }
 }
 

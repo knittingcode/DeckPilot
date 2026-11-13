@@ -127,7 +127,12 @@ sent (`server.rs`).
 - **Modules** own the variables they declare, inside their namespace: the
   module id in lower camel case (`projects` → `projects`, `work-session` →
   `workSession`, `module_namespace`). A reference to a module variable has
-  the module namespace as its root: `{{ projects.current.key }}`.
+  the module namespace as its root: `{{ projects.current.key }}`. Only the
+  namespaces of modules that declare variables (`MODULE_NAMESPACES`:
+  `projects`, `workSession`) are roots of the grammar; any other root is
+  rejected when parsed and validated, exactly as before (`{{ env.home }}`
+  stays invalid). A module that declares variables adds its namespace
+  there; a test keeps the list equal to the built-in modules'.
   - Projects owns `projects.current.id`, `projects.current.key`,
     `projects.current.name`.
   - Work Session owns `workSession.id`, `.state`, `.startedAt`,
@@ -160,8 +165,9 @@ sent (`server.rs`).
   read-only, a source exists) and refuses the whole module otherwise;
   `unregister` removes the module and its variables; disabling a module (or
   running on an unsupported platform) marks its variables unavailable.
-- A reference whose owner is disabled, unsupported or not installed
-  resolves to `Resolution::Unavailable { owner }` (status `unavailable`).
+- A canonical reference whose module is disabled, unsupported or not
+  installed resolves to `Resolution::Unavailable { owner }` (status
+  `unavailable`). Legacy ids are not affected (§2.3).
   Nothing is deleted or rewritten; enabling the module again makes the same
   references resolve.
 - The registry never stores values: every resolution asks the owner's
@@ -174,7 +180,12 @@ sent (`server.rs`).
 owning module and the version that deprecated it (0.6.0). A legacy
 reference keeps its spelling (the `VariableRef` remembers it, so saving a
 profile never rewrites it), keeps its static type for validation, and
-resolves exactly as its canonical id. The picker inserts canonical ids and
+resolves exactly as it did before the registry, whatever the state of the
+module that owns its canonical id (`VariableRegistry::resolve_legacy`):
+project values from the context through the core, work session values from
+the live session through the work session module's source even while that
+module is disabled, and no value without it. Only canonical ids follow
+their module's availability. The picker inserts canonical ids and
 hides deprecated entries; the catalog lists them flagged `deprecated` so
 older apps keep seeing them.
 

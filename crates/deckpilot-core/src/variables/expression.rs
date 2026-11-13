@@ -25,7 +25,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::registry::{RESERVED_ROOTS, VariableId};
+use super::registry::{MODULE_NAMESPACES, VariableId};
 use super::{VariableKey, VariableType};
 use crate::graph::Reference;
 use crate::work_session::WorkSessionVariable;
@@ -173,10 +173,10 @@ pub enum VariableRef {
     /// `system.…` and `workflow.…`, including the aliases of module
     /// variables, which keep their spelling.
     System(SystemVariable),
-    /// `<namespace>.…`: a variable a module declares, by its canonical id.
-    /// Parsed without knowing the modules: whether it exists is decided
-    /// when it is resolved, so a reference to a disabled or missing module
-    /// stays readable.
+    /// `<namespace>.…`: a variable a module declares, by its canonical id,
+    /// in one of the known [`super::registry::MODULE_NAMESPACES`]. While
+    /// the module is disabled or unsupported the reference stays readable
+    /// and resolves as unavailable.
     Module(VariableId),
 }
 
@@ -208,10 +208,12 @@ impl VariableRef {
             "system" | "workflow" => SystemVariable::from_path(trimmed)
                 .map(Self::System)
                 .ok_or_else(invalid),
-            root if RESERVED_ROOTS.contains(&root) => Err(invalid()),
-            _ => VariableId::new(trimmed)
+            // A known module's namespace; whether the variable exists and
+            // its module is available is decided when it is resolved.
+            root if MODULE_NAMESPACES.contains(&root) => VariableId::new(trimmed)
                 .map(Self::Module)
                 .map_err(|_| invalid()),
+            _ => Err(invalid()),
         }
     }
 

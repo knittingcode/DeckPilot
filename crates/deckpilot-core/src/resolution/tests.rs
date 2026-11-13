@@ -359,6 +359,64 @@ fn legacy_ids_and_canonical_ids_resolve_alike() {
 }
 
 #[test]
+fn legacy_ids_keep_working_while_their_module_is_disabled() {
+    let f = Fixture::new();
+    let projects = ModuleId::new("projects").unwrap();
+    let mut disabled = crate::variables::doubles::builtin_registry();
+    disabled.set_available(&projects, Some("the Projects module is disabled".into()));
+    let missing = crate::variables::VariableRegistry::new();
+    let context = Invocation::default().context(&f.profile, Some(f.profile.projects[1].id));
+    for registry in [&disabled, &missing] {
+        let resolver = ContextResolver {
+            profile: &f.profile,
+            os: Os::Linux,
+            shared: &NoSharedVariables,
+            outputs: None,
+            registry,
+            live: &crate::variables::NoLiveState,
+        };
+        let resolve = |text: &str| resolver.resolve(&VariableRef::parse(text).unwrap(), &context);
+        // As on main: the core resolves the project in the context.
+        for (variable, value) in [
+            (
+                SystemVariable::ProjectCurrentKey,
+                "system.project.current.key",
+            ),
+            (
+                SystemVariable::ProjectCurrentName,
+                "system.project.current.name",
+            ),
+            (
+                SystemVariable::ProjectCurrentId,
+                "system.project.current.id",
+            ),
+        ] {
+            assert_eq!(
+                resolve(value),
+                system_value(variable, &f.profile, Os::Linux, &context),
+                "{value}"
+            );
+        }
+        assert!(matches!(
+            resolve("system.project.current.key"),
+            Resolution::Value { value: VariableValue::String(key), .. } if key == "CMR"
+        ));
+        // Without a session, as without the agent on main.
+        assert_eq!(
+            resolve("system.work.session.state"),
+            Resolution::Missing(MissingReason::NoValue)
+        );
+        // The canonical id follows its module.
+        assert_eq!(
+            resolve("projects.current.key"),
+            Resolution::Unavailable {
+                owner: "projects".into()
+            }
+        );
+    }
+}
+
+#[test]
 fn variables_of_an_unavailable_module_fail_without_losing_the_reference() {
     let mut f = Fixture::new();
     let id = f.add(message(template("on {{ projects.current.key }}")));
@@ -496,7 +554,7 @@ fn sensitive_values_are_redacted_from_results_and_progress() {
     assert!(result.message.contains("[redacted]"));
 }
 
-/// `vault.token`, a sensitive module variable.
+/// `projects.token`, a sensitive module variable.
 struct Vault;
 
 impl crate::variables::VariableSource for Vault {
@@ -518,14 +576,14 @@ impl crate::variables::VariableSource for Vault {
 fn sensitive_module_variables_are_redacted_like_shared_ones() {
     use crate::variables::{DeclaredScope, PreviewItem, VariableDeclaration, preview_reference};
     let f = Fixture::new();
-    let mut registry = crate::variables::doubles::builtin_registry();
+    let mut registry = crate::variables::VariableRegistry::new();
     registry
         .register_module(
-            &ModuleId::new("vault").unwrap(),
+            &ModuleId::new("projects").unwrap(),
             &[VariableDeclaration {
                 sensitive: true,
                 ..VariableDeclaration::new(
-                    "vault.token",
+                    "projects.token",
                     "Token",
                     VariableType::String,
                     DeclaredScope::Machine,
@@ -545,7 +603,7 @@ fn sensitive_module_variables_are_redacted_like_shared_ones() {
     let context = Invocation::default().context(&f.profile, None);
     let parameters = resolve_parameters(
         Probe::new().definition(),
-        &message(template("use {{ vault.token }}")),
+        &message(template("use {{ projects.token }}")),
         &resolver,
         &context,
         &f.profile,
@@ -558,7 +616,7 @@ fn sensitive_module_variables_are_redacted_like_shared_ones() {
     let preview = preview_reference(
         &resolver,
         &PreviewItem {
-            reference: "vault.token".into(),
+            reference: "projects.token".into(),
             expected: None,
         },
         &ResolutionContext::preview(f.profile.id),

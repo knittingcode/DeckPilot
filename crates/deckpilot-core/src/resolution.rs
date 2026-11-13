@@ -252,20 +252,27 @@ impl VariableResolver for ContextResolver<'_> {
             return Resolution::Missing(MissingReason::OtherProfile);
         }
         match reference {
-            // Core and module variables, and the aliases of module
+            // Core and module variables, and the legacy ids of module
             // variables: computed when asked (never cached); a project of
-            // another profile is missing.
+            // another profile is missing. Legacy ids resolve as they always
+            // did, whatever the state of the module that owns them now.
             VariableRef::System(_) | VariableRef::Module(_) => {
-                let Some(id) = reference.registered_id() else {
-                    return Resolution::Missing(MissingReason::UnknownVariable);
-                };
                 let environment = VariableEnvironment {
                     context,
                     profile: self.profile,
                     os: self.os,
                     live: self.live,
                 };
-                confine_to_profile(self.registry.resolve(&id, &environment), self.profile)
+                let resolution = match reference {
+                    VariableRef::System(variable) => {
+                        self.registry.resolve_legacy(*variable, &environment)
+                    }
+                    VariableRef::Module(id) => self.registry.resolve(id, &environment),
+                    VariableRef::Shared(_) | VariableRef::Step(_) => {
+                        Resolution::Missing(MissingReason::UnknownVariable)
+                    }
+                };
+                confine_to_profile(resolution, self.profile)
             }
             VariableRef::Shared(_) => {
                 confine_to_profile(self.shared.resolve(reference, context), self.profile)

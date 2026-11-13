@@ -127,14 +127,13 @@ fn anything_outside_the_grammar_is_rejected() {
 }
 
 #[test]
-fn module_roots_parse_without_knowing_the_modules() {
+fn module_roots_parse_for_known_module_namespaces() {
     for text in [
         "projects.current.key",
         "workSession.elapsedSeconds",
-        "git.repo.branch",
-        // A namespace no module owns parses too: it resolves as
-        // unavailable, so a reference to a missing module stays readable.
-        "someday.value",
+        // An id the module does not declare parses: it resolves as an
+        // unknown variable, like an unknown shared variable.
+        "projects.someday",
     ] {
         let parsed = reference(text);
         assert_eq!(parsed, VariableRef::Module(VariableId::new(text).unwrap()));
@@ -143,6 +142,23 @@ fn module_roots_parse_without_knowing_the_modules() {
         assert_eq!(
             serde_json::from_value::<VariableRef>(json!(text)).unwrap(),
             parsed
+        );
+    }
+    // Any other root is not a reference, exactly as before the registry.
+    for bad in [
+        "env.home",
+        "git.repo.branch",
+        "someday.value",
+        "docker.flag",
+    ] {
+        assert!(VariableRef::parse(bad).is_err(), "{bad}");
+        assert!(
+            serde_json::from_value::<VariableRef>(json!(bad)).is_err(),
+            "{bad}"
+        );
+        assert!(
+            parse_expression(&format!("{{{{ {bad} }}}}")).is_err(),
+            "{bad}"
         );
     }
     // The grammar's own roots are never module namespaces.
