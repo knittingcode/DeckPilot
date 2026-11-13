@@ -748,6 +748,12 @@ async fn module_variables_have_owners_and_follow_the_module() {
         .await;
     assert_eq!(previews[0]["status"], previews[1]["status"]);
     assert_eq!(previews[0]["status"]["value"]["value"], "SHOP");
+    // A preview of the application's project without naming one sees the
+    // active project, as a key press would.
+    let active = s
+        .preview(ResolutionContext::preview(s.work.id), &both)
+        .await;
+    assert_eq!(active[0]["status"]["value"]["value"], "SHOP");
 
     // A protocol 8 client gets the catalog it knew.
     let mut old = AgentClient::connect_with_protocol(&s.agent.paths, ClientKind::Desktop, 8)

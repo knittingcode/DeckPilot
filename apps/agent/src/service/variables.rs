@@ -394,6 +394,28 @@ fn as_preview(context: &ResolutionContext) -> ResolutionContext {
 }
 
 impl Agent {
+    /// The context of a client's preview: always a preview, and with the
+    /// application's active project of the profile when it asks for the
+    /// application's project without naming one, so pickers and the
+    /// variables page show what a key press would see.
+    fn preview_context(&self, context: &ResolutionContext) -> ResolutionContext {
+        let mut context = as_preview(context);
+        if context.project_source == ProjectSource::Application && context.project.is_none() {
+            context.project = if self
+                .runtime
+                .profile()
+                .is_some_and(|p| p.id == context.profile)
+            {
+                self.runtime.active_project_id()
+            } else {
+                self.store
+                    .as_ref()
+                    .and_then(|store| store.active_project(context.profile).ok().flatten())
+            };
+        }
+        context
+    }
+
     /// Takes new snapshots of the shared variables after the configuration
     /// changed, and announces the keys that changed.
     pub(super) fn reload_variables(&self) -> Result<(), StorageError> {
@@ -435,7 +457,7 @@ impl Agent {
         // Asking for another profile than the active one is fine; one that
         // does not exist is not.
         self.context_profile(context.profile)?;
-        let context = as_preview(context);
+        let context = self.preview_context(context);
         let active = self.work_session_snapshot().session.is_some();
         let entries = catalog(
             self.modules.variables(),
@@ -455,7 +477,7 @@ impl Agent {
         items: &[PreviewItem],
     ) -> Result<Response, IpcError> {
         let profile = self.context_profile(context.profile)?;
-        let context = as_preview(context);
+        let context = self.preview_context(context);
         let variables = self.current_variables(profile.id)?;
         let disabled = self.variables.disabled();
         let shared = SnapshotResolver {
