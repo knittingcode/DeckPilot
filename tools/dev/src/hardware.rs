@@ -196,7 +196,9 @@ impl Agent {
         let mut command = Command::new(binary);
         command.arg("--headless");
         if mock {
-            command.args(["--mock-devices", "mk2"]);
+            // Only the simulated MK.2: a plugged-in Stream Deck must not be
+            // the device the procedure finds.
+            command.args(["--mock-devices", "mk2", "--no-usb"]);
         }
         let log = std::fs::File::create(dir.join("agent-output.log")).map_err(|e| e.to_string())?;
         let child = command

@@ -1427,12 +1427,15 @@ fn failed(message: String) -> IpcError {
     IpcError::new(ErrorCode::Failed, message)
 }
 
-/// Options used by `main`: USB devices through the HID driver, plus one
-/// simulated device per model in `mock_models` (development without
-/// hardware).
-pub fn default_options(paths: AgentPaths, mock_models: &[DeviceModel]) -> AgentOptions {
-    let mut backend =
-        CombinedBackend::default().with(Box::new(deckpilot_hid::ElgatoBackend::new()));
+/// Options used by `main`: USB devices through the HID driver (unless
+/// `usb` is false, e.g. in tests that must not touch a plugged-in Stream
+/// Deck), plus one simulated device per model in `mock_models`
+/// (development without hardware).
+pub fn default_options(paths: AgentPaths, mock_models: &[DeviceModel], usb: bool) -> AgentOptions {
+    let mut backend = CombinedBackend::default();
+    if usb {
+        backend = backend.with(Box::new(deckpilot_hid::ElgatoBackend::new()));
+    }
     let mock = (!mock_models.is_empty()).then(|| {
         let mock = MockBackend::new();
         for (index, model) in mock_models.iter().enumerate() {
