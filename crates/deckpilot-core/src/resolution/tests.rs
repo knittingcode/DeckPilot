@@ -496,6 +496,80 @@ fn sensitive_values_are_redacted_from_results_and_progress() {
     assert!(result.message.contains("[redacted]"));
 }
 
+/// `vault.token`, a sensitive module variable.
+struct Vault;
+
+impl crate::variables::VariableSource for Vault {
+    fn resolve(
+        &self,
+        _: &crate::variables::VariableDeclaration,
+        _: &crate::variables::VariableEnvironment<'_>,
+    ) -> Resolution {
+        // The source forgets to say it is sensitive; the declaration does.
+        Resolution::Value {
+            value: VariableValue::String("t0k3n".into()),
+            source: ValueSource::System,
+            sensitive: false,
+        }
+    }
+}
+
+#[test]
+fn sensitive_module_variables_are_redacted_like_shared_ones() {
+    use crate::variables::{DeclaredScope, PreviewItem, VariableDeclaration, preview_reference};
+    let f = Fixture::new();
+    let mut registry = crate::variables::doubles::builtin_registry();
+    registry
+        .register_module(
+            &ModuleId::new("vault").unwrap(),
+            &[VariableDeclaration {
+                sensitive: true,
+                ..VariableDeclaration::new(
+                    "vault.token",
+                    "Token",
+                    VariableType::String,
+                    DeclaredScope::Machine,
+                )
+            }],
+            Some(Arc::new(Vault)),
+        )
+        .unwrap();
+    let resolver = ContextResolver {
+        profile: &f.profile,
+        os: Os::Linux,
+        shared: &NoSharedVariables,
+        outputs: None,
+        registry: &registry,
+        live: &crate::variables::NoLiveState,
+    };
+    let context = Invocation::default().context(&f.profile, None);
+    let parameters = resolve_parameters(
+        Probe::new().definition(),
+        &message(template("use {{ vault.token }}")),
+        &resolver,
+        &context,
+        &f.profile,
+    )
+    .unwrap();
+    assert_eq!(
+        parameters.redactor.redact("got t0k3n back"),
+        "got [redacted] back"
+    );
+    let preview = preview_reference(
+        &resolver,
+        &PreviewItem {
+            reference: "vault.token".into(),
+            expected: None,
+        },
+        &ResolutionContext::preview(f.profile.id),
+    );
+    assert!(!format!("{preview:?}").contains("t0k3n"));
+    assert!(matches!(
+        preview.status,
+        crate::variables::ReferenceStatus::Redacted { .. }
+    ));
+}
+
 #[test]
 fn resolved_values_are_never_expanded_again() {
     // A value that looks like a reference to itself is text: no cycle.
