@@ -89,6 +89,16 @@ zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 deckpilot-agent = { path = ".", features = ["test-hooks"] }
+# plugins_e2e: a local signed registry made with the publishing tool and
+# throwaway keys, packages, and reading plugins.db from outside.
+base64.workspace = true
+deckpilot-plugin-manifest.workspace = true
+deckpilot-plugin-package.workspace = true
+deckpilot-plugin-registry = { workspace = true, features = ["publish"] }
+deckpilot-plugin-store.workspace = true
+flate2.workspace = true
+sha2.workspace = true
+tar.workspace = true
 deckpilot-render.workspace = true
 zeroize.workspace = true
 deckpilot-modules.workspace = true
@@ -98,3 +108,8 @@ serde_json.workspace = true
 [lints]
 workspace = true
 
+# End to end through a real agent process, the real plugin host and the
+# sample plugin (built from plugins/runtime by the test).
+[[test]]
+name = "plugins_e2e"
+required-features = ["plugins"]
