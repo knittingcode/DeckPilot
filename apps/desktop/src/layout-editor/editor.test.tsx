@@ -19,6 +19,7 @@ vi.mock("@/lib/api", () => ({
   api: {
     previewLayout: () => Promise.resolve([]),
     listIcons: () => Promise.resolve([]),
+    pageTree: () => Promise.resolve({ pages: [], warnings: [] }),
     listActionTypes: () => Promise.resolve([]),
     getGestureDefaults: () => Promise.resolve({ doubleClickMs: 300, longPressMs: 700 }),
     saveLayout: (...args: unknown[]) => saveLayout(...args) as unknown,
