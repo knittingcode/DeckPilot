@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/registry-index.schema.json",
+  "title": "DeckPilot plugin registry: index/<seq>.json",
+  "description": "Design artifact (docs/marketplace/architecture.md section 10). Immutable per seq. Signed by an index key with the trusted comment 'deckpilot-registry v1 role:index seq:<seq> keys:<keys_version>'. At most 4 MiB. Per-plugin detail files are not signed separately: their sha256 and length come from this document.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "_type",
+    "spec_version",
+    "seq",
+    "keys_version",
+    "generated_at",
+    "expires",
+    "source_commit",
+    "download_prefix",
+    "publishers",
+    "plugins",
+    "revocations"
+  ],
+  "properties": {
+    "_type": { "const": "deckpilot-registry-index" },
+    "spec_version": { "const": 1 },
+    "seq": { "type": "integer", "minimum": 1 },
+    "keys_version": { "type": "integer", "minimum": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "expires": {
+      "type": "string",
+      "format": "date-time",
+      "description": "generated_at + 90 days. Freshness comes from timestamp.json."
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "Commit of knittingcode/deckpilot-plugins the snapshot was generated from."
+    },
+    "download_prefix": {
+      "const": "https://github.com/knittingcode/deckpilot-plugins/releases/download/"
+    },
+    "min_app_version": {
+      "$ref": "#/$defs/semver",
+      "description": "Clients older than this show 'update DeckPilot to browse plugins' and install nothing."
+    },
+    "publishers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["namespace", "github_id", "login", "verified"],
+        "properties": {
+          "namespace": {
+            "$ref": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json#/$defs/publisherId"
+          },
+          "github_id": { "type": "integer", "minimum": 1 },
+          "login": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,39}$" },
+          "display_name": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "verified": { "type": "boolean" }
+        }
+      }
+    },
+    "plugins": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "publisher", "name", "summary", "latest", "detail"],
+        "properties": {
+          "id": { "$ref": "#/$defs/pluginId" },
+          "publisher": {
+            "$ref": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json#/$defs/publisherId"
+          },
+          "name": { "type": "string", "minLength": 1, "maxLength": 48 },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 300 },
+          "categories": {
+            "type": "array",
+            "maxItems": 3,
+            "uniqueItems": true,
+            "items": { "type": "string", "pattern": "^[a-z-]{2,24}$" }
+          },
+          "latest": {
+            "type": "object",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "properties": {
+              "stable": { "$ref": "#/$defs/semver" },
+              "prerelease": { "$ref": "#/$defs/semver" }
+            }
+          },
+          "deprecated": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["at", "reason"],
+            "properties": {
+              "at": { "type": "string", "format": "date-time" },
+              "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
+              "replacement": { "$ref": "#/$defs/pluginId" }
+            }
+          },
+          "detail": { "$ref": "#/$defs/fileRef" }
+        }
+      }
+    },
+    "revocations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "versions", "action", "reason", "at"],
+        "properties": {
+          "id": { "$ref": "#/$defs/pluginId" },
+          "versions": {
+            "oneOf": [
+              { "const": "*" },
+              {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": { "$ref": "#/$defs/semver" }
+              }
+            ]
+          },
+          "action": {
+            "enum": ["yank", "disable"],
+            "description": "yank: not offered for install or update, installed copies keep running. disable: clients stop and refuse to load matching installed versions."
+          },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "advisory": { "type": "string", "format": "uri", "pattern": "^https://" },
+          "at": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "pluginId": {
+      "$ref": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json#/$defs/pluginId"
+    },
+    "semver": {
+      "$ref": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json#/$defs/semver"
+    },
+    "fileRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "length"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^plugins/[a-z][a-z0-9.-]{3,56}/[0-9a-f]{64}\\.json$",
+          "description": "Content-addressed: the file name is the sha256 of its bytes."
+        },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "length": { "type": "integer", "minimum": 1, "maximum": 262144 }
+      }
+    }
+  }
+}

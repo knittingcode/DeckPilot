@@ -28,7 +28,8 @@ make up        # or: pnpm dev (same session, in the foreground; Ctrl+C stops it)
 2. creates `.dev/` (ignored by Git) with an **isolated data directory**
    `.dev/data` and seeds it with demonstration data on first use: a *Work*
    profile (SHOP → CMR → CMS, actions, a workflow and layouts for the MK.2,
-   XL and Stream Deck +), a *Personal* profile with its own projects, and an
+   XL and Stream Deck +; the XL and Stream Deck + are layout design only,
+   with no driver), a *Personal* profile with its own projects, and an
    *Empty* profile to check empty states. The Work profile has the
    integration examples *Start Work* (resolve the project, check Git and
    Docker, start SHOP's Compose services when Docker runs, open the editor,
@@ -62,7 +63,8 @@ make up        # or: pnpm dev (same session, in the foreground; Ctrl+C stops it)
    development database from an earlier version is left alone so that the
    app's migration can be tried;
 3. builds and starts the background agent with simulated MK.2, XL and
-   Stream Deck + devices next to any connected hardware;
+   Stream Deck + devices next to any connected hardware (XL and Stream
+   Deck +: layout design only; no driver);
 4. starts the configuration app with `tauri dev` and Vite HMR.
 
 Both processes run with `DECKPILOT_DATA_DIR=.dev/data`, so they use their
@@ -175,18 +177,18 @@ the desktop crate on a fresh checkout (`make build` does this).
 
 ## Checks
 
-| Purpose               | Command                                                     |
-| --------------------- | ----------------------------------------------------------- |
-| Everything            | `make check`                                                |
-| Rust formatting       | `cargo fmt --all --check`                                   |
-| Rust lints            | `cargo clippy --workspace --all-targets -- -D warnings`     |
-| Rust tests            | `cargo test --workspace`                                    |
-| SQLCipher storage     | `cargo test -p deckpilot-storage --features sqlcipher`      |
-| Version consistency   | `cargo run -p deckpilot-dev -- check-versions`              |
-| Frontend formatting   | `pnpm format:check` (fix with `pnpm format`)                |
-| Frontend lint         | `pnpm lint`                                                 |
-| TypeScript            | `pnpm typecheck`                                            |
-| Frontend tests        | `pnpm test`                                                 |
+| Purpose             | Command                                                          |
+| ------------------- | ---------------------------------------------------------------- |
+| Everything          | `make check`                                                     |
+| Rust formatting     | `cargo fmt --all --check`                                        |
+| Rust lints          | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
+| Rust tests          | `cargo test --workspace --locked`                                |
+| SQLCipher storage   | `cargo test -p deckpilot-storage --features sqlcipher --locked`  |
+| Version consistency | `cargo run --locked -p deckpilot-dev -- check-versions`          |
+| Frontend formatting | `pnpm format:check` (fix with `pnpm format`)                     |
+| Frontend lint       | `pnpm lint`                                                      |
+| TypeScript          | `pnpm typecheck`                                                 |
+| Frontend tests      | `pnpm test`                                                      |
 
 CI (`.github/workflows/ci.yml`) runs the frontend checks on Linux and the
 Rust checks on Linux, macOS and Windows. Agent tests use simulated devices and
@@ -268,11 +270,14 @@ Runs and caches:
   same argument shapes as `src/lib/api.ts`.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/).
 
-## Pull requests and branches
+## Maintainer workflow
 
-`main` is protected: changes arrive as squash-merged pull requests whose
-required checks passed on a branch that is up to date with `main`. Every
-change goes through this cycle:
+`main` is protected: changes arrive only as pull requests, merged by squash
+merge (no merge commits, no rebase merges) after their required checks
+passed on a branch that is up to date with `main`. Contributors open pull
+requests from a fork, as described in [CONTRIBUTING.md](../CONTRIBUTING.md).
+The maintainer, who has write access, works on branches of this repository
+with this cycle:
 
 1. Push a feature branch and open a pull request against `main`.
 2. Wait for the required checks; to update a branch, merge `main` into it
