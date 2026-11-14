@@ -2,6 +2,11 @@
 
 use std::time::Duration;
 
+/// The local mock server's helpers; only `bind_local` is used here.
+#[allow(dead_code)]
+#[path = "support/http.rs"]
+mod http_support;
+
 use deckpilot_agent::{Agent, AgentError, AgentOptions, Clock, InstanceLock, LockError};
 use deckpilot_core::{
     ActionParameters, ActionRegistry, ActionStatus, CycleDirection, DeviceLayout, LayoutStatus,
@@ -2697,16 +2702,43 @@ async fn git_reads_the_repository_of_each_runs_own_project() {
     agent.shutdown().await;
 }
 
+/// Stops the [`json_server`] and closes its listener when dropped.
+struct JsonServer {
+    port: u16,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for JsonServer {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 /// A server on 127.0.0.1 that answers every request with a JSON body and
-/// records the requests it received.
-fn json_server() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+/// records the requests it received, one connection at a time.
+fn json_server() -> (JsonServer, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
     use std::io::{BufRead, Write};
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let listener = http_support::bind_local();
     let port = listener.local_addr().unwrap().port();
+    // Polled, so that stopping never needs a connection of its own.
+    listener.set_nonblocking(true).unwrap();
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let shared = seen.clone();
-    std::thread::spawn(move || {
-        for mut stream in listener.incoming().flatten() {
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let flag = stop.clone();
+    let thread = std::thread::spawn(move || {
+        while !flag.load(Ordering::SeqCst) {
+            let Ok((mut stream, _)) = listener.accept() else {
+                std::thread::sleep(Duration::from_millis(2));
+                continue;
+            };
+            // Accepted sockets may inherit non-blocking mode.
+            let _ = stream.set_nonblocking(false);
             let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
             let mut head = String::new();
             loop {
@@ -2725,13 +2757,19 @@ fn json_server() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
             );
         }
     });
-    (port, seen)
+    let server = JsonServer {
+        port,
+        stop,
+        thread: Some(thread),
+    };
+    (server, seen)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn http_requests_use_stored_credentials_and_keep_bodies_out_of_history() {
     let agent = setup().await;
-    let (port, seen) = json_server();
+    let (server, seen) = json_server();
+    let port = server.port;
     agent
         .store()
         .set_credential(
