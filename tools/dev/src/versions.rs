@@ -38,6 +38,15 @@ fn json_version(path: &Path) -> Result<String, String> {
         .ok_or_else(|| format!("{} has no version", path.display()))
 }
 
+/// Packages in `Cargo.lock` that belong to the separate plugin runtime
+/// workspace (`plugins/runtime`, its own versions): the agent's optional
+/// `plugins` feature depends on them by path.
+const RUNTIME_PACKAGES: [&str; 3] = [
+    "deckpilot-plugin-abi",
+    "deckpilot-plugin-broker",
+    "deckpilot-plugin-supervisor",
+];
+
 /// The versions of the workspace's own packages in `Cargo.lock`.
 fn lockfile_versions(root: &Path) -> Result<Vec<(String, String)>, String> {
     let lock = std::fs::read_to_string(root.join("Cargo.lock")).map_err(|e| e.to_string())?;
@@ -49,6 +58,7 @@ fn lockfile_versions(root: &Path) -> Result<Vec<(String, String)>, String> {
         } else if let Some(value) = line.strip_prefix("version = ")
             && let Some(name) = name.take()
             && name.starts_with("deckpilot")
+            && !RUNTIME_PACKAGES.contains(&name.as_str())
         {
             found.push((name, value.trim_matches('"').to_owned()));
         }
