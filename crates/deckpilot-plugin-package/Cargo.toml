@@ -1,0 +1,22 @@
+[package]
+name = "deckpilot-plugin-package"
+description = "Experimental: deterministic builder and safe reader of DeckPilot plugin packages (.dpplugin). Not used by DeckPilot yet."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+deckpilot-plugin-manifest.workspace = true
+flate2.workspace = true
+semver.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
