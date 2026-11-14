@@ -1,15 +1,19 @@
 <div align="center">
 
-<img src=".github/assets/logo.png" alt="DeckPilot logo" width="160" height="160" />
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/branding/icon.svg" />
+    <img src=".github/assets/branding/wordmark.svg" alt="DeckPilot" height="72" />
+  </picture>
+</p>
 
-# DeckPilot
-
-**An open-source, local-first Stream Deck controller and automation app for macOS, Windows and Linux.**
+**DeckPilot** is an open-source, local-first Stream Deck controller and automation app for macOS,
+Windows and Linux.
 
 Design your keys around what you want to happen: switch projects, open your tools,
 run workflows and time your work, all from a Stream Deck, without a cloud account.
 
-[**Download**](#download) &nbsp;&bull;&nbsp; [Documentation](docs/architecture.md) &nbsp;&bull;&nbsp; [Releases](https://github.com/knittingcode/DeckPilot/releases) &nbsp;&bull;&nbsp; [Report an issue](https://github.com/knittingcode/DeckPilot/issues/new/choose)
+[**Download**](#download) &nbsp;&bull;&nbsp; [Documentation](docs/README.md) &nbsp;&bull;&nbsp; [Releases](https://github.com/knittingcode/DeckPilot/releases) &nbsp;&bull;&nbsp; [Report an issue](https://github.com/knittingcode/DeckPilot/issues/new/choose)
 
 [![CI](https://github.com/knittingcode/DeckPilot/actions/workflows/ci.yml/badge.svg)](https://github.com/knittingcode/DeckPilot/actions/workflows/ci.yml)
 

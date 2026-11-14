@@ -13,7 +13,7 @@ screenshots of a build of current main with seeded demonstration data
 | `03-profiles-projects.png` | Profiles and projects |
 | `04-action-editor.png` | Action editor |
 | `05-workflow-editor.png` | Workflow editor |
-| `06-work-session.png` | Work Sessions |
+| `06-work-session.png` | Work Session |
 | `07-settings-modules.png` | Settings and modules |
 
 Number the files in the order they appear; add a `-dark` variant
