@@ -71,6 +71,7 @@ impl HostCommand {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
+        crate::fds::inherit_only_stdio(&mut c);
         c
     }
 }

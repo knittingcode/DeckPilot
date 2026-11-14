@@ -330,6 +330,7 @@ version = "0.1.0"
 dependencies = [
  "deckpilot-plugin-abi",
  "deckpilot-plugin-broker",
+ "libc",
  "serde_json",
 ]
 

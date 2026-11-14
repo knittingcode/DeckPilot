@@ -14,8 +14,9 @@
 //!   exit status.
 //! * [`Supervisor`] adds the restart policy: exponential backoff and a
 //!   crash-loop breaker that disables the plugin (design §3.6).
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
+mod fds;
 mod host;
 mod supervisor;
 
