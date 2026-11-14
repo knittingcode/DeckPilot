@@ -1,0 +1,278 @@
+//! Plugins (experimental; `docs/marketplace/agent-integration.md`).
+//!
+//! The plugin requests of IPC protocol 10 arrive here. Without the
+//! `plugins` feature (every release build) they are answered with
+//! "plugins not available", and `getPluginRuntime` says why. With it, and
+//! with plugins enabled (`--enable-plugins`), they go to a worker thread
+//! that owns the plugin store, the registry client, the permission broker
+//! and one supervisor per running plugin ([`PluginRuntime`]). Plugin code
+//! never runs in the agent: every invocation goes through the supervisor
+//! to a sandboxed `deckpilot-plugin-host` process.
+
+use std::path::PathBuf;
+
+use deckpilot_ipc::plugins::{PluginRuntimeStatus, reason};
+use deckpilot_ipc::{ErrorCode, IpcError, Request, Response};
+use tokio::sync::oneshot;
+
+#[cfg(feature = "plugins")]
+mod convert;
+#[cfg(feature = "plugins")]
+mod executor;
+#[cfg(feature = "plugins")]
+pub mod key;
+#[cfg(feature = "plugins")]
+mod registry;
+#[cfg(feature = "plugins")]
+mod service;
+#[cfg(feature = "plugins")]
+mod worker;
+
+/// Whether this agent was built with the `plugins` feature.
+pub const BUILT: bool = cfg!(feature = "plugins");
+
+/// Environment variable that enables plugins like `--enable-plugins` (`1`).
+pub const ENABLE_ENV: &str = "DECKPILOT_ENABLE_PLUGINS";
+/// Environment variable naming the plugin host executable.
+pub const HOST_ENV: &str = "DECKPILOT_PLUGIN_HOST";
+/// Environment variable naming the local registry directory.
+pub const REGISTRY_ENV: &str = "DECKPILOT_PLUGIN_REGISTRY";
+/// Environment variable naming the registry's root keys (`roots.json`).
+pub const REGISTRY_ROOTS_ENV: &str = "DECKPILOT_PLUGIN_REGISTRY_ROOTS";
+
+/// How plugins are set up for this agent.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginSettings {
+    /// Plugin requests are answered (`--enable-plugins`). Off by default.
+    pub enabled: bool,
+    /// The `deckpilot-plugin-host` executable. Default: next to the agent's
+    /// own executable.
+    pub host: Option<PathBuf>,
+    /// A local registry: a directory with the static site in `site/v1/`
+    /// and the release assets in `releases/` (the layout the publishing
+    /// tool writes). No network fetching yet.
+    pub registry: Option<PathBuf>,
+    /// The registry's root role (`roots.json`). It stands for the roots a
+    /// release build will embed; it must not come from the registry
+    /// directory itself.
+    pub registry_roots: Option<PathBuf>,
+}
+
+impl PluginSettings {
+    /// Settings from the environment ([`ENABLE_ENV`], [`HOST_ENV`],
+    /// [`REGISTRY_ENV`], [`REGISTRY_ROOTS_ENV`]); command-line options
+    /// override them.
+    pub fn from_env() -> Self {
+        let path = |name: &str| {
+            std::env::var_os(name)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        };
+        Self {
+            enabled: std::env::var(ENABLE_ENV).is_ok_and(|v| v == "1"),
+            host: path(HOST_ENV),
+            registry: path(REGISTRY_ENV),
+            registry_roots: path(REGISTRY_ROOTS_ENV),
+        }
+    }
+}
+
+/// Whether plugins may run here: only where the host's OS sandbox is
+/// verified (macOS, Linux). On Windows the sandbox does not deny file
+/// reads or network yet (no `AppContainer`), so enabling and running are
+/// refused; installing and inspecting still work.
+pub fn execution_supported() -> bool {
+    cfg!(any(target_os = "macos", target_os = "linux"))
+}
+
+/// `macos`, `linux` or `windows` (or the OS name elsewhere).
+pub fn platform() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        std::env::consts::OS
+    }
+}
+
+/// Why plugins cannot run on this platform, if they cannot.
+pub fn platform_problem() -> Option<String> {
+    (!execution_supported()).then(|| {
+        format!(
+            "plugins cannot run on {}: the plugin host's sandbox is not verified on this \
+             platform (Windows needs AppContainer isolation, which is not implemented); \
+             plugins can be installed and inspected, but not enabled or run",
+            platform()
+        )
+    })
+}
+
+/// Requests of protocol 10's plugin API.
+pub(crate) fn is_plugin_request(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::GetPluginRuntime
+            | Request::ListPlugins
+            | Request::GetPlugin { .. }
+            | Request::ListAvailablePlugins { .. }
+            | Request::InstallPlugin { .. }
+            | Request::EnablePlugin { .. }
+            | Request::DisablePlugin { .. }
+            | Request::GrantPluginPermissions { .. }
+            | Request::RevokePluginPermission { .. }
+            | Request::UpdatePlugin { .. }
+            | Request::ApprovePluginUpdate { .. }
+            | Request::DeclinePluginUpdate { .. }
+            | Request::RollbackPlugin { .. }
+            | Request::UninstallPlugin { .. }
+            | Request::InvokePluginAction { .. }
+    )
+}
+
+fn unavailable_reason(settings: &PluginSettings) -> String {
+    if !BUILT {
+        "plugins are not available: this agent was built without plugin support".into()
+    } else if !settings.enabled {
+        "plugins are not enabled in this agent (start it with --enable-plugins)".into()
+    } else {
+        "plugins are not available right now".into()
+    }
+}
+
+/// The error of every plugin request but `getPluginRuntime` while plugins
+/// cannot be used.
+pub(crate) fn unavailable(settings: &PluginSettings) -> IpcError {
+    IpcError::new(ErrorCode::Unsupported, unavailable_reason(settings))
+        .with_reason(reason::PLUGINS_UNAVAILABLE)
+}
+
+#[cfg(feature = "plugins")]
+pub(crate) fn locked() -> IpcError {
+    IpcError::new(
+        ErrorCode::Locked,
+        "the configuration is locked; plugins are available once it is unlocked",
+    )
+    .with_reason(reason::LOCKED)
+}
+
+/// The status when no plugin worker answers (not built, not enabled).
+fn idle_status(settings: &PluginSettings) -> PluginRuntimeStatus {
+    PluginRuntimeStatus {
+        available: false,
+        built: BUILT,
+        enabled: settings.enabled && BUILT,
+        execution_supported: execution_supported(),
+        platform: platform().to_owned(),
+        reason: Some(unavailable_reason(settings)),
+        registry: None,
+    }
+}
+
+type Reply = oneshot::Sender<Result<Response, IpcError>>;
+
+/// The agent's plugin runtime: settings, and with the `plugins` feature
+/// the worker that serves plugin requests.
+#[derive(Debug, Default)]
+pub(crate) struct PluginRuntime {
+    settings: PluginSettings,
+    #[cfg(feature = "plugins")]
+    worker: Option<worker::PluginWorker>,
+}
+
+// Without the feature these only answer "not available".
+#[cfg_attr(
+    not(feature = "plugins"),
+    allow(clippy::unused_self, clippy::needless_pass_by_value)
+)]
+impl PluginRuntime {
+    /// Starts the worker when built with plugins and enabled.
+    pub(crate) fn new(
+        settings: PluginSettings,
+        data_dir: &std::path::Path,
+        events: &tokio::sync::broadcast::Sender<deckpilot_ipc::AgentEvent>,
+        plugin_events: &tokio::sync::broadcast::Sender<deckpilot_ipc::plugins::PluginEvent>,
+    ) -> Self {
+        #[cfg(feature = "plugins")]
+        {
+            let worker = settings.enabled.then(|| {
+                worker::PluginWorker::start(
+                    settings.clone(),
+                    data_dir,
+                    worker::Events {
+                        agent: events.clone(),
+                        plugins: plugin_events.clone(),
+                    },
+                )
+            });
+            Self { settings, worker }
+        }
+        #[cfg(not(feature = "plugins"))]
+        {
+            let _ = (data_dir, events, plugin_events);
+            Self { settings }
+        }
+    }
+
+    /// Answers a plugin request (here or on the worker).
+    pub(crate) fn handle(&self, request: Request, reply: Reply, unlocked: bool) {
+        #[cfg(feature = "plugins")]
+        if let Some(worker) = &self.worker {
+            if !unlocked && !matches!(request, Request::GetPluginRuntime) {
+                let _ = reply.send(Err(locked()));
+                return;
+            }
+            worker.request(request, reply);
+            return;
+        }
+        let _ = unlocked;
+        let answer = match request {
+            Request::GetPluginRuntime => Ok(Response::PluginRuntime {
+                status: Box::new(idle_status(&self.settings)),
+            }),
+            _ => Err(unavailable(&self.settings)),
+        };
+        let _ = reply.send(answer);
+    }
+
+    /// The configuration was unlocked with `key`: open the plugin store
+    /// with the key derived from it.
+    pub(crate) fn opened(&self, key: &deckpilot_storage::DatabaseKey) {
+        #[cfg(feature = "plugins")]
+        if let Some(worker) = &self.worker {
+            worker.open(key::plugin_store_key(key));
+        }
+        #[cfg(not(feature = "plugins"))]
+        let _ = key;
+    }
+
+    /// The configuration was locked: stop every host and close the store.
+    pub(crate) fn closed(&self) {
+        #[cfg(feature = "plugins")]
+        if let Some(worker) = &self.worker {
+            worker.close();
+        }
+    }
+
+    /// The configuration key changes from `old` to `new` (the agent
+    /// switches it to a system-managed key): re-encrypt the plugin store
+    /// with the key derived from `new`. Called while locked.
+    pub(crate) fn rekey(
+        &self,
+        old: &deckpilot_storage::DatabaseKey,
+        new: &deckpilot_storage::DatabaseKey,
+    ) {
+        #[cfg(feature = "plugins")]
+        if let Some(worker) = &self.worker {
+            worker.rekey(key::plugin_store_key(old), key::plugin_store_key(new));
+        }
+        #[cfg(not(feature = "plugins"))]
+        let _ = (old, new);
+    }
+
+    /// Stops every host and the worker.
+    pub(crate) fn stop(&mut self) {
+        #[cfg(feature = "plugins")]
+        if let Some(worker) = self.worker.take() {
+            worker.stop();
+        }
+    }
+}

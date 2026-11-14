@@ -16,6 +16,8 @@ DeckPilot background agent
 
 Usage:
   deckpilot-agent [--headless] [--mock-devices [<models>]] [--no-usb] [--log-level <level>]
+                  [--enable-plugins] [--plugin-host <path>] [--plugin-registry <dir>]
+                  [--plugin-registry-roots <roots.json>]
   deckpilot-agent autostart <enable|disable|status>
 
 Options:
@@ -26,12 +28,23 @@ Options:
   --no-usb            Do not open USB devices, e.g. for tests with simulated
                       devices while a Stream Deck is plugged in
   --log-level <level> error, warn, info (default), debug or trace
+  --enable-plugins    Answer plugin requests (experimental; only in builds with
+                      the `plugins` feature)
+  --plugin-host <path>
+                      The plugin host executable (default: next to the agent)
+  --plugin-registry <dir>
+                      A local plugin registry (site/v1 and releases/)
+  --plugin-registry-roots <roots.json>
+                      The root keys that registry must be signed with
   --version           Print the version
   --help              Print this help
 
 Environment:
   DECKPILOT_DATA_DIR    Use a different data directory
-  DECKPILOT_DESKTOP_BIN Path of the configuration app executable";
+  DECKPILOT_DESKTOP_BIN Path of the configuration app executable
+  DECKPILOT_ENABLE_PLUGINS=1, DECKPILOT_PLUGIN_HOST, DECKPILOT_PLUGIN_REGISTRY,
+  DECKPILOT_PLUGIN_REGISTRY_ROOTS
+                        Like the plugin options";
 
 struct Args {
     headless: bool,
@@ -39,6 +52,7 @@ struct Args {
     /// Open USB devices through the HID driver (off with `--no-usb`).
     usb: bool,
     level: LevelFilter,
+    plugins: deckpilot_agent::plugins::PluginSettings,
 }
 
 fn mock_models(list: &str) -> Result<Vec<DeviceModel>, String> {
@@ -61,11 +75,31 @@ fn parse_args() -> Result<Result<Args, String>, ExitCode> {
         mock_models: Vec::new(),
         usb: true,
         level: LevelFilter::INFO,
+        plugins: deckpilot_agent::plugins::PluginSettings::from_env(),
+    };
+    let path = |args: &mut std::iter::Peekable<std::iter::Skip<std::env::Args>>, name: &str| {
+        args.next()
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| format!("{name} needs a path"))
     };
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--headless" => parsed.headless = true,
             "--no-usb" => parsed.usb = false,
+            "--enable-plugins" => parsed.plugins.enabled = true,
+            "--plugin-host" => match path(&mut args, "--plugin-host") {
+                Ok(p) => parsed.plugins.host = Some(p),
+                Err(message) => return Ok(Err(message)),
+            },
+            "--plugin-registry" => match path(&mut args, "--plugin-registry") {
+                Ok(p) => parsed.plugins.registry = Some(p),
+                Err(message) => return Ok(Err(message)),
+            },
+            "--plugin-registry-roots" => match path(&mut args, "--plugin-registry-roots") {
+                Ok(p) => parsed.plugins.registry_roots = Some(p),
+                Err(message) => return Ok(Err(message)),
+            },
             "--mock-devices" => {
                 let list = match args.peek() {
                     Some(next) if !next.starts_with("--") => args.next().unwrap_or_default(),
@@ -207,8 +241,9 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
+        let plugins = args.plugins;
         let result = runtime.block_on(async {
-            let agent = Agent::start(options, lock)?;
+            let agent = Agent::start(options, lock)?.with_plugins(plugins);
             agent.run(deckpilot_agent::service::shutdown_signal()).await
         });
         if let Err(error) = result {
@@ -216,7 +251,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     } else {
-        deckpilot_agent::tray::run(options, lock);
+        deckpilot_agent::tray::run_with_plugins(options, lock, args.plugins);
     }
     ExitCode::SUCCESS
 }

@@ -299,6 +299,12 @@ checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
 
 [[package]]
 name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "base64"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
@@ -962,6 +968,7 @@ name = "deckpilot-agent"
 version = "0.6.0-alpha.2"
 dependencies = [
  "auto-launch",
+ "base64 0.23.1",
  "chrono",
  "deckpilot-agent",
  "deckpilot-core",
@@ -969,14 +976,29 @@ dependencies = [
  "deckpilot-hid",
  "deckpilot-ipc",
  "deckpilot-keystore",
+ "deckpilot-module-http",
  "deckpilot-modules",
+ "deckpilot-plugin-abi",
+ "deckpilot-plugin-broker",
+ "deckpilot-plugin-manifest",
+ "deckpilot-plugin-package",
+ "deckpilot-plugin-registry",
+ "deckpilot-plugin-store",
+ "deckpilot-plugin-supervisor",
  "deckpilot-presence",
  "deckpilot-render",
  "deckpilot-storage",
+ "flate2",
+ "hkdf 0.12.4",
  "interprocess",
+ "reqwest",
  "rusqlite",
+ "semver",
+ "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tao",
+ "tar",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -1238,6 +1260,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "deckpilot-plugin-abi"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "deckpilot-plugin-broker"
+version = "0.1.0"
+dependencies = [
+ "deckpilot-plugin-abi",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
 name = "deckpilot-plugin-manifest"
 version = "0.6.0-alpha.2"
 dependencies = [
@@ -1298,6 +1339,16 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "zeroize",
+]
+
+[[package]]
+name = "deckpilot-plugin-supervisor"
+version = "0.1.0"
+dependencies = [
+ "deckpilot-plugin-abi",
+ "deckpilot-plugin-broker",
+ "libc",
+ "serde_json",
 ]
 
 [[package]]
@@ -2277,6 +2328,15 @@ dependencies = [
  "libc",
  "pkg-config",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "hkdf"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
+dependencies = [
+ "hmac 0.12.1",
 ]
 
 [[package]]
@@ -4524,7 +4584,7 @@ dependencies = [
  "cbc",
  "futures-util",
  "getrandom 0.4.3",
- "hkdf",
+ "hkdf 0.13.0",
  "hybrid-array",
  "num",
  "once_cell",

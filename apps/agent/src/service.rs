@@ -173,6 +173,8 @@ pub(crate) enum Command {
 pub struct AgentHandle {
     commands: mpsc::UnboundedSender<Command>,
     events: broadcast::Sender<AgentEvent>,
+    /// Plugin progress and state (protocol 10, `subscribePluginEvents`).
+    plugin_events: broadcast::Sender<deckpilot_ipc::plugins::PluginEvent>,
     pub(crate) desktop_clients: Arc<AtomicUsize>,
     work_session: watch::Receiver<deckpilot_core::work_session::WorkSessionSnapshot>,
 }
@@ -194,6 +196,10 @@ impl AgentHandle {
 
     pub fn subscribe(&self) -> broadcast::Receiver<AgentEvent> {
         self.events.subscribe()
+    }
+
+    pub fn subscribe_plugins(&self) -> broadcast::Receiver<deckpilot_ipc::plugins::PluginEvent> {
+        self.plugin_events.subscribe()
     }
 
     /// The work session as last published; changes on every transition.
@@ -345,6 +351,9 @@ pub struct Agent {
     work: work_session::WorkSessions,
     /// Work session keys shown, and when their elapsed time changes.
     session_faces: work_session_faces::WorkSessionFaces,
+    /// Plugins (experimental; answered only with the `plugins` feature
+    /// and `--enable-plugins`).
+    plugins: crate::plugins::PluginRuntime,
     handle: AgentHandle,
     commands: mpsc::UnboundedReceiver<Command>,
     signals_tx: mpsc::UnboundedSender<DeviceSignal>,
@@ -408,6 +417,7 @@ impl Agent {
         let handle = AgentHandle {
             commands: commands_tx,
             events,
+            plugin_events: broadcast::channel(256).0,
             desktop_clients: Arc::new(AtomicUsize::new(0)),
             work_session,
         };
@@ -457,6 +467,7 @@ impl Agent {
             context_watch: variables::ContextWatch::default(),
             work,
             session_faces: work_session_faces::WorkSessionFaces::default(),
+            plugins: crate::plugins::PluginRuntime::default(),
             handle,
             commands,
             signals_tx,
@@ -468,6 +479,24 @@ impl Agent {
 
     pub fn handle(&self) -> AgentHandle {
         self.handle.clone()
+    }
+
+    /// Sets up plugins (before [`Agent::run`]). Without the `plugins`
+    /// feature, or with `settings.enabled` off, plugin requests are
+    /// answered with "plugins not available".
+    #[must_use]
+    pub fn with_plugins(mut self, settings: crate::plugins::PluginSettings) -> Self {
+        self.plugins.stop();
+        self.plugins = crate::plugins::PluginRuntime::new(
+            settings,
+            &self.options.paths.data_dir,
+            &self.handle.events,
+            &self.handle.plugin_events,
+        );
+        if let Some(key) = &self.key {
+            self.plugins.opened(key);
+        }
+        self
     }
 
     /// Runs until `shutdown` completes or a client or the tray requests it.
@@ -549,6 +578,7 @@ impl Agent {
 
     async fn stop(mut self) {
         info!("agent shutting down");
+        self.plugins.stop();
         self.work_session_shutdown();
         self.states.reset();
         self.interrupt_executions();
@@ -579,6 +609,7 @@ impl Agent {
         let _ = std::fs::remove_file(&self.options.paths.token_file);
     }
 
+    #[allow(clippy::too_many_lines)] // One arm per command.
     fn handle_command(&mut self, command: Command) -> Flow {
         match command {
             Command::Request {
@@ -637,6 +668,11 @@ impl Agent {
                 let end = work_session::RunEnd::with_can_finish(can_finish);
                 self.work_session_run_ended(purpose, &end);
                 let _ = reply.send(());
+                Flow::Continue
+            }
+            Command::Request { request, reply } if crate::plugins::is_plugin_request(&request) => {
+                self.plugins
+                    .handle(request, reply, self.security == SecurityState::Unlocked);
                 Flow::Continue
             }
             Command::Request {
@@ -731,7 +767,10 @@ impl Agent {
             }
             // Subscriptions are handled per connection by the server; the
             // run loop stops after replying to a shutdown request.
-            Request::Subscribe | Request::Shutdown | Request::PrepareForUpdate => Ok(Response::Ok),
+            Request::Subscribe
+            | Request::SubscribePluginEvents
+            | Request::Shutdown
+            | Request::PrepareForUpdate => Ok(Response::Ok),
             other => self.handle_change(other),
         }
     }
@@ -828,6 +867,7 @@ impl Agent {
             | Request::PreviewReferences { .. }
             | Request::GetAutostart
             | Request::Subscribe
+            | Request::SubscribePluginEvents
             | Request::Shutdown
             | Request::PrepareForUpdate
             | Request::GetWorkSession
@@ -837,6 +877,23 @@ impl Agent {
             | Request::ResolveWorkSessionReview { .. }
             | Request::ClearWorkSessionNotices { .. } => self.handle_request(request),
             Request::RunWorkflow { .. } => unreachable!("handled by handle_command"),
+            Request::GetPluginRuntime
+            | Request::ListPlugins
+            | Request::GetPlugin { .. }
+            | Request::ListAvailablePlugins { .. }
+            | Request::InstallPlugin { .. }
+            | Request::EnablePlugin { .. }
+            | Request::DisablePlugin { .. }
+            | Request::GrantPluginPermissions { .. }
+            | Request::RevokePluginPermission { .. }
+            | Request::UpdatePlugin { .. }
+            | Request::ApprovePluginUpdate { .. }
+            | Request::DeclinePluginUpdate { .. }
+            | Request::RollbackPlugin { .. }
+            | Request::UninstallPlugin { .. }
+            | Request::InvokePluginAction { .. } => {
+                unreachable!("plugin requests are handled by handle_command")
+            }
             Request::Unlock { .. }
             | Request::Lock
             | Request::GetDatabaseKey

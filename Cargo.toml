@@ -32,6 +32,13 @@ members = [
     "apps/desktop/src-tauri",
     "tools/dev",
 ]
+# The plugin runtime is a standalone workspace with its own lock file
+# (plugins/runtime/README.md). The agent's optional `plugins` feature uses
+# its agent-side crates (abi, broker, supervisor) as path dependencies;
+# excluding the directory keeps them out of this workspace, so they inherit
+# their settings from plugins/runtime/Cargo.toml and wasmtime never enters
+# this workspace.
+exclude = ["plugins/runtime", "plugins/examples"]
 
 [workspace.package]
 version = "0.6.0-alpha.2"
@@ -69,6 +76,13 @@ deckpilot-render = { path = "crates/deckpilot-render" }
 deckpilot-plugin-manifest = { path = "crates/deckpilot-plugin-manifest" }
 deckpilot-plugin-package = { path = "crates/deckpilot-plugin-package" }
 deckpilot-plugin-registry = { path = "crates/deckpilot-plugin-registry" }
+deckpilot-plugin-store = { path = "crates/deckpilot-plugin-store" }
+# Agent-side crates of the plugin runtime (plugins/runtime, a separate
+# workspace; never the host, so never wasmtime). Optional dependencies of
+# the agent's `plugins` feature only.
+deckpilot-plugin-abi = { path = "plugins/runtime/crates/abi" }
+deckpilot-plugin-broker = { path = "plugins/runtime/crates/broker" }
+deckpilot-plugin-supervisor = { path = "plugins/runtime/crates/supervisor" }
 
 tauri = "2"
 tauri-build = "2"
@@ -85,6 +99,7 @@ elgato-streamdeck = { version = "0.14", default-features = false }
 flate2 = "1"
 font8x8 = { version = "0.3", default-features = false }
 getrandom = "0.3"
+hkdf = "0.12"
 hidapi = "2.6"
 image = { version = "0.25", default-features = false }
 minisign-verify = "0.3"

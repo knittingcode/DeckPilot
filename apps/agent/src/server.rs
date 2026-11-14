@@ -16,6 +16,7 @@ use tokio::task::JoinSet;
 use tracing::{debug, warn};
 
 use crate::service::{AgentHandle, VERSION};
+use deckpilot_ipc::plugins::PluginEvent;
 
 /// A client must authenticate within this time.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -92,9 +93,9 @@ fn error(id: Option<u64>, code: ErrorCode, message: impl Into<String>) -> Server
     }
 }
 
-async fn next_event(
-    events: &mut Option<broadcast::Receiver<AgentEvent>>,
-) -> Result<AgentEvent, broadcast::error::RecvError> {
+async fn next_event<T: Clone>(
+    events: &mut Option<broadcast::Receiver<T>>,
+) -> Result<T, broadcast::error::RecvError> {
     match events {
         Some(events) => events.recv().await,
         None => std::future::pending().await,
@@ -160,6 +161,7 @@ async fn serve(
     };
 
     let mut events: Option<broadcast::Receiver<AgentEvent>> = None;
+    let mut plugin_events: Option<broadcast::Receiver<PluginEvent>> = None;
     let mut desktop: Option<DesktopGuard> = None;
     loop {
         tokio::select! {
@@ -167,7 +169,14 @@ async fn serve(
                 let reply = match message {
                     Ok(None) | Err(FrameError::Io(_)) => break,
                     Ok(Some(value)) => {
-                        handle_message(value, &handle, (client, protocol), &mut events, &mut desktop).await
+                        handle_message(
+                            value,
+                            &handle,
+                            (client, protocol),
+                            (&mut events, &mut plugin_events),
+                            &mut desktop,
+                        )
+                        .await
                     }
                     Err(FrameError::Malformed(e)) => {
                         error(None, ErrorCode::InvalidRequest, format!("malformed message: {e}"))
@@ -193,6 +202,16 @@ async fn serve(
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => break,
             },
+            // Only connections that asked for them (protocol 10).
+            event = next_event(&mut plugin_events) => match event {
+                Ok(event) => {
+                    if !send(&mut writer, &ServerMessage::PluginEvent { event }).await {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => plugin_events = None,
+            },
             _ = shutdown.changed() => {
                 // Deliver the final notifications before closing.
                 if let Some(events) = events.as_mut() {
@@ -214,7 +233,10 @@ async fn handle_message(
     value: serde_json::Value,
     handle: &AgentHandle,
     (client, protocol): (ClientKind, u32),
-    events: &mut Option<broadcast::Receiver<AgentEvent>>,
+    (events, plugin_events): (
+        &mut Option<broadcast::Receiver<AgentEvent>>,
+        &mut Option<broadcast::Receiver<PluginEvent>>,
+    ),
     desktop: &mut Option<DesktopGuard>,
 ) -> ServerMessage {
     let id = value.get("id").and_then(serde_json::Value::as_u64);
@@ -249,6 +271,15 @@ async fn handle_message(
                 request.name()
             ),
         );
+    }
+    if matches!(request, Request::SubscribePluginEvents) {
+        if plugin_events.is_none() {
+            *plugin_events = Some(handle.subscribe_plugins());
+        }
+        return ServerMessage::Response {
+            id,
+            response: Response::Ok,
+        };
     }
     if matches!(request, Request::Subscribe) {
         if events.is_none() {
