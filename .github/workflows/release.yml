@@ -3,10 +3,12 @@
 #   Stage A  builds, signs and notarizes, assembles the update manifest, the
 #            signing record and SHA256SUMS into a *draft* release, and checks
 #            all of it. Nothing is visible to users.
-#   Stage B  waits for approval in the "production-release" environment
-#            (required reviewers, or tag authority: docs/releasing.md,
-#            "Release authorization"; fails closed if the environment is missing
-#            or has none), checks the draft's assets again, publishes it in one
+#   Stage B  runs in the "production-release" environment once the release
+#            is authorized (tag authority, the current model: the protected
+#            v* tag is the authorization and nothing waits; or required
+#            reviewers: docs/releasing.md, "Release authorization"; fails
+#            closed if the environment is missing or authorizes neither way),
+#            checks the draft's assets again, publishes it in one
 #            update — as a pre-release for alpha/beta/rc, as latest only for
 #            the newest stable release — and verifies what users download.
 #

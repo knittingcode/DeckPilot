@@ -1,10 +1,17 @@
 # Key gestures, stateful keys and work sessions
 
-Status: **design and contract**. The types in
-`crates/deckpilot-core/src/gesture.rs` and `crates/deckpilot-core/src/work_session.rs`
-(plus `WorkSessionId` and `VerificationId` in `id.rs`) and their mirror at the
-end of `apps/desktop/src/lib/types.ts` exist and are tested. Nothing uses them
-yet, so behaviour is unchanged until the workstreams in section 12 land.
+Status: **implemented in 0.6.0**. Key gestures (click, double click and
+long press, with default and per-key timings), stateful keys and the Work
+Session (started, verified and finished from its key, with a live timer,
+history and the Work Session page) shipped through the workstreams of
+section 12. The gesture engine is in `crates/deckpilot-core/src/gesture/`,
+stateful keys in `crates/deckpilot-core/src/stateful.rs`, the session
+contract in `crates/deckpilot-core/src/work_session.rs`, and the Work Session
+page in `apps/desktop/src/modules/work-session/` (module `work-session`). The remaining sections are
+the original design record, written before the implementation; where the
+code differs, the code and the tests win. The work session variables now
+belong to the `work-session` module (`workSession.…`; see
+[variables.md](variables.md)).
 
 This document builds on `docs/action-architecture.md`, which covers action
 types and instances, shared variables, the resolution pipeline and protocol 7.
