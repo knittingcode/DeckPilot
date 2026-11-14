@@ -18,6 +18,8 @@
 #   - SHA256SUMS covers exactly the assets and every checksum matches;
 #   - release-meta.json names this tag, version, channel, manifest and SHA;
 #   - every updater signature verifies (deckpilot-dev verify-release);
+#   - the manifest announces this version, has an update for every
+#     platform and package type, and points only to assets of this tag;
 #   - the release notes are not empty.
 # Then one update publishes it: a pre-release for alpha, beta and rc; a
 # stable release, marked latest only if it is newer than every published
@@ -74,6 +76,29 @@ if [ "$(jq -r .draft <<< "$release")" = true ]; then
 
   "${verify_release[@]}" "$assets" > "$work/verify.log" 2>&1 \
     || fail "the updater signatures do not verify: $(tail -n 3 "$work/verify.log" | tr '\n' ' ')"
+
+  # The manifest as installations will read it, checked while the release
+  # is still a draft (published releases are immutable): this version, an
+  # update for every platform and package type (as
+  # tools/ci/assemble-latest-json.sh requires), and every URL an asset of
+  # this tag.
+  manifest="$assets/$MANIFEST"
+  announced=$(jq -r .version "$manifest")
+  [ "$announced" = "$VERSION" ] || fail "$MANIFEST announces $announced, expected $VERSION"
+  required="darwin-aarch64 darwin-aarch64-app darwin-x86_64 darwin-x86_64-app
+    linux-x86_64 linux-x86_64-appimage linux-x86_64-deb
+    windows-x86_64 windows-x86_64-msi windows-x86_64-nsis"
+  [ "$PRERELEASE" = true ] || required="$required linux-x86_64-rpm"
+  for key in $required; do
+    jq -e --arg k "$key" '.platforms | has($k)' "$manifest" > /dev/null \
+      || fail "$MANIFEST has no update for $key"
+  done
+  prefix="https://github.com/$repository/releases/download/$tag/"
+  while read -r url; do
+    name="${url#"$prefix"}"
+    { [ "$url" != "$name" ] && grep -q -x -F -- "$name" "$work/assets.txt"; } \
+      || fail "$MANIFEST points to $url, not to an asset of $tag"
+  done < <(jq -r '.platforms[].url' "$manifest")
 
   # Latest: a stable release newer than every published stable release.
   latest=false

@@ -368,7 +368,11 @@ tag; that push starts the release workflow.
    nothing of the other channel, `SHA256SUMS` covers exactly the assets and
    matches each of them, `release-meta.json` names this tag, version,
    channel, manifest and commit, every updater signature verifies, the
-   notes are not empty — and only then publishes it in **one** update:
+   manifest announces this version with an update for every platform and
+   package type and points only to assets of this tag, the notes are not
+   empty — and only then publishes it in **one** update (the repository
+   has immutable releases enabled, so nothing of a published release can
+   be changed afterwards; every asset is uploaded while it is a draft):
    alpha, beta and rc as a GitHub **pre-release** (never latest); a stable
    version as a release, marked **latest** only if it is newer than every
    published stable release (a fix of an older line is not). Finally it
