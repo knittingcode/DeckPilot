@@ -5,7 +5,9 @@ use std::ffi::OsString;
 use std::fmt;
 use std::io::{self, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::process::ExitStatus;
+#[cfg(not(windows))]
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -23,6 +25,8 @@ use deckpilot_plugin_abi::value::{validate_name, validate_params};
 use deckpilot_plugin_abi::{ABI_VERSION, ActionOutcome, CallErrorCode, CallResult, Params};
 use deckpilot_plugin_broker::{Allowed, Decision, PluginId, Session};
 
+use crate::process::{HostProcess, HostStdin};
+
 /// Carries out what the broker allowed (the agent's HTTP client, storage,
 /// notifications, log). Called on the supervisor's thread.
 pub trait CapabilityExecutor {
@@ -38,14 +42,15 @@ pub struct HostCommand {
 }
 
 /// The working directory every host gets: the file system root on Unix,
-/// the host binary's directory on Windows.
+/// the system directory on Windows (readable by every AppContainer).
 pub fn fixed_working_dir(program: &Path) -> PathBuf {
-    if cfg!(windows) {
-        program
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("\\"))
-    } else {
+    let _ = program;
+    #[cfg(windows)]
+    {
+        crate::windows::system_dir()
+    }
+    #[cfg(not(windows))]
+    {
         PathBuf::from("/")
     }
 }
@@ -63,9 +68,25 @@ impl HostCommand {
         self
     }
 
-    /// The command as the supervisor spawns it: empty environment, fixed
-    /// working directory, piped stdin/stdout, no stderr.
-    pub fn command(&self) -> Command {
+    /// Starts the host: empty environment, fixed working directory, piped
+    /// stdin/stdout, no stderr, no other descriptor or handle. On Windows
+    /// additionally in a fresh AppContainer without capabilities and a
+    /// Job Object held by the returned value (see `windows.rs`); the
+    /// environment then holds only `SystemRoot`.
+    pub fn spawn(&self) -> io::Result<HostProcess> {
+        #[cfg(windows)]
+        {
+            crate::windows::spawn(&self.program, &self.args, &fixed_working_dir(&self.program))
+                .map(HostProcess::from_spawned)
+        }
+        #[cfg(not(windows))]
+        {
+            self.command().spawn().map(HostProcess::from_child)
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn command(&self) -> Command {
         let mut c = Command::new(&self.program);
         c.args(&self.args)
             .env_clear()
@@ -198,8 +219,8 @@ enum Recv {
 
 /// A running host. Dropping it kills the process.
 pub struct PluginHost {
-    child: Child,
-    stdin: Option<BufWriter<ChildStdin>>,
+    child: HostProcess,
+    stdin: Option<BufWriter<HostStdin>>,
     rx: Receiver<Result<ToSupervisor, String>>,
     session: Session,
     sandbox: SandboxReport,
@@ -227,7 +248,7 @@ impl PluginHost {
         if config.module.len() > MAX_MODULE_BYTES {
             return Err(HostError::ModuleTooLarge);
         }
-        let mut child = config.command.command().spawn().map_err(HostError::Spawn)?;
+        let mut child = config.command.spawn().map_err(HostError::Spawn)?;
         let stdin = child.stdin.take().map(BufWriter::new);
         let stdout = child.stdout.take();
         let (tx, rx) = mpsc::channel();
@@ -570,7 +591,7 @@ impl Drop for PluginHost {
     }
 }
 
-fn wait_for(child: &mut Child, timeout: Duration) -> Option<ExitStatus> {
+fn wait_for(child: &mut HostProcess, timeout: Duration) -> Option<ExitStatus> {
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {

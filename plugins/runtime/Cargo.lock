@@ -404,6 +404,7 @@ dependencies = [
  "deckpilot-plugin-broker",
  "libc",
  "serde_json",
+ "windows-sys",
 ]
 
 [[package]]

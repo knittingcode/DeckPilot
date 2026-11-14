@@ -10,6 +10,10 @@ pub const MAX_FRAME_TO_SUPERVISOR: usize = 256 << 10;
 pub const MAX_LOAD_FRAME: usize = 24 << 20;
 /// Largest wasm module the host accepts.
 pub const MAX_MODULE_BYTES: usize = 16 << 20;
+/// Committed memory of the whole host process, where the OS enforces it
+/// (Windows Job Object, set by the supervisor and checked by the host).
+/// Linear memory is capped separately per Store.
+pub const HOST_PROCESS_MEMORY: usize = 256 << 20;
 
 /// Largest invocation input (JSON) the host writes into guest memory.
 pub const MAX_GUEST_INPUT: usize = 1 << 20;
