@@ -4,7 +4,11 @@
   "id": "example-tools.kitchen-sink",
   "name": "Kitchen Sink",
   "version": "2.1.0-rc.3",
-  "publisher": { "id": "example-tools", "name": "Example Tools", "url": "https://tools.example.org/" },
+  "publisher": {
+    "id": "example-tools",
+    "name": "Example Tools",
+    "url": "https://tools.example.org/"
+  },
   "description": "Uses every field of manifestVersion 1, so the Rust model and the JSON Schema are compared on all of them.",
   "homepage": "https://tools.example.org/kitchen-sink",
   "repository": {
@@ -18,7 +22,11 @@
   "engines": { "deckpilot": ">=0.8.0 <=1.4.2", "pluginApi": "^1.1", "sdk": "1.1.0-beta.2" },
   "entry": "src/main.ts",
   "platforms": ["macos", "linux"],
-  "icons": { "32": "assets/icon-32.png", "128": "assets/icon-128.png", "256": "assets/icon-256.png" },
+  "icons": {
+    "32": "assets/icon-32.png",
+    "128": "assets/icon-128.png",
+    "256": "assets/icon-256.png"
+  },
   "assets": {
     "keyIcons": { "ok": "assets/keys/ok.png", "fail-2": "assets/keys/fail_2.png" },
     "screenshots": ["assets/screens/one.png", "assets/screens/two.png"],
@@ -49,7 +57,11 @@
       "read": ["shared.paths.root", "shared.services.*", "plugins.other.tool.status"],
       "justification": "Reads the service paths you share between actions."
     },
-    { "kind": "storage", "quotaKb": 1024, "justification": "Caches the last results between runs." },
+    {
+      "kind": "storage",
+      "quotaKb": 1024,
+      "justification": "Caches the last results between runs."
+    },
     {
       "kind": "openUrl",
       "hosts": ["example.org", "*.example.org"],
@@ -67,7 +79,9 @@
       "justification": "Shows status and icons on the plugin's keys."
     }
   ],
-  "supports": { "device": { "requires": ["keys"], "uses": ["keyDisplays", "dials", "touchStrip"] } },
+  "supports": {
+    "device": { "requires": ["keys"], "uses": ["keyDisplays", "dials", "touchStrip"] }
+  },
   "contributes": {
     "actions": [
       {
@@ -105,7 +119,12 @@
             "kind": { "type": "choice", "options": ["fast", "full"] },
             "default": { "type": "choice", "value": "full" }
           },
-          { "key": "project", "label": "Project", "required": false, "kind": { "type": "project" } },
+          {
+            "key": "project",
+            "label": "Project",
+            "required": false,
+            "kind": { "type": "project" }
+          },
           {
             "key": "paths",
             "label": "Paths",
@@ -193,7 +212,12 @@
         "valueType": { "type": "string" },
         "scope": "machine"
       },
-      { "id": "failing", "name": "Failing services", "valueType": { "type": "integer" }, "scope": "profile" },
+      {
+        "id": "failing",
+        "name": "Failing services",
+        "valueType": { "type": "integer" },
+        "scope": "profile"
+      },
       {
         "id": "project.healthy",
         "name": "Project healthy",
