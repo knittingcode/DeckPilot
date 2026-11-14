@@ -1,0 +1,58 @@
+# Example only: NOT active. Copy to .github/workflows/ to run the runtime
+# spike on all three platforms. The spike is a standalone Cargo project with
+# its own lock file, so it does not touch the main workspace build.
+#
+# What runs where:
+#   all OS   tests/isolation.rs (wasm limits, traps, no WASI), tests/ipc.rs
+#            (framing, crash/hang supervision), tests/broker.rs (permission
+#            denials; the two symlink tests are cfg(unix), so skipped on Windows)
+#   macOS    tests/sandbox_macos.rs (sandbox-exec, deny-default profile)
+#   Linux    no OS sandbox test yet (Landlock + seccomp not implemented)
+#   Windows  no OS sandbox test yet (AppContainer + Job Object not implemented)
+name: runtime-spike
+
+on:
+  pull_request:
+    paths: ["experiments/marketplace-spikes/runtime/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-spike-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: experiments/marketplace-spikes/runtime
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # rust-toolchain.toml at the repository root pins the compiler; the
+      # guest needs the wasm32 target for that toolchain.
+      - name: Install Rust toolchain and wasm32 target
+        run: |
+          rustup toolchain install
+          rustup target add wasm32-unknown-unknown
+          rustc --version
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: experiments/marketplace-spikes/runtime
+      - name: Test
+        run: cargo test --locked -- --nocapture
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Measurements
+        run: cargo run --locked --release --bin ipc-bench
