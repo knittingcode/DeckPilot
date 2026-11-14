@@ -134,7 +134,7 @@ draft() {
   signing "$work/signing"
   TAG="$tag" NOTES_FILE="$work/notes.md" MACOS_SIGNING=true \
     "$here/release-meta.sh" "$work/signing" "$assets/release-meta.json" "$work/body.md" > /dev/null
-  "$GH" api -X PATCH "repos/$REPOSITORY/releases/$id" -F body=@"$work/body.md" > /dev/null
+  "$GH" api -X PATCH "repos/$REPOSITORY/releases/$id" -f tag_name="$tag" -F body=@"$work/body.md" > /dev/null
   (cd "$assets" && sha256 -- * > "$work/SHA256SUMS" && mv "$work/SHA256SUMS" SHA256SUMS)
   echo "$id"
 }
@@ -281,8 +281,8 @@ if run publish.log publish v0.6.0-alpha.1; then
 else
   bad "pre-release publication: $(cat "$work/publish.log")"
 fi
-patches=$(grep -c -- "-X PATCH repos/$REPOSITORY/releases/[0-9]* -F draft=false" "$STUB_DIR/calls.log" || true)
-[ "$patches" -eq 1 ] && ok "published with one update" || bad "$patches publishing updates"
+patches=$(grep -c -- "-X PATCH repos/$REPOSITORY/releases/[0-9]* -f tag_name=v0.6.0-alpha.1 -F draft=false" "$STUB_DIR/calls.log" || true)
+[ "$patches" -eq 1 ] && ok "published with one update that keeps the tag" || bad "$patches publishing updates with tag_name"
 run publish.log publish v0.6.0-alpha.1 && grep -q "already published; verifying only" "$work/publish.log" \
   && ok "re-running stage B changes nothing and verifies again" || bad "re-run: $(cat "$work/publish.log")"
 patches=$(grep -c -- "-F draft=false" "$STUB_DIR/calls.log" || true)
@@ -367,8 +367,16 @@ echo "$sha_b" > "$STUB_DIR/tags/v0.6.0-rc.1"
 expect_draft "a tag moved after stage A" "now points to" v0.6.0-rc.1
 fresh
 id=$(draft v0.6.0-rc.1)
-"$GH" api -X PATCH "repos/$REPOSITORY/releases/$id" -f body=" " > /dev/null
+"$GH" api -X PATCH "repos/$REPOSITORY/releases/$id" -f tag_name=v0.6.0-rc.1 -f body=" " > /dev/null
 expect_draft "no release notes" "has no release notes" v0.6.0-rc.1
+fresh
+id=$(draft v0.6.0-rc.1)
+# As on v0.6.0-alpha.1: an update without tag_name detaches the draft.
+"$GH" api -X PATCH "repos/$REPOSITORY/releases/$id" -f body="notes" > /dev/null
+[ "$(jq -r .tag_name "$STUB_DIR/releases/$id.json")" != v0.6.0-rc.1 ] \
+  && ok "the stub detaches a draft updated without tag_name, as GitHub does" || bad "the stub kept the tag"
+expect_failure "a draft detached from its tag" "there is no release for v0.6.0-rc.1" publish v0.6.0-rc.1
+[ "$(jq -r .draft "$STUB_DIR/releases/$id.json")" = true ] && ok "a detached draft is never published" || bad "a detached draft was published"
 fresh
 expect_failure "no release at all" "there is no release" publish v0.6.0-rc.1
 
@@ -380,7 +388,7 @@ id=$(draft v0.6.0-rc.2)
 # removed by hand): verification fails, the release stays published, and
 # stage B is re-run once it is fixed.
 mv "$STUB_DIR/assets/$id/DeckPilot_0.6.0-rc.2_x64.dmg" "$work/held.dmg"
-"$GH" api -X PATCH "repos/$REPOSITORY/releases/$id" -F draft=false -F prerelease=true -f make_latest=false > /dev/null
+"$GH" api -X PATCH "repos/$REPOSITORY/releases/$id" -f tag_name=v0.6.0-rc.2 -F draft=false -F prerelease=true -f make_latest=false > /dev/null
 expect_failure "verification after publication finds a missing download" "cannot be downloaded" publish v0.6.0-rc.2
 mv "$work/held.dmg" "$STUB_DIR/assets/$id/DeckPilot_0.6.0-rc.2_x64.dmg"
 run publish.log publish v0.6.0-rc.2 && ok "re-running stage B after the fix verifies it" || bad "recovery: $(cat "$work/publish.log")"
