@@ -7,11 +7,11 @@ the known limitations in the [README](README.md) and the threat model in
 
 ## Supported versions
 
-| Version                         | Security fixes |
-| ------------------------------- | -------------- |
-| `main`                          | yes            |
-| the latest published release    | yes            |
-| older releases and pre-releases | no             |
+| Version                                           | Security fixes |
+| ------------------------------------------------- | -------------- |
+| `main`                                            | yes            |
+| the latest published release (none published yet) | yes            |
+| older releases and pre-releases                   | no             |
 
 Before 1.0, fixes are made on `main` and shipped in the next release; there
 are no backports. Draft releases are not supported versions.
@@ -30,7 +30,7 @@ A useful report contains:
 
 - the affected version or commit and the operating system;
 - what an attacker can do, and what they need first (local access, a
-  logged-in session, a malicious module or update server, …);
+  logged-in session, a modified build, a malicious update source, …);
 - steps to reproduce, or a proof of concept;
 - any known workaround.
 
@@ -52,6 +52,11 @@ In scope: the DeckPilot application and its background agent, the
 encrypted configuration database and its key handling, the IPC between app
 and agent, the update mechanism (manifest, signatures, installation), the
 built-in modules, the release workflows and signing in this repository.
+
+DeckPilot has no third-party plugins: every module is built in and
+compiled into the application. A plugin marketplace exists only as a design
+proposal; if plugins are added, they will be treated as untrusted code that
+runs behind a sandbox and a permission broker.
 
 Out of scope: vulnerabilities in third-party dependencies that do not
 affect DeckPilot (report those upstream), attacks that require full control

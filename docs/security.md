@@ -450,6 +450,5 @@ tao or webkit2gtk is updated.
 
 ## Reporting a vulnerability
 
-Please report security problems privately through GitHub's
-[security advisories](https://github.com/knittingcode/DeckPilot/security/advisories/new)
-rather than in public issues.
+See [SECURITY.md](../SECURITY.md) for how to report a vulnerability
+privately, the supported versions and the scope.

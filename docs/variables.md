@@ -14,7 +14,7 @@ pipeline of actions.
 
 | Kind | Declared in | Owner today | Resolved by |
 |---|---|---|---|
-| System variables `system.…`, `workflow.…` | the closed enum `SystemVariable` in `crates/deckpilot-core/src/variables/expression.rs` (paths, types, descriptions hard-coded) | the core, for all of them, including project and work session values | `deckpilot_core::resolution::system_value` from the `ResolutionContext` and the profile |
+| System variables `system.…`, `workflow.…` | the closed enum `SystemVariable` in `crates/deckpilot-core/src/variables/expression.rs` (paths, types, descriptions hard-coded) | the core, for all of them, including project and Work Session values | `deckpilot_core::resolution::system_value` from the `ResolutionContext` and the profile |
 | Work session `system.work.session.…` | `WorkSessionVariable` in `crates/deckpilot-core/src/work_session.rs`, wrapped by `SystemVariable` | the core enum; values only the agent knows | the agent: `apps/agent/src/service/variables.rs::work_session_value` from the live `WorkSessionSnapshot` (through `VariableStore`, the "shared" resolver) |
 | Shared variables `shared.<key>` | the configuration database (schema 8: `shared_variables`, `shared_variable_values`), `crates/deckpilot-storage/src/variables.rs` | the user (`module_id IS NULL`); the store can also hold module-declared definitions (`declare_module_variables`), which no module uses | `SharedVariables::resolve` on a per-profile snapshot (`select_value`: execution > project > profile > global > default) |
 | Node outputs `steps.<node>.output.<key>` | the workflow graph | the workflow | the executor's outputs |
@@ -22,7 +22,7 @@ pipeline of actions.
 
 There is no module declaration of variables: `ModuleManifest` has no
 variables, and nothing ties `system.project.current.…` to the projects
-module or `system.work.session.…` to the work session module. Disabling the
+module or `system.work.session.…` to the Work Session module. Disabling the
 projects module does not affect `system.project.current.…`; disabling a
 module that declared shared variables makes them `permissionDenied`
 (`VariableStore::set_disabled_modules`).
@@ -98,7 +98,7 @@ Protocol 7 added `listVariables` (metadata only), `previewReferences`, and
 the events `projectChanged`, `profileChanged`, `sharedVariablesChanged`
 (keys only; also the `system.work.session.…` paths that changed),
 `resourceBindingsChanged`, `deviceContextChanged`,
-`executionContextChanged`. Protocol 8 added the work session requests and
+`executionContextChanged`. Protocol 8 added the Work Session requests and
 `workSessionChanged`. Responses are adapted to older clients by
 `Response::for_protocol`; events newer than the client's protocol are not
 sent (`server.rs`).
@@ -182,8 +182,8 @@ reference keeps its spelling (the `VariableRef` remembers it, so saving a
 profile never rewrites it), keeps its static type for validation, and
 resolves exactly as it did before the registry, whatever the state of the
 module that owns its canonical id (`VariableRegistry::resolve_legacy`):
-project values from the context through the core, work session values from
-the live session through the work session module's source even while that
+project values from the context through the core, Work Session values from
+the live session through the Work Session module's source even while that
 module is disabled, and no value without it. Only canonical ids follow
 their module's availability. The picker inserts canonical ids and
 hides deprecated entries; the catalog lists them flagged `deprecated` so
@@ -238,7 +238,7 @@ keeps its value, `model#serial`.
   Legacy alias entries stay in the list, so an older app sees exactly the
   ids it knew.
 - `sharedVariablesChanged` names both the canonical and the legacy ids of
-  work session variables that changed; module enable/disable announces the
+  Work Session variables that changed; module enable/disable announces the
   module's ids.
 
 ### 2.6 Catalog UI and picker

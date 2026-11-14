@@ -5,16 +5,17 @@ All notable changes to DeckPilot. The format follows
 [Semantic Versioning](https://semver.org/). The section of a version is used
 as the notes of its GitHub release and of the in-app update.
 
-**Release status.** No version has been published yet. 0.5.0 exists only as
-two signed draft prereleases (0.5.0-1 and 0.5.0-2) made to test signing,
-notarization and packaging; they were never made public and are not offered
-by the updater. The versions before 0.5.0 were never released either. 0.6.0
-is the first version intended for publication.
+**Release status.** No version has been published yet. 0.5.0 existed only
+as two signed draft prereleases (0.5.0-1 and 0.5.0-2) made to test signing,
+notarization and packaging, since deleted; they were never made public and
+are not offered by the updater. The versions before 0.5.0 were never
+released either. 0.6.0 is the first version intended for publication.
 
 ## [0.6.0] - Unreleased
 
-The first public release. It includes the changes of the unreleased
-versions 0.1.0 to 0.5.0, listed in CHANGELOG.md.
+The first public release. It also includes the changes of the
+unreleased versions 0.1.0 to 0.5.0, which are recorded in the project's
+CHANGELOG.md.
 
 ### Added
 
@@ -182,9 +183,9 @@ versions 0.1.0 to 0.5.0, listed in CHANGELOG.md.
 - Settings have their own navigation, grouped into General, Hardware,
   Security & Data, Extensions and Advanced, with one page per area. Back and
   forward work like in a browser and the place is remembered.
-- Modules are managed like plugins: search, filters, and an explanation when
-  a dependency prevents enabling or disabling one. Modules with settings get
-  their own settings page.
+- Modules are managed in Settings › Modules: search, filters, and an
+  explanation when a dependency prevents enabling or disabling one. Modules
+  with settings get their own settings page.
 - On macOS the toolbar is part of the window's titlebar. Page commands such
   as New workflow, Run workflow or Refresh devices are in the toolbar.
 - A status bar shows the agent, connected devices (simulated ones

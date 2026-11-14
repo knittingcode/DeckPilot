@@ -1,7 +1,8 @@
 # Screenshots
 
 Product screenshots for the repository README. This folder holds real
-screenshots of the released app only: no mockups, no generated images.
+screenshots of a build of current main with seeded demonstration data
+(`make seed`): no mockups, no generated images.
 
 ## Planned set, in README order
 
@@ -12,7 +13,7 @@ screenshots of the released app only: no mockups, no generated images.
 | `03-profiles-projects.png` | Profiles and projects |
 | `04-action-editor.png` | Action editor |
 | `05-workflow-editor.png` | Workflow editor |
-| `06-work-session.png` | Work Sessions |
+| `06-work-session.png` | Work Session |
 | `07-settings-modules.png` | Settings and modules |
 
 Number the files in the order they appear; add a `-dark` variant
