@@ -1,0 +1,78 @@
+# Plugin runtime (docs/marketplace/architecture.md §3-§5): guest/host ABI,
+# permission broker, sandboxed plugin host and supervisor.
+#
+# A standalone workspace with its own Cargo.lock and target directory. It is
+# NOT a member of the repository's root workspace, so the app, agent and
+# release builds are unaffected until the agent adopts these crates.
+[workspace]
+resolver = "3"
+members = [
+    "crates/abi",
+    "crates/broker",
+    "crates/host",
+    "crates/supervisor",
+    "crates/test-fixtures",
+    "guest/sdk",
+    "guest/test-guest",
+]
+# The test guest is a wasm32 cdylib, compiled for wasm32-unknown-unknown by
+# crates/test-fixtures/build.rs. Plain `cargo test` and `cargo clippy` cover
+# the host-side crates and the guest SDK (which also compiles natively).
+default-members = [
+    "crates/abi",
+    "crates/broker",
+    "crates/host",
+    "crates/supervisor",
+    "crates/test-fixtures",
+    "guest/sdk",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+repository = "https://github.com/knittingcode/DeckPilot"
+publish = false
+
+[workspace.dependencies]
+deckpilot-plugin-abi = { path = "crates/abi" }
+deckpilot-plugin-broker = { path = "crates/broker" }
+deckpilot-plugin-host = { path = "crates/host" }
+deckpilot-plugin-supervisor = { path = "crates/supervisor" }
+deckpilot-plugin-guest = { path = "guest/sdk" }
+deckpilot-plugin-test-fixtures = { path = "crates/test-fixtures" }
+# Only the compiler and the runtime: no WASI, no component model, no cache,
+# no WAT parser, no parallel compilation (no thread pool after the sandbox).
+wasmtime = { version = "=50.0.1", default-features = false, features = ["cranelift", "runtime", "std"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+base64 = "0.22.1"
+url = "2.5.8"
+libc = "0.2.191"
+landlock = "0.4.7"
+seccompiler = "0.5.0"
+windows-sys = "0.61.2"
+wat = "1.263.0"
+tempfile = "3.27.0"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+
+# wasmtime and Cranelift are slow unoptimized.
+[profile.dev.package."*"]
+opt-level = 2
+
+# Profile for wasm guests built by crates/test-fixtures/build.rs.
+[profile.guest]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

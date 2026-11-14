@@ -1,0 +1,30 @@
+[package]
+name = "deckpilot-plugin-supervisor"
+description = "Agent-side supervisor for DeckPilot plugin hosts: spawn, handshake, timeouts, restart policy, broker relay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+deckpilot-plugin-abi.workspace = true
+deckpilot-plugin-broker.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+# Scripted fake hosts: the test binary re-executes itself as a misbehaving
+# host, so it needs its own main (no libtest output on stdout).
+[[test]]
+name = "fake_host"
+path = "tests/fake_host.rs"
+harness = false
+
+[lints]
+workspace = true

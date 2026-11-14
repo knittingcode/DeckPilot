@@ -1,0 +1,51 @@
+[package]
+name = "deckpilot-plugin-host"
+description = "Plugin host process: one plugin's wasm module in wasmtime, no WASI, inside an OS sandbox it applies to itself"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "deckpilot-plugin-host"
+path = "src/bin/deckpilot-plugin-host.rs"
+
+# Test-only: applies the same sandbox as the host, then attempts file,
+# network and process operations from native code. Not shipped.
+[[bin]]
+name = "deckpilot-sandbox-probe"
+path = "src/bin/deckpilot-sandbox-probe.rs"
+
+[dependencies]
+deckpilot-plugin-abi.workspace = true
+wasmtime.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+libc.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock.workspace = true
+seccompiler.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+deckpilot-plugin-broker.workspace = true
+deckpilot-plugin-supervisor.workspace = true
+deckpilot-plugin-test-fixtures.workspace = true
+serde_json.workspace = true
+wat.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
