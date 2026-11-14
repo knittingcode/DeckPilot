@@ -440,7 +440,9 @@ describe("Variables page with the unified registry", () => {
       agent: agentConnection({ capabilities: ["variables", "variableRegistry"] }),
     })
     await screen.findByRole("table", { name: "Variables" })
-    await user.click(screen.getByRole("button", { name: "Copy projects.current.key" }))
+    // The registry rows come from a second request that can finish after the
+    // table is first shown.
+    await user.click(await screen.findByRole("button", { name: "Copy projects.current.key" }))
     // user-event's clipboard stands in for the system's.
     expect(await navigator.clipboard.readText()).toBe("{{ projects.current.key }}")
     expect(toast.success).toHaveBeenCalledWith("Reference copied")
