@@ -1,0 +1,14 @@
+{
+  "//": "Type-checks the declarations. Also the project that the root ESLint config (projectService) uses for this directory.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": false,
+    "types": []
+  },
+  "include": ["index.d.ts"]
+}

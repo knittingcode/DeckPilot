@@ -1,0 +1,18 @@
+[package]
+name = "deckpilot-plugin-broker"
+description = "Deny-by-default permission broker for DeckPilot plugins (pure decision logic, no I/O)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+deckpilot-plugin-abi.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true
