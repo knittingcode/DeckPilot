@@ -36,6 +36,15 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`
 export function useLayoutEditing(model: DeviceModel, saved: DeviceLayout) {
   const [state, setState] = useState(() => history(saved))
   const [openPage, setOpenPage] = useState(saved.homePage)
+  // The stored layout the draft is compared with. Page commands (reorder,
+  // move, copy) save on the backend and hand back the stored layout before
+  // the `saved` prop catches up.
+  const [baseline, setBaseline] = useState(saved)
+  const [savedProp, setSavedProp] = useState(saved)
+  if (saved !== savedProp) {
+    setSavedProp(saved)
+    setBaseline(saved)
+  }
   const [trail, setTrail] = useState<string[]>([])
   const [selection, setSelection] = useState<Selection>(emptySelection)
   const [clipboard, setClipboard] = useState<Clipboard | null>(null)
@@ -99,7 +108,7 @@ export function useLayoutEditing(model: DeviceModel, saved: DeviceLayout) {
       setState(redo)
     },
     revert: () => {
-      change(saved)
+      change(baseline)
     },
     copy,
     cut: () => {
@@ -168,6 +177,15 @@ export function useLayoutEditing(model: DeviceModel, saved: DeviceLayout) {
     renamePage: (name: string) => {
       change(renamePage(draft, pageId, name), `page-name:${pageId}`)
     },
+    /**
+     * Replaces the draft and its history with a layout stored by a page
+     * command, and shows `page` (else the home page).
+     */
+    reset: (layout: DeviceLayout, page?: string) => {
+      setState(history(layout))
+      setBaseline(layout)
+      showPage(page && findPage(layout, page) ? page : layout.homePage, [])
+    },
     deletePage: () => {
       change(deletePage(draft, pageId))
       showPage(draft.homePage, [])
@@ -176,6 +194,7 @@ export function useLayoutEditing(model: DeviceModel, saved: DeviceLayout) {
 
   return {
     draft,
+    baseline,
     pageId,
     trail: trail.filter((id) => findPage(draft, id)),
     selection,

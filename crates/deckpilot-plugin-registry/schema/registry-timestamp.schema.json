@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/registry-timestamp.schema.json",
+  "title": "DeckPilot plugin registry: timestamp.json",
+  "description": "Design artifact (docs/marketplace/architecture.md section 10). The only mutable registry document. Signed by a timestamp key with the trusted comment 'deckpilot-registry v1 role:timestamp seq:<seq> keys:<keys_version>'. At most 4 KiB.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["_type", "spec_version", "seq", "keys_version", "signed_at", "expires", "index"],
+  "properties": {
+    "_type": { "const": "deckpilot-registry-timestamp" },
+    "spec_version": { "const": 1 },
+    "seq": { "type": "integer", "minimum": 1 },
+    "keys_version": { "type": "integer", "minimum": 1 },
+    "signed_at": { "type": "string", "format": "date-time" },
+    "expires": { "type": "string", "format": "date-time" },
+    "index": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "length"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^index/[1-9][0-9]*\\.json$" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "length": { "type": "integer", "minimum": 1, "maximum": 4194304 }
+      }
+    }
+  }
+}
