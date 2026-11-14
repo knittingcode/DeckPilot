@@ -1251,7 +1251,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-plugin-package"
-version = "0.6.0-alpha.2"
+version = "0.6.0-alpha.3"
 dependencies = [
  "deckpilot-plugin-manifest",
  "flate2",
@@ -1265,7 +1265,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-plugin-registry"
-version = "0.6.0-alpha.2"
+version = "0.6.0-alpha.3"
 dependencies = [
  "base64 0.23.1",
  "chrono",
