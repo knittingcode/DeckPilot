@@ -10,7 +10,7 @@ use crate::framing::{FrameError, read_message, write_message};
 use crate::{
     AgentEvent, AgentPaths, Capability, ClientKind, ClientMessage, ErrorCode, IpcError,
     MIN_COMPATIBLE_AGENT_PROTOCOL, PROTOCOL_VERSION, Request, Response, ServerMessage,
-    SharedStream, negotiate, token,
+    SharedStream, negotiate, plugins::PluginEvent, token,
 };
 
 /// How long the agent has to answer a new connection's `hello`.
@@ -101,6 +101,7 @@ pub struct AgentClient {
     protocol: u32,
     capabilities: Vec<Capability>,
     events: VecDeque<AgentEvent>,
+    plugin_events: VecDeque<PluginEvent>,
 }
 
 impl Drop for AgentClient {
@@ -186,6 +187,7 @@ impl AgentClient {
             protocol,
             capabilities: Vec::new(),
             events: VecDeque::new(),
+            plugin_events: VecDeque::new(),
         };
         let hello = ClientMessage::Hello {
             protocol,
@@ -291,6 +293,32 @@ impl AgentClient {
                     return Err(ClientError::Agent(error));
                 }
                 ServerMessage::Event { event } => self.events.push_back(event),
+                ServerMessage::PluginEvent { event } => self.plugin_events.push_back(event),
+                other => return Err(ClientError::Protocol(format!("{other:?}"))),
+            }
+        }
+    }
+
+    /// Subscribes to plugin events (protocol 10).
+    pub async fn subscribe_plugin_events(&mut self) -> Result<(), ClientError> {
+        match self.request(Request::SubscribePluginEvents).await? {
+            Response::Ok => Ok(()),
+            other => Err(ClientError::Protocol(format!("{other:?}"))),
+        }
+    }
+
+    /// Waits for the next plugin event after
+    /// [`AgentClient::subscribe_plugin_events`]. Runtime events that arrive
+    /// meanwhile are kept for [`AgentClient::next_event`].
+    pub async fn next_plugin_event(&mut self) -> Result<PluginEvent, ClientError> {
+        loop {
+            if let Some(event) = self.plugin_events.pop_front() {
+                return Ok(event);
+            }
+            match self.receive().await? {
+                ServerMessage::PluginEvent { event } => return Ok(event),
+                ServerMessage::Event { event } => self.events.push_back(event),
+                ServerMessage::Error { error, .. } => return Err(ClientError::Agent(error)),
                 other => return Err(ClientError::Protocol(format!("{other:?}"))),
             }
         }
@@ -309,10 +337,14 @@ impl AgentClient {
         if let Some(event) = self.events.pop_front() {
             return Ok(event);
         }
-        match self.receive().await? {
-            ServerMessage::Event { event } => Ok(event),
-            ServerMessage::Error { error, .. } => Err(ClientError::Agent(error)),
-            other => Err(ClientError::Protocol(format!("{other:?}"))),
+        loop {
+            match self.receive().await? {
+                ServerMessage::Event { event } => return Ok(event),
+                // Kept for `next_plugin_event`.
+                ServerMessage::PluginEvent { event } => self.plugin_events.push_back(event),
+                ServerMessage::Error { error, .. } => return Err(ClientError::Agent(error)),
+                other => return Err(ClientError::Protocol(format!("{other:?}"))),
+            }
         }
     }
 }

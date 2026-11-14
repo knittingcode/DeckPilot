@@ -8,6 +8,8 @@
 //!
 //! Incompatible changes require a new [`PROTOCOL_VERSION`].
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use deckpilot_core::graph::ExecutionEvent;
@@ -23,6 +25,7 @@ use deckpilot_core::{
 };
 use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceDescriptor, DeviceId};
 
+use crate::plugins;
 use crate::work_session::{MAX_WORK_SESSION_LIST, WorkSessionSettings, WorkSessionSummary};
 
 /// Protocol spoken by this build.
@@ -64,7 +67,17 @@ use crate::work_session::{MAX_WORK_SESSION_LIST, WorkSessionSettings, WorkSessio
 /// receive the catalog they knew: no module roots, `notInContext` and
 /// `permissionDenied` in place of the new availability and status. No
 /// request changes.
-pub const PROTOCOL_VERSION: u32 = 9;
+///
+/// Version 10: plugins (experimental, capability `plugins`). Requests to
+/// list, inspect, install, enable, disable, grant, revoke, update, roll
+/// back, uninstall and invoke plugins ([`crate::plugins`]); their progress
+/// and state changes arrive as `pluginEvent` messages after
+/// `subscribePluginEvents` (a message of its own, so clients that do not
+/// ask never see them, whatever their protocol). Errors may carry a
+/// machine-readable `reason`, which older clients ignore. The agent answers
+/// plugin requests only when built with plugins and with plugins enabled.
+/// Nothing older clients receive changes.
+pub const PROTOCOL_VERSION: u32 = 10;
 
 /// Most references one `previewReferences` may ask about.
 pub const MAX_PREVIEW_ITEMS: usize = 200;
@@ -195,10 +208,14 @@ pub enum Capability {
     /// ids and the `unavailable` status. Without it the app inserts the
     /// ids the agent lists (legacy ones included). Protocol 9.
     VariableRegistry,
+    /// Plugin requests and events ([`crate::plugins`]). The protocol has
+    /// them; whether this agent can use plugins is `getPluginRuntime`.
+    /// Protocol 10.
+    Plugins,
 }
 
 impl Capability {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Workflows,
         Self::PrepareForUpdate,
         Self::ModuleNamespaces,
@@ -208,6 +225,7 @@ impl Capability {
         Self::Variables,
         Self::WorkSession,
         Self::VariableRegistry,
+        Self::Plugins,
     ];
 
     /// The protocol that introduced the capability.
@@ -221,6 +239,7 @@ impl Capability {
             Self::Variables => 7,
             Self::WorkSession => 8,
             Self::VariableRegistry => 9,
+            Self::Plugins => 10,
         }
     }
 
@@ -425,6 +444,89 @@ pub enum Request {
         #[serde(default)]
         session: Option<WorkSessionId>,
     },
+    /// Starts pushing [`ServerMessage::PluginEvent`]s on this connection.
+    /// Since protocol 10.
+    SubscribePluginEvents,
+    /// Whether plugins can be used here, and why not. Answered whatever
+    /// the plugin runtime's state. Since protocol 10.
+    GetPluginRuntime,
+    /// Installed plugins. Since protocol 10.
+    ListPlugins,
+    /// One installed plugin in full. Since protocol 10.
+    GetPlugin {
+        plugin: String,
+    },
+    /// The plugins the verified registry offers; `refresh` re-reads the
+    /// registry first. Since protocol 10.
+    ListAvailablePlugins {
+        #[serde(default)]
+        refresh: bool,
+    },
+    /// Installs a plugin in state `disabled`, granting the permissions in
+    /// `consent` (grant keys). Since protocol 10.
+    InstallPlugin {
+        source: plugins::PluginInstallSource,
+        #[serde(default)]
+        consent: Vec<String>,
+    },
+    /// Grants `consent`, then enables the plugin. Every declared
+    /// permission must be granted. Since protocol 10.
+    EnablePlugin {
+        plugin: String,
+        #[serde(default)]
+        consent: Vec<String>,
+    },
+    /// Stops the plugin's host and disables it. Since protocol 10.
+    DisablePlugin {
+        plugin: String,
+    },
+    /// Grants declared permissions. Since protocol 10.
+    GrantPluginPermissions {
+        plugin: String,
+        permissions: Vec<String>,
+    },
+    /// Revokes one permission; the next capability call is refused. Since
+    /// protocol 10.
+    RevokePluginPermission {
+        plugin: String,
+        permission: String,
+    },
+    /// Installs a newer version (`version`, or the latest stable one). An
+    /// escalation is applied only if `consent` lists every new or broadened
+    /// permission; otherwise the version is staged. Since protocol 10.
+    UpdatePlugin {
+        plugin: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        #[serde(default)]
+        consent: Vec<String>,
+    },
+    /// Activates the staged update with consent for its escalations. Since
+    /// protocol 10.
+    ApprovePluginUpdate {
+        plugin: String,
+        consent: Vec<String>,
+    },
+    /// Drops the staged update. Since protocol 10.
+    DeclinePluginUpdate {
+        plugin: String,
+    },
+    /// Makes the previous version active again. Since protocol 10.
+    RollbackPlugin {
+        plugin: String,
+    },
+    /// Removes the plugin, its files and its records. Since protocol 10.
+    UninstallPlugin {
+        plugin: String,
+    },
+    /// Runs one action of an enabled plugin in its sandboxed host. Since
+    /// protocol 10.
+    InvokePluginAction {
+        plugin: String,
+        action: String,
+        #[serde(default)]
+        params: BTreeMap<String, serde_json::Value>,
+    },
 }
 
 impl Request {
@@ -458,6 +560,56 @@ impl Request {
                     "limit must be between 1 and {MAX_WORK_SESSION_LIST}"
                 ))
             }
+            Self::GetPlugin { plugin }
+            | Self::DisablePlugin { plugin }
+            | Self::DeclinePluginUpdate { plugin }
+            | Self::RollbackPlugin { plugin }
+            | Self::UninstallPlugin { plugin } => plugins::check_text("plugin", plugin),
+            Self::InstallPlugin { source, consent } => {
+                source.check()?;
+                plugins::check_consent(consent)
+            }
+            Self::EnablePlugin { plugin, consent }
+            | Self::ApprovePluginUpdate { plugin, consent }
+            | Self::GrantPluginPermissions {
+                plugin,
+                permissions: consent,
+            } => {
+                plugins::check_text("plugin", plugin)?;
+                plugins::check_consent(consent)
+            }
+            Self::RevokePluginPermission { plugin, permission } => {
+                plugins::check_text("plugin", plugin)?;
+                plugins::check_text("permission", permission)
+            }
+            Self::UpdatePlugin {
+                plugin,
+                version,
+                consent,
+            } => {
+                plugins::check_text("plugin", plugin)?;
+                if let Some(version) = version {
+                    plugins::check_text("version", version)?;
+                }
+                plugins::check_consent(consent)
+            }
+            Self::InvokePluginAction {
+                plugin,
+                action,
+                params,
+            } => {
+                plugins::check_text("plugin", plugin)?;
+                plugins::check_text("action", action)?;
+                if params.len() > plugins::MAX_ACTION_PARAMS {
+                    return Err(format!(
+                        "an action takes at most {} parameters",
+                        plugins::MAX_ACTION_PARAMS
+                    ));
+                }
+                params
+                    .keys()
+                    .try_for_each(|key| plugins::check_text("parameter", key))
+            }
             _ => Ok(()),
         }
     }
@@ -482,6 +634,11 @@ pub enum ErrorCode {
 pub struct IpcError {
     pub code: ErrorCode,
     pub message: String,
+    /// A stable, machine-readable reason (plugin errors use
+    /// [`plugins::reason`]). Since protocol 10; absent from older agents
+    /// and ignored by older clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl IpcError {
@@ -489,7 +646,15 @@ impl IpcError {
         Self {
             code,
             message: message.into(),
+            reason: None,
         }
+    }
+
+    /// The error with a machine-readable `reason`.
+    #[must_use]
+    pub fn with_reason(mut self, reason: &str) -> Self {
+        self.reason = Some(reason.to_owned());
+        self
     }
 }
 
@@ -516,6 +681,11 @@ pub enum ServerMessage {
     },
     Event {
         event: AgentEvent,
+    },
+    /// A plugin operation's progress or a plugin's new state, after
+    /// `subscribePluginEvents`. Since protocol 10.
+    PluginEvent {
+        event: plugins::PluginEvent,
     },
 }
 
@@ -593,6 +763,34 @@ pub enum Response {
     /// Since protocol 8.
     WorkSessionSettings {
         settings: Box<WorkSessionSettings>,
+    },
+    /// Answer to `getPluginRuntime`. Since protocol 10.
+    PluginRuntime {
+        status: Box<plugins::PluginRuntimeStatus>,
+    },
+    /// Answer to `listPlugins`. Since protocol 10.
+    Plugins {
+        plugins: Vec<plugins::PluginSummary>,
+    },
+    /// One installed plugin after `getPlugin` and every plugin change.
+    /// Since protocol 10.
+    Plugin {
+        plugin: Box<plugins::PluginDetails>,
+    },
+    /// Answer to `listAvailablePlugins`. Since protocol 10.
+    AvailablePlugins {
+        registry: plugins::RegistryStatus,
+        plugins: Vec<plugins::AvailablePlugin>,
+    },
+    /// Answer to `updatePlugin` and `approvePluginUpdate`. Since protocol
+    /// 10.
+    PluginUpdate {
+        plugin: String,
+        outcome: plugins::PluginUpdateOutcome,
+    },
+    /// Answer to `invokePluginAction`. Since protocol 10.
+    PluginActionResult {
+        outcome: plugins::PluginActionOutcome,
     },
     Ok,
 }
@@ -763,6 +961,22 @@ impl Request {
             | Self::SaveWorkSessionSettings { .. }
             | Self::ResolveWorkSessionReview { .. }
             | Self::ClearWorkSessionNotices { .. } => 8,
+            Self::SubscribePluginEvents
+            | Self::GetPluginRuntime
+            | Self::ListPlugins
+            | Self::GetPlugin { .. }
+            | Self::ListAvailablePlugins { .. }
+            | Self::InstallPlugin { .. }
+            | Self::EnablePlugin { .. }
+            | Self::DisablePlugin { .. }
+            | Self::GrantPluginPermissions { .. }
+            | Self::RevokePluginPermission { .. }
+            | Self::UpdatePlugin { .. }
+            | Self::ApprovePluginUpdate { .. }
+            | Self::DeclinePluginUpdate { .. }
+            | Self::RollbackPlugin { .. }
+            | Self::UninstallPlugin { .. }
+            | Self::InvokePluginAction { .. } => 10,
             Self::RunWorkflow { .. } | Self::PrepareForUpdate => 2,
             Self::GetStatus
             | Self::ListDevices
@@ -1175,7 +1389,7 @@ mod tests {
             serde_json::to_value(Capability::VariableRegistry).unwrap(),
             "variableRegistry"
         );
-        assert_eq!(PROTOCOL_VERSION, 9);
+        assert_eq!(PROTOCOL_VERSION, 10);
         let projects = deckpilot_core::ModuleId::new("projects").unwrap();
         let legacy = CatalogEntry {
             reference: VariableRef::System(SystemVariable::ProjectCurrentKey),
@@ -1310,5 +1524,174 @@ mod tests {
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "executionProgress");
         assert_eq!(json["event"]["type"], "nodeStarted");
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one case per request
+    fn plugins_need_protocol_10() {
+        use crate::plugins::{PluginInstallSource, PluginStage, PluginState};
+        assert!(!Capability::of_protocol(9).contains(&Capability::Plugins));
+        assert!(Capability::of_protocol(10).contains(&Capability::Plugins));
+        assert_eq!(
+            serde_json::to_value(Capability::Plugins).unwrap(),
+            "plugins"
+        );
+        for (json, name) in [
+            (
+                serde_json::json!({"type": "getPluginRuntime"}),
+                "getPluginRuntime",
+            ),
+            (serde_json::json!({"type": "listPlugins"}), "listPlugins"),
+            (
+                serde_json::json!({"type": "getPlugin", "plugin": "acme.hello-weather"}),
+                "getPlugin",
+            ),
+            (
+                serde_json::json!({"type": "listAvailablePlugins"}),
+                "listAvailablePlugins",
+            ),
+            (
+                serde_json::json!({"type": "installPlugin",
+                    "source": {"type": "registry", "plugin": "acme.hello-weather"},
+                    "consent": ["network:api.open-meteo.com"]}),
+                "installPlugin",
+            ),
+            (
+                serde_json::json!({"type": "installPlugin",
+                    "source": {"type": "file", "path": "/tmp/a.dpplugin"}}),
+                "installPlugin",
+            ),
+            (
+                serde_json::json!({"type": "enablePlugin", "plugin": "acme.x", "consent": []}),
+                "enablePlugin",
+            ),
+            (
+                serde_json::json!({"type": "disablePlugin", "plugin": "acme.x"}),
+                "disablePlugin",
+            ),
+            (
+                serde_json::json!({"type": "grantPluginPermissions", "plugin": "acme.x",
+                    "permissions": ["notifications"]}),
+                "grantPluginPermissions",
+            ),
+            (
+                serde_json::json!({"type": "revokePluginPermission", "plugin": "acme.x",
+                    "permission": "notifications"}),
+                "revokePluginPermission",
+            ),
+            (
+                serde_json::json!({"type": "updatePlugin", "plugin": "acme.x"}),
+                "updatePlugin",
+            ),
+            (
+                serde_json::json!({"type": "approvePluginUpdate", "plugin": "acme.x",
+                    "consent": ["notifications"]}),
+                "approvePluginUpdate",
+            ),
+            (
+                serde_json::json!({"type": "declinePluginUpdate", "plugin": "acme.x"}),
+                "declinePluginUpdate",
+            ),
+            (
+                serde_json::json!({"type": "rollbackPlugin", "plugin": "acme.x"}),
+                "rollbackPlugin",
+            ),
+            (
+                serde_json::json!({"type": "uninstallPlugin", "plugin": "acme.x"}),
+                "uninstallPlugin",
+            ),
+            (
+                serde_json::json!({"type": "invokePluginAction", "plugin": "acme.x",
+                    "action": "greet", "params": {"name": "Ada", "count": 2}}),
+                "invokePluginAction",
+            ),
+        ] {
+            let request: Request = serde_json::from_value(json).unwrap();
+            assert_eq!(request.since_protocol(), 10, "{name}");
+            assert_eq!(request.name(), name);
+            request.validate().unwrap();
+        }
+        assert_eq!(Request::SubscribePluginEvents.since_protocol(), 10);
+        let message = ServerMessage::PluginEvent {
+            event: crate::plugins::PluginEvent::Progress {
+                plugin: "acme.x".into(),
+                operation: crate::plugins::PluginOperation::Install,
+                stage: PluginStage::Verifying,
+                message: None,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&message).unwrap(),
+            serde_json::json!({"type": "pluginEvent", "event": {"type": "progress",
+                "plugin": "acme.x", "operation": "install", "stage": "verifying"}})
+        );
+        let changed: crate::plugins::PluginEvent =
+            serde_json::from_value(serde_json::json!({"type": "changed", "plugin": "acme.x",
+                "state": "enabled"}))
+            .unwrap();
+        assert_eq!(
+            changed,
+            crate::plugins::PluginEvent::Changed {
+                plugin: "acme.x".into(),
+                state: Some(PluginState::Enabled)
+            }
+        );
+        // Bounds are checked before the agent sees a request.
+        let long = "a".repeat(crate::plugins::MAX_PLUGIN_TEXT + 1);
+        for bad in [
+            Request::GetPlugin {
+                plugin: long.clone(),
+            },
+            Request::GetPlugin {
+                plugin: "acme x".into(),
+            },
+            Request::EnablePlugin {
+                plugin: "acme.x".into(),
+                consent: vec![String::new()],
+            },
+            Request::EnablePlugin {
+                plugin: "acme.x".into(),
+                consent: vec!["notifications".into(); crate::plugins::MAX_CONSENT_KEYS + 1],
+            },
+            Request::InstallPlugin {
+                source: PluginInstallSource::File {
+                    path: String::new(),
+                },
+                consent: vec![],
+            },
+            Request::InvokePluginAction {
+                plugin: "acme.x".into(),
+                action: "greet".into(),
+                params: (0..=crate::plugins::MAX_ACTION_PARAMS)
+                    .map(|i| (format!("p{i}"), serde_json::Value::Null))
+                    .collect(),
+            },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn error_reasons_are_optional_both_ways() {
+        // A client of protocol 9 has no `reason` field and ignores it.
+        #[derive(Deserialize)]
+        #[allow(dead_code)]
+        struct Protocol9Error {
+            code: ErrorCode,
+            message: String,
+        }
+        // An older agent's error parses; one without a reason serializes as
+        // before, so older clients read it unchanged.
+        let old: IpcError = serde_json::from_str(r#"{"code":"failed","message":"m"}"#).unwrap();
+        assert_eq!(old, IpcError::new(ErrorCode::Failed, "m"));
+        assert_eq!(
+            serde_json::to_string(&old).unwrap(),
+            r#"{"code":"failed","message":"m"}"#
+        );
+        let new = IpcError::new(ErrorCode::Unsupported, "no plugins")
+            .with_reason(crate::plugins::reason::PLUGINS_UNAVAILABLE);
+        let json = serde_json::to_value(&new).unwrap();
+        assert_eq!(json["reason"], "pluginsUnavailable");
+        serde_json::from_value::<Protocol9Error>(json).unwrap();
     }
 }

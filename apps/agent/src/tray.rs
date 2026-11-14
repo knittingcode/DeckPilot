@@ -34,29 +34,39 @@ const PROFILE_PREFIX: &str = "profile:";
 /// Runs the agent with a tray icon until the user quits or the agent stops.
 /// Never returns on some platforms; the process exits from the event loop.
 pub fn run(options: AgentOptions, lock: InstanceLock) {
+    run_with_plugins(options, lock, crate::plugins::PluginSettings::default());
+}
+
+/// [`run`] with plugins set up as `plugins` says.
+pub fn run_with_plugins(
+    options: AgentOptions,
+    lock: InstanceLock,
+    plugins: crate::plugins::PluginSettings,
+) {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     #[cfg(target_os = "macos")]
     {
         use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
         let mut event_loop = event_loop;
         event_loop.set_activation_policy(ActivationPolicy::Accessory);
-        run_loop(event_loop, options, lock);
+        run_loop(event_loop, options, lock, plugins);
     }
     #[cfg(not(target_os = "macos"))]
-    run_loop(event_loop, options, lock);
+    run_loop(event_loop, options, lock, plugins);
 }
 
 fn run_loop(
     event_loop: tao::event_loop::EventLoop<UserEvent>,
     options: AgentOptions,
     lock: InstanceLock,
+    plugins: crate::plugins::PluginSettings,
 ) {
     let proxy = event_loop.create_proxy();
     let menu_proxy = proxy.clone();
     MenuEvent::set_event_handler(Some(move |event| {
         let _ = menu_proxy.send_event(UserEvent::Menu(event));
     }));
-    spawn_agent(options, lock, proxy);
+    spawn_agent(options, lock, plugins, proxy);
 
     let mut tray: Option<TrayIcon> = None;
     let mut handle: Option<AgentHandle> = None;
@@ -92,7 +102,12 @@ fn run_loop(
     });
 }
 
-fn spawn_agent(options: AgentOptions, lock: InstanceLock, proxy: EventLoopProxy<UserEvent>) {
+fn spawn_agent(
+    options: AgentOptions,
+    lock: InstanceLock,
+    plugins: crate::plugins::PluginSettings,
+    proxy: EventLoopProxy<UserEvent>,
+) {
     std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -108,7 +123,7 @@ fn spawn_agent(options: AgentOptions, lock: InstanceLock, proxy: EventLoopProxy<
         };
         runtime.block_on(async {
             let agent = match Agent::start(options, lock) {
-                Ok(agent) => agent,
+                Ok(agent) => agent.with_plugins(plugins),
                 Err(error) => {
                     error!(%error, "agent failed to start");
                     let _ = proxy.send_event(UserEvent::Exit);

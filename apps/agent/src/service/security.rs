@@ -288,6 +288,7 @@ impl Agent {
             Err(error) => return Err(storage_error(&error)),
         };
         self.store = Some(store);
+        self.plugins.opened(&key);
         self.key = Some(key);
         self.security = SecurityState::Unlocked;
         self.lock_reason = None;
@@ -311,6 +312,7 @@ impl Agent {
         self.invalidate_gestures(deckpilot_core::gesture::GestureCancel::Locked);
         self.store = None;
         self.key = None;
+        self.plugins.closed();
         self.security =
             security_state(&self.options.paths.database).unwrap_or(SecurityState::Locked);
         self.lock_reason = (self.security == SecurityState::Locked).then_some(reason);
@@ -356,6 +358,8 @@ impl Agent {
         match switched {
             Ok(new_key) => {
                 info!(store = %keys.name(), "the configuration now uses a system-managed key");
+                // plugins.db's key is derived from the configuration key.
+                self.plugins.rekey(&current, &new_key);
                 self.open_with_key(new_key)
             }
             Err(error) => {

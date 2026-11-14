@@ -9,6 +9,7 @@ mod devices;
 pub mod instance;
 pub mod launcher;
 pub mod notifications;
+pub mod plugins;
 pub mod render;
 mod server;
 pub mod service;
