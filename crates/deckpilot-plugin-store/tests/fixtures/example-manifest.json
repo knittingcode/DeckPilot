@@ -1,0 +1,136 @@
+{
+  "$schema": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
+  "id": "acme.github-prs",
+  "name": "GitHub PR Count",
+  "version": "1.0.0",
+  "publisher": { "id": "acme", "name": "Acme Tools", "url": "https://acme.example" },
+  "description": "Shows how many pull requests wait for your review, on a key and as a variable.",
+  "homepage": "https://acme.example/deckpilot/github-prs",
+  "repository": { "type": "git", "url": "https://github.com/acme/deckpilot-github-prs" },
+  "license": "MIT",
+  "categories": ["developer-tools"],
+  "engines": { "deckpilot": ">=0.8.0 <1.0.0", "pluginApi": "^1.0", "sdk": "1.0.0" },
+  "entry": "src/index.ts",
+  "icons": { "128": "assets/icon-128.png", "32": "assets/icon-32.png" },
+  "assets": { "keyIcons": { "pr": "assets/keys/pr.png" }, "readme": "README.md" },
+  "permissions": [
+    {
+      "kind": "network",
+      "hosts": ["api.github.com"],
+      "methods": ["GET"],
+      "justification": "Reads pull request counts from the GitHub API."
+    },
+    {
+      "kind": "credentials",
+      "refs": ["token"],
+      "justification": "Sends your GitHub token to api.github.com only."
+    },
+    {
+      "kind": "background",
+      "minIntervalSeconds": 120,
+      "justification": "Refreshes the review count every few minutes."
+    },
+    {
+      "kind": "device",
+      "state": true,
+      "justification": "Shows the count on keys bound to this action."
+    }
+  ],
+  "supports": { "device": { "uses": ["keyDisplays"] } },
+  "contributes": {
+    "credentials": [
+      {
+        "key": "token",
+        "label": "GitHub token",
+        "description": "A fine-grained token with read access to pull requests.",
+        "hosts": ["api.github.com"],
+        "schemes": ["bearer"],
+        "setupUrl": "https://github.com/settings/personal-access-tokens/new"
+      }
+    ],
+    "settings": {
+      "portabilityVersion": 1,
+      "fields": [
+        {
+          "key": "pollMinutes",
+          "label": "Refresh every (minutes)",
+          "required": true,
+          "kind": { "type": "integer", "min": 2, "max": 120 },
+          "default": { "type": "integer", "value": 5 },
+          "portability": "portable"
+        },
+        {
+          "key": "defaultRepository",
+          "label": "Default repository",
+          "description": "owner/name; empty counts across all repositories.",
+          "required": false,
+          "kind": { "type": "text", "maxLength": 200 },
+          "portability": "portable"
+        }
+      ]
+    },
+    "actions": [
+      {
+        "id": "pr-count",
+        "name": "Count pull requests",
+        "description": "Counts open pull requests: all in a repository, yours, or waiting for your review.",
+        "category": "GitHub",
+        "parameters": [
+          {
+            "key": "repository",
+            "label": "Repository",
+            "description": "owner/name; empty uses the default repository.",
+            "required": false,
+            "kind": { "type": "text", "maxLength": 200 }
+          },
+          {
+            "key": "filter",
+            "label": "Which",
+            "required": true,
+            "kind": { "type": "choice", "options": ["all", "author-me", "review-requested"] },
+            "default": { "type": "choice", "value": "review-requested" }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "git-pull-request",
+          "outputs": [
+            { "key": "count", "label": "Count", "kind": "integer", "always": true },
+            { "key": "url", "label": "Search page", "kind": "url", "always": true }
+          ],
+          "timeoutMs": 20000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        },
+        "state": { "refresh": "every", "intervalSeconds": 120 }
+      }
+    ],
+    "variables": [
+      {
+        "id": "reviewCount",
+        "name": "PRs waiting for my review",
+        "description": "Updated in the background every few minutes.",
+        "valueType": { "type": "integer" },
+        "scope": "machine"
+      },
+      {
+        "id": "checkedAt",
+        "name": "Last GitHub check",
+        "valueType": { "type": "string" },
+        "scope": "machine"
+      }
+    ],
+    "errorCodes": {
+      "invalid-repository": "The repository is not owner/name.",
+      "all-needs-repository": "\"all\" needs a repository.",
+      "unauthorized": "GitHub refused the token (401).",
+      "forbidden": "GitHub refused access (403), e.g. missing permission or SSO.",
+      "rate-limited": "GitHub's rate limit was reached; data has retryAfterSeconds.",
+      "invalid-response": "GitHub answered with something that is not a search result.",
+      "github-error": "GitHub answered with another error."
+    }
+  }
+}
