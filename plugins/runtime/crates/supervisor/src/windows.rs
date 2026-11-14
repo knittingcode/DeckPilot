@@ -23,6 +23,12 @@
 //!   restricted (a second layer behind the job's process limit).
 //! * `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`: the child inherits exactly the
 //!   two pipe ends (stdin read end, stdout write end); stderr is not set.
+//! * `DETACHED_PROCESS`: no console. A console process created with a
+//!   console (`CREATE_NO_WINDOW` included) has kernelbase start a
+//!   `conhost.exe` for it during DLL initialization; the child process
+//!   policy denies that, and the process dies with
+//!   `STATUS_DLL_INIT_FAILED` (0xC0000142) before `main`. Detached, the
+//!   host has no console and talks only over the two pipes.
 //! * Environment: `SystemRoot` (Winsock and other system DLLs need it, so
 //!   that a denied connection is the sandbox's doing), and `TEMP`, `TMP` and
 //!   `LOCALAPPDATA`, which CreateProcessW requires for an AppContainer
@@ -286,7 +292,7 @@ fn add_read_execute_ace(path: &Path) -> io::Result<()> {
 
 // --------------------------------------------------------------------- job
 
-fn create_job(o: &Options) -> io::Result<OwnedHandle> {
+fn create_job() -> io::Result<OwnedHandle> {
     // SAFETY: Win32 calls with valid, zero-initialized structures; the
     // handle is owned by the returned value.
     unsafe {
@@ -296,14 +302,10 @@ fn create_job(o: &Options) -> io::Result<OwnedHandle> {
         }
         let job = OwnedHandle::from_raw_handle(raw);
         let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-        info.BasicLimitInformation.LimitFlags =
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
-        if o.memory {
-            info.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
-        }
-        if o.one_process {
-            info.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
-        }
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_PROCESS_MEMORY
+            | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+            | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
         info.BasicLimitInformation.ActiveProcessLimit = 1;
         info.ProcessMemoryLimit = HOST_PROCESS_MEMORY;
         if SetInformationJobObject(
@@ -316,7 +318,14 @@ fn create_job(o: &Options) -> io::Result<OwnedHandle> {
             return Err(last_error("SetInformationJobObject(limits)"));
         }
         let ui = JOBOBJECT_BASIC_UI_RESTRICTIONS {
-            UIRestrictionsClass: o.ui,
+            UIRestrictionsClass: JOB_OBJECT_UILIMIT_DESKTOP
+                | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS
+                | JOB_OBJECT_UILIMIT_EXITWINDOWS
+                | JOB_OBJECT_UILIMIT_GLOBALATOMS
+                | JOB_OBJECT_UILIMIT_HANDLES
+                | JOB_OBJECT_UILIMIT_READCLIPBOARD
+                | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS
+                | JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
         };
         if SetInformationJobObject(
             raw,
@@ -516,52 +525,11 @@ pub(crate) struct Spawned {
     pub stdout: PipeReader,
 }
 
-/// Temporary (diagnosis of STATUS_DLL_INIT_FAILED): the parts of the
-/// launch that can be toggled one at a time.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Options {
-    pub app_container: bool,
-    pub job: bool,
-    pub memory: bool,
-    pub one_process: bool,
-    pub ui: u32,
-    pub child_policy: bool,
-    pub console: u32,
-}
-
-const ALL_UI: u32 = JOB_OBJECT_UILIMIT_DESKTOP
-    | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS
-    | JOB_OBJECT_UILIMIT_EXITWINDOWS
-    | JOB_OBJECT_UILIMIT_GLOBALATOMS
-    | JOB_OBJECT_UILIMIT_HANDLES
-    | JOB_OBJECT_UILIMIT_READCLIPBOARD
-    | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS
-    | JOB_OBJECT_UILIMIT_WRITECLIPBOARD;
-
-pub(crate) const PRODUCTION: Options = Options {
-    app_container: true,
-    job: true,
-    memory: true,
-    one_process: true,
-    ui: ALL_UI,
-    child_policy: true,
-    console: DETACHED_PROCESS,
-};
-
 pub(crate) fn spawn(program: &Path, args: &[OsString], cwd: &Path) -> io::Result<Spawned> {
-    spawn_with(program, args, cwd, &PRODUCTION)
-}
-
-pub(crate) fn spawn_with(
-    program: &Path,
-    args: &[OsString],
-    cwd: &Path,
-    o: &Options,
-) -> io::Result<Spawned> {
     let program = std::path::absolute(program)?;
     grant_executable(&program);
     let profile = Profile::create()?;
-    let job = create_job(o)?;
+    let job = create_job()?;
     let (child_stdin, our_stdin) = pipe()?;
     let (our_stdout, child_stdout) = pipe()?;
     set_inheritable(&child_stdin)?;
@@ -585,32 +553,26 @@ pub(crate) fn spawn_with(
     let mut attrs = AttributeList::new(4)?;
     // SAFETY: every value outlives `attrs`' use in CreateProcessW below.
     unsafe {
-        if o.app_container {
-            attrs.set(
-                PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-                &caps,
-                std::mem::size_of_val(&caps),
-            )?;
-        }
+        attrs.set(
+            PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+            &caps,
+            std::mem::size_of_val(&caps),
+        )?;
         attrs.set(
             PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
             handles.as_ptr(),
             std::mem::size_of_val(&handles),
         )?;
-        if o.job {
-            attrs.set(
-                PROC_THREAD_ATTRIBUTE_JOB_LIST,
-                jobs.as_ptr(),
-                std::mem::size_of_val(&jobs),
-            )?;
-        }
-        if o.child_policy {
-            attrs.set(
-                PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY,
-                &child_policy,
-                std::mem::size_of_val(&child_policy),
-            )?;
-        }
+        attrs.set(
+            PROC_THREAD_ATTRIBUTE_JOB_LIST,
+            jobs.as_ptr(),
+            std::mem::size_of_val(&jobs),
+        )?;
+        attrs.set(
+            PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY,
+            &child_policy,
+            std::mem::size_of_val(&child_policy),
+        )?;
     }
 
     // SAFETY: zeroed STARTUPINFOEXW is a valid "nothing set" value.
@@ -633,7 +595,7 @@ pub(crate) fn spawn_with(
             null(),
             null(),
             1, // inherit: limited to `handles` by the handle list
-            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | o.console,
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | DETACHED_PROCESS,
             env.as_ptr().cast(),
             wcwd.as_ptr(),
             &si.StartupInfo,
@@ -725,146 +687,11 @@ impl Drop for Process {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
     fn line(args: &[&str]) -> String {
         let args: Vec<OsString> = args.iter().map(OsString::from).collect();
         let w = command_line(Path::new("C:\\a b\\host.exe"), &args).unwrap();
         String::from_utf16(&w[..w.len() - 1]).unwrap()
-    }
-
-    /// Temporary diagnosis: which part of the launch makes the host fail
-    /// with STATUS_DLL_INIT_FAILED. Run with `--ignored --nocapture`.
-    #[test]
-    #[ignore]
-    fn diagnose_launch() {
-        let deps = std::env::current_exe().unwrap();
-        let debug = deps.parent().unwrap().parent().unwrap().to_path_buf();
-        let programs = [
-            debug.join("deckpilot-plugin-host.exe"),
-            debug.join("deckpilot-sandbox-probe.exe"),
-            system_dir().join("hostname.exe"),
-        ];
-        let p = PRODUCTION;
-        let mut configs: Vec<(&str, Options)> = vec![
-            ("production(detached)", p),
-            (
-                "no_window",
-                Options {
-                    console: CREATE_NO_WINDOW,
-                    ..p
-                },
-            ),
-            ("plain_console_flags", Options { console: 0, ..p }),
-            (
-                "no_window+one_process=off",
-                Options {
-                    console: CREATE_NO_WINDOW,
-                    one_process: false,
-                    ..p
-                },
-            ),
-            (
-                "no_window+child_policy=off",
-                Options {
-                    console: CREATE_NO_WINDOW,
-                    child_policy: false,
-                    ..p
-                },
-            ),
-            (
-                "no_window+ui=0",
-                Options {
-                    console: CREATE_NO_WINDOW,
-                    ui: 0,
-                    ..p
-                },
-            ),
-            (
-                "no_window+job=off",
-                Options {
-                    console: CREATE_NO_WINDOW,
-                    job: false,
-                    ..p
-                },
-            ),
-            ("ui=0", Options { ui: 0, ..p }),
-            ("memory=off", Options { memory: false, ..p }),
-            (
-                "one_process=off",
-                Options {
-                    one_process: false,
-                    ..p
-                },
-            ),
-            (
-                "child_policy=off",
-                Options {
-                    child_policy: false,
-                    ..p
-                },
-            ),
-            ("job=off", Options { job: false, ..p }),
-            (
-                "app_container=off",
-                Options {
-                    app_container: false,
-                    ..p
-                },
-            ),
-            (
-                "everything_off",
-                Options {
-                    app_container: false,
-                    job: false,
-                    child_policy: false,
-                    ..p
-                },
-            ),
-        ];
-        for bit in [
-            JOB_OBJECT_UILIMIT_DESKTOP,
-            JOB_OBJECT_UILIMIT_DISPLAYSETTINGS,
-            JOB_OBJECT_UILIMIT_EXITWINDOWS,
-            JOB_OBJECT_UILIMIT_GLOBALATOMS,
-            JOB_OBJECT_UILIMIT_HANDLES,
-            JOB_OBJECT_UILIMIT_READCLIPBOARD,
-            JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS,
-            JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
-        ] {
-            configs.push((
-                Box::leak(format!("ui_without_{bit:#x}").into_boxed_str()),
-                Options {
-                    ui: ALL_UI & !bit,
-                    ..p
-                },
-            ));
-        }
-        for program in &programs {
-            for (name, o) in &configs {
-                let r = match spawn_with(program, &[], &system_dir(), o) {
-                    Err(e) => format!("spawn error: {e}"),
-                    Ok(mut s) => {
-                        drop(s.stdin);
-                        let mut out = String::new();
-                        let _ = std::io::Read::read_to_string(&mut s.stdout, &mut out);
-                        match s.process.wait_ms(10_000) {
-                            Ok(Some(st)) => format!(
-                                "exit {:#x} out {:?}",
-                                st.code().unwrap_or(0) as u32,
-                                out.chars().take(200).collect::<String>()
-                            ),
-                            Ok(None) => "still running after 10 s".to_owned(),
-                            Err(e) => format!("wait error: {e}"),
-                        }
-                    }
-                };
-                println!(
-                    "DIAG {} {name}: {r}",
-                    program.file_name().unwrap().to_string_lossy()
-                );
-            }
-        }
     }
 
     #[test]

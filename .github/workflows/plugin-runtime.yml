@@ -75,18 +75,6 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Clippy (wasm guest crates)
         run: cargo clippy --locked -p deckpilot-plugin-guest -p deckpilot-test-guest -p deckpilot-plugin-sdk -p deckpilot-sdk-test-guest -p hello-weather --target wasm32-unknown-unknown -- -D warnings
-      # Temporary: diagnosis of STATUS_DLL_INIT_FAILED in the AppContainer.
-      - name: Windows launch diagnosis
-        if: runner.os == 'Windows'
-        continue-on-error: true
-        run: |
-          cargo build --locked --bins
-          whoami /all || true
-          icacls target/debug || true
-          icacls target/debug/deckpilot-plugin-host.exe || true
-          DUMPBIN=$(ls /c/Program\ Files/Microsoft\ Visual\ Studio/*/*/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe 2>/dev/null | head -1)
-          [ -n "$DUMPBIN" ] && "$DUMPBIN" //nologo //dependents target/debug/deckpilot-plugin-host.exe || true
-          cargo test --locked -p deckpilot-plugin-supervisor --lib diagnose_launch -- --ignored --nocapture
       - name: Test
         run: cargo test --locked --no-fail-fast -- --nocapture
       # AppContainer network isolation is enforced by the Windows Filtering
