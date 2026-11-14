@@ -135,6 +135,11 @@ case "$method $path" in
     id="${path##*/}"
     [ -f "$dir/releases/$id.json" ] || not_found
     make_latest=$(jq -r '.make_latest // ""' <<< "$fields")
+    # As GitHub does (seen on v0.6.0-alpha.1): updating a draft without
+    # tag_name detaches it from its tag ("untagged-…").
+    if [ "$(jq -r .draft "$dir/releases/$id.json")" = true ] && ! jq -e 'has("tag_name")' <<< "$fields" > /dev/null; then
+      fields=$(jq '. + {tag_name: "untagged-0123456789abcdef0123"}' <<< "$fields")
+    fi
     jq --argjson f "$fields" '. + ($f | del(.make_latest))' "$dir/releases/$id.json" > "$dir/patched.json"
     mv "$dir/patched.json" "$dir/releases/$id.json"
     if [ "$make_latest" = true ]; then jq -r .tag_name "$dir/releases/$id.json" > "$dir/latest"; fi

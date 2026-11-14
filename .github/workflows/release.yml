@@ -645,7 +645,11 @@ jobs:
           NOTES_FILE="$RUNNER_TEMP/notes.md" tools/release-pipeline/release-meta.sh \
             "$RUNNER_TEMP/signing" release-files/release-meta.json "$RUNNER_TEMP/release-notes.md"
           gh release upload "$TAG" release-files/release-meta.json --repo "$GITHUB_REPOSITORY" --clobber
-          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F body=@"$RUNNER_TEMP/release-notes.md" > /dev/null
+          # tag_name every time: GitHub detaches a draft from its tag when an
+          # update leaves it out (seen on v0.6.0-alpha.1).
+          tag=$(gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            -f tag_name="$TAG" -F body=@"$RUNNER_TEMP/release-notes.md" --jq .tag_name)
+          [ "$tag" = "$TAG" ] || { echo "::error::the draft has the tag $tag after the update, not $TAG"; exit 1; }
       - name: Attach checksums
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

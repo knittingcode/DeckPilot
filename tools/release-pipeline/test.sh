@@ -299,6 +299,25 @@ mutate "signing without the environment" 'del jobs["build"]["environment"]' "job
 # shellcheck disable=SC2016 # a literal GitHub expression
 mutate "signing secrets in another job" 'jobs["verify"]["env"] = {"K": "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"}' "job verify uses signing secrets outside the environment"
 
+echo "== release updates keep the tag"
+# GitHub detaches a draft from its tag when an update omits tag_name
+# (v0.6.0-alpha.1): every release PATCH in release.yml sends it.
+if python3 - "$root/.github/workflows/release.yml" << 'EOF'
+import re, sys, yaml
+jobs = yaml.safe_load(open(sys.argv[1]))["jobs"]
+runs = [step.get("run", "") for job in jobs.values() for step in job.get("steps", [])]
+patches = [run for run in runs if re.search(r"-X PATCH \S*releases/", run)]
+assert patches, "no release update found"
+for run in patches:
+    command = run[run.index("-X PATCH"):].split("\n\n")[0]
+    assert "tag_name=" in command, command
+EOF
+then
+  ok "every release update in release.yml sends tag_name"
+else
+  bad "a release update in release.yml omits tag_name"
+fi
+
 echo "== signing secrets only in the protected environment"
 if python3 - "$root/.github/workflows/release.yml" << 'EOF'
 import sys, yaml

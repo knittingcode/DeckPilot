@@ -108,9 +108,13 @@ if [ "$(jq -r .draft <<< "$release")" = true ]; then
       latest=true
     fi
   fi
-  "$gh" api -X PATCH "repos/$repository/releases/$id" \
-    -F draft=false -F prerelease="$PRERELEASE" -f make_latest="$latest" > /dev/null \
+  # tag_name every time: GitHub detaches a draft from its tag when an update
+  # leaves it out.
+  published=$("$gh" api -X PATCH "repos/$repository/releases/$id" \
+    -f tag_name="$tag" -F draft=false -F prerelease="$PRERELEASE" -f make_latest="$latest") \
     || fail "publishing $tag failed; it is still a draft. Re-run the publish job"
+  [ "$(jq -r .tag_name <<< "$published")" = "$tag" ] \
+    || fail "the published release has the tag $(jq -r .tag_name <<< "$published"), not $tag"
   echo "published $tag ($CHANNEL$([ "$latest" = true ] && echo ", latest"))"
 else
   [ "$(jq -r .target_commitish <<< "$release")" = "$SHA" ] || fail "the published $tag was not built from $SHA"
