@@ -9,8 +9,7 @@
 ## Checklist
 
 - [ ] One topic; the title follows Conventional Commits (`fix(agent): …`)
-- [ ] `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test` pass
-- [ ] `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked` pass
+- [ ] `make check` passes (all checks: [docs/development.md](https://github.com/knittingcode/DeckPilot/blob/main/docs/development.md#checks))
 - [ ] Documentation in `docs/` updated where behavior changes
 - [ ] No secrets, credentials or personal data in code, tests, logs or screenshots
 - [ ] Security-relevant changes (encryption, keys, IPC, updates, release workflows) are called out above

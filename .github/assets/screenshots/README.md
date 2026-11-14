@@ -1,7 +1,8 @@
 # Screenshots
 
 Product screenshots for the repository README. This folder holds real
-screenshots of the released app only: no mockups, no generated images.
+screenshots of a build of current main with seeded demonstration data
+(`make seed`): no mockups, no generated images.
 
 ## Planned set, in README order
 

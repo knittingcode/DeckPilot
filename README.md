@@ -18,10 +18,10 @@ Apache-2.0 &nbsp;·&nbsp; macOS · Windows · Linux &nbsp;·&nbsp; Pre-release
 </div>
 
 > [!NOTE]
-> DeckPilot is in **early development**. No release has been published yet; the first pre-release,
-> 0.6.0-alpha, is being prepared. Only the Elgato **Stream Deck MK.2** is supported, and it has been
-> tested on real hardware on **macOS** so far. See [Supported devices](#supported-devices) and
-> [Known limitations](#known-limitations).
+> DeckPilot is in **early development**. No release has been published yet; the `v0.6.0-alpha.2`
+> draft is verified, and the first public pre-release will be a later 0.6.0-alpha tag. Only the
+> Elgato **Stream Deck MK.2** is supported, and it has been tested on real hardware on **macOS** so
+> far. See [Supported devices](#supported-devices) and [Known limitations](#known-limitations).
 
 ## What is DeckPilot?
 
@@ -51,8 +51,8 @@ synchronization and no telemetry.
 - **Private by design.** Local, always-encrypted configuration; anything that can change your
   system (running commands, starting containers, reaching private networks) is off until you allow
   it on that computer.
-- **Cross-platform and open.** One codebase for macOS, Windows and Linux, licensed under
-  Apache-2.0.
+- **Cross-platform and open.** One codebase for macOS, Windows and Linux (hardware-tested on macOS
+  so far), licensed under Apache-2.0.
 
 ## Features
 
@@ -94,7 +94,7 @@ Combine actions into graphs in a visual editor: conditions, parallel branches, l
 timeouts and sub-workflows. Workflows can be started from keys or triggers, show their progress
 live, keep a run history, and pass results from one step to the next.
 
-### Work Sessions
+### Work Session
 
 Start, verify and finish a work session from a key. The key shows a live timer, and every session
 is kept in a history you can review.
@@ -121,14 +121,14 @@ a password instead. Encrypted exports are the backup and move a configuration to
   App preview: the screenshot gallery goes here once the images exist in
   .github/assets/screenshots/ (see the README there): main dashboard,
   device view, profiles and projects, action editor, workflow editor,
-  Work Sessions, settings and modules.
+  Work Session, settings and modules.
 -->
 
 ## Download
 
-No release has been published yet. The first pre-release, **0.6.0-alpha**, is being prepared and
-will appear on the [Releases page](https://github.com/knittingcode/DeckPilot/releases) with these
-installers:
+No release has been published yet. The `v0.6.0-alpha.2` draft is verified but not published; the
+first public pre-release will be a later **0.6.0-alpha** tag and will appear on the
+[Releases page](https://github.com/knittingcode/DeckPilot/releases) with these installers:
 
 | Platform | Installer | Notes |
 | --- | --- | --- |
@@ -171,7 +171,9 @@ at once has not been tested. Details: [Devices](docs/devices.md#verification-lev
 ## Security and privacy
 
 - **Local-first.** Configuration, history and credentials stay on your computer; nothing is sent
-  anywhere unless an action you created does so.
+  anywhere unless an action you created does so. The one exception is the update check: while the
+  app is open it asks GitHub Releases for a newer version, daily by default (Settings → Updates,
+  *Check automatically while DeckPilot is open*; see [docs/updates.md](docs/updates.md)).
 - **Encrypted at rest.** SQLCipher (AES-256) for the whole configuration, with the key in the system
   credential store or derived from your password (Argon2id). Exports are encrypted separately.
 - **Locking.** Manual and automatic lock, Touch ID on macOS, and re-authentication for sensitive
@@ -241,8 +243,9 @@ real configuration. `pnpm dev` runs the same session in the foreground. All comm
 
 Planned work is tracked in [docs/roadmap.md](docs/roadmap.md): drivers for more Stream Deck
 models, hardware testing on Windows and Linux, and Windows code signing. Cloud synchronization and
-telemetry are out of scope. A plugin marketplace is only a design proposal for now and is not
-part of DeckPilot.
+telemetry are out of scope. A plugin marketplace is a design proposal
+([#191](https://github.com/knittingcode/DeckPilot/pull/191)) with experimental feasibility work; it
+is not part of DeckPilot.
 
 ## Contributing
 
