@@ -2,27 +2,51 @@
 
 How a release candidate is validated before a release is published. Each
 part says what is automated, what needs a person, and what the evidence is.
-Nothing here publishes a release or touches the release signing keys.
+Only pushing a release tag (section 1) publishes anything, and it does so
+automatically; nothing else here publishes a release or touches the release
+signing keys.
 
-## 1. Signed test release (CI)
+## 1. Signed pre-release (CI)
 
-A pre-release tag runs the real release workflow: the same build, signing
-and notarization as a final release, ending in a **draft** release. (The
-0.5.0 test releases used `vX.Y.Z-N` tags; those no longer start the
-workflow, see [releasing.md](releasing.md#release-tags-and-the-tag-gate).)
+A release tag runs the real release workflow: stage A builds, signs,
+notarizes and checks everything into a **draft** release, and stage B
+publishes it **automatically** once every check has passed again. Pushing
+the tag is the authorization; there is no approval step and no later point
+at which to stop the publication (see
+[releasing.md](releasing.md#release-authorization)). A pre-release tag is
+therefore a real, public pre-release, not a test. (The 0.5.0 test releases
+used `vX.Y.Z-N` tags; those no longer start the workflow, see
+[releasing.md](releasing.md#the-former-vxyz-n-test-tags).)
 
-1. Set the version to the pre-release version, e.g. `0.6.0-alpha.1`, merge
-   it to `main` and wait for the required checks on the merge commit. The
-   MSI gets a numeric version computed by the tag gate (`0.6.0.1`). RPM
+To validate signing and packaging **without publishing**:
+
+- inspect the existing, unpublished `v0.6.0-alpha.2` draft (stage A ran end
+  to end for it, see [releasing.md](releasing.md#status)); a `publish_only`
+  run on its tag would publish it, so it is not a validation step;
+- or run the packaging workflow (`.github/workflows/packaging.yml`), which
+  builds and checks the Linux and Windows installers with a throwaway
+  updater key, code-signs nothing and publishes nothing. macOS signing and
+  notarization run only in the release workflow.
+
+For a pre-release that is meant to be published:
+
+1. Set the version to the pre-release version `0.6.0-alpha.N`, with `N`
+   higher than every existing `v0.6.0-alpha.*` tag, merge it to `main` and
+   wait for the required checks on the merge commit
+   ([releasing.md](releasing.md#the-first-pre-release-command-by-command)).
+   The MSI gets a numeric version computed by the tag gate (`0.6.0.N`). RPM
    does not accept `-` in versions, so pre-releases build `.deb` and the
    AppImage on Linux; final versions build all packages.
-2. Tag that commit and push: `git tag -s v0.6.0-alpha.1 <sha> -m "DeckPilot 0.6.0-alpha.1" && git push origin v0.6.0-alpha.1`.
+2. Tag that commit and push:
+   `git tag -s v0.6.0-alpha.N <sha> -m "DeckPilot 0.6.0-alpha.N" && git push origin v0.6.0-alpha.N`.
 3. The workflow refuses to continue if the tag, its commit, versions, the
    required checks, release notes (a pre-release uses the notes of
-   `0.6.0`), updater or Apple signing are not in
-   order. A tag with a pre-release suffix becomes a pre-release, so even if
-   it were published it would never become the release the app updates to
-   (the app only reads `releases/latest`).
+   `0.6.0`), updater or Apple signing are not in order; the release then
+   stays a draft. A tag with a pre-release suffix becomes a GitHub
+   pre-release with only a `prerelease.json` manifest: installations on the
+   stable channel never see it, and installations on the pre-release
+   channel, which read the release list, are offered it once it is
+   published (see [updates.md](updates.md#channels-and-discovery)).
 
 Evidence to collect from the run and the draft:
 
@@ -33,13 +57,14 @@ Evidence to collect from the run and the draft:
   identifier `io.github.knittingcode.deckpilot.agent`, `spctl`, `stapler`).
 - `Verify artifacts and publish checksums`: every artifact verified against
   `DECKPILOT_UPDATER_PUBKEY`, including the signed version.
-- Download the disk image from the draft on a Mac and check it like a user
+- Download the disk image from the draft (or the published pre-release) on a Mac and check it like a user
   would receive it: `spctl --assess --type open --context
   context:primary-signature -v <dmg>`, `xcrun stapler validate <dmg>`, then
   open it and start the app (Gatekeeper must not warn).
 
-Delete the draft release and the tag afterwards, or keep them as a record;
-a draft is never visible to users.
+A draft is never visible to users. A draft that failed a check can be
+discarded with `tools/release-pipeline/discard-draft.sh <tag>` (it refuses
+published releases); a published release is permanent.
 
 ## 2. Update between two versions (local, reproducible)
 

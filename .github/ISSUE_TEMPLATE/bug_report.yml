@@ -27,7 +27,7 @@ body:
     id: version
     attributes:
       label: DeckPilot version or commit
-      placeholder: e.g. 0.6.0, or the commit of main
+      placeholder: e.g. 0.6.0-alpha.2, or the commit of main
     validations:
       required: true
   - type: dropdown
