@@ -95,6 +95,7 @@ fn main() {
         .manage(updates::UpdateManager::default())
         .manage(windows::WindowRegistry::default())
         .manage(commands::portability::PendingImport::default())
+        .manage(commands::plugins::PluginEvents::default())
         .setup(move |app| {
             // Same location as the agent; `DECKPILOT_DATA_DIR` overrides it.
             let paths = deckpilot_ipc::AgentPaths::resolve()?;
