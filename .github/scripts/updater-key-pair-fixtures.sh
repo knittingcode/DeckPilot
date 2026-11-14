@@ -71,25 +71,29 @@ refuses() { # refuses <what> <message> <run args...>
   fi
 }
 
-one="$fixtures/throwaway-updater.key"
-other="$fixtures/other-updater.key"
+# Named .secret, not .key: *.key is ignored by git so real keys are never
+# committed; these throwaway fixtures are.
+one="$fixtures/throwaway-updater.secret"
+one_pub="$fixtures/throwaway-updater.pub"
+other="$fixtures/other-updater.secret"
+other_pub="$fixtures/other-updater.pub"
 password="throwaway fixture password"
 : > "$work/empty"
 printf 'not base64!' > "$work/garbage"
 
-accepts "a matching key, password and public key" "$one" "$password" "$one.pub"
-accepts "a key with an empty password" "$other" "" "$other.pub"
-accepts "a key that matches the pinned file" "$one" "$password" "$one.pub" --pinned "$one.pub" --require-variable
-refuses "a wrong password" "wrong password or key" "$one" "wrong" "$one.pub"
-refuses "another key's public key" "does not belong" "$one" "$password" "$other.pub"
+accepts "a matching key, password and public key" "$one" "$password" "$one_pub"
+accepts "a key with an empty password" "$other" "" "$other_pub"
+accepts "a key that matches the pinned file" "$one" "$password" "$one_pub" --pinned "$one_pub" --require-variable
+refuses "a wrong password" "wrong password or key" "$one" "wrong" "$one_pub"
+refuses "another key's public key" "does not belong" "$one" "$password" "$other_pub"
 refuses "a throwaway key against the pinned release key" "does not belong to $pinned" "$one" "$password" "$work/empty" --pinned "$pinned"
-refuses "a variable other than the pinned key" "is not the public key pinned in" "$one" "$password" "$one.pub" --pinned "$pinned"
-refuses "no variable where it is required" "DECKPILOT_UPDATER_PUBKEY is not set" "$one" "$password" "$work/empty" --pinned "$one.pub" --require-variable
+refuses "a variable other than the pinned key" "is not the public key pinned in" "$one" "$password" "$one_pub" --pinned "$pinned"
+refuses "no variable where it is required" "DECKPILOT_UPDATER_PUBKEY is not set" "$one" "$password" "$work/empty" --pinned "$one_pub" --require-variable
 refuses "a malformed public key" "DECKPILOT_UPDATER_PUBKEY is not" "$one" "$password" "$work/garbage"
-refuses "a malformed secret key" "TAURI_SIGNING_PRIVATE_KEY is not" "$work/garbage" "$password" "$one.pub"
-refuses "no secret key" "TAURI_SIGNING_PRIVATE_KEY is not set" "$work/empty" "" "$one.pub"
+refuses "a malformed secret key" "TAURI_SIGNING_PRIVATE_KEY is not" "$work/garbage" "$password" "$one_pub"
+refuses "no secret key" "TAURI_SIGNING_PRIVATE_KEY is not set" "$work/empty" "" "$one_pub"
 # Nothing secret in the output.
-run "$one" "$password" "$one.pub" || true
+run "$one" "$password" "$one_pub" || true
 if grep -q -F "$password" "$work/out.log" || grep -q -F "$(cat "$one")" "$work/out.log"; then
   bad "the output contains key material"
 else

@@ -8,9 +8,10 @@ DeckPilot builds trust only the release public key pinned in
 
 | Files | Password |
 |---|---|
-| `throwaway-updater.key`, `throwaway-updater.key.pub` | `throwaway fixture password` |
-| `other-updater.key`, `other-updater.key.pub` | empty |
+| `throwaway-updater.secret`, `throwaway-updater.pub` | `throwaway fixture password` |
+| `other-updater.secret`, `other-updater.pub` | empty |
 
-Never put a real key here. The release signing key exists only in the
+The secret keys are named `.secret` because `*.key` is ignored by git, so
+that real keys are not committed by accident. Never put a real key here. The release signing key exists only in the
 `production-release` environment and on the owner's machine
 ([docs/releasing.md](../../../docs/releasing.md)).
