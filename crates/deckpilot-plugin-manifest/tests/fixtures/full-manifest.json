@@ -1,0 +1,288 @@
+{
+  "$schema": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
+  "id": "example-tools.kitchen-sink",
+  "name": "Kitchen Sink",
+  "version": "2.1.0-rc.3",
+  "publisher": {
+    "id": "example-tools",
+    "name": "Example Tools",
+    "url": "https://tools.example.org/"
+  },
+  "description": "Uses every field of manifestVersion 1, so the Rust model and the JSON Schema are compared on all of them.",
+  "homepage": "https://tools.example.org/kitchen-sink",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/example-tools/deckpilot-plugins",
+    "directory": "plugins/kitchen-sink"
+  },
+  "license": "Apache-2.0 OR MIT",
+  "keywords": ["testing", "all-fields", "ci"],
+  "categories": ["developer-tools", "monitoring", "other"],
+  "engines": { "deckpilot": ">=0.8.0 <=1.4.2", "pluginApi": "^1.1", "sdk": "1.1.0-beta.2" },
+  "entry": "src/main.ts",
+  "platforms": ["macos", "linux"],
+  "icons": {
+    "32": "assets/icon-32.png",
+    "128": "assets/icon-128.png",
+    "256": "assets/icon-256.png"
+  },
+  "assets": {
+    "keyIcons": { "ok": "assets/keys/ok.png", "fail-2": "assets/keys/fail_2.png" },
+    "screenshots": ["assets/screens/one.png", "assets/screens/two.png"],
+    "readme": "README.md",
+    "changelog": "CHANGELOG.md"
+  },
+  "permissions": [
+    {
+      "kind": "network",
+      "hosts": ["api.example.org", "*.status.example.org", "example.org:8443"],
+      "methods": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+      "privateNetwork": true,
+      "justification": "Talks to the Example API and to hosts you add."
+    },
+    {
+      "kind": "credentials",
+      "refs": ["token", "apiKey", "login"],
+      "justification": "Sends your Example credentials to the Example API only."
+    },
+    { "kind": "notifications", "justification": "Tells you when a check fails." },
+    {
+      "kind": "profile",
+      "read": ["profile", "project"],
+      "justification": "Uses the active project's key to pick the service."
+    },
+    {
+      "kind": "variables",
+      "read": ["shared.paths.root", "shared.services.*", "plugins.other.tool.status"],
+      "justification": "Reads the service paths you share between actions."
+    },
+    {
+      "kind": "storage",
+      "quotaKb": 1024,
+      "justification": "Caches the last results between runs."
+    },
+    {
+      "kind": "openUrl",
+      "hosts": ["example.org", "*.example.org"],
+      "justification": "Opens the dashboard of a service."
+    },
+    {
+      "kind": "background",
+      "minIntervalSeconds": 60,
+      "justification": "Checks the services every minute."
+    },
+    {
+      "kind": "device",
+      "state": true,
+      "icons": true,
+      "justification": "Shows status and icons on the plugin's keys."
+    }
+  ],
+  "supports": {
+    "device": { "requires": ["keys"], "uses": ["keyDisplays", "dials", "touchStrip"] }
+  },
+  "contributes": {
+    "actions": [
+      {
+        "id": "check",
+        "name": "Check a service",
+        "description": "Checks one service and reports its status.",
+        "category": "Monitoring",
+        "parameters": [
+          {
+            "key": "note",
+            "label": "Note",
+            "description": "Free text.",
+            "required": false,
+            "kind": { "type": "text", "multiline": true, "maxLength": 500 },
+            "default": { "type": "text", "value": "hello" }
+          },
+          {
+            "key": "retries",
+            "label": "Retries",
+            "required": true,
+            "kind": { "type": "integer", "min": 0, "max": 5 },
+            "default": { "type": "integer", "value": 2 }
+          },
+          {
+            "key": "verbose",
+            "label": "Verbose",
+            "required": false,
+            "kind": { "type": "boolean" },
+            "default": { "type": "boolean", "value": false }
+          },
+          {
+            "key": "mode",
+            "label": "Mode",
+            "required": true,
+            "kind": { "type": "choice", "options": ["fast", "full"] },
+            "default": { "type": "choice", "value": "full" }
+          },
+          {
+            "key": "project",
+            "label": "Project",
+            "required": false,
+            "kind": { "type": "project" }
+          },
+          {
+            "key": "paths",
+            "label": "Paths",
+            "required": false,
+            "kind": { "type": "lines", "itemLabel": "Path", "maxItems": 10, "maxLength": 200 },
+            "default": { "type": "text", "value": "/health\n/ready" }
+          },
+          {
+            "key": "headers",
+            "label": "Headers",
+            "required": false,
+            "kind": {
+              "type": "pairs",
+              "separator": ":",
+              "nameLabel": "Header",
+              "valueLabel": "Value",
+              "maxItems": 20,
+              "caseInsensitive": true,
+              "noSecrets": true
+            },
+            "default": { "type": "text", "value": "Accept: application/json" }
+          },
+          {
+            "key": "body",
+            "label": "Body",
+            "required": false,
+            "kind": { "type": "code", "language": "json", "maxLength": 10000 },
+            "default": { "type": "text", "value": "{}" }
+          }
+        ],
+        "requiresProject": true,
+        "node": {
+          "version": 2,
+          "icon": "activity",
+          "outputs": [
+            { "key": "status", "label": "Status" },
+            { "key": "code", "label": "HTTP status", "kind": "integer", "always": true },
+            { "key": "healthy", "label": "Healthy", "kind": "boolean" },
+            { "key": "logPath", "label": "Log", "kind": "path" },
+            { "key": "dashboard", "label": "Dashboard", "kind": "url" },
+            { "key": "projectKey", "label": "Project", "kind": "projectKey" },
+            { "key": "secretHint", "label": "Hint", "kind": "text", "sensitive": true }
+          ],
+          "timeoutMs": 60000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        },
+        "state": { "refresh": "onEvents", "intervalSeconds": 30 },
+        "device": { "requires": ["keyDisplays"] }
+      },
+      {
+        "id": "restart-v1",
+        "name": "Restart (old)",
+        "description": "Restarts a service. Use Restart instead.",
+        "category": "Monitoring",
+        "parameters": [],
+        "deprecated": true,
+        "replacedBy": "restart",
+        "node": { "effect": "modifies" }
+      },
+      {
+        "id": "restart",
+        "name": "Restart",
+        "description": "Restarts a service.",
+        "category": "Monitoring",
+        "parameters": [],
+        "node": { "effect": "modifies", "retrySafe": false }
+      },
+      {
+        "id": "open-dashboard",
+        "name": "Open dashboard",
+        "description": "Opens the service dashboard.",
+        "category": "Monitoring",
+        "parameters": [],
+        "node": { "effect": "opens" }
+      }
+    ],
+    "variables": [
+      {
+        "id": "status.summary",
+        "name": "Status summary",
+        "description": "All services in one line.",
+        "valueType": { "type": "string" },
+        "scope": "machine"
+      },
+      {
+        "id": "failing",
+        "name": "Failing services",
+        "valueType": { "type": "integer" },
+        "scope": "profile"
+      },
+      {
+        "id": "project.healthy",
+        "name": "Project healthy",
+        "valueType": { "type": "boolean" },
+        "scope": "project",
+        "requires": ["project"]
+      },
+      {
+        "id": "raw",
+        "name": "Raw result",
+        "valueType": { "type": "json" },
+        "scope": "machine",
+        "sensitive": true,
+        "deprecated": true
+      }
+    ],
+    "settings": {
+      "portabilityVersion": 0,
+      "fields": [
+        {
+          "key": "region",
+          "label": "Region",
+          "required": true,
+          "kind": { "type": "choice", "options": ["eu", "us"] },
+          "default": { "type": "choice", "value": "eu" },
+          "portability": "portable"
+        },
+        {
+          "key": "cacheDir",
+          "label": "Cache folder",
+          "required": false,
+          "kind": { "type": "text" },
+          "portability": "machineSpecific"
+        },
+        {
+          "key": "webhook",
+          "label": "Webhook",
+          "required": false,
+          "kind": { "type": "text" },
+          "portability": "sensitive"
+        }
+      ]
+    },
+    "credentials": [
+      {
+        "key": "token",
+        "label": "API token",
+        "description": "A read token.",
+        "hosts": ["api.example.org"],
+        "schemes": ["bearer", "header"],
+        "headerName": "X-Api-Token",
+        "setupUrl": "https://tools.example.org/tokens"
+      },
+      {
+        "key": "apiKey",
+        "label": "Status key",
+        "hosts": ["eu.status.example.org", "*.us.status.example.org"],
+        "schemes": ["query"],
+        "queryName": "api_key"
+      },
+      { "key": "login", "label": "Login", "hosts": ["example.org:8443"], "schemes": ["basic"] }
+    ],
+    "errorCodes": {
+      "service-down": "The service did not answer.",
+      "bad-region": "The region is not eu or us."
+    }
+  }
+}

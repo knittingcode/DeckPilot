@@ -12,6 +12,7 @@ members = [
     "crates/deckpilot-keystore",
     "crates/deckpilot-presence",
     "crates/deckpilot-render",
+    "crates/deckpilot-plugin-manifest",
     "modules/general",
     "modules/projects",
     "modules/system",
