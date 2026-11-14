@@ -220,7 +220,7 @@ envfile="$STUB_DIR/environments/production-release.json"
 # environment <protection rules JSON> [<custom: true|false> <protected: true|false>]
 environment() {
   jq -n --argjson rules "$1" --argjson custom "${2:-true}" --argjson protected "${3:-false}" \
-    '{name: "production-release", protection_rules: $rules,
+    '{name: "production-release", protection_rules: $rules, can_admins_bypass: false,
       deployment_branch_policy: {custom_branch_policies: $custom, protected_branches: $protected}}' > "$envfile"
 }
 # policies <type:name>...: the environment's deployment policies.
@@ -238,7 +238,7 @@ echo '{"name": "release", "protection_rules": [{"type": "required_reviewers", "r
 expect_failure "a protected environment of another name does not count" "'production-release' does not exist" "$here/check-environment.sh"
 # What GitHub creates when a job first names the environment: no rules.
 environment '[]' false false
-expect_failure "an auto-created, unprotected environment" "requires no reviewer" "$here/check-environment.sh" production-release
+expect_failure "an auto-created, unprotected environment" "does not restrict deployments" "$here/check-environment.sh" production-release
 environment '[{"type": "wait_timer", "wait_timer": 5}]'
 policies tag:v*
 expect_failure "an environment with only a wait timer" "requires no reviewer" "$here/check-environment.sh" production-release
@@ -258,6 +258,39 @@ expect_failure "branches named v*" "not only tags v*" "$here/check-environment.s
 policies tag:v*
 run env.log "$here/check-environment.sh" production-release && grep -q "deploys tags v\* only" "$work/env.log" \
   && ok "reviewers and tags v* only" || bad "environment: $(cat "$work/env.log")"
+jq '.can_admins_bypass = true' "$envfile" > "$work/e.json" && mv "$work/e.json" "$envfile"
+expect_failure "administrators may bypass the environment" "administrators can bypass" "$here/check-environment.sh" production-release
+environment "$reviewer"
+
+# Tag authority: no reviewer; creating a protected v* tag authorizes the run.
+# tag_ruleset <jq changes to a complete tag ruleset>
+tag_ruleset() {
+  mkdir -p "$STUB_DIR/rulesets"
+  jq -n '{id: 7, name: "Release tag protection", target: "tag", enforcement: "active",
+      conditions: {ref_name: {include: ["refs/tags/v*"], exclude: []}},
+      rules: [{type: "creation"}, {type: "update"}, {type: "deletion"}, {type: "non_fast_forward"}],
+      current_user_can_bypass: "never"} | '"${1:-.}" > "$STUB_DIR/rulesets/7.json"
+}
+environment '[]'
+expect_failure "no reviewer and no tag ruleset" "no tag ruleset protects the creation of v* tags" "$here/check-environment.sh" production-release
+tag_ruleset '.rules -= [{type: "creation"}]'
+expect_failure "no reviewer, and anyone with write access may create v* tags" "no tag ruleset protects" "$here/check-environment.sh" production-release
+tag_ruleset '.enforcement = "evaluate"'
+expect_failure "no reviewer, and the tag ruleset only evaluates" "no tag ruleset protects" "$here/check-environment.sh" production-release
+tag_ruleset '.current_user_can_bypass = "always"'
+expect_failure "no reviewer, and the workflow could create tags itself" "no tag ruleset protects" "$here/check-environment.sh" production-release
+tag_ruleset '.conditions.ref_name.include = ["refs/tags/release-*"]'
+expect_failure "no reviewer, and the ruleset covers other tags" "no tag ruleset protects" "$here/check-environment.sh" production-release
+tag_ruleset '.conditions.ref_name.exclude = ["refs/tags/v0.*"]'
+expect_failure "no reviewer, and the ruleset excludes some v* tags" "no tag ruleset protects" "$here/check-environment.sh" production-release
+tag_ruleset
+run env.log "$here/check-environment.sh" production-release && grep -q "creating a v\* tag is the authorization" "$work/env.log" \
+  && ok "no reviewer, with protected creation of v* tags" || bad "tag authority: $(cat "$work/env.log")"
+policies tag:v* branch:main
+expect_failure "tag authority, but deployments from a branch too" "not only tags v*" "$here/check-environment.sh" production-release
+policies tag:v*
+rm -rf "$STUB_DIR/rulesets"
+environment "$reviewer"
 rm "$STUB_DIR/environments/production-release-policies.json"
 expect_failure "unreadable deployment policies" "cannot be read" "$here/check-environment.sh" production-release
 
