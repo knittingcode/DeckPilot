@@ -116,9 +116,20 @@ draft() {
   [ "$PRERELEASE" = true ] || names+=("DeckPilot-${v}-1.x86_64.rpm" "DeckPilot-${v}-1.x86_64.rpm.sig")
   local name
   for name in "${names[@]}"; do printf 'content of %s\n' "$name" > "$assets/$name"; done
-  jq -n --arg v "$v" --arg base "$base/download/$tag/" '{version: $v, notes: "n", platforms: {
-      "darwin-aarch64": {signature: "s", url: ($base + "DeckPilot_aarch64.app.tar.gz")},
-      "windows-x86_64": {signature: "s", url: ($base + "DeckPilot_" + $v + "_x64_en-US.msi")}}}' \
+  jq -n --arg v "$v" --arg base "$base/download/$tag/" --argjson rpm "$([ "$PRERELEASE" = true ] && echo false || echo true)" '
+    def update(name): {signature: "s", url: ($base + name)};
+    {version: $v, notes: "n", platforms: ({
+      "darwin-aarch64": update("DeckPilot_aarch64.app.tar.gz"),
+      "darwin-aarch64-app": update("DeckPilot_aarch64.app.tar.gz"),
+      "darwin-x86_64": update("DeckPilot_x64.app.tar.gz"),
+      "darwin-x86_64-app": update("DeckPilot_x64.app.tar.gz"),
+      "linux-x86_64": update("DeckPilot_" + $v + "_amd64.AppImage"),
+      "linux-x86_64-appimage": update("DeckPilot_" + $v + "_amd64.AppImage"),
+      "linux-x86_64-deb": update("DeckPilot_" + $v + "_amd64.deb"),
+      "windows-x86_64": update("DeckPilot_" + $v + "_x64_en-US.msi"),
+      "windows-x86_64-msi": update("DeckPilot_" + $v + "_x64_en-US.msi"),
+      "windows-x86_64-nsis": update("DeckPilot_" + $v + "_x64-setup.exe")}
+      + if $rpm then {"linux-x86_64-rpm": update("DeckPilot-" + $v + "-1.x86_64.rpm")} else {} end)}' \
     > "$assets/$MANIFEST"
   signing "$work/signing"
   TAG="$tag" NOTES_FILE="$work/notes.md" MACOS_SIGNING=true \
@@ -319,6 +330,28 @@ fresh
 id=$(draft v0.6.0-rc.1)
 rm "$STUB_DIR/assets/$id/prerelease.json"
 expect_draft "a missing manifest" "lacks: prerelease.json" v0.6.0-rc.1
+# change_manifest <jq filter>: edits the draft's manifest, keeps SHA256SUMS valid.
+change_manifest() {
+  jq "$1" "$STUB_DIR/assets/$id/prerelease.json" > "$work/m.json"
+  mv "$work/m.json" "$STUB_DIR/assets/$id/prerelease.json"
+  (cd "$STUB_DIR/assets/$id" && rm SHA256SUMS && sha256 -- * > ../S && mv ../S SHA256SUMS)
+}
+fresh
+id=$(draft v0.6.0-rc.1)
+change_manifest 'del(.platforms["windows-x86_64-nsis"])'
+expect_draft "a manifest without an update for a platform" "has no update for windows-x86_64-nsis" v0.6.0-rc.1
+fresh
+id=$(draft v0.6.0-rc.1)
+change_manifest '.platforms["linux-x86_64-deb"].url |= sub("/v0.6.0-rc.1/"; "/v0.5.0/")'
+expect_draft "a manifest URL of another release" "not to an asset of v0.6.0-rc.1" v0.6.0-rc.1
+fresh
+id=$(draft v0.6.0-rc.1)
+change_manifest '.platforms["darwin-x86_64"].url |= sub("x64.app.tar.gz$"; "x64.zip")'
+expect_draft "a manifest URL of a missing asset" "not to an asset of v0.6.0-rc.1" v0.6.0-rc.1
+fresh
+id=$(draft v0.6.0-rc.1)
+change_manifest '.version = "0.6.0-rc.0"'
+expect_draft "a manifest of another version" "announces 0.6.0-rc.0, expected 0.6.0-rc.1" v0.6.0-rc.1
 fresh
 id=$(draft v0.6.0-rc.1)
 jq '.commit = "'"$sha_b"'"' "$STUB_DIR/assets/$id/release-meta.json" > "$work/m.json"
