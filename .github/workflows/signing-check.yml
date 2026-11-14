@@ -15,6 +15,10 @@
 # protected production-release environment (tag v*, required reviewer).
 # Developer ID and notarization credentials are checked by the Apple
 # signing check workflow, in the same environment.
+#
+# On main and on demand, the job "Release authorization" runs the release
+# gate with this workflow's token (no secret): the environment and the
+# release tag protection still authorize releases.
 name: Signing check
 
 on:
@@ -54,3 +58,25 @@ jobs:
           # key, and on main and in merge queue groups it must be visible.
           DECKPILOT_UPDATER_PUBKEY_OPTIONAL: ${{ github.event_name == 'pull_request' }}
         run: .github/scripts/updater-key-pair-fixtures.sh
+
+  # The release gate (tools/release-pipeline/check-environment.sh) as the
+  # release workflow runs it, with this workflow's own token: the
+  # production-release environment and the release tag protection still
+  # authorize releases (docs/releasing.md, "Release authorization"). Read
+  # only, no secret, no environment; on main and on demand, so a weakened
+  # setting shows here before a release tag meets it. Not a required check.
+  release-authorization:
+    name: Release authorization
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: tools/release-pipeline
+      - name: production-release and the release tag protection authorize releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: tools/release-pipeline/check-environment.sh production-release
