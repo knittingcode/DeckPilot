@@ -1,0 +1,60 @@
+# Feasibility spikes for the plugin marketplace (docs/marketplace in PR #191):
+# experiments/marketplace-spikes/runtime (wasm isolation, host IPC, permission
+# broker, macOS sandbox) and experiments/marketplace-spikes/trust (package
+# signing, signed static registry). Each is a standalone Cargo project with
+# its own lock file: nothing here is part of the DeckPilot workspace or of any
+# release. Runs on all three platforms for cross-platform evidence; not a
+# required check. No secrets, read-only token; keys in the trust spike are
+# throwaway keys generated in the tests.
+name: Marketplace spikes
+
+on:
+  pull_request:
+    paths:
+      - experiments/marketplace-spikes/**
+      - crates/deckpilot-update/**
+      - .github/workflows/marketplace-spikes.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketplace-spikes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spike:
+    name: ${{ matrix.spike }} (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        spike: [runtime, trust]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+        working-directory: experiments/marketplace-spikes/${{ matrix.spike }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # rust-toolchain.toml at the repository root pins the compiler; the
+      # runtime spike's guest needs the wasm32 target for it.
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup target add wasm32-unknown-unknown
+          rustc --version
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: experiments/marketplace-spikes/${{ matrix.spike }}
+      - name: Test
+        run: cargo test --locked -- --nocapture
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Measurements
+        if: matrix.spike == 'runtime'
+        run: cargo run --locked --release --bin ipc-bench

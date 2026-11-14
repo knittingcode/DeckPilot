@@ -1,0 +1,17 @@
+# Test guest, built for wasm32-unknown-unknown by ../build.rs.
+[workspace]
+
+[package]
+name = "spike-guest"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+opt-level = "s"
+panic = "abort"
+lto = true
+strip = true
