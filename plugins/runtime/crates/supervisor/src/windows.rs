@@ -23,9 +23,13 @@
 //!   restricted (a second layer behind the job's process limit).
 //! * `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`: the child inherits exactly the
 //!   two pipe ends (stdin read end, stdout write end); stderr is not set.
-//! * Environment: only `SystemRoot` (Winsock and other system DLLs need it,
-//!   so that a denied connection is the sandbox's doing). Working
-//!   directory: the system directory, which every AppContainer may read.
+//! * Environment: `SystemRoot` (Winsock and other system DLLs need it, so
+//!   that a denied connection is the sandbox's doing), and `TEMP`, `TMP` and
+//!   `LOCALAPPDATA`, which CreateProcessW requires for an AppContainer
+//!   process and rewrites to the container's own folders (without them it
+//!   fails with ERROR_ENVVAR_NOT_FOUND, 203). They are paths, not access:
+//!   what the container may open is decided by its SID. Working directory:
+//!   the system directory, which every AppContainer may read.
 //!
 //! The host binary itself must be readable and executable by the container.
 //! Under `Program Files` that is already the case (`ALL APPLICATION
@@ -464,7 +468,12 @@ fn command_line(program: &Path, args: &[OsString]) -> io::Result<Vec<u16>> {
     Ok(cmd)
 }
 
-/// `SystemRoot=<Windows directory>`, then the block terminator.
+/// Variables CreateProcessW needs for an AppContainer process; it rewrites
+/// them to the container's own folders.
+const CONTAINER_REDIRECTED: [&str; 3] = ["LOCALAPPDATA", "TEMP", "TMP"];
+
+/// `SystemRoot=<Windows directory>`, the container-redirected variables
+/// that are set in the supervisor's environment, then the block terminator.
 fn environment() -> Vec<u16> {
     let mut env: Vec<u16> = OsStr::new("SystemRoot=").encode_wide().collect();
     env.extend(
@@ -472,7 +481,16 @@ fn environment() -> Vec<u16> {
             .as_os_str()
             .encode_wide(),
     );
-    env.extend([0, 0]);
+    env.push(0);
+    for name in CONTAINER_REDIRECTED {
+        if let Some(value) = std::env::var_os(name).filter(|v| !v.is_empty()) {
+            env.extend(OsStr::new(name).encode_wide());
+            env.push(u16::from(b'='));
+            env.extend(value.encode_wide());
+            env.push(0);
+        }
+    }
+    env.push(0);
     env
 }
 
@@ -683,11 +701,18 @@ mod tests {
     }
 
     #[test]
-    fn environment_is_only_system_root() {
+    fn environment_is_system_root_and_container_folders_only() {
         let env = environment();
         let s = String::from_utf16(&env).unwrap();
         assert!(s.starts_with("SystemRoot="), "{s}");
         assert!(s.ends_with("\0\0"));
-        assert_eq!(s.matches('=').count(), 1);
+        let names: Vec<&str> = s
+            .trim_end_matches('\0')
+            .split('\0')
+            .map(|entry| entry.split('=').next().unwrap())
+            .collect();
+        for name in &names[1..] {
+            assert!(CONTAINER_REDIRECTED.contains(name), "{name} in {s}");
+        }
     }
 }
