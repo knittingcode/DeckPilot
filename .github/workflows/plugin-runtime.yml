@@ -1,0 +1,77 @@
+# Plugin runtime foundation (plugins/runtime: ABI, permission broker,
+# sandboxed plugin host, supervisor). A standalone Cargo workspace with its
+# own lock file, not part of the DeckPilot build or of any release. Runs on
+# all three platforms because the OS sandbox probes are per platform (the
+# Linux and Windows evidence comes from here). Not a required check. No
+# secrets, read-only token.
+name: Plugin runtime
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - plugins/runtime/**
+      - rust-toolchain.toml
+      - .github/workflows/plugin-runtime.yml
+  pull_request:
+    paths:
+      - plugins/runtime/**
+      - rust-toolchain.toml
+      - .github/workflows/plugin-runtime.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-runtime-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Plugin runtime (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+        working-directory: plugins/runtime
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # rust-toolchain.toml at the repository root pins the compiler; the
+      # test guest needs the wasm32 target for it.
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup target add wasm32-unknown-unknown
+          rustc --version
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: plugins/runtime
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Kernel and sandbox facilities
+        if: runner.os == 'Linux'
+        run: |
+          uname -a
+          cat /sys/kernel/security/lsm || true
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Clippy (wasm guest crates)
+        run: cargo clippy --locked -p deckpilot-plugin-guest -p deckpilot-test-guest --target wasm32-unknown-unknown -- -D warnings
+      - name: Test
+        run: cargo test --locked -- --nocapture
+      - name: Sandbox probe output
+        if: always()
+        run: |
+          cargo run --locked -q --bin deckpilot-sandbox-probe -- read_file "$PWD/Cargo.toml" exec /bin/sh || true
