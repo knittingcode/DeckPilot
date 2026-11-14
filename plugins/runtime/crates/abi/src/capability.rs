@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::limits::{
-    MAX_BODY_LEN, MAX_HEADER_LEN, MAX_HEADERS, MAX_LOG_LEN, MAX_NOTIFY_BODY, MAX_NOTIFY_TITLE,
-    MAX_STORAGE_KEY, MAX_STORAGE_VALUE, MAX_URL_LEN,
+    MAX_BODY_LEN, MAX_CREDENTIAL_KEY, MAX_HEADER_LEN, MAX_HEADERS, MAX_LOG_LEN, MAX_NOTIFY_BODY,
+    MAX_NOTIFY_TITLE, MAX_STORAGE_KEY, MAX_STORAGE_VALUE, MAX_URL_LEN,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -40,6 +40,58 @@ pub struct HttpFetch {
     pub url: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub headers: Vec<Header>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// A credential **handle**: the agent injects the secret of this slot
+    /// (never visible to the guest) if the broker allows it for the
+    /// request's origin and scheme (design §5.5). Added compatibly within
+    /// ABI 1: optional, and omitted from the JSON when absent, so requests
+    /// without it are byte-identical to the original ABI 1 form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<HttpAuth>,
+}
+
+/// How a credential handle is attached to a request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpAuth {
+    /// The credential slot key from the manifest (`[a-z][A-Za-z0-9]{0,31}`).
+    pub credential: String,
+    pub scheme: AuthScheme,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AuthScheme {
+    /// `Authorization: Bearer <secret>`.
+    Bearer,
+    /// `Authorization: Basic <secret>`.
+    Basic,
+    /// The slot's declared header name.
+    Header,
+    /// The slot's declared query parameter.
+    Query,
+}
+
+/// Checks a credential slot key: `[a-z][A-Za-z0-9]{0,31}` (the manifest's
+/// `camelKey`).
+pub fn is_credential_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    key.len() <= MAX_CREDENTIAL_KEY
+        && chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_alphanumeric())
+}
+
+/// The `ok` value of an allowed `http.fetch`, as the agent's executor
+/// returns it. Unknown fields are **ignored** here (host to guest only), so
+/// the agent can add fields within ABI 1 without breaking built guests.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HttpResponse {
+    pub status: u16,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<Header>,
+    /// The body as UTF-8 text (bodies that are not UTF-8 are not delivered
+    /// in ABI 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
 }
@@ -131,6 +183,12 @@ impl CapabilityRequest {
                 }
                 if f.body.as_ref().is_some_and(|b| b.len() > MAX_BODY_LEN) {
                     return Err(RequestError::TooLarge("body"));
+                }
+                if f.auth
+                    .as_ref()
+                    .is_some_and(|a| !is_credential_key(&a.credential))
+                {
+                    return Err(RequestError::TooLarge("credential"));
                 }
             }
             Self::Notify(n) => {
@@ -294,6 +352,56 @@ mod tests {
         let method =
             parse(r#"{"op":"http.fetch","args":{"method":"CONNECT","url":"https://a.b"}}"#);
         assert!(method.is_err());
+    }
+
+    #[test]
+    fn auth_is_an_optional_compatible_addition() {
+        // The original ABI 1 form parses and serializes byte-identically.
+        let old = r#"{"op":"http.fetch","args":{"method":"GET","url":"https://a.example.com/"}}"#;
+        let r = parse(old).unwrap();
+        assert_eq!(serde_json::to_string(&r).unwrap(), old);
+        let CapabilityRequest::HttpFetch(f) = &r else {
+            panic!()
+        };
+        assert_eq!(f.auth, None);
+
+        let new = r#"{"op":"http.fetch","args":{"method":"GET","url":"https://a.example.com/","auth":{"credential":"apiKey","scheme":"bearer"}}}"#;
+        let r = parse(new).unwrap();
+        r.validate().unwrap();
+        assert_eq!(serde_json::to_string(&r).unwrap(), new);
+
+        for bad in [
+            r#"{"credential":"apiKey","scheme":"digest"}"#,
+            r#"{"credential":"apiKey"}"#,
+            r#"{"credential":"apiKey","scheme":"bearer","value":"s3cret"}"#,
+        ] {
+            let json = format!(
+                r#"{{"op":"http.fetch","args":{{"method":"GET","url":"https://a.example.com/","auth":{bad}}}}}"#
+            );
+            assert!(parse(&json).is_err(), "{bad}");
+        }
+        for key in ["", "ApiKey", "api-key", "api_key", &"k".repeat(33)] {
+            let json = format!(
+                r#"{{"op":"http.fetch","args":{{"method":"GET","url":"https://a.example.com/","auth":{{"credential":"{key}","scheme":"bearer"}}}}}}"#
+            );
+            assert_eq!(
+                parse(&json).unwrap().validate(),
+                Err(RequestError::TooLarge("credential")),
+                "{key:?}"
+            );
+        }
+        assert!(is_credential_key("token"));
+        assert!(is_credential_key("apiKey2"));
+    }
+
+    #[test]
+    fn http_responses_tolerate_additions() {
+        let r: HttpResponse =
+            serde_json::from_str(r#"{"status":200,"body":"{}","elapsedMs":12}"#).unwrap();
+        assert_eq!(r.status, 200);
+        assert_eq!(r.body.as_deref(), Some("{}"));
+        assert!(r.headers.is_empty());
+        assert!(serde_json::from_str::<HttpResponse>(r#"{"body":"x"}"#).is_err());
     }
 
     #[test]

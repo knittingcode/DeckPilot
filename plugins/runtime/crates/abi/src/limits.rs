@@ -46,6 +46,10 @@ pub const MAX_HEADERS: usize = 32;
 pub const MAX_HEADER_LEN: usize = 4 << 10;
 /// Request body in one `http.fetch`.
 pub const MAX_BODY_LEN: usize = 32 << 10;
+/// Credential slot key in `http.fetch` `auth`.
+pub const MAX_CREDENTIAL_KEY: usize = 32;
+/// Largest plugin descriptor (`dp_describe` output, JSON).
+pub const MAX_DESCRIPTOR: usize = 64 << 10;
 /// One log line (design §5.2).
 pub const MAX_LOG_LEN: usize = 2 << 10;
 /// Notification title and body (design §5.2).

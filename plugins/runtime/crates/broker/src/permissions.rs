@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use deckpilot_plugin_abi::HttpMethod;
+use deckpilot_plugin_abi::capability::{AuthScheme, is_credential_key};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -46,6 +47,14 @@ pub enum ApprovedPermission {
     },
     /// Struct variant so that unknown fields are rejected.
     Notifications {},
+    /// One credential slot (design §5.5): the agent may inject its secret
+    /// into requests to the listed exact origins, in the listed schemes.
+    /// The plugin only ever holds the slot key (a handle).
+    Credential {
+        key: String,
+        origins: BTreeSet<String>,
+        schemes: BTreeSet<AuthScheme>,
+    },
 }
 
 /// The set of approved permissions of one plugin.
@@ -79,7 +88,28 @@ impl ApprovedPermissions {
 pub struct Grants {
     pub(crate) network: BTreeMap<Origin, BTreeSet<HttpMethod>>,
     pub(crate) notifications: bool,
+    pub(crate) credentials: BTreeMap<String, CredentialGrant>,
 }
+
+/// Where and how one credential slot may be injected.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CredentialGrant {
+    pub(crate) origins: BTreeSet<Origin>,
+    pub(crate) schemes: BTreeSet<AuthScheme>,
+}
+
+impl CredentialGrant {
+    pub fn origins(&self) -> impl Iterator<Item = &Origin> {
+        self.origins.iter()
+    }
+
+    pub fn schemes(&self) -> impl Iterator<Item = AuthScheme> + '_ {
+        self.schemes.iter().copied()
+    }
+}
+
+/// Most credential slots one plugin may be granted (the manifest's limit).
+pub const MAX_CREDENTIALS: usize = 8;
 
 /// Most origins one plugin may be granted.
 pub const MAX_ORIGINS: usize = 64;
@@ -101,12 +131,51 @@ impl Grants {
                         .extend(methods.iter().copied());
                 }
                 ApprovedPermission::Notifications {} => g.notifications = true,
+                ApprovedPermission::Credential {
+                    key,
+                    origins,
+                    schemes,
+                } => {
+                    if !is_credential_key(key) {
+                        return Err(GrantError::CredentialKey);
+                    }
+                    if origins.is_empty() || schemes.is_empty() {
+                        return Err(GrantError::EmptyCredential);
+                    }
+                    let mut slot = CredentialGrant {
+                        schemes: schemes.clone(),
+                        ..CredentialGrant::default()
+                    };
+                    for o in origins {
+                        slot.origins
+                            .insert(Origin::parse_grant(o).map_err(GrantError::Origin)?);
+                    }
+                    if g.credentials.insert(key.clone(), slot).is_some() {
+                        return Err(GrantError::DuplicateCredential);
+                    }
+                }
             }
         }
         if g.network.len() > MAX_ORIGINS {
             return Err(GrantError::TooManyOrigins);
         }
+        if g.credentials.len() > MAX_CREDENTIALS {
+            return Err(GrantError::TooManyCredentials);
+        }
+        // A secret may only travel to origins the plugin can reach at all.
+        let reachable = g
+            .credentials
+            .values()
+            .flat_map(|c| c.origins.iter())
+            .all(|o| g.network.contains_key(o));
+        if !reachable {
+            return Err(GrantError::CredentialOriginNotGranted);
+        }
         Ok(g)
+    }
+
+    pub fn credential(&self, key: &str) -> Option<&CredentialGrant> {
+        self.credentials.get(key)
     }
 
     pub fn origins(&self) -> impl Iterator<Item = &Origin> {
@@ -125,6 +194,12 @@ pub enum GrantError {
     Origin(OriginError),
     NoMethods,
     TooManyOrigins,
+    CredentialKey,
+    EmptyCredential,
+    DuplicateCredential,
+    TooManyCredentials,
+    /// A credential slot names an origin without a network grant.
+    CredentialOriginNotGranted,
 }
 
 impl fmt::Display for GrantError {
@@ -137,6 +212,13 @@ impl fmt::Display for GrantError {
             Self::Origin(e) => write!(f, "invalid origin: {e}"),
             Self::NoMethods => f.write_str("network permission without methods"),
             Self::TooManyOrigins => f.write_str("too many origins"),
+            Self::CredentialKey => f.write_str("invalid credential key"),
+            Self::EmptyCredential => f.write_str("credential without origins or schemes"),
+            Self::DuplicateCredential => f.write_str("credential key granted twice"),
+            Self::TooManyCredentials => f.write_str("too many credentials"),
+            Self::CredentialOriginNotGranted => {
+                f.write_str("credential origin has no network grant")
+            }
         }
     }
 }

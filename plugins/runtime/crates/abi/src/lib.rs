@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 
 pub mod capability;
+pub mod describe;
 pub mod frame;
 pub mod guest;
 pub mod limits;
@@ -27,4 +28,10 @@ pub use capability::{CallError, CallErrorCode, CallResult, CapabilityRequest, Ht
 pub use value::{ActionOutcome, ParamValue, Params, ValidationError};
 
 /// The ABI version implemented by this crate.
+///
+/// Compatible additions made within ABI 1 (each optional, so modules and
+/// messages without them are unchanged): the optional guest exports
+/// `dp_describe`, `dp_init` and `dp_shutdown` ([`guest`]); `auth` (a
+/// credential handle) in `http.fetch` and the [`capability::HttpResponse`]
+/// shape of its reply; `descriptor` in the `loaded` message.
 pub const ABI_VERSION: u32 = 1;
