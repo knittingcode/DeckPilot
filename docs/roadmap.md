@@ -45,8 +45,9 @@ Implemented:
 
 - Action Library, Workflow editor (conditions, overrides, reordering), profile
   and project management, per-machine resource mappings
-- Device model catalog (MK.2, XL, Stream Deck +) and a visual layout designer
-  that works without hardware
+- Device model catalog (MK.2, XL, Stream Deck +; the XL and Stream Deck +
+  are layout design only, with no driver) and a visual layout designer that
+  works without hardware
 - Supervised live development environment (`make up`, `pnpm dev`) with
   simulated devices and isolated data
 - Signed updates from GitHub Releases with coordinated agent restart, and a
@@ -122,6 +123,15 @@ Remaining:
 
 - Publish the first pre-release
 
+## Keys, variables and work sessions (done in 0.6.0)
+
+- Key gestures (click, double click, long press), stateful keys and the
+  Work Session ([gestures-and-work-session.md](gestures-and-work-session.md))
+- Shared variables and one variable registry for core, module and workflow
+  values, with a variable picker ([variables.md](variables.md))
+- Workflow triggers, sub-workflows with inputs and outputs, and workflow
+  variables; GitHub, GitLab and Jira modules (read-only)
+
 ## Later
 
 - Drivers for more Stream Deck models (XL, Stream Deck +, encoders and
@@ -129,8 +139,14 @@ Remaining:
   driver
 - Hardware testing on Windows and Linux
 
+## Proposed (not planned)
+
+- Plugin marketplace: a design proposal (pull request
+  [#191](https://github.com/knittingcode/DeckPilot/pull/191)) and
+  experimental feasibility spikes for its runtime and trust model (pull
+  request [#202](https://github.com/knittingcode/DeckPilot/pull/202)).
+  Nothing of it is part of DeckPilot, and it is not scheduled.
+
 ## Out of scope
 
 - Cloud synchronization, telemetry or analytics
-- Plugin marketplace (only a design proposal exists, in open pull request
-  #191; nothing of it is implemented)
