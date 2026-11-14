@@ -11,12 +11,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use deckpilot_plugin_abi::describe::PluginDescriptor;
 use deckpilot_plugin_abi::guest::{
-    EXPORT_ABI_VERSION, EXPORT_ALLOC, EXPORT_INVOKE, EXPORT_MEMORY, IMPORT_HOST_CALL,
-    IMPORT_MODULE, InvokeInput, pack, unpack,
+    EXPORT_ABI_VERSION, EXPORT_ALLOC, EXPORT_DESCRIBE, EXPORT_INIT, EXPORT_INVOKE, EXPORT_MEMORY,
+    EXPORT_SHUTDOWN, IMPORT_HOST_CALL, IMPORT_MODULE, InvokeInput, pack, unpack,
 };
 use deckpilot_plugin_abi::limits::{
-    MAX_GUEST_INPUT, MAX_GUEST_OUTPUT, MAX_HOST_CALL_REPLY, MAX_HOST_CALL_REQUEST,
+    MAX_DESCRIPTOR, MAX_GUEST_INPUT, MAX_GUEST_OUTPUT, MAX_HOST_CALL_REPLY, MAX_HOST_CALL_REQUEST,
     MAX_HOST_CALLS_PER_INVOCATION, MAX_MODULE_BYTES,
 };
 use deckpilot_plugin_abi::protocol::{FatalReason, GuestLimits};
@@ -163,6 +164,9 @@ struct HostState {
     invocation_id: u64,
     calls_this_invocation: u32,
     next_call_id: u64,
+    /// Inside `dp_describe`, `dp_init` or `dp_shutdown`: host calls get a
+    /// local `unavailable` reply and never reach the supervisor.
+    in_lifecycle: bool,
 }
 
 /// The wasmtime engine plus the epoch ticker thread. Create it **before**
@@ -234,6 +238,7 @@ impl PluginEngine {
             invocation_id: 0,
             calls_this_invocation: 0,
             next_call_id: 0,
+            in_lifecycle: false,
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|s| &mut s.limits);
@@ -269,15 +274,50 @@ impl PluginEngine {
                 "guest ABI version {v} is not supported"
             )));
         }
-        Ok(LoadedPlugin {
+
+        // Optional exports (compatible additions within ABI 1).
+        let describe = optional_func::<(), i64>(&instance, &mut store, EXPORT_DESCRIBE)?;
+        let init = optional_func::<(), i32>(&instance, &mut store, EXPORT_INIT)?;
+        let shutdown = optional_func::<(), ()>(&instance, &mut store, EXPORT_SHUTDOWN)?;
+        let mut plugin = LoadedPlugin {
             store,
             _instance: instance,
             memory,
             alloc,
             invoke,
+            shutdown,
+            descriptor: None,
             limits,
-        })
+        };
+        if let Some(describe) = describe {
+            let packed = plugin.lifecycle(|store| describe.call(store, ()))?;
+            plugin.descriptor = Some(plugin.read_descriptor(packed as u64)?);
+        }
+        if let Some(init) = init {
+            let code = plugin.lifecycle(|store| init.call(store, ()))?;
+            if code != 0 {
+                return Err(Fault::Load(format!("dp_init returned {code}")));
+            }
+        }
+        Ok(plugin)
     }
+}
+
+/// An optional export: absent is fine, present with another type is not.
+fn optional_func<P: wasmtime::WasmParams, R: wasmtime::WasmResults>(
+    instance: &Instance,
+    store: &mut Store<HostState>,
+    name: &str,
+) -> Result<Option<TypedFunc<P, R>>, Fault> {
+    let Some(export) = instance.get_export(&mut *store, name) else {
+        return Ok(None);
+    };
+    let func = export
+        .into_func()
+        .ok_or_else(|| Fault::Load(format!("export {name} is not a function")))?;
+    func.typed::<P, R>(&*store)
+        .map(Some)
+        .map_err(|_| Fault::Load(format!("export {name} has the wrong type")))
 }
 
 fn check_imports(module: &Module) -> Result<(), Fault> {
@@ -336,6 +376,8 @@ pub struct LoadedPlugin {
     memory: Memory,
     alloc: TypedFunc<i32, i32>,
     invoke: TypedFunc<(i32, i32), i64>,
+    shutdown: Option<TypedFunc<(), ()>>,
+    descriptor: Option<PluginDescriptor>,
     limits: EffectiveLimits,
 }
 
@@ -343,6 +385,7 @@ impl fmt::Debug for LoadedPlugin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LoadedPlugin")
             .field("limits", &self.limits)
+            .field("descriptor", &self.descriptor)
             .finish_non_exhaustive()
     }
 }
@@ -350,6 +393,57 @@ impl fmt::Debug for LoadedPlugin {
 impl LoadedPlugin {
     pub fn limits(&self) -> EffectiveLimits {
         self.limits
+    }
+
+    /// What the module's `dp_describe` returned (validated), if it has one.
+    pub fn descriptor(&self) -> Option<&PluginDescriptor> {
+        self.descriptor.as_ref()
+    }
+
+    /// Runs the module's `dp_shutdown` hook, if it has one, under the same
+    /// limits as an invocation. Call once, right before the host exits.
+    pub fn shutdown(&mut self) -> Result<(), Fault> {
+        match self.shutdown.take() {
+            Some(f) => self.lifecycle(|store| f.call(store, ())),
+            None => Ok(()),
+        }
+    }
+
+    /// Runs a lifecycle export with a fresh deadline and fuel budget; host
+    /// calls made inside get `unavailable` locally.
+    fn lifecycle<T>(
+        &mut self,
+        f: impl FnOnce(&mut Store<HostState>) -> wasmtime::Result<T>,
+    ) -> Result<T, Fault> {
+        {
+            let s = self.store.data_mut();
+            s.in_lifecycle = true;
+            s.calls_this_invocation = 0;
+        }
+        self.store
+            .set_fuel(self.limits.fuel)
+            .map_err(|e| Fault::Trap(format!("{e:#}")))?;
+        self.store.set_epoch_deadline(self.limits.deadline_ticks);
+        let r = f(&mut self.store).map_err(Fault::from_runtime);
+        self.store.data_mut().in_lifecycle = false;
+        r
+    }
+
+    fn read_descriptor(&self, packed: u64) -> Result<PluginDescriptor, Fault> {
+        let (ptr, len) = unpack(packed);
+        let (ptr, len) = (ptr as usize, len as usize);
+        if len > MAX_DESCRIPTOR {
+            return Err(Fault::Load("descriptor too large".into()));
+        }
+        let bytes = ptr
+            .checked_add(len)
+            .and_then(|end| self.memory.data(&self.store).get(ptr..end))
+            .ok_or_else(|| Fault::Load("descriptor out of bounds".into()))?;
+        let d: PluginDescriptor = serde_json::from_slice(bytes)
+            .map_err(|_| Fault::Load("descriptor does not parse".into()))?;
+        d.validate()
+            .map_err(|e| Fault::Load(format!("invalid descriptor: {e}")))?;
+        Ok(d)
     }
 
     /// Current linear memory size in bytes.
@@ -475,6 +569,11 @@ fn host_call(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) -> wasmtime:
         .to_vec();
 
     let reply = match parse_request(&request) {
+        // No invocation to relay for: answered here, never sent upstream.
+        _ if caller.data().in_lifecycle => CallResult::error(
+            CallErrorCode::Unavailable,
+            "capabilities are not available during dp_describe, dp_init or dp_shutdown",
+        ),
         Ok(req) => {
             let s = caller.data_mut();
             s.next_call_id += 1;

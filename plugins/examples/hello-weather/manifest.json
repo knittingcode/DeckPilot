@@ -1,0 +1,101 @@
+{
+  "$schema": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
+  "id": "acme.hello-weather",
+  "name": "Hello Weather",
+  "version": "0.1.0",
+  "publisher": { "id": "acme", "name": "Acme Tools", "url": "https://acme.example" },
+  "description": "Sample plugin: greets someone, and shows the current temperature of a city from Open-Meteo.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/knittingcode/DeckPilot",
+    "directory": "plugins/examples/hello-weather"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["sample", "weather"],
+  "categories": ["other"],
+  "engines": { "deckpilot": ">=0.7.0 <1.0.0", "pluginApi": "^1.0", "sdk": "0.1.0" },
+  "entry": "src/lib.rs",
+  "icons": { "128": "assets/icon-128.png" },
+  "permissions": [
+    {
+      "kind": "network",
+      "hosts": ["api.open-meteo.com"],
+      "methods": ["GET"],
+      "justification": "Reads the current temperature of the chosen city from Open-Meteo."
+    }
+  ],
+  "contributes": {
+    "actions": [
+      {
+        "id": "greet",
+        "name": "Greet",
+        "description": "Greets someone by name. Runs entirely inside the plugin.",
+        "category": "Hello Weather",
+        "parameters": [
+          {
+            "key": "name",
+            "label": "Name",
+            "required": true,
+            "kind": { "type": "text", "maxLength": 64 }
+          },
+          {
+            "key": "style",
+            "label": "Style",
+            "required": false,
+            "kind": { "type": "choice", "options": ["plain", "excited"] },
+            "default": { "type": "choice", "value": "plain" }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "hand",
+          "outputs": [{ "key": "greeting", "label": "Greeting", "kind": "text", "always": true }],
+          "timeoutMs": 5000,
+          "retrySafe": true,
+          "idempotent": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "current-temperature",
+        "name": "Current temperature",
+        "description": "Fetches the current temperature of a city from Open-Meteo.",
+        "category": "Hello Weather",
+        "parameters": [
+          {
+            "key": "city",
+            "label": "City",
+            "required": true,
+            "kind": { "type": "choice", "options": ["berlin", "london", "new-york", "tokyo"] }
+          },
+          {
+            "key": "units",
+            "label": "Units",
+            "required": false,
+            "kind": { "type": "choice", "options": ["celsius", "fahrenheit"] },
+            "default": { "type": "choice", "value": "celsius" }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "thermometer",
+          "outputs": [
+            { "key": "temperature", "label": "Temperature", "kind": "text", "always": true },
+            { "key": "unit", "label": "Unit", "kind": "text", "always": true },
+            { "key": "city", "label": "City", "kind": "text", "always": true },
+            { "key": "observedAt", "label": "Observed at", "kind": "text" }
+          ],
+          "timeoutMs": 15000,
+          "retrySafe": true,
+          "idempotent": true,
+          "effect": "readOnly"
+        }
+      }
+    ],
+    "errorCodes": {
+      "weather-service-error": "Open-Meteo answered with an error status.",
+      "invalid-response": "Open-Meteo answered with something that is not a forecast."
+    }
+  }
+}

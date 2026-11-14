@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, RwLock};
 
-use deckpilot_plugin_abi::capability::{Header, LogLevel};
+use deckpilot_plugin_abi::capability::{Header, HttpAuth, LogLevel};
 use deckpilot_plugin_abi::{CallErrorCode, CapabilityRequest, HttpMethod};
 use serde_json::Value;
 use url::Url;
@@ -35,7 +35,9 @@ use url::Url;
 pub use addr::{BlockedAddr, check_connect_addr};
 pub use audit::{AuditDecision, AuditRecord, AuditSink, MemoryAudit};
 pub use origin::{Origin, OriginError};
-pub use permissions::{ApprovedPermission, ApprovedPermissions, GrantError, Grants};
+pub use permissions::{
+    ApprovedPermission, ApprovedPermissions, CredentialGrant, GrantError, Grants,
+};
 pub use plugin_id::PluginId;
 pub use rate::{Clock, ManualClock, Rate, RateLimits, SystemClock};
 
@@ -90,6 +92,13 @@ pub enum DenyReason {
     TooLarge,
     RateLimited,
     TooManyRedirects,
+    /// The credential slot is not granted (or was revoked).
+    CredentialNotGranted,
+    /// The credential slot may not be sent to this origin (including a
+    /// redirect that left the original origin).
+    CredentialOriginNotAllowed,
+    /// The credential slot may not be sent in this scheme.
+    CredentialSchemeNotAllowed,
 }
 
 impl DenyReason {
@@ -115,6 +124,13 @@ impl fmt::Display for DenyReason {
             Self::TooLarge => f.write_str("request exceeds a size limit"),
             Self::RateLimited => f.write_str("rate limited"),
             Self::TooManyRedirects => f.write_str("too many redirects"),
+            Self::CredentialNotGranted => f.write_str("credential not granted"),
+            Self::CredentialOriginNotAllowed => {
+                f.write_str("credential may not be sent to this origin")
+            }
+            Self::CredentialSchemeNotAllowed => {
+                f.write_str("credential may not be sent in this scheme")
+            }
         }
     }
 }
@@ -130,6 +146,10 @@ pub struct AllowedFetch {
     pub method: HttpMethod,
     pub headers: Vec<Header>,
     pub body: Option<String>,
+    /// A credential handle the broker allowed for this origin and scheme.
+    /// The executor looks the secret up by `credential` (never from the
+    /// plugin) and adds it as `scheme` prescribes.
+    pub auth: Option<HttpAuth>,
 }
 
 /// What the agent may carry out.
@@ -158,6 +178,10 @@ pub enum Allowed {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one short-lived value per capability call; boxing would only add an allocation"
+)]
 pub enum Decision {
     Allow(Allowed),
     Deny(DenyReason),
@@ -231,6 +255,13 @@ impl Broker {
     pub fn revoke_origin(&self, plugin: &PluginId, origin: &Origin) {
         self.update(plugin, |g| {
             g.network.remove(origin);
+        });
+    }
+
+    /// Revokes one credential slot. Effective on the next call.
+    pub fn revoke_credential(&self, plugin: &PluginId, key: &str) {
+        self.update(plugin, |g| {
+            g.credentials.remove(key);
         });
     }
 
@@ -368,7 +399,9 @@ impl Session {
                     Ok(v) => v,
                     Err(e) => return (Decision::Deny(DenyReason::Url(e)), None),
                 };
-                let d = self.check_fetch(&grants, &url, &origin, f.method, &f.headers);
+                let d = self
+                    .check_fetch(&grants, &url, &origin, f.method, &f.headers)
+                    .or_else(|| check_auth(&grants, &origin, f.auth.as_ref()));
                 let d = match d {
                     Some(reason) => Decision::Deny(reason),
                     None if !b.take(&self.plugin, RateClass::Http) => {
@@ -380,6 +413,7 @@ impl Session {
                         method: f.method,
                         headers: f.headers.clone(),
                         body: f.body.clone(),
+                        auth: f.auth.clone(),
                     })),
                 };
                 (d, Some(origin))
@@ -484,7 +518,19 @@ impl Session {
             Ok(v) => v,
             Err(e) => return (Decision::Deny(DenyReason::Url(e)), None),
         };
-        let d = match self.check_fetch(&grants, &url, &origin, previous.method, &previous.headers) {
+        // A credential never follows a redirect off its original origin
+        // (design §5.5), and is re-checked against the current grants.
+        let auth_check = || {
+            if previous.auth.is_some() && origin != previous.origin {
+                Some(DenyReason::CredentialOriginNotAllowed)
+            } else {
+                check_auth(&grants, &origin, previous.auth.as_ref())
+            }
+        };
+        let d = match self
+            .check_fetch(&grants, &url, &origin, previous.method, &previous.headers)
+            .or_else(auth_check)
+        {
             Some(r) => Decision::Deny(r),
             None => Decision::Allow(Allowed::Fetch(AllowedFetch {
                 url,
@@ -492,10 +538,25 @@ impl Session {
                 method: previous.method,
                 headers: previous.headers.clone(),
                 body: previous.body.clone(),
+                auth: previous.auth.clone(),
             })),
         };
         (d, Some(origin))
     }
+}
+
+fn check_auth(grants: &Grants, origin: &Origin, auth: Option<&HttpAuth>) -> Option<DenyReason> {
+    let auth = auth?;
+    let Some(slot) = grants.credentials.get(&auth.credential) else {
+        return Some(DenyReason::CredentialNotGranted);
+    };
+    if !slot.origins.contains(origin) {
+        return Some(DenyReason::CredentialOriginNotAllowed);
+    }
+    if !slot.schemes.contains(&auth.scheme) {
+        return Some(DenyReason::CredentialSchemeNotAllowed);
+    }
+    None
 }
 
 fn header_allowed(h: &Header) -> bool {

@@ -1,5 +1,6 @@
 //! One running plugin host process.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fmt;
 use std::io::{self, BufReader, BufWriter};
@@ -9,6 +10,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
+use deckpilot_plugin_abi::describe::PluginDescriptor;
 use deckpilot_plugin_abi::frame::{FrameError, read_frame, write_frame};
 use deckpilot_plugin_abi::limits::{
     MAX_FRAME_TO_SUPERVISOR, MAX_HOST_CALL_REPLY, MAX_HOST_CALLS_PER_INVOCATION, MAX_LOAD_FRAME,
@@ -92,6 +94,9 @@ pub struct HostConfig {
     pub shutdown_grace: Duration,
     /// How long to wait for the exit status after the channel closed.
     pub reap_timeout: Duration,
+    /// The manifest's action ids. When set, a module whose descriptor
+    /// (`dp_describe`) lists other ids, or that has none, is refused.
+    pub expected_actions: Option<BTreeSet<String>>,
 }
 
 impl HostConfig {
@@ -105,7 +110,14 @@ impl HostConfig {
             load_timeout: Duration::from_secs(10),
             shutdown_grace: Duration::from_secs(5),
             reap_timeout: Duration::from_secs(2),
+            expected_actions: None,
         }
+    }
+
+    /// Requires the module to implement exactly these action ids.
+    pub fn expect_actions<I: IntoIterator<Item = S>, S: Into<String>>(mut self, ids: I) -> Self {
+        self.expected_actions = Some(ids.into_iter().map(Into::into).collect());
+        self
     }
 }
 
@@ -136,6 +148,13 @@ pub enum HostError {
     Protocol {
         detail: String,
         status: Option<ExitStatus>,
+    },
+    /// The module's descriptor does not list exactly the manifest's action
+    /// ids (`actual` is `None` when the module has no `dp_describe`). The
+    /// host was killed.
+    ActionMismatch {
+        expected: Vec<String>,
+        actual: Option<Vec<String>>,
     },
     /// The action or parameters break ABI 1 bounds (nothing was sent).
     InvalidParams,
@@ -184,6 +203,7 @@ pub struct PluginHost {
     rx: Receiver<Result<ToSupervisor, String>>,
     session: Session,
     sandbox: SandboxReport,
+    descriptor: Option<PluginDescriptor>,
     next_invocation: u64,
     reap_timeout: Duration,
     dead: bool,
@@ -243,6 +263,7 @@ impl PluginHost {
                 enforcement: Enforcement::None,
                 notes: vec![],
             },
+            descriptor: None,
             next_invocation: 1,
             reap_timeout: config.reap_timeout,
             dead: false,
@@ -290,7 +311,32 @@ impl PluginHost {
         }
         let deadline = Instant::now() + config.load_timeout;
         match self.recv(deadline) {
-            Recv::Msg(ToSupervisor::Loaded { abi_version }) if abi_version == ABI_VERSION => Ok(()),
+            Recv::Msg(ToSupervisor::Loaded {
+                abi_version,
+                descriptor,
+            }) if abi_version == ABI_VERSION => {
+                // The host is assumed compromised: re-check, then compare
+                // with the manifest's action ids (design §6.1).
+                if descriptor.as_ref().is_some_and(|d| d.validate().is_err()) {
+                    return Err(self.protocol("invalid descriptor".into()));
+                }
+                if let Some(expected) = &config.expected_actions {
+                    let actual = descriptor.as_ref().map(PluginDescriptor::action_ids);
+                    let matches = actual.is_some_and(|ids| {
+                        ids.len() == expected.len() && ids.iter().all(|id| expected.contains(*id))
+                    });
+                    if !matches {
+                        self.kill();
+                        return Err(HostError::ActionMismatch {
+                            expected: expected.iter().cloned().collect(),
+                            actual: descriptor
+                                .map(|d| d.actions.into_iter().map(|a| a.id).collect()),
+                        });
+                    }
+                }
+                self.descriptor = descriptor;
+                Ok(())
+            }
             Recv::Msg(ToSupervisor::Fatal { reason, detail }) => {
                 let status = self.reap();
                 Err(HostError::LoadFailed {
@@ -325,6 +371,11 @@ impl PluginHost {
 
     pub fn sandbox(&self) -> &SandboxReport {
         &self.sandbox
+    }
+
+    /// The module's descriptor from `loaded`, if it has `dp_describe`.
+    pub fn descriptor(&self) -> Option<&PluginDescriptor> {
+        self.descriptor.as_ref()
     }
 
     pub fn pid(&self) -> u32 {

@@ -55,7 +55,10 @@ fn ready(enforcement: Enforcement, protocol: u32) {
 fn handshake() {
     ready(Enforcement::Full, 1);
     match recv() {
-        Some(ToHost::Load { .. }) => out_frame(&ToSupervisor::Loaded { abi_version: 1 }),
+        Some(ToHost::Load { .. }) => out_frame(&ToSupervisor::Loaded {
+            abi_version: 1,
+            descriptor: None,
+        }),
         _ => std::process::exit(99),
     }
 }

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use deckpilot_plugin_abi::CapabilityRequest;
 use deckpilot_plugin_abi::capability::{
-    Header, HttpFetch, Log, LogLevel, Notify, StorageKey, StorageSet,
+    AuthScheme, Header, HttpAuth, HttpFetch, Log, LogLevel, Notify, StorageKey, StorageSet,
 };
 use deckpilot_plugin_abi::{CallErrorCode, HttpMethod};
 use deckpilot_plugin_broker::*;
@@ -47,6 +47,7 @@ fn fetch(method: HttpMethod, url: &str) -> CapabilityRequest {
         url: url.into(),
         headers: vec![],
         body: None,
+        auth: None,
     })
 }
 
@@ -185,6 +186,7 @@ fn methods_and_headers_are_checked() {
                 value: value.into(),
             }],
             body: None,
+            auth: None,
         });
         assert_eq!(
             s.authorize(&req).denial(),
@@ -200,6 +202,7 @@ fn methods_and_headers_are_checked() {
             value: "application/json".into(),
         }],
         body: None,
+        auth: None,
     });
     assert!(s.authorize(&ok).is_allowed());
 }
@@ -426,6 +429,7 @@ fn audit_records_never_contain_values() {
             value: SECRET.into(),
         }],
         body: Some(SECRET.into()),
+        auth: None,
     }));
     s.authorize(&CapabilityRequest::Notify(Notify {
         title: SECRET.into(),
@@ -456,4 +460,140 @@ fn audit_records_never_contain_values() {
     assert_eq!(records[1].target.as_deref(), Some("https://evil.net"));
     let seqs: Vec<u64> = records.iter().map(|r| r.seq).collect();
     assert!(seqs.windows(2).all(|w| w[1] == w[0] + 1));
+}
+
+const WITH_TOKEN: &str = r#"[
+    {"kind":"network","origin":"https://api.example.com","methods":["GET"]},
+    {"kind":"network","origin":"https://cdn.example.com","methods":["GET"]},
+    {"kind":"credential","key":"token","origins":["https://api.example.com"],"schemes":["bearer"]}]"#;
+
+fn get_with(url: &str, credential: &str, scheme: AuthScheme) -> CapabilityRequest {
+    CapabilityRequest::HttpFetch(HttpFetch {
+        method: HttpMethod::Get,
+        url: url.into(),
+        headers: vec![],
+        body: None,
+        auth: Some(HttpAuth {
+            credential: credential.into(),
+            scheme,
+        }),
+    })
+}
+
+#[test]
+fn credential_handles_go_only_to_their_origins_and_schemes() {
+    let f = fixture(WITH_TOKEN);
+    let s = f.broker.session(f.plugin.clone());
+    let d = s.authorize(&get_with(
+        "https://api.example.com/me",
+        "token",
+        AuthScheme::Bearer,
+    ));
+    let Decision::Allow(Allowed::Fetch(first)) = &d else {
+        panic!("{d:?}")
+    };
+    assert_eq!(
+        first.auth.as_ref().map(|x| x.credential.as_str()),
+        Some("token")
+    );
+    // Same request without a handle: allowed, nothing to inject.
+    let Decision::Allow(Allowed::Fetch(plain)) = s.authorize(&get("https://api.example.com/me"))
+    else {
+        panic!()
+    };
+    assert_eq!(plain.auth, None);
+
+    for (req, reason) in [
+        (
+            get_with("https://cdn.example.com/", "token", AuthScheme::Bearer),
+            DenyReason::CredentialOriginNotAllowed,
+        ),
+        (
+            get_with("https://api.example.com/", "token", AuthScheme::Basic),
+            DenyReason::CredentialSchemeNotAllowed,
+        ),
+        (
+            get_with("https://api.example.com/", "other", AuthScheme::Bearer),
+            DenyReason::CredentialNotGranted,
+        ),
+        // The origin check comes first: an ungranted origin stays an
+        // ungranted origin, whatever handle is attached.
+        (
+            get_with("https://evil.net/", "token", AuthScheme::Bearer),
+            DenyReason::OriginNotGranted,
+        ),
+    ] {
+        assert_eq!(s.authorize(&req).denial(), Some(reason), "{req:?}");
+        assert_eq!(reason.call_error_code(), CallErrorCode::NotPermitted);
+    }
+
+    // A redirect keeps the handle only on the original origin.
+    assert!(s.authorize_redirect(first, "/v2/me", 1).is_allowed());
+    assert_eq!(
+        s.authorize_redirect(first, "https://cdn.example.com/x", 1)
+            .denial(),
+        Some(DenyReason::CredentialOriginNotAllowed)
+    );
+
+    // Revocation applies to the next call, redirects included.
+    f.broker.revoke_credential(&f.plugin, "token");
+    assert_eq!(
+        s.authorize(&get_with(
+            "https://api.example.com/",
+            "token",
+            AuthScheme::Bearer
+        ))
+        .denial(),
+        Some(DenyReason::CredentialNotGranted)
+    );
+    assert_eq!(
+        s.authorize_redirect(first, "/v2/me", 1).denial(),
+        Some(DenyReason::CredentialNotGranted)
+    );
+}
+
+#[test]
+fn credential_grants_are_strict() {
+    let derive = |json: &str| Grants::derive(&ApprovedPermissions::from_json(json)?);
+    let net = r#"{"kind":"network","origin":"https://api.example.com","methods":["GET"]}"#;
+    let cred = |body: &str| format!(r#"[{net},{{"kind":"credential",{body}}}]"#);
+    assert!(
+        derive(&cred(
+            r#""key":"token","origins":["https://api.example.com"],"schemes":["bearer"]"#
+        ))
+        .is_ok()
+    );
+    for (body, err) in [
+        (
+            r#""key":"Token","origins":["https://api.example.com"],"schemes":["bearer"]"#,
+            GrantError::CredentialKey,
+        ),
+        (
+            r#""key":"token","origins":[],"schemes":["bearer"]"#,
+            GrantError::EmptyCredential,
+        ),
+        (
+            r#""key":"token","origins":["https://api.example.com"],"schemes":[]"#,
+            GrantError::EmptyCredential,
+        ),
+        (
+            r#""key":"token","origins":["https://other.example.com"],"schemes":["bearer"]"#,
+            GrantError::CredentialOriginNotGranted,
+        ),
+        (
+            r#""key":"token","origins":["https://api.example.com"],"schemes":["bearer"],"value":"s3cret""#,
+            GrantError::Malformed,
+        ),
+        (
+            r#""key":"token","origins":["https://api.example.com"],"schemes":["digest"]"#,
+            GrantError::Malformed,
+        ),
+    ] {
+        assert_eq!(derive(&cred(body)), Err(err), "{body}");
+    }
+    let twice = format!(
+        r#"[{net},{{"kind":"credential","key":"t","origins":["https://api.example.com"],"schemes":["bearer"]}},
+            {{"kind":"credential","key":"t","origins":["https://api.example.com"],"schemes":["basic"]}}]"#
+    );
+    assert_eq!(derive(&twice), Err(GrantError::DuplicateCredential));
 }

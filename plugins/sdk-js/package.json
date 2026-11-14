@@ -1,0 +1,15 @@
+{
+  "name": "@deckpilot/plugin-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Type declarations for DeckPilot JavaScript plugins (plugin API 1.0). Requires the QuickJS runtime, which is not yet available. Not published.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "types": "./index.d.ts",
+  "files": [
+    "index.d.ts"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p ."
+  }
+}
