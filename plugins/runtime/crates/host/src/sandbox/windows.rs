@@ -1,33 +1,40 @@
-//! Windows: a Job Object the host assigns itself to, and a Low integrity
-//! token.
+//! Windows. Two cases, told apart by the process token:
 //!
-//! * Job: process memory limit, one active process (no child processes),
-//!   kill on job close, die on unhandled exception, all UI restrictions.
-//! * Low integrity (`S-1-16-4096`): the process can no longer open
-//!   Medium-integrity objects for writing (no-write-up), which covers the
-//!   user's files and registry keys.
-//!
-//! **Not covered** (requires launching the host in an AppContainer/LPAC,
-//! which is not implemented): reading the user's files and network access.
-
+//! * **Launched by the supervisor** (production): the host already runs in
+//!   an AppContainer without capabilities, inside a Job Object the
+//!   supervisor holds (`deckpilot-plugin-supervisor`, `windows.rs`). Here
+//!   the host only *verifies* that: the token is an AppContainer token with
+//!   zero capabilities, and the job it is in has one active process, kill
+//!   on close and the process memory limit. If the job cannot be verified
+//!   the host assigns itself to its own (nested) job as below. Reported as
+//!   `windows-appcontainer-job`, `full`: the user's files (read and write),
+//!   the network and process creation are denied by the OS.
+//! * **Started any other way** (no AppContainer): a Job Object the host
+//!   assigns itself to and a Low integrity token, as before. This denies
+//!   process creation and writes to Medium-integrity objects (the user's
+//!   files), but **not** reading the user's files or network access, so it
+//!   is reported as `windows-job-lowil`, `partial`.
+use std::ffi::c_void;
 use std::ptr::null;
 
 use deckpilot_plugin_abi::protocol::{Enforcement, SandboxReport};
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::Security::{
-    GetLengthSid, PSID, SID_AND_ATTRIBUTES, SetTokenInformation, TOKEN_ADJUST_DEFAULT,
-    TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TokenIntegrityLevel,
+    GetLengthSid, GetTokenInformation, PSID, SID_AND_ATTRIBUTES, SetTokenInformation,
+    TOKEN_ADJUST_DEFAULT, TOKEN_GROUPS, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TokenCapabilities,
+    TokenIntegrityLevel, TokenIsAppContainer,
 };
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
     JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_UILIMIT_DESKTOP,
     JOB_OBJECT_UILIMIT_DISPLAYSETTINGS, JOB_OBJECT_UILIMIT_EXITWINDOWS,
     JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES, JOB_OBJECT_UILIMIT_READCLIPBOARD,
     JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS, JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
     JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation, SetInformationJobObject,
+    JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+    SetInformationJobObject,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -132,20 +139,132 @@ fn low_integrity() -> Result<(), SandboxError> {
     Ok(())
 }
 
+/// What the token says about the AppContainer: `None` when the process is
+/// not in one, otherwise the number of capabilities.
+fn app_container() -> Result<Option<u32>, SandboxError> {
+    // SAFETY: Win32 calls with out buffers of the stated sizes; the token
+    // handle is closed on every path.
+    unsafe {
+        let mut token: HANDLE = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return Err(last_error("OpenProcessToken"));
+        }
+        let mut is_ac = 0u32;
+        let mut len = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenIsAppContainer,
+            &mut is_ac as *mut u32 as *mut c_void,
+            std::mem::size_of::<u32>() as u32,
+            &mut len,
+        );
+        if ok == 0 {
+            CloseHandle(token);
+            return Err(last_error("GetTokenInformation(TokenIsAppContainer)"));
+        }
+        if is_ac == 0 {
+            CloseHandle(token);
+            return Ok(None);
+        }
+        GetTokenInformation(token, TokenCapabilities, std::ptr::null_mut(), 0, &mut len);
+        if len < std::mem::size_of::<u32>() as u32 {
+            CloseHandle(token);
+            return Err(last_error("GetTokenInformation(TokenCapabilities, size)"));
+        }
+        let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+        let ok = GetTokenInformation(
+            token,
+            TokenCapabilities,
+            buf.as_mut_ptr() as *mut c_void,
+            len,
+            &mut len,
+        );
+        CloseHandle(token);
+        if ok == 0 {
+            return Err(last_error("GetTokenInformation(TokenCapabilities)"));
+        }
+        Ok(Some((*(buf.as_ptr() as *const TOKEN_GROUPS)).GroupCount))
+    }
+}
+
+/// Whether the job the process is in (the innermost one) has the limits
+/// the supervisor sets. `Err` when it cannot be queried.
+fn supervisor_job() -> Result<bool, SandboxError> {
+    // SAFETY: Win32 calls with out buffers of the stated sizes; a null job
+    // handle means the calling process's job.
+    unsafe {
+        let mut in_job = 0;
+        if IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut in_job) == 0 {
+            return Err(last_error("IsProcessInJob"));
+        }
+        if in_job == 0 {
+            return Ok(false);
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        if QueryInformationJobObject(
+            std::ptr::null_mut(),
+            JobObjectExtendedLimitInformation,
+            &mut info as *mut _ as *mut c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            std::ptr::null_mut(),
+        ) == 0
+        {
+            return Err(last_error("QueryInformationJobObject"));
+        }
+        let flags = info.BasicLimitInformation.LimitFlags;
+        let need = JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+            | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+        Ok(flags & need == need
+            && info.BasicLimitInformation.ActiveProcessLimit == 1
+            && info.ProcessMemoryLimit != 0
+            && info.ProcessMemoryLimit <= PROCESS_MEMORY_LIMIT)
+    }
+}
+
 pub fn apply() -> Result<SandboxReport, SandboxError> {
-    job()?;
-    low_integrity()?;
-    Ok(SandboxReport {
-        mechanism: "windows-job-lowil".into(),
-        // File reads and network are not restricted without AppContainer.
-        enforcement: Enforcement::Partial,
-        notes: vec![
-            format!(
-                "job: memory {} MiB, 1 active process, kill on close, ui restricted",
-                PROCESS_MEMORY_LIMIT >> 20
-            ),
-            "token: low integrity".into(),
-            "NOT restricted: file reads, network (AppContainer not implemented)".into(),
-        ],
-    })
+    let memory = PROCESS_MEMORY_LIMIT >> 20;
+    match app_container()? {
+        Some(0) => {
+            let job_note = match supervisor_job() {
+                Ok(true) => format!(
+                    "job (supervisor): memory {memory} MiB, 1 active process, kill on close"
+                ),
+                verified => {
+                    // Not verifiable: add our own (nested) job.
+                    job()?;
+                    format!(
+                        "job (own, supervisor job not verified: {verified:?}): memory {memory} MiB, 1 active process, kill on close, ui restricted"
+                    )
+                }
+            };
+            Ok(SandboxReport {
+                mechanism: "windows-appcontainer-job".into(),
+                enforcement: Enforcement::Full,
+                notes: vec![
+                    "appcontainer: 0 capabilities (no network), low integrity".into(),
+                    job_note,
+                ],
+            })
+        }
+        Some(n) => Err(SandboxError(format!(
+            "AppContainer token has {n} capabilities; the host requires none"
+        ))),
+        None => {
+            job()?;
+            low_integrity()?;
+            Ok(SandboxReport {
+                mechanism: "windows-job-lowil".into(),
+                // File reads and network are not restricted without AppContainer.
+                enforcement: Enforcement::Partial,
+                notes: vec![
+                    format!(
+                        "job: memory {memory} MiB, 1 active process, kill on close, ui restricted"
+                    ),
+                    "token: low integrity".into(),
+                    "NOT restricted: file reads, network (not launched in an AppContainer by the supervisor)".into(),
+                ],
+            })
+        }
+    }
 }

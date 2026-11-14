@@ -77,6 +77,18 @@ jobs:
         run: cargo clippy --locked -p deckpilot-plugin-guest -p deckpilot-test-guest -p deckpilot-plugin-sdk -p deckpilot-sdk-test-guest -p hello-weather --target wasm32-unknown-unknown -- -D warnings
       - name: Test
         run: cargo test --locked -- --nocapture
+      # AppContainer network isolation is enforced by the Windows Filtering
+      # Platform; show its state next to the probe results.
+      - name: Windows firewall and AppContainer profiles
+        if: always() && runner.os == 'Windows'
+        env:
+          # Git Bash would rewrite the /s and /f switches into paths.
+          MSYS_NO_PATHCONV: "1"
+        run: |
+          netsh advfirewall show allprofiles state || true
+          sc query mpssvc || true
+          # Profiles the supervisor created and did not delete (expected: none).
+          reg query 'HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Mappings' /s /f DeckPilot.PluginHost || true
       - name: Sandbox probe output
         if: always()
         run: |

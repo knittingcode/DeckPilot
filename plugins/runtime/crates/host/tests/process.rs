@@ -16,8 +16,8 @@ use deckpilot_plugin_broker::{
     Allowed, ApprovedPermissions, Broker, ManualClock, MemoryAudit, PluginId, RateLimits,
 };
 use deckpilot_plugin_supervisor::{
-    CapabilityExecutor, HostCommand, HostConfig, HostError, PluginHost, RestartPolicy, Supervisor,
-    SupervisorError, SupervisorState,
+    CapabilityExecutor, HostCommand, HostConfig, HostError, HostProcess, PluginHost, RestartPolicy,
+    Supervisor, SupervisorError, SupervisorState,
 };
 use deckpilot_plugin_test_fixtures::TEST_GUEST;
 use serde_json::json;
@@ -87,9 +87,13 @@ fn host_starts_sandboxed_and_serves_invocations() {
     } else if cfg!(target_os = "linux") {
         "linux-landlock-seccomp"
     } else {
-        "windows-job-lowil"
+        "windows-appcontainer-job"
     };
-    assert_eq!(s.mechanism, expected);
+    assert_eq!(s.mechanism, expected, "{s:?}");
+    if cfg!(windows) {
+        // The supervisor's AppContainer and job were verified by the host.
+        assert_eq!(s.enforcement, Enforcement::Full, "{s:?}");
+    }
     let mut ex = Executor::default();
     let o = h
         .invoke("add", &params(json!({"a": 2, "b": 3})), T, &mut ex)
@@ -425,7 +429,9 @@ fn crashes_outside_the_window_are_forgotten() {
 #[test]
 fn spawned_host_gets_no_environment_and_no_extra_descriptors() {
     // The probe binary is spawned exactly like the host (same command
-    // builder), without the sandbox so that it can inspect itself.
+    // builder), without the host's own sandbox stage so that it can
+    // inspect itself. On Windows it still runs in the supervisor's
+    // AppContainer, whose environment holds only `SystemRoot`.
     let mut c = HostCommand::new(PROBE)
         .arg("--no-os-sandbox")
         .arg("env_count")
@@ -433,24 +439,38 @@ fn spawned_host_gets_no_environment_and_no_extra_descriptors() {
     if cfg!(unix) {
         c = c.arg("open_fds").arg("-");
     }
-    let out = c.command().stdin(Stdio::null()).output().unwrap();
-    let text = String::from_utf8_lossy(&out.stdout);
+    let mut child = c.spawn().unwrap();
+    drop(child.stdin.take());
+    let mut text = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut text)
+        .unwrap();
+    child.wait().unwrap();
     let lines: Vec<serde_json::Value> = text
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
+    assert!(lines.len() > 1, "{text}");
     for l in &lines[1..] {
-        assert_eq!(l["detail"], "0", "{l}");
+        let expected = if cfg!(windows) && l["kind"] == "env_count" {
+            "1"
+        } else {
+            "0"
+        };
+        assert_eq!(l["detail"], expected, "{l}");
     }
 }
 
 // --- malformed frames sent straight to the host process ---
 
-fn raw_host() -> std::process::Child {
-    HostCommand::new(HOST).command().spawn().unwrap()
+fn raw_host() -> HostProcess {
+    HostCommand::new(HOST).spawn().unwrap()
 }
 
-fn read_ready(child: &mut std::process::Child) {
+fn read_ready(child: &mut HostProcess) {
     let out = child.stdout.as_mut().unwrap();
     let m: Option<ToSupervisor> = read_frame(out, 1 << 20).unwrap();
     assert!(matches!(m, Some(ToSupervisor::Ready { .. })));

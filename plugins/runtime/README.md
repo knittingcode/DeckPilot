@@ -79,23 +79,53 @@ and its epoch-ticker thread are created, then stage 2 for all threads.
 | --- | --- | --- |
 | macOS | `sandbox_init` with `(version 1)(deny default)`, `RLIMIT_CORE=0` | file read, write, directory listing, TCP connect, Unix socket connect, exec |
 | Linux | Landlock (best effort up to ABI 9: all file access, TCP, scopes) + seccomp-bpf allowlist with TSYNC (default `EPERM`; no `open*`, `socket`, `connect`, `execve`, `clone`, `ptrace`) | the same; Landlock alone is also tested (`EACCES`) |
-| Windows | Job Object (256 MiB process memory, 1 active process, kill on close, die on unhandled exception, UI restrictions) + Low integrity token | exec, writes to the user's (Medium-integrity) files. **Not denied: file reads and network** (needs AppContainer, not implemented) |
+| Windows | **Launched by the supervisor** (`crates/supervisor/src/windows.rs`, `CreateProcessW` with `STARTUPINFOEXW`): a fresh AppContainer profile per host process with **no capabilities** (`PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`), a supervisor-held Job Object assigned at creation (`PROC_THREAD_ATTRIBUTE_JOB_LIST`: 256 MiB process memory, 1 active process, kill on close, die on unhandled exception, UI restrictions), child process creation restricted (`PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY`), only the two pipe handles inherited (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), environment `SystemRoot` only. The host verifies token and job and reports `windows-appcontainer-job`, `full`. Started any other way: own Job Object + Low integrity token, `windows-job-lowil`, `partial` | AppContainer: file read, write and directory listing in `%TEMP%` and the user profile, TCP connect to loopback, exec; a system file stays readable (control). Fallback: exec and writes only. **Implemented, not verified** (see below) |
+
+Windows design notes and trade-offs:
+
+- AppContainer rather than a restricted token: a restricted token plus Low
+  integrity still reads everything the user can read and opens network
+  connections; an AppContainer without capabilities denies both by default
+  (user files carry no ACE for the container or `ALL APPLICATION
+  PACKAGES`; loopback is blocked for every AppContainer). Not LPAC: the
+  less privileged variant would also lose the `ALL APPLICATION PACKAGES`
+  read access to `System32` and `Program Files` that the host needs to load.
+- Profiles: one per host process (`DeckPilot.PluginHost.<agent pid>.<n>`),
+  deleted with `DeleteAppContainerProfile` after the process exits. A
+  stable per-install name was rejected because processes in the same
+  AppContainer can open each other (one plugin's host could reach
+  another's) and its private storage would persist. A profile left by a
+  crashed agent is removed when its name comes round again; otherwise it
+  stays (empty) until removed.
+- The container must read and execute the host binary. Under `Program
+  Files` it already can; elsewhere the supervisor adds an `ALL APPLICATION
+  PACKAGES` read/execute ACE **to the host executable only** (best effort,
+  once per path). The working directory is `System32`.
+- The two child pipe ends are inheritable for the duration of the spawn; a
+  `std::process::Command` started by another agent thread in that window
+  would inherit them too (only delaying end-of-file; no access to the host).
+- Because the supervisor holds the job, the host dies when the agent does
+  (kill on job close) on Windows.
 
 ## Verification status
 
 | Claim | macOS 27.2 arm64 (local) | Linux aarch64 (Docker Desktop, kernel 7.0 linuxkit, local) | Linux x86_64, Windows |
 | --- | --- | --- | --- |
-| All tests pass (`cargo test --locked`) | verified | verified | CI workflow; not yet run |
-| Host runs guests under its own OS sandbox (JIT, traps, epoch) | verified | verified | CI |
-| Sandbox probes deny files, network, exec, on main and helper thread | verified | verified (seccomp `EPERM`; Landlock-only run `EACCES`) | Windows: exec and write only |
-| clippy `-D warnings`, `fmt --check` | verified | verified | Windows: type-checked with clippy locally for `x86_64-pc-windows-msvc`, not run |
+| All tests pass (`cargo test --locked`) | verified | verified | Linux x86_64 and the Job Object/Low integrity fallback on Windows: CI run 43626042263. AppContainer launch: **not verified** (no CI run of it yet) |
+| Host runs guests under its own OS sandbox (JIT, traps, epoch) | verified | verified | Windows in the AppContainer: **not verified**, `crates/host/tests/process.rs` and `sdk_e2e.rs` run every host through it on `windows-latest` |
+| Sandbox probes deny files, network, exec, on main and helper thread | verified | verified (seccomp `EPERM`; Landlock-only run `EACCES`) | Windows AppContainer: **not verified**, `app_container_denies_user_files_network_and_exec` (non-ignored) must pass on `windows-latest` |
+| clippy `-D warnings`, `fmt --check` | verified | verified | Windows: `cargo check`/`clippy --all-targets -D warnings` for `x86_64-pc-windows-msvc` pass locally (type check only, nothing run) |
 
 **NOT VERIFIED / not implemented:**
 
-- Windows AppContainer/LPAC (file reads and network are not denied on
-  Windows); a supervisor-held Job Object so that the host dies with the
-  agent (today the host exits on stdin EOF, which needs the host to be
-  responsive).
+- Windows AppContainer isolation is implemented but has **never run**:
+  it was written and type-checked on macOS; the only verification will be
+  the `windows-latest` CI job (until a run is green, treat Windows plugin
+  execution as unverified). Loopback/network denial relies on the
+  Windows Filtering Platform AppContainer rules; the CI job prints the
+  firewall state next to the probe results. The supervisor-held job (host
+  dies with the agent) is not tested on its own. On macOS and Linux the
+  host still exits on stdin EOF only, which needs it to be responsive.
 - Signed, hardened-runtime macOS helper (`allow-jit`), notarization,
   Pulley; the Seatbelt interface is deprecated and undocumented.
 - Linux seccomp allowlist on distributions other than the Debian-based

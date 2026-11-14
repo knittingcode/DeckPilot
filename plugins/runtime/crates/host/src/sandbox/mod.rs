@@ -5,7 +5,7 @@
 //! | --- | --- | --- |
 //! | macOS | Seatbelt via `sandbox_init` with a `(deny default)` profile; `RLIMIT_CORE = 0` | file reads and writes, network, process exec and fork, mach-lookup, IPC |
 //! | Linux | `PR_SET_NO_NEW_PRIVS`, `PR_SET_DUMPABLE = 0`, `RLIMIT_CORE = 0`, Landlock (best available ABI: all file access, TCP bind/connect on ABI 4+, abstract-socket and signal scoping on ABI 6+), seccomp-bpf allowlist | `open*`, `socket`, `connect`, `execve`, `fork`/`clone`, `ptrace` and everything else not on the allowlist (EPERM) |
-//! | Windows | Job Object (process memory limit, one active process, kill on close, die on unhandled exception, UI restrictions) and the process token lowered to Low integrity | creating processes; writes to Medium-integrity objects (the user's files). **Not** denied: reading the user's files and network access (needs AppContainer, not implemented) |
+//! | Windows | Launched by the supervisor in an AppContainer without capabilities and a supervisor-held Job Object (process memory limit, one active process, kill on close, die on unhandled exception, UI restrictions); the host verifies both (`windows-appcontainer-job`). Started otherwise: own Job Object and Low integrity token (`windows-job-lowil`, partial) | AppContainer: reading and writing the user's files, network (including loopback), creating processes. Fallback: only creating processes and writes to Medium-integrity objects |
 //!
 //! [`apply`] returns a [`SandboxReport`] that the host sends in `ready`;
 //! the supervisor refuses a host without one unless configured otherwise.
@@ -41,7 +41,7 @@ impl std::error::Error for SandboxError {}
 
 /// Process memory limit enforced by the OS where available (Windows Job
 /// Object). Linear memory is capped separately at 64 MiB per Store.
-pub const PROCESS_MEMORY_LIMIT: usize = 256 << 20;
+pub const PROCESS_MEMORY_LIMIT: usize = deckpilot_plugin_abi::limits::HOST_PROCESS_MEMORY;
 
 /// First stage, while the process is still single-threaded (Linux:
 /// `no_new_privs`, rlimits, Landlock, which new threads inherit). Create the
