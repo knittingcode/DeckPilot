@@ -1,0 +1,30 @@
+# Standalone feasibility spike for the plugin runtime (see RESULTS.md).
+# The empty [workspace] table keeps this package out of the repository's
+# root workspace; it has its own Cargo.lock and target directory.
+[workspace]
+
+[package]
+name = "runtime-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+wasmtime = { version = "=50.0.1", default-features = false, features = ["cranelift", "runtime", "std", "wat"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "plugin-host"
+path = "src/bin/plugin-host.rs"
+
+[[bin]]
+name = "ipc-bench"
+path = "src/bin/ipc-bench.rs"
+
+[profile.dev.package."*"]
+opt-level = 2
