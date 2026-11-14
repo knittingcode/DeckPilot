@@ -22,11 +22,16 @@
 //! is not enforced by default), revocations can be lifted only by a
 //! root-signed key set with `seq_floor_reset`, and `seq_floor` is a floor
 //! (`max`) unless reset.
+//!
+//! With the `publish` feature, the `publish` module and the `deckpilot-registry`
+//! binary add the offline tooling that generates and signs the site.
 
 mod client;
 mod datetime;
 mod error;
 mod model;
+#[cfg(feature = "publish")]
+pub mod publish;
 pub mod sig;
 mod state;
 

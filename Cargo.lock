@@ -1280,6 +1280,23 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
+name = "deckpilot-plugin-store"
+version = "0.6.0-alpha.3"
+dependencies = [
+ "deckpilot-plugin-manifest",
+ "deckpilot-plugin-package",
+ "deckpilot-plugin-registry",
+ "rusqlite",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]
