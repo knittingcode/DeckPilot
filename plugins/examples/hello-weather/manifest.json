@@ -14,7 +14,8 @@
   "license": "Apache-2.0",
   "keywords": ["sample", "weather"],
   "categories": ["other"],
-  "engines": { "deckpilot": ">=0.7.0 <1.0.0", "pluginApi": "^1.0", "sdk": "0.1.0" },
+  "engines": { "deckpilot": ">=0.5.0 <1.0.0", "pluginApi": "^1.0", "sdk": "0.1.0" },
+  "runtime": { "kind": "wasm", "abi": 1 },
   "entry": "src/lib.rs",
   "icons": { "128": "assets/icon-128.png" },
   "permissions": [

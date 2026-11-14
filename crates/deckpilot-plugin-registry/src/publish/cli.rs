@@ -40,6 +40,9 @@ DECKPILOT_REGISTRY_KEY_PASSWORD; never printed.
   keyset rotate [--root PUB]... [--root-threshold N] [--index PUB] [--timestamp PUB]
                 [--seq-floor N] [--seq-floor-reset]
   keyset sign --key FILE [--version N]
+  package --plugin-dir DIR --module FILE.wasm --out FILE.dpplugin
+      Builds a package: manifest.json, LICENSE and the files the manifest names
+      from DIR, the module as plugin.wasm (plugin ABI 1, checked).
   publisher --namespace NS --github-id N --login LOGIN [--display-name NAME] [--verified]
   add-version --package FILE.dpplugin [--plugin-detail plugin.json]
               --source-repository OWNER/NAME --tag TAG --commit SHA [--source-path PATH]
@@ -289,6 +292,23 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
     let ws = opts.workspace()?;
     let message = match command.as_str() {
         "help" | "--help" | "-h" => USAGE.to_owned(),
+        "package" => {
+            let dir = PathBuf::from(opts.required("plugin-dir")?);
+            let module = PathBuf::from(opts.required("module")?);
+            let out = PathBuf::from(opts.required("out")?);
+            opts.finish()?;
+            let built = super::pack::package(&dir, &module)?;
+            std::fs::write(&out, &built.bytes)
+                .map_err(|e| PublishError(format!("{}: {e}", out.display())))?;
+            format!(
+                "{} {} packaged to {} (sha256 {}, {} bytes)",
+                built.manifest.id,
+                built.manifest.version,
+                out.display(),
+                built.integrity.package.sha256,
+                built.integrity.package.size
+            )
+        }
         "keys generate" => {
             let role = KeyRole::parse(&opts.required("role")?)?;
             let out = PathBuf::from(opts.required("out")?);
