@@ -1,0 +1,38 @@
+[package]
+name = "deckpilot-plugin-store"
+description = "Experimental: encrypted storage and crash-safe install lifecycle of DeckPilot plugins. Not used by DeckPilot yet."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+deckpilot-plugin-manifest.workspace = true
+deckpilot-plugin-package.workspace = true
+# Only for the revocation verdict (`InstalledVerdict`) and its source.
+deckpilot-plugin-registry.workspace = true
+# The same SQLite build as deckpilot-storage (SQLCipher, see `[features]`),
+# but its own database file: this crate never opens the configuration
+# database and does not depend on deckpilot-storage (which pulls the app's
+# core, device and keystore crates).
+rusqlite.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[features]
+# The plugin database is always encrypted with SQLCipher, exactly as the
+# configuration database (`deckpilot-storage`): OpenSSL is built from source
+# and linked statically. Without the feature every open is refused.
+default = ["sqlcipher"]
+sqlcipher = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
+
+[lints]
+workspace = true
