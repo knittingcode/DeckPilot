@@ -70,23 +70,24 @@ Developer ID (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
 `APPLE_SIGNING_IDENTITY`); the builds are never notarized. The *Update
 continuity* workflow (`.github/workflows/update-continuity.yml`) runs it on a
 macOS runner with a temporary keychain: no Apple submission, no release,
-nothing public. It runs only when started by hand
-(`gh workflow run "Update continuity" --ref main`), never on pull requests:
+nothing public. It runs only when started by hand on a release tag, in the
+`production-release` environment (approve the deployment):
+`gh workflow run "Update continuity" --ref v<version>`, never on pull
+requests or branches:
 it builds the app (dependency installation, build scripts) in the job that
 holds the certificate, so it runs only for a reviewed ref, without
 restoring caches of other workflows.
 
-The *Signing check* workflow holds the release secrets on every pull
-request, so its jobs run only code that is already trusted: a sparse
-checkout of `.github/scripts` — on pull requests from the **base commit**
-(already on `main`), not from the pull request — and nothing else (no
-dependency installation, no build, no cache). A pull request that changes
-`updater-key-pair.py`, `apple-certificate.sh` or `apple-api-key.sh` is
-therefore checked with the previous versions against the real secrets, and
-its own versions are tested only with throwaway keys
-(`tools/release-pipeline/test-updater-key-pair.sh` in the *Release pipeline
-tests*); the new versions meet the secrets first on the push to `main`
-after review.
+No workflow that pull requests trigger holds a signing secret. The
+required check *Updater signing keys match* (*Signing check* workflow) uses
+none: it checks the pinned public key `.github/updater.pub` against the
+variable and runs `updater-key-pair.py` on committed throwaway keys, with
+the pull request's own scripts. The real updater key meets
+`updater-key-pair.py` in the release's `prepare` job; the Developer ID
+certificate and the API key meet `apple-certificate.sh` and
+`apple-api-key.sh` in the *Apple signing check* — both in
+`production-release`, on a tag of a reviewed `main` commit, with a sparse or
+pinned checkout and nothing installed before the check.
 
 ## 3. Stream Deck MK.2 (physical device)
 

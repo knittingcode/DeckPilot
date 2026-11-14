@@ -152,15 +152,20 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.validate-tag.outputs.sha }}
+      # First, before any build or dependency runs in this job: the signing
+      # key and its password belong to the public key pinned in
+      # .github/updater.pub, and DECKPILOT_UPDATER_PUBKEY (compiled into the
+      # builds) is that key. The only check that sees the real updater key;
+      # the required check "Updater signing keys match" uses none
+      # (.github/scripts/updater-key-pair.py, Python standard library only).
+      - name: Signing key, password and pinned public key belong together
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
+        run: python3 -I .github/scripts/updater-key-pair.py --pinned .github/updater.pub --require-variable
       - name: Install Rust toolchain
         run: rustup toolchain install
-      - name: Signing configuration is present
-        env:
-          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
-        run: |
-          test -n "$KEY" || { echo "::error::secret TAURI_SIGNING_PRIVATE_KEY is not configured"; exit 1; }
-          test -n "$PUBKEY" || { echo "::error::variable DECKPILOT_UPDATER_PUBKEY is not configured"; exit 1; }
       - name: Updater public key is well formed
         env:
           DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}

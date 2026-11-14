@@ -179,13 +179,16 @@ What the release workflow does on macOS:
    (`stapler validate`). If the bundler skipped notarization (for example
    because of incomplete credentials), this step fails the release.
 
-The *Signing check* workflow checks the credentials without a release: the
-certificate provides exactly the configured identity of the configured team,
-a throwaway executable signs with it (hardened runtime, secure timestamp),
-and Apple's notary service accepts the API key. A manual run with
-`notarize: true` (`gh workflow run "Signing check" -f notarize=true`) also
-submits that throwaway executable for notarization; this records a
-submission in the developer account.
+The *Apple signing check* workflow (`apple-signing-check.yml`) checks the
+credentials without a release: the certificate provides exactly the
+configured identity of the configured team, a throwaway executable signs
+with it (hardened runtime, secure timestamp), and Apple's notary service
+accepts the API key. It runs in the `production-release` environment, so
+only on a release tag and after a reviewer approves the deployment:
+`gh workflow run "Apple signing check" --ref v<version>`. With
+`-f notarize=true` it also submits that throwaway executable for
+notarization; this records a submission in the developer account. On any
+other ref the environment refuses the job before a secret is read.
 
 ### Windows: Authenticode (not yet provisioned)
 
@@ -202,19 +205,33 @@ The updater signature is independent of all platform signatures.
 
 Without building or publishing anything:
 
-- **In CI:** the *Signing check* workflow (`.github/workflows/signing-check.yml`)
-  runs on every pull request, on every push to `main` and on demand
-  (`gh workflow run "Signing check"`). *Updater signing keys match*
-  decrypts the secret key with its password and checks that its key ID and
-  public key equal `DECKPILOT_UPDATER_PUBKEY`
-  (`.github/scripts/updater-key-pair.py`, Python standard library only;
-  tested with throwaway keys by `tools/release-pipeline/test-updater-key-pair.sh`).
-  *wrong password or key* means the two secrets do not belong together.
-  While a secret is in the job, nothing else runs: the jobs check out only
-  `.github/scripts`, restore no cache and install no dependencies, so no
-  package installation or build script can see a secret. Pull requests
-  from forks and from Dependabot get no secrets; the jobs are skipped for
-  them, and a skipped required check counts as passed.
+- **In CI, without secrets:** *Updater signing keys match*, the required
+  check of the *Signing check* workflow (`.github/workflows/signing-check.yml`,
+  every pull request, every push to `main`), uses no secret
+  (`.github/scripts/updater-key-pair-fixtures.sh`). It checks that the
+  release public key pinned in `.github/updater.pub` is a well-formed
+  Ed25519 minisign key and that the repository variable
+  `DECKPILOT_UPDATER_PUBKEY` (compiled into release builds) is that key
+  (required on `main`; pull requests from forks may not see the variable),
+  and that `.github/scripts/updater-key-pair.py` accepts and refuses the
+  committed throwaway keys in `.github/scripts/fixtures`. It runs the same
+  way for pull requests from this repository, from forks and from
+  Dependabot. `tools/release-pipeline/test-updater-key-pair.sh` also tests
+  the script with keys freshly made by the Tauri CLI.
+- **In the release, with the real key:** the release workflow's `prepare`
+  job, in the `production-release` environment, first runs
+  `updater-key-pair.py --pinned .github/updater.pub --require-variable`:
+  the secret key decrypts with its password, and its key ID and public key
+  equal the pinned key and the variable. *wrong password or key* means the
+  two secrets do not belong together. It runs before any toolchain,
+  dependency or build step of the job, and the release stops there if it
+  fails. A new release key means a new `.github/updater.pub` (reviewed like
+  any change) together with the variable.
+- **Secret isolation:** `tools/release-pipeline/check-secret-isolation.py`
+  (run by the *Release pipeline tests*) refuses any workflow that pull
+  requests or merge queue groups trigger and that references a signing
+  secret, any job with a signing secret outside `production-release`, and
+  the triggers `pull_request_target` and `workflow_run`.
 - **Locally:** sign a throwaway file with your key (the password is read
   without echo and never appears in the command line) and verify it against
   the public key:
@@ -481,16 +498,14 @@ are typed or piped from the offline copies, never echoed or logged.
    the draft afterwards (`tools/release-pipeline/discard-draft.sh <tag>`).
 5. **Only then, with the owner's explicit approval, remove the
    repository-level secrets** (`gh secret delete <name>` for each of the
-   five). Before that, decide how the other workflows that read them keep
-   working: *Signing check* (`signing-check.yml`, whose *Updater signing
-   keys match* is a required check of `main` and runs on every pull request
-   and push to `main`) and *Update continuity* (`update-continuity.yml`)
-   read the repository secrets and are not in the environment. Putting them
-   into `production-release` would make every pull request wait for a
-   release reviewer; this is an open decision for the owner (for example a
-   separate environment for the checks, or keeping those secrets at
-   repository level), and the repository-level secrets must stay until it
-   is made.
+   five). No workflow needs them any more: the required check *Updater
+   signing keys match* uses no secret, and every job that reads a signing
+   secret — the release's `prepare` and `build`, the *Apple signing check*
+   and *Update continuity* — runs in `production-release`
+   (`tools/release-pipeline/check-secret-isolation.py`). While the
+   repository-level copies exist, a workflow on any branch that someone
+   with write access pushes can still reference them; deleting them is
+   what makes them unreachable outside the environment.
 
 ### Failure recovery
 
@@ -563,8 +578,9 @@ outputs, keeping every job behind `validate-tag`.
 ## Status
 
 The updater signing key pair and the Apple Developer ID and notarization
-credentials are provisioned in the repository settings; the *Signing check*
-workflow verifies them on every change to release code. Signing and
+credentials are provisioned in the `production-release` environment (and,
+until the owner deletes them, as repository secrets); the release's
+`prepare` job and the *Apple signing check* verify them on a release tag. Signing and
 notarization ran end to end for the draft test releases `v0.5.0-1` and
 `v0.5.0-2` (see [release-validation.md](release-validation.md)). Windows
 code signing is not provisioned. The two-stage publication (stage B) has

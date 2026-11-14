@@ -1,26 +1,20 @@
-# Proves that the configured signing credentials work, without building or
-# publishing a release:
+# The required check "Updater signing keys match", without any secret.
 #
-# - updater: the private key from the secrets, decrypted with its password,
-#   belongs to the public key from the repository variable
-#   (.github/scripts/updater-key-pair.py, standard library only);
-# - macOS: the Developer ID certificate provides the configured identity of
-#   the configured team, a throwaway executable is signed with it (hardened
-#   runtime, secure timestamp), and Apple's notary service accepts the App
-#   Store Connect API key (a read-only query). Submitting the throwaway
-#   executable for notarization is optional (manual run with `notarize`).
+# - The updater public key pinned in .github/updater.pub is a well-formed
+#   Ed25519 minisign key, and the repository variable
+#   DECKPILOT_UPDATER_PUBKEY (compiled into release builds) is that key.
+# - .github/scripts/updater-key-pair.py, which proves in the release
+#   workflow that the real signing key and its password belong to the
+#   pinned key, accepts and refuses committed throwaway keys
+#   (.github/scripts/updater-key-pair-fixtures.sh).
 #
-# No key material is printed; GitHub masks secrets.
-#
-# While a secret is in a job, no dependency installation, build script or
-# other repository code than .github/scripts runs: the jobs check out only
-# .github/scripts (sparse), restore no cache, install nothing, and pass each
-# secret only to the step that needs it. On pull requests they check out
-# the base commit, so only scripts already on main run next to the secrets;
-# a pull request's changes to them are tested with throwaway keys by the
-# Release pipeline tests (tools/release-pipeline/test-updater-key-pair.sh). Dependabot pull requests get no
-# secrets, so the jobs skip them (a skipped required check counts as
-# passed); pull requests from forks too.
+# No secret is referenced here, so the job is the same for pull requests
+# from this repository, from forks and from Dependabot, and it runs the
+# pull request's own scripts. The real signing key meets
+# updater-key-pair.py only in the release workflow's prepare job, in the
+# protected production-release environment (tag v*, required reviewer).
+# Developer ID and notarization credentials are checked by the Apple
+# signing check workflow, in the same environment.
 name: Signing check
 
 on:
@@ -38,11 +32,6 @@ on:
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
-    inputs:
-      notarize:
-        description: Also notarize a throwaway executable (records a submission in the Apple developer account)
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -52,110 +41,16 @@ jobs:
     name: Updater signing keys match
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # No secrets for pull requests from forks or from Dependabot.
-    if: >-
-      github.event_name != 'pull_request' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.user.login != 'dependabot[bot]')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # On pull requests the scripts of the base commit (already on
-          # main), never the pull request's own: a change to them runs next
-          # to the secrets only after review and merge. The same for merge
-          # queue groups: the scripts of the group's base commit on main.
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.sha }}
           persist-credentials: false
-          sparse-checkout: .github/scripts
-      # Only for the pull request that introduces the script: its base does
-      # not have it yet. Then no secret is used here, and the first push to
-      # main runs the check with the real secrets.
-      - name: The base commit has the key-pair check
-        id: base
-        run: |
-          if [ -f .github/scripts/updater-key-pair.py ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::the base commit has no .github/scripts/updater-key-pair.py yet; the key pair is checked on the push to main"
-          fi
-      # Python's standard library only (scrypt, BLAKE2b); -I: no site
-      # packages, no environment, nothing from the working directory.
-      - name: Signing key, password and public key belong together
-        if: steps.base.outputs.present == 'true'
+          sparse-checkout: .github
+      - name: Pinned updater public key and throwaway key pairs
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
-        run: python3 -I .github/scripts/updater-key-pair.py
-
-  apple:
-    name: Developer ID and notarization credentials
-    runs-on: macos-latest
-    timeout-minutes: 30
-    # Not on pushes to main: not a required check, and macOS minutes. No
-    # secrets for pull requests from forks or from Dependabot.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.user.login != 'dependabot[bot]')
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # On pull requests the scripts of the base commit (already on
-          # main), never the pull request's own: a change to them runs next
-          # to the secrets only after review and merge.
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
-          persist-credentials: false
-          sparse-checkout: .github/scripts
-      - name: The certificate provides the configured Developer ID identity
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
-          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-        run: .github/scripts/apple-certificate.sh
-      - name: Sign a throwaway executable with the hardened runtime
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
-          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-        run: |
-          binary="$RUNNER_TEMP/deckpilot-signing-check"
-          printf 'int main(void) { return 0; }\n' > "$RUNNER_TEMP/check.c"
-          clang -o "$binary" "$RUNNER_TEMP/check.c"
-          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --keychain "$DECKPILOT_KEYCHAIN" \
-            --options runtime --timestamp --identifier io.github.knittingcode.deckpilot.signing-check "$binary"
-          codesign --verify --strict --verbose=2 "$binary"
-          details=$(codesign --display --verbose=2 "$binary" 2>&1)
-          echo "$details" | grep -E "^(Identifier|TeamIdentifier|Timestamp|Authority)="
-          echo "$details" | grep -q -x "TeamIdentifier=$APPLE_TEAM_ID" || { echo "::error::not signed by team APPLE_TEAM_ID"; exit 1; }
-          echo "$details" | grep -q "flags=.*runtime" || { echo "::error::the hardened runtime is missing"; exit 1; }
-          echo "$details" | grep -q "^Timestamp=" || { echo "::error::no secure timestamp"; exit 1; }
-          echo "$details" | grep -q "^Authority=Developer ID Application" || { echo "::error::not a Developer ID Application signature"; exit 1; }
-      - name: The App Store Connect API key is well formed
-        env:
-          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
-        run: .github/scripts/apple-api-key.sh
-      - name: Apple's notary service accepts the API key
-        env:
-          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
-        run: |
-          xcrun notarytool history --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" \
-            --issuer "$APPLE_API_ISSUER" --output-format json > /dev/null
-          echo "notarytool authenticated with the App Store Connect API key"
-      - name: Notarize the throwaway executable
-        if: github.event_name == 'workflow_dispatch' && inputs.notarize
-        env:
-          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
-        run: |
-          ditto -c -k --keepParent "$RUNNER_TEMP/deckpilot-signing-check" "$RUNNER_TEMP/deckpilot-signing-check.zip"
-          .github/scripts/notarize.sh "$RUNNER_TEMP/deckpilot-signing-check.zip"
-      - name: Remove the temporary keychain and key
-        if: always()
-        run: |
-          [ -n "${DECKPILOT_KEYCHAIN:-}" ] && security delete-keychain "$DECKPILOT_KEYCHAIN" || true
-          rm -rf "$RUNNER_TEMP/private_keys" "$RUNNER_TEMP/certificate.p12"
+          # Pull requests from forks or Dependabot may not see repository
+          # variables; when the variable is visible it must be the pinned
+          # key, and on main and in merge queue groups it must be visible.
+          DECKPILOT_UPDATER_PUBKEY_OPTIONAL: ${{ github.event_name == 'pull_request' }}
+        run: .github/scripts/updater-key-pair-fixtures.sh

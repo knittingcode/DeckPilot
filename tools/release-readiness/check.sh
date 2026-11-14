@@ -76,7 +76,7 @@ case "$(uname -s)" in
     ;;
   *) skip "Linux packaging" "CI job" ;;
 esac
-skip "macOS signing and notarization" "Release workflow on a test tag, or Signing check workflow"
+skip "macOS signing and notarization" "Release workflow on a test tag, or Apple signing check workflow on a release tag"
 skip "signed update and Keychain continuity" "update-continuity workflow; tools/release-validation/update-test.sh"
 skip "manual platform checks" "see docs/release-readiness.md"
 
