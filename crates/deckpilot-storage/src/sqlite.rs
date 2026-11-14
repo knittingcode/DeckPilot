@@ -2758,17 +2758,24 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("deckpilot.db");
         SqliteStore::open(&path, &Encryption::None).unwrap();
-        // Two connections (the agent and the app), interleaving writes that
-        // read first. Kept small: on slow disks (CI) a larger load can make a
-        // writer wait longer than the busy timeout, which is not what this
-        // test is about — it catches the immediate "database is locked" of a
-        // deferred transaction that cannot upgrade its lock.
+        // Two connections (the agent and the app), writing at the same time
+        // with writes that read first. They start every round together, so
+        // each round one of them has to wait for the other's lock. The
+        // rounds keep that wait to a transaction or two: SQLite's busy
+        // handler polls and is not fair, so a writer committing back to back
+        // can keep the lock for longer than the busy timeout when commits
+        // are slow (seen on Windows CI). That is not what this test is
+        // about; it catches the immediate "database is locked" of a deferred
+        // transaction that cannot upgrade its lock.
+        let rounds = std::sync::Arc::new(std::sync::Barrier::new(2));
         let writers: Vec<_> = (0..2)
             .map(|n| {
                 let path = path.clone();
+                let rounds = std::sync::Arc::clone(&rounds);
                 std::thread::spawn(move || {
                     let store = SqliteStore::open(&path, &Encryption::None).unwrap();
                     for i in 0..10 {
+                        rounds.wait();
                         store
                             .record_launch(&format!("component-{n}"), "0.4.0")
                             .unwrap();
@@ -2785,6 +2792,45 @@ mod tests {
         let store = SqliteStore::open(&path, &Encryption::None).unwrap();
         assert_eq!(store.list_profiles().unwrap().len(), 20);
         drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_writer_waits_for_a_lock_held_by_another_connection() {
+        let dir = std::env::temp_dir().join(format!("deckpilot-locked-{}", ProfileId::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("deckpilot.db");
+        let holder = SqliteStore::open(&path, &Encryption::None).unwrap();
+        holder.record_launch("component", "0.3.0").unwrap();
+        // The other process is in the middle of a write.
+        holder
+            .connection_for_tests()
+            .execute_batch("BEGIN IMMEDIATE")
+            .unwrap();
+        let (starting, started) = std::sync::mpsc::channel();
+        let writer = {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                let store = SqliteStore::open(&path, &Encryption::None).unwrap();
+                starting.send(()).unwrap();
+                // Reads before it writes: a deferred transaction would fail
+                // at once instead of waiting.
+                let launch = store.record_launch("component", "0.4.0").unwrap();
+                store.save_profile(&Profile::new("Waited")).unwrap();
+                launch
+            })
+        };
+        started.recv().unwrap();
+        // Well within the busy timeout, so the writer is waiting meanwhile.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        holder
+            .connection_for_tests()
+            .execute_batch("COMMIT")
+            .unwrap();
+        let launch = writer.join().unwrap();
+        assert_eq!(launch.previous_version.as_deref(), Some("0.3.0"));
+        assert_eq!(holder.list_profiles().unwrap().len(), 1);
+        drop(holder);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
