@@ -939,3 +939,59 @@ fn bad_input_is_refused() {
     let error = fx.fails(&["keyset", "sign", "--key", &fx.key("k")]);
     assert!(error.contains("not a root key"), "{error}");
 }
+
+#[test]
+fn package_builds_from_a_plugin_directory() {
+    let fx = Fixture::new();
+    let reference = package("acme.alpha", "1.0.0");
+    let files =
+        deckpilot_plugin_package::read_archive(&reference.bytes, &Limits::default()).unwrap();
+    let plugin = fx.keys.path().join("plugin");
+    for (path, bytes) in &files {
+        if path == "plugin.wasm" {
+            continue;
+        }
+        let target = plugin.join(path);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(target, bytes).unwrap();
+    }
+    // Sources and build output next to the manifest are not packaged.
+    std::fs::create_dir_all(plugin.join("src")).unwrap();
+    std::fs::write(plugin.join("src/lib.rs"), "// source").unwrap();
+    let module = fx.keys.path().join("plugin.wasm");
+    std::fs::write(&module, &files["plugin.wasm"]).unwrap();
+    let out = fx.keys.path().join("out.dpplugin");
+    let args = |dir: &Path| {
+        vec![
+            "package".to_owned(),
+            "--plugin-dir".to_owned(),
+            dir.display().to_string(),
+            "--module".to_owned(),
+            module.display().to_string(),
+            "--out".to_owned(),
+            out.display().to_string(),
+        ]
+    };
+    let report = fx.run(&args(&plugin).iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(report.contains("acme.alpha 1.0.0 packaged"), "{report}");
+    // Deterministic: the same bytes as the builder's.
+    assert_eq!(std::fs::read(&out).unwrap(), reference.bytes);
+
+    // A module that is not plugin ABI 1 is refused.
+    std::fs::write(&module, b"\0asm\x01\0\0\0").unwrap();
+    let error = fx.fails(&args(&plugin).iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(error.contains("plugin.wasm"), "{error}");
+
+    // A manifest of the #191 JavaScript contract is refused, naming the
+    // contract.
+    std::fs::write(&module, &files["plugin.wasm"]).unwrap();
+    let mut manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
+    manifest.as_object_mut().unwrap().remove("runtime");
+    std::fs::write(
+        plugin.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let error = fx.fails(&args(&plugin).iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(error.contains("artifact-contract.md"), "{error}");
+}

@@ -21,6 +21,7 @@ template for your own plugin.
 | `src/lib.rs` | The plugin: `plugin()` declares it, `deckpilot_plugin_sdk::plugin!(plugin)` exports it |
 | `src/tests.rs` | Native unit tests: definition equals manifest, schema validity, both actions against a mock host |
 | `assets/icon-128.png` | The required 128×128 icon |
+| `LICENSE` | Packaged with the plugin (required in every package) |
 
 ## Build
 
@@ -164,10 +165,25 @@ what the plugin asked for.
 | SDK version | `engines.sdk`, `deckpilot_plugin_sdk::SDK_VERSION` | 0.1.0 |
 | Guest ABI | `deckpilot_plugin_sdk::ABI_VERSION` (checked at compile time) | 1 |
 
+## Package
+
+The manifest declares `"runtime": {"kind": "wasm", "abi": 1}`: the package
+ships the module as `plugin.wasm` (`docs/marketplace/artifact-contract.md`).
+
+```sh
+cargo run -p deckpilot-plugin-registry --features publish --bin deckpilot-registry -- \
+  package --plugin-dir plugins/examples/hello-weather \
+  --module plugins/runtime/target/wasm32-unknown-unknown/guest/hello_weather.wasm \
+  --out hello-weather.dpplugin
+```
+
+`apps/agent/tests/plugins_e2e.rs` packages it twice, publishes it into a
+local signed registry and installs, runs, updates, rolls back and removes it
+through a real agent (feature `plugins`).
+
 ## Not covered yet
 
-Packaging and signing (`.dpplugin`, registry), install consent UI, and the
-agent-side network executor are separate work; the end-to-end tests use a
-stub executor and check the broker's decisions only. Manifest version 1 has
+Publishing to a real registry and the install consent UI are separate
+work. Manifest version 1 has
 no parameter kinds for `number` or `secret`, so this sample does not use
 them (the SDK test guest in `plugins/runtime/guest/sdk-test-guest` does).
