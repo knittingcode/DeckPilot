@@ -8,6 +8,7 @@
 #   environments/<name>.json   GET repos/<repo>/environments/<name> (missing: 404)
 #   environments/<name>-policies.json
 #                              GET .../environments/<name>/deployment-branch-policies
+#   rulesets/<id>.json         GET repos/<repo>/rulesets (list) and rulesets/<id>
 #   releases/<id>.json         releases: GET (list, latest), POST, PATCH, DELETE
 #   assets/<id>/<name>         their assets (`gh release download`)
 #   latest                     the tag GitHub would call latest
@@ -105,6 +106,18 @@ case "$method $path" in
     tag="${path##*/commits/}"
     [ -f "$dir/tags/$tag" ] || not_found
     jq -n --arg sha "$(cat "$dir/tags/$tag")" '{sha: $sha}' | answer
+    ;;
+  "GET repos/"*/rulesets\?*)
+    if compgen -G "$dir/rulesets/*.json" > /dev/null; then
+      jq -s '[.[] | {id, name, target, enforcement}]' "$dir"/rulesets/*.json | answer
+    else
+      echo '[]' | answer
+    fi
+    ;;
+  "GET repos/"*/rulesets/*)
+    id="${path##*/rulesets/}"
+    [ -f "$dir/rulesets/$id.json" ] || not_found
+    answer < "$dir/rulesets/$id.json"
     ;;
   "GET repos/"*/environments/*/deployment-branch-policies)
     name="${path##*/environments/}"

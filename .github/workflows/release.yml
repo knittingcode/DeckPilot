@@ -4,7 +4,8 @@
 #            signing record and SHA256SUMS into a *draft* release, and checks
 #            all of it. Nothing is visible to users.
 #   Stage B  waits for approval in the "production-release" environment
-#            (required reviewers; fails closed if the environment is missing
+#            (required reviewers, or tag authority: docs/releasing.md,
+#            "Release authorization"; fails closed if the environment is missing
 #            or has none), checks the draft's assets again, publishes it in one
 #            update — as a pre-release for alpha/beta/rc, as latest only for
 #            the newest stable release — and verifies what users download.
@@ -111,8 +112,11 @@ jobs:
         run: tools/release-pipeline/validate-tag.sh "$TAG"
 
   # Before anything that names the production-release environment or reads
-  # a signing secret: the environment exists, requires a reviewer and
-  # deploys tags v* only (tools/release-pipeline/check-environment.sh).
+  # a signing secret: the environment exists, deploys tags v* only, cannot
+  # be bypassed by administrators, and authorizes each run either by a
+  # required reviewer or by a tag ruleset that restricts who may create v*
+  # tags (tools/release-pipeline/check-environment.sh; docs/releasing.md,
+  # "Release authorization").
   # GitHub would otherwise create it, unprotected, when prepare first names
   # it, and prepare and the builds would read the secrets without approval.
   # This job names no environment and reads no secret.
@@ -129,7 +133,7 @@ jobs:
           ref: ${{ needs.validate-tag.outputs.sha }}
           persist-credentials: false
           sparse-checkout: tools/release-pipeline
-      - name: production-release exists, requires a reviewer, deploys tags v* only
+      - name: production-release exists, deploys tags v* only, authorizes every run
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -672,8 +676,9 @@ jobs:
           tools/release-pipeline/check-assets.sh "$RUNNER_TEMP/assets.txt" --final
 
   # Stage B precondition: publication needs the "production-release"
-  # environment with at least one required reviewer. Without it this job
-  # fails and nothing is published. (GitHub creates a named environment,
+  # environment, still protected as the environment gate requires (a
+  # required reviewer, or tag authority). Otherwise this job fails and
+  # nothing is published. (GitHub creates a named environment,
   # unprotected, when a job first refers to it — stage A's prepare job may
   # have done so — so its existence alone proves nothing.)
   publish-gate:
@@ -689,7 +694,7 @@ jobs:
         with:
           ref: ${{ needs.validate-tag.outputs.sha }}
           persist-credentials: false
-      - name: production-release still requires a reviewer and tags v* only
+      - name: production-release still authorizes every run and deploys tags v* only
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
