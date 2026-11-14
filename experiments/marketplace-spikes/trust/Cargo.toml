@@ -1,0 +1,38 @@
+# Feasibility spikes for the plugin marketplace trust model
+# (docs/marketplace/architecture.md, PR #191):
+#   spike 4: package signing and verification
+#   spike 5: static registry trust (key set chain, timestamp, index)
+#
+# Standalone project: NOT a member of the DeckPilot workspace.
+[workspace]
+
+[package]
+name = "marketplace-trust-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+
+[dependencies]
+# Reused unchanged: the app updater's minisign verifier (Tauri base64 format).
+deckpilot-update = { path = "../../../crates/deckpilot-update" }
+# Only to read the trusted comment of an already verified signature.
+minisign-verify = "0.3"
+# Signing is only needed by the registry-side helpers (`signer`), which a
+# real client would not contain.
+minisign = "0.10"
+base64 = "0.23"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+semver = "1"
+thiserror = "2"
+time = { version = "0.3", features = ["parsing", "formatting", "macros", "serde"] }
+tar = { version = "0.4", default-features = false }
+flate2 = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.test]
+opt-level = 2

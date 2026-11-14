@@ -1,0 +1,270 @@
+# SKETCH ONLY. Not a real workflow, never committed to .github/workflows.
+#
+# What `.github/workflows/publish.yml` of the separate registry repository
+# `knittingcode/deckpilot-plugins` could look like (design §11.5 of
+# docs/marketplace/architecture.md, PR #191), with the trust model of
+# experiments/marketplace-spikes/trust.
+#
+# Signing-key custody:
+#   * REGISTRY_INDEX_KEY(+_PASSWORD) exist ONLY as environment secrets of
+#     `registry-release`: required reviewers, deployment branches = `main`
+#     only, admins cannot bypass (environment protection rule).
+#   * REGISTRY_TIMESTAMP_KEY(+_PASSWORD) exist ONLY in `registry-timestamp`:
+#     `main` only, no reviewer (timestamp.yml runs daily unattended; this key
+#     can only freeze, never point at unsigned content).
+#   * Root keys are never in GitHub (offline, maintainer machine + backup).
+#   * No repository- or organization-level secrets at all.
+#
+# Why fork PRs never reach the keys:
+#   * This workflow has no `pull_request` / `pull_request_target` trigger.
+#     Submissions are validated by validate.yml (`pull_request`, permissions
+#     {}, no secrets, no environments); forks get no secrets there anyway.
+#   * Environment secrets are only released to jobs that run on `main`
+#     (deployment branch policy) after reviewer approval; a PR branch, a fork
+#     or a tag cannot satisfy the policy.
+#   * Author code runs only in `build`, which has `permissions: {}`, no
+#     environment and no secrets; its output is accepted only if its sha256
+#     equals the reviewed pin on `main`.
+#   * Signing steps receive the key through `env:` of that one step, write
+#     it to a 0600 file in $RUNNER_TEMP and delete it in the same step.
+#
+# Action SHAs marked <pin> must be resolved to full commit SHAs; the others
+# are the pins DeckPilot already uses.
+
+name: Publish registry
+
+on:
+  push:
+    branches: [main]
+    paths: ["registry/**", "keys/**"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: registry-pages
+  cancel-in-progress: false
+
+env:
+  SITE_URL: https://knittingcode.github.io/deckpilot-plugins/v1
+
+jobs:
+  gate:
+    # Authoritative re-validation of everything under registry/ from main.
+    if: github.repository == 'knittingcode/deckpilot-plugins' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      unreleased: ${{ steps.plan.outputs.unreleased }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: tools/validate/run --all registry/
+      - id: plan
+        # JSON list of {id, version} that have no release yet (anonymous
+        # HEAD on the release URL; no API token needed).
+        run: tools/validate/unreleased --json >> "$GITHUB_OUTPUT"
+
+  environment-gate:
+    # Fails unless both environments still have: main-only deployment
+    # branches, required reviewers (release), no admin bypass, and the
+    # expected secret names. Like DeckPilot's tools/check-environment.sh.
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: tools/check-environment.sh registry-release registry-timestamp
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  build:
+    # UNTRUSTED: runs author code (npm install --ignore-scripts, esbuild).
+    needs: gate
+    if: needs.gate.outputs.unreleased != '[]'
+    strategy:
+      matrix:
+        plugin: ${{ fromJSON(needs.gate.outputs.unreleased) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions: {}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate matrix values
+        env:
+          ID: ${{ matrix.plugin.id }}
+          VERSION: ${{ matrix.plugin.version }}
+        run: |
+          [[ "$ID" =~ ^[a-z][a-z0-9-]{1,23}\.[a-z][a-z0-9-]{1,31}$ ]]
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+      - name: Build from the pinned source commit
+        env:
+          ID: ${{ matrix.plugin.id }}
+          VERSION: ${{ matrix.plugin.version }}
+        run: tools/builder/build "registry/plugins/$ID/versions/$VERSION.json" --out "out/$ID-$VERSION.dpplugin"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pkg-${{ matrix.plugin.id }}-${{ matrix.plugin.version }}
+          path: out/*.dpplugin
+          retention-days: 1
+
+  release:
+    needs: [gate, environment-gate, build]
+    if: needs.gate.outputs.unreleased != '[]'
+    strategy:
+      matrix:
+        plugin: ${{ fromJSON(needs.gate.outputs.unreleased) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: registry-release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@<pin> # v7
+        with:
+          name: pkg-${{ matrix.plugin.id }}-${{ matrix.plugin.version }}
+          path: ${{ runner.temp }}/pkg   # fresh directory, nothing executed from it
+      - name: Accept the bytes only if they equal the reviewed pin on main
+        env:
+          ID: ${{ matrix.plugin.id }}
+          VERSION: ${{ matrix.plugin.version }}
+        run: tools/validate/check-pin "registry/plugins/$ID/versions/$VERSION.json" "$RUNNER_TEMP/pkg/$ID-$VERSION.dpplugin"
+      - name: Draft, verify, publish immutable release <id>--v<version>
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ID: ${{ matrix.plugin.id }}
+          VERSION: ${{ matrix.plugin.version }}
+        run: tools/release/publish "$ID" "$VERSION" "$RUNNER_TEMP/pkg/$ID-$VERSION.dpplugin"
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: ${{ runner.temp }}/pkg/*.dpplugin
+
+  index:
+    # Generates index/<seq+1>.json from main ONLY and signs it.
+    needs: [gate, environment-gate, release]
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: registry-release        # reviewer approval releases the index key
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the verifier/signer from a pinned DeckPilot commit
+        run: tools/site/build-registry-cli   # deckpilot-registry, pinned SHA, cargo --locked
+      - name: Generate the snapshot (seq = verified live seq + 1)
+        run: tools/site/generate-index --live "$SITE_URL" --out site/v1
+      - name: Sign index
+        env:
+          KEY: ${{ secrets.REGISTRY_INDEX_KEY }}
+          KEY_PASSWORD: ${{ secrets.REGISTRY_INDEX_KEY_PASSWORD }}
+        run: |
+          umask 077
+          key="$RUNNER_TEMP/index.key"
+          printf '%s' "$KEY" > "$key"
+          trap 'rm -f "$key"' EXIT
+          seq=$(jq -r .seq site/v1/index/next.json)
+          kv=$(jq -r .keys_version site/v1/index/next.json)
+          mv site/v1/index/next.json "site/v1/index/$seq.json"
+          # Exact trusted comment (design §9.2); the CLI refuses any other.
+          deckpilot-registry sign --key "$key" --password-env KEY_PASSWORD \
+            --comment "deckpilot-registry v1 role:index seq:$seq keys:$kv" \
+            "site/v1/index/$seq.json"
+          # Self-check before anything leaves the job.
+          deckpilot-registry verify-index --keys keys/ "site/v1/index/$seq.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site-index
+          path: site/
+          retention-days: 1
+
+  timestamp:
+    needs: [gate, environment-gate, index]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: registry-timestamp
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@<pin> # v7
+        with:
+          name: site-index
+          path: ${{ runner.temp }}/site
+      - run: tools/site/build-registry-cli
+      - name: Sign timestamp (+7 days)
+        env:
+          KEY: ${{ secrets.REGISTRY_TIMESTAMP_KEY }}
+          KEY_PASSWORD: ${{ secrets.REGISTRY_TIMESTAMP_KEY_PASSWORD }}
+        run: |
+          umask 077
+          key="$RUNNER_TEMP/timestamp.key"
+          printf '%s' "$KEY" > "$key"
+          trap 'rm -f "$key"' EXIT
+          # The CLI re-verifies the index signature against keys/ before
+          # pinning its sha256 and length, so a tampered artifact is refused.
+          deckpilot-registry timestamp --keys keys/ --key "$key" --password-env KEY_PASSWORD \
+            --site "$RUNNER_TEMP/site/v1" --expires-in 7d
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site-signed
+          path: ${{ runner.temp }}/site/
+          retention-days: 1
+
+  deploy:
+    needs: [gate, environment-gate, timestamp]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: github-pages               # main only
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@<pin> # v7
+        with:
+          name: site-signed
+          path: ${{ runner.temp }}/site
+      - name: Mirror the previous 10 snapshots (hash-checked) and keys/
+        run: tools/site/assemble --live "$SITE_URL" --new "$RUNNER_TEMP/site" --out _site
+      - uses: actions/upload-pages-artifact@<pin> # v4
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@<pin> # v4
+
+  verify-published:
+    # Anonymous fetch of the live site, verified with the CLIENT's code.
+    needs: deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: tools/site/build-registry-cli
+      - run: deckpilot-registry check-live --roots "$(cat keys/root.json)" "$SITE_URL" --warn-expiry-under 3d
