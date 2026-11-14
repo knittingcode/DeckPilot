@@ -13,8 +13,8 @@ is the first version intended for publication.
 
 ## [0.6.0] - Unreleased
 
-The first public release. It includes everything listed for 0.1.0 to 0.5.0
-below.
+The first public release. It includes the changes of the unreleased
+versions 0.1.0 to 0.5.0, listed in CHANGELOG.md.
 
 ### Added
 
@@ -135,6 +135,30 @@ below.
   exactly as before, as deprecated aliases that are never rewritten. A
   module's own ids are reported as unavailable while the module is
   disabled.
+- Key gestures: a key can run a different action, workflow or page for a
+  click, a double click and a long press, each with its own parameter
+  overrides. A press resolves to at most one gesture, and a click waits
+  only for the gestures the key uses. Timings default to 300 ms for a
+  double click and 700 ms for a long press (Settings › Devices) and can be
+  set per key. Keys without gestures, including every existing layout,
+  keep reacting to the raw press as before.
+- Stateful keys and the Work Session: a key can change its operation with
+  the state of a built-in state machine. The Work Session key starts a
+  session (running an optional start workflow), verifies the end with an
+  optional verification workflow and finishes the session with a click
+  once it is ready; the session is operated from the key only. The key
+  shows the state and a live timer. The Work Session page shows the live
+  state, the last verification and notices, holds the settings, assigns
+  the key, and lists the history of sessions. Sessions survive agent
+  restarts, and only finishing stops the timer.
+- Shared variables: named, typed values (`{{ shared.… }}`) defined
+  globally, per profile or per project and used by actions, workflows and
+  keys. The Variables page in Settings lists every variable (core, module
+  and shared) with search, filters, owner, access and the current value
+  when it is safe to show; shared variables are edited there, and a
+  variable that is still used cannot be deleted or retyped. A variable
+  picker with live previews inserts references in action parameters and
+  workflow node mappings. Sensitive values are never shown or exported.
 
 ### Fixed
 

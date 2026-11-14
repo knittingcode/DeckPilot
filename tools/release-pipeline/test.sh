@@ -298,6 +298,68 @@ mutate "publishing in another environment" 'jobs["publish"]["environment"] = "re
 mutate "signing without the environment" 'del jobs["build"]["environment"]' "job build uses signing secrets outside the environment"
 # shellcheck disable=SC2016 # a literal GitHub expression
 mutate "signing secrets in another job" 'jobs["verify"]["env"] = {"K": "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"}' "job verify uses signing secrets outside the environment"
+
+echo "== release updates keep the tag"
+# GitHub detaches a draft from its tag when an update omits tag_name
+# (v0.6.0-alpha.1): every release PATCH in release.yml sends it.
+if python3 - "$root/.github/workflows/release.yml" << 'EOF'
+import re, sys, yaml
+jobs = yaml.safe_load(open(sys.argv[1]))["jobs"]
+runs = [step.get("run", "") for job in jobs.values() for step in job.get("steps", [])]
+patches = [run for run in runs if re.search(r"-X PATCH \S*releases/", run)]
+assert patches, "no release update found"
+for run in patches:
+    command = run[run.index("-X PATCH"):].split("\n\n")[0]
+    assert "tag_name=" in command, command
+EOF
+then
+  ok "every release update in release.yml sends tag_name"
+else
+  bad "a release update in release.yml omits tag_name"
+fi
+
+echo "== signing secrets only in the protected environment"
+if python3 - "$root/.github/workflows/release.yml" << 'EOF'
+import sys, yaml
+steps = yaml.safe_load(open(sys.argv[1]))["jobs"]["prepare"]["steps"]
+runs = [step.get("run", "") for step in steps]
+check = "python3 -I .github/scripts/updater-key-pair.py --pinned .github/updater.pub --require-variable"
+# The key-pair check comes before any toolchain, dependency or build step.
+assert runs.index(check) < runs.index("rustup toolchain install"), runs
+EOF
+then
+  ok "release prepare checks the signing key against the pinned public key first"
+else
+  bad "release prepare does not check the signing key against .github/updater.pub first"
+fi
+isolation() { python3 "$here/check-secret-isolation.py" "$1" > "$work/isolation.log" 2>&1; }
+isolation "$root/.github/workflows" && ok "$(cat "$work/isolation.log")" || bad "isolation: $(cat "$work/isolation.log")"
+# isolated <what> <expected message> <python statement on `workflow`> <workflow file>
+isolated() {
+  rm -rf "$work/workflows" && cp -R "$root/.github/workflows" "$work/workflows"
+  python3 - "$work/workflows/$4" "$3" << 'EOF'
+import sys, yaml
+workflow = yaml.safe_load(open(sys.argv[1]))
+exec(sys.argv[2])
+yaml.safe_dump(workflow, open(sys.argv[1], "w"))
+EOF
+  if isolation "$work/workflows"; then
+    bad "$1: passes the isolation check"
+  elif grep -q -F -- "$2" "$work/isolation.log"; then
+    ok "$1 is caught"
+  else
+    bad "$1: $(cat "$work/isolation.log")"
+  fi
+}
+# shellcheck disable=SC2016 # literal GitHub expressions
+isolated "a signing secret in the required check" "uses signing secrets in a workflow that pull requests trigger" \
+  'workflow["jobs"]["signing"]["env"] = {"K": "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"}' signing-check.yml
+isolated "the Apple check without the environment" "job apple uses signing secrets outside the environment" \
+  'del workflow["jobs"]["apple"]["environment"]' apple-signing-check.yml
+isolated "update continuity without the environment" "job continuity uses signing secrets outside the environment" \
+  'del workflow["jobs"]["continuity"]["environment"]' update-continuity.yml
+isolated "a pull_request_target trigger" "trigger pull_request_target is not allowed" \
+  'workflow[True] = {"pull_request_target": None}' apple-signing-check.yml
 mutate "publishing without the publication gate" 'jobs["publish"]["needs"] = ["validate-tag"]' "publish must need publish-gate"
 mutate "another job in the environment" 'jobs["verify"]["environment"] = "production-release"' "job verify may not use the environment"
 mutate "a draft that does not wait for the installer checks" 'jobs["draft"]["needs"].remove("packaging")' "draft must need packaging"
@@ -309,6 +371,15 @@ mutate "secrets read before the environment check" 'jobs["prepare"]["needs"] = [
 mutate "publishing without the environment check" 'jobs["publish"]["needs"] = ["validate-tag", "publish-gate"]; jobs["publish-gate"]["needs"] = ["validate-tag", "verify"]; jobs["verify"]["needs"] = ["validate-tag", "compatibility"]' "job publish uses the environment or secrets without needing environment-gate"
 # shellcheck disable=SC2016 # a literal GitHub expression
 mutate "a new secret-using job without the check" 'jobs["extra"] = {"needs": "validate-tag", "runs-on": "ubuntu-latest", "timeout-minutes": 5, "permissions": {"contents": "read"}, "steps": [{"run": "true", "env": {"K": "${{ secrets.SOME_TOKEN }}"}}]}' "job extra uses the environment or secrets without needing environment-gate"
+# Fail closed: a secret-holding job must not run after the environment
+# gate failed or was skipped.
+# shellcheck disable=SC2016 # literal GitHub expressions
+{
+  mutate "signing after a failed environment check (always)" 'jobs["build"]["if"] = "${{ always() }}"' "job build uses the environment or secrets and may not run after a failed dependency"
+  mutate "secrets read after a failed environment check (!cancelled)" 'jobs["prepare"]["if"] = "${{ !cancelled() }}"' "job prepare uses the environment or secrets and may not run after a failed dependency"
+  mutate "publishing after a failed dependency (failure)" 'jobs["publish"]["if"] = "failure() || success()"' "job publish uses the environment or secrets and may not run after a failed dependency"
+  mutate "secrets behind the environment check only through another job" 'jobs["build"]["needs"].remove("environment-gate")' "job build uses the environment or secrets and must need environment-gate directly"
+}
 mutate "no environment check" 'del jobs["environment-gate"]; [j.__setitem__("needs", [n for n in (j["needs"] if isinstance(j.get("needs"), list) else [j.get("needs")]) if n and n != "environment-gate"]) for j in jobs.values() if j.get("needs")]' "no job environment-gate"
 mutate "an environment check in the environment" 'jobs["environment-gate"]["environment"] = "production-release"' "environment-gate must not use an environment"
 mutate "a job without a timeout" 'del jobs["manifest"]["timeout-minutes"]' "job manifest has no timeout-minutes"

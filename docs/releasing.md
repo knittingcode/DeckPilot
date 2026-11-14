@@ -3,9 +3,12 @@
 Releases are built by `.github/workflows/release.yml` when a release tag
 is pushed (or when the workflow is started manually for an existing tag),
 in two stages: stage A builds, signs and checks everything into a **draft**
-release; stage B publishes it only after a maintainer approves it in the
-`production-release` environment and every check has passed again
-([release steps](#release-steps)).
+release; stage B publishes it automatically once every check has passed
+again ([release steps](#release-steps)). Creating the protected release tag
+is the authorization: the `production-release` environment has no required
+reviewers, and only the repository administrator role can create `v*` tags
+([release authorization](#release-authorization)). There is no approval
+step in the run.
 
 ## Release tags and the tag gate
 
@@ -85,12 +88,14 @@ answers (`tools/release-pipeline/gh-stub.sh`); no real tag is created.
 ### The former `vX.Y.Z-N` test tags
 
 `v0.5.0-1` and `v0.5.0-2` were signed draft test builds. Tags of that form
-**no longer start a release**: the gate refuses them. The two existing
-drafts stay as they are (the compatibility workflow still uses the
-`v0.5.0-2` binaries). To test the pipeline end to end, push an `alpha` tag
-of a commit on `main`: it builds the same signed, notarized draft, which is
-never published unless a reviewer approves stage B. To build installers
-without a release, use the packaging workflow instead.
+**no longer start a release**: the gate refuses them. The tag `v0.5.0-1`,
+the tag `v0.6.0-alpha.1` and the draft releases of 0.5.0-1 and 0.5.0-2 have
+been deleted; the tag `v0.5.0-2` is kept as the compatibility baseline (the
+compatibility workflow builds it). An `alpha` tag of a commit on `main` is
+a real release: under tag authority it is built, signed, notarized and
+**published** as a pre-release once every check passes, without any
+approval. To build installers without a release, use the packaging
+workflow instead.
 
 ## One-time provisioning
 
@@ -179,13 +184,17 @@ What the release workflow does on macOS:
    (`stapler validate`). If the bundler skipped notarization (for example
    because of incomplete credentials), this step fails the release.
 
-The *Signing check* workflow checks the credentials without a release: the
-certificate provides exactly the configured identity of the configured team,
-a throwaway executable signs with it (hardened runtime, secure timestamp),
-and Apple's notary service accepts the API key. A manual run with
-`notarize: true` (`gh workflow run "Signing check" -f notarize=true`) also
-submits that throwaway executable for notarization; this records a
-submission in the developer account.
+The *Apple signing check* workflow (`apple-signing-check.yml`) checks the
+credentials without a release: the certificate provides exactly the
+configured identity of the configured team, a throwaway executable signs
+with it (hardened runtime, secure timestamp), and Apple's notary service
+accepts the API key. It runs in the `production-release` environment, so
+only on a release tag (and, with required reviewers, only after a reviewer
+approves the deployment):
+`gh workflow run "Apple signing check" --ref v<version>`. With
+`-f notarize=true` it also submits that throwaway executable for
+notarization; this records a submission in the developer account. On any
+other ref the environment refuses the job before a secret is read.
 
 ### Windows: Authenticode (not yet provisioned)
 
@@ -202,19 +211,33 @@ The updater signature is independent of all platform signatures.
 
 Without building or publishing anything:
 
-- **In CI:** the *Signing check* workflow (`.github/workflows/signing-check.yml`)
-  runs on every pull request, on every push to `main` and on demand
-  (`gh workflow run "Signing check"`). *Updater signing keys match*
-  decrypts the secret key with its password and checks that its key ID and
-  public key equal `DECKPILOT_UPDATER_PUBKEY`
-  (`.github/scripts/updater-key-pair.py`, Python standard library only;
-  tested with throwaway keys by `tools/release-pipeline/test-updater-key-pair.sh`).
-  *wrong password or key* means the two secrets do not belong together.
-  While a secret is in the job, nothing else runs: the jobs check out only
-  `.github/scripts`, restore no cache and install no dependencies, so no
-  package installation or build script can see a secret. Pull requests
-  from forks and from Dependabot get no secrets; the jobs are skipped for
-  them, and a skipped required check counts as passed.
+- **In CI, without secrets:** *Updater signing keys match*, the required
+  check of the *Signing check* workflow (`.github/workflows/signing-check.yml`,
+  every pull request, every push to `main`), uses no secret
+  (`.github/scripts/updater-key-pair-fixtures.sh`). It checks that the
+  release public key pinned in `.github/updater.pub` is a well-formed
+  Ed25519 minisign key and that the repository variable
+  `DECKPILOT_UPDATER_PUBKEY` (compiled into release builds) is that key
+  (required on `main`; pull requests from forks may not see the variable),
+  and that `.github/scripts/updater-key-pair.py` accepts and refuses the
+  committed throwaway keys in `.github/scripts/fixtures`. It runs the same
+  way for pull requests from this repository, from forks and from
+  Dependabot. `tools/release-pipeline/test-updater-key-pair.sh` also tests
+  the script with keys freshly made by the Tauri CLI.
+- **In the release, with the real key:** the release workflow's `prepare`
+  job, in the `production-release` environment, first runs
+  `updater-key-pair.py --pinned .github/updater.pub --require-variable`:
+  the secret key decrypts with its password, and its key ID and public key
+  equal the pinned key and the variable. *wrong password or key* means the
+  two secrets do not belong together. It runs before any toolchain,
+  dependency or build step of the job, and the release stops there if it
+  fails. A new release key means a new `.github/updater.pub` (reviewed like
+  any change) together with the variable.
+- **Secret isolation:** `tools/release-pipeline/check-secret-isolation.py`
+  (run by the *Release pipeline tests*) refuses any workflow that pull
+  requests or merge queue groups trigger and that references a signing
+  secret, any job with a signing secret outside `production-release`, and
+  the triggers `pull_request_target` and `workflow_run`.
 - **Locally:** sign a throwaway file with your key (the password is read
   without echo and never appears in the command line) and verify it against
   the public key:
@@ -271,7 +294,10 @@ tag; that push starts the release workflow.
    request.
 2. Wait until the required checks have passed on the merge commit, then tag
    that commit:
-   `git tag -s v0.6.0-alpha.1 <sha> -m "DeckPilot 0.6.0-alpha.1" && git push origin v0.6.0-alpha.1`.
+   `git tag -s v<version> <sha> -m "DeckPilot <version>" && git push origin v<version>`.
+   Only the release identity can create the tag
+   ([release authorization](#release-authorization)); pushing it is the
+   authorization of the whole release.
 3. **Stage A** (automatic, no user can see anything yet):
    - validates the tag (see [the tag gate](#release-tags-and-the-tag-gate));
    - checks that updater signing is configured, that `CHANGELOG.md` has
@@ -341,17 +367,21 @@ tag; that push starts the release workflow.
      `.rpm`, Windows MSI and NSIS), attaches `SHA256SUMS` and checks that
      every required asset is in the draft
      (`tools/release-pipeline/check-assets.sh --final`).
-4. **Stage B** (after approval): the *Publication gate* job checks that the
-   `production-release` environment exists and requires a reviewer (see
-   below); the
-   *Publish and verify* job then waits for a reviewer's approval in the
-   workflow run. After approval it checks the draft again
+4. **Stage B** (automatic): the *Publication gate* job checks again that
+   the `production-release` environment is protected and that the release
+   is authorized (see below: under tag authority, that the tag ruleset
+   still restricts the creation of `v*` tags); the *Publish and verify* job
+   then checks the draft again
    (`tools/release-pipeline/publish.sh`) — exactly one release for the tag,
    the tag still points to the built commit, every required asset and
    nothing of the other channel, `SHA256SUMS` covers exactly the assets and
    matches each of them, `release-meta.json` names this tag, version,
    channel, manifest and commit, every updater signature verifies, the
-   notes are not empty — and only then publishes it in **one** update:
+   manifest announces this version with an update for every platform and
+   package type and points only to assets of this tag, the notes are not
+   empty — and only then publishes it in **one** update (the repository
+   has immutable releases enabled, so nothing of a published release can
+   be changed afterwards; every asset is uploaded while it is a draft):
    alpha, beta and rc as a GitHub **pre-release** (never latest); a stable
    version as a release, marked **latest** only if it is newer than every
    published stable release (a fix of an older line is not). Finally it
@@ -363,8 +393,10 @@ tag; that push starts the release workflow.
    points only to verified assets, and the stable channel never announces a
    pre-release.
 
-Nothing is published without the approval; a partial or unverified draft
-is never published, and a pre-release never becomes the stable release.
+Nothing is published unless the release is authorized (a protected `v*`
+tag, or a reviewer's approval in the reviewer model); a partial or
+unverified draft is never published, and a pre-release never becomes the
+stable release.
 
 ### Publication gate and signing environment (repository settings)
 
@@ -379,9 +411,10 @@ jobs run in it:
 
 `tools/release-pipeline/check-workflow-gate.py` refuses any other job in
 the environment and any job outside it that references a signing secret.
-With required reviewers, a release therefore asks for approval three times:
-before `prepare`, before the builds (one approval covers the four pending
-build jobs), and before publication.
+Under tag authority (the current model) these jobs run without approval.
+Only in the alternative reviewer model does a release ask for approval
+three times: before `prepare`, before the builds (one approval covers the
+four pending build jobs), and before publication.
 
 The workflow does not create or change the environment. GitHub creates a
 named environment, **unprotected**, the first time a job refers to it, so
@@ -392,11 +425,15 @@ no environment, reads no secret, has `contents: read` only, and runs
 `tools/release-pipeline/check-environment.sh production-release`, which
 requires that
 
-- the environment **exists** (a missing one is never created by this job);
-- it has **at least one required reviewer**;
+- the environment **exists** (a missing one is never created by this job)
+  and administrators **cannot bypass** it;
 - its deployment policy allows **tags `v*` and nothing else**: *Selected
   branches and tags* (not *Protected branches*, not *No restriction*), with
-  exactly one rule, of type tag, named `v*`.
+  exactly one rule, of type tag, named `v*`;
+- every deployment is **authorized**: either by at least one required
+  reviewer, or, without reviewers, by an active tag ruleset that restricts
+  the creation, update and deletion of `v*` tags and that the workflow's
+  token cannot bypass ([release authorization](#release-authorization)).
 
 Otherwise it fails and nothing else runs: `prepare`, the builds and
 `publish` need it (directly or through `needs`), so no signing secret is
@@ -407,7 +444,10 @@ gate* job runs the same check again right before publication, in case the
 environment was changed while the release waited.
 `tools/release-pipeline/check-workflow-gate.py` refuses a workflow in which
 any job that uses the environment or a secret other than `GITHUB_TOKEN`
-does not reach `environment-gate` through `needs`; the cases (missing,
+does not need `environment-gate` directly, or has an `if:` with `always()`,
+`failure()` or `cancelled()` (including `!cancelled()`): such a condition
+would run the job although the environment gate failed or was skipped, so
+these jobs keep GitHub's implicit `success()` and fail closed. The cases (missing,
 auto-created without rules, wait timer only, no tag restriction, branch or
 extra rules, unreadable policies) are tested by
 `tools/release-pipeline/test-publication.sh`. Until the secrets are moved (below), the
@@ -415,16 +455,21 @@ jobs keep reading the repository-level secrets — a job in an environment
 sees repository secrets too, and environment secrets take precedence over
 repository secrets of the same name.
 
-Proposed configuration (Settings → Environments → New environment):
+Current configuration (Settings → Environments → `production-release`):
 
 - name `production-release`;
-- **Required reviewers**: the maintainers who may release (optionally
-  *Prevent self-review*);
-- **Deployment branches and tags**: *Selected branches and tags*, add the
-  tag rule `v*` (the workflow runs for a tag);
-- **Environment secrets**: see the migration below.
+- **Required reviewers**: none (tag authority; see
+  [release authorization](#release-authorization)). In the alternative
+  reviewer model: the maintainers who may release (optionally *Prevent
+  self-review*);
+- **Allow administrators to bypass configured protection rules**: off;
+- **Deployment branches and tags**: *Selected branches and tags*, the tag
+  rule `v*` only (the workflow runs for a tag);
+- **Environment secrets**: the five signing secrets (see the migration
+  below).
 
-Equivalent API calls (an admin token; review before running):
+Equivalent API calls for the reviewer model (an admin token; review before
+running; for tag authority, leave out the two `reviewers` fields):
 
 ```sh
 gh api -X PUT repos/knittingcode/DeckPilot/environments/production-release \
@@ -435,13 +480,105 @@ gh api -X POST repos/knittingcode/DeckPilot/environments/production-release/depl
   -f name='v*' -f type=tag
 ```
 
+### Release authorization
+
+Every job that reads a signing secret or publishes runs in the
+`production-release` environment, which deploys tags `v*` only and cannot be
+bypassed by administrators. Something must authorize each run. The release
+gate (`tools/release-pipeline/check-environment.sh`, in *Protected release
+environment* and again in *Publication gate*) accepts exactly two models and
+blocks the release otherwise:
+
+1. **Required reviewers** (the alternative, not in use). A reviewer
+   approves each deployment of the run. GitHub asks once per job: *Check
+   configuration and release notes*, *Build* (once for all four builds) and
+   *Publish and verify*.
+2. **Tag authority** (current, since 2026-11-14). `production-release`
+   has no required reviewer;
+   creating a `v*` tag is the single authorization, and the run continues
+   to publication without stopping. The gate then requires, on every run,
+   an active tag ruleset on `refs/tags/v*` (no exclusions) that restricts
+   **creation**, **update** and **deletion**, and that the workflow's own
+   token cannot bypass. Who may bypass it, the *release identity*, is
+   visible to administrators only. The owner checks it with
+   `tools/release-pipeline/check-tag-authority.sh` before removing the
+   reviewers.
+
+Both models fail closed. A release stays a draft unless every asset,
+`SHA256SUMS`, `release-meta.json`, every updater signature and the
+manifest check out (`publish.sh`, re-checked on the draft itself), and a
+retry (*Re-run failed jobs*, or a `publish_only` run) goes through the same
+checks. Branches and pull requests never get the secrets: the environment
+refuses any ref other than a `v*` tag, and no workflow that pull requests
+trigger references a signing secret (`check-secret-isolation.py`).
+
+#### The release identity
+
+Without reviewers, whoever can create a `v*` tag can sign and publish a
+release, so creating `v*` tags is restricted. On this user-owned repository
+a ruleset bypass can be granted to the **repository administrator role** or
+to a **deploy key** (or a GitHub App).
+
+**Chosen model: the repository administrator role** (owner decision,
+2026-11-14). *Release tag protection* (`refs/tags/v*`) restricts creation,
+updates and deletion and blocks force pushes; its only bypass actor is the
+*Repository admin* role, bypass mode *always*. The repository is
+user-owned and the owner is its only collaborator, so only the owner's
+account can create release tags. Automation that acts with the owner's
+credentials (Claude Code pushes with the owner's SSH key and uses the
+owner's `gh` token) is deliberately part of that identity: it may push a
+release tag when the owner has authorized that release. No separate
+release account, deploy key or app is used.
+
+The trust boundary is therefore: write access to the repository (the owner
+only), the protected `main` (pull requests, squash merges, the six required
+checks, no bypass), the tag gate (the tag's commit must be on `main` and
+have passed the required checks) and the release checks before
+publication. Accepted residual risks: anyone or anything holding the
+owner's credentials can create a release tag, run code with the signing
+secrets through it, or change the ruleset and the environment; a release
+tag starts an automatic, immutable publication. Anyone later given
+administrator access becomes a release identity too, and a collaborator
+with write access only cannot create release tags.
+
+A deploy key used only for tags, kept where every use needs the owner's
+confirmation, is the stricter alternative if automation should no longer be
+able to create release tags: make it the only bypass actor instead and
+check with `check-tag-authority.sh deploy-key:<id>`.
+
+#### Switching to tag authority
+
+In this order, each step verified before the next:
+
+1. Add *Restrict creations* to *Release tag protection* with the
+   *Repository admin* role as its only bypass actor (bypass mode
+   *always*). Keep *Restrict updates*, *Restrict deletions* and *Block
+   force pushes*. (Done 2026-11-14.)
+2. Run `REPOSITORY=knittingcode/DeckPilot tools/release-pipeline/check-tag-authority.sh admin-role`
+   with the owner's token. It must pass. (Passed 2026-11-14.) Do not test
+   the restriction by pushing a trial tag: if it were accepted, the ruleset
+   would keep it forever and start a release run.
+3. Only after any release run still using the reviewer model has finished,
+   remove the required reviewers of `production-release`. Keep the tag rule
+   `v*`, "administrators cannot bypass" and the five environment secrets.
+   The next release runs without approvals; its gate (*Protected release
+   environment*, *Publication gate*) refuses to run if the tag ruleset is
+   weakened later. (Done 2026-11-14. The *Release authorization* job of the
+   *Signing check* workflow runs the same check on `main` and passed on
+   `9f8a84a`.)
+
 ### Moving the signing secrets into the environment
 
 Done by the owner, by hand, in this order. No step prints a secret; values
-are typed or piped from the offline copies, never echoed or logged.
+are typed or piped from the offline copies, never echoed or logged. This
+migration is complete: the five secrets are environment secrets of
+`production-release` and the repository-level copies have been deleted.
+The steps are kept as the record and for a future re-provisioning; step 4
+assumes the reviewer model, because under tag authority a release tag is
+published without a stop.
 
-1. **Create the environment** `production-release` as above (required
-   reviewers, tag rule `v*`).
+1. **Create the environment** `production-release` as above (tag rule
+   `v*`; required reviewers while the migration is validated).
 2. **Re-enter each secret in the environment** (the values cannot be read
    back from the repository secrets; use the offline copies):
 
@@ -478,24 +615,22 @@ are typed or piped from the offline copies, never echoed or logged.
    the draft afterwards (`tools/release-pipeline/discard-draft.sh <tag>`).
 5. **Only then, with the owner's explicit approval, remove the
    repository-level secrets** (`gh secret delete <name>` for each of the
-   five). Before that, decide how the other workflows that read them keep
-   working: *Signing check* (`signing-check.yml`, whose *Updater signing
-   keys match* is a required check of `main` and runs on every pull request
-   and push to `main`) and *Update continuity* (`update-continuity.yml`)
-   read the repository secrets and are not in the environment. Putting them
-   into `production-release` would make every pull request wait for a
-   release reviewer; this is an open decision for the owner (for example a
-   separate environment for the checks, or keeping those secrets at
-   repository level), and the repository-level secrets must stay until it
-   is made.
+   five). No workflow needs them any more: the required check *Updater
+   signing keys match* uses no secret, and every job that reads a signing
+   secret — the release's `prepare` and `build`, the *Apple signing check*
+   and *Update continuity* — runs in `production-release`
+   (`tools/release-pipeline/check-secret-isolation.py`). While the
+   repository-level copies exist, a workflow on any branch that someone
+   with write access pushes can still reference them; deleting them is
+   what makes them unreachable outside the environment.
 
 ### Failure recovery
 
 | What failed | State | What to do |
 | ----------- | ----- | ---------- |
-| The tag gate | nothing created | Fix the cause (wait for CI, tag a commit on `main`, fix the version) and push a **new** tag; delete a wrong tag only if no release exists for it: `git push origin :refs/tags/<tag>` |
+| The tag gate | nothing created | Fix the cause (wait for CI, tag a commit on `main`, fix the version) and push a **new** tag. A pushed `v*` tag cannot be deleted or moved: the *Release tag protection* ruleset blocks it for everyone except its only bypass actor, the *Repository admin* role ([the release identity](#the-release-identity)). Leave the refused tag; only the owner can remove one, and only if no release exists for it |
 | Stage A (a build, signing, notarization, manifest, checksums) | a draft, possibly incomplete | Re-run the failed jobs (`gh run rerun <run-id> --failed`): the draft of the same commit is reused and its assets replaced. For a clean retry, discard the draft and run again: `tools/release-pipeline/discard-draft.sh <tag>` (refuses published releases; keeps the tag), then `gh workflow run release.yml --ref <tag>` |
-| Protected release environment (`environment-gate`) | nothing created, no secret read | Set up `production-release` (above: reviewers, tag rule `v*` only), then `gh run rerun <run-id> --failed` |
+| Protected release environment (`environment-gate`) | nothing created, no secret read | Set up `production-release` (above: tag rule `v*` only, no administrator bypass, and tag authority or required reviewers), then `gh run rerun <run-id> --failed` |
 | Publication gate | a complete draft | Create or protect the `production-release` environment (above), then `gh run rerun <run-id> --failed` |
 | Stage B before publishing | a complete draft, unpublished | Re-run the failed jobs, or `gh workflow run release.yml --ref <tag> -f publish_only=true` (skips stage A, publishes the existing draft after the same checks). Every check runs again; nothing is published until all pass |
 | Stage B after publishing (verification of the public release) | published | Never delete a published release. Find the cause (for example an asset removed by hand), fix it without replacing published assets, and re-run: for an already published release of the same commit `publish.sh` changes nothing and only verifies again. If the release itself is wrong, publish a new version |
@@ -509,23 +644,33 @@ unpublished, idempotent re-runs and recovery.
 
 ### The first pre-release, command by command
 
-Once: create the protected `production-release` environment
-([publication gate and signing environment](#publication-gate-and-signing-environment-repository-settings)).
-Then, from an up-to-date, clean checkout of `main`:
+The protected `production-release` environment and the release tag
+protection are in place
+([publication gate and signing environment](#publication-gate-and-signing-environment-repository-settings),
+[release authorization](#release-authorization)). The version must be newer
+than every existing `v*` tag; `v0.6.0-alpha.2` exists (an unpublished
+draft), so a new pre-release is `0.6.0-alpha.3` or later. (That existing
+draft could instead be published by a `publish_only` run on its tag, after
+the same checks; see [failure recovery](#failure-recovery). Its notes are
+those of `13cabe6`.) From an up-to-date, clean checkout of `main`, as the
+release identity:
 
 ```sh
-cargo run -p deckpilot-dev -- prepare-release 0.6.0-alpha.1   # branch, commit, PR; no tag
-gh pr checks --watch <pr-number>                                # the owner approves and merges the PR
+cargo run -p deckpilot-dev -- prepare-release 0.6.0-alpha.3   # branch, commit, PR; no tag
+gh pr checks --watch <pr-number>                                # the owner merges the PR
 git fetch origin
 sha=$(git rev-parse origin/main)                                # the merge commit
 gh api "repos/knittingcode/DeckPilot/commits/$sha/check-runs" \
   --jq '.check_runs[] | "\(.name): \(.status) \(.conclusion)"'  # required checks passed?
-git tag -s v0.6.0-alpha.1 "$sha" -m "DeckPilot 0.6.0-alpha.1"
-git push origin v0.6.0-alpha.1                                  # starts stage A
+git tag -s v0.6.0-alpha.3 "$sha" -m "DeckPilot 0.6.0-alpha.3"
+git push origin v0.6.0-alpha.3                                  # the authorization; starts stage A
 gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
-# Approve "prepare" and the builds (production-release), review the draft,
-# then approve "Publish and verify" in the run (stage B).
+# No approval is asked for: stage B publishes the pre-release as soon as
+# every check of the draft has passed again.
 ```
+
+Pushing the tag publishes the release; there is no later point at which
+to stop it, so review the merged commit and the notes before tagging.
 
 ### Workflow hardening
 
@@ -560,11 +705,22 @@ outputs, keeping every job behind `validate-tag`.
 ## Status
 
 The updater signing key pair and the Apple Developer ID and notarization
-credentials are provisioned in the repository settings; the *Signing check*
-workflow verifies them on every change to release code. Signing and
-notarization ran end to end for the draft test releases `v0.5.0-1` and
-`v0.5.0-2` (see [release-validation.md](release-validation.md)). Windows
-code signing is not provisioned. The two-stage publication (stage B) has
-not run against GitHub yet: no release has been published. The first release should be treated as a test of the
-pipeline, and the first update between two published releases as the test of
-installation (see [updates.md](updates.md)).
+credentials are provisioned as environment secrets of `production-release`
+only (the repository-level copies have been deleted); the release's
+`prepare` job and the *Apple signing check* verify them on a release tag.
+Releases are authorized by tag authority; the *Release authorization* job
+of the *Signing check* workflow verified the setup on `main` at `9f8a84a`
+([run 43609631711](https://github.com/knittingcode/DeckPilot/actions/runs/43609631711)).
+
+Stage A ran end to end for `v0.6.0-alpha.2` (`13cabe6`,
+[run 43597399166](https://github.com/knittingcode/DeckPilot/actions/runs/43597399166)):
+macOS arm64 and x86_64 Developer ID signed (team `PUB9L83UMZ`) with the
+hardened runtime, notarized, stapled and accepted by Gatekeeper; the
+updater signatures, `SHA256SUMS`, `release-meta.json` and `prerelease.json`
+verified; 17 assets in the draft. That draft was **not** published: its
+*Publish and verify* deployment was cancelled when the required reviewers
+were removed. Windows and Linux builds are not code-signed (Windows code
+signing is not provisioned). Stage B has not published a release yet: no
+release has been published. The first release should be treated as a test
+of the publication, and the first update between two published releases
+as the test of installation (see [updates.md](updates.md)).

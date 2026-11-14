@@ -9,6 +9,27 @@ changes neither file; that is the owner's decision (see
 Baseline: `main` at `e7a3cc9` (2026-11-13). Code references were checked
 against that commit. Nothing in this document is implemented.
 
+> **Update 2026-11-14.** Still a proposal; the open decisions in §20 remain
+> the owner's. What changed since the baseline:
+>
+> - Feasibility spikes for the runtime (wasm isolation, host IPC, permission
+>   broker, macOS sandbox) and for trust (package signing, signed registry)
+>   are in #202 (`experiments/marketplace-spikes/`), with results and new
+>   findings in their `RESULTS.md` files — among them that nothing re-signs
+>   the index before its 90-day expiry (§10) and that QuickJS-NG in wasm is
+>   not built yet (S1).
+> - The manifest contract (§7) is implemented as the experimental, unused
+>   crate `deckpilot-plugin-manifest` in #203, with this schema unchanged.
+> - The app's release secrets now live only in the `production-release`
+>   environment and releases are authorized by a protected `v*` tag
+>   (`docs/releasing.md`); §11.1 and the assumptions of P14 refer to that.
+> - Plugin settings belong under **Settings › Extensions** (next to Modules
+>   and Permissions) and the development toggle under **Settings ›
+>   Advanced**; there is no Settings › Plugins or Developer category yet
+>   (§5, §15.4).
+> - Main is at IPC protocol 9 and storage schema 9, so the plugin additions
+>   become protocol 10 and schema 10 as planned.
+
 Companion files:
 
 | File | What it is |
@@ -972,8 +993,9 @@ Semantics the schemas cannot express:
 ### 11.1 Repository
 
 `knittingcode/deckpilot-plugins` (public), separate from DeckPilot because
-community PRs must never sit next to the app's release secrets (which,
-per `docs/releasing.md`, are still repository-level).
+community PRs must never sit next to the app's release secrets (since
+2026-11-14 these exist only in the app's `production-release` environment,
+which deploys `v*` tags only; see `docs/releasing.md`).
 
 ```text
 .github/CODEOWNERS            * @knittingcode

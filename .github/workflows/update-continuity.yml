@@ -8,12 +8,15 @@
 # public. The agent keeps its key in a temporary keychain that exists only
 # for this job.
 #
-# Manual runs only (`gh workflow run "Update continuity" --ref main`): the
-# test builds the app (dependency installation, build scripts) in the job
-# that holds the Developer ID certificate, so it never runs on pull
-# requests, where any branch's dependencies would run next to it. No cache
-# is restored, so nothing written by other workflows is reused. The
-# certificate is passed only to the update test step.
+# Manual runs only, on a release tag, in the protected production-release
+# environment (tags v* only, required reviewer):
+#   gh workflow run "Update continuity" --ref v<version>
+# then approve the deployment. The test builds the app (dependency
+# installation, build scripts) in the job that holds the Developer ID
+# certificate, so it runs only for a tagged commit of main, never on pull
+# requests or branches. No cache is restored, so nothing written by other
+# workflows is reused. The certificate is passed only to the update test
+# step.
 name: Update continuity
 
 on:
@@ -31,6 +34,7 @@ jobs:
     name: Keychain access after a signed update (macOS)
     runs-on: macos-latest
     timeout-minutes: 120
+    environment: production-release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

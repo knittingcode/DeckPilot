@@ -189,7 +189,14 @@ never installs an older version than the running one.
 - Update discovery, manifest validation, signature verification, policy
   decisions and the agent stop/restart sequence are covered by automated
   tests.
-- **An actual signed update has not yet been installed end to end.** This
-  requires a provisioned signing key and two published releases; see
+- **An actual signed update has not yet been installed end to end between
+  two published releases.** No release has been published yet; see
   [releasing.md](releasing.md). Until it has been verified, the default mode
   stays "Notify me".
+- Keychain continuity across a signed update has been verified on
+  `v0.6.0-alpha.2` by the *Update continuity* workflow
+  ([run 43606772522](https://github.com/knittingcode/DeckPilot/actions/runs/43606772522)):
+  two Developer ID signed builds with the same code identity, a tampered
+  update rejected, the signed update from 0.5.0 to 0.5.1 installed, the
+  configuration opened from the Keychain without a prompt before and after
+  the update, and the data preserved and still encrypted.

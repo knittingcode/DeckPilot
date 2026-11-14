@@ -116,14 +116,25 @@ draft() {
   [ "$PRERELEASE" = true ] || names+=("DeckPilot-${v}-1.x86_64.rpm" "DeckPilot-${v}-1.x86_64.rpm.sig")
   local name
   for name in "${names[@]}"; do printf 'content of %s\n' "$name" > "$assets/$name"; done
-  jq -n --arg v "$v" --arg base "$base/download/$tag/" '{version: $v, notes: "n", platforms: {
-      "darwin-aarch64": {signature: "s", url: ($base + "DeckPilot_aarch64.app.tar.gz")},
-      "windows-x86_64": {signature: "s", url: ($base + "DeckPilot_" + $v + "_x64_en-US.msi")}}}' \
+  jq -n --arg v "$v" --arg base "$base/download/$tag/" --argjson rpm "$([ "$PRERELEASE" = true ] && echo false || echo true)" '
+    def update(name): {signature: "s", url: ($base + name)};
+    {version: $v, notes: "n", platforms: ({
+      "darwin-aarch64": update("DeckPilot_aarch64.app.tar.gz"),
+      "darwin-aarch64-app": update("DeckPilot_aarch64.app.tar.gz"),
+      "darwin-x86_64": update("DeckPilot_x64.app.tar.gz"),
+      "darwin-x86_64-app": update("DeckPilot_x64.app.tar.gz"),
+      "linux-x86_64": update("DeckPilot_" + $v + "_amd64.AppImage"),
+      "linux-x86_64-appimage": update("DeckPilot_" + $v + "_amd64.AppImage"),
+      "linux-x86_64-deb": update("DeckPilot_" + $v + "_amd64.deb"),
+      "windows-x86_64": update("DeckPilot_" + $v + "_x64_en-US.msi"),
+      "windows-x86_64-msi": update("DeckPilot_" + $v + "_x64_en-US.msi"),
+      "windows-x86_64-nsis": update("DeckPilot_" + $v + "_x64-setup.exe")}
+      + if $rpm then {"linux-x86_64-rpm": update("DeckPilot-" + $v + "-1.x86_64.rpm")} else {} end)}' \
     > "$assets/$MANIFEST"
   signing "$work/signing"
   TAG="$tag" NOTES_FILE="$work/notes.md" MACOS_SIGNING=true \
     "$here/release-meta.sh" "$work/signing" "$assets/release-meta.json" "$work/body.md" > /dev/null
-  "$GH" api -X PATCH "repos/$REPOSITORY/releases/$id" -F body=@"$work/body.md" > /dev/null
+  "$GH" api -X PATCH "repos/$REPOSITORY/releases/$id" -f tag_name="$tag" -F body=@"$work/body.md" > /dev/null
   (cd "$assets" && sha256 -- * > "$work/SHA256SUMS" && mv "$work/SHA256SUMS" SHA256SUMS)
   echo "$id"
 }
@@ -209,7 +220,7 @@ envfile="$STUB_DIR/environments/production-release.json"
 # environment <protection rules JSON> [<custom: true|false> <protected: true|false>]
 environment() {
   jq -n --argjson rules "$1" --argjson custom "${2:-true}" --argjson protected "${3:-false}" \
-    '{name: "production-release", protection_rules: $rules,
+    '{name: "production-release", protection_rules: $rules, can_admins_bypass: false,
       deployment_branch_policy: {custom_branch_policies: $custom, protected_branches: $protected}}' > "$envfile"
 }
 # policies <type:name>...: the environment's deployment policies.
@@ -227,7 +238,7 @@ echo '{"name": "release", "protection_rules": [{"type": "required_reviewers", "r
 expect_failure "a protected environment of another name does not count" "'production-release' does not exist" "$here/check-environment.sh"
 # What GitHub creates when a job first names the environment: no rules.
 environment '[]' false false
-expect_failure "an auto-created, unprotected environment" "requires no reviewer" "$here/check-environment.sh" production-release
+expect_failure "an auto-created, unprotected environment" "does not restrict deployments" "$here/check-environment.sh" production-release
 environment '[{"type": "wait_timer", "wait_timer": 5}]'
 policies tag:v*
 expect_failure "an environment with only a wait timer" "requires no reviewer" "$here/check-environment.sh" production-release
@@ -247,6 +258,39 @@ expect_failure "branches named v*" "not only tags v*" "$here/check-environment.s
 policies tag:v*
 run env.log "$here/check-environment.sh" production-release && grep -q "deploys tags v\* only" "$work/env.log" \
   && ok "reviewers and tags v* only" || bad "environment: $(cat "$work/env.log")"
+jq '.can_admins_bypass = true' "$envfile" > "$work/e.json" && mv "$work/e.json" "$envfile"
+expect_failure "administrators may bypass the environment" "administrators can bypass" "$here/check-environment.sh" production-release
+environment "$reviewer"
+
+# Tag authority: no reviewer; creating a protected v* tag authorizes the run.
+# tag_ruleset <jq changes to a complete tag ruleset>
+tag_ruleset() {
+  mkdir -p "$STUB_DIR/rulesets"
+  jq -n '{id: 7, name: "Release tag protection", target: "tag", enforcement: "active",
+      conditions: {ref_name: {include: ["refs/tags/v*"], exclude: []}},
+      rules: [{type: "creation"}, {type: "update"}, {type: "deletion"}, {type: "non_fast_forward"}],
+      current_user_can_bypass: "never"} | '"${1:-.}" > "$STUB_DIR/rulesets/7.json"
+}
+environment '[]'
+expect_failure "no reviewer and no tag ruleset" "no tag ruleset protects the creation of v* tags" "$here/check-environment.sh" production-release
+tag_ruleset '.rules -= [{type: "creation"}]'
+expect_failure "no reviewer, and anyone with write access may create v* tags" "no tag ruleset protects" "$here/check-environment.sh" production-release
+tag_ruleset '.enforcement = "evaluate"'
+expect_failure "no reviewer, and the tag ruleset only evaluates" "no tag ruleset protects" "$here/check-environment.sh" production-release
+tag_ruleset '.current_user_can_bypass = "always"'
+expect_failure "no reviewer, and the workflow could create tags itself" "no tag ruleset protects" "$here/check-environment.sh" production-release
+tag_ruleset '.conditions.ref_name.include = ["refs/tags/release-*"]'
+expect_failure "no reviewer, and the ruleset covers other tags" "no tag ruleset protects" "$here/check-environment.sh" production-release
+tag_ruleset '.conditions.ref_name.exclude = ["refs/tags/v0.*"]'
+expect_failure "no reviewer, and the ruleset excludes some v* tags" "no tag ruleset protects" "$here/check-environment.sh" production-release
+tag_ruleset
+run env.log "$here/check-environment.sh" production-release && grep -q "creating a v\* tag is the authorization" "$work/env.log" \
+  && ok "no reviewer, with protected creation of v* tags" || bad "tag authority: $(cat "$work/env.log")"
+policies tag:v* branch:main
+expect_failure "tag authority, but deployments from a branch too" "not only tags v*" "$here/check-environment.sh" production-release
+policies tag:v*
+rm -rf "$STUB_DIR/rulesets"
+environment "$reviewer"
 rm "$STUB_DIR/environments/production-release-policies.json"
 expect_failure "unreadable deployment policies" "cannot be read" "$here/check-environment.sh" production-release
 
@@ -270,8 +314,8 @@ if run publish.log publish v0.6.0-alpha.1; then
 else
   bad "pre-release publication: $(cat "$work/publish.log")"
 fi
-patches=$(grep -c -- "-X PATCH repos/$REPOSITORY/releases/[0-9]* -F draft=false" "$STUB_DIR/calls.log" || true)
-[ "$patches" -eq 1 ] && ok "published with one update" || bad "$patches publishing updates"
+patches=$(grep -c -- "-X PATCH repos/$REPOSITORY/releases/[0-9]* -f tag_name=v0.6.0-alpha.1 -F draft=false" "$STUB_DIR/calls.log" || true)
+[ "$patches" -eq 1 ] && ok "published with one update that keeps the tag" || bad "$patches publishing updates with tag_name"
 run publish.log publish v0.6.0-alpha.1 && grep -q "already published; verifying only" "$work/publish.log" \
   && ok "re-running stage B changes nothing and verifies again" || bad "re-run: $(cat "$work/publish.log")"
 patches=$(grep -c -- "-F draft=false" "$STUB_DIR/calls.log" || true)
@@ -319,6 +363,28 @@ fresh
 id=$(draft v0.6.0-rc.1)
 rm "$STUB_DIR/assets/$id/prerelease.json"
 expect_draft "a missing manifest" "lacks: prerelease.json" v0.6.0-rc.1
+# change_manifest <jq filter>: edits the draft's manifest, keeps SHA256SUMS valid.
+change_manifest() {
+  jq "$1" "$STUB_DIR/assets/$id/prerelease.json" > "$work/m.json"
+  mv "$work/m.json" "$STUB_DIR/assets/$id/prerelease.json"
+  (cd "$STUB_DIR/assets/$id" && rm SHA256SUMS && sha256 -- * > ../S && mv ../S SHA256SUMS)
+}
+fresh
+id=$(draft v0.6.0-rc.1)
+change_manifest 'del(.platforms["windows-x86_64-nsis"])'
+expect_draft "a manifest without an update for a platform" "has no update for windows-x86_64-nsis" v0.6.0-rc.1
+fresh
+id=$(draft v0.6.0-rc.1)
+change_manifest '.platforms["linux-x86_64-deb"].url |= sub("/v0.6.0-rc.1/"; "/v0.5.0/")'
+expect_draft "a manifest URL of another release" "not to an asset of v0.6.0-rc.1" v0.6.0-rc.1
+fresh
+id=$(draft v0.6.0-rc.1)
+change_manifest '.platforms["darwin-x86_64"].url |= sub("x64.app.tar.gz$"; "x64.zip")'
+expect_draft "a manifest URL of a missing asset" "not to an asset of v0.6.0-rc.1" v0.6.0-rc.1
+fresh
+id=$(draft v0.6.0-rc.1)
+change_manifest '.version = "0.6.0-rc.0"'
+expect_draft "a manifest of another version" "announces 0.6.0-rc.0, expected 0.6.0-rc.1" v0.6.0-rc.1
 fresh
 id=$(draft v0.6.0-rc.1)
 jq '.commit = "'"$sha_b"'"' "$STUB_DIR/assets/$id/release-meta.json" > "$work/m.json"
@@ -334,8 +400,16 @@ echo "$sha_b" > "$STUB_DIR/tags/v0.6.0-rc.1"
 expect_draft "a tag moved after stage A" "now points to" v0.6.0-rc.1
 fresh
 id=$(draft v0.6.0-rc.1)
-"$GH" api -X PATCH "repos/$REPOSITORY/releases/$id" -f body=" " > /dev/null
+"$GH" api -X PATCH "repos/$REPOSITORY/releases/$id" -f tag_name=v0.6.0-rc.1 -f body=" " > /dev/null
 expect_draft "no release notes" "has no release notes" v0.6.0-rc.1
+fresh
+id=$(draft v0.6.0-rc.1)
+# As on v0.6.0-alpha.1: an update without tag_name detaches the draft.
+"$GH" api -X PATCH "repos/$REPOSITORY/releases/$id" -f body="notes" > /dev/null
+[ "$(jq -r .tag_name "$STUB_DIR/releases/$id.json")" != v0.6.0-rc.1 ] \
+  && ok "the stub detaches a draft updated without tag_name, as GitHub does" || bad "the stub kept the tag"
+expect_failure "a draft detached from its tag" "there is no release for v0.6.0-rc.1" publish v0.6.0-rc.1
+[ "$(jq -r .draft "$STUB_DIR/releases/$id.json")" = true ] && ok "a detached draft is never published" || bad "a detached draft was published"
 fresh
 expect_failure "no release at all" "there is no release" publish v0.6.0-rc.1
 
@@ -347,7 +421,7 @@ id=$(draft v0.6.0-rc.2)
 # removed by hand): verification fails, the release stays published, and
 # stage B is re-run once it is fixed.
 mv "$STUB_DIR/assets/$id/DeckPilot_0.6.0-rc.2_x64.dmg" "$work/held.dmg"
-"$GH" api -X PATCH "repos/$REPOSITORY/releases/$id" -F draft=false -F prerelease=true -f make_latest=false > /dev/null
+"$GH" api -X PATCH "repos/$REPOSITORY/releases/$id" -f tag_name=v0.6.0-rc.2 -F draft=false -F prerelease=true -f make_latest=false > /dev/null
 expect_failure "verification after publication finds a missing download" "cannot be downloaded" publish v0.6.0-rc.2
 mv "$work/held.dmg" "$STUB_DIR/assets/$id/DeckPilot_0.6.0-rc.2_x64.dmg"
 run publish.log publish v0.6.0-rc.2 && ok "re-running stage B after the fix verifies it" || bad "recovery: $(cat "$work/publish.log")"

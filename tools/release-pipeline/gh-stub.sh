@@ -8,6 +8,7 @@
 #   environments/<name>.json   GET repos/<repo>/environments/<name> (missing: 404)
 #   environments/<name>-policies.json
 #                              GET .../environments/<name>/deployment-branch-policies
+#   rulesets/<id>.json         GET repos/<repo>/rulesets (list) and rulesets/<id>
 #   releases/<id>.json         releases: GET (list, latest), POST, PATCH, DELETE
 #   assets/<id>/<name>         their assets (`gh release download`)
 #   latest                     the tag GitHub would call latest
@@ -106,6 +107,18 @@ case "$method $path" in
     [ -f "$dir/tags/$tag" ] || not_found
     jq -n --arg sha "$(cat "$dir/tags/$tag")" '{sha: $sha}' | answer
     ;;
+  "GET repos/"*/rulesets\?*)
+    if compgen -G "$dir/rulesets/*.json" > /dev/null; then
+      jq -s '[.[] | {id, name, target, enforcement}]' "$dir"/rulesets/*.json | answer
+    else
+      echo '[]' | answer
+    fi
+    ;;
+  "GET repos/"*/rulesets/*)
+    id="${path##*/rulesets/}"
+    [ -f "$dir/rulesets/$id.json" ] || not_found
+    answer < "$dir/rulesets/$id.json"
+    ;;
   "GET repos/"*/environments/*/deployment-branch-policies)
     name="${path##*/environments/}"
     name="${name%/deployment-branch-policies}"
@@ -135,6 +148,11 @@ case "$method $path" in
     id="${path##*/}"
     [ -f "$dir/releases/$id.json" ] || not_found
     make_latest=$(jq -r '.make_latest // ""' <<< "$fields")
+    # As GitHub does (seen on v0.6.0-alpha.1): updating a draft without
+    # tag_name detaches it from its tag ("untagged-…").
+    if [ "$(jq -r .draft "$dir/releases/$id.json")" = true ] && ! jq -e 'has("tag_name")' <<< "$fields" > /dev/null; then
+      fields=$(jq '. + {tag_name: "untagged-0123456789abcdef0123"}' <<< "$fields")
+    fi
     jq --argjson f "$fields" '. + ($f | del(.make_latest))' "$dir/releases/$id.json" > "$dir/patched.json"
     mv "$dir/patched.json" "$dir/releases/$id.json"
     if [ "$make_latest" = true ]; then jq -r .tag_name "$dir/releases/$id.json" > "$dir/latest"; fi

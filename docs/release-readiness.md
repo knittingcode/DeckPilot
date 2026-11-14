@@ -4,6 +4,55 @@ How to decide whether a version is ready to be published, and what is
 known about the current one. Publishing itself is described in
 [releasing.md](releasing.md); nothing here publishes anything.
 
+## Current status (`main` at `9f8a84a`, 2026-11-14)
+
+This section replaces the blockers of the
+[report of 2026-11-13](#report-for-060) below, which is kept as history.
+
+- **No release has been published yet.**
+- **Release authorization: tag authority.** `production-release` has no
+  required reviewers, deploys only from tags `v*`, and administrators
+  cannot bypass it. The *Release tag protection* ruleset restricts the
+  creation, update and deletion of `refs/tags/v*`; its only bypass actor
+  is the *Repository admin* role (bypass mode *always*). Creating a
+  protected `v*` tag is the authorization, and stage B publishes
+  automatically once every check has passed again
+  ([releasing.md](releasing.md#release-authorization)). The release gate
+  (`tools/release-pipeline/check-environment.sh`) verifies this on every
+  run; the *Release authorization* job of the *Signing check* workflow
+  passed on `9f8a84a`
+  ([run 43609631711](https://github.com/knittingcode/DeckPilot/actions/runs/43609631711)).
+- **Signing secrets** are environment secrets of `production-release`
+  only; the repository-level copies have been deleted.
+- **Signed and notarized 0.6.0 build.** The draft release of
+  `v0.6.0-alpha.2` (`13cabe6`) was built in
+  [run 43597399166](https://github.com/knittingcode/DeckPilot/actions/runs/43597399166):
+  macOS arm64 and x86_64 Developer ID signed (team `PUB9L83UMZ`) with the
+  hardened runtime, notarized, stapled and accepted by Gatekeeper; updater
+  signatures, `SHA256SUMS`, `release-meta.json` and `prerelease.json`
+  verified; 17 assets. It was **not** published: its *Publish and verify*
+  deployment was cancelled when the required reviewers were removed.
+- **Update continuity** passed on `v0.6.0-alpha.2`
+  ([run 43606772522](https://github.com/knittingcode/DeckPilot/actions/runs/43606772522)):
+  two Developer ID signed builds with the same code identity, a tampered
+  update rejected, the signed update 0.5.0 → 0.5.1 installed, the
+  configuration opened from the Keychain without a prompt before and after
+  the update, and the data preserved and encrypted.
+- **Tags.** The historical tags `v0.5.0-1` and `v0.6.0-alpha.1` and the
+  draft releases of 0.5.0-1 and 0.5.0-2 have been deleted. The tag
+  `v0.5.0-2` is kept as the compatibility baseline.
+- **Security alerts:** no open code scanning, Dependabot or secret
+  scanning alerts.
+
+Still open:
+
+| Item | State |
+| ---- | ----- |
+| First published release | not done; a `v*` tag publishes automatically ([releasing.md](releasing.md#the-first-pre-release-command-by-command)) |
+| Install of a signed build by hand (acceptance steps 1, 14, 15) | not recorded ([mvp-acceptance.md](mvp-acceptance.md)) |
+| Physical MK.2 retest on the current `main` | not recorded; the physical run of 2026-11-13 was on `5569a14` |
+| Windows code signing (Authenticode) | not provisioned; Windows and Linux builds are not code-signed |
+
 ## Procedure
 
 1. **Version.** `deckpilot-dev set-version <x.y.z>` writes the version to
@@ -31,9 +80,11 @@ known about the current one. Publishing itself is described in
 5. **Signed test release.** An alpha tag (`vX.Y.Z-alpha.N`; the former
    `vX.Y.Z-N` test tags no longer start the release workflow, see
    [releasing.md](releasing.md#release-tags-and-the-tag-gate)) runs the real
-   release workflow, signs and notarizes, and ends in a **draft** release; verify
-   it with `deckpilot-dev verify-release` (see
-   [release-validation.md](release-validation.md)).
+   release workflow, signs and notarizes into a **draft** release and, under
+   tag authority, **publishes** it as a pre-release once every check passes
+   again, without an approval. The workflow verifies the draft before it
+   publishes; `deckpilot-dev verify-release` checks the assets again by
+   hand (see [release-validation.md](release-validation.md)).
 6. **Update path.** `update-continuity` workflow (Keychain continuity
    between two Developer ID signed builds) and
    `tools/release-validation/update-test.sh` (tampered update rejected, real
@@ -56,6 +107,12 @@ The macOS MVP acceptance run (15 steps, from installing to updating) is
 [mvp-acceptance.md](mvp-acceptance.md).
 
 ## Report for 0.6.0
+
+> **Historical, superseded** by the [current status](#current-status-main-at-9f8a84a-2026-11-14)
+> above. This report describes `main` on 2026-11-13. Its blockers (no
+> `production-release` environment, no signed 0.6.0 build, *Update
+> continuity* not run, unrestricted creation of `v*` tags) have since been
+> resolved, and its owner actions are marked where they no longer apply.
 
 State on **2026-11-13**. The `check.sh` run and the CI table below are for
 commit `1f1de25371785931f89c2eec2895197311716edc` (`1f1de25`); the native,
@@ -201,18 +258,17 @@ Security alerts (read with `gh api`, open alerts only): code scanning
 
 ### Owner actions before the first pre-release
 
-1. **Create the `production-release` environment** with a required
-   reviewer and a tag deployment policy
-   ([releasing.md](releasing.md#publication-gate-and-signing-environment-repository-settings)).
-   On 2026-11-13 the repository has no environments.
-2. **Move the signing secrets into it** and run the non-publishing
-   validation
+As of 2026-11-13; items 1 to 3 and 7 are done or replaced (see the
+[current status](#current-status-main-at-9f8a84a-2026-11-14)).
+
+1. *Done.* The `production-release` environment exists, with a tag
+   deployment policy `v*` and tag authority instead of a required reviewer
+   ([releasing.md](releasing.md#release-authorization)).
+2. *Done.* The signing secrets are environment secrets only
    ([releasing.md](releasing.md#moving-the-signing-secrets-into-the-environment)).
-3. **Tag ruleset.** A *Release tag protection* ruleset is active on
-   `refs/tags/v*`. It blocks deletion, update and non-fast-forward and has
-   no bypass actors. Confirm that this is the intended rule set for
-   release tags, or extend it (for example, restrict who may create `v*`
-   tags).
+3. *Done.* *Release tag protection* on `refs/tags/v*` restricts creation,
+   update and deletion; its only bypass actor is the *Repository admin*
+   role.
 4. **Physical MK.2 checks:** done on 2026-11-13 for one device
    ([report](mvp-acceptance.md#physical-mk2-2026-11-13)). Still to do:
    record the firmware version and test two devices at once.
@@ -222,12 +278,12 @@ Security alerts (read with `gh api`, open alerts only): code scanning
 6. **Signed build, reboot and update:** install a Developer ID signed,
    notarized build, do a real reboot, and update to a signed newer build
    (acceptance steps 1, 14 and 15).
-7. Then make the signed test release `v0.6.0-alpha.1` (draft) with the
-   exact commands in
-   [releasing.md](releasing.md#the-first-pre-release-command-by-command).
-   They were not run for this report. After that, do the manual
-   acceptance run in [mvp-acceptance.md](mvp-acceptance.md) with the build
-   from the draft.
+7. *Replaced.* `v0.6.0-alpha.1` was never released and its tag has been
+   deleted; the signed draft of `v0.6.0-alpha.2` exists. Under tag
+   authority a new `v*` tag is published, not kept as a draft: follow
+   [releasing.md](releasing.md#the-first-pre-release-command-by-command),
+   then do the manual acceptance run in
+   [mvp-acceptance.md](mvp-acceptance.md) with the signed build.
 
 ### Security and packaging check (2026-11-13)
 
@@ -290,12 +346,16 @@ finding above describes `5569a14` and no longer applies to `main`.
 | Release tags protected | Ruleset *Release tag protection* (active, `refs/tags/v*`): deletion, update, non-fast-forward; no bypass actors. Creation is not restricted |
 | Workflow token read-only by default | `default_workflow_permissions: read`, `can_approve_pull_request_reviews: false`; all actions allowed, SHA pinning not required by the repository (pinning is enforced by `check-workflow-gate.py` instead) |
 
-**Owner actions** (to be run by the owner only; nothing here was run):
+**Owner actions** (as of 2026-11-13, to be run by the owner only; nothing
+here was run). Items 1 to 4 are done, with tag authority instead of
+required reviewers (see the
+[current status](#current-status-main-at-9f8a84a-2026-11-14)); they are
+kept as the record.
 
 1. *Owner action.* Create the environment: Settings → Environments → New
-   environment → `production-release` → Required reviewers (add the
-   maintainers; optionally *Prevent self-review*) → Deployment branches and
-   tags: *Selected branches and tags* → Add rule → type *Tag*, `v*`. The
+   environment → `production-release` → Deployment branches and tags:
+   *Selected branches and tags* → Add rule → type *Tag*, `v*`, and set up
+   the release authorization (tag authority, or required reviewers). The
    equivalent `gh api` calls are in
    [releasing.md](releasing.md#publication-gate-and-signing-environment-repository-settings).
 2. *Owner action.* Verify it:

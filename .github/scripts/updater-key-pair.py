@@ -1,22 +1,28 @@
 #!/usr/bin/env python3
-"""Checks that the updater signing key and its password belong to the
-public key, using only the Python standard library.
+"""Checks the updater signing key pair, using only the Python standard
+library.
 
-    python3 -I .github/scripts/updater-key-pair.py
+    python3 -I .github/scripts/updater-key-pair.py [--pinned FILE [--require-variable]] [--public-only]
 
 Environment (never printed):
     TAURI_SIGNING_PRIVATE_KEY           base64 of the minisign secret key file
     TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password (may be empty)
     DECKPILOT_UPDATER_PUBKEY            base64 of the minisign public key file
 
-The signing check runs this instead of the Tauri CLI or deckpilot-dev, so
-that no dependency installation or build script runs while the key is in
-the job: the minisign secret key is decrypted (scrypt, as libsodium's
-crypto_pwhash_scryptsalsa208sha256), its BLAKE2b checksum proves the
-password, and its key ID and Ed25519 public key must equal the public key's.
-Only "match" or a reason is printed.
+--pinned FILE: the public key is the one committed in FILE (base64 of the
+minisign public key file, .github/updater.pub). DECKPILOT_UPDATER_PUBKEY,
+when set, must be the same key; with --require-variable it must be set.
+--public-only: check the public key alone; no secret key is read.
+
+Without --public-only, the minisign secret key is decrypted (scrypt, as
+libsodium's crypto_pwhash_scryptsalsa208sha256), its BLAKE2b checksum proves
+the password, and its key ID and Ed25519 public key must equal the public
+key's. The release workflow runs this in the protected environment, so no
+dependency installation or build script runs before it while the key is in
+the job. Only "match", "public key …" or a reason is printed.
 """
 
+import argparse
 import base64
 import hashlib
 import os
@@ -28,9 +34,9 @@ class Mismatch(Exception):
     pass
 
 
-def payload(name):
-    """The binary key line of the base64-encoded minisign key file in $name."""
-    value = os.environ.get(name, "").strip()
+def decode(value, name):
+    """The binary key line of a base64-encoded minisign key file."""
+    value = value.strip()
     if not value:
         raise Mismatch(f"{name} is not set")
     try:
@@ -41,6 +47,22 @@ def payload(name):
         return base64.b64decode(lines[1].strip(), validate=True)
     except ValueError as error:
         raise Mismatch(f"{name} is not a base64-encoded minisign key file") from error
+
+
+def payload(name):
+    """The binary key line of the base64-encoded minisign key file in $name."""
+    return decode(os.environ.get(name, ""), name)
+
+
+def public_key(data, name):
+    if len(data) != 42 or data[0:2] != b"Ed":
+        raise Mismatch(f"{name} is not an Ed25519 minisign public key")
+    return data
+
+
+def key_id(public):
+    """The key ID as minisign shows it (little-endian hexadecimal)."""
+    return public[2:10][::-1].hex().upper()
 
 
 def scrypt_parameters(opslimit, memlimit):
@@ -91,20 +113,42 @@ def secret_key(data, password):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pinned", metavar="FILE")
+    parser.add_argument("--require-variable", action="store_true")
+    parser.add_argument("--public-only", action="store_true")
+    args = parser.parse_args()
+    variable = "DECKPILOT_UPDATER_PUBKEY"
     try:
-        public = payload("DECKPILOT_UPDATER_PUBKEY")
-        if len(public) != 42 or public[0:2] != b"Ed":
-            raise Mismatch("DECKPILOT_UPDATER_PUBKEY is not an Ed25519 minisign public key")
+        if args.pinned:
+            try:
+                with open(args.pinned, encoding="utf-8") as file:
+                    pinned = file.read()
+            except OSError as error:
+                raise Mismatch(f"{args.pinned} cannot be read") from error
+            public = public_key(decode(pinned, args.pinned), args.pinned)
+            if os.environ.get(variable, "").strip():
+                if public_key(payload(variable), variable) != public:
+                    raise Mismatch(f"{variable} is not the public key pinned in {args.pinned}")
+            elif args.require_variable:
+                raise Mismatch(f"{variable} is not set")
+            name = args.pinned
+        else:
+            public = public_key(payload(variable), variable)
+            name = variable
+        if args.public_only:
+            print(f"public key {key_id(public)}: {name} is a well-formed Ed25519 minisign public key")
+            return 0
         keynum, pk = secret_key(
             payload("TAURI_SIGNING_PRIVATE_KEY"),
             os.environ.get("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", ""),
         )
         if keynum != public[2:10] or pk != public[10:42]:
-            raise Mismatch("the signing key does not belong to DECKPILOT_UPDATER_PUBKEY")
+            raise Mismatch(f"the signing key does not belong to {name}")
     except Mismatch as error:
         print(f"::error::{error}")
         return 1
-    print("match: the signing key and its password belong to DECKPILOT_UPDATER_PUBKEY")
+    print(f"match: the signing key and its password belong to {name} (key {key_id(public)})")
     return 0
 
 
