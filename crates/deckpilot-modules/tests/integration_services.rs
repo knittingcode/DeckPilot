@@ -9,7 +9,6 @@
 //! module registry exactly as the agent runs them.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -120,6 +119,8 @@ struct Server {
     port: u16,
     tls: bool,
     seen: Arc<Mutex<Vec<Seen>>>,
+    /// Stops the server when the test ends.
+    _acceptor: local::Acceptor,
 }
 
 impl Server {
@@ -133,33 +134,29 @@ impl Server {
     }
 
     fn spawn(handler: Handler, tls: bool) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
         let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
         let shared = seen.clone();
         let config = tls.then(tls_config);
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let seen = shared.clone();
-                let handler = handler.clone();
-                let config = config.clone();
-                std::thread::spawn(move || match config {
-                    Some(config) => {
-                        let Ok(connection) = rustls::ServerConnection::new(config) else {
-                            return;
-                        };
-                        respond(
-                            rustls::StreamOwned::new(connection, stream),
-                            port,
-                            &seen,
-                            &handler,
-                        );
-                    }
-                    None => respond(stream, port, &seen, &handler),
-                });
+        let acceptor = local::Acceptor::start(move |stream, port| match config.clone() {
+            Some(config) => {
+                let Ok(connection) = rustls::ServerConnection::new(config) else {
+                    return;
+                };
+                respond(
+                    rustls::StreamOwned::new(connection, stream),
+                    port,
+                    &shared,
+                    &handler,
+                );
             }
+            None => respond(stream, port, &shared, &handler),
         });
-        Self { port, tls, seen }
+        Self {
+            port: acceptor.port,
+            tls,
+            seen,
+            _acceptor: acceptor,
+        }
     }
 
     fn url(&self, path: &str) -> String {
@@ -173,6 +170,123 @@ impl Server {
 
     fn count(&self) -> usize {
         self.seen.lock().unwrap().len()
+    }
+}
+
+/// Local stand-in servers that stop with the test: the listener is closed
+/// when the [`local::Acceptor`] is dropped, at most a few connections are
+/// served at once, and binding retries the short-lived errors of a busy
+/// machine (Windows runs out of ephemeral ports or socket buffers for a
+/// moment: WSAENOBUFS, WSAEADDRINUSE).
+mod local {
+    use std::io;
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::thread::JoinHandle;
+    use std::time::Duration;
+
+    /// Connections served at the same time; more wait to be accepted.
+    const MAX_CONNECTIONS: usize = 16;
+    /// How often the accept loop looks for a connection or the stop.
+    const POLL: Duration = Duration::from_millis(2);
+    const BIND_ATTEMPTS: u32 = 8;
+
+    /// An error that goes away once ports or buffers are freed again.
+    fn transient(error: &io::Error) -> bool {
+        const NO_BUFFERS: i32 = if cfg!(windows) {
+            10_055 // WSAENOBUFS
+        } else if cfg!(target_os = "linux") {
+            105 // ENOBUFS
+        } else {
+            55 // ENOBUFS (macOS, BSD)
+        };
+        matches!(
+            error.kind(),
+            io::ErrorKind::AddrInUse | io::ErrorKind::AddrNotAvailable
+        ) || error.raw_os_error() == Some(NO_BUFFERS)
+    }
+
+    /// A listener on a free port of 127.0.0.1, retrying transient errors
+    /// with a growing pause.
+    pub fn bind() -> TcpListener {
+        let mut pause = Duration::from_millis(50);
+        for _ in 1..BIND_ATTEMPTS {
+            match TcpListener::bind("127.0.0.1:0") {
+                Ok(listener) => return listener,
+                Err(error) if transient(&error) => {
+                    std::thread::sleep(pause);
+                    pause = (pause * 2).min(Duration::from_secs(1));
+                }
+                Err(error) => panic!("binding 127.0.0.1 failed: {error}"),
+            }
+        }
+        TcpListener::bind("127.0.0.1:0").expect("binding 127.0.0.1")
+    }
+
+    /// Accepts connections on its own thread and serves each with
+    /// `serve` (given the port) on a thread of its own until dropped.
+    pub struct Acceptor {
+        pub port: u16,
+        stop: Arc<AtomicBool>,
+        thread: Option<JoinHandle<()>>,
+    }
+
+    impl Acceptor {
+        pub fn start(serve: impl Fn(TcpStream, u16) + Send + Sync + 'static) -> Self {
+            let listener = bind();
+            let port = listener.local_addr().unwrap().port();
+            listener.set_nonblocking(true).unwrap();
+            let stop = Arc::new(AtomicBool::new(false));
+            let flag = stop.clone();
+            let serve = Arc::new(serve);
+            let thread = std::thread::spawn(move || {
+                let active = Arc::new(AtomicUsize::new(0));
+                while !flag.load(Ordering::SeqCst) {
+                    let Ok((stream, _)) = listener.accept() else {
+                        // Nothing waiting, or a failed accept.
+                        std::thread::sleep(POLL);
+                        continue;
+                    };
+                    // Accepted sockets may inherit non-blocking mode.
+                    let _ = stream.set_nonblocking(false);
+                    while active.load(Ordering::SeqCst) >= MAX_CONNECTIONS {
+                        std::thread::sleep(POLL);
+                    }
+                    active.fetch_add(1, Ordering::SeqCst);
+                    let done = Done(active.clone());
+                    let serve = serve.clone();
+                    std::thread::spawn(move || {
+                        let _done = done;
+                        serve(stream, port);
+                    });
+                }
+                // The listener closes here.
+            });
+            Self {
+                port,
+                stop,
+                thread: Some(thread),
+            }
+        }
+    }
+
+    impl Drop for Acceptor {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    /// Counts a connection as finished, even when serving it panicked.
+    struct Done(Arc<AtomicUsize>);
+
+    impl Drop for Done {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -240,7 +354,7 @@ fn respond<S: Read + Write>(stream: S, port: u16, seen: &Mutex<Vec<Seen>>, handl
 
 /// A port on this computer that nothing listens on.
 fn closed_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = local::bind();
     listener.local_addr().unwrap().port()
 }
 
@@ -540,14 +654,11 @@ fn a_self_signed_certificate_is_refused_and_nothing_is_sent() {
 fn plain_text_on_an_https_address_is_refused() {
     // An https address whose server answers in plain HTTP at once,
     // without waiting for a request.
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    std::thread::spawn(move || {
-        for mut stream in listener.incoming().flatten() {
-            let _ = stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
-        }
+    let server = local::Acceptor::start(|mut stream, _| {
+        let _ = stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
     });
+    let port = server.port;
     for service in SERVICES {
         let url = format!("https://127.0.0.1:{port}/api");
         let result = probe(service, &service.config(&url, true, 10));
