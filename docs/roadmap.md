@@ -12,7 +12,7 @@ functionality.
 - SQLite storage with migrations; optional SQLCipher build
 - Configuration app: dashboard, actions, profiles, projects, devices, settings
 
-## Milestone 1 – Background agent and MK.2 support (done, hardware test pending)
+## Milestone 1 – Background agent and MK.2 support (done; Windows and Linux hardware tests pending)
 
 Implemented:
 
@@ -25,18 +25,21 @@ Implemented:
 - Key image rendering from labels; generated default layouts
 - Per-user start at login
 
+- The agent bundled with the configuration app's release builds
+- The MK.2 driver tested on a physical device on macOS
+  ([mvp-acceptance.md](mvp-acceptance.md#physical-mk2-2026-11-13))
+
 Remaining before the milestone is complete:
 
-- Test the MK.2 driver on a physical device on all three platforms and mark
-  the model as verified
-- Bundle the agent with the configuration app installers
+- Test the MK.2 driver on a physical device on Windows and Linux, and with
+  more than one device at a time
 
 ## Milestone 1.x – Polish
 
-- Icons on keys
+- Icons on keys (done: custom icons and an icon library in 0.6.0)
 - Event-driven device discovery where the OS provides hotplug notifications
 
-## Milestone 2 – Configuration studio, live development, updates (current)
+## Milestone 2 – Configuration studio, live development, updates (done except the first published release)
 
 Implemented:
 
@@ -47,7 +50,12 @@ Implemented:
 - Supervised live development environment (`make up`, `pnpm dev`) with
   simulated devices and isolated data
 - Signed updates from GitHub Releases with coordinated agent restart, and a
-  release pipeline that builds draft releases
+  release pipeline that builds, signs and checks draft releases and
+  publishes them from a protected release tag
+  ([releasing.md](releasing.md))
+- The updater signing key provisioned; signed updates and Keychain
+  continuity verified between two Developer ID signed builds
+  ([updates.md](updates.md))
 - Modular feature architecture: built-in modules (`general`, `projects`) with
   namespaced action types, module-driven navigation, enable/disable without
   losing configuration; projects stored per profile with database constraints
@@ -56,11 +64,11 @@ Implemented:
 
 Remaining before the milestone is complete:
 
-- Provision the signing key, publish a first release and verify an update
-  between two releases end to end
+- Publish the first release and verify an update between two published
+  releases end to end
 - Profile switching from the device
 
-## Milestone 3 – Security and portability (v0.4, current)
+## Milestone 3 – Security and portability (v0.4; done on macOS)
 
 Implemented:
 
@@ -77,29 +85,52 @@ Implemented:
   conflict resolution and resource mapping
 - Module portability contracts and module-owned schema versions
 - A signing check for the updater keys and build provenance for releases
+- macOS code signing: Developer ID signed, hardened runtime, notarized and
+  stapled builds (verified on the `v0.6.0-alpha.2` draft), which keeps
+  macOS from asking for Keychain access after updates
+- Credentials for modules (HTTP, GitHub, GitLab, Jira) stored on this
+  computer and used by name, never exported
 
 Remaining before the milestone is complete:
 
-- A first signed release and an end-to-end update between two releases
-- Platform code signing (Apple notarization, Windows Authenticode), which
-  also keeps macOS from asking for Keychain access after updates
+- The first published signed release and an end-to-end update between two
+  published releases
+- Windows code signing (Authenticode); Windows and Linux builds are not
+  code-signed yet
 - Windows Hello and polkit as system authentication; locking with the
   screen lock on Windows
-- Secret storage for future modules that need credentials (OS keychain)
 
-## Milestone 4 – Platform actions
+## Milestone 4 – Platform actions (done in 0.6.0)
 
-- Platform services behind explicit interfaces: open application, open
-  directory, open terminal at a resource, open URL
-- Docker/Compose environment actions
-- Clear confirmation for any action with side effects
+- Platform services behind explicit interfaces: the System module (open
+  applications, web pages, files and folders, run commands), the Workspace
+  module (editors, repositories, pages) and the Git and HTTP modules
+- Docker/Compose environment actions (the Docker module)
+- Actions declare what running them does, and actions that change things
+  say so before they are saved; commands and Compose changes are off until
+  allowed on each computer
+
+## Milestone 5 – Release builds and update distribution (done; first release pending)
+
+- Release builds for macOS, Windows and Linux, a signed update manifest per
+  channel, `SHA256SUMS`, a signing record and build provenance, assembled
+  into a draft release and checked before publication
+  ([releasing.md](releasing.md))
+- Stable and pre-release update channels
+
+Remaining:
+
+- Publish the first pre-release
 
 ## Later
 
-- Additional device models (encoders, touch surfaces) after hardware testing
-- Release builds and update distribution through GitHub Releases
+- Drivers for more Stream Deck models (XL, Stream Deck +, encoders and
+  touch surfaces), after hardware testing; today only the MK.2 has a
+  driver
+- Hardware testing on Windows and Linux
 
 ## Out of scope
 
 - Cloud synchronization, telemetry or analytics
-- Plugin marketplace
+- Plugin marketplace (only a design proposal exists, in open pull request
+  #191; nothing of it is implemented)
