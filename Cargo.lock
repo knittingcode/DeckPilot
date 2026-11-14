@@ -1250,6 +1250,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "deckpilot-plugin-package"
+version = "0.6.0-alpha.2"
+dependencies = [
+ "deckpilot-plugin-manifest",
+ "flate2",
+ "semver",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "deckpilot-plugin-registry"
+version = "0.6.0-alpha.2"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "deckpilot-plugin-manifest",
+ "deckpilot-plugin-package",
+ "deckpilot-update",
+ "jsonschema",
+ "minisign",
+ "minisign-verify",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "deckpilot-portability"
 version = "0.6.0-alpha.2"
 dependencies = [
