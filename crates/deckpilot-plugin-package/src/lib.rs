@@ -8,8 +8,12 @@
 //! 12.3 (steps 4 to 8) and 12.5.
 //!
 //! A package is a gzip-compressed POSIX ustar archive of regular files:
-//! `manifest.json`, `plugin.js` (the bundle), `LICENSE`, optionally
-//! `README.md` and `CHANGELOG.md`, and the `assets/` the manifest names.
+//! `manifest.json`, `plugin.wasm` (the executable artifact, a WebAssembly
+//! module implementing plugin ABI 1, see
+//! `docs/marketplace/artifact-contract.md` and [`wasm`]), `LICENSE`,
+//! optionally `README.md` and `CHANGELOG.md`, and the `assets/` the
+//! manifest names. Packages of the #191 JavaScript contract (`plugin.js`)
+//! are refused with [`PackageError::UnsupportedRuntime`].
 //!
 //! ```text
 //! registry pins (sha256, size, manifest_sha256, id, version, permissions)
@@ -34,9 +38,10 @@ mod limits;
 mod paths;
 mod read;
 mod unpack;
+pub mod wasm;
 
 pub use build::{BuiltPackage, GZIP_OS_UNKNOWN, PackageBuilder};
-pub use contents::{BUNDLE, Files, MANIFEST};
+pub use contents::{ARTIFACT, Files, LICENSE, MANIFEST};
 pub use error::{PackageError, PathError};
 pub use limits::Limits;
 pub use paths::{check_entry_path, check_entry_set};

@@ -36,8 +36,15 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub categories: Option<Vec<Category>>,
     pub engines: Engines,
-    /// Source entry module the builder bundles; the package always holds the
-    /// bundle as `plugin.js`.
+    /// How the package's code runs (`docs/marketplace/artifact-contract.md`).
+    /// Absent means the #191 JavaScript contract (`plugin.js`), which this
+    /// version of DeckPilot reads but refuses to install; see
+    /// [`Manifest::runtime_contract`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<Runtime>,
+    /// Source entry module the builder compiles or bundles (e.g.
+    /// `src/lib.rs`). Informational: the package always holds the
+    /// executable artifact under a fixed name ([`Manifest::artifact_file`]).
     pub entry: String,
     /// `None` means every platform.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -98,6 +105,44 @@ pub struct Engines {
     /// Exact `@deckpilot/plugin-sdk` version used to build. Informational.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sdk: Option<Version>,
+}
+
+/// The executable artifact a package ships and the runtime contract it
+/// implements (`"runtime": {"kind": "wasm", "abi": 1}`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Runtime {
+    pub kind: RuntimeKind,
+    /// The plugin ABI version the module implements (`deckpilot_v1`
+    /// imports, `dp_*` exports). Only [`WASM_ABI_VERSION`] exists.
+    pub abi: u64,
+}
+
+/// Kinds of executable artifact. A JavaScript plugin of the future is also
+/// a `wasm` module (`QuickJS` and the bundle compiled into one ABI module),
+/// so there is deliberately no `js` kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuntimeKind {
+    /// A WebAssembly module, `plugin.wasm`.
+    Wasm,
+}
+
+/// The plugin ABI version of `"runtime": {"kind": "wasm"}`.
+pub const WASM_ABI_VERSION: u64 = 1;
+/// The package file of a `wasm` runtime.
+pub const WASM_ARTIFACT: &str = "plugin.wasm";
+/// The package file of the #191 JavaScript contract (no `runtime`).
+pub const LEGACY_JS_ARTIFACT: &str = "plugin.js";
+
+/// What a manifest's `runtime` amounts to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeContract {
+    /// A WebAssembly module implementing plugin ABI `abi`.
+    Wasm { abi: u64 },
+    /// No `runtime`: the #191 JavaScript bundle (`plugin.js`). Not
+    /// installable by this version of DeckPilot.
+    LegacyJs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

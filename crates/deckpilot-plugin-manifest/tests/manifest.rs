@@ -298,6 +298,43 @@ fn fixtures() -> Vec<Fixture> {
         mutate("manifestVersion 2", true, UnsupportedVersion, |v| {
             set(v, "/manifestVersion", json!(2));
         }),
+        // Runtime (artifact contract): wasm ABI 1 only, no `js` kind.
+        mutate(
+            "runtime kind js",
+            true,
+            Structure("unknown variant `js`"),
+            |v| {
+                set(v, "/runtime", json!({ "kind": "js", "abi": 1 }));
+            },
+        ),
+        mutate(
+            "runtime abi 2",
+            true,
+            Invalid("runtime.abi", C::Range),
+            |v| {
+                set(v, "/runtime", json!({ "kind": "wasm", "abi": 2 }));
+            },
+        ),
+        mutate(
+            "runtime without abi",
+            true,
+            Structure("missing field `abi`"),
+            |v| {
+                set(v, "/runtime", json!({ "kind": "wasm" }));
+            },
+        ),
+        mutate(
+            "unknown runtime field",
+            true,
+            Structure("unknown field `engine`"),
+            |v| {
+                set(
+                    v,
+                    "/runtime",
+                    json!({ "kind": "wasm", "abi": 1, "engine": "quickjs" }),
+                );
+            },
+        ),
         // Identity.
         mutate(
             "uppercase plugin id",
@@ -1114,4 +1151,25 @@ fn package_integrity() {
             "`assets/keys/pr.png` is missing from the package"
         ]
     );
+}
+
+// ------------------------------------------------------- artifact contract
+
+#[test]
+fn runtime_declares_the_artifact() {
+    use deckpilot_plugin_manifest::{REQUIRED_FILES, RuntimeContract};
+    // The #191 example predates the contract: it still parses and
+    // validates, and names the JavaScript bundle the installer refuses.
+    let legacy = Manifest::parse_and_validate(EXAMPLE).unwrap();
+    assert_eq!(legacy.runtime, None);
+    assert_eq!(legacy.runtime_contract(), RuntimeContract::LegacyJs);
+    assert_eq!(legacy.artifact_file(), "plugin.js");
+
+    let wasm = Manifest::parse_and_validate(FULL).unwrap();
+    assert_eq!(wasm.runtime_contract(), RuntimeContract::Wasm { abi: 1 });
+    assert_eq!(wasm.artifact_file(), "plugin.wasm");
+    assert_eq!(wasm.required_files(), REQUIRED_FILES);
+    assert_eq!(REQUIRED_FILES, ["manifest.json", "plugin.wasm", "LICENSE"]);
+    let json: Value = serde_json::from_str(&wasm.to_json_pretty()).unwrap();
+    assert_eq!(json["runtime"], json!({ "kind": "wasm", "abi": 1 }));
 }

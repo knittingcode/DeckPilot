@@ -4,7 +4,8 @@
 use std::collections::BTreeMap;
 
 use deckpilot_plugin_manifest::{
-    Manifest, PackageDigest, PackageIntegrity, REQUIRED_FILES, Sha256Digest,
+    LEGACY_JS_ARTIFACT, Manifest, PackageDigest, PackageIntegrity, RuntimeContract, Sha256Digest,
+    WASM_ABI_VERSION, WASM_ARTIFACT,
 };
 
 use crate::error::PackageError;
@@ -15,16 +16,21 @@ use crate::sha256;
 /// The files of a package by path, sorted.
 pub type Files = BTreeMap<String, Vec<u8>>;
 
-/// The bundle every package runs.
-pub const BUNDLE: &str = "plugin.js";
+/// The executable artifact every installable package runs: a WebAssembly
+/// module implementing plugin ABI 1 (`docs/marketplace/artifact-contract.md`).
+pub const ARTIFACT: &str = WASM_ARTIFACT;
 /// The manifest every package carries.
 pub const MANIFEST: &str = "manifest.json";
+/// The license every package carries.
+pub const LICENSE: &str = "LICENSE";
 
 fn len(bytes: &[u8]) -> u64 {
     u64::try_from(bytes.len()).unwrap_or(u64::MAX)
 }
 
-/// Shape checks that need no manifest: count, paths, sizes, required files.
+/// Shape checks that need no manifest: count, paths, sizes, `manifest.json`
+/// and `LICENSE`. The artifact is checked by [`check_artifact`] once the
+/// manifest says which runtime the package declares.
 pub(crate) fn check_shape(files: &Files, limits: &Limits) -> Result<(), PackageError> {
     if files.len() > limits.max_entries {
         return Err(PackageError::TooManyEntries {
@@ -49,18 +55,50 @@ pub(crate) fn check_shape(files: &Files, limits: &Limits) -> Result<(), PackageE
             });
         }
     }
-    for required in REQUIRED_FILES {
+    for required in [MANIFEST, LICENSE] {
         if !files.contains_key(required) {
             return Err(PackageError::Missing(required));
         }
     }
-    let bundle = len(&files[BUNDLE]);
-    if bundle > limits.max_bundle_bytes {
-        return Err(PackageError::BundleTooLarge {
-            size: bundle,
-            limit: limits.max_bundle_bytes,
+    Ok(())
+}
+
+/// The artifact contract: the manifest must declare the `wasm` runtime with
+/// plugin ABI 1, and `plugin.wasm` must be present, within the size limit
+/// and a valid ABI 1 module ([`crate::wasm::validate_module`]). A package of
+/// the #191 JavaScript contract (no `runtime`, `plugin.js`) is refused with
+/// an error that names the contract; it is never reinterpreted.
+pub(crate) fn check_artifact(
+    files: &Files,
+    manifest: &Manifest,
+    limits: &Limits,
+) -> Result<(), PackageError> {
+    match manifest.runtime_contract() {
+        RuntimeContract::LegacyJs => {
+            return Err(PackageError::UnsupportedRuntime {
+                found: if files.contains_key(LEGACY_JS_ARTIFACT) {
+                    "a JavaScript bundle (plugin.js) without a `runtime` declaration".into()
+                } else {
+                    "no `runtime` declaration".into()
+                },
+            });
+        }
+        RuntimeContract::Wasm { abi } if abi != WASM_ABI_VERSION => {
+            return Err(PackageError::UnsupportedRuntime {
+                found: format!("a wasm module for plugin ABI {abi}"),
+            });
+        }
+        RuntimeContract::Wasm { .. } => {}
+    }
+    let module = files.get(ARTIFACT).ok_or(PackageError::Missing(ARTIFACT))?;
+    let size = len(module);
+    if size > limits.max_artifact_bytes {
+        return Err(PackageError::ArtifactTooLarge {
+            size,
+            limit: limits.max_artifact_bytes,
         });
     }
+    crate::wasm::validate_module(module)?;
     Ok(())
 }
 

@@ -20,7 +20,8 @@
   "keywords": ["testing", "all-fields", "ci"],
   "categories": ["developer-tools", "monitoring", "other"],
   "engines": { "deckpilot": ">=0.8.0 <=1.4.2", "pluginApi": "^1.1", "sdk": "1.1.0-beta.2" },
-  "entry": "src/main.ts",
+  "runtime": { "kind": "wasm", "abi": 1 },
+  "entry": "src/main.rs",
   "platforms": ["macos", "linux"],
   "icons": {
     "32": "assets/icon-32.png",
