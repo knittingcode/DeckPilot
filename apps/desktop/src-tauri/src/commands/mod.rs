@@ -17,6 +17,7 @@ mod layouts;
 mod logs;
 mod machine;
 mod modules;
+pub(crate) mod plugins;
 pub(crate) mod portability;
 mod profiles;
 pub(crate) mod security;
@@ -151,6 +152,23 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         work_session::clear_work_session_notices,
         work_session::get_work_session_settings,
         work_session::save_work_session_settings,
+        plugins::get_plugin_runtime,
+        plugins::list_plugins,
+        plugins::get_plugin,
+        plugins::list_available_plugins,
+        plugins::install_plugin,
+        plugins::enable_plugin,
+        plugins::disable_plugin,
+        plugins::grant_plugin_permissions,
+        plugins::revoke_plugin_permission,
+        plugins::update_plugin,
+        plugins::approve_plugin_update,
+        plugins::decline_plugin_update,
+        plugins::rollback_plugin,
+        plugins::uninstall_plugin,
+        plugins::invoke_plugin_action,
+        plugins::pick_plugin_package,
+        plugins::watch_plugin_events,
         crate::updates::update_state,
         crate::updates::check_for_updates,
         crate::updates::download_update,

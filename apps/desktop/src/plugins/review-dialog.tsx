@@ -16,51 +16,52 @@ import {
 
 import { pluginErrorText } from "./api"
 import { PermissionList, PublisherLine } from "./components"
-import { FIXTURE_LABEL } from "./fixtures"
 import type { Grant } from "./permissions"
-import type { RegistryPublisher } from "./types"
 
 /**
  * - `new`: needs the user's consent now.
+ * - `broadened`: an update asks for more under a key already granted.
  * - `granted`: consent is stored; shown for context.
- * - `revoked`: the user revoked it; it stays revoked unless they allow it here.
  */
-export type ReviewState = "new" | "granted" | "revoked"
+export type ReviewState = "new" | "broadened" | "granted"
 
 export interface ReviewRequest {
   mode: "install" | "update" | "enable"
   pluginId: string
   name: string
-  namespace: string
-  publisher: RegistryPublisher | null
+  publisher: string
   version: string
   items: { grant: Grant; state: ReviewState }[]
-  /** Permissions an update drops; shown so the change is complete. */
+  /** Grant keys an update drops; shown so the change is complete. */
   removed?: string[]
-  /** Resolves when done; a rejection is shown in the dialog. */
+  /**
+   * Called with exactly the keys the user checked. Resolves when done; a
+   * rejection is shown in the dialog.
+   */
   confirm: (consent: string[]) => Promise<void>
+  /** Updates only: drops the staged version (`declinePluginUpdate`). */
+  decline?: () => Promise<void>
 }
 
 const CONFIRM = { install: "Install", update: "Update", enable: "Enable" } as const
 
 /**
  * Asks for consent before an install, an update that asks for more, or
- * enabling a plugin. Every new permission needs its own check; "Allow all"
- * is a separate, explicit action. The dialog keeps focus until closed.
+ * enabling a plugin. Every permission that needs consent has its own
+ * check; "Allow all" is a separate, explicit action. The consent sent is
+ * exactly the set of checked keys. The dialog keeps focus until closed.
  */
 export function PermissionReviewDialog({
   request,
-  fixtures,
   onClose,
 }: {
   request: ReviewRequest
-  fixtures: boolean
   onClose: () => void
 }) {
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<{ message: string; hint?: string } | null>(null)
-  const required = request.items.filter((i) => i.state === "new").map((i) => i.grant.key)
+  const required = request.items.filter((i) => i.state !== "granted").map((i) => i.grant.key)
   const missing = required.filter((key) => !checked.has(key)).length
   const states = new Map(request.items.map((i) => [i.grant.key, i.state]))
 
@@ -73,13 +74,17 @@ export function PermissionReviewDialog({
     })
   }
 
-  const submit = () => {
+  const finish = (work: Promise<void>) => {
     setBusy(true)
     setError(null)
-    request.confirm([...checked]).then(onClose, (e: unknown) => {
+    work.then(onClose, (e: unknown) => {
       setError(pluginErrorText(e))
       setBusy(false)
     })
+  }
+
+  const submit = () => {
+    finish(request.confirm(required.filter((key) => checked.has(key))))
   }
 
   const title =
@@ -92,8 +97,8 @@ export function PermissionReviewDialog({
     request.mode === "install"
       ? "Review what this plugin may do. Check each permission to consent to it; you can revoke permissions later in Installed."
       : request.mode === "update"
-        ? "This version asks for permissions you have not granted. Check each new one to consent, or cancel to keep the current version."
-        : "Review what the plugin may do once it runs. Permissions you revoked stay revoked unless you allow them again here."
+        ? "This version asks for more than you granted. Check each new or broadened permission to consent, decline the update, or cancel to decide later."
+        : "A plugin runs only with every permission it declares. Check each one that is not granted yet."
 
   return (
     <Dialog
@@ -108,20 +113,14 @@ export function PermissionReviewDialog({
           <DialogDescription>{intro}</DialogDescription>
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-xs">{request.pluginId}</span>
-            <PublisherLine publisher={request.publisher} namespace={request.namespace} />
+            <PublisherLine publisher={request.publisher} />
           </div>
         </DialogHeader>
-        {fixtures && (
-          <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-            {FIXTURE_LABEL}. Confirming changes only the in-memory fixture state.
-          </p>
-        )}
         <p className="flex items-start gap-2 text-xs text-muted-foreground">
           <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
           <span>
-            DeckPilot is designed to enforce these permissions in its plugin runtime. That runtime
-            and its sandbox are experimental and not ready for production use; only install plugins
-            you trust.
+            The agent enforces these permissions on every call the plugin makes. The plugin runtime
+            is experimental; only install plugins you trust.
           </span>
         </p>
         <PermissionList
@@ -137,24 +136,21 @@ export function PermissionReviewDialog({
                 </Badge>
               )
             }
-            if (state === "revoked" && request.mode !== "enable") {
-              return <Badge variant="outline">Revoked; stays revoked</Badge>
-            }
             return (
               <div className="flex shrink-0 items-center gap-2">
                 <Checkbox
                   id={id}
                   checked={checked.has(grant.key)}
                   disabled={busy}
-                  aria-label={`${state === "revoked" ? "Allow again" : "Allow"}: ${grant.title}`}
+                  aria-label={`Allow: ${grant.title}`}
                   onCheckedChange={(value) => {
                     toggle(grant.key, value === true)
                   }}
                 />
                 <label htmlFor={id} className="text-xs">
-                  {state === "revoked"
-                    ? "Allow again"
-                    : state === "new" && request.mode === "update"
+                  {state === "broadened"
+                    ? "Broadened: allow"
+                    : request.mode === "update"
                       ? "New: allow"
                       : "Allow"}
                 </label>
@@ -167,9 +163,9 @@ export function PermissionReviewDialog({
             <h4 className="text-xs font-medium text-muted-foreground uppercase">
               No longer requested
             </h4>
-            <ul className="grid gap-0.5" aria-label="No longer requested">
-              {request.removed.map((title) => (
-                <li key={title}>{title}</li>
+            <ul className="grid gap-0.5 font-mono text-xs" aria-label="No longer requested">
+              {request.removed.map((key) => (
+                <li key={key}>{key}</li>
               ))}
             </ul>
           </div>
@@ -184,11 +180,11 @@ export function PermissionReviewDialog({
           <p className="text-xs text-muted-foreground" aria-live="polite">
             {required.length === 0
               ? request.mode === "enable"
-                ? "No new permissions are needed."
+                ? "Every permission is granted."
                 : "This plugin asks for no permissions."
               : missing === 0
-                ? "You consented to every new permission."
-                : `${String(missing)} of ${String(required.length)} new permissions still need your consent.`}
+                ? "You consented to every permission."
+                : `${String(missing)} of ${String(required.length)} permissions still need your consent.`}
           </p>
           <div className="flex flex-wrap gap-2">
             {required.length > 1 && (
@@ -200,6 +196,17 @@ export function PermissionReviewDialog({
                 }}
               >
                 Allow all {required.length}
+              </Button>
+            )}
+            {request.decline && (
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  if (request.decline) finish(request.decline())
+                }}
+              >
+                Decline update
               </Button>
             )}
             <Button variant="ghost" disabled={busy} onClick={onClose}>
