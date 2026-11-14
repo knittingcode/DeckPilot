@@ -492,53 +492,54 @@ trigger references a signing secret (`check-secret-isolation.py`).
 #### The release identity
 
 Without reviewers, whoever can create a `v*` tag can sign and publish a
-release. On this user-owned repository a ruleset bypass can be granted to
-the **repository administrator role** or to a **deploy key** (GitHub Apps
-too, if one is installed). The administrator role is the owner's account,
-and automation that acts with the owner's credentials (Claude Code pushes
-with the owner's SSH key and uses the owner's `gh` token) would then be a
-release identity as well. So the recommended identity is a **deploy key
-used only for release tags**:
+release, so creating `v*` tags is restricted. On this user-owned repository
+a ruleset bypass can be granted to the **repository administrator role** or
+to a **deploy key** (or a GitHub App).
 
-- a new SSH key, kept where every use needs the owner's confirmation (for
-  example 1Password with approval for each use), never given to
-  automation;
-- added as a deploy key with write access (*Settings → Deploy keys*);
-- the only bypass actor of *Release tag protection*, with the rule
-  *Restrict creations* added (*Settings → Rules → Rulesets*).
+**Chosen model: the repository administrator role** (owner decision,
+2026-11-14). *Release tag protection* (`refs/tags/v*`) restricts creation,
+updates and deletion and blocks force pushes; its only bypass actor is the
+*Repository admin* role, bypass mode *always*. The repository is
+user-owned and the owner is its only collaborator, so only the owner's
+account can create release tags. Automation that acts with the owner's
+credentials (Claude Code pushes with the owner's SSH key and uses the
+owner's `gh` token) is deliberately part of that identity: it may push a
+release tag when the owner has authorized that release. No separate
+release account, deploy key or app is used.
 
-A tag is then pushed with that key only:
+The trust boundary is therefore: write access to the repository (the owner
+only), the protected `main` (pull requests, squash merges, the six required
+checks, no bypass), the tag gate (the tag's commit must be on `main` and
+have passed the required checks) and the release checks before
+publication. Accepted residual risks: anyone or anything holding the
+owner's credentials can create a release tag, run code with the signing
+secrets through it, or change the ruleset and the environment; a release
+tag starts an automatic, immutable publication. Anyone later given
+administrator access becomes a release identity too, and a collaborator
+with write access only cannot create release tags.
 
-```sh
-git tag -a v0.6.0-alpha.3 <merge-commit-sha> -m "DeckPilot 0.6.0-alpha.3"
-GIT_SSH_COMMAND='ssh -i ~/.ssh/deckpilot-release-tags -o IdentitiesOnly=yes' \
-  git push git@github.com:knittingcode/DeckPilot.git v0.6.0-alpha.3
-```
-
-Anyone with write access, including the owner's account and automation
-using it, can still push branches and run workflows, but can no longer
-create release tags. An administrator can still change the ruleset or the
-environment; giving automation its own account with write access only
-(collaborator, not administrator) removes that too.
+A deploy key used only for tags, kept where every use needs the owner's
+confirmation, is the stricter alternative if automation should no longer be
+able to create release tags: make it the only bypass actor instead and
+check with `check-tag-authority.sh deploy-key:<id>`.
 
 #### Switching to tag authority
 
 In this order, each step verified before the next:
 
-1. Create the release key and add it as a deploy key with write access.
-2. Add *Restrict creations* to *Release tag protection* and make the deploy
-   key its only bypass actor (bypass mode *always*). Keep *Restrict
-   updates*, *Restrict deletions* and *Block force pushes*.
-3. Run `tools/release-pipeline/check-tag-authority.sh deploy-key:<id>`
-   with the owner's token. It must pass.
-4. The same script confirms that the token it runs with (the owner's
-   account) cannot bypass the ruleset, so the owner's account and
-   automation using it can no longer create `v*` tags. Do not test this by
-   pushing a trial tag: if it were accepted, the ruleset would keep it
-   forever and start a release run.
-5. Only then remove the required reviewers of `production-release`. Keep
-   the tag rule `v*` and "administrators cannot bypass". The next release
-   runs without approvals; the gate refuses to run if the tag ruleset is
+1. Add *Restrict creations* to *Release tag protection* with the
+   *Repository admin* role as its only bypass actor (bypass mode
+   *always*). Keep *Restrict updates*, *Restrict deletions* and *Block
+   force pushes*. (Done 2026-11-14.)
+2. Run `REPOSITORY=knittingcode/DeckPilot tools/release-pipeline/check-tag-authority.sh admin-role`
+   with the owner's token. It must pass. (Passed 2026-11-14.) Do not test
+   the restriction by pushing a trial tag: if it were accepted, the ruleset
+   would keep it forever and start a release run.
+3. Only after any release run still using the reviewer model has finished,
+   remove the required reviewers of `production-release`. Keep the tag rule
+   `v*`, "administrators cannot bypass" and the five environment secrets.
+   The next release runs without approvals; its gate (*Protected release
+   environment*, *Publication gate*) refuses to run if the tag ruleset is
    weakened later.
 
 ### Moving the signing secrets into the environment

@@ -6,10 +6,12 @@
 #   tools/release-pipeline/check-tag-authority.sh <release identity>
 #
 #   <release identity>  who alone may create v* tags:
-#                       deploy-key:<id>   a deploy key (recommended; see
+#                       admin-role        the repository administrator role
+#                                         (DeckPilot's model; see
 #                                         docs/releasing.md, "Release
 #                                         authorization")
-#                       admin-role        the repository administrator role
+#                       deploy-key:<id>   a deploy key (the stricter
+#                                         alternative)
 #
 # Passes only if:
 #   - an active tag ruleset on refs/tags/v* (no exclusions) restricts
