@@ -17,6 +17,9 @@ sha2.workspace = true
 tar.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
+# Static checks of plugin.wasm (imports, exports, types, limits) without
+# compiling it. Only the parser and validator: no component model.
+wasmparser.workspace = true
 
 [lints]
 workspace = true

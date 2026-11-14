@@ -79,6 +79,7 @@ impl PackageBuilder {
     pub fn build(&self) -> Result<BuiltPackage, PackageError> {
         contents::check_shape(&self.files, &self.limits)?;
         let manifest = contents::parse_manifest(&self.files)?;
+        contents::check_artifact(&self.files, &manifest, &self.limits)?;
         let bytes = encode(&self.files)?;
         let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         if size > self.limits.max_archive_bytes {

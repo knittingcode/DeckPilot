@@ -159,8 +159,10 @@ pub fn package(plugin: &str, version: &str) -> BuiltPackage {
         .add("manifest.json", manifest_json(plugin, version))
         .unwrap()
         .add(
-            "plugin.js",
-            format!("export function activate(ctx) {{ ctx.log('{plugin} {version}'); }}\n"),
+            "plugin.wasm",
+            deckpilot_plugin_package::wasm::minimal_abi_module_with_note(&format!(
+                "{plugin} {version}"
+            )),
         )
         .unwrap()
         .add("LICENSE", "MIT License\n")

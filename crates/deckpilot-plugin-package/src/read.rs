@@ -112,6 +112,7 @@ pub fn verify_package(
             found: format!("{}@{}", manifest.id, manifest.version),
         });
     }
+    contents::check_artifact(&files, &manifest, limits)?;
     if let Some(consented) = &expected.permissions {
         let raw: serde_json::Value = serde_json::from_slice(&files[MANIFEST])
             .map_err(|_| PackageError::PermissionsMismatch)?;

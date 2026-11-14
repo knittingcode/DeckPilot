@@ -55,10 +55,15 @@ rebuild. Cross-tool reproducibility stays spike S6.
 5. Nothing after the last entry but the zero end-of-archive marker.
 6. The path set: no duplicates, no two paths that differ only in case, no
    file that is also another file's directory.
-7. `manifest.json`, `plugin.js` (at most 2 MiB) and `LICENSE` present;
-   `manifest.json` sha256 equal to the pinned `manifest_sha256` before it
-   is parsed; the manifest validates; its `id` and `version` equal the
-   pinned ones; its `permissions` equal (as JSON values) the permissions
+7. `manifest.json` and `LICENSE` present; `manifest.json` sha256 equal to
+   the pinned `manifest_sha256` before it is parsed; the manifest
+   validates; its `id` and `version` equal the pinned ones; the artifact
+   contract (`docs/marketplace/artifact-contract.md`): `"runtime":
+   {"kind": "wasm", "abi": 1}` declared (a #191 `plugin.js` package is
+   refused with `UnsupportedRuntime`), `plugin.wasm` present, at most
+   4 MiB and a valid plugin ABI 1 module (`wasm::validate_module`: only the
+   `deckpilot_v1.host_call` import, the required `dp_*` exports with their
+   types, one 32-bit memory, at most one table); its `permissions` equal (as JSON values) the permissions
    shown for consent; every file named by the manifest present and no
    other file (`PackageIntegrity::validate`).
 

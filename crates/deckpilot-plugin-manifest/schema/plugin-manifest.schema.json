@@ -101,9 +101,19 @@
         }
       }
     },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "abi"],
+      "properties": {
+        "kind": { "const": "wasm" },
+        "abi": { "const": 1 }
+      },
+      "description": "Executable artifact contract (docs/marketplace/artifact-contract.md): a WebAssembly module implementing plugin ABI 1, shipped as plugin.wasm. Omitted means the #191 JavaScript contract (plugin.js), which DeckPilot does not install."
+    },
     "entry": {
       "$ref": "#/$defs/relativePath",
-      "description": "Source entry module the builder bundles (e.g. src/index.ts). The package always contains the bundle as plugin.js; the agent ignores this field."
+      "description": "Source entry module the builder compiles or bundles (e.g. src/lib.rs). The package contains the artifact under a fixed name (plugin.wasm, see runtime); the agent ignores this field."
     },
     "platforms": {
       "type": "array",

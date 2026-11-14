@@ -105,6 +105,7 @@ tempfile = "3"
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 thiserror = "2"
 url = "2.5"
+wasmparser = { version = "0.263", default-features = false, features = ["std", "validate", "features", "simd"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 zeroize = { version = "1", features = ["derive", "serde"] }
 

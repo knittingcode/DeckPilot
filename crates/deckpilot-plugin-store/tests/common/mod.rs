@@ -80,8 +80,10 @@ pub fn built(id: &str, version: &str, permissions: &[Value]) -> (Vec<u8>, Expect
         .add("manifest.json", manifest_json(id, version, permissions))
         .unwrap()
         .add(
-            "plugin.js",
-            format!("export function activate(ctx) {{ ctx.log('{id} {version}'); }}\n"),
+            "plugin.wasm",
+            deckpilot_plugin_package::wasm::minimal_abi_module_with_note(&format!(
+                "{id} {version}"
+            )),
         )
         .unwrap()
         .add("LICENSE", b"MIT License\n".to_vec())

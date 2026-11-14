@@ -262,7 +262,7 @@ fn staging_leftovers_and_orphan_directories_are_swept() {
     }
     let root = env.data_dir().join("plugins");
     std::fs::create_dir_all(root.join(".staging/unpack-x/files/assets")).unwrap();
-    std::fs::write(root.join(".staging/unpack-x/files/plugin.js"), "half").unwrap();
+    std::fs::write(root.join(".staging/unpack-x/files/plugin.wasm"), "half").unwrap();
     std::fs::create_dir_all(root.join("acme.github-prs/9.9.9")).unwrap();
     std::fs::create_dir_all(root.join("acme.ghost/1.0.0")).unwrap();
     std::fs::write(root.join(".trash/old"), "x").unwrap();

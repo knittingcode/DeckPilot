@@ -473,6 +473,19 @@ fn engines(c: &mut Checker, m: &Manifest) {
         c.release_version("engines.sdk", sdk);
     }
     c.relative_path("entry", &m.entry);
+    if let Some(runtime) = &m.runtime
+        && runtime.abi != crate::model::WASM_ABI_VERSION
+    {
+        c.error(
+            "runtime.abi",
+            IssueCode::Range,
+            format!(
+                "plugin ABI {} does not exist; `wasm` modules implement ABI {}",
+                runtime.abi,
+                crate::model::WASM_ABI_VERSION
+            ),
+        );
+    }
     if let Some(platforms) = &m.platforms {
         if platforms.is_empty() {
             c.error(
