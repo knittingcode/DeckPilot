@@ -1,15 +1,17 @@
 # Action architecture: action types, instances, shared variables
 
-Status: **design and contract**. The types in
-`crates/deckpilot-core/src/variables/` and their mirror at the end of
-`apps/desktop/src/lib/types.ts` exist and are tested; nothing uses them yet.
-Behaviour is unchanged until the workstreams below land.
+Status: **implemented in 0.6.0**. Shared variables, references in action
+parameters, provenance and the variable picker shipped through the
+workstreams of section 14. The types are in
+`crates/deckpilot-core/src/variables/`, mirrored at the end of
+`apps/desktop/src/lib/types.ts`; the unified variable registry that followed
+(protocol 9) is described in [variables.md](variables.md). Section 1 is the
+audit made before the implementation, and the remaining sections are the
+original design record; where the code differs, the code and the tests win.
 
-This document is the shared reference for the work that follows: what exists
-today (audit), the target model, the contracts every workstream builds on,
-and who owns which files.
+## 1. Pre-implementation audit (0.6.0 development)
 
-## 1. Audit of the current code (0.6.0)
+This describes main before the workstreams landed; it is kept as a record.
 
 | Area | Where | What exists |
 |---|---|---|
@@ -26,8 +28,8 @@ and who owns which files.
 | Run project context | `graph/executor.rs` | Each run captures the active project and carries its own context along edges; `Workflow::project_scope` (`Execution` default \| `Application`) decides whether the final context becomes the application's active project. |
 | Resource resolution | `resource.rs`, `ExecutionContext::resolve` | `ResourceRef::Fixed { key }` \| `ProjectRole { role }` resolved against `MachineConfig` bindings for the context's project. |
 | Module execution context | `execution.rs` | `ExecutionContext` holds `&Profile`, `Option<&Project>`, `&MachineConfig`, capabilities, optional `ExecutionControl` (cancellation, progress, run summary), `&dyn CredentialSource`, `&dyn Notifier`. Already constructor-injected (no service locator); access is gated by module capabilities. There is no variable resolver. |
-| Storage | `crates/deckpilot-storage/src/sqlite.rs` | **Schema version 7** (`MIGRATIONS.len()`), `DOCUMENT_VERSION = 4`. Migrations run in one transaction after an **encrypted, verified backup** in `backups/`, recorded in `migration_history`, with a post-commit check. Older binaries refuse newer schemas ("schema version N is newer than supported"). Module-owned tables via `module_schemas`. |
-| IPC | `crates/deckpilot-ipc/src/protocol.rs` | **`PROTOCOL_VERSION = 6`**, `MIN_PROTOCOL_VERSION = 1`, `negotiate = min(client, agent)`, `Capability` list derived from the protocol, `Request::since_protocol`. Events: `State`, `ActionCompleted`, `ExecutionStarted/Progress/Finished`, `Notification`, … |
+| Storage | `crates/deckpilot-storage/src/sqlite.rs` | **Schema version 7** at the time of the audit (`MIGRATIONS.len()`; now 9), `DOCUMENT_VERSION = 4`. Migrations run in one transaction after an **encrypted, verified backup** in `backups/`, recorded in `migration_history`, with a post-commit check. Older binaries refuse newer schemas ("schema version N is newer than supported"). Module-owned tables via `module_schemas`. |
+| IPC | `crates/deckpilot-ipc/src/protocol.rs` | **`PROTOCOL_VERSION = 6`** at the time of the audit (now 9), `MIN_PROTOCOL_VERSION = 1`, `negotiate = min(client, agent)`, `Capability` list derived from the protocol, `Request::since_protocol`. Events: `State`, `ActionCompleted`, `ExecutionStarted/Progress/Finished`, `Notification`, … |
 | Frontend | `apps/desktop/src` | Action Library `pages/actions.tsx` + `components/action-editor.tsx`; one schema-driven `components/parameter-field.tsx` (+ `structured-fields.tsx`) used by the action editor, `pages/workflow-steps.tsx`, the builder inspector and module settings. Mapping UI: `workflow-builder/mapping.ts`, `mapping-editor.tsx` (`OutputSelect`, `MappingEditor`), `variables-editor.tsx`, `triggers-editor.tsx`. Layout designer `pages/layout-designer.tsx`. A contract test (`crates/deckpilot-modules/tests/contracts.rs`) checks that `types.ts` can draw every `ParameterKind`. |
 
 Consequences for the design:
@@ -375,7 +377,7 @@ only); their previews are always `unavailableUntilRuntime`.
 One component, `apps/desktop/src/components/variable-picker/`, used by
 every schema-driven editor: `parameter-field.tsx` (Action Library, workflow
 steps, builder inspector, layout designer inline actions, module settings),
-`mapping-editor.tsx`, `triggers-editor.tsx` and the Shared Variables page.
+`mapping-editor.tsx`, `triggers-editor.tsx` and the Variables page (Settings › Variables).
 No other implementation.
 
 - Search (debounced) over reference, label, description, scope, type and
@@ -431,7 +433,7 @@ Schema 7 → 8 (E), one migration step, additive:
 | **A** core | pipeline, `ParameterValue::{Reference,Template}`, `ExecutionDependencies` in `ExecutionContext`, `Capability::VariablesRead`, agent resolver, IPC protocol 7 (requests, events, negotiation), agent handlers | `crates/deckpilot-core/src/{resolution.rs (new), action.rs, execution.rs (except `ContextEffect`), registry.rs, runtime.rs, module.rs (capability)}`, `crates/deckpilot-ipc/src/protocol.rs`, `apps/agent/src/service/variables.rs` (new) and the request/event arms it needs in `apps/agent/src/service.rs` | 0. Real data needs E's store API (uses `MemoryVariables` until then) |
 | **B** projects | `projects.select` scope/references, `projects.cycle`, `projects.current`, `ContextEffect::CycleProject`, device state and `projectChanged` | `modules/projects/**`, `crates/deckpilot-core/src/project.rs`, the `ContextEffect` enum in `execution.rs`, effect application in `runtime.rs` (`execute`, coordinate with A), `apps/agent/src/service.rs::cycle_project`/`after_change`, `apps/desktop/src-tauri/src/modules/projects.rs`, `apps/desktop/src/modules/projects/**` | 0. Cycle: nothing. Select with references: A (pipeline) |
 | **C** workflows | extended grammar in templates, `Mapping::Variable`, `NodeKind::Invoke`, `BindingTarget::Invoke`, `GRAPH_VERSION` 2, executor through the pipeline, validation, builder UI | `crates/deckpilot-core/src/graph/**`, `crates/deckpilot-core/src/layout.rs`, `device_runtime.rs` dispatch of inline bindings, `apps/desktop/src/workflow-builder/**`, `docs/workflow-graphs.md` | 0. Model/validation: nothing. Executor: A. UI picker: F |
-| **D** library UI | Action Library (create/edit with references), inline action config in the layout designer, Shared Variables page, Tauri commands | `apps/desktop/src/pages/{actions.tsx, layout-designer.tsx, shared-variables.tsx (new)}`, `components/action-editor.tsx`, `apps/desktop/src/lib/api.ts`, `apps/desktop/src-tauri/src/commands/{variables.rs (new), actions.rs, mod.rs}`, `src-tauri/src/main.rs` registration, `src-tauri/src/tests.rs` | 0; E for storage calls; F for the picker (stub until then) |
+| **D** library UI | Action Library (create/edit with references), inline action config in the layout designer, Variables page (Settings › Variables), Tauri commands | `apps/desktop/src/pages/{actions.tsx, layout-designer.tsx, shared-variables.tsx (new)}`, `components/action-editor.tsx`, `apps/desktop/src/lib/api.ts`, `apps/desktop/src-tauri/src/commands/{variables.rs (new), actions.rs, mod.rs}`, `src-tauri/src/main.rs` registration, `src-tauri/src/tests.rs` | 0; E for storage calls; F for the picker (stub until then) |
 | **E** storage | schema 8, store API for variables (`SharedVariables` reads/writes), provenance, seed provenance, dev-only legacy cleanup, `DOCUMENT_VERSION` 5, portability, fixtures | `crates/deckpilot-storage/src/{sqlite.rs, variables.rs (new), provenance.rs (new), lib.rs}`, `crates/deckpilot-storage/tests/**`, `crates/deckpilot-portability/**`, `tools/dev/src/seed*.rs`, `docs/data-model.md` | 0 |
 | **F** picker | the universal picker and inspector, live-value hooks, autocomplete, integration into `parameter-field.tsx`, `mapping-editor.tsx`, `triggers-editor.tsx`, module settings | `apps/desktop/src/components/variable-picker/**` (new), `apps/desktop/src/lib/variables.ts` (new), `components/parameter-field.tsx`, `components/structured-fields.tsx`, `workflow-builder/mapping-editor.tsx` (picker insertion only; C owns the rest), `settings/pages/module-settings.tsx` | 0. Live values: A (IPC); can start on a mocked `api.ts` |
 
