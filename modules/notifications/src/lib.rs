@@ -143,6 +143,7 @@ impl NotificationsModule {
                 },
                 migrations: Vec::new(),
                 windows: Vec::new(),
+                variables: Vec::new(),
             },
         }
     }
@@ -256,6 +257,7 @@ fn show_definition() -> ActionType {
             critical(),
         ],
         requires_project: false,
+        deprecated: false,
         node: node("bell", Vec::new()),
     }
 }
@@ -295,6 +297,7 @@ fn summary_definition() -> ActionType {
             critical(),
         ],
         requires_project: false,
+        deprecated: false,
         node: node(
             "list-checks",
             vec![OutputSpec::new("summary", "Summary", ValueKind::Text)],

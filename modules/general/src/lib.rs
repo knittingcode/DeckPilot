@@ -64,6 +64,7 @@ impl GeneralModule {
                 },
                 migrations: Vec::new(),
                 windows: Vec::new(),
+                variables: Vec::new(),
             },
         }
     }
@@ -111,6 +112,7 @@ impl LogMessage {
                 default: None,
             }],
             requires_project: false,
+            deprecated: false,
             // Only produces a message from its inputs: safe to repeat.
             node: deckpilot_core::graph::NodeSpec {
                 icon: Some("message-square".into()),
@@ -187,6 +189,7 @@ impl Wait {
                 default: Some(deckpilot_core::ParameterValue::Integer(5)),
             }],
             requires_project: false,
+            deprecated: false,
             node: deckpilot_core::graph::NodeSpec {
                 version: 1,
                 icon: Some("timer".into()),

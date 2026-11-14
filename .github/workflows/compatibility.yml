@@ -8,26 +8,44 @@ name: Compatibility
 on:
   pull_request:
     paths:
-      - crates/deckpilot-ipc/**
-      - crates/deckpilot-storage/**
+      # The agent and the client (deckpilot-dev) with every crate they are
+      # built from: types of deckpilot-core and others travel over IPC and
+      # into the database, and dependency or toolchain updates change them
+      # too.
+      - crates/**
       - apps/agent/**
+      - tools/dev/**
       - tools/compat/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
       - .github/workflows/compatibility.yml
   push:
     branches: [main]
     paths:
-      - crates/deckpilot-ipc/**
-      - crates/deckpilot-storage/**
+      # The agent and the client (deckpilot-dev) with every crate they are
+      # built from: types of deckpilot-core and others travel over IPC and
+      # into the database, and dependency or toolchain updates change them
+      # too.
+      - crates/**
       - apps/agent/**
+      - tools/dev/**
       - tools/compat/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .github/workflows/compatibility.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Pull requests: a new push cancels the obsolete run. main and manual runs:
+# every commit has a group of its own, so a quick second merge never
+# cancels the check of the first.
 concurrency:
-  group: compatibility-${{ github.ref }}
-  cancel-in-progress: true
+  group: compatibility-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.ref, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   matrix:
@@ -35,17 +53,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Install Linux system dependencies
         run: tools/ci/install-linux-deps.sh
       - name: Install Rust toolchain
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: compatibility
           workspaces: |
             . -> target
             ${{ runner.temp }}/compat/old-tree -> target
+          # Saved by main only (about 1 GB): per-pull-request copies filled
+          # the repository's 10 GB cache storage and evicted main's caches.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: tools/compat/matrix.sh v0.5.0-2 "$RUNNER_TEMP/compat"

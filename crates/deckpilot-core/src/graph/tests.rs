@@ -12,11 +12,62 @@ use crate::{
 };
 
 /// `test.probe`: records that it ran, optionally sleeps, fails the first
-/// `fail_times` calls, and outputs `value` = its `message`.
+/// `fail_times` calls, and outputs `value` = its `message`. With `meet` and
+/// `meet_count`, it waits inside the action until that many probes with the
+/// same `meet` are inside theirs at the same time (and fails after
+/// [`MEET_TIMEOUT`] otherwise): a deterministic proof that they ran
+/// concurrently, where a scheduler running them one after the other fails.
 struct Probe {
     definition: ActionType,
     log: Arc<Mutex<Vec<String>>>,
     calls: Arc<AtomicU32>,
+    concurrency: Arc<Concurrency>,
+}
+
+/// Generous: only reached when the probes do not run concurrently.
+const MEET_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How many probes run at once, and the rendezvous of `meet` probes.
+#[derive(Default)]
+struct Concurrency {
+    running: std::sync::atomic::AtomicUsize,
+    most: std::sync::atomic::AtomicUsize,
+    arrived: Mutex<BTreeMap<String, i64>>,
+    changed: std::sync::Condvar,
+}
+
+impl Concurrency {
+    /// Waits until `count` probes arrived at `meeting`; false on timeout.
+    fn meet(&self, meeting: &str, count: i64) -> bool {
+        let mut arrived = self.arrived.lock().unwrap();
+        *arrived.entry(meeting.to_owned()).or_default() += 1;
+        self.changed.notify_all();
+        let (arrived, timeout) = self
+            .changed
+            .wait_timeout_while(arrived, MEET_TIMEOUT, |arrived| {
+                arrived.get(meeting).copied().unwrap_or(0) < count
+            })
+            .unwrap();
+        drop(arrived);
+        !timeout.timed_out()
+    }
+}
+
+/// Counts a probe as running while alive.
+struct Running<'a>(&'a Concurrency);
+
+impl<'a> Running<'a> {
+    fn new(concurrency: &'a Concurrency) -> Self {
+        let now = concurrency.running.fetch_add(1, Ordering::SeqCst) + 1;
+        concurrency.most.fetch_max(now, Ordering::SeqCst);
+        Self(concurrency)
+    }
+}
+
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        self.0.running.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 fn probe_type() -> ActionTypeId {
@@ -44,8 +95,18 @@ impl ActionHandler for Probe {
         parameters: &crate::ActionParameters,
         context: &ExecutionContext<'_>,
     ) -> ActionResult {
+        let _running = Running::new(&self.concurrency);
         let message = parameters.text("message").unwrap_or_default().to_owned();
         self.log.lock().unwrap().push(message.clone());
+        if let Some(meeting) = parameters.text("meet")
+            && !self
+                .concurrency
+                .meet(meeting, parameters.integer("meet_count").unwrap_or(2))
+        {
+            return ActionResult::failure(format!(
+                "{message} waited {MEET_TIMEOUT:?} for the others at `{meeting}`: they did not run at the same time"
+            ));
+        }
         if let Some(ms) = parameters.integer("sleep_ms") {
             std::thread::sleep(Duration::from_millis(u64::try_from(ms).unwrap()));
         }
@@ -70,12 +131,14 @@ struct Fixture {
     profile: Profile,
     log: Arc<Mutex<Vec<String>>>,
     calls: Arc<AtomicU32>,
+    concurrency: Arc<Concurrency>,
 }
 
 impl Fixture {
     fn new() -> Self {
         let log = Arc::new(Mutex::new(Vec::new()));
         let calls = Arc::new(AtomicU32::new(0));
+        let concurrency = Arc::new(Concurrency::default());
         let mut registry = ActionRegistry::default();
         registry
             .register(Box::new(Probe {
@@ -113,8 +176,23 @@ impl Fixture {
                                 max: None,
                             },
                         ),
+                        parameter(
+                            "meet",
+                            ParameterKind::Text {
+                                multiline: false,
+                                max_length: None,
+                            },
+                        ),
+                        parameter(
+                            "meet_count",
+                            ParameterKind::Integer {
+                                min: None,
+                                max: None,
+                            },
+                        ),
                     ],
                     requires_project: false,
+                    deprecated: false,
                     node: NodeSpec {
                         outputs: vec![OutputSpec {
                             key: "value".into(),
@@ -130,6 +208,7 @@ impl Fixture {
                 },
                 log: log.clone(),
                 calls: calls.clone(),
+                concurrency: concurrency.clone(),
             }))
             .unwrap();
         registry.register(Box::new(Select::new())).unwrap();
@@ -138,7 +217,13 @@ impl Fixture {
             profile: with_projects("Work", &["SHOP", "CMS"]),
             log,
             calls,
+            concurrency,
         }
+    }
+
+    /// The most probes that were inside their action at the same time.
+    fn most_at_once(&self) -> usize {
+        self.concurrency.most.load(Ordering::SeqCst)
     }
 
     /// Adds a probe action instance and returns its id.
@@ -368,9 +453,14 @@ fn conditions_choose_one_branch_and_skip_the_other() {
 #[test]
 fn parallel_branches_run_concurrently_and_join_once() {
     let mut f = Fixture::new();
-    let sleep = ("sleep_ms", ParameterValue::Integer(300));
-    let left = f.probe("left", std::slice::from_ref(&sleep));
-    let right = f.probe("right", &[sleep]);
+    // Each branch waits inside its action until the other is inside its
+    // own: run one after the other, the first would give up and fail.
+    let meet = [
+        ("meet", ParameterValue::Text("branches".into())),
+        ("meet_count", ParameterValue::Integer(2)),
+    ];
+    let left = f.probe("left", &meet);
+    let right = f.probe("right", &meet);
     let last = f.probe("last", &[]);
     let workflow = f.workflow(graph(
         vec![
@@ -391,15 +481,14 @@ fn parallel_branches_run_concurrently_and_join_once() {
         ],
     ));
     assert!(f.issues(workflow).is_empty(), "{:?}", f.issues(workflow));
-    let started = Instant::now();
     let report = f.run(workflow);
-    let elapsed = started.elapsed();
-    assert_eq!(report.status, RunStatus::Succeeded);
-    // Sequentially this takes 600 ms; concurrently a little over 300 ms.
-    assert!(
-        elapsed < Duration::from_millis(550),
-        "branches ran one after the other: {elapsed:?}"
+    assert_eq!(
+        report.status,
+        RunStatus::Succeeded,
+        "{:?}",
+        report.nodes.iter().map(|n| &n.message).collect::<Vec<_>>()
     );
+    assert_eq!(f.most_at_once(), 2);
     assert_eq!(f.ran().last().map(String::as_str), Some("last"));
     assert_eq!(f.ran().iter().filter(|m| *m == "last").count(), 1);
     // Nodes are recorded as they finish: the branches in either order,
@@ -410,6 +499,67 @@ fn parallel_branches_run_concurrently_and_join_once() {
     branches.sort_unstable();
     assert_eq!(branches, ["left", "right"]);
     assert_eq!(order[4..], ["join", "last"]);
+}
+
+#[test]
+fn parallel_branches_beyond_the_limit_wait_for_a_free_slot() {
+    let mut f = Fixture::new();
+    let names = ["b1", "b2", "b3", "b4", "b5", "b6"];
+    let mut nodes = vec![
+        node("start", NodeKind::Trigger),
+        node("fork", NodeKind::Parallel),
+        node("join", NodeKind::Join),
+    ];
+    let mut edges = vec![edge("start", Port::Out, "fork")];
+    for (index, name) in names.into_iter().enumerate() {
+        // The first four started (ties go by node id) are inside their
+        // action together: they meet there before any of them finishes.
+        let probe = if index < 4 {
+            f.probe(
+                name,
+                &[
+                    ("meet", ParameterValue::Text("first four".into())),
+                    ("meet_count", ParameterValue::Integer(4)),
+                ],
+            )
+        } else {
+            f.probe(name, &[])
+        };
+        nodes.push(action(name, probe));
+        edges.push(edge("fork", Port::Out, name));
+        edges.push(edge(name, Port::Out, "join"));
+    }
+    let workflow = f.workflow(graph(nodes, edges));
+    assert!(f.issues(workflow).is_empty(), "{:?}", f.issues(workflow));
+    let (report, events, _) = f.run_with(workflow, &CancellationToken::new());
+    assert_eq!(report.status, RunStatus::Succeeded, "{events:?}");
+
+    // Never more than `max_parallel` (4) branches at once.
+    let limit = ExecutionLimits::default().max_parallel;
+    let mut running = 0usize;
+    let mut most = 0usize;
+    for event in &events {
+        match event {
+            ExecutionEvent::NodeStarted { node } if names.contains(&node.as_str()) => {
+                running += 1;
+                most = most.max(running);
+            }
+            ExecutionEvent::NodeFinished { report } if names.contains(&report.node.as_str()) => {
+                running -= 1;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(most, limit, "{events:?}");
+    assert_eq!(f.most_at_once(), limit);
+    // Every branch ran exactly once, and the Join after all of them.
+    let mut ran = f.ran();
+    ran.sort_unstable();
+    assert_eq!(ran, names);
+    assert_eq!(status(&report, "join"), NodeStatus::Succeeded);
+    let order: Vec<_> = report.nodes.iter().map(|r| r.node.as_str()).collect();
+    assert_eq!(order.last(), Some(&"join"));
+    assert_eq!(order.iter().filter(|n| **n == "join").count(), 1);
 }
 
 fn select_project(f: &mut Fixture, name: &str, key: &str) -> crate::ActionInstanceId {
@@ -761,7 +911,9 @@ fn cancellation_interrupts_delays_and_skips_the_rest() {
     let started = Instant::now();
     let (report, _, _) = f.run_with(workflow, &cancel);
     canceller.join().unwrap();
-    assert!(started.elapsed() < Duration::from_secs(1));
+    // Well before the 5 s delay would end; generous for slow runners.
+    let elapsed = started.elapsed();
+    assert!(elapsed < Duration::from_secs(4), "{elapsed:?}");
     assert_eq!(report.status, RunStatus::Cancelled);
     assert_eq!(status(&report, "wait"), NodeStatus::Cancelled);
     assert_eq!(status(&report, "after"), NodeStatus::Cancelled);
@@ -2481,18 +2633,34 @@ fn at_most_four_nodes_run_at_the_same_time() {
     let mut edges = vec![edge("start", Port::Out, "fork")];
     for index in 0..6 {
         let id = format!("b{index}");
-        let probe = f.probe(&id, &[("sleep_ms", ParameterValue::Integer(200))]);
+        // The first four (started first: ties go by node id) wait inside
+        // their action until all four are inside theirs, so four do run at
+        // once; the cap keeps the other two from starting meanwhile.
+        let probe = if index < 4 {
+            f.probe(
+                &id,
+                &[
+                    ("meet", ParameterValue::Text("first four".into())),
+                    ("meet_count", ParameterValue::Integer(4)),
+                ],
+            )
+        } else {
+            f.probe(&id, &[])
+        };
         nodes.push(action(&id, probe));
         edges.push(edge("fork", Port::Out, &id));
         edges.push(edge(&id, Port::Out, "join"));
     }
     let workflow = f.workflow(graph(nodes, edges));
-    let started = Instant::now();
     let report = f.run(workflow);
-    let elapsed = started.elapsed();
-    assert_eq!(report.status, RunStatus::Succeeded);
-    // Six branches of 200 ms, four at a time: two rounds.
-    assert!(elapsed >= Duration::from_millis(390), "{elapsed:?}");
-    assert!(elapsed < Duration::from_millis(1_000), "{elapsed:?}");
+    assert_eq!(
+        report.status,
+        RunStatus::Succeeded,
+        "{:?}",
+        report.nodes.iter().map(|n| &n.message).collect::<Vec<_>>()
+    );
+    assert_eq!(f.most_at_once(), 4);
     assert_eq!(f.ran().len(), 6);
 }
+
+mod references;

@@ -34,6 +34,7 @@ const plus: DeviceModel = {
     touch: null,
   },
   support: "unverified",
+  verification: [],
 }
 
 const bind = (control: ControlId, change: Partial<ControlBinding> = {}): ControlBinding => ({

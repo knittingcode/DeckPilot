@@ -6,16 +6,20 @@ Nothing here publishes a release or touches the release signing keys.
 
 ## 1. Signed test release (CI)
 
-A test tag runs the real release workflow: the same build, signing and
-notarization as a final release, ending in a **draft** release.
+A pre-release tag runs the real release workflow: the same build, signing
+and notarization as a final release, ending in a **draft** release. (The
+0.5.0 test releases used `vX.Y.Z-N` tags; those no longer start the
+workflow, see [releasing.md](releasing.md#release-tags-and-the-tag-gate).)
 
-1. Set the version to the test version, e.g. `0.5.0-1` (Windows installers
-   accept only numeric pre-release identifiers), and push the commit. RPM
-   does not accept `-` in versions, so test releases build `.deb` and the
+1. Set the version to the pre-release version, e.g. `0.6.0-alpha.1`, merge
+   it to `main` and wait for the required checks on the merge commit. The
+   MSI gets a numeric version computed by the tag gate (`0.6.0.1`). RPM
+   does not accept `-` in versions, so pre-releases build `.deb` and the
    AppImage on Linux; final versions build all packages.
-2. Tag and push: `git tag v0.5.0-1 && git push origin v0.5.0-1`.
-3. The workflow refuses to continue if versions, release notes (a test
-   version uses the notes of `0.5.0`), updater or Apple signing are not in
+2. Tag that commit and push: `git tag -s v0.6.0-alpha.1 <sha> -m "DeckPilot 0.6.0-alpha.1" && git push origin v0.6.0-alpha.1`.
+3. The workflow refuses to continue if the tag, its commit, versions, the
+   required checks, release notes (a pre-release uses the notes of
+   `0.6.0`), updater or Apple signing are not in
    order. A tag with a pre-release suffix becomes a pre-release, so even if
    it were published it would never become the release the app updates to
    (the app only reads `releases/latest`).
@@ -66,7 +70,24 @@ Developer ID (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
 `APPLE_SIGNING_IDENTITY`); the builds are never notarized. The *Update
 continuity* workflow (`.github/workflows/update-continuity.yml`) runs it on a
 macOS runner with a temporary keychain: no Apple submission, no release,
-nothing public.
+nothing public. It runs only when started by hand on a release tag, in the
+`production-release` environment (approve the deployment):
+`gh workflow run "Update continuity" --ref v<version>`, never on pull
+requests or branches:
+it builds the app (dependency installation, build scripts) in the job that
+holds the certificate, so it runs only for a reviewed ref, without
+restoring caches of other workflows.
+
+No workflow that pull requests trigger holds a signing secret. The
+required check *Updater signing keys match* (*Signing check* workflow) uses
+none: it checks the pinned public key `.github/updater.pub` against the
+variable and runs `updater-key-pair.py` on committed throwaway keys, with
+the pull request's own scripts. The real updater key meets
+`updater-key-pair.py` in the release's `prepare` job; the Developer ID
+certificate and the API key meet `apple-certificate.sh` and
+`apple-api-key.sh` in the *Apple signing check* — both in
+`production-release`, on a tag of a reviewed `main` commit, with a sparse or
+pinned checkout and nothing installed before the check.
 
 ## 3. Stream Deck MK.2 (physical device)
 
@@ -75,7 +96,10 @@ agent on an isolated data directory (`.dev/hardware-test`) with test profiles
 whose keys are labelled `A1`…`A15` and `B1`…`B15` and log every press and
 release, then checks discovery, the model, every key, images, brightness,
 profile and project switching, unplugging, an agent restart and multiple
-devices, asking where only a person can judge. It refuses to start while
+devices. Keys are pressed in the order of their labels, so a key whose image
+and input index disagree (rotation or mirroring) fails the test; it also asks
+where A1, A5 and A15 are and whether the keys are black once the agent
+stopped, asking where only a person can judge. It refuses to start while
 other programs may hold the device (quit `make up` and the Elgato app first)
 and writes `report.md`. `--mock` runs it against a simulated MK.2 to check
 the procedure itself (CI does this on Linux); that is not a hardware test.
@@ -89,7 +113,7 @@ The same steps by hand, with DeckPilot installed (or `make up` with
 | 2 | Activate a profile with an MK.2 layout | Key images appear within a second; the active page is shown |
 | 3 | Press and release a key bound to an action | The action runs once; a workflow summary appears for failures |
 | 4 | Switch profiles (app and tray) | Layout and images change; no restart |
-| 5 | Switch projects (key bound to `projects.next`) | The active project changes and persists after a restart |
+| 5 | Switch projects (key bound to `projects.cycle`) | The active project changes, the key shows it at once, and it persists after a restart |
 | 6 | Change brightness in the app | The device follows immediately and keeps it after reconnecting |
 | 7 | Unplug, wait, plug in again | "Disconnected", then the same layout and page again within ~2 s |
 | 8 | Restart the agent (tray → Quit, start DeckPilot) | Images return; profile, project and brightness are restored |
@@ -99,6 +123,30 @@ The same steps by hand, with DeckPilot installed (or `make up` with
 
 Record the DeckPilot version, operating system, MK.2 firmware/serial and the
 result of each step. Hardware has **not** been tested by the project yet.
+
+### Physical MK.2 checklist
+
+These points are covered only by simulated devices and unit tests so far,
+and need a real MK.2 on each operating system. "Step" is the step of
+`deckpilot-dev hardware-test` that checks it; manual steps refer to the
+table above.
+
+| # | Check | hardware-test step | Manual |
+| - | ----- | ------------------ | ------ |
+| 1 | The device is discovered by serial number and opened (no conflict with the Elgato app; Linux udev rule, macOS Input Monitoring, Windows built-in HID driver) | Device discovery, Model detection | 1 |
+| 2 | Key images are upright and not mirrored, A1 top left, A5 top right, A15 bottom right | Key images and text | 2 |
+| 3 | Pressing the keys in label order reports the same order (images and input agree on key indices 0–14) | Key press and release (in label order with #67; any order before) | 3 |
+| 4 | Each press and release is reported once; key input arrives at all (input report `0x01`) | Key press and release | 3 |
+| 5 | Full key images arrive intact and a full redraw is quick enough (image reports `0x02 0x07`, 1016-byte pages) | Key images and text, Profile switching | 2, 4 |
+| 6 | Brightness changes visibly at 10 % and 100 % (feature report `0x03 0x08`) | Brightness | 6 |
+| 7 | Unplugging is reported as a disconnect; replugging restores the page, images and brightness | Unplug and replug | 6, 7 |
+| 8 | Keys are black after the agent stops, and stale images are replaced when it starts | Keys cleared on stop (#67), Agent restart | 8 |
+| 9 | Two MK.2s at once: both discovered, own pages, no cross-talk | Multiple devices | — |
+| 10 | Icons, live key states and key-started workflows look and behave as in the simulated tests | — (not part of the procedure) | 2, 3 |
+
+The page part of check 7 needs #62. Checks 4 and 5 matter in particular
+for the protocol implementation in #55 (held until it passes this
+checklist); `main` drives the device through `elgato-streamdeck`.
 
 ## 4. Windows and Linux
 
@@ -143,6 +191,8 @@ signature. Manual checks on real machines:
 | App/agent compatibility | By design, tested | Same version required: the app detects a mismatching agent and offers to restart it with the bundled one; the update stops the agent before replacing files and starts the new one (update test) |
 | SQLCipher migrations | Tested | A newer schema is refused; upgrades run after a verified encrypted backup, in one transaction (storage tests) |
 | Failed updates | Tested | A rejected or failed update leaves the installed version and its agent running (update test); the downloaded update stays ready to retry |
+| Interrupted and stalled downloads | Tested | Connection closed early, stalled (60 s read timeout), server errors: the download fails, nothing partial is kept, the next attempt starts over; a stalled check or download no longer blocks the updater (desktop `updates_tests.rs`, loopback server, throwaway keys) |
+| Failure diagnostics | Tested | Each failure says what happened, the state of the installation and what to do; it is shown and appended to `updates.log` in the log directory (no key material) |
 | Release artifact integrity | Verified | Draft-only releases; checksums verified in the release workflow; attestations (`gh attestation verify`) |
 | Certificate expiry | Checked | The signing check fails on an expired Developer ID certificate and warns 60 days ahead. Shipped apps keep working after expiry: signatures carry a secure timestamp and the notarization ticket is stapled |
 | Updater key | Not rotated | The minisign key has no expiry; losing it means installations cannot verify updates (keep the offline backup, see [releasing.md](releasing.md)) |

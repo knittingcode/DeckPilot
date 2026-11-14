@@ -38,7 +38,7 @@ export interface AppContextValue {
 }
 
 /** Pages of the core application. */
-export type CorePageId = "dashboard" | "actions" | "workflows" | "profiles" | "models" | "designer"
+export type CorePageId = "dashboard" | "actions" | "workflows" | "profiles" | "designer"
 
 /** A core page or a page contributed by a module (`module/page`). */
 export type PageId = CorePageId | ModulePageId

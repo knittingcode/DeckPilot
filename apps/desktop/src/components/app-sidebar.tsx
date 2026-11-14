@@ -2,7 +2,6 @@ import {
   Boxes,
   Check,
   ChevronsUpDown,
-  Cpu,
   LayoutDashboard,
   LayoutGrid,
   Library,
@@ -56,10 +55,8 @@ const GROUPS: NavGroup[] = [
   },
   {
     label: "Devices",
-    items: [
-      { id: "models", label: "Device Models", icon: Cpu },
-      { id: "designer", label: "Layout Designer", icon: LayoutGrid },
-    ],
+    // Connected devices and supported models are in Settings › Devices.
+    items: [{ id: "designer", label: "Layout Designer", icon: LayoutGrid }],
   },
 ]
 

@@ -7,13 +7,19 @@
 # update comes from a loopback endpoint on the runner: no release, nothing
 # public. The agent keeps its key in a temporary keychain that exists only
 # for this job.
+#
+# Manual runs only, on a release tag, in the protected production-release
+# environment (tags v* only, required reviewer):
+#   gh workflow run "Update continuity" --ref v<version>
+# then approve the deployment. The test builds the app (dependency
+# installation, build scripts) in the job that holds the Developer ID
+# certificate, so it runs only for a tagged commit of main, never on pull
+# requests or branches. No cache is restored, so nothing written by other
+# workflows is reused. The certificate is passed only to the update test
+# step.
 name: Update continuity
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/update-continuity.yml
-      - tools/release-validation/**
   workflow_dispatch:
 
 permissions:
@@ -28,20 +34,17 @@ jobs:
     name: Keychain access after a signed update (macOS)
     runs-on: macos-latest
     timeout-minutes: 120
-    # Secrets are not available to pull requests from forks.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    environment: production-release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install Rust toolchain
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: update-continuity
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Temporary keychain for the agent
         run: |
@@ -59,7 +62,7 @@ jobs:
         run: tools/release-validation/update-test.sh "$RUNNER_TEMP/update-test"
       - name: Logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: update-continuity-logs
           path: |

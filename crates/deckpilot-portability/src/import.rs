@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+use deckpilot_core::variables::{ScopeKey, VariableDefinition, VariableKey, VariableValue};
 use deckpilot_core::{
     Availability, LayoutIssue, ModuleId, ModuleRegistry, ModuleSettings, Profile, ProfileId,
     ProfileIssue, ProjectId, ResourceKey, ResourceKind,
@@ -26,6 +27,8 @@ const MAX_PROFILES: usize = 200;
 const MAX_ITEMS_PER_PROFILE: usize = 5000;
 const MAX_NAME_CHARS: usize = 200;
 const MAX_MODULES: usize = 100;
+const MAX_VARIABLES: usize = 1000;
+const MAX_VARIABLE_VALUES: usize = 20_000;
 
 /// Checks an untrusted payload before anything is shown or written.
 /// Returns warnings that do not block the import.
@@ -99,7 +102,73 @@ pub fn validate(
             }
         }
     }
+    validate_variables(payload)?;
     Ok(warnings)
+}
+
+/// The shared variables of an untrusted payload: valid user definitions,
+/// each key once, and values only for the exported profiles and their own
+/// projects, of the exported type and allowed scope.
+fn validate_variables(payload: &Payload) -> Result<(), PortabilityError> {
+    let invalid = |message: String| Err(PortabilityError::Invalid(message));
+    let variables = &payload.variables;
+    if variables.definitions.len() > MAX_VARIABLES || variables.values.len() > MAX_VARIABLE_VALUES {
+        return invalid("too many shared variables".into());
+    }
+    let mut definitions: BTreeMap<&VariableKey, &VariableDefinition> = BTreeMap::new();
+    for definition in &variables.definitions {
+        if definition.module.is_some() {
+            return invalid(format!(
+                "`{}` claims to be a module's variable",
+                definition.key
+            ));
+        }
+        if let Some(issue) = definition.issues().into_iter().next() {
+            return invalid(issue.to_string());
+        }
+        if definitions.insert(&definition.key, definition).is_some() {
+            return invalid(format!("the variable `{}` appears twice", definition.key));
+        }
+    }
+    let mut slots = HashSet::new();
+    for value in &variables.values {
+        match value.scope {
+            ScopeKey::Global => {}
+            ScopeKey::Profile { profile } => {
+                if !payload.profiles.iter().any(|p| p.id == profile) {
+                    return invalid(format!(
+                        "a value of `{}` belongs to a profile that is not in the export",
+                        value.key
+                    ));
+                }
+            }
+            ScopeKey::Project { profile, project } => {
+                let owned = payload
+                    .profiles
+                    .iter()
+                    .find(|p| p.id == profile)
+                    .is_some_and(|p| p.project(project).is_some());
+                if !owned {
+                    return invalid(format!(
+                        "a value of `{}` belongs to a project that is not in its profile",
+                        value.key
+                    ));
+                }
+            }
+            ScopeKey::Execution { .. } => {
+                return invalid(format!("`{}` has a value of a run", value.key));
+            }
+        }
+        if let Some(definition) = definitions.get(&value.key)
+            && let Err(issue) = definition.check_value(&value.scope, &value.value)
+        {
+            return invalid(issue.to_string());
+        }
+        if !slots.insert((&value.key, value.scope)) {
+            return invalid(format!("`{}` has two values at one scope", value.key));
+        }
+    }
+    Ok(())
 }
 
 /// How an imported profile relates to the local configuration.
@@ -177,6 +246,49 @@ pub struct ImportPreview {
     pub local_profiles: Vec<(ProfileId, String)>,
     /// Portable application settings in the export.
     pub settings: AppSettings,
+    pub variables: VariablesPreview,
+}
+
+/// The shared variables an import brings.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VariablesPreview {
+    /// Variables that do not exist here and would be created.
+    pub new: Vec<VariableKey>,
+    /// Variables that exist here with the same type; the local definition
+    /// is kept.
+    pub existing: Vec<VariableKey>,
+    /// Exported variables whose type differs from the local one; their
+    /// values are not imported.
+    pub incompatible: Vec<VariableKey>,
+    /// Values of profiles and projects.
+    pub values: usize,
+    /// Global values, applied only with the application settings.
+    pub global_values: usize,
+}
+
+fn variables_preview(
+    payload: &Payload,
+    store: &SqliteStore,
+) -> Result<VariablesPreview, PortabilityError> {
+    let mut preview = VariablesPreview::default();
+    for definition in &payload.variables.definitions {
+        match store.shared_variable(&definition.key)? {
+            None => preview.new.push(definition.key.clone()),
+            Some(local) if local.definition.value_type != definition.value_type => {
+                preview.incompatible.push(definition.key.clone());
+            }
+            Some(_) => preview.existing.push(definition.key.clone()),
+        }
+    }
+    for value in &payload.variables.values {
+        if value.scope == ScopeKey::Global {
+            preview.global_values += 1;
+        } else {
+            preview.values += 1;
+        }
+    }
+    Ok(preview)
 }
 
 /// Describes `payload` relative to the local configuration.
@@ -254,6 +366,7 @@ pub fn preview(
         warnings,
         local_profiles: local.into_iter().map(|p| (p.id, p.name)).collect(),
         settings: payload.settings.clone(),
+        variables: variables_preview(payload, store)?,
     })
 }
 
@@ -351,6 +464,12 @@ pub struct ImportSummary {
     pub modules: Vec<String>,
     /// Application settings that were applied.
     pub settings: Vec<String>,
+    /// Shared variables that were created.
+    pub variables: Vec<String>,
+    /// Number of shared variable values that were set.
+    pub variable_values: usize,
+    /// Values that were not imported, and why.
+    pub skipped_values: Vec<String>,
 }
 
 fn unique_name(name: &str, taken: &BTreeSet<String>) -> String {
@@ -398,6 +517,41 @@ fn plan_modules(
     states
 }
 
+/// The export has global shared variable values (applied with the
+/// application settings).
+fn has_global_values(payload: &Payload) -> bool {
+    payload
+        .variables
+        .values
+        .iter()
+        .any(|v| v.scope == ScopeKey::Global)
+}
+
+/// Local profiles the import removes: all of them when replacing, else
+/// those the user chose to replace.
+fn removed_profiles(
+    options: &ImportOptions,
+    local: &[deckpilot_storage::ProfileSummary],
+    selected: &[&Profile],
+) -> BTreeSet<ProfileId> {
+    if options.mode == ImportMode::Replace {
+        return local.iter().map(|p| p.id).collect();
+    }
+    selected
+        .iter()
+        .filter(|profile| {
+            local.iter().any(|l| l.id == profile.id)
+                && options
+                    .conflicts
+                    .get(&profile.id)
+                    .copied()
+                    .unwrap_or_default()
+                    == ConflictResolution::Replace
+        })
+        .map(|profile| profile.id)
+        .collect()
+}
+
 /// Turns the user's choices into one set of changes. Nothing is written.
 pub fn plan(
     payload: &Payload,
@@ -422,7 +576,8 @@ pub fn plan(
         })
         .collect::<Result<_, _>>()?;
     let apply_settings = options.app_settings && !payload.settings.is_empty();
-    if selected.is_empty() && !options.module_settings && !apply_settings {
+    let settings_selected = options.app_settings && (apply_settings || has_global_values(payload));
+    if selected.is_empty() && !options.module_settings && !settings_selected {
         return Err(PortabilityError::Invalid(
             "nothing selected to import".into(),
         ));
@@ -430,23 +585,10 @@ pub fn plan(
 
     // Local profiles that will remain, and their projects: an imported
     // project must never end up in two profiles.
-    let mut removed: BTreeSet<ProfileId> = BTreeSet::new();
-    if options.mode == ImportMode::Replace {
-        removed.extend(local.iter().map(|p| p.id));
-    } else {
-        for profile in &selected {
-            if local.iter().any(|l| l.id == profile.id)
-                && options
-                    .conflicts
-                    .get(&profile.id)
-                    .copied()
-                    .unwrap_or_default()
-                    == ConflictResolution::Replace
-            {
-                removed.insert(profile.id);
-            }
-        }
-    }
+    let removed = removed_profiles(options, &local, &selected);
+    // Where the exported profiles and projects ended up, for their values.
+    let mut moved_profiles: BTreeMap<ProfileId, ProfileId> = BTreeMap::new();
+    let mut moved_projects: BTreeMap<ProjectId, (ProfileId, ProjectId)> = BTreeMap::new();
     let mut remaining_projects: HashSet<ProjectId> = HashSet::new();
     let mut names: BTreeSet<String> = BTreeSet::new();
     for summary_entry in &local {
@@ -490,6 +632,11 @@ pub fn plan(
         }
         names.insert(imported.name.to_lowercase());
         remaining_projects.extend(imported.projects.iter().map(|p| p.id));
+        moved_profiles.insert(profile.id, imported.id);
+        // `duplicate` keeps the order of the projects.
+        for (old, new) in profile.projects.iter().zip(&imported.projects) {
+            moved_projects.insert(old.id, (imported.id, new.id));
+        }
         summary.imported.push((imported.id, imported.name.clone()));
         changes.save_profiles.push(imported);
     }
@@ -503,11 +650,142 @@ pub fn plan(
     if options.module_settings {
         changes.module_states = plan_modules(payload, modules, &mut summary);
     }
+    let moved = Moved {
+        profiles: &moved_profiles,
+        projects: &moved_projects,
+    };
+    plan_variables(
+        payload,
+        store,
+        options.app_settings,
+        &moved,
+        &mut changes,
+        &mut summary,
+    )?;
     if apply_settings && let Some(updates) = payload.settings.updates {
         changes.settings.push(plan_update_settings(updates, store)?);
         summary.settings.push("updates".into());
     }
     Ok((changes, summary))
+}
+
+/// Where exported profiles and projects were imported to.
+struct Moved<'a> {
+    profiles: &'a BTreeMap<ProfileId, ProfileId>,
+    projects: &'a BTreeMap<ProjectId, (ProfileId, ProjectId)>,
+}
+
+impl Moved<'_> {
+    /// The scope a value lands at; `None`: its profile is not imported.
+    fn scope(&self, scope: ScopeKey, app_settings: bool) -> Option<ScopeKey> {
+        match scope {
+            ScopeKey::Global if app_settings => Some(ScopeKey::Global),
+            ScopeKey::Profile { profile } => self
+                .profiles
+                .get(&profile)
+                .map(|profile| ScopeKey::Profile { profile: *profile }),
+            ScopeKey::Project { project, .. } => {
+                self.projects
+                    .get(&project)
+                    .map(|(profile, project)| ScopeKey::Project {
+                        profile: *profile,
+                        project: *project,
+                    })
+            }
+            // Global values without the application settings; values of a
+            // run are refused by validation.
+            ScopeKey::Global | ScopeKey::Execution { .. } => None,
+        }
+    }
+
+    /// The value with project and profile ids moved along; `Err`: why it
+    /// cannot be imported at `scope`.
+    fn value(&self, value: &VariableValue, scope: ScopeKey) -> Result<VariableValue, &'static str> {
+        let owner = match scope {
+            ScopeKey::Profile { profile } | ScopeKey::Project { profile, .. } => Some(profile),
+            ScopeKey::Global | ScopeKey::Execution { .. } => None,
+        };
+        Ok(match value {
+            VariableValue::ProjectId(project) => match self.projects.get(project) {
+                Some((profile, id)) if owner.is_none_or(|owner| owner == *profile) => {
+                    VariableValue::ProjectId(*id)
+                }
+                Some(_) => return Err("it names a project of another profile"),
+                None if owner.is_some() => return Err("it names a project that is not imported"),
+                None => value.clone(),
+            },
+            VariableValue::ProfileId(profile) => match self.profiles.get(profile) {
+                Some(id) if owner.is_none_or(|owner| owner == *id) => VariableValue::ProfileId(*id),
+                _ if owner.is_some() => return Err("it names another profile"),
+                _ => value.clone(),
+            },
+            other => other.clone(),
+        })
+    }
+}
+
+/// The shared variables to create and the values to set. Local
+/// definitions are never replaced; values follow their profile or project
+/// to where it was imported; global values only with the application
+/// settings. A value that does not fit is skipped and reported, never
+/// forced.
+fn plan_variables(
+    payload: &Payload,
+    store: &SqliteStore,
+    app_settings: bool,
+    moved: &Moved<'_>,
+    changes: &mut ConfigChanges,
+    summary: &mut ImportSummary,
+) -> Result<(), PortabilityError> {
+    let mut effective: BTreeMap<VariableKey, VariableDefinition> = BTreeMap::new();
+    for definition in &payload.variables.definitions {
+        if let Some(local) = store.shared_variable(&definition.key)? {
+            effective.insert(definition.key.clone(), local.definition);
+        } else {
+            effective.insert(definition.key.clone(), definition.clone());
+            changes.variables.push(definition.clone());
+            summary.variables.push(definition.key.to_string());
+        }
+    }
+    for exported in &payload.variables.values {
+        let Some(scope) = moved.scope(exported.scope, app_settings) else {
+            continue;
+        };
+        let skip = |reason: &str| format!("`{}`: {reason}", exported.key);
+        let definition = match effective.get(&exported.key) {
+            Some(definition) => Some(definition.clone()),
+            // A module's variable, declared here by the module.
+            None => store.shared_variable(&exported.key)?.map(|s| s.definition),
+        };
+        let Some(definition) = definition else {
+            summary
+                .skipped_values
+                .push(skip("the variable does not exist here"));
+            continue;
+        };
+        if definition.sensitive {
+            summary
+                .skipped_values
+                .push(skip("the variable is sensitive here"));
+            continue;
+        }
+        let value = match moved.value(&exported.value, scope) {
+            Ok(value) => value,
+            Err(reason) => {
+                summary.skipped_values.push(skip(reason));
+                continue;
+            }
+        };
+        if let Err(issue) = definition.check_value(&scope, &value) {
+            summary.skipped_values.push(skip(&issue.to_string()));
+            continue;
+        }
+        changes
+            .variable_values
+            .push((exported.key.clone(), scope, value));
+        summary.variable_values += 1;
+    }
+    Ok(())
 }
 
 /// The update preferences to store: the exported ones, with this
@@ -525,6 +803,8 @@ fn plan_update_settings(
         automatic_checks: updates.automatic_checks,
         check_interval_hours: updates.check_interval_hours,
         last_check: local.last_check,
+        // The update channel is this computer's choice; it is not exported.
+        channel: local.channel,
     }
     .sanitized();
     let text = serde_json::to_string(&preferences)

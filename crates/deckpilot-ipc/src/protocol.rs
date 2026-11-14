@@ -11,11 +11,19 @@
 use serde::{Deserialize, Serialize};
 
 use deckpilot_core::graph::ExecutionEvent;
-use deckpilot_core::{
-    ActionInstanceId, ActionResult, ActionStatus, CycleDirection, ExecutionId, ExecutionRecord,
-    ExecutionSummary, LayoutStatus, ProfileId, Project, ProjectId, WorkflowId, WorkflowReport,
+use deckpilot_core::variables::{
+    CatalogEntry, CatalogFilter, PreviewItem, ProjectSource, ReferencePreview, ReferenceStatus,
+    ResolutionContext,
 };
-use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId};
+use deckpilot_core::work_session::WorkSessionSnapshot;
+use deckpilot_core::{
+    ActionInstanceId, ActionResult, ActionStatus, ContextEffect, CycleDirection, ExecutionId,
+    ExecutionRecord, ExecutionSummary, LayoutStatus, ProfileId, Project, ProjectId, WorkSessionId,
+    WorkflowId, WorkflowReport,
+};
+use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceDescriptor, DeviceId};
+
+use crate::work_session::{MAX_WORK_SESSION_LIST, WorkSessionSettings, WorkSessionSummary};
 
 /// Protocol spoken by this build.
 ///
@@ -33,7 +41,33 @@ use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId};
 ///
 /// Version 6: actions show notifications; the agent sends them to the app
 /// as `notification` events for its status bar.
-pub const PROTOCOL_VERSION: u32 = 6;
+///
+/// Version 7: shared variables and references. The agent lists the
+/// references available in a context (`listVariables`, metadata only) and
+/// previews them (`previewReferences`); it announces context changes
+/// (`projectChanged`, `profileChanged`, `sharedVariablesChanged`,
+/// `resourceBindingsChanged`, `deviceContextChanged`,
+/// `executionContextChanged`). Action results may carry `cycleProject`
+/// effects, which are removed for older clients.
+///
+/// Version 8: the work session. The agent reports the session
+/// (`getWorkSession`, `workSessionChanged`), its history
+/// (`listWorkSessions`) and settings (`getWorkSessionSettings`,
+/// `saveWorkSessionSettings`), and lets the user clear notices and decide
+/// flagged gaps. No request starts, verifies or finishes a session (D11).
+///
+/// Version 9: the unified variable registry. Catalog entries name their
+/// owner (core, module or user), whether they are read-only and, for
+/// legacy ids, the canonical id that replaces them; modules list their own
+/// variables (`projects.current.id`, group `module`); a variable whose
+/// module is disabled or missing previews as `unavailable`. Older clients
+/// receive the catalog they knew: no module roots, `notInContext` and
+/// `permissionDenied` in place of the new availability and status. No
+/// request changes.
+pub const PROTOCOL_VERSION: u32 = 9;
+
+/// Most references one `previewReferences` may ask about.
+pub const MAX_PREVIEW_ITEMS: usize = 200;
 
 /// Most executions returned by one `listExecutions`.
 pub const MAX_EXECUTION_LIST: u32 = 200;
@@ -150,16 +184,30 @@ pub enum Capability {
     BackgroundExecutions,
     /// Notifications for the status bar. Protocol 6.
     Notifications,
+    /// Shared variables: `listVariables`, `previewReferences` and context
+    /// events. Without it the app shows no live values and does not save
+    /// references, which the agent could not resolve. Protocol 7.
+    Variables,
+    /// The work session: its state, history, settings and events. Without
+    /// it the app explains that the agent is too old. Protocol 8.
+    WorkSession,
+    /// The unified variable registry: owners, module variables, canonical
+    /// ids and the `unavailable` status. Without it the app inserts the
+    /// ids the agent lists (legacy ones included). Protocol 9.
+    VariableRegistry,
 }
 
 impl Capability {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 9] = [
         Self::Workflows,
         Self::PrepareForUpdate,
         Self::ModuleNamespaces,
         Self::EncryptedDatabase,
         Self::BackgroundExecutions,
         Self::Notifications,
+        Self::Variables,
+        Self::WorkSession,
+        Self::VariableRegistry,
     ];
 
     /// The protocol that introduced the capability.
@@ -170,6 +218,9 @@ impl Capability {
             Self::EncryptedDatabase => 4,
             Self::BackgroundExecutions => 5,
             Self::Notifications => 6,
+            Self::Variables => 7,
+            Self::WorkSession => 8,
+            Self::VariableRegistry => 9,
         }
     }
 
@@ -325,6 +376,55 @@ pub enum Request {
     },
     /// The report of the last workflow the agent ran. Since protocol 4.
     GetLastWorkflowReport,
+    /// The references available in `context` that match `filter`:
+    /// metadata only, never values. Since protocol 7.
+    ListVariables {
+        context: Box<ResolutionContext>,
+        #[serde(default)]
+        filter: Box<CatalogFilter>,
+    },
+    /// What each reference resolves to in `context`, as a preview: values
+    /// of sensitive variables are redacted and run-time values are
+    /// unavailable. Since protocol 7.
+    PreviewReferences {
+        context: Box<ResolutionContext>,
+        items: Vec<PreviewItem>,
+    },
+    /// The work session as it is now. Since protocol 8.
+    GetWorkSession,
+    /// Sessions of every profile, newest first: at most `limit`, only
+    /// those requested before `before` (ms) when given. Since protocol 8.
+    ListWorkSessions {
+        limit: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<i64>,
+    },
+    /// The work session settings of `profile` (defaults if never saved).
+    /// Since protocol 8.
+    GetWorkSessionSettings {
+        profile: ProfileId,
+    },
+    /// Saves the work session settings of `settings.profile` after
+    /// checking its workflows: the start workflow needs no inputs a
+    /// session cannot give, the verification workflow must fulfil the
+    /// verification contract. Since protocol 8.
+    SaveWorkSessionSettings {
+        settings: Box<WorkSessionSettings>,
+    },
+    /// Decides a flagged gap of `session`: `count` keeps it counted,
+    /// otherwise it is excluded. Either can be changed again. Since
+    /// protocol 8.
+    ResolveWorkSessionReview {
+        session: WorkSessionId,
+        review: i64,
+        count: bool,
+    },
+    /// Clears the notice of `session`, or, without one, the notice an idle
+    /// session shows. Since protocol 8.
+    ClearWorkSessionNotices {
+        #[serde(default)]
+        session: Option<WorkSessionId>,
+    },
 }
 
 impl Request {
@@ -347,6 +447,16 @@ impl Request {
                 limit: Some(limit), ..
             } if *limit == 0 || *limit > MAX_EXECUTION_LIST => {
                 Err(format!("limit must be between 1 and {MAX_EXECUTION_LIST}"))
+            }
+            Self::PreviewReferences { items, .. } if items.len() > MAX_PREVIEW_ITEMS => Err(
+                format!("at most {MAX_PREVIEW_ITEMS} references can be previewed at once"),
+            ),
+            Self::ListWorkSessions { limit, .. }
+                if *limit == 0 || *limit > MAX_WORK_SESSION_LIST =>
+            {
+                Err(format!(
+                    "limit must be between 1 and {MAX_WORK_SESSION_LIST}"
+                ))
             }
             _ => Ok(()),
         }
@@ -457,7 +567,93 @@ pub enum Response {
     Autostart {
         enabled: bool,
     },
+    /// Answer to `listVariables`. Since protocol 7.
+    Variables {
+        entries: Vec<CatalogEntry>,
+    },
+    /// Answer to `previewReferences`, in the order asked. Since protocol 7.
+    ReferencePreviews {
+        previews: Vec<ReferencePreview>,
+    },
+    /// Answer to `getWorkSession` and `clearWorkSessionNotices`. Since
+    /// protocol 8.
+    WorkSession {
+        snapshot: Box<WorkSessionSnapshot>,
+    },
+    /// Answer to `listWorkSessions`. Since protocol 8.
+    WorkSessions {
+        entries: Vec<WorkSessionSummary>,
+    },
+    /// Answer to `resolveWorkSessionReview`: the session afterwards. Since
+    /// protocol 8.
+    WorkSessionEntry {
+        entry: Box<WorkSessionSummary>,
+    },
+    /// Answer to `getWorkSessionSettings` and `saveWorkSessionSettings`.
+    /// Since protocol 8.
+    WorkSessionSettings {
+        settings: Box<WorkSessionSettings>,
+    },
     Ok,
+}
+
+impl Response {
+    /// The response as a client speaking `protocol` understands it: effects
+    /// it does not know are removed from action results (`cycleProject`
+    /// before protocol 7), and catalogs and previews lose what came with the
+    /// variable registry (before protocol 9).
+    #[must_use]
+    pub fn for_protocol(mut self, protocol: u32) -> Self {
+        if protocol < 9 {
+            self = self.without_registry();
+        }
+        if protocol >= 7 {
+            return self;
+        }
+        let strip = |result: &mut ActionResult| {
+            result
+                .effects
+                .retain(|effect| matches!(effect, ContextEffect::SelectProject { .. }));
+        };
+        match &mut self {
+            Self::ActionResult { result } => strip(result),
+            Self::WorkflowReport { report }
+            | Self::LastWorkflow {
+                report: Some(report),
+            } => report
+                .steps
+                .iter_mut()
+                .for_each(|step| strip(&mut step.result)),
+            _ => {}
+        }
+        self
+    }
+
+    /// Catalogs without module roots and registry metadata, previews with
+    /// `permissionDenied` for `unavailable`, as protocol 8 had them.
+    fn without_registry(self) -> Self {
+        match self {
+            Self::Variables { entries } => Self::Variables {
+                entries: entries
+                    .into_iter()
+                    .filter_map(CatalogEntry::for_protocol_8)
+                    .collect(),
+            },
+            Self::ReferencePreviews { previews } => Self::ReferencePreviews {
+                previews: previews
+                    .into_iter()
+                    .map(|preview| match preview.status {
+                        ReferenceStatus::Unavailable { .. } => ReferencePreview {
+                            status: ReferenceStatus::PermissionDenied,
+                            ..preview
+                        },
+                        _ => preview,
+                    })
+                    .collect(),
+            },
+            other => other,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -504,6 +700,43 @@ pub enum AgentEvent {
     Notification {
         notification: deckpilot_core::notify::Notification,
     },
+    /// The application's active project of `profile` changed (a key, a
+    /// request, a workflow with application scope, a reload). Since
+    /// protocol 7.
+    ProjectChanged {
+        profile: ProfileId,
+        project: Option<ProjectId>,
+        source: ProjectSource,
+    },
+    /// Another profile became active. Since protocol 7.
+    ProfileChanged {
+        profile: ProfileId,
+    },
+    /// Definitions or values of these shared variables changed. Keys only,
+    /// never values. Also names the `system.work.session.…` paths whose
+    /// value changed with a work session transition. Since protocol 7.
+    SharedVariablesChanged {
+        keys: Vec<String>,
+    },
+    /// This computer's resource bindings changed. Since protocol 7.
+    ResourceBindingsChanged,
+    /// A device connected or disconnected. Since protocol 7.
+    DeviceContextChanged {
+        device: Option<DeviceId>,
+    },
+    /// A run started or finished with this project in its own context.
+    /// Since protocol 7.
+    ExecutionContextChanged {
+        execution: ExecutionId,
+        project: Option<ProjectId>,
+    },
+    /// The work session changed: its state, verification, approval,
+    /// notices, or its counted time after a decided gap. Elapsed time is
+    /// drawn from `elapsedMs` at `asOfMs`, so the agent does not send one
+    /// per tick. Since protocol 8.
+    WorkSessionChanged {
+        snapshot: Box<WorkSessionSnapshot>,
+    },
 }
 
 impl Request {
@@ -523,6 +756,13 @@ impl Request {
             | Self::GetDatabaseKey
             | Self::RequestWindow { .. }
             | Self::GetLastWorkflowReport => 4,
+            Self::ListVariables { .. } | Self::PreviewReferences { .. } => 7,
+            Self::GetWorkSession
+            | Self::ListWorkSessions { .. }
+            | Self::GetWorkSessionSettings { .. }
+            | Self::SaveWorkSessionSettings { .. }
+            | Self::ResolveWorkSessionReview { .. }
+            | Self::ClearWorkSessionNotices { .. } => 8,
             Self::RunWorkflow { .. } | Self::PrepareForUpdate => 2,
             Self::GetStatus
             | Self::ListDevices
@@ -563,6 +803,13 @@ impl AgentEvent {
             | Self::ExecutionProgress { .. }
             | Self::ExecutionFinished { .. } => 5,
             Self::Notification { .. } => 6,
+            Self::ProjectChanged { .. }
+            | Self::ProfileChanged { .. }
+            | Self::SharedVariablesChanged { .. }
+            | Self::ResourceBindingsChanged
+            | Self::DeviceContextChanged { .. }
+            | Self::ExecutionContextChanged { .. } => 7,
+            Self::WorkSessionChanged { .. } => 8,
             Self::OpenWindow { .. } => 4,
             Self::State { .. }
             | Self::ActionCompleted { .. }
@@ -591,6 +838,11 @@ pub struct DeviceInfo {
     /// Backend providing the device: `elgato-hid` for USB, `mock` for
     /// simulated devices.
     pub source: String,
+    /// Vendor-neutral description of the device: vendor, model, serial,
+    /// capabilities, driver and verification status. Absent from older
+    /// agents and for models the agent does not know.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub descriptor: Option<DeviceDescriptor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -711,6 +963,336 @@ mod tests {
         assert!(list(Some(MAX_EXECUTION_LIST)).validate().is_ok());
         assert!(list(Some(0)).validate().is_err());
         assert!(list(Some(MAX_EXECUTION_LIST + 1)).validate().is_err());
+    }
+
+    #[test]
+    fn variables_need_protocol_7() {
+        let profile = ProfileId::new();
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "type": "previewReferences",
+            "context": {"profile": profile},
+            "items": [{"reference": "shared.projects.favorite", "expected": {"type": "project"}}],
+        }))
+        .unwrap();
+        assert_eq!(request.since_protocol(), 7);
+        assert_eq!(request.name(), "previewReferences");
+        let list: Request = serde_json::from_value(serde_json::json!({
+            "type": "listVariables",
+            "context": {"profile": profile, "projectSource": "execution"},
+        }))
+        .unwrap();
+        let Request::ListVariables { context, filter } = &list else {
+            panic!("listVariables");
+        };
+        assert_eq!(context.project_source, ProjectSource::Execution);
+        assert_eq!(**filter, CatalogFilter::default());
+        assert_eq!(list.since_protocol(), 7);
+        let too_many = Request::PreviewReferences {
+            context: Box::new(ResolutionContext::preview(profile)),
+            items: vec![
+                PreviewItem {
+                    reference: "system.platform".into(),
+                    expected: None,
+                };
+                MAX_PREVIEW_ITEMS + 1
+            ],
+        };
+        assert!(too_many.validate().is_err());
+
+        for (event, name) in [
+            (
+                AgentEvent::ProjectChanged {
+                    profile,
+                    project: None,
+                    source: ProjectSource::Application,
+                },
+                "projectChanged",
+            ),
+            (AgentEvent::ProfileChanged { profile }, "profileChanged"),
+            (
+                AgentEvent::SharedVariablesChanged {
+                    keys: vec!["projects.favorite".into()],
+                },
+                "sharedVariablesChanged",
+            ),
+            (
+                AgentEvent::ResourceBindingsChanged,
+                "resourceBindingsChanged",
+            ),
+            (
+                AgentEvent::DeviceContextChanged { device: None },
+                "deviceContextChanged",
+            ),
+            (
+                AgentEvent::ExecutionContextChanged {
+                    execution: ExecutionId::new(),
+                    project: None,
+                },
+                "executionContextChanged",
+            ),
+        ] {
+            assert_eq!(event.since_protocol(), 7);
+            let json = serde_json::to_value(&event).unwrap();
+            assert_eq!(json["type"], name);
+            assert_eq!(serde_json::from_value::<AgentEvent>(json).unwrap(), event);
+        }
+        assert!(
+            Capability::of_protocol(6)
+                .iter()
+                .all(|c| *c != Capability::Variables)
+        );
+        assert!(Capability::of_protocol(7).contains(&Capability::Variables));
+        assert_eq!(
+            serde_json::to_value(Capability::Variables).unwrap(),
+            "variables"
+        );
+    }
+
+    #[allow(clippy::too_many_lines)] // Every request and the event.
+    #[test]
+    fn the_work_session_needs_protocol_8() {
+        use crate::work_session::{ElapsedFormat, WorkSessionSettings};
+        use deckpilot_core::work_session::WorkSessionSnapshot;
+        let profile = ProfileId::new();
+        let session = WorkSessionId::new();
+        for (json, name) in [
+            (
+                serde_json::json!({"type": "getWorkSession"}),
+                "getWorkSession",
+            ),
+            (
+                serde_json::json!({"type": "listWorkSessions", "limit": 20, "before": 5}),
+                "listWorkSessions",
+            ),
+            (
+                serde_json::json!({"type": "getWorkSessionSettings", "profile": profile}),
+                "getWorkSessionSettings",
+            ),
+            (
+                serde_json::json!({"type": "saveWorkSessionSettings", "settings": {
+                    "profile": profile, "startWorkflow": null, "verificationWorkflow": null,
+                    "approvalTtlSeconds": 600, "reviewGapSeconds": 900, "elapsedFormat": "seconds",
+                }}),
+                "saveWorkSessionSettings",
+            ),
+            (
+                serde_json::json!({"type": "resolveWorkSessionReview",
+                                   "session": session, "review": 4, "count": false}),
+                "resolveWorkSessionReview",
+            ),
+            (
+                serde_json::json!({"type": "clearWorkSessionNotices", "session": null}),
+                "clearWorkSessionNotices",
+            ),
+            (
+                serde_json::json!({"type": "clearWorkSessionNotices"}),
+                "clearWorkSessionNotices",
+            ),
+        ] {
+            let request: Request = serde_json::from_value(json.clone()).expect(name);
+            assert_eq!(request.since_protocol(), 8, "{name}");
+            assert_eq!(request.name(), name);
+            assert!(request.validate().is_ok(), "{name}");
+        }
+        let save: Request = serde_json::from_value(serde_json::json!({
+            "type": "saveWorkSessionSettings", "settings": {
+                "profile": profile, "approvalTtlSeconds": 600, "reviewGapSeconds": 900,
+                "elapsedFormat": "seconds",
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            save,
+            Request::SaveWorkSessionSettings {
+                settings: Box::new(WorkSessionSettings {
+                    profile,
+                    start_workflow: None,
+                    verification_workflow: None,
+                    approval_ttl_seconds: 600,
+                    review_gap_seconds: 900,
+                    elapsed_format: ElapsedFormat::Seconds,
+                    updated_at_ms: None,
+                })
+            }
+        );
+        // There is no way to operate a session (D11).
+        for operation in [
+            "startWorkSession",
+            "verifyWorkSession",
+            "finishWorkSession",
+            "stopWorkSession",
+        ] {
+            assert!(
+                serde_json::from_value::<Request>(serde_json::json!({"type": operation})).is_err(),
+                "{operation}"
+            );
+        }
+        let list = |limit| Request::ListWorkSessions {
+            limit,
+            before: None,
+        };
+        assert!(list(1).validate().is_ok());
+        assert!(
+            list(crate::work_session::MAX_WORK_SESSION_LIST)
+                .validate()
+                .is_ok()
+        );
+        assert!(list(0).validate().is_err());
+        assert!(
+            list(crate::work_session::MAX_WORK_SESSION_LIST + 1)
+                .validate()
+                .is_err()
+        );
+
+        let event = AgentEvent::WorkSessionChanged {
+            snapshot: Box::new(WorkSessionSnapshot::idle(42)),
+        };
+        assert_eq!(event.since_protocol(), 8);
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"type": "workSessionChanged",
+                               "snapshot": {"state": "idle", "elapsedMs": 0, "asOfMs": 42}})
+        );
+        assert_eq!(serde_json::from_value::<AgentEvent>(json).unwrap(), event);
+        assert!(!Capability::of_protocol(7).contains(&Capability::WorkSession));
+        assert!(Capability::of_protocol(8).contains(&Capability::WorkSession));
+        assert_eq!(
+            serde_json::to_value(Capability::WorkSession).unwrap(),
+            "workSession"
+        );
+    }
+
+    #[test]
+    fn the_variable_registry_needs_protocol_9() {
+        use deckpilot_core::variables::{
+            CatalogEntry, Deprecation, ReferenceAvailability, ReferencePreview, ReferenceStatus,
+            SystemVariable, VariableGroup, VariableId, VariableOwner, VariableRef, VariableType,
+        };
+        assert!(!Capability::of_protocol(8).contains(&Capability::VariableRegistry));
+        assert!(Capability::of_protocol(9).contains(&Capability::VariableRegistry));
+        assert_eq!(
+            serde_json::to_value(Capability::VariableRegistry).unwrap(),
+            "variableRegistry"
+        );
+        assert_eq!(PROTOCOL_VERSION, 9);
+        let projects = deckpilot_core::ModuleId::new("projects").unwrap();
+        let legacy = CatalogEntry {
+            reference: VariableRef::System(SystemVariable::ProjectCurrentKey),
+            label: "Project key".into(),
+            description: String::new(),
+            group: VariableGroup::System,
+            value_type: VariableType::String,
+            scope: None,
+            module: Some(projects.clone()),
+            sensitive: false,
+            dynamic: true,
+            availability: ReferenceAvailability::Unavailable,
+            owner: Some(VariableOwner::Module {
+                module: projects.clone(),
+            }),
+            read_only: true,
+            deprecated: Some(Deprecation {
+                canonical: VariableId::new("projects.current.key").unwrap(),
+                since: "0.6.0".into(),
+            }),
+            declared_scope: Some(deckpilot_core::variables::DeclaredScope::Project),
+        };
+        let canonical = CatalogEntry {
+            reference: VariableRef::parse("projects.current.key").unwrap(),
+            group: VariableGroup::Module,
+            deprecated: None,
+            ..legacy.clone()
+        };
+        let response = Response::Variables {
+            entries: vec![legacy.clone(), canonical.clone()],
+        };
+        // Protocol 9 clients get everything.
+        assert_eq!(response.clone().for_protocol(9), response);
+        // Older clients get the catalog they knew: no module root they could
+        // not parse, no registry metadata, `notInContext` for `unavailable`.
+        let Response::Variables { entries } = response.for_protocol(8) else {
+            panic!("variables");
+        };
+        assert_eq!(entries.len(), 1);
+        let old = serde_json::to_value(&entries[0]).unwrap();
+        assert_eq!(old["reference"], "system.project.current.key");
+        assert_eq!(old["availability"], "notInContext");
+        for field in ["owner", "readOnly", "deprecated", "declaredScope"] {
+            assert!(old.get(field).is_none(), "{field}");
+        }
+        let previews = Response::ReferencePreviews {
+            previews: vec![ReferencePreview {
+                reference: "system.project.current.key".into(),
+                status: ReferenceStatus::Unavailable {
+                    owner: "projects".into(),
+                },
+            }],
+        };
+        let Response::ReferencePreviews { previews: old } = previews.clone().for_protocol(7) else {
+            panic!("previews");
+        };
+        assert_eq!(old[0].status, ReferenceStatus::PermissionDenied);
+        assert_eq!(previews.clone().for_protocol(9), previews);
+    }
+
+    #[test]
+    fn older_clients_never_see_new_effects() {
+        let project = ProjectId::new();
+        let result = ActionResult::success("switched")
+            .with_effect(ContextEffect::SelectProject { project })
+            .with_effect(ContextEffect::CycleProject {
+                direction: CycleDirection::Next,
+                wrap_around: true,
+            });
+        let response = Response::ActionResult {
+            result: result.clone(),
+        };
+        let Response::ActionResult { result: old } = response.clone().for_protocol(6) else {
+            panic!("an action result");
+        };
+        assert_eq!(old.effects, vec![ContextEffect::SelectProject { project }]);
+        assert_eq!(
+            response.clone().for_protocol(7),
+            Response::ActionResult { result }
+        );
+        assert_eq!(Response::Ok.for_protocol(1), Response::Ok);
+    }
+
+    /// The descriptor is an additive field: older agents send none, and
+    /// older clients ignore it.
+    #[test]
+    fn device_info_descriptor_is_optional_both_ways() {
+        let old = serde_json::json!({
+            "id": {"model": "elgato.streamdeck.mk2", "serial": "A1"},
+            "modelName": "Stream Deck MK.2",
+            "state": "connected",
+            "layout": {"type": "missing"},
+            "page": null,
+            "source": "elgato-hid",
+        });
+        let info: DeviceInfo = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(info.descriptor, None);
+        assert_eq!(serde_json::to_value(&info).unwrap(), old);
+
+        let catalog = deckpilot_device::ModelCatalog::builtin();
+        let descriptor = catalog
+            .describe(
+                &info.id,
+                Some(deckpilot_device::DriverInfo {
+                    id: "elgato-hid".into(),
+                    version: "0.6.0".into(),
+                }),
+            )
+            .unwrap();
+        let new = DeviceInfo {
+            descriptor: Some(descriptor),
+            ..info
+        };
+        let json = serde_json::to_value(&new).unwrap();
+        assert_eq!(json["descriptor"]["vendorId"], "elgato");
+        assert_eq!(json["descriptor"]["driver"]["id"], "elgato-hid");
+        assert_eq!(serde_json::from_value::<DeviceInfo>(json).unwrap(), new);
     }
 
     #[test]

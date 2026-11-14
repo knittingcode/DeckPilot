@@ -1,0 +1,69 @@
+# Tests of the release pipeline without a release: the tag gate against a
+# synthetic repository and mocked GitHub API answers, the structure of
+# release.yml (every job behind the gate), shellcheck, and the release
+# commands of deckpilot-dev. No tag, release, secret or signing key is used.
+# Not a required check.
+name: Release pipeline tests
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - .github/workflows/packaging.yml
+      - .github/workflows/release-tests.yml
+      - .github/workflows/signing-check.yml
+      - .github/workflows/update-continuity.yml
+      - .github/workflows/apple-signing-check.yml
+      - .github/scripts/**
+      - .github/updater.pub
+      - tools/release-pipeline/**
+      - tools/dev/src/release.rs
+      - tools/dev/src/versions.rs
+      - tools/dev/src/prepare.rs
+      - crates/deckpilot-update/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Release gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # deckpilot-dev links the device and storage crates.
+      - name: Install Linux system dependencies
+        run: tools/ci/install-linux-deps.sh
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      # Restores main's cache when one exists, but pull requests never save
+      # one: they would fill the cache quota and evict main's caches. This
+      # workflow does not run on main, so its builds are cold.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: release-tests
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The Tauri CLI makes the throwaway keys of the key-pair test.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: pnpm install --frozen-lockfile
+      - name: shellcheck
+        run: shellcheck -x tools/release-pipeline/*.sh
+      - name: Two-stage publication (stubbed GitHub)
+        run: tools/release-pipeline/test-publication.sh "$RUNNER_TEMP/release-publication"
+      - name: Release commands of deckpilot-dev and the channel rules
+        run: cargo test --locked -p deckpilot-dev -p deckpilot-update
+      - name: Tag gate and workflow structure
+        run: tools/release-pipeline/test.sh "$RUNNER_TEMP/release-pipeline"
+      - name: The signing check's key-pair verification (throwaway keys)
+        run: tools/release-pipeline/test-updater-key-pair.sh "$RUNNER_TEMP/updater-key-pair"

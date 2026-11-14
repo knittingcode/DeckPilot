@@ -12,7 +12,6 @@ import {
   emptySelection,
   extendSelection,
   folderOf,
-  hasBack,
   moveControl,
   neighbour,
   orderedControls,
@@ -38,6 +37,7 @@ const mk2: DeviceModel = {
     touch: null,
   },
   support: "unverified",
+  verification: [],
 }
 
 const plus: DeviceModel = {
@@ -311,8 +311,6 @@ describe("pages", () => {
     expect(folderOf(l, "home", key(0))).toBeUndefined()
     expect(parentPage(l, "folder")).toBe("home")
     expect(parentPage(l, "home")).toBe("home")
-    expect(hasBack(l, "folder")).toBe(true)
-    expect(hasBack(layout([]), "folder")).toBe(false)
     expect(parentPage(layout([]), "folder")).toBe("home")
   })
 })

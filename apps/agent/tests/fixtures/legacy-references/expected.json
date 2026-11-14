@@ -1,0 +1,64 @@
+{
+  "actions": {
+    "Plain": "Succeeded: plain",
+    "Project reference": "Succeeded: SHOP",
+    "Project template": "Succeeded: SHOP|9ae9a00b-a332-4bb2-a847-680e4808d0cd|Shop",
+    "Session template": "Failed: parameter `message`: {{ system.work.session.state }} has no value (no value is set); parameter `message`: {{ system.work.session.canFinish }} has no value (no value is set)",
+    "Shared": "Succeeded: shop crew on SHOP"
+  },
+  "flow": {
+    "nodes": [
+      "start: Succeeded: ",
+      "override: Succeeded: node SHOP shop crew",
+      "session: Failed: parameter `message`: {{ system.work.session.state }} has no value (no value is set); parameter `message`: {{ system.work.session.canFinish }} has no value (no value is set)"
+    ],
+    "state": "Failed"
+  },
+  "flowModulesDisabled": {
+    "nodes": [
+      "start: Succeeded: ",
+      "override: Succeeded: node CMR profile crew",
+      "session: Failed: parameter `message`: {{ system.work.session.state }} has no value (no value is set); parameter `message`: {{ system.work.session.canFinish }} has no value (no value is set)"
+    ],
+    "state": "Failed"
+  },
+  "frames": {
+    "Key { index: 0 }": "72x72 7bd2214d410ee5a5",
+    "Key { index: 1 }": "72x72 cb2e81ed9b963215",
+    "Key { index: 2 }": "72x72 686baad33868e53d"
+  },
+  "keyOverride": "Failed: parameter `message`: {{ system.work.session.state }} has no value (no value is set)",
+  "modulesDisabled": {
+    "Plain": "Succeeded: plain",
+    "Project reference": "Succeeded: CMR",
+    "Project template": "Succeeded: CMR|9a39d374-7e5d-469a-86fa-7b612c05488a|Cream",
+    "Session template": "Failed: parameter `message`: {{ system.work.session.state }} has no value (no value is set); parameter `message`: {{ system.work.session.canFinish }} has no value (no value is set)",
+    "Shared": "Succeeded: profile crew on CMR"
+  },
+  "otherProject": {
+    "Plain": "Succeeded: plain",
+    "Project reference": "Succeeded: CMR",
+    "Project template": "Succeeded: CMR|9a39d374-7e5d-469a-86fa-7b612c05488a|Cream",
+    "Session template": "Failed: parameter `message`: {{ system.work.session.state }} has no value (no value is set); parameter `message`: {{ system.work.session.canFinish }} has no value (no value is set)",
+    "Shared": "Succeeded: profile crew on CMR"
+  },
+  "status": {
+    "activeProfile": "Legacy",
+    "activeProject": "SHOP",
+    "layout": {
+      "layout": "457cb86e-f9fc-496d-8820-2627e351d5b3",
+      "name": "Main",
+      "type": "compatible"
+    },
+    "model": "elgato.streamdeck.mk2",
+    "modelName": "Stream Deck MK.2",
+    "page": "Home"
+  },
+  "steps": {
+    "nodes": [
+      "step_1: Succeeded: SHOP|9ae9a00b-a332-4bb2-a847-680e4808d0cd|Shop",
+      "step_2: Succeeded: shop crew on SHOP"
+    ],
+    "state": "Succeeded"
+  }
+}

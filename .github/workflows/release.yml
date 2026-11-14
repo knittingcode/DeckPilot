@@ -1,6 +1,28 @@
-# Builds signed installers and updater artifacts for a version tag and
-# attaches them to a *draft* GitHub release. Nothing becomes visible to users
-# or to the in-app updater until a maintainer publishes the draft.
+# Releases a version tag in two stages (docs/releasing.md):
+#
+#   Stage A  builds, signs and notarizes, assembles the update manifest, the
+#            signing record and SHA256SUMS into a *draft* release, and checks
+#            all of it. Nothing is visible to users.
+#   Stage B  runs in the "production-release" environment once the release
+#            is authorized (tag authority, the current model: the protected
+#            v* tag is the authorization and nothing waits; or required
+#            reviewers: docs/releasing.md, "Release authorization"; fails
+#            closed if the environment is missing or authorizes neither way),
+#            checks the draft's assets again, publishes it in one
+#            update — as a pre-release for alpha/beta/rc, as latest only for
+#            the newest stable release — and verifies what users download.
+#
+# A failed stage B can be re-run (re-run failed jobs, or dispatch with
+# publish_only); it never changes a published release. A failed stage A
+# leaves a draft that can be discarded (tools/release-pipeline/discard-draft.sh)
+# and built again.
+#
+# The signing secrets are read only by the jobs that run in the
+# "production-release" environment (prepare and build; publish needs none).
+# They work with repository-level secrets as well as with environment
+# secrets, so the secrets can move into the environment without a workflow
+# change (docs/releasing.md, "Moving the signing secrets"). No other job may
+# reference them (tools/release-pipeline/check-workflow-gate.py).
 #
 # Required repository configuration (see docs/releasing.md):
 #   secrets.TAURI_SIGNING_PRIVATE_KEY          updater signing key (minisign)
@@ -19,50 +41,137 @@
 # Without them the release is blocked, unless vars.DECKPILOT_ALLOW_UNSIGNED_MACOS
 # is "true": unsigned macOS builds work, but macOS asks for the login keychain
 # password after every update (see docs/security.md).
+#
+# Every job depends on the "validate-tag" job (directly or through another
+# job's `needs`), which is the authoritative gate: the trigger's "v*" is only
+# a preliminary filter. tools/release-pipeline/test.sh checks the dependency
+# graph on every pull request that changes this file.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  # Run on a tag only: `gh workflow run release.yml --ref <tag>`. Started on
+  # a branch, the gate refuses it (the ref must be refs/tags/<release tag>)
+  # before any job that holds a secret, and the production-release
+  # environment's deployment rule allows tags v* only.
   workflow_dispatch:
     inputs:
-      tag:
-        description: Existing tag to build, e.g. v0.3.0
-        required: true
+      publish_only:
+        description: Skip stage A and run stage B (publish and verify) on the existing draft or published release
+        type: boolean
+        default: false
 
+# Jobs that need more ask for it themselves.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
-  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  TAG: ${{ github.ref_name }}
 
 jobs:
-  prepare:
-    name: Check versions and configuration
+  # The release gate (tools/release-pipeline/validate-tag.sh): the tag is
+  # exactly vX.Y.Z or vX.Y.Z-(alpha|beta|rc).N, its commit (annotated tags
+  # dereferenced) is on the protected main branch, every version matches it,
+  # and the required checks passed on exactly that commit. Later jobs build
+  # that commit (outputs.sha), not whatever the tag points to by then.
+  validate-tag:
+    name: Validate the release tag
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      version: ${{ steps.gate.outputs.version }}
+      channel: ${{ steps.gate.outputs.channel }}
+      sha: ${{ steps.gate.outputs.sha }}
+      prerelease: ${{ steps.gate.outputs.prerelease }}
+      msi_version: ${{ steps.gate.outputs.msi_version }}
+      manifest: ${{ steps.gate.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch the protected main branch
+        run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Tag, commit, versions and required checks
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_REF: ${{ github.ref }}
+          RUN_SHA: ${{ github.sha }}
+        run: tools/release-pipeline/validate-tag.sh "$TAG"
+
+  # Before anything that names the production-release environment or reads
+  # a signing secret: the environment exists, deploys tags v* only, cannot
+  # be bypassed by administrators, and authorizes each run either by a
+  # required reviewer or by a tag ruleset that restricts who may create v*
+  # tags (tools/release-pipeline/check-environment.sh; docs/releasing.md,
+  # "Release authorization").
+  # GitHub would otherwise create it, unprotected, when prepare first names
+  # it, and prepare and the builds would read the secrets without approval.
+  # This job names no environment and reads no secret.
+  environment-gate:
+    name: Protected release environment
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate-tag.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: tools/release-pipeline
+      - name: production-release exists, deploys tags v* only, authorizes every run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: tools/release-pipeline/check-environment.sh production-release
+
+  prepare:
+    name: Check configuration and release notes
+    needs: [validate-tag, environment-gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Reads the signing secrets (presence and form only).
+    environment: production-release
+    # Reads only; the draft is created by the draft job.
+    permissions:
+      contents: read
     outputs:
       macos-signing: ${{ steps.macos.outputs.signing }}
       notes: ${{ steps.notes.outputs.notes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.validate-tag.outputs.sha }}
+      # First, before any build or dependency runs in this job: the signing
+      # key and its password belong to the public key pinned in
+      # .github/updater.pub, and DECKPILOT_UPDATER_PUBKEY (compiled into the
+      # builds) is that key. The only check that sees the real updater key;
+      # the required check "Updater signing keys match" uses none
+      # (.github/scripts/updater-key-pair.py, Python standard library only).
+      - name: Signing key, password and pinned public key belong together
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
+        run: python3 -I .github/scripts/updater-key-pair.py --pinned .github/updater.pub --require-variable
       - name: Install Rust toolchain
         run: rustup toolchain install
-      - name: Version of the tag, the app and the agent must match
-        run: cargo run --locked -p deckpilot-dev -- check-versions --tag "$TAG"
-      - name: Signing configuration is present
-        env:
-          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
-        run: |
-          test -n "$KEY" || { echo "::error::secret TAURI_SIGNING_PRIVATE_KEY is not configured"; exit 1; }
-          test -n "$PUBKEY" || { echo "::error::variable DECKPILOT_UPDATER_PUBKEY is not configured"; exit 1; }
       - name: Updater public key is well formed
         env:
           DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
@@ -105,9 +214,81 @@ jobs:
             exit 1
           fi
 
+  # The full installer checks of the Packaging workflow (Linux .deb and
+  # .rpm, Windows NSIS and MSI: names, versions, app, bundled agent, udev
+  # rule, updater signatures by a throwaway key) on the tagged commit,
+  # before anything is signed: the draft and every later job need it. It
+  # builds github.sha, which the gate checked is the tag's commit (RUN_SHA),
+  # and gets no secret. Pre-releases build no .rpm and the MSI gets the
+  # gate's numeric version, as in the signed build.
+  packaging:
+    name: Installer checks (unsigned)
+    needs: validate-tag
+    if: ${{ !inputs.publish_only }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/packaging.yml
+    with:
+      prerelease: ${{ needs.validate-tag.outputs.prerelease == 'true' }}
+      msi-version: ${{ needs.validate-tag.outputs.msi_version }}
+
+  # Database migration and IPC compatibility with the previous release's
+  # real binaries (tools/compat/matrix.sh, as the Compatibility workflow),
+  # for the tagged commit itself.
+  compatibility:
+    name: Compatibility with the previous release
+    needs: validate-tag
+    if: ${{ !inputs.publish_only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate-tag.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Linux system dependencies
+        run: tools/ci/install-linux-deps.sh
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - run: tools/compat/matrix.sh "$(cat tools/release-pipeline/compat-baseline)" "$RUNNER_TEMP/compat"
+
+  # Stage A: the one draft release the builds upload to. Refuses a published
+  # release and a draft of another commit (a moved or reused tag).
+  draft:
+    name: Create the draft release
+    needs: [validate-tag, prepare, packaging]
+    if: ${{ !inputs.publish_only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      release-id: ${{ steps.draft.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate-tag.outputs.sha }}
+          persist-credentials: false
+      - name: Draft release for the tagged commit
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ needs.validate-tag.outputs.sha }}
+          PRERELEASE: ${{ needs.validate-tag.outputs.prerelease }}
+          NOTES: ${{ needs.prepare.outputs.notes }}
+        run: |
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          NOTES_FILE="$RUNNER_TEMP/notes.md" tools/release-pipeline/create-draft.sh "$TAG"
+
   build:
     name: Build (${{ matrix.target }})
-    needs: prepare
+    needs: [validate-tag, environment-gate, prepare, draft]
+    # Signs (updater key, Developer ID) and notarizes.
+    environment: production-release
     strategy:
       fail-fast: false
       matrix:
@@ -121,15 +302,16 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     permissions:
       contents: write
       # Build provenance attestations for the release artifacts.
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.validate-tag.outputs.sha }}
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: tools/ci/install-linux-deps.sh
@@ -138,36 +320,12 @@ jobs:
         run: |
           rustup toolchain install
           rustup target add ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: release-${{ matrix.target }}
-      # Developer ID signing (application and the bundled agent, with the
-      # hardened runtime) and notarization by the Tauri bundler. A stable
-      # signature keeps the agent's Keychain access across updates.
-      - name: Enable macOS signing and notarization
-        if: runner.os == 'macOS' && needs.prepare.outputs.macos-signing == 'true'
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
-          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
-        run: |
-          # The private key goes to a file (APPLE_API_KEY_PATH); the bundler
-          # reads the key *ID* from APPLE_API_KEY. Delimited values: a
-          # certificate may span several lines.
-          .github/scripts/apple-api-key.sh
-          export APPLE_API_KEY="$APPLE_API_KEY_ID"
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_ISSUER; do
-            delimiter="value-$(openssl rand -hex 8)"
-            { echo "$name<<$delimiter"; echo "${!name}"; echo "$delimiter"; } >> "$GITHUB_ENV"
-          done
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      # No cache: this job holds the signing secrets, and caches written by
+      # other workflows (pull requests included) must not feed its build.
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
-          cache: pnpm
       - run: pnpm install --frozen-lockfile
       # The vendored OpenSSL (SQLCipher) is configured with Perl. Bash steps
       # on Windows would find Git's minimal Perl, which lacks modules the
@@ -190,15 +348,46 @@ jobs:
              "apps/desktop/src-tauri/binaries/deckpilot-agent-${{ matrix.target }}${suffix}"
       # The bundler checks the updater artifacts against the public key in
       # the configuration (empty in tauri.conf.json; the app compiles it in).
-      - name: Updater public key for the bundler
+      # And the numeric MSI version: Windows Installer refuses
+      # "0.6.0-alpha.1" (deckpilot-dev release-tag computes it; see
+      # docs/releasing.md).
+      - name: Updater public key and MSI version for the bundler
         shell: bash
         env:
           DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
+          MSI_VERSION: ${{ needs.validate-tag.outputs.msi_version }}
         run: |
-          jq -n --arg key "$DECKPILOT_UPDATER_PUBKEY" '{plugins: {updater: {pubkey: $key}}}' \
+          jq -n --arg key "$DECKPILOT_UPDATER_PUBKEY" --arg msi "$MSI_VERSION" \
+            '{plugins: {updater: {pubkey: $key}}, bundle: {windows: {wix: {version: $msi}}}}' \
             > apps/desktop/src-tauri/tauri.updater.conf.json
+      # Developer ID signing (application and the bundled agent, with the
+      # hardened runtime) and notarization by the Tauri bundler. A stable
+      # signature keeps the agent's Keychain access across updates.
+      # Enabled only now, right before the bundler needs them: the
+      # certificate and its password are not in the environment of the
+      # dependency installation (package lifecycle scripts) or of the agent
+      # build.
+      - name: Enable macOS signing and notarization
+        if: runner.os == 'macOS' && needs.prepare.outputs.macos-signing == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
+        run: |
+          # The private key goes to a file (APPLE_API_KEY_PATH); the bundler
+          # reads the key *ID* from APPLE_API_KEY. Delimited values: a
+          # certificate may span several lines.
+          .github/scripts/apple-api-key.sh
+          export APPLE_API_KEY="$APPLE_API_KEY_ID"
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_ISSUER; do
+            delimiter="value-$(openssl rand -hex 8)"
+            { echo "$name<<$delimiter"; echo "${!name}"; echo "$delimiter"; } >> "$GITHUB_ENV"
+          done
       - name: Build and upload the application
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -206,20 +395,40 @@ jobs:
           DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
         with:
           projectPath: apps/desktop
-          tagName: ${{ env.TAG }}
-          releaseName: DeckPilot ${{ env.TAG }}
-          releaseBody: ${{ needs.prepare.outputs.notes }}
-          releaseDraft: true
-          # Test tags (e.g. v0.5.0-1) become pre-releases: even if published,
-          # they never become "latest", the channel the app reads.
-          prerelease: ${{ contains(env.TAG, '-') }}
-          includeUpdaterJson: true
-          # RPM does not allow "-" in versions: test releases (pre-release
-          # versions) build .deb and AppImage on Linux; final releases all.
+          # The draft of the draft job; the builds never create a release.
+          releaseId: ${{ needs.draft.outputs.release-id }}
+          # The update manifest (latest.json or prerelease.json) is
+          # assembled once, after all builds, by the manifest
+          # job: four jobs merging into it concurrently can lose entries.
+          includeUpdaterJson: false
+          # RPM does not allow "-" in versions: pre-releases build .deb and
+          # AppImage on Linux; stable releases all three.
           args: >-
             --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
             --config src-tauri/tauri.updater.conf.json
-            ${{ (runner.os == 'Linux' && contains(env.TAG, '-')) && '--bundles deb,appimage' || '' }}
+            ${{ (runner.os == 'Linux' && needs.validate-tag.outputs.prerelease == 'true') && '--bundles deb,appimage' || '' }}
+      # Later steps need no certificate: remove it from their environment.
+      - name: Disable macOS signing for the remaining steps
+        if: runner.os == 'macOS' && needs.prepare.outputs.macos-signing == 'true'
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD; do
+            echo "$name=" >> "$GITHUB_ENV"
+          done
+      # This build's entries of the update manifest (target keys, asset names and
+      # signatures), for the manifest job.
+      - name: Updater manifest fragment
+        shell: bash
+        run: >
+          tools/ci/updater-fragment.sh "${{ matrix.target }}"
+          "target/${{ matrix.target }}/release/bundle"
+          "$RUNNER_TEMP/updater-fragment/${{ matrix.target }}.json"
+      - name: Upload the updater manifest fragment
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: updater-fragment-${{ matrix.target }}
+          path: ${{ runner.temp }}/updater-fragment/${{ matrix.target }}.json
+          if-no-files-found: error
+          overwrite: true
       # The updater key compiled into the app must be the configured one;
       # otherwise installations could not verify (or would trust other) updates.
       - name: Embedded updater key matches DECKPILOT_UPDATER_PUBKEY
@@ -269,16 +478,61 @@ jobs:
           hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$(find "$bundle/dmg" -maxdepth 1 -name '*.dmg' | head -n 1)" >/dev/null
           .github/scripts/verify-macos-app.sh "$(find "$mount" -maxdepth 1 -name '*.app' | head -n 1)"
           hdiutil detach "$mount" >/dev/null
-      - name: Note unsigned platform builds
-        if: runner.os == 'Windows' || (runner.os == 'macOS' && needs.prepare.outputs.macos-signing != 'true')
-        shell: bash
+      # What this build's installers actually carry, measured on the files,
+      # for release-meta.json and the release notes
+      # (tools/release-pipeline/release-meta.sh): nothing is claimed that
+      # was not checked here.
+      - name: Signing record (macOS)
+        if: runner.os == 'macOS'
         run: |
-          echo "### ${{ matrix.target }}: not code-signed" >> "$GITHUB_STEP_SUMMARY"
-          echo "Installers carry no platform code signature (updater artifacts are signed). See docs/releasing.md." >> "$GITHUB_STEP_SUMMARY"
+          bundle="target/${{ matrix.target }}/release/bundle"
+          app=$(find "$bundle/macos" -maxdepth 1 -name '*.app' | head -n 1)
+          dmg=$(find "$bundle/dmg" -maxdepth 1 -name '*.dmg' | head -n 1)
+          codesign=unsigned notarized=false
+          if codesign --verify --strict "$app" 2> /dev/null \
+            && codesign -dvv "$app" 2>&1 | grep -q '^Authority=Developer ID Application:'; then
+            codesign=developer-id
+          fi
+          if xcrun stapler validate "$app" > /dev/null 2>&1 && xcrun stapler validate "$dmg" > /dev/null 2>&1; then
+            notarized=true
+          fi
+          mkdir -p "$RUNNER_TEMP/signing"
+          jq -n --arg target "${{ matrix.target }}" --arg codesign "$codesign" --argjson notarized "$notarized" \
+            '{target: $target, codesign: $codesign, notarized: $notarized}' > "$RUNNER_TEMP/signing/${{ matrix.target }}.json"
+          echo "### ${{ matrix.target }}: code signature $codesign, notarized $notarized" >> "$GITHUB_STEP_SUMMARY"
+      - name: Signing record (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bundle = "target/${{ matrix.target }}/release/bundle"
+          $files = @(Get-ChildItem "$bundle/msi/*.msi") + @(Get-ChildItem "$bundle/nsis/*-setup.exe")
+          $valid = $files.Count -gt 0
+          foreach ($file in $files) {
+            if ((Get-AuthenticodeSignature $file.FullName).Status -ne 'Valid') { $valid = $false }
+          }
+          $codesign = if ($valid) { 'authenticode' } else { 'unsigned' }
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/signing" | Out-Null
+          @{ target = '${{ matrix.target }}'; codesign = $codesign; notarized = $null } | ConvertTo-Json |
+            Out-File -Encoding utf8 "$env:RUNNER_TEMP/signing/${{ matrix.target }}.json"
+          "### ${{ matrix.target }}: code signature $codesign" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+      - name: Signing record (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p "$RUNNER_TEMP/signing"
+          jq -n --arg target "${{ matrix.target }}" '{target: $target, codesign: "unsigned", notarized: null}' \
+            > "$RUNNER_TEMP/signing/${{ matrix.target }}.json"
+          echo "### ${{ matrix.target }}: packages carry no code signature (updater artifacts are signed)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the signing record
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signing-${{ matrix.target }}
+          path: ${{ runner.temp }}/signing/${{ matrix.target }}.json
+          if-no-files-found: error
+          overwrite: true
       # Signed statement that these files were built by this workflow from
       # this tag; verify with `gh attestation verify <file> --repo <owner/repo>`.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
             target/${{ matrix.target }}/release/bundle/**/*.dmg
@@ -290,14 +544,59 @@ jobs:
             target/${{ matrix.target }}/release/bundle/**/*.exe
             target/${{ matrix.target }}/release/bundle/**/*.sig
 
-  verify:
-    name: Verify artifacts and publish checksums
-    needs: build
+  # Writes the update manifest once, from the fragments of all builds, and
+  # attaches it to the draft: latest.json for a stable release (the stable
+  # channel's manifest), prerelease.json for a pre-release, never both, so
+  # a pre-release can never reach stable installations (docs/updates.md).
+  # Fails if a platform or package type is missing, if two builds claim the
+  # same entry, or if a referenced asset is not in the draft
+  # (tools/ci/assemble-latest-json.sh, tested on every pull request by
+  # tools/ci/test-latest-json.sh).
+  manifest:
+    name: Assemble the update manifest
+    needs: [validate-tag, prepare, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Attaches the manifest to the draft.
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.validate-tag.outputs.sha }}
+      - name: Download the updater manifest fragments
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: updater-fragment-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/updater-fragments
+      - name: Assemble the manifest and attach it to the draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTES: ${{ needs.prepare.outputs.notes }}
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+          MANIFEST: ${{ needs.validate-tag.outputs.manifest }}
+        run: |
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' \
+            > "$RUNNER_TEMP/assets.txt"
+          REPOSITORY="$GITHUB_REPOSITORY" NOTES_FILE="$RUNNER_TEMP/notes.md" \
+            ASSETS_FILE="$RUNNER_TEMP/assets.txt" \
+            tools/ci/assemble-latest-json.sh "$RUNNER_TEMP/updater-fragments" "$RUNNER_TEMP/$MANIFEST"
+          gh release upload "$TAG" "$RUNNER_TEMP/$MANIFEST" --repo "$GITHUB_REPOSITORY" --clobber
+
+  verify:
+    name: Verify the draft and attach checksums
+    needs: [validate-tag, prepare, draft, compatibility, manifest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Attaches release-meta.json, the notes and SHA256SUMS to the draft.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate-tag.outputs.sha }}
       - name: Install Rust toolchain
         run: rustup toolchain install
       - name: Download the draft release
@@ -308,6 +607,55 @@ jobs:
         env:
           DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
         run: cargo run --locked -p deckpilot-dev -- verify-release release-files
+      # A build whose entries are missing from the manifest would leave
+      # installations of that platform or package type without updates,
+      # silently. (verify-release has already refused the other channel's
+      # manifest.)
+      - name: Every platform and package type is in the manifest
+        env:
+          PRERELEASE: ${{ needs.validate-tag.outputs.prerelease }}
+          MANIFEST: ${{ needs.validate-tag.outputs.manifest }}
+        run: |
+          required="darwin-aarch64 darwin-aarch64-app darwin-x86_64 darwin-x86_64-app
+            linux-x86_64 linux-x86_64-appimage linux-x86_64-deb
+            windows-x86_64 windows-x86_64-msi windows-x86_64-nsis"
+          # Stable releases also build the .rpm (see the build job).
+          [ "$PRERELEASE" = true ] || required="$required linux-x86_64-rpm"
+          listed=$(jq -r '.platforms | keys[]' "release-files/$MANIFEST")
+          echo "$MANIFEST lists: $(tr '\n' ' ' <<< "$listed")"
+          missing=""
+          for target in $required; do
+            echo "$listed" | grep -q -x -F "$target" || missing="$missing $target"
+          done
+          [ -z "$missing" ] || { echo "::error::$MANIFEST has no update for:$missing"; exit 1; }
+      - name: Download the signing records
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: signing-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/signing
+      # Fails on a failed signing or notarization; records "unsigned"
+      # wherever a build carries no platform signature.
+      - name: Signing record and release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+          CHANNEL: ${{ needs.validate-tag.outputs.channel }}
+          SHA: ${{ needs.validate-tag.outputs.sha }}
+          MANIFEST: ${{ needs.validate-tag.outputs.manifest }}
+          MACOS_SIGNING: ${{ needs.prepare.outputs.macos-signing }}
+          NOTES: ${{ needs.prepare.outputs.notes }}
+          RELEASE_ID: ${{ needs.draft.outputs.release-id }}
+        run: |
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          NOTES_FILE="$RUNNER_TEMP/notes.md" tools/release-pipeline/release-meta.sh \
+            "$RUNNER_TEMP/signing" release-files/release-meta.json "$RUNNER_TEMP/release-notes.md"
+          gh release upload "$TAG" release-files/release-meta.json --repo "$GITHUB_REPOSITORY" --clobber
+          # tag_name every time: GitHub detaches a draft from its tag when an
+          # update leaves it out (seen on v0.6.0-alpha.1).
+          tag=$(gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            -f tag_name="$TAG" -F body=@"$RUNNER_TEMP/release-notes.md" --jq .tag_name)
+          [ "$tag" = "$TAG" ] || { echo "::error::the draft has the tag $tag after the update, not $TAG"; exit 1; }
       - name: Attach checksums
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -317,3 +665,69 @@ jobs:
           sha256sum -- * > SHA256SUMS
           sha256sum --check SHA256SUMS
           gh release upload "$TAG" SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+      # The draft as stage B will see it: every required asset, no asset of
+      # the other channel.
+      - name: The draft is complete
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+          PRERELEASE: ${{ needs.validate-tag.outputs.prerelease }}
+          MANIFEST: ${{ needs.validate-tag.outputs.manifest }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' > "$RUNNER_TEMP/assets.txt"
+          tools/release-pipeline/check-assets.sh "$RUNNER_TEMP/assets.txt" --final
+
+  # Stage B precondition: publication needs the "production-release"
+  # environment, still protected as the environment gate requires (a
+  # required reviewer, or tag authority). Otherwise this job fails and
+  # nothing is published. (GitHub creates a named environment,
+  # unprotected, when a job first refers to it — stage A's prepare job may
+  # have done so — so its existence alone proves nothing.)
+  publish-gate:
+    name: Publication gate
+    needs: [validate-tag, environment-gate, verify]
+    if: ${{ always() && needs.validate-tag.result == 'success' && needs.environment-gate.result == 'success' && (needs.verify.result == 'success' || (inputs.publish_only && needs.verify.result == 'skipped')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate-tag.outputs.sha }}
+          persist-credentials: false
+      - name: production-release still authorizes every run and deploys tags v* only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: tools/release-pipeline/check-environment.sh production-release
+
+  # Stage B: after approval, checks the draft's assets again, publishes it
+  # in one update and verifies the published release. The only job that
+  # publishes; re-runnable.
+  publish:
+    name: Publish and verify
+    needs: [validate-tag, environment-gate, publish-gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate-tag.outputs.sha }}
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Publish the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
+          SHA: ${{ needs.validate-tag.outputs.sha }}
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+          CHANNEL: ${{ needs.validate-tag.outputs.channel }}
+          MANIFEST: ${{ needs.validate-tag.outputs.manifest }}
+          PRERELEASE: ${{ needs.validate-tag.outputs.prerelease }}
+        run: WORK="$RUNNER_TEMP/publish" tools/release-pipeline/publish.sh "$TAG"

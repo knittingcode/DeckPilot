@@ -3,7 +3,7 @@
 use std::process::ExitCode;
 
 use deckpilot_agent::autostart::Autostart;
-use deckpilot_agent::{Agent, InstanceLock, LockError, default_options};
+use deckpilot_agent::{Agent, InstanceLock, LockError, STARTUP_LOCK_WAIT, default_options};
 use deckpilot_device::{DeviceModel, models};
 use deckpilot_ipc::AgentPaths;
 use tracing::{error, info};
@@ -15,7 +15,7 @@ const USAGE: &str = "\
 DeckPilot background agent
 
 Usage:
-  deckpilot-agent [--headless] [--mock-devices [<models>]] [--log-level <level>]
+  deckpilot-agent [--headless] [--mock-devices [<models>]] [--no-usb] [--log-level <level>]
   deckpilot-agent autostart <enable|disable|status>
 
 Options:
@@ -23,6 +23,8 @@ Options:
   --mock-devices [<models>]
                       Add simulated devices next to USB devices. <models> is a
                       comma-separated list of mk2, xl and plus (default: mk2)
+  --no-usb            Do not open USB devices, e.g. for tests with simulated
+                      devices while a Stream Deck is plugged in
   --log-level <level> error, warn, info (default), debug or trace
   --version           Print the version
   --help              Print this help
@@ -34,6 +36,8 @@ Environment:
 struct Args {
     headless: bool,
     mock_models: Vec<DeviceModel>,
+    /// Open USB devices through the HID driver (off with `--no-usb`).
+    usb: bool,
     level: LevelFilter,
 }
 
@@ -55,11 +59,13 @@ fn parse_args() -> Result<Result<Args, String>, ExitCode> {
     let mut parsed = Args {
         headless: false,
         mock_models: Vec::new(),
+        usb: true,
         level: LevelFilter::INFO,
     };
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--headless" => parsed.headless = true,
+            "--no-usb" => parsed.usb = false,
             "--mock-devices" => {
                 let list = match args.peek() {
                     Some(next) if !next.starts_with("--") => args.next().unwrap_or_default(),
@@ -174,7 +180,9 @@ fn main() -> ExitCode {
     };
     let _guard = init_logging(&paths, args.level);
 
-    let lock = match InstanceLock::acquire(&paths.lock_file) {
+    // A previous agent may still be finishing its shutdown (a restart or an
+    // update starts the next one as soon as the endpoint closes).
+    let lock = match InstanceLock::acquire_waiting(&paths.lock_file, STARTUP_LOCK_WAIT) {
         Ok(lock) => lock,
         Err(LockError::AlreadyRunning) => {
             info!("the agent is already running");
@@ -185,7 +193,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let options = default_options(paths, &args.mock_models);
+    let options = default_options(paths, &args.mock_models, args.usb);
 
     if args.headless {
         let runtime = match tokio::runtime::Builder::new_multi_thread()

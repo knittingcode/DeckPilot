@@ -16,6 +16,8 @@ const api = {
   importIcon: vi.fn(),
   deleteIcon: vi.fn(),
   pageTree: vi.fn(),
+  listActionTypes: vi.fn(),
+  getGestureDefaults: vi.fn(),
 }
 
 vi.mock("@/lib/api", () => ({
@@ -41,6 +43,7 @@ const plus: DeviceModel = {
     touch: null,
   },
   support: "unverified",
+  verification: [],
 }
 
 const press = (index: number, action: string, appearance?: ControlBinding["appearance"]) =>
@@ -123,6 +126,8 @@ beforeEach(() => {
   api.pageTree.mockResolvedValue({ pages: [], warnings: [] })
   api.listIcons.mockResolvedValue([icon("rocket", "Rocket", 1), icon("star", "Star", 0)])
   api.saveLayout.mockResolvedValue(undefined)
+  api.listActionTypes.mockResolvedValue([])
+  api.getGestureDefaults.mockResolvedValue({ doubleClickMs: 300, longPressMs: 700 })
 })
 afterEach(cleanup)
 
@@ -274,6 +279,20 @@ describe("appearance editor", () => {
       "true",
     )
     expect(panel().queryByRole("alert")).not.toBeInTheDocument()
+  })
+
+  it("says which file was not imported and why", async () => {
+    api.importIcon.mockRejectedValue("the image could not be decoded")
+    const user = renderEditor()
+    await user.click(control("Key 2"))
+    const input = await panel().findByLabelText("Icon file")
+    await user.upload(input, new File(["broken"], "logo.png", { type: "image/png" }))
+    expect(await panel().findByRole("alert")).toHaveTextContent(
+      "“logo.png” was not imported: the image could not be decoded.",
+    )
+    expect(input).toHaveAccessibleDescription(
+      "“logo.png” was not imported: the image could not be decoded.",
+    )
   })
 
   it("carries the appearance when copying keys", async () => {

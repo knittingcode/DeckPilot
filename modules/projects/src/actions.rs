@@ -1,42 +1,70 @@
 //! Action types of the projects module.
 //!
 //! Every type is generic: it works for any project of the profile, chosen
-//! through the optional `project_id` parameter (a stable project id). Leaving
-//! it unset means "the current project", resolved when the action runs. The
+//! through the optional `project_id` parameter (a stable project id, or a
+//! reference to a `projectId` variable such as `shared.projects.favorite`,
+//! which the engine resolves before the handler runs). Leaving it unset
+//! means "the current project", resolved when the action runs. The
 //! module never creates action types or action instances for individual
 //! projects or resources.
 //!
 //! Handlers never change state themselves. Switching actions request a
-//! [`ContextEffect::SelectProject`]; the engine applies it only after checking
-//! that the project belongs to the active profile.
+//! [`ContextEffect::SelectProject`] or [`ContextEffect::CycleProject`]; the
+//! engine applies it only after checking that the project belongs to the
+//! active profile. A cycle is applied against the project active when the
+//! engine applies it, so presses handled one after the other never skip or
+//! repeat a project.
+//!
+//! `projects.next`, `projects.previous` and `projects.active` are
+//! [`deprecated`](ActionType::deprecated): saved actions of these types keep
+//! working, but new ones use `projects.cycle` and `projects.current`.
 
 use deckpilot_core::graph::{ActionEffect, NodeSpec, OutputSpec, ValueKind};
 use deckpilot_core::{
     ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, ContextEffect,
-    CycleDirection, ExecutionContext, KeyFace, ParameterKind, ParameterSpec, Profile, Project,
+    CycleDirection, ExecutionContext, KeyFace, ParameterKind, ParameterSpec, ParameterValue,
+    Profile, Project, ProjectSwitcher,
 };
 
 use crate::resources::{self, DOCUMENTATION_ROLE, REPOSITORY_ROLE};
 
-pub const NEXT: &str = "projects.next";
-pub const PREVIOUS: &str = "projects.previous";
+pub const CYCLE: &str = "projects.cycle";
 pub const SELECT: &str = "projects.select";
-pub const ACTIVE: &str = "projects.active";
+pub const CURRENT: &str = "projects.current";
 pub const REPOSITORY: &str = "projects.repository";
 pub const DOCUMENTATION: &str = "projects.documentation";
 pub const RESOLVE_RESOURCE: &str = "projects.resolve-resource";
+/// Deprecated: `projects.cycle` with direction `next`.
+pub const NEXT: &str = "projects.next";
+/// Deprecated: `projects.cycle` with direction `previous`.
+pub const PREVIOUS: &str = "projects.previous";
+/// Deprecated: `projects.current`.
+pub const ACTIVE: &str = "projects.active";
 
 /// Optional project parameter shared by the project-related types. Unset
 /// means the current project.
 pub const PROJECT_ID: &str = "project_id";
 /// Resource name parameter of `projects.resolve-resource`.
 pub const RESOURCE: &str = "resource";
+/// Direction parameter of `projects.cycle`: [`NEXT_DIRECTION`] or
+/// [`PREVIOUS_DIRECTION`].
+pub const DIRECTION: &str = "direction";
+pub const NEXT_DIRECTION: &str = "next";
+pub const PREVIOUS_DIRECTION: &str = "previous";
 
 /// # Panics
 ///
 /// Never: the identifiers are valid constants.
 fn id(value: &str) -> ActionTypeId {
     ActionTypeId::new(value).expect("projects action type ids are valid")
+}
+
+pub fn cycle_id() -> ActionTypeId {
+    id(CYCLE)
+}
+
+pub fn current_id() -> ActionTypeId {
+    id(CURRENT)
 }
 
 pub fn next_id() -> ActionTypeId {
@@ -67,16 +95,18 @@ pub fn resolve_resource_id() -> ActionTypeId {
     id(RESOLVE_RESOURCE)
 }
 
-/// Handlers for all action types of the module.
+/// Handlers for all action types of the module; the deprecated ones last.
 pub fn handlers(wrap_around: bool) -> Vec<Box<dyn ActionHandler>> {
     vec![
-        Box::new(Step::new(CycleDirection::Next, wrap_around)),
-        Box::new(Step::new(CycleDirection::Previous, wrap_around)),
+        Box::new(Cycle::new(wrap_around)),
         Box::new(Select::new()),
-        Box::new(Active::new()),
+        Box::new(Current::new()),
         Box::new(ProjectResource::repository()),
         Box::new(ProjectResource::documentation()),
         Box::new(ProjectResource::custom()),
+        Box::new(Step::new(CycleDirection::Next, wrap_around)),
+        Box::new(Step::new(CycleDirection::Previous, wrap_around)),
+        Box::new(Active::new()),
     ]
 }
 
@@ -88,6 +118,7 @@ fn action_type(id: ActionTypeId, name: &str, description: &str) -> ActionType {
         category: "Projects".into(),
         parameters: Vec::new(),
         requires_project: false,
+        deprecated: false,
         node: NodeSpec::default(),
     }
 }
@@ -179,8 +210,182 @@ fn with_project_detail(
     }
 }
 
-/// `projects.next` and `projects.previous`: move through the profile's
-/// project order.
+/// One step through the profile's project order, as reported by
+/// `projects.cycle`, `projects.next` and `projects.previous`.
+///
+/// The result names the project the step leads to from the project the
+/// handler sees and requests a [`ContextEffect::CycleProject`]; the engine
+/// steps again from the project active when it applies the effect and
+/// corrects the reported project if that differs. Without projects the
+/// action fails with `no-projects`; with a single project that is already
+/// active it succeeds without changing anything. Without wrap-around the
+/// ends fail with `at-last-project` / `at-first-project`. A deleted active
+/// project starts from the first (or last) project.
+fn cycle(context: &ExecutionContext<'_>, direction: CycleDirection, wrap: bool) -> ActionResult {
+    let (profile, current) = match (context.profile(), context.project()) {
+        (Ok(profile), Ok(project)) => (profile, project),
+        (Err(denied), _) | (_, Err(denied)) => return denied.into(),
+    };
+    if let ([only], Some(current)) = (profile.projects.as_slice(), current)
+        && only.id == current.id
+    {
+        return resources::with_project(
+            ActionResult::success(format!("{} is the only project", current.key)),
+            current,
+        );
+    }
+    let target =
+        match ProjectSwitcher::step(&profile.projects, current.map(|p| p.id), direction, wrap) {
+            Ok(target) => target,
+            Err(error) => return ActionResult::error(error.code(), error.to_string()),
+        };
+    match profile.project(target) {
+        Some(next) => resources::with_project(
+            ActionResult::success(format!("switched to {}", next.key)),
+            next,
+        )
+        .with_effect(ContextEffect::CycleProject {
+            direction,
+            wrap_around: wrap,
+        }),
+        None => ActionResult::error("no-projects", "this profile has no projects"),
+    }
+}
+
+/// The `direction` parameter of `projects.cycle`.
+fn direction_parameter() -> ParameterSpec {
+    ParameterSpec {
+        key: DIRECTION.into(),
+        label: "Direction".into(),
+        description: Some(
+            "Next or previous project in the profile's order. Whether the ends wrap around is \
+             a setting of the Projects module."
+                .into(),
+        ),
+        kind: ParameterKind::Choice {
+            options: vec![NEXT_DIRECTION.into(), PREVIOUS_DIRECTION.into()],
+        },
+        required: true,
+        default: Some(ParameterValue::Choice(NEXT_DIRECTION.into())),
+    }
+}
+
+/// `projects.cycle`: makes the next or previous project of the profile
+/// active, one reusable action for both directions.
+#[derive(Debug)]
+pub struct Cycle {
+    definition: ActionType,
+    wrap_around: bool,
+}
+
+impl Cycle {
+    pub fn new(wrap_around: bool) -> Self {
+        let mut definition = action_type(
+            cycle_id(),
+            "Cycle projects",
+            "Makes the next or previous project of the profile active.",
+        );
+        definition.parameters.push(direction_parameter());
+        // Cycling twice moves two projects on: neither idempotent nor safe to retry.
+        definition.node = node(project_outputs(), true, false);
+        Self {
+            definition,
+            wrap_around,
+        }
+    }
+}
+
+impl ActionHandler for Cycle {
+    fn definition(&self) -> &ActionType {
+        &self.definition
+    }
+
+    fn execute(
+        &self,
+        parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> ActionResult {
+        let direction = match parameters.text(DIRECTION) {
+            None | Some(NEXT_DIRECTION) => CycleDirection::Next,
+            Some(PREVIOUS_DIRECTION) => CycleDirection::Previous,
+            Some(_) => {
+                return ActionResult::error("invalid-parameters", "unknown direction");
+            }
+        };
+        cycle(context, direction, self.wrap_around)
+    }
+
+    fn decorate_face(
+        &self,
+        face: KeyFace,
+        parameters: &ActionParameters,
+        template: &str,
+        project: Option<&Project>,
+    ) -> KeyFace {
+        with_project_detail(face, parameters, template, project)
+    }
+}
+
+/// `projects.current`: reports the current project — its id, key and name
+/// and the profile it belongs to — e.g. as the first step of a workflow or
+/// as a key that always shows it. Never changes state. In a workflow the
+/// current project is the run's own project.
+#[derive(Debug)]
+pub struct Current(ActionType);
+
+impl Current {
+    pub fn new() -> Self {
+        let mut definition = action_type(
+            current_id(),
+            "Current project",
+            "Reports the current project of the profile.",
+        );
+        let mut outputs = project_outputs();
+        outputs.push(output("profileId", "Profile id", ValueKind::Text));
+        definition.node = node(outputs, false, true);
+        Self(definition)
+    }
+}
+
+impl Default for Current {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ActionHandler for Current {
+    fn definition(&self) -> &ActionType {
+        &self.0
+    }
+
+    fn execute(&self, _: &ActionParameters, context: &ExecutionContext<'_>) -> ActionResult {
+        let (profile, project) = match (context.profile(), context.project()) {
+            (Ok(profile), Ok(project)) => (profile, project),
+            (Err(denied), _) | (_, Err(denied)) => return denied.into(),
+        };
+        match project {
+            Some(project) => resources::with_project(
+                ActionResult::success(format!("{} ({})", project.key, project.name)),
+                project,
+            )
+            .with_data("profileId", profile.id.to_string()),
+            None => ActionResult::error("no-active-project", "no project is active"),
+        }
+    }
+
+    fn decorate_face(
+        &self,
+        face: KeyFace,
+        parameters: &ActionParameters,
+        template: &str,
+        project: Option<&Project>,
+    ) -> KeyFace {
+        with_project_detail(face, parameters, template, project)
+    }
+}
+
+/// `projects.next` and `projects.previous` (deprecated, see
+/// [`Cycle`]): move through the profile's project order.
 #[derive(Debug)]
 pub struct Step {
     definition: ActionType,
@@ -205,6 +410,7 @@ impl Step {
         // Cycling twice moves two projects on: neither idempotent nor safe to retry.
         let definition = ActionType {
             node: node(project_outputs(), true, false),
+            deprecated: true,
             ..definition
         };
         Self {
@@ -221,27 +427,7 @@ impl ActionHandler for Step {
     }
 
     fn execute(&self, _: &ActionParameters, context: &ExecutionContext<'_>) -> ActionResult {
-        let (profile, project) = match (context.profile(), context.project()) {
-            (Ok(profile), Ok(project)) => (profile, project),
-            (Err(denied), _) | (_, Err(denied)) => return denied.into(),
-        };
-        let target = match crate::switching::step(
-            profile,
-            project.map(|p| p.id),
-            self.direction,
-            self.wrap_around,
-        ) {
-            Ok(target) => target,
-            Err(error) => return ActionResult::error(error.code(), error.to_string()),
-        };
-        match profile.project(target) {
-            Some(next) => resources::with_project(
-                ActionResult::success(format!("switched to {}", next.key)),
-                next,
-            )
-            .with_effect(ContextEffect::SelectProject { project: target }),
-            None => ActionResult::error("no-projects", "this profile has no projects"),
-        }
+        cycle(context, self.direction, self.wrap_around)
     }
 
     fn decorate_face(
@@ -324,8 +510,8 @@ impl ActionHandler for Select {
     }
 }
 
-/// `projects.active`: reports the active project, e.g. as the first step of a
-/// workflow or as a key that always shows it. Never changes state.
+/// `projects.active` (deprecated, see [`Current`]): reports the active
+/// project. Never changes state.
 #[derive(Debug)]
 pub struct Active(ActionType);
 
@@ -337,6 +523,7 @@ impl Active {
             "Reports the active project of the profile.",
         );
         definition.node = node(project_outputs(), false, true);
+        definition.deprecated = true;
         Self(definition)
     }
 }
@@ -580,15 +767,25 @@ mod tests {
         assert_eq!(
             ids,
             [
-                NEXT,
-                PREVIOUS,
+                CYCLE,
                 SELECT,
-                ACTIVE,
+                CURRENT,
                 REPOSITORY,
                 DOCUMENTATION,
-                RESOLVE_RESOURCE
+                RESOLVE_RESOURCE,
+                NEXT,
+                PREVIOUS,
+                ACTIVE,
             ]
         );
+        // Next, previous and active are replaced by cycle and current: kept
+        // for saved actions, not offered for new ones.
+        let deprecated: Vec<_> = handlers(true)
+            .iter()
+            .filter(|h| h.definition().deprecated)
+            .map(|h| h.definition().id.to_string())
+            .collect();
+        assert_eq!(deprecated, [NEXT, PREVIOUS, ACTIVE]);
         // Projects are parameters, never part of a type; the project is
         // optional everywhere and defaults to the current one.
         for handler in handlers(true) {
@@ -597,6 +794,143 @@ mod tests {
                 assert!(!spec.required, "{}", definition.id);
             }
         }
+    }
+
+    fn direction(value: &str) -> ActionParameters {
+        ActionParameters::new().with(DIRECTION, ParameterValue::Choice(value.into()))
+    }
+
+    #[test]
+    fn cycle_moves_in_either_direction_and_wraps() {
+        let cycle = Cycle::new(true);
+        let result = run(&cycle, &ActionParameters::new(), Some(0));
+        // Next is the default direction.
+        assert_eq!(result.data["projectKey"], "CMR");
+        assert_eq!(result.message, "switched to CMR");
+        assert_eq!(
+            result.effects,
+            vec![ContextEffect::CycleProject {
+                direction: CycleDirection::Next,
+                wrap_around: true,
+            }]
+        );
+        assert_eq!(
+            run(&cycle, &direction(NEXT_DIRECTION), Some(2)).data["projectKey"],
+            "SHOP"
+        );
+        let back = run(&cycle, &direction(PREVIOUS_DIRECTION), Some(0));
+        assert_eq!(back.data["projectKey"], "CMS");
+        assert_eq!(
+            back.effects,
+            vec![ContextEffect::CycleProject {
+                direction: CycleDirection::Previous,
+                wrap_around: true,
+            }]
+        );
+        // Without an active project (e.g. it was deleted) the first one
+        // follows.
+        assert_eq!(
+            run(&cycle, &ActionParameters::new(), None).data["projectKey"],
+            "SHOP"
+        );
+        assert!(
+            cycle
+                .definition()
+                .normalize(&direction("sideways"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn cycle_follows_the_wrap_setting() {
+        let cycle = Cycle::new(false);
+        let last = run(&cycle, &ActionParameters::new(), Some(2));
+        assert_eq!(last.code.as_deref(), Some("at-last-project"));
+        assert_eq!(last.effects, Vec::new());
+        let first = run(&cycle, &direction(PREVIOUS_DIRECTION), Some(0));
+        assert_eq!(first.code.as_deref(), Some("at-first-project"));
+        assert_eq!(
+            run(&cycle, &ActionParameters::new(), Some(1)).effects,
+            vec![ContextEffect::CycleProject {
+                direction: CycleDirection::Next,
+                wrap_around: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn cycle_without_projects_fails_and_with_one_changes_nothing() {
+        let machine = MachineConfig::new(Os::Linux);
+        let empty = Profile::new("Empty");
+        let cycle = Cycle::new(true);
+        let result = run_in(&empty, &machine, &cycle, &ActionParameters::new(), None);
+        assert!(!result.is_success());
+        assert_eq!(result.code.as_deref(), Some("no-projects"));
+        assert_eq!(result.effects, Vec::new());
+
+        let mut single = Profile::new("Single");
+        single
+            .projects
+            .push(Project::new(ProjectKey::new("ONE").unwrap(), "One"));
+        for wrap in [true, false] {
+            for value in [NEXT_DIRECTION, PREVIOUS_DIRECTION] {
+                let result = run_in(
+                    &single,
+                    &machine,
+                    &Cycle::new(wrap),
+                    &direction(value),
+                    Some(0),
+                );
+                assert!(result.is_success(), "{}", result.message);
+                assert_eq!(result.message, "ONE is the only project");
+                assert_eq!(result.data["projectKey"], "ONE");
+                assert_eq!(result.effects, Vec::new());
+            }
+        }
+        // A single project that is not active yet becomes active.
+        let result = run_in(&single, &machine, &cycle, &ActionParameters::new(), None);
+        assert_eq!(result.data["projectKey"], "ONE");
+        assert_eq!(result.effects.len(), 1);
+    }
+
+    #[test]
+    fn current_reports_typed_project_outputs() {
+        let (profile, machine) = fixture();
+        let current = Current::new();
+        let result = run_in(
+            &profile,
+            &machine,
+            &current,
+            &ActionParameters::new(),
+            Some(1),
+        );
+        assert!(result.is_success());
+        assert_eq!(result.message, "CMR (CMR)");
+        assert_eq!(result.effects, Vec::new());
+        assert_eq!(result.data["projectId"], profile.projects[1].id.to_string());
+        assert_eq!(result.data["projectKey"], "CMR");
+        assert_eq!(result.data["projectName"], "CMR");
+        assert_eq!(result.data["profileId"], profile.id.to_string());
+        // Every declared output is set, with its kind.
+        let outputs = &current.definition().node.outputs;
+        for output in outputs {
+            assert!(result.data.contains_key(&output.key), "{}", output.key);
+            assert!(output.always);
+        }
+        let kinds: Vec<_> = outputs.iter().map(|o| (o.key.as_str(), o.kind)).collect();
+        assert_eq!(
+            kinds,
+            [
+                ("projectId", ValueKind::Text),
+                ("projectKey", ValueKind::ProjectKey),
+                ("projectName", ValueKind::Text),
+                ("profileId", ValueKind::Text),
+            ]
+        );
+        assert!(!current.definition().node.changes_context);
+
+        let none = run_in(&profile, &machine, &current, &ActionParameters::new(), None);
+        assert_eq!(none.code.as_deref(), Some("no-active-project"));
     }
 
     #[test]

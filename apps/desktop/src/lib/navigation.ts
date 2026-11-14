@@ -136,14 +136,18 @@ export function sanitize(
   return withWorkspace({ entries: kept, index, workspace })
 }
 
+/** Former workspace pages that are now part of Settings › Devices. */
+const MOVED_TO_DEVICES = new Set(["devices", "models"])
+
 /** Translates a page reference from an event or older state. */
 export function locationOf(reference: string): Location {
   if (reference === "settings") return { mode: "settings", page: DEFAULT_SETTINGS_PAGE }
   if (reference.startsWith("settings:")) {
     return { mode: "settings", page: reference.slice("settings:".length) }
   }
-  // Connected devices moved from the workspace to the settings.
-  if (reference === "devices") return { mode: "settings", page: "devices" }
+  // Connected devices and the device models moved from the workspace to
+  // the settings.
+  if (MOVED_TO_DEVICES.has(reference)) return { mode: "settings", page: "devices" }
   return { mode: "workspace", page: reference }
 }
 
@@ -173,7 +177,7 @@ export function loadNavigation(storage: Pick<Storage, "getItem"> | null): Naviga
     const stored = typeof value.index === "number" ? value.index : entries.length - 1
     const index = Math.min(Math.max(0, Math.trunc(stored) - dropped), kept.length - 1)
     const workspace =
-      typeof value.workspace === "string" && value.workspace !== "devices"
+      typeof value.workspace === "string" && !MOVED_TO_DEVICES.has(value.workspace)
         ? value.workspace
         : DEFAULT_WORKSPACE_PAGE
     return withWorkspace({ entries: kept, index, workspace })

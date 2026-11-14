@@ -61,6 +61,7 @@ impl Echo {
             category: "Test".into(),
             parameters: vec![text("message", true)],
             requires_project: false,
+            deprecated: false,
             node: crate::graph::NodeSpec::default(),
         })
     }
@@ -133,6 +134,7 @@ impl Select {
                 default: None,
             }],
             requires_project: false,
+            deprecated: false,
             node: crate::graph::NodeSpec {
                 changes_context: true,
                 ..crate::graph::NodeSpec::default()
@@ -207,6 +209,7 @@ impl ActionHandler for Noop {
 
 pub(crate) struct TestModule {
     manifest: ModuleManifest,
+    source: Option<std::sync::Arc<dyn crate::variables::VariableSource>>,
 }
 
 impl TestModule {
@@ -230,6 +233,7 @@ impl TestModule {
             portability: crate::Portability::default(),
             migrations: Vec::new(),
             windows: Vec::new(),
+            variables: Vec::new(),
         }
     }
 
@@ -243,7 +247,10 @@ impl TestModule {
             size: crate::WindowSize::Medium,
             blocking: false,
         }];
-        Self { manifest }
+        Self {
+            manifest,
+            source: None,
+        }
     }
 
     /// Module `test-extra`, Linux only, depending on `test`.
@@ -251,18 +258,33 @@ impl TestModule {
         let mut manifest = Self::manifest("test-extra", "Extra", "Extra", 10);
         manifest.platforms = vec![Os::Linux];
         manifest.dependencies = vec![ModuleId::new("test").unwrap()];
-        Self { manifest }
+        Self {
+            manifest,
+            source: None,
+        }
     }
 
     /// Module `other` that wrongly provides `test.echo`.
     pub(crate) fn outside_namespace() -> Self {
         Self {
             manifest: Self::manifest("other", "Other", "Other", 30),
+            source: None,
         }
     }
 }
 
 impl TestModule {
+    /// Declares `variables`, resolved by `source`.
+    pub(crate) fn with_variables(
+        mut self,
+        variables: Vec<crate::variables::VariableDeclaration>,
+        source: Option<std::sync::Arc<dyn crate::variables::VariableSource>>,
+    ) -> Self {
+        self.manifest.variables = variables;
+        self.source = source;
+        self
+    }
+
     /// Declares a window with `id`, which may be outside the namespace.
     pub(crate) fn set_window(&mut self, id: &str) {
         self.manifest.windows = vec![crate::ModuleWindow {
@@ -279,6 +301,10 @@ impl FeatureModule for TestModule {
         &self.manifest
     }
 
+    fn variable_source(&self) -> Option<std::sync::Arc<dyn crate::variables::VariableSource>> {
+        self.source.clone()
+    }
+
     fn action_handlers(&self, _config: &ActionParameters) -> Vec<Box<dyn ActionHandler>> {
         match self.manifest.id.as_str() {
             "test-extra" => vec![Box::new(Noop(ActionType {
@@ -288,6 +314,7 @@ impl FeatureModule for TestModule {
                 category: "Test".into(),
                 parameters: Vec::new(),
                 requires_project: false,
+                deprecated: false,
                 node: crate::graph::NodeSpec::default(),
             }))],
             "other" => vec![Box::new(Echo::new())],

@@ -6,6 +6,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::variables::{ExpressionPart, VariableRef, VariableType, parse_expression};
 use crate::{ActionInstanceId, IdentifierError, ProjectId, ResourceKind, ResourceRef};
 
 /// Identifier of an action type, e.g. `projects.next`. The first segment is
@@ -158,6 +159,12 @@ pub struct ParameterSpec {
 }
 
 /// A configured parameter value.
+///
+/// The first six variants are literals. [`ParameterValue::Reference`] and
+/// [`ParameterValue::Template`] are resolved when the action runs (see
+/// `docs/action-architecture.md`); handlers only ever receive literals.
+/// Literal text is never parsed: a [`ParameterValue::Text`] containing
+/// `{{` stays exactly that text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum ParameterValue {
@@ -167,6 +174,32 @@ pub enum ParameterValue {
     Choice(String),
     Resource(ResourceRef),
     Project(ProjectId),
+    /// The whole value comes from one reference and keeps its native type,
+    /// e.g. a `projectId` shared variable for a project parameter. Stored
+    /// without braces: `shared.projects.favorite`.
+    Reference(VariableRef),
+    /// Text with `{{ … }}` references, for text kinds only, e.g.
+    /// `cd {{ shared.paths.root }}`. Each reference is rendered as text.
+    Template(String),
+}
+
+impl ParameterValue {
+    /// Whether the value is used as it is, without resolving anything.
+    pub fn is_literal(&self) -> bool {
+        !matches!(self, Self::Reference(_) | Self::Template(_))
+    }
+
+    /// The references the value depends on, in order. An invalid template
+    /// has none (it does not pass [`ActionType::normalize`]).
+    pub fn references(&self) -> Vec<VariableRef> {
+        match self {
+            Self::Reference(reference) => vec![reference.clone()],
+            Self::Template(template) => {
+                crate::variables::references_in_expression(template).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        }
+    }
 }
 
 /// Parameter values of an action instance, keyed by [`ParameterSpec::key`].
@@ -240,6 +273,21 @@ impl ActionParameters {
         }
     }
 
+    /// Whether every value is a literal, i.e. nothing is left to resolve.
+    pub fn is_resolved(&self) -> bool {
+        self.0.values().all(ParameterValue::is_literal)
+    }
+
+    /// Every reference of every value, with the parameter it is in.
+    pub fn references(&self) -> impl Iterator<Item = (&str, VariableRef)> + '_ {
+        self.0.iter().flat_map(|(key, value)| {
+            value
+                .references()
+                .into_iter()
+                .map(move |reference| (key.as_str(), reference))
+        })
+    }
+
     /// Every project referenced by a parameter value.
     pub fn projects(&self) -> impl Iterator<Item = ProjectId> + '_ {
         self.0.values().filter_map(|value| match value {
@@ -297,6 +345,10 @@ pub struct ActionType {
     /// How the action behaves as a workflow node.
     #[serde(default)]
     pub node: crate::graph::NodeSpec,
+    /// Replaced by another type: saved actions, workflow nodes and keys of
+    /// this type keep working, but the type is not offered for new ones.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deprecated: bool,
 }
 
 impl ActionType {
@@ -339,6 +391,8 @@ fn check_value(spec: &ParameterSpec, value: &ParameterValue) -> Result<(), Param
     let key = || spec.key.clone();
     let invalid = |reason: String| ParameterError::Invalid { key: key(), reason };
     match (&spec.kind, value) {
+        (kind, ParameterValue::Reference(reference)) => check_reference(spec, kind, reference),
+        (kind, ParameterValue::Template(template)) => check_template(spec, kind, template),
         (
             ParameterKind::Text { max_length, .. } | ParameterKind::Code { max_length, .. },
             ParameterValue::Text(text),
@@ -418,6 +472,93 @@ fn check_value(spec: &ParameterSpec, value: &ParameterValue) -> Result<(), Param
             },
         }),
     }
+}
+
+/// The type a reference is known to have before it is resolved: system
+/// variables (and their aliases) have a fixed type; shared and module
+/// variables are checked when they are resolved (their definitions live in
+/// the store and the module registry); node outputs are text, converted to
+/// the parameter's kind as mapped values are.
+fn static_type(reference: &VariableRef) -> Option<VariableType> {
+    match reference {
+        VariableRef::System(variable) => Some(variable.value_type()),
+        VariableRef::Shared(_) | VariableRef::Step(_) | VariableRef::Module(_) => None,
+    }
+}
+
+/// A whole-value reference fits any kind its type can be assigned to
+/// ([`VariableType::assignable_to`]). Constraints such as ranges and
+/// choices are checked on the resolved value.
+fn check_reference(
+    spec: &ParameterSpec,
+    kind: &ParameterKind,
+    reference: &VariableRef,
+) -> Result<(), ParameterError> {
+    let invalid = |reason: String| ParameterError::Invalid {
+        key: spec.key.clone(),
+        reason,
+    };
+    if matches!(reference, VariableRef::Step(_)) && matches!(kind, ParameterKind::Resource { .. }) {
+        return Err(invalid(format!(
+            "{{{{ {reference} }}}} is a node output and cannot fill a resource"
+        )));
+    }
+    match static_type(reference) {
+        Some(found) if !found.assignable_to(kind) => Err(invalid(format!(
+            "{{{{ {reference} }}}} holds {} values, which cannot fill this parameter",
+            found.name()
+        ))),
+        _ => Ok(()),
+    }
+}
+
+/// A template fills text kinds only, and every reference in it must render
+/// as text. Lengths and line rules are checked on the rendered text.
+fn check_template(
+    spec: &ParameterSpec,
+    kind: &ParameterKind,
+    template: &str,
+) -> Result<(), ParameterError> {
+    let invalid = |reason: String| ParameterError::Invalid {
+        key: spec.key.clone(),
+        reason,
+    };
+    if !is_text_kind(kind) {
+        return Err(invalid(
+            "a template with references can only fill a text parameter".into(),
+        ));
+    }
+    if spec.required && template.trim().is_empty() {
+        return Err(ParameterError::Missing(spec.key.clone()));
+    }
+    let parts = parse_expression(template).map_err(|error| invalid(error.to_string()))?;
+    for part in parts {
+        if let ExpressionPart::Reference(reference) = part
+            && let Some(found) = static_type(&reference)
+            && matches!(
+                found,
+                VariableType::SecretRef | VariableType::Resource { .. }
+            )
+        {
+            return Err(invalid(format!(
+                "{{{{ {reference} }}}} holds {} values, which cannot be part of text",
+                found.name()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The kinds stored as text that a template may fill (not credentials,
+/// which are names).
+fn is_text_kind(kind: &ParameterKind) -> bool {
+    matches!(
+        kind,
+        ParameterKind::Text { .. }
+            | ParameterKind::Lines { .. }
+            | ParameterKind::Pairs { .. }
+            | ParameterKind::Code { .. }
+    )
 }
 
 fn check_lines(
@@ -614,6 +755,7 @@ mod tests {
                 },
             ],
             requires_project: false,
+            deprecated: false,
             node: crate::graph::NodeSpec::default(),
         }
     }
@@ -702,6 +844,7 @@ mod structured_text_tests {
                 default: None,
             }],
             requires_project: false,
+            deprecated: false,
             node: crate::graph::NodeSpec::default(),
         }
     }
@@ -782,5 +925,273 @@ mod structured_text_tests {
         // Stored values stay plain text, as before.
         let json = serde_json::to_value(ParameterKind::Credential).unwrap();
         assert_eq!(json, serde_json::json!({"type": "credential"}));
+    }
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+    use crate::variables::{SystemVariable, VariableKey};
+
+    fn spec(key: &str, kind: ParameterKind, required: bool) -> ParameterSpec {
+        ParameterSpec {
+            key: key.into(),
+            label: key.into(),
+            description: None,
+            kind,
+            required,
+            default: None,
+        }
+    }
+
+    fn action_type() -> ActionType {
+        ActionType {
+            id: ActionTypeId::new("test.references").unwrap(),
+            name: "Test".into(),
+            description: String::new(),
+            category: String::new(),
+            parameters: vec![
+                spec(
+                    "text",
+                    ParameterKind::Text {
+                        multiline: false,
+                        max_length: Some(3),
+                    },
+                    false,
+                ),
+                spec(
+                    "count",
+                    ParameterKind::Integer {
+                        min: None,
+                        max: None,
+                    },
+                    false,
+                ),
+                spec("project", ParameterKind::Project, false),
+                spec("target", ParameterKind::Resource { kind: None }, false),
+                spec("token", ParameterKind::Credential, false),
+                spec(
+                    "mode",
+                    ParameterKind::Choice {
+                        options: vec!["a".into()],
+                    },
+                    false,
+                ),
+                spec(
+                    "required",
+                    ParameterKind::Text {
+                        multiline: false,
+                        max_length: None,
+                    },
+                    true,
+                ),
+            ],
+            requires_project: false,
+            deprecated: false,
+            node: crate::graph::NodeSpec::default(),
+        }
+    }
+
+    fn reference(text: &str) -> ParameterValue {
+        ParameterValue::Reference(VariableRef::parse(text).unwrap())
+    }
+
+    fn template(text: &str) -> ParameterValue {
+        ParameterValue::Template(text.into())
+    }
+
+    fn check(key: &str, value: ParameterValue) -> Result<ActionParameters, Vec<ParameterError>> {
+        let parameters = ActionParameters::new()
+            .with("required", ParameterValue::Text("x".into()))
+            .with(key, value);
+        action_type().normalize(&parameters)
+    }
+
+    fn error(key: &str, value: ParameterValue) -> String {
+        check(key, value).unwrap_err()[0].to_string()
+    }
+
+    #[test]
+    fn serialize_as_documented() {
+        let value = reference("shared.projects.favorite");
+        let json = serde_json::to_value(&value).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"type": "reference", "value": "shared.projects.favorite"})
+        );
+        assert_eq!(
+            serde_json::from_value::<ParameterValue>(json).unwrap(),
+            value
+        );
+        let value = template("cd {{ shared.paths.root }}");
+        let json = serde_json::to_value(&value).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"type": "template", "value": "cd {{ shared.paths.root }}"})
+        );
+        assert_eq!(
+            serde_json::from_value::<ParameterValue>(json).unwrap(),
+            value
+        );
+        // Spaces around a reference are not part of it.
+        let spaced: ParameterValue = serde_json::from_value(
+            serde_json::json!({"type": "reference", "value": " system.platform "}),
+        )
+        .unwrap();
+        assert_eq!(spaced, reference("system.platform"));
+        // An invalid reference is not a value at all.
+        for invalid in [
+            "{{ shared.a.b }}",
+            "shared.x",
+            "env.home",
+            "env.HOME",
+            "steps.x",
+            "system.nope",
+        ] {
+            assert!(
+                serde_json::from_value::<ParameterValue>(
+                    serde_json::json!({"type": "reference", "value": invalid})
+                )
+                .is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    /// The app's mirror of [`ParameterValue`].
+    const FRONTEND_TYPES: &str = include_str!("../../../apps/desktop/src/lib/types.ts");
+
+    #[test]
+    fn the_frontend_mirrors_the_new_values() {
+        let union = FRONTEND_TYPES
+            .split("export type ParameterValue =")
+            .nth(1)
+            .and_then(|rest| rest.split("export type").next())
+            .unwrap_or_default();
+        for value in [reference("system.platform"), template("")] {
+            let json = serde_json::to_value(value).unwrap();
+            let name = json["type"].as_str().unwrap();
+            assert!(
+                union.contains(&format!("type: \"{name}\"")),
+                "types.ts lacks {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn literal_text_with_braces_stays_literal() {
+        let text = ParameterValue::Text("{{ shared.a.b }}".into());
+        assert!(text.is_literal());
+        assert_eq!(text.references(), Vec::new());
+        let parameters = ActionParameters::new().with(
+            "required",
+            ParameterValue::Text("{{ not a reference".into()),
+        );
+        let normalized = action_type().normalize(&parameters).unwrap();
+        assert_eq!(normalized.text("required"), Some("{{ not a reference"));
+        assert!(normalized.is_resolved());
+        // An old document decodes to literal text.
+        let old: ActionParameters = serde_json::from_str(
+            r#"{"required": {"type": "text", "value": "echo {{ steps.a.output.b }}"}}"#,
+        )
+        .unwrap();
+        assert!(old.is_resolved());
+        assert_eq!(old.references().count(), 0);
+    }
+
+    #[test]
+    fn references_are_listed_and_never_read_as_literals() {
+        let parameters = ActionParameters::new()
+            .with("project", reference("shared.projects.favorite"))
+            .with(
+                "required",
+                template("{{ system.project.current.key }}-{{ steps.a.output.b }}"),
+            );
+        assert!(!parameters.is_resolved());
+        let found: Vec<(String, String)> = parameters
+            .references()
+            .map(|(key, reference)| (key.to_owned(), reference.to_string()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("project".into(), "shared.projects.favorite".into()),
+                ("required".into(), "system.project.current.key".into()),
+                ("required".into(), "steps.a.output.b".into()),
+            ]
+        );
+        // Accessors return literals only: a handler never mistakes a
+        // reference for its value.
+        assert_eq!(parameters.project("project"), None);
+        assert_eq!(parameters.text("required"), None);
+        assert_eq!(parameters.projects().count(), 0);
+    }
+
+    #[test]
+    fn whole_value_references_need_an_assignable_type() {
+        // Shared variables are typed by their definition, checked later.
+        for key in ["text", "count", "project", "target", "token", "mode"] {
+            assert!(check(key, reference("shared.any.value")).is_ok(), "{key}");
+        }
+        // System variables have a known type.
+        assert!(check("project", reference("system.project.current.id")).is_ok());
+        assert!(check("text", reference("system.project.current.id")).is_ok());
+        assert!(check("mode", reference("system.platform")).is_ok());
+        assert!(
+            error("count", reference("system.project.current.key")).contains("holds string values")
+        );
+        assert!(error("project", reference("system.profile.current.id")).contains("profileId"));
+        assert!(error("target", reference("system.platform")).contains("cannot fill"));
+        // Node outputs are text converted like mapped values; never a resource.
+        assert!(check("count", reference("steps.a.output.n")).is_ok());
+        assert!(error("target", reference("steps.a.output.n")).contains("node output"));
+        // Constraints wait for the value: a reference may fill a text
+        // parameter whose limit is shorter than the reference.
+        assert!(check("text", reference("system.project.current.name")).is_ok());
+        // A required parameter is satisfied by a reference.
+        let parameters = ActionParameters::new().with("required", reference("shared.paths.root"));
+        assert!(action_type().normalize(&parameters).is_ok());
+    }
+
+    #[test]
+    fn templates_fill_text_kinds_only() {
+        assert!(check("required", template("cd {{ shared.paths.root }}")).is_ok());
+        assert!(check("text", template("{{ system.project.current.name }} long")).is_ok());
+        for key in ["count", "project", "target", "token", "mode"] {
+            assert!(
+                error(key, template("{{ shared.a.b }}")).contains("text parameter"),
+                "{key}"
+            );
+        }
+        assert!(error("required", template("{{ shared.a.b")).contains("not closed"));
+        assert!(error("required", template("{{ env.home }}")).contains("not a reference"));
+        assert_eq!(
+            check("required", template("  ")).unwrap_err(),
+            vec![ParameterError::Missing("required".into())]
+        );
+        // Text without references is still a valid template.
+        assert!(check("required", template("plain")).is_ok());
+    }
+
+    #[test]
+    fn defaults_may_be_references() {
+        let mut action_type = action_type();
+        action_type.parameters[2].default = Some(ParameterValue::Reference(VariableRef::System(
+            SystemVariable::ProjectCurrentId,
+        )));
+        let parameters = ActionParameters::new().with("required", ParameterValue::Text("x".into()));
+        let normalized = action_type.normalize(&parameters).unwrap();
+        assert_eq!(
+            normalized.get("project"),
+            Some(&ParameterValue::Reference(VariableRef::System(
+                SystemVariable::ProjectCurrentId
+            )))
+        );
+        assert_eq!(
+            ParameterValue::Reference(VariableRef::Shared(VariableKey::new("a.b").unwrap()))
+                .references()
+                .len(),
+            1
+        );
     }
 }

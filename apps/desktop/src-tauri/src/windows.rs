@@ -324,7 +324,9 @@ pub fn open<R: Runtime>(app: &AppHandle<R>, spec: &WindowSpec) -> Result<(), Win
     let work = target_monitor(app).map_or(FALLBACK_WORK_AREA, |m| logical_work_area(&m));
     let size = fit_size(limits.min, limits, work);
     let (x, y) = place(size, work, None);
-    let url = WebviewUrl::App(format!("index.html?window={}", spec.id).into());
+    let page = format!("index.html?window={}", spec.id);
+    let url = crate::dev_server::fallback_url(app.config(), &page)
+        .unwrap_or_else(|| WebviewUrl::App(page.into()));
     let mut builder = WebviewWindowBuilder::new(app, &label, url)
         .title(&spec.title)
         .inner_size(size.0, size.1)
@@ -543,6 +545,7 @@ mod tests {
                     size: WindowSize::Large,
                     blocking: false,
                 }],
+                variables: Vec::new(),
             })))
             .unwrap();
         registry
