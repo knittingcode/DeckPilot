@@ -18,6 +18,8 @@ const api = {
   reorderPages: vi.fn(),
   movePage: vi.fn(),
   copyPage: vi.fn(),
+  listActionTypes: vi.fn(),
+  getGestureDefaults: vi.fn(),
 }
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn() }))
 
@@ -41,6 +43,7 @@ const plus: DeviceModel = {
     touch: { zones: 4, image: null, gestures: ["tap"] },
   },
   support: "unverified",
+  verification: [],
 }
 
 const main: DeviceLayout = {
@@ -129,6 +132,8 @@ beforeEach(() => {
   for (const fn of Object.values(toast)) fn.mockReset()
   api.previewLayout.mockResolvedValue([])
   api.listIcons.mockResolvedValue([])
+  api.listActionTypes.mockResolvedValue([])
+  api.getGestureDefaults.mockResolvedValue({ doubleClickMs: 300, longPressMs: 700 })
   api.pageTree.mockImplementation((layout: DeviceLayout) => Promise.resolve(fakeTree(layout)))
 })
 afterEach(cleanup)
