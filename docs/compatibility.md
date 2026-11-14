@@ -10,11 +10,13 @@ page says what happens then and how it is tested.
 
 | Build | App/agent version | IPC protocol | Database schema |
 | ----- | ----------------- | ------------ | --------------- |
-| Draft prereleases `v0.5.0-1`, `v0.5.0-2` (signed test builds, never published) | 0.5.0-1, 0.5.0-2 | 4 | 5 |
-| Current main (becomes 0.6.0) | see `Cargo.toml` | 6 | 7 |
+| Tag `v0.5.0-2` (signed draft test build, never published) | 0.5.0-2 | 4 | 5 |
+| Current main (0.6.0 pre-releases) | see `Cargo.toml` | 9 | 9 |
 
-DeckPilot 0.5.0 was never published: it exists only as the two draft
-prereleases above. "0.5.0" in this page means those builds.
+DeckPilot 0.5.0 was never published. Its two draft prereleases (0.5.0-1
+and 0.5.0-2) have since been deleted; only the tag `v0.5.0-2` remains, as
+the compatibility baseline that `tools/compat/matrix.sh` builds. "0.5.0" in
+this page means that build.
 
 ## Protocol negotiation
 
@@ -26,7 +28,8 @@ prereleases above. "0.5.0" in this page means those builds.
 - What a connection can do is a list of **capabilities** derived from that
   protocol (`Capability::of_protocol`): `workflows` and `prepareForUpdate`
   (2), `moduleNamespaces` (3), `encryptedDatabase` (4),
-  `backgroundExecutions` (5), `notifications` (6). Agents from protocol 6
+  `backgroundExecutions` (5), `notifications` (6), `variables` (7),
+  `workSession` (8), `variableRegistry` (9). Agents from protocol 6
   also list them in `welcome`; the client never credits an agent with more
   than its protocol has.
 - **No unsupported requests.** Every request has the protocol that
@@ -59,16 +62,18 @@ recognised with its new version, protocol and capabilities.
 
 "Real" means the actual binaries of both versions; "simulated" means a test
 peer that behaves like the other version, using messages recorded from the
-real binary (`crates/deckpilot-ipc/tests/fixtures/`).
+real binary (`crates/deckpilot-ipc/tests/fixtures/`). Results marked
+*measured before 0.6.0-alpha.2* were recorded when main spoke protocol 6
+with schema 7 and have not been recorded again for protocol 9 and schema 9.
 
 | Case | How it is tested | Result |
 | ---- | ---------------- | ------ |
 | 0.5.0 app/client with 0.5.0 agent | real (`tools/compat/matrix.sh`) | works (protocol 4) |
-| 0.6.0 client with 0.6.0 agent | real (matrix), agent and desktop tests | works (protocol 6) |
-| 0.6.0 client with 0.5.0 agent | real (matrix: `real_agent` test against the running 0.5.0-2 agent); simulated (`peers` tests) | negotiates protocol 4 after refused `hello` 6 and 5; status read; `listExecutions` refused locally and never sent |
+| 0.6.0 client with 0.6.0 agent | real (matrix), agent and desktop tests | works (protocol 6; measured before 0.6.0-alpha.2) |
+| 0.6.0 client with 0.5.0 agent | real (matrix: `real_agent` test against the running 0.5.0-2 agent); simulated (`peers` tests) | negotiates protocol 4 after refused `hello` 6 and 5; status read; `listExecutions` refused locally and never sent (measured before 0.6.0-alpha.2) |
 | 0.5.0 client with 0.6.0 agent | real (matrix: the 0.5.0-2 CLI client); agent test with recorded protocol 4 messages | works with protocol 4; `welcome` lists protocol 4's capabilities; protocol 5 requests refused with `unsupported` |
-| 0.5.0 agent given a 0.6.0 database | real (matrix) | refused ("schema version 7 is newer than supported version 5"); database and key file byte-identical afterwards; the 0.6.0 agent still opens it |
-| 0.6.0 agent given a 0.5.0 database | real (matrix: database created by the 0.5.0-2 tools) | upgraded to schema 7; profiles, active profile and project kept |
+| 0.5.0 agent given a 0.6.0 database | real (matrix) | refused ("schema version 7 is newer than supported version 5"); database and key file byte-identical afterwards; the 0.6.0 agent still opens it (measured before 0.6.0-alpha.2) |
+| 0.6.0 agent given a 0.5.0 database | real (matrix: database created by the 0.5.0-2 tools) | upgraded to schema 7; profiles, active profile and project kept (measured before 0.6.0-alpha.2) |
 | agent before protocol 4 | simulated (`peers`: a protocol 3 peer) | update required; stopping it with protocol 1 still works |
 | protocol 5 agent | simulated (`peers`) | background executions without notifications |
 | agent temporarily unavailable | desktop tests (`stopped` state), connect timeouts (`deckpilot-ipc`) | stopped state; no request hangs |

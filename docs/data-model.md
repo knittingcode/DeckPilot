@@ -343,7 +343,7 @@ unchanged.
   `provenance` (see [Shared variables](#shared-variables) and
   [Provenance](#provenance)). It is additive: no profile document is
   rewritten, and no provenance or variable is created for existing data.
-- **Migration 9** adds the work session tables `work_session_settings`,
+- **Migration 9** adds the Work Session tables `work_session_settings`,
   `work_sessions`, `work_session_intervals`, `work_session_reviews` and
   `work_session_transitions` (see [Work sessions](#work-sessions)). It is
   additive: the new tables start empty and nothing else changes.
@@ -646,7 +646,7 @@ The storage unit tests in `src/upgrade_tests.rs` compare the same fixture row
 by row: every row and table definition of schema 5 is unchanged after the
 upgrade, which only adds `workflow_executions`, `credentials`,
 `shared_variables`, `shared_variable_values`, `provenance` and the five
-work session tables (all empty) and one `migration_history` row, and opening the upgraded database again
+Work Session tables (all empty) and one `migration_history` row, and opening the upgraded database again
 changes nothing. They also make the upgrade fail at injected points (after
 migrations 6, 7, 8 and 9, just before the commit, and while the backup is
 written) and kill a child process at the same points with the transaction
@@ -676,7 +676,7 @@ They run a third time on a schema 8 database (`tests/fixtures/schema8/`:
 the 0.6.0 fixture upgraded by `main` at schema 8, plus shared variables
 with global, profile and project values and a provenance row, so that
 every schema 8 table has rows): every row is kept, the upgrade adds only
-the five empty work session tables, and failures and kills after migration
+the five empty Work Session tables, and failures and kills after migration
 9, before the commit or while the backup is written leave the schema 8
 database and its backup intact. `tests/upgrade_work_sessions_from_schema_8.rs`
 checks the variables and provenance through the API, that a work session on

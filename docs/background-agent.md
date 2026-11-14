@@ -207,13 +207,24 @@ Requests (`crates/deckpilot-ipc/src/protocol.rs`):
 | `listExecutions` / `getExecution` | Running and recorded runs (protocol 5)     |
 | `clearExecutionHistory` | Delete recorded runs of the profile (protocol 5)     |
 | `prepareForUpdate`      | Release devices and exit for an update (protocol 2)  |
-| `subscribe`             | Receive `state`, `actionCompleted`, `showWindow`, `openWindow`, `shuttingDown`, `execution*` and `notification` events |
+| `listVariables`         | Variables available in a context, metadata only (protocol 7) |
+| `previewReferences`     | What references resolve to, sensitive values redacted (protocol 7) |
+| `getWorkSession` / `listWorkSessions` | The current work session and the history (protocol 8) |
+| `getWorkSessionSettings` / `saveWorkSessionSettings` | Work Session settings of a profile (protocol 8) |
+| `resolveWorkSessionReview` / `clearWorkSessionNotices` | Decide a flagged gap; clear a notice (protocol 8) |
+| `subscribe`             | Receive `state`, `actionCompleted`, `showWindow`, `openWindow`, `shuttingDown`, `execution*`, `notification`, context (`projectChanged`, `sharedVariablesChanged`, …; protocol 7) and `workSessionChanged` (protocol 8) events |
 | `showWindow`            | Bring the configuration window to the front          |
 | `shutdown`              | Stop the agent gracefully                            |
 | `simulateInput`         | Inject input into a simulated device (`--mock-devices` only) |
 
-The current protocol is 6: actions show notifications, which the agent
-sends to the app as `notification` events for its status bar (see
+The current protocol is 9. Protocol 9 adds the unified variable registry:
+owners, module variables, canonical ids and the `unavailable` status (see
+[Variables](variables.md#25-ipc-protocol-9)). Protocol 8 adds the Work
+Session requests and events (see
+[Key gestures and work sessions](gestures-and-work-session.md#9-ipc-and-tauri)).
+Protocol 7 adds shared variables: `listVariables`, `previewReferences` and
+the context events. Protocol 6 lets actions show notifications, which the
+agent sends to the app as `notification` events for its status bar (see
 [Integration modules](integration-modules.md#notifications-notifications)).
 Protocol 5 runs workflows in the background (see
 [Workflow graphs](workflow-graphs.md#running-in-the-agent)). Protocol 4 added
