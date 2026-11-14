@@ -1,7 +1,7 @@
 //! Unpacking into the plugin directory (architecture sections 12.1, 12.3
 //! steps 5 and 8, and 12.5).
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::Path;
 
@@ -98,7 +98,7 @@ fn ensure_absent(target: &Path) -> Result<(), PackageError> {
 
 #[cfg(unix)]
 fn sync_directory(path: &Path) -> Result<(), PackageError> {
-    File::open(path)
+    fs::File::open(path)
         .and_then(|directory| directory.sync_all())
         .map_err(|e| PackageError::io(path, &e))
 }
