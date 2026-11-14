@@ -1,0 +1,21 @@
+[package]
+name = "deckpilot-plugin-sdk"
+description = "Rust SDK for DeckPilot plugins: metadata, typed actions, structured results, brokered capabilities (plugin API 1.0, guest ABI 1)"
+# Versioned on its own (semver), independent of the runtime crates. 0.x
+# while plugin API 1.0 is experimental; 1.0.0 once it is frozen. See
+# README.md "Versioning".
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+deckpilot-plugin-abi.workspace = true
+deckpilot-plugin-guest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

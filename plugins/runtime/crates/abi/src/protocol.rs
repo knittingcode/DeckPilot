@@ -16,6 +16,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::capability::{CallResult, CapabilityRequest};
+use crate::describe::PluginDescriptor;
 use crate::value::{ActionOutcome, Params};
 
 /// Version of this protocol, sent in `ready`.
@@ -63,7 +64,14 @@ pub enum ToSupervisor {
         sandbox: SandboxReport,
     },
     #[serde(rename_all = "camelCase")]
-    Loaded { abi_version: u32 },
+    Loaded {
+        abi_version: u32,
+        /// What the module's optional `dp_describe` returned (validated by
+        /// the host). Absent for modules without that export; omitted from
+        /// the JSON then, so `loaded` keeps its original ABI 1 form.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        descriptor: Option<PluginDescriptor>,
+    },
     #[serde(rename_all = "camelCase")]
     Call {
         invocation_id: u64,
@@ -208,6 +216,36 @@ mod tests {
         assert_eq!(serde_json::from_str::<ToHost>(&json).unwrap(), msg);
         let bad = json.replace("AGFzbf8=", "!!!");
         assert!(serde_json::from_str::<ToHost>(&bad).is_err());
+    }
+
+    #[test]
+    fn loaded_without_descriptor_keeps_its_original_form() {
+        let old = r#"{"type":"loaded","abiVersion":1}"#;
+        let m: ToSupervisor = serde_json::from_str(old).unwrap();
+        assert_eq!(
+            m,
+            ToSupervisor::Loaded {
+                abi_version: 1,
+                descriptor: None
+            }
+        );
+        assert_eq!(serde_json::to_string(&m).unwrap(), old);
+        let new = r#"{"type":"loaded","abiVersion":1,"descriptor":{"sdk":"s/1","apiLevel":"1.0","actions":[{"id":"a"}]}}"#;
+        let m: ToSupervisor = serde_json::from_str(new).unwrap();
+        let ToSupervisor::Loaded {
+            descriptor: Some(d),
+            ..
+        } = &m
+        else {
+            panic!("{m:?}")
+        };
+        assert_eq!(d.actions[0].id, "a");
+        assert!(
+            serde_json::from_str::<ToSupervisor>(
+                r#"{"type":"loaded","abiVersion":1,"descriptor":{"sdk":"s","apiLevel":"1.0","actions":[],"pluginId":"x"}}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

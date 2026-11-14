@@ -170,6 +170,7 @@ fn serve<R: Read + 'static, W: Write + 'static>(
     drop(module);
     if let Err(e) = send(&ToSupervisor::Loaded {
         abi_version: ABI_VERSION,
+        descriptor: plugin.descriptor().cloned(),
     }) {
         return e;
     }
@@ -198,7 +199,14 @@ fn serve<R: Read + 'static, W: Write + 'static>(
                     return e;
                 }
             }
-            Ok(Some(ToHost::Shutdown {})) | Ok(None) => return Exit::Clean,
+            // The optional dp_shutdown hook runs once, under the usual
+            // limits; a fault there is reported like any other.
+            Ok(Some(ToHost::Shutdown {})) | Ok(None) => {
+                return match plugin.shutdown() {
+                    Ok(()) => Exit::Clean,
+                    Err(f) => fault_exit(f),
+                };
+            }
             Ok(Some(_)) => return violation("unexpected message"),
             Err(e) => return frame_exit(e),
         }

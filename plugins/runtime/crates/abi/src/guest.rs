@@ -9,6 +9,21 @@
 //! | `dp_alloc` | `(len: i32) -> i32` | returns a pointer to `len` writable bytes the guest owns (0 on failure) |
 //! | `dp_invoke` | `(ptr: i32, len: i32) -> i64` | runs one invocation; input is an [`InvokeInput`] JSON at `ptr..ptr+len` (allocated with `dp_alloc`, owned by the guest afterwards); returns `ptr << 32 \| len` of an [`ActionOutcome`](crate::ActionOutcome) JSON that stays valid until the next `dp_invoke` |
 //!
+//! A module **may** additionally export (compatible additions within ABI 1:
+//! a module without them loads and runs exactly as before, and a host that
+//! predates them simply never calls them):
+//!
+//! | Export | Type | Meaning |
+//! | --- | --- | --- |
+//! | `dp_describe` | `() -> i64` | `ptr << 32 \| len` of a [`PluginDescriptor`](crate::describe::PluginDescriptor) JSON (at most [`MAX_DESCRIPTOR`](crate::limits::MAX_DESCRIPTOR) bytes); called once after `dp_abi_version`, reported in `loaded` |
+//! | `dp_init` | `() -> i32` | lifecycle hook, called once after `dp_describe`; 0 = ready, anything else fails the load |
+//! | `dp_shutdown` | `() -> ()` | lifecycle hook, called once on `shutdown` before the host exits |
+//!
+//! All three run under the same deadline and fuel limits as an invocation.
+//! `host_call` from inside them gets an `unavailable` error reply without
+//! reaching the supervisor (there is no invocation to relay it for). An
+//! export with one of these names but another type fails the load.
+//!
 //! A module **may** import exactly one function and nothing else:
 //!
 //! | Import | Type | Meaning |
@@ -33,6 +48,12 @@ pub const EXPORT_MEMORY: &str = "memory";
 pub const EXPORT_ABI_VERSION: &str = "dp_abi_version";
 pub const EXPORT_ALLOC: &str = "dp_alloc";
 pub const EXPORT_INVOKE: &str = "dp_invoke";
+/// Optional: `() -> i64`, the plugin descriptor.
+pub const EXPORT_DESCRIBE: &str = "dp_describe";
+/// Optional: `() -> i32`, the init hook (0 = ready).
+pub const EXPORT_INIT: &str = "dp_init";
+/// Optional: `() -> ()`, the shutdown hook.
+pub const EXPORT_SHUTDOWN: &str = "dp_shutdown";
 
 /// Input of one `dp_invoke`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

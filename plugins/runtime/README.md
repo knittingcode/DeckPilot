@@ -24,8 +24,37 @@ cargo fmt --check
 | `crates/broker` (`deckpilot-plugin-broker`) | Pure decision logic. Grants derived from approved permissions (exact `https` origins, never wildcards or IP literals; file system, process and clipboard never grantable); `Session` per channel as the only identity; grants read per call (revocation applies to the next call); redirects re-checked; SSRF address policy for the network layer; token-bucket rate limits; audit records without values |
 | `crates/host` (`deckpilot-plugin-host`) | The host process. Sandboxes itself, receives the module bytes over stdin (opens no file), runs one wasmtime Store with no WASI, epoch deadline, fuel, `StoreLimits` (memory, tables, instances), bounded wasm stack, and exits non-zero after any trap. Also `deckpilot-sandbox-probe` (test only, not shipped) |
 | `crates/supervisor` (`deckpilot-plugin-supervisor`) | Agent side. Spawns the host with an empty environment, fixed working directory and only stdin/stdout; handshake with sandbox check; per-invocation wall-clock timeout and kill; relays capability requests to the broker session and an executor; restart backoff 1, 2, 4 … 60 s and a crash-loop breaker (5 in 10 min); shutdown with grace period and kill |
-| `guest/sdk` (`deckpilot-plugin-guest`) | Minimal Rust guest SDK for `wasm32-unknown-unknown`: `export_plugin!`, `Context::call` |
-| `guest/test-guest` | Test guest: normal actions and deliberate attacks. Built from source by `crates/test-fixtures/build.rs` (no committed binaries) |
+| `guest/sdk` (`deckpilot-plugin-guest`) | Raw guest ABI bindings for `wasm32-unknown-unknown`: `export_plugin!`, `Context::call`. Plugin authors use `deckpilot-plugin-sdk` instead |
+| `guest/plugin-sdk` (`deckpilot-plugin-sdk`, own semver, 0.1.0) | The Rust plugin SDK (plugin API 1.0 on ABI 1): `Plugin`/`Action`/`Param` builders and `plugin!`; typed parameters (`text`, `integer`, `number`, `boolean`, `choice`, `secret` handle) checked before the handler; `Output`/`PluginError` with shared codes; brokered `Context` (HTTP to an exact origin, credentials as handles, notifications, storage, log) with explanatory `CapabilityError`s; init/shutdown hooks; `testing::MockHost` for native tests. No `unsafe` in plugin code |
+| `guest/test-guest` | Test guest: normal actions and deliberate attacks on the raw ABI |
+| `guest/sdk-test-guest` | Test guest built with the SDK: lifecycle, secret handles, numbers, panic, spin, slow host calls |
+| `../examples/hello-weather` | The sample plugin (see its README): a pure action and a brokered HTTPS action, `manifest.json` valid against the #191 schema (copy in `plugins/schemas/`) |
+
+The wasm guests and the sample are built from source by
+`crates/test-fixtures/build.rs` in one locked cargo invocation with the
+`guest` profile and remapped source paths (no committed binaries).
+`crates/host/tests/sdk_e2e.rs` runs the sample and the SDK test guest in the
+real sandboxed host under the real supervisor and broker, with a stub
+network executor (decisions only, no network).
+
+## ABI 1 additions (compatible)
+
+Each addition is optional, so original ABI 1 modules and messages are
+unchanged byte for byte (tested in `crates/abi` and `crates/host/tests/lifecycle.rs`):
+
+- Optional guest exports `dp_describe` (descriptor: SDK, API level, actions
+  and parameter kinds, no plugin id), `dp_init` (0 = ready, otherwise the
+  load fails) and `dp_shutdown`. They run under the invocation limits; a
+  `host_call` inside them gets `unavailable` locally. A host that predates
+  them never calls them, and the SDK then runs init before the first
+  invocation.
+- `loaded` carries the validated descriptor; `HostConfig::expect_actions`
+  makes the supervisor refuse a module whose action ids differ from the
+  manifest's (design §6.1).
+- `http.fetch` takes an optional `auth` (credential slot key and scheme,
+  never a secret); the broker allows it only for a granted `credential`
+  slot, its origins and schemes, and never across a redirect to another
+  origin. `HttpResponse` documents the executor's reply shape.
 
 ## Fixes relative to the spike
 
@@ -76,6 +105,10 @@ and its epoch-ticker thread are created, then stage 2 for all threads.
   agent); concurrency limits and `abort` messages; the agent-side network
   executor (the broker only decides; redirects and resolved addresses must be
   checked with `authorize_redirect` and `check_connect_addr`).
+- The agent-side credential store and secret injection (the broker only
+  decides whether a `credential` handle may go to an origin); packaging the
+  sample as a `.dpplugin` (the #209 package format carries a JS bundle,
+  `plugin.js`, not a wasm module).
 - Compile time of a hostile module is bounded only by the supervisor's
   `load_timeout` (kill), not inside the host.
 - wasmtime's own freedom from escape bugs (assumed, not tested; no fuzzing).

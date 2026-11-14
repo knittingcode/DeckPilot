@@ -1,6 +1,8 @@
 # Plugin runtime foundation (plugins/runtime: ABI, permission broker,
-# sandboxed plugin host, supervisor). A standalone Cargo workspace with its
-# own lock file, not part of the DeckPilot build or of any release. Runs on
+# sandboxed plugin host, supervisor, plugin SDK) and the sample plugin in
+# plugins/examples, which is a member of that workspace. A standalone Cargo
+# workspace with its own lock file, not part of the DeckPilot build or of any
+# release. Runs on
 # all three platforms because the OS sandbox probes are per platform (the
 # Linux and Windows evidence comes from here). Not a required check. No
 # secrets, read-only token.
@@ -11,11 +13,15 @@ on:
     branches: [main]
     paths:
       - plugins/runtime/**
+      - plugins/examples/**
+      - plugins/schemas/**
       - rust-toolchain.toml
       - .github/workflows/plugin-runtime.yml
   pull_request:
     paths:
       - plugins/runtime/**
+      - plugins/examples/**
+      - plugins/schemas/**
       - rust-toolchain.toml
       - .github/workflows/plugin-runtime.yml
   workflow_dispatch:
@@ -68,7 +74,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Clippy (wasm guest crates)
-        run: cargo clippy --locked -p deckpilot-plugin-guest -p deckpilot-test-guest --target wasm32-unknown-unknown -- -D warnings
+        run: cargo clippy --locked -p deckpilot-plugin-guest -p deckpilot-test-guest -p deckpilot-plugin-sdk -p deckpilot-sdk-test-guest -p hello-weather --target wasm32-unknown-unknown -- -D warnings
       - name: Test
         run: cargo test --locked -- --nocapture
       - name: Sandbox probe output

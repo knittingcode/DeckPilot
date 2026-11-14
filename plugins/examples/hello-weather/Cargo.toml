@@ -1,0 +1,28 @@
+# Sample DeckPilot plugin built with deckpilot-plugin-sdk. A member of the
+# plugins/runtime workspace (shared Cargo.lock), built for
+# wasm32-unknown-unknown with the `guest` profile by
+# plugins/runtime/crates/test-fixtures/build.rs. The rlib crate type lets
+# its native unit tests run with plain `cargo test`.
+[package]
+name = "hello-weather"
+description = "Sample DeckPilot plugin: a pure greeting and a brokered weather lookup"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+publish = false
+workspace = "../../runtime"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+deckpilot-plugin-sdk.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true
+
+[lints]
+workspace = true

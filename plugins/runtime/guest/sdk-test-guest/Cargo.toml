@@ -1,0 +1,21 @@
+# Test guest built with deckpilot-plugin-sdk: lifecycle, secret handles,
+# number parameters and deliberate faults (panic, spin, slow host calls).
+# Built for wasm32-unknown-unknown by crates/test-fixtures/build.rs (profile
+# `guest`). Not a default member: it is a wasm cdylib.
+[package]
+name = "deckpilot-sdk-test-guest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+deckpilot-plugin-sdk.workspace = true
+
+[lints]
+workspace = true

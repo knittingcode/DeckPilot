@@ -1,4 +1,9 @@
-//! Guest SDK for DeckPilot plugin ABI 1.
+//! Raw guest bindings for DeckPilot plugin ABI 1.
+//!
+//! Plugin authors should use `deckpilot-plugin-sdk`, which builds on this
+//! crate (typed parameters, structured results, lifecycle hooks, the
+//! optional exports). This crate stays for test guests that need to break
+//! the ABI on purpose.
 //!
 //! A guest is a `cdylib` built for `wasm32-unknown-unknown` (Rust std there
 //! has no file system, network, environment or process support; every such
@@ -63,6 +68,7 @@ impl Context {
             url: url.to_owned(),
             headers: Vec::new(),
             body: None,
+            auth: None,
         }))
     }
 
@@ -165,7 +171,28 @@ pub mod __rt {
         unsafe { Vec::from_raw_parts(ptr as u32 as usize as *mut u8, len, len) }
     }
 
-    pub(crate) fn host_call_bytes(request: &[u8]) -> Option<Vec<u8>> {
+    /// Takes ownership of an input buffer the host filled (`dp_invoke`).
+    ///
+    /// # Safety
+    /// `ptr`/`len` must describe a live allocation from [`alloc`].
+    pub unsafe fn take_input(ptr: i32, len: i32) -> Vec<u8> {
+        // SAFETY: forwarded contract.
+        unsafe { take(ptr, len) }
+    }
+
+    /// Keeps `bytes` alive until the next call and returns them packed
+    /// (`ptr << 32 | len`) for the host.
+    pub fn publish_output(bytes: Vec<u8>) -> i64 {
+        LAST_OUTPUT.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            *slot = bytes;
+            pack(slot.as_ptr() as usize as u32, slot.len() as u32) as i64
+        })
+    }
+
+    /// Sends request bytes through `host_call` and returns the reply bytes.
+    /// `None` off wasm (there is no host).
+    pub fn host_call_bytes(request: &[u8]) -> Option<Vec<u8>> {
         if !cfg!(target_arch = "wasm32") {
             return None;
         }
@@ -195,12 +222,7 @@ pub mod __rt {
             }
             Err(_) => ActionOutcome::failed("bad-input", "invocation input did not parse"),
         };
-        let out = serde_json::to_vec(&outcome).unwrap_or_default();
-        LAST_OUTPUT.with(|slot| {
-            let mut slot = slot.borrow_mut();
-            *slot = out;
-            pack(slot.as_ptr() as usize as u32, slot.len() as u32) as i64
-        })
+        publish_output(serde_json::to_vec(&outcome).unwrap_or_default())
     }
 }
 
