@@ -10,7 +10,9 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -53,32 +55,83 @@ const SHORT_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How often the accept loop looks for a connection or the stop.
+const POLL: Duration = Duration::from_millis(2);
+const BIND_ATTEMPTS: u32 = 8;
+
+/// An error that goes away once ports or socket buffers are freed again
+/// (a busy Windows runner gives WSAENOBUFS or WSAEADDRINUSE for a moment).
+fn transient(error: &std::io::Error) -> bool {
+    const NO_BUFFERS: i32 = if cfg!(windows) {
+        10_055 // WSAENOBUFS
+    } else if cfg!(target_os = "linux") {
+        105 // ENOBUFS
+    } else {
+        55 // ENOBUFS (macOS, BSD)
+    };
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::AddrInUse | std::io::ErrorKind::AddrNotAvailable
+    ) || error.raw_os_error() == Some(NO_BUFFERS)
+}
+
+/// A listener on a free port of 127.0.0.1, retrying transient errors
+/// with a growing pause.
+fn bind_local() -> TcpListener {
+    let mut pause = Duration::from_millis(50);
+    for _ in 1..BIND_ATTEMPTS {
+        match TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => return listener,
+            Err(error) if transient(&error) => {
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(Duration::from_secs(1));
+            }
+            Err(error) => panic!("binding 127.0.0.1 failed: {error}"),
+        }
+    }
+    TcpListener::bind("127.0.0.1:0").expect("binding 127.0.0.1")
+}
+
 /// A minimal HTTP/1.1 server on 127.0.0.1 with replies that can be changed
 /// between requests. It is listening when `start` returns, serves every
-/// connection on its own thread (a stalled one never blocks the next), and
-/// records what it saw for failure messages.
+/// connection on its own thread (a stalled one never blocks the next),
+/// records what it saw for failure messages, and closes its listener when
+/// dropped.
 struct Server {
     port: u16,
     replies: Arc<Mutex<HashMap<String, Reply>>>,
     events: Arc<Mutex<Vec<String>>>,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
 }
 
 impl Server {
     fn start() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = bind_local();
         let port = listener.local_addr().unwrap().port();
+        // Polled, so that stopping never needs a connection of its own.
+        listener.set_nonblocking(true).unwrap();
         let replies: Arc<Mutex<HashMap<String, Reply>>> = Arc::default();
         let events: Arc<Mutex<Vec<String>>> = Arc::default();
-        let (shared, seen) = (replies.clone(), events.clone());
-        std::thread::spawn(move || {
+        let stop = Arc::new(AtomicBool::new(false));
+        let (shared, seen, flag) = (replies.clone(), events.clone(), stop.clone());
+        let thread = std::thread::spawn(move || {
             // Keeps accepting after failed accepts too.
-            for stream in listener.incoming() {
-                match stream {
-                    Ok(stream) => {
+            while !flag.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        // Accepted sockets may inherit non-blocking mode.
+                        let _ = stream.set_nonblocking(false);
                         let (replies, seen) = (shared.clone(), seen.clone());
                         std::thread::spawn(move || serve(stream, &replies, &seen));
                     }
-                    Err(error) => record(&seen, &format!("accept failed: {error}")),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(POLL);
+                    }
+                    Err(error) => {
+                        record(&seen, &format!("accept failed: {error}"));
+                        std::thread::sleep(POLL);
+                    }
                 }
             }
         });
@@ -86,6 +139,8 @@ impl Server {
             port,
             replies,
             events,
+            stop,
+            thread: Some(thread),
         }
     }
 
@@ -103,6 +158,15 @@ impl Server {
             .lock()
             .unwrap()
             .insert(format!("/{path}"), reply);
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 

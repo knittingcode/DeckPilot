@@ -9,7 +9,7 @@ stateful keys in `crates/deckpilot-core/src/stateful.rs`, the session
 contract in `crates/deckpilot-core/src/work_session.rs`, and the Work Session
 page in `apps/desktop/src/modules/work-session/` (module `work-session`). The remaining sections are
 the original design record, written before the implementation; where the
-code differs, the code and the tests win. The work session variables now
+code differs, the code and the tests win. The Work Session variables now
 belong to the `work-session` module (`workSession.…`; see
 [variables.md](variables.md)).
 
@@ -42,7 +42,7 @@ Consequences:
    would make a slow action turn a click into a long press.
 2. Gestures are a layer on top of the press and release edges, not a driver
    change. Nothing in `deckpilot-hid` changes.
-3. The work session needs an agent-internal state source for key faces, and
+3. The Work Session needs an agent-internal state source for key faces, and
    the top-level workflow outputs must be read at the end of a run.
 4. Schema numbers: E's schema 8 is not merged, so the work-session tables
    are **schema 9**, appended after E's step (section 6.4).
@@ -740,7 +740,7 @@ proposed defaults, accepted by the coordinator.
   invocation now. `Invoke` may come later through C, with no contract
   change.
 - **D4** Elapsed text on keys is `h:mm`, redrawn once per minute and only
-  while a work session key is shown. `seconds` (1 Hz) is opt-in per profile.
+  while a Work Session key is shown. `seconds` (1 Hz) is opt-in per profile.
 - **D5** Variables are `system.work.session.*` (existing root).
 - **D6** Storage is core **schema 9** after E's schema 8.
 - **D7** There is one active session per database. It records its profile
