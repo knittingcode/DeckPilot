@@ -23,6 +23,25 @@ serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
+# Feature `publish` only: signing and key generation for the publishing
+# tool. The verifier library never signs anything.
+minisign = { version = "0.10", optional = true }
+zeroize = { workspace = true, optional = true }
+
+[features]
+# The registry publishing tool (`deckpilot-registry` binary and the
+# `publish` module). Off by default, so the client library keeps its
+# dependency footprint.
+publish = ["dep:minisign", "dep:zeroize"]
+
+[[bin]]
+name = "deckpilot-registry"
+path = "src/bin/deckpilot-registry.rs"
+required-features = ["publish"]
+
+[[test]]
+name = "publish"
+required-features = ["publish"]
 
 [dev-dependencies]
 # Signs test documents with throwaway keys generated per test.

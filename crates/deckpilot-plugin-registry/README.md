@@ -13,6 +13,13 @@ There is no network code. Documents go in as bytes, either through the
 step-by-step API or through a `RegistrySource` the agent's fetcher will
 implement; state goes to a `TrustStore`.
 
+With the optional `publish` feature the crate also builds the offline
+publishing tool `deckpilot-registry` (keys for local use, key sets,
+version history, revocations, index, signatures, timestamp and
+`verify-site`, which runs this client over the generated site). See
+[PUBLISHING.md](PUBLISHING.md); none of it is set up anywhere. Without the
+feature the library has no signing code and no extra dependencies.
+
 ## API
 
 - `RegistryClient::open(embedded_roots, store, Policy)`.
@@ -146,6 +153,16 @@ manifest schema by `$id`; the tests resolve it to
 `deckpilot_plugin_manifest::SCHEMA_JSON`.
 
 ## Tests
+
+`cargo test -p deckpilot-plugin-registry --features publish` adds 11
+end-to-end tests of the publishing tool (`tests/publish.rs`, throwaway
+keys): publish two plugins and five versions and verify them with the
+client (and the schemas), deterministic documents, revocation and yank
+enforced, key rotation with old and new roots, rollback refused by a
+client with stored state, tampered documents and packages refused,
+timestamp-only refresh keeping clients fresh, revocations lifted only
+after `seq_floor_reset`, secrets kept out of the binary's output, and
+input errors.
 
 `cargo test -p deckpilot-plugin-registry`: 58 tests (1 unit, 50 in
 `tests/registry.rs`, 7 in `tests/schemas.rs`), all keys generated per test
