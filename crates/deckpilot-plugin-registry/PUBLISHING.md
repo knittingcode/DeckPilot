@@ -51,6 +51,7 @@ Secret keys never belong in this directory.
 | `keyset init --root PUB… [--root-threshold N] --index PUB --timestamp PUB [--seq-floor N]` | `roots.json` and an unsigned `keys/1.json` | public keys only |
 | `keyset rotate [--root PUB…] [--root-threshold N] [--index PUB] [--timestamp PUB] [--seq-floor N] [--seq-floor-reset]` | unsigned `keys/<n+1>.json`; unchanged roles are carried over; `seq_floor` defaults to the live seq | public keys only |
 | `keyset sign --key FILE [--version N]` | adds one root signature; prints how many of the previous and new root thresholds are met | a root key |
+| `package --plugin-dir DIR --module FILE.wasm --out FILE.dpplugin` | builds a package: `manifest.json`, `LICENSE` and the files the manifest names from `DIR`, the module as `plugin.wasm` (`docs/marketplace/artifact-contract.md`), deterministic and checked by every reader rule | — |
 | `publisher --namespace NS --github-id N --login L [--display-name] [--verified]` | `registry/publishers/<login>.json` | — |
 | `add-version --package F.dpplugin [--plugin-detail plugin.json] --source-repository O/N --tag T --commit SHA --builder V [--source-path P] [--attestation URL]` | verifies the package with `deckpilot-plugin-package` (`read_archive`, then `verify_package` against its own digests), takes sha256, size, manifest digest, permissions, engines and platforms from it, appends the version, stores the release asset | — |
 | `yank --id ID --version V --reason R [--advisory URL]` | marks the version `yanked` in its detail and adds a `yank` revocation (the Settings notice) | — |
