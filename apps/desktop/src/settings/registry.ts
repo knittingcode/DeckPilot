@@ -10,6 +10,7 @@ import {
   ScrollText,
   Server,
   ShieldCheck,
+  Store,
   Variable,
   type LucideIcon,
 } from "lucide-react"
@@ -189,6 +190,28 @@ const CORE_PAGES: SettingsPageEntry[] = [
   },
 ]
 
+let pluginsPage: SettingsPageEntry | undefined
+
+/**
+ * Experimental pages, present only in builds that opt in. The plugin
+ * marketplace needs `VITE_DECKPILOT_PLUGINS=1` at build time; Vite replaces
+ * the check with a constant, so normal and release builds contain neither
+ * the page nor its code.
+ */
+function experimentalPages(): SettingsPageEntry[] {
+  if (import.meta.env.VITE_DECKPILOT_PLUGINS !== "1") return []
+  pluginsPage ??= {
+    id: "plugins",
+    title: "Plugins",
+    description: "Experimental: browse, install and manage community plugins",
+    category: "extensions",
+    icon: Store,
+    keywords: ["marketplace", "plugins", "install", "community", "registry", "experimental"],
+    view: view(() => import("@/plugins/marketplace").then((m) => ({ default: m.PluginsSettings }))),
+  }
+  return [pluginsPage]
+}
+
 /** Every settings page, with the pages of enabled modules under Extensions. */
 export function settingsPages(modules: ModuleInfo[]): SettingsPageEntry[] {
   const fromModules = moduleSettingsPages(modules).map((page): SettingsPageEntry => ({
@@ -201,7 +224,7 @@ export function settingsPages(modules: ModuleInfo[]): SettingsPageEntry[] {
     view: page.view ?? null,
     module: page.module,
   }))
-  return [...CORE_PAGES, ...fromModules]
+  return [...CORE_PAGES, ...experimentalPages(), ...fromModules]
 }
 
 export function findSettingsPage(modules: ModuleInfo[], id: string) {
