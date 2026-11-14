@@ -1,0 +1,13 @@
+# Test-only: builds guest/test-guest for wasm32-unknown-unknown from source
+# (build.rs) and embeds it. No prebuilt binaries are committed.
+[package]
+name = "deckpilot-plugin-test-fixtures"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
