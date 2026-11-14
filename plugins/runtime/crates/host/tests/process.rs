@@ -431,7 +431,13 @@ fn spawned_host_gets_no_environment_and_no_extra_descriptors() {
     // The probe binary is spawned exactly like the host (same command
     // builder), without the host's own sandbox stage so that it can
     // inspect itself. On Windows it still runs in the supervisor's
-    // AppContainer, whose environment holds only `SystemRoot`.
+    // AppContainer, whose environment holds only `SystemRoot` and the
+    // container-redirected `LOCALAPPDATA`, `TEMP` and `TMP` (those set
+    // here; CreateProcessW points them at the container's folders).
+    let windows_env = 1 + ["LOCALAPPDATA", "TEMP", "TMP"]
+        .iter()
+        .filter(|v| std::env::var_os(v).is_some_and(|x| !x.is_empty()))
+        .count();
     let mut c = HostCommand::new(PROBE)
         .arg("--no-os-sandbox")
         .arg("env_count")
@@ -456,9 +462,9 @@ fn spawned_host_gets_no_environment_and_no_extra_descriptors() {
     assert!(lines.len() > 1, "{text}");
     for l in &lines[1..] {
         let expected = if cfg!(windows) && l["kind"] == "env_count" {
-            "1"
+            windows_env.to_string()
         } else {
-            "0"
+            "0".to_owned()
         };
         assert_eq!(l["detail"], expected, "{l}");
     }
