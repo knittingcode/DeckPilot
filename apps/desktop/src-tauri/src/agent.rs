@@ -32,10 +32,18 @@ pub const VARIABLES_EVENT: &str = "agent-variables";
 /// Event with the work session's snapshot whenever it changes. Agents
 /// before protocol 8 send none.
 pub const WORK_SESSION_EVENT: &str = "agent-work-session";
+/// Event with a plugin operation's progress or a plugin's new state: the
+/// agent's `pluginEvent` payload as it is (`progress`, `changed`). Only
+/// forwarded once the plugin screen asked for it (`watch_plugin_events`)
+/// and only from agents that answer plugin requests.
+pub const PLUGIN_EVENT: &str = "plugin-event";
 
 /// Overrides the agent executable.
 const AGENT_BIN_ENV: &str = "DECKPILOT_AGENT_BIN";
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
+/// How often an agent whose plugins are off is asked again (they come on
+/// when the configuration is unlocked or the agent restarts with them).
+const PLUGIN_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -396,6 +404,45 @@ async fn subscribe<R: Runtime>(app: &AppHandle<R>, paths: &AgentPaths) -> Result
                 let _ = app.emit(WORK_SESSION_EVENT, snapshot);
             }
         }
+    }
+}
+
+/// Keeps a plugin event subscription to the agent and forwards its events
+/// to the windows. Agents before protocol 10, and agents whose plugins are
+/// not available, are asked again later; nothing is subscribed to then.
+pub fn spawn_plugin_bridge<R: Runtime>(app: AppHandle<R>, paths: AgentPaths) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let delay = match forward_plugin_events(&app, &paths).await {
+                Ok(()) => PLUGIN_RETRY_DELAY,
+                Err(ClientError::Closed | ClientError::NotRunning) => RECONNECT_DELAY,
+                Err(error) => {
+                    eprintln!("plugin event subscription failed: {error}");
+                    PLUGIN_RETRY_DELAY
+                }
+            };
+            tokio::time::sleep(delay).await;
+        }
+    });
+}
+
+/// Returns `Ok` without subscribing when the agent has no plugins.
+async fn forward_plugin_events<R: Runtime>(
+    app: &AppHandle<R>,
+    paths: &AgentPaths,
+) -> Result<(), ClientError> {
+    let mut client = AgentClient::connect(paths, ClientKind::Desktop).await?;
+    if !client.supports(Capability::Plugins) {
+        return Ok(());
+    }
+    match client.request(Request::GetPluginRuntime).await? {
+        Response::PluginRuntime { status } if status.available => {}
+        _ => return Ok(()),
+    }
+    client.subscribe_plugin_events().await?;
+    loop {
+        let event = client.next_plugin_event().await?;
+        let _ = app.emit(PLUGIN_EVENT, event);
     }
 }
 

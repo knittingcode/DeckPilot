@@ -69,6 +69,7 @@ impl Harness {
             .manage(AppState::with_presence(paths.clone(), presence).expect("open state"))
             .manage(crate::updates::UpdateManager::default())
             .manage(crate::commands::portability::PendingImport::default())
+            .manage(crate::commands::plugins::PluginEvents::default())
             .manage(crate::windows::WindowRegistry::default())
             .invoke_handler(crate::commands::handler())
             .build(mock_context(noop_assets()))
@@ -3244,4 +3245,104 @@ fn shared_variables_are_managed_without_revealing_secrets() {
     assert!(missing.contains("not found"), "{missing}");
     let left = h.ok("list_shared_variables", json!({ "profileId": work }));
     assert_eq!(left.as_array().unwrap().len(), 2);
+}
+
+/// The plugin commands' refusal as the frontend receives it.
+fn plugin_refusal(h: &Harness, cmd: &str, args: Value) -> (String, String) {
+    let error = h.call(cmd, args).expect_err(cmd);
+    (
+        error["reason"].as_str().unwrap_or_default().to_owned(),
+        error["message"].as_str().unwrap_or_default().to_owned(),
+    )
+}
+
+#[test]
+fn plugin_commands_refuse_unless_the_agent_answers_plugin_requests() {
+    let h = Harness::new();
+    // Every plugin command, with the arguments the frontend sends.
+    let commands = [
+        ("list_plugins", json!({})),
+        ("get_plugin", json!({ "plugin": "example.hello" })),
+        ("list_available_plugins", json!({ "refresh": true })),
+        (
+            "install_plugin",
+            json!({
+                "source": { "type": "registry", "plugin": "example.hello", "version": "1.0.0" },
+                "consent": ["notifications"]
+            }),
+        ),
+        (
+            "install_plugin",
+            json!({ "source": { "type": "file", "path": "/tmp/x.dpplugin" }, "consent": [] }),
+        ),
+        (
+            "enable_plugin",
+            json!({ "plugin": "example.hello", "consent": [] }),
+        ),
+        ("disable_plugin", json!({ "plugin": "example.hello" })),
+        (
+            "grant_plugin_permissions",
+            json!({ "plugin": "example.hello", "permissions": ["notifications"] }),
+        ),
+        (
+            "revoke_plugin_permission",
+            json!({ "plugin": "example.hello", "permission": "notifications" }),
+        ),
+        (
+            "update_plugin",
+            json!({ "plugin": "example.hello", "version": null, "consent": [] }),
+        ),
+        (
+            "approve_plugin_update",
+            json!({ "plugin": "example.hello", "consent": ["network:api.example.com"] }),
+        ),
+        (
+            "decline_plugin_update",
+            json!({ "plugin": "example.hello" }),
+        ),
+        ("rollback_plugin", json!({ "plugin": "example.hello" })),
+        ("uninstall_plugin", json!({ "plugin": "example.hello" })),
+        (
+            "invoke_plugin_action",
+            json!({ "plugin": "example.hello", "action": "greet", "params": { "name": "x" } }),
+        ),
+    ];
+
+    // No agent: typed, and nothing is sent anywhere.
+    let (reason, _) = plugin_refusal(&h, "get_plugin_runtime", json!({}));
+    assert_eq!(reason, "agentNotRunning");
+    for (cmd, args) in &commands {
+        assert_eq!(
+            plugin_refusal(&h, cmd, args.clone()).0,
+            "agentNotRunning",
+            "{cmd}"
+        );
+    }
+
+    // An agent of this release without plugins (the test agent is built
+    // without the `plugins` feature and started without `--enable-plugins`).
+    let (_runtime, _mock) = start_agent(&h.paths);
+    h.unlock();
+    wait_for(&h, |s| s["running"] == true);
+    let runtime = h.ok("get_plugin_runtime", json!({}));
+    assert_eq!(runtime["available"], false, "{runtime}");
+    assert_eq!(runtime["enabled"], false, "{runtime}");
+    assert!(runtime["platform"].is_string(), "{runtime}");
+    assert!(runtime["reason"].is_string(), "{runtime}");
+    for (cmd, args) in &commands {
+        let (reason, message) = plugin_refusal(&h, cmd, args.clone());
+        assert_eq!(reason, "pluginsUnavailable", "{cmd}: {message}");
+        assert!(!message.is_empty(), "{cmd}");
+    }
+    // Watching events against such an agent subscribes to nothing and
+    // fails nothing.
+    h.ok("watch_plugin_events", json!({}));
+    h.ok("watch_plugin_events", json!({}));
+
+    // A locked app refuses before it asks the agent.
+    h.ok("lock", json!({}));
+    assert_eq!(plugin_refusal(&h, "list_plugins", json!({})).0, "locked");
+
+    h.ok("stop_agent", json!({}));
+    wait_for(&h, |s| s["running"] == false);
 }
