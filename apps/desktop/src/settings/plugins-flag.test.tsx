@@ -20,8 +20,8 @@ vi.mock("@/plugins/marketplace", () => {
   loaded.add("marketplace")
   return { PluginsSettings: () => null }
 })
-vi.mock("@/plugins/fixtures", () => {
-  loaded.add("fixtures")
+vi.mock("@/plugins/client", () => {
+  loaded.add("client")
   return {}
 })
 

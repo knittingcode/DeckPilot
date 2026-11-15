@@ -1,25 +1,37 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest"
 
-import { cleanup, screen, waitFor, within } from "@testing-library/react"
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { installDomStubs } from "@/test/dom"
+import {
+  HELLO,
+  LIGHTS,
+  createFakePluginClient,
+  readyRuntime,
+  type FakeOptions,
+} from "@/test/plugins"
 import { renderWithApp } from "@/test/render"
 import { resetToasts, toast } from "@/test/toast"
 
 import { PluginClientContext } from "./api"
-import { FIXTURE_LABEL, createFixtureClient, type FixtureOptions } from "./fixtures"
 import { PluginsSettings } from "./marketplace"
 
 vi.mock("sonner", async () => (await import("@/test/toast")).sonnerModule)
+// The default client must never be created in these tests.
+vi.mock("./client", () => ({
+  createTauriPluginClient: () => {
+    throw new Error("the Tauri client is not used in tests")
+  },
+}))
 
 beforeAll(installDomStubs)
 beforeEach(resetToasts)
 afterEach(cleanup)
 
-function renderMarketplace(options: FixtureOptions = {}) {
-  const client = createFixtureClient(options)
+function renderMarketplace(options: FakeOptions = {}) {
+  const client = createFakePluginClient(options)
   const result = renderWithApp(
     <PluginClientContext value={client}>
       <PluginsSettings />
@@ -28,8 +40,8 @@ function renderMarketplace(options: FixtureOptions = {}) {
   return { ...result, client }
 }
 
-const cards = () => within(screen.getByRole("list", { name: "Plugins" })).getAllByRole("listitem")
 const tab = (name: RegExp) => screen.getByRole("tab", { name })
+const cards = () => within(screen.getByRole("list", { name: "Plugins" })).getAllByRole("listitem")
 const installedItem = (name: string) =>
   within(
     within(screen.getByRole("list", { name: "Installed plugins" }))
@@ -42,185 +54,185 @@ async function openDetails(user: ReturnType<typeof renderMarketplace>["user"], n
   return screen.findByRole("heading", { name, level: 3 })
 }
 
-describe("marketplace states", () => {
-  it("labels fixture data and shows loading first", async () => {
-    renderMarketplace({ delayMs: 20 })
-    expect(screen.getByText("Loading…")).toBeInTheDocument()
-    expect(screen.getByRole("note", { name: FIXTURE_LABEL })).toBeInTheDocument()
-    expect(await screen.findByRole("list", { name: "Plugins" })).toBeInTheDocument()
-    expect(screen.getByText(FIXTURE_LABEL)).toBeInTheDocument()
-  })
+async function openInstalled(user: ReturnType<typeof renderMarketplace>["user"]) {
+  await screen.findByRole("list", { name: "Plugins" })
+  await user.click(tab(/Installed/))
+}
 
-  it("reports a failure with a recovery hint and retries", async () => {
-    const { user } = renderMarketplace({ failList: true })
-    expect(await screen.findByText("Plugins could not be loaded")).toBeInTheDocument()
-    expect(
-      screen.getByText("Check Settings › Background Agent, then try again."),
-    ).toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Try again" }))
-    expect(await screen.findByText("Plugins could not be loaded")).toBeInTheDocument()
-  })
-
-  it("shows empty states", async () => {
-    const { user } = renderMarketplace({ empty: true })
-    expect(await screen.findByText("No plugins to show")).toBeInTheDocument()
-    await user.click(tab(/Installed/))
-    expect(screen.getByText("No plugins installed")).toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Browse plugins" }))
-    expect(tab(/Discover/)).toHaveAttribute("aria-selected", "true")
-    await user.click(tab(/Updates/))
-    expect(screen.getByText("All plugins are up to date")).toBeInTheDocument()
-  })
-
-  it("browses nothing before the registry was ever reached", async () => {
-    renderMarketplace({ registry: "never-reached" })
-    expect(await screen.findByText("Registry not reached yet")).toBeInTheDocument()
-    expect(
-      screen.getByText("The registry has not been reached on this computer yet."),
-    ).toBeInTheDocument()
-  })
-
+describe("runtime availability", () => {
   it.each([
-    ["offline", "Offline: showing the last verified registry"],
-    ["stale", "Registry stale"],
-    ["verification-failed", "Registry verification failed"],
-  ] as const)("pauses installs while the registry is %s", async (registry, title) => {
-    const { user } = renderMarketplace({ registry })
+    [
+      "not built",
+      {
+        runtime: {
+          ...readyRuntime(),
+          available: false,
+          built: false,
+          enabled: false,
+          reason: "built without plugin support",
+        },
+      },
+      "Plugins are not available: the agent was built without plugin support",
+    ],
+    [
+      "not enabled",
+      { runtime: { ...readyRuntime(), available: false, enabled: false } },
+      "Plugins are not available: they are not enabled in the agent",
+    ],
+    [
+      "locked",
+      { runtime: { ...readyRuntime(), available: false, reason: "the configuration is locked" } },
+      "Plugins are not available right now",
+    ],
+    [
+      "no agent",
+      { runtimeError: { reason: "agentNotRunning", message: "the agent is not running" } },
+      "Plugins are not available: the agent is not running",
+    ],
+    [
+      "an old agent",
+      { runtimeError: { reason: "agentTooOld", message: "protocol 9" } },
+      "Plugins are not available: the running agent is too old",
+    ],
+  ] as const)("says why with %s and asks nothing else", async (_, options, title) => {
+    const { client, user } = renderMarketplace(options)
     expect(await screen.findByText(title)).toBeInTheDocument()
-    expect(screen.getByText(/Installed plugins keep running/)).toBeInTheDocument()
-    // Cached data stays browsable, but nothing can be installed or updated.
-    await openDetails(user, "Home Lights")
-    expect(screen.getByRole("button", { name: /^Install/ })).toBeDisabled()
-    await user.click(screen.getByRole("button", { name: "Back to plugins" }))
-    await user.click(tab(/Updates/))
-    for (const button of screen.getAllByRole("button", { name: /update/i })) {
-      if (button.textContent.trim() !== "Check for updates") expect(button).toBeDisabled()
-    }
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument()
+    expect(client.listPlugins).not.toHaveBeenCalled()
+    expect(client.listAvailablePlugins).not.toHaveBeenCalled()
+    await user.click(screen.getByRole("button", { name: "Check again" }))
+    await waitFor(() => {
+      expect(client.getRuntime).toHaveBeenCalledTimes(2)
+    })
   })
 
-  it("switches the simulated registry state from the fixture notice", async () => {
-    const { user } = renderMarketplace()
-    await screen.findByRole("list", { name: "Plugins" })
-    await user.click(screen.getByRole("radio", { name: "Stale" }))
-    expect(await screen.findByText("Registry stale")).toBeInTheDocument()
-    await user.click(screen.getByRole("radio", { name: "Up to date" }))
-    await waitFor(() => {
-      expect(screen.queryByText("Registry stale")).not.toBeInTheDocument()
+  it("installs but does not enable or run on an unsupported platform", async () => {
+    const { user } = renderMarketplace({
+      runtime: readyRuntime({ executionSupported: false, platform: "windows" }),
+      helloInstalled: true,
     })
+    expect(await screen.findByText("Plugins cannot run on Windows")).toBeInTheDocument()
+    await openInstalled(user)
+    const item = installedItem("Hello Weather")
+    await user.click(item.getByRole("switch", { name: "Disable Hello Weather" }))
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Hello Weather disabled")
+    })
+    expect(
+      installedItem("Hello Weather").getByRole("switch", { name: "Enable Hello Weather" }),
+    ).toBeDisabled()
+  })
+
+  it("reports other failures with the backend's hint and retries", async () => {
+    const { user, client } = renderMarketplace()
+    vi.mocked(client.listPlugins).mockRejectedValueOnce(
+      Object.assign(new Error("database is busy"), { reason: "storeUnavailable" }),
+    )
+    // A plain Error without the PluginError class still shows its message.
+    expect(await screen.findByText("Plugins could not be loaded")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Try again" }))
+    expect(await screen.findByRole("list", { name: "Plugins" })).toBeInTheDocument()
   })
 })
 
-describe("discover", () => {
-  it("lists browsable plugins and hides deprecated ones", async () => {
-    renderMarketplace()
-    await screen.findByRole("list", { name: "Plugins" })
-    const names = cards().map((card) => card.querySelector(".font-medium")?.textContent)
-    expect(names).toContain("GitHub Pull Requests")
-    expect(names).not.toContain("Old Clock")
-    expect(within(cards()[3] as HTMLElement).getByText(/publisher/)).toBeInTheDocument()
+describe("registry", () => {
+  it.each([
+    [{ freshness: "stale" as const }, "Registry stale"],
+    [{ freshness: "neverVerified" as const }, "Registry not verified yet"],
+  ])("pauses installs while the registry is %o", async (registry, title) => {
+    const { user } = renderMarketplace({
+      runtime: readyRuntime({ registry: { source: "/tmp/registry", ...registry } }),
+    })
+    expect(await screen.findByText(title)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /Install from package file/ })).toBeDisabled()
+    await openDetails(user, "Home Lights")
+    expect(screen.getByRole("button", { name: /^Install/ })).toBeDisabled()
   })
 
-  it("searches and filters by category", async () => {
-    const { user } = renderMarketplace()
+  it("shows a registry that cannot be read and checks it again with refresh", async () => {
+    const { user, client } = renderMarketplace({
+      registryError: {
+        reason: "registryUnavailable",
+        message: "the timestamp signature is invalid",
+      },
+    })
+    expect(await screen.findByText("The registry could not be read")).toBeInTheDocument()
+    expect(screen.getByText("the timestamp signature is invalid")).toBeInTheDocument()
+    expect(screen.getByText("No plugins to show")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Check the registry" }))
+    await waitFor(() => {
+      expect(client.listAvailablePlugins).toHaveBeenLastCalledWith(true)
+    })
+  })
+
+  it("says when no registry is configured", async () => {
+    renderMarketplace({ runtime: { ...readyRuntime(), registry: undefined }, available: [] })
+    expect(await screen.findByText("No plugin registry configured")).toBeInTheDocument()
+  })
+})
+
+describe("discover and details", () => {
+  it("lists and searches the registry's plugins", async () => {
+    const { user } = renderMarketplace({ helloInstalled: true })
     await screen.findByRole("list", { name: "Plugins" })
-    await user.click(screen.getByRole("radio", { name: "Smart home" }))
+    expect(cards()).toHaveLength(4)
+    await user.type(screen.getByLabelText("Search plugins"), "weather")
     expect(cards()).toHaveLength(1)
-    expect(cards()[0]).toHaveTextContent("Home Lights")
-    await user.click(screen.getByRole("radio", { name: "All" }))
-    await user.type(screen.getByLabelText("Search plugins"), "pull requests")
-    expect(cards()).toHaveLength(1)
-    expect(cards()[0]).toHaveTextContent("Installed 1.2.0")
+    expect(cards()[0]).toHaveTextContent("Installed 1.0.0")
     expect(cards()[0]).toHaveTextContent("Update available")
     await user.clear(screen.getByLabelText("Search plugins"))
     await user.type(screen.getByLabelText("Search plugins"), "nothing like this")
     expect(screen.getByText("No plugins found")).toBeInTheDocument()
   })
-})
 
-describe("plugin details", () => {
-  it("shows publisher, version, compatibility, platforms and permissions by risk", async () => {
+  it("explains incompatible and withdrawn versions", async () => {
     const { user } = renderMarketplace()
-    const heading = await openDetails(user, "GitHub Pull Requests")
-    expect(heading).toHaveFocus()
-    expect(screen.getByText("Verified publisher")).toBeInTheDocument()
-    // The version Discover offers; the installed one is in the status.
-    expect(screen.getByText("Version 1.3.0")).toBeInTheDocument()
-    expect(screen.getByText("Works with DeckPilot 0.6.0 on macOS")).toBeInTheDocument()
-    expect(screen.getByText("macOS, Windows, Linux")).toBeInTheDocument()
-    const status = screen.getByRole("region", { name: "Install status" })
-    expect(status).toHaveTextContent("Installed 1.2.0")
-    expect(within(status).getByRole("button", { name: "Update to 1.3.0" })).toBeEnabled()
-    const permissions = screen.getByRole("group", { name: "Permissions" })
-    const high = within(permissions).getByRole("region", { name: "High risk" })
-    expect(high).toHaveTextContent("Use the secret “token” that you store for it")
-    const medium = within(permissions).getByRole("region", { name: "Medium risk" })
-    expect(medium).toHaveTextContent("Send data to and receive data from https://api.github.com")
-    expect(medium).toHaveTextContent("Reads the pull requests that wait for your review.")
-
-    await user.click(screen.getByRole("button", { name: "Back to plugins" }))
-    expect(screen.getByRole("list", { name: "Plugins" })).toBeInTheDocument()
-  })
-
-  it("explains why an incompatible plugin cannot be installed", async () => {
-    const { user } = renderMarketplace()
-    await openDetails(user, "Weather Keys")
-    expect(screen.getByText("Not compatible with this DeckPilot")).toBeInTheDocument()
-    const reasons = screen.getByRole("list", { name: "Incompatibility reasons" })
-    expect(reasons).toHaveTextContent("Requires DeckPilot >=0.9.0; this is DeckPilot 0.6.0.")
-    expect(reasons).toHaveTextContent("Not available for macOS; supports Windows.")
-    expect(screen.getByRole("button", { name: /^Install/ })).toBeDisabled()
-    expect(screen.getByText("Verified publisher")).toBeInTheDocument()
-  })
-
-  it("offers an older version when the newest was withdrawn", async () => {
-    const { user } = renderMarketplace()
-    await openDetails(user, "Chat Bridge")
-    expect(screen.getByRole("button", { name: "Install 1.0.0" })).toBeEnabled()
-    expect(screen.getByRole("list", { name: "Versions" })).toHaveTextContent(
-      "Withdrawn: Crashes on start.",
+    await openDetails(user, "Future Keys")
+    expect(screen.getByRole("list", { name: "Incompatibility reasons" })).toHaveTextContent(
+      "requires DeckPilot >=9.0.0",
     )
-  })
-
-  it("shows revocations by the registry", async () => {
-    const { user } = renderMarketplace()
-    await openDetails(user, "Clipboard Sync")
-    expect(screen.getByText("Revoked by the registry")).toBeInTheDocument()
-    expect(screen.getByRole("list", { name: "Versions" })).toHaveTextContent("Revoked")
+    expect(screen.getByRole("button", { name: /^Install/ })).toBeDisabled()
+    await user.click(screen.getByRole("button", { name: "Back to plugins" }))
+    await openDetails(user, "Gone Plugin")
+    expect(screen.getByText("Version 1.0.0 was withdrawn")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /^Install/ })).toBeDisabled()
   })
 })
 
-describe("consent", () => {
-  it("cannot install without consent to every permission", async () => {
-    const { user } = renderMarketplace()
-    await openDetails(user, "Home Lights")
+describe("install", () => {
+  it("sends exactly the consented grant keys", async () => {
+    const { user, client } = renderMarketplace()
+    const heading = await openDetails(user, "Home Lights")
+    expect(heading).toHaveFocus()
     await user.click(screen.getByRole("button", { name: "Install 0.3.0" }))
     const dialog = screen.getByRole("dialog", { name: "Install Home Lights 0.3.0?" })
     const install = within(dialog).getByRole("button", { name: "Install" })
+    expect(within(dialog).getAllByRole("checkbox")).toHaveLength(5)
     expect(install).toBeDisabled()
-    expect(dialog).toHaveTextContent(FIXTURE_LABEL)
-    // High-risk permissions are listed and need their own check.
-    const boxes = within(dialog).getAllByRole("checkbox")
-    expect(boxes).toHaveLength(4)
-    expect(
-      within(dialog).getByRole("checkbox", { name: /local network that you add/ }),
-    ).not.toBeChecked()
-    await user.click(within(dialog).getByRole("checkbox", { name: /https:\/\/api\.lifx\.com/ }))
-    expect(dialog).toHaveTextContent("3 of 4 new permissions still need your consent.")
-    expect(install).toBeDisabled()
-    // "Allow all" is an explicit action of its own.
-    await user.click(within(dialog).getByRole("button", { name: "Allow all 4" }))
-    expect(install).toBeEnabled()
+    await user.click(within(dialog).getByRole("checkbox", { name: /local network/ }))
+    expect(dialog).toHaveTextContent("4 of 5 permissions still need your consent.")
+    await user.click(within(dialog).getByRole("button", { name: "Allow all 5" }))
     await user.click(install)
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
     })
+    expect(client.installPlugin).toHaveBeenCalledWith(
+      { type: "registry", plugin: LIGHTS, version: "0.3.0" },
+      [
+        "network:api.lifx.com",
+        "network:private-network",
+        "credentials:token",
+        "device:state",
+        "device:icons",
+      ],
+    )
     expect(toast.success).toHaveBeenCalledWith("Home Lights installed")
-    expect(screen.getByRole("region", { name: "Install status" })).toHaveTextContent(
-      "Installed 0.3.0",
+    expect(await screen.findByRole("region", { name: "Install status" })).toHaveTextContent(
+      "Installed 0.3.0 (disabled)",
     )
   })
 
-  it("keeps focus in the dialog and installs nothing when cancelled", async () => {
+  it("installs nothing when cancelled", async () => {
     const { user, client } = renderMarketplace()
     await openDetails(user, "Home Lights")
     await user.click(screen.getByRole("button", { name: "Install 0.3.0" }))
@@ -228,166 +240,264 @@ describe("consent", () => {
     expect(dialog).toContainElement(document.activeElement as HTMLElement)
     await user.keyboard("{Escape}")
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
-    expect((await client.listPlugins()).installed.some((p) => p.id === "knit.home-lights")).toBe(
-      false,
-    )
+    expect(client.installPlugin).not.toHaveBeenCalled()
   })
 
-  it("reports a package that fails verification", async () => {
-    const { user } = renderMarketplace()
-    await openDetails(user, "Calendar Keys")
-    await user.click(screen.getByRole("button", { name: "Install 1.0.0" }))
+  it("shows a refusal in the dialog with the backend's hint", async () => {
+    const { user, client } = renderMarketplace()
+    vi.mocked(client.installPlugin).mockRejectedValueOnce(
+      Object.assign(new (await import("./api")).PluginError("revoked", "the version was revoked")),
+    )
+    await openDetails(user, "Hello Weather")
+    await user.click(screen.getByRole("button", { name: "Install 1.1.0" }))
     const dialog = screen.getByRole("dialog")
-    await user.click(within(dialog).getByRole("checkbox"))
+    await user.click(within(dialog).getByRole("button", { name: "Allow all 2" }))
     await user.click(within(dialog).getByRole("button", { name: "Install" }))
-    expect(await within(dialog).findByText(/Verification failed/)).toBeInTheDocument()
+    expect(await within(dialog).findByText("the version was revoked")).toBeInTheDocument()
     expect(
-      within(dialog).getByText(/report the plugin to the registry maintainers/),
+      within(dialog).getByText(
+        "The registry withdrew this version; choose another one or uninstall it.",
+      ),
     ).toBeInTheDocument()
   })
 
-  it("asks only for the new permissions of an update", async () => {
-    const { user } = renderMarketplace()
-    await screen.findByRole("list", { name: "Plugins" })
-    await user.click(tab(/Updates/))
-    const updates = screen.getByRole("list", { name: "Available updates" })
-    const item = within(within(updates).getByRole("listitem", { name: /GitHub Pull Requests/ }))
-    expect(item.getByText("1 new permission")).toBeInTheDocument()
-    await user.click(item.getByRole("button", { name: "Review and update" }))
-    const dialog = screen.getByRole("dialog", { name: "Update GitHub Pull Requests to 1.3.0?" })
-    expect(within(dialog).getAllByRole("checkbox")).toHaveLength(1)
-    expect(within(dialog).getAllByText("Already granted")).toHaveLength(4)
-    const update = within(dialog).getByRole("button", { name: "Update" })
-    expect(update).toBeDisabled()
-    await user.click(
-      within(dialog).getByRole("checkbox", { name: /https:\/\/github\.com in your browser/ }),
-    )
-    await user.click(update)
-    await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith("GitHub Pull Requests updated to 1.3.0")
-    })
-  })
-
-  it("applies an update that asks for less without a dialog", async () => {
-    const { user } = renderMarketplace()
-    await screen.findByRole("list", { name: "Plugins" })
-    await user.click(tab(/Updates/))
-    const item = within(screen.getByRole("listitem", { name: /Status Page Monitor/ }))
-    expect(item.getByText("No new permissions")).toBeInTheDocument()
-    await user.click(item.getByRole("button", { name: "Update" }))
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
-    await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith("Status Page Monitor updated to 2.0.1")
-    })
-  })
-
-  it("reviews permissions before enabling and keeps revoked ones revoked", async () => {
+  it("installs from a local package file without granting anything", async () => {
     const { user, client } = renderMarketplace()
-    await screen.findByRole("list", { name: "Plugins" })
-    await user.click(tab(/Installed/))
-    await user.click(
-      installedItem("Focus Timer").getByRole("switch", { name: "Enable Focus Timer" }),
-    )
-    const dialog = screen.getByRole("dialog", { name: "Enable Focus Timer?" })
-    expect(within(dialog).getByText("Already granted")).toBeInTheDocument()
-    expect(
-      within(dialog).getByRole("checkbox", { name: /Allow again: Show notifications/ }),
-    ).not.toBeChecked()
-    await user.click(within(dialog).getByRole("button", { name: "Enable" }))
+    vi.mocked(client.pickPackage).mockResolvedValueOnce("/tmp/acme.hello-weather-1.0.0.dpplugin")
+    await user.click(await screen.findByRole("button", { name: /Install from package file/ }))
     await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith("Focus Timer enabled")
+      expect(client.installPlugin).toHaveBeenCalledWith(
+        { type: "file", path: "/tmp/acme.hello-weather-1.0.0.dpplugin" },
+        [],
+      )
     })
-    const timer = (await client.listPlugins()).installed.find((p) => p.id === "tempo.focus-timer")
-    expect(timer?.enabled).toBe(true)
-    expect(timer?.grants.find((g) => g.key === "notifications")?.enabled).toBe(false)
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalled()
+    })
+    await user.click(tab(/Installed/))
+    expect(installedItem("Hello Weather").getByText("Local package")).toBeInTheDocument()
   })
 
-  it("revokes and allows again a single permission", async () => {
-    const { user } = renderMarketplace()
-    await screen.findByRole("list", { name: "Plugins" })
-    await user.click(tab(/Installed/))
-    const item = () => installedItem("GitHub Pull Requests")
-    await user.click(item().getByRole("button", { name: "Permissions" }))
-    await user.click(
-      item().getByRole("button", {
-        name: "Revoke: Send data to and receive data from https://api.github.com",
-      }),
-    )
+  it("reports a package the registry does not pin", async () => {
+    const { user, client } = renderMarketplace()
+    vi.mocked(client.pickPackage).mockResolvedValueOnce("/tmp/other.dpplugin")
+    await user.click(await screen.findByRole("button", { name: /Install from package file/ }))
     await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith("Permission revoked")
+      expect(toast.error).toHaveBeenCalledWith("the package is not a version the registry pins", {
+        description: "Only package files whose bytes the verified registry pins can be installed.",
+      })
     })
-    expect(item().getByText(/1 permission revoked/)).toBeInTheDocument()
-    await user.click(
-      item().getByRole("button", {
-        name: "Allow again: Send data to and receive data from https://api.github.com",
-      }),
-    )
+  })
+
+  it("does nothing when the file dialog is cancelled", async () => {
+    const { user, client } = renderMarketplace()
+    await user.click(await screen.findByRole("button", { name: /Install from package file/ }))
     await waitFor(() => {
-      expect(item().queryByText(/permission revoked/)).not.toBeInTheDocument()
+      expect(client.pickPackage).toHaveBeenCalled()
+    })
+    expect(client.installPlugin).not.toHaveBeenCalled()
+  })
+
+  it("shows the agent's progress and reloads when a plugin changed", async () => {
+    const { client } = renderMarketplace()
+    await screen.findByRole("list", { name: "Plugins" })
+    act(() => {
+      client.emit({ type: "progress", plugin: HELLO, operation: "install", stage: "verifying" })
+    })
+    expect(screen.getByRole("status", { name: "Plugin operations" })).toHaveTextContent(
+      `Installing ${HELLO}: verifying signatures and pins`,
+    )
+    act(() => {
+      client.emit({ type: "progress", plugin: HELLO, operation: "install", stage: "finished" })
+    })
+    expect(screen.queryByRole("status", { name: "Plugin operations" })).not.toBeInTheDocument()
+    const calls = vi.mocked(client.listPlugins).mock.calls.length
+    act(() => {
+      client.emit({ type: "changed", plugin: HELLO, state: "disabled" })
+    })
+    await waitFor(() => {
+      expect(vi.mocked(client.listPlugins).mock.calls.length).toBe(calls + 1)
     })
   })
 })
 
 describe("installed plugins", () => {
-  it("reports problems with recovery options", async () => {
-    const { user } = renderMarketplace()
-    await screen.findByRole("list", { name: "Plugins" })
-    await user.click(tab(/Installed/))
-
-    const deploy = installedItem("Deploy Buttons")
-    expect(deploy.getByText("Deploy Buttons failed to load")).toBeInTheDocument()
-    expect(deploy.getByText(/Roll back to the previous version or uninstall/)).toBeInTheDocument()
-    await user.click(deploy.getByRole("button", { name: "Roll back to 0.8.2" }))
+  it("enables with consent to every declared permission", async () => {
+    const { user, client } = renderMarketplace()
+    vi.mocked(client.pickPackage).mockResolvedValueOnce("/tmp/acme.hello-weather-1.0.0.dpplugin")
+    await user.click(await screen.findByRole("button", { name: /Install from package file/ }))
     await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith("Deploy Buttons rolled back to 0.8.2")
+      expect(toast.success).toHaveBeenCalled()
     })
-    expect(installedItem("Deploy Buttons").queryByText("Deploy Buttons failed to load")).toBeNull()
-
-    const clipboard = installedItem("Clipboard Sync")
-    expect(clipboard.getByText("Disabled: revoked by the registry")).toBeInTheDocument()
-    expect(clipboard.getByRole("switch", { name: "Enable Clipboard Sync" })).toBeDisabled()
-
-    const status = installedItem("Status Page Monitor")
-    expect(status.getByText("Version 2.0.0 was withdrawn")).toBeInTheDocument()
-    expect(status.getByText(/Updating to 2.0.1 is recommended/)).toBeInTheDocument()
+    await user.click(tab(/Installed/))
+    expect(installedItem("Hello Weather").getByText(/1 permission not granted/)).toBeInTheDocument()
+    await user.click(
+      installedItem("Hello Weather").getByRole("switch", { name: "Enable Hello Weather" }),
+    )
+    const dialog = screen.getByRole("dialog", { name: "Enable Hello Weather?" })
+    const enable = within(dialog).getByRole("button", { name: "Enable" })
+    expect(enable).toBeDisabled()
+    await user.click(within(dialog).getByRole("checkbox", { name: /api\.open-meteo\.com/ }))
+    await user.click(enable)
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Hello Weather enabled")
+    })
+    expect(client.enablePlugin).toHaveBeenCalledWith(HELLO, ["network:api.open-meteo.com"])
   })
 
-  it("disables and uninstalls a plugin", async () => {
-    const { user } = renderMarketplace()
-    await screen.findByRole("list", { name: "Plugins" })
-    await user.click(tab(/Installed/))
+  it("runs actions, revokes, sees the refusal, grants again and disables", async () => {
+    const { user, client } = renderMarketplace({ helloInstalled: true })
+    await openInstalled(user)
+    const item = () => installedItem("Hello Weather")
+    await user.click(item().getByRole("button", { name: "Permissions and actions" }))
+
+    await user.type(item().getByLabelText("Name"), "Ada")
+    await user.click(item().getByRole("button", { name: "Run Greet" }))
+    expect(await item().findByRole("status", { name: "Result of Greet" })).toHaveTextContent(
+      "Succeeded: Hello, Ada.",
+    )
+    expect(client.invokeAction).toHaveBeenCalledWith(HELLO, "greet", { name: "Ada" })
+
     await user.click(
-      installedItem("GitHub Pull Requests").getByRole("switch", {
-        name: "Disable GitHub Pull Requests",
+      item().getByRole("button", {
+        name: "Revoke: Send data to and receive data from https://api.open-meteo.com",
       }),
     )
     await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith("GitHub Pull Requests disabled")
+      expect(toast.success).toHaveBeenCalledWith("Permission revoked")
     })
-    await user.click(
-      installedItem("GitHub Pull Requests").getByRole("button", { name: "Uninstall" }),
-    )
-    const confirm = screen.getByRole("alertdialog", { name: "Uninstall GitHub Pull Requests?" })
+    expect(client.revokePermission).toHaveBeenCalledWith(HELLO, "network:api.open-meteo.com")
+    await user.click(item().getByRole("button", { name: "Run Current temperature" }))
     expect(
-      within(confirm).getByRole("checkbox", { name: "Also delete the secrets stored for it" }),
-    ).not.toBeChecked()
-    await user.click(within(confirm).getByRole("button", { name: "Uninstall" }))
+      await item().findByRole("status", { name: "Result of Current temperature" }),
+    ).toHaveTextContent("Failed (not-permitted)")
+
+    await user.click(
+      item().getByRole("button", {
+        name: "Grant: Send data to and receive data from https://api.open-meteo.com",
+      }),
+    )
     await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith("GitHub Pull Requests uninstalled")
+      expect(client.grantPermissions).toHaveBeenCalledWith(HELLO, ["network:api.open-meteo.com"])
     })
-    expect(tab(/Installed/)).toHaveTextContent("Installed 4")
+
+    await user.click(item().getByRole("switch", { name: "Disable Hello Weather" }))
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Hello Weather disabled")
+    })
+    expect(item().getByRole("button", { name: "Run Greet" })).toBeDisabled()
   })
 
-  it("reports a failed request as a toast with its hint", async () => {
-    const { user, client } = renderMarketplace()
-    await screen.findByRole("list", { name: "Plugins" })
-    await user.click(tab(/Installed/))
-    vi.spyOn(client, "rollbackPlugin").mockRejectedValue(new Error("The agent is busy."))
+  it("reports a refused action with its reason", async () => {
+    const { user, client } = renderMarketplace({ helloInstalled: true })
+    vi.mocked(client.invokeAction).mockRejectedValueOnce(
+      new (await import("./api")).PluginError("hostFailed", "the host crashed"),
+    )
+    await openInstalled(user)
     await user.click(
-      installedItem("Deploy Buttons").getByRole("button", { name: "Roll back to 0.8.2" }),
+      installedItem("Hello Weather").getByRole("button", { name: "Permissions and actions" }),
+    )
+    await user.click(installedItem("Hello Weather").getByRole("button", { name: "Run Greet" }))
+    expect(
+      await installedItem("Hello Weather").findByRole("status", { name: "Result of Greet" }),
+    ).toHaveTextContent("the host crashed The plugin host failed")
+  })
+
+  it("uninstalls after confirmation", async () => {
+    const { user, client } = renderMarketplace({ helloInstalled: true })
+    await openInstalled(user)
+    await user.click(installedItem("Hello Weather").getByRole("button", { name: "Uninstall" }))
+    const confirm = screen.getByRole("alertdialog", { name: "Uninstall Hello Weather?" })
+    await user.click(within(confirm).getByRole("button", { name: "Uninstall" }))
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Hello Weather uninstalled")
+    })
+    expect(client.uninstallPlugin).toHaveBeenCalledWith(HELLO)
+    expect(await screen.findByText("No plugins installed")).toBeInTheDocument()
+  })
+
+  it("reports a failed request as a toast with the reason's hint", async () => {
+    const { user, client } = renderMarketplace({ helloInstalled: true })
+    vi.mocked(client.disablePlugin).mockRejectedValueOnce(
+      new (await import("./api")).PluginError("locked", "the configuration is locked"),
+    )
+    await openInstalled(user)
+    await user.click(
+      installedItem("Hello Weather").getByRole("switch", { name: "Disable Hello Weather" }),
     )
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith("The agent is busy.", undefined)
+      expect(toast.error).toHaveBeenCalledWith("the configuration is locked", {
+        description: "Unlock DeckPilot, then try again.",
+      })
     })
+  })
+})
+
+describe("updates", () => {
+  it("stages an escalation, approves it with exactly the new keys and rolls back", async () => {
+    const { user, client } = renderMarketplace({ helloInstalled: true })
+    await screen.findByRole("list", { name: "Plugins" })
+    await user.click(tab(/Updates 1/))
+    const row = within(screen.getByRole("listitem", { name: /Hello Weather 1.0.0 to 1.1.0/ }))
+    await user.click(row.getByRole("button", { name: "Update" }))
+    expect(client.updatePlugin).toHaveBeenCalledWith(HELLO, "1.1.0", [])
+    const dialog = await screen.findByRole("dialog", { name: "Update Hello Weather to 1.1.0?" })
+    expect(within(dialog).getAllByRole("checkbox")).toHaveLength(1)
+    const update = within(dialog).getByRole("button", { name: "Update" })
+    expect(update).toBeDisabled()
+    await user.click(within(dialog).getByRole("checkbox", { name: /Show notifications/ }))
+    await user.click(update)
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Hello Weather updated to 1.1.0")
+    })
+    expect(client.approveUpdate).toHaveBeenCalledWith(HELLO, ["notifications"])
+
+    await user.click(tab(/Installed/))
+    await user.click(
+      installedItem("Hello Weather").getByRole("button", { name: "Roll back to 1.0.0" }),
+    )
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Hello Weather rolled back to 1.0.0")
+    })
+    expect(client.rollbackPlugin).toHaveBeenCalledWith(HELLO)
+  })
+
+  it("keeps a cancelled escalation staged and declines it later", async () => {
+    const { user, client } = renderMarketplace({ helloInstalled: true })
+    await screen.findByRole("list", { name: "Plugins" })
+    await user.click(tab(/Updates/))
+    await user.click(screen.getByRole("button", { name: "Update" }))
+    await user.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" }),
+    )
+    const row = within(await screen.findByRole("listitem", { name: /Hello Weather/ }))
+    expect(row.getByText("Waiting for consent: 1 permission")).toBeInTheDocument()
+    await user.click(row.getByRole("button", { name: "Review and update" }))
+    const dialog = screen.getByRole("dialog", { name: "Update Hello Weather to 1.1.0?" })
+    await user.click(within(dialog).getByRole("button", { name: "Decline update" }))
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Update of Hello Weather declined")
+    })
+    expect(client.declineUpdate).toHaveBeenCalledWith(HELLO)
+    expect(client.approveUpdate).not.toHaveBeenCalled()
+  })
+
+  it("applies an update that asks for nothing new without a dialog", async () => {
+    const { user, client } = renderMarketplace({ helloInstalled: true })
+    vi.mocked(client.updatePlugin).mockResolvedValueOnce({
+      plugin: HELLO,
+      outcome: {
+        type: "applied",
+        version: "1.1.0",
+        changes: { added: [], broadened: [], removed: [], escalation: false },
+      },
+    })
+    await screen.findByRole("list", { name: "Plugins" })
+    await user.click(tab(/Updates/))
+    await user.click(screen.getByRole("button", { name: "Update" }))
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Hello Weather updated to 1.1.0")
+    })
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
   })
 })
