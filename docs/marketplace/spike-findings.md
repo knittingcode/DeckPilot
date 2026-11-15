@@ -307,5 +307,6 @@ names changed slightly.
 | `offline_behavior` | `offline_behaviour`, `offline_part_way_keeps_the_stored_state` |
 
 The spike's `examples/measure.rs` was a measurement only (numbers above).
-Its `publish-workflow.yml.example` is now
-`crates/deckpilot-plugin-registry/examples/publish-workflow.yml.example`.
+Its `publish-workflow.yml.example` sketch is superseded by the real
+workflows of the registry repository `knittingcode/deckpilot-plugins`
+(`validate.yml`, `publish.yml`, `refresh-timestamp.yml`).
