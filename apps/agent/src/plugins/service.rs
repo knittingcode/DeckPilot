@@ -49,9 +49,10 @@ use tracing::{info, warn};
 
 use super::convert;
 use super::engine::CatalogPlugin;
-use super::executor::{Executor, Transport};
+use super::executor::{Executor, OwnVariables, Transport};
 use super::lane::{Done, Ended, Job, Lane, LaneEnd, LaneError};
 use super::registry::LocalRegistry;
+use super::variables::PublishedVariables;
 use super::worker::{EngineFailure, EngineReply, Events};
 use super::{PluginSettings, platform, platform_problem};
 
@@ -270,6 +271,8 @@ pub(super) struct PluginService {
     host: PathBuf,
     events: Events,
     transport: Transport,
+    /// What the plugins published for their own variables.
+    values: PublishedVariables,
 }
 
 impl std::fmt::Debug for PluginService {
@@ -307,6 +310,7 @@ impl PluginService {
         key: &StoreKey,
         events: Events,
         lane_ended: Ended,
+        values: PublishedVariables,
     ) -> Result<Self, StoreError> {
         let mut manager = PluginManager::open(data_dir, key, manager_options())?;
         let report = manager.recover()?;
@@ -347,6 +351,7 @@ impl PluginService {
             host: host_program(settings),
             events,
             transport: Transport::from_env(),
+            values,
         };
         if service.registry.is_some() {
             let _ = service.refresh();
@@ -358,10 +363,29 @@ impl PluginService {
         Ok(service)
     }
 
-    /// Stops every host.
+    /// Stops every host; every published value is dropped.
     pub fn shutdown(&mut self) {
         for (_, lane) in std::mem::take(&mut self.lanes) {
             lane.stop();
+        }
+        for (plugin, ids) in self.values.forget_all() {
+            self.announce_dropped(&plugin, &ids);
+        }
+    }
+
+    /// Tells clients that a plugin's values are gone (ids only).
+    fn announce_dropped(&self, plugin: &str, ids: &[String]) {
+        let Ok(module) = deckpilot_core::ModuleId::new(plugin) else {
+            return;
+        };
+        let namespace = deckpilot_core::variables::module_namespace(&module);
+        if !ids.is_empty() {
+            let _ = self
+                .events
+                .agent
+                .send(deckpilot_ipc::AgentEvent::SharedVariablesChanged {
+                    keys: ids.iter().map(|id| format!("{namespace}.{id}")).collect(),
+                });
         }
     }
 
@@ -383,6 +407,7 @@ impl PluginService {
                     version: manifest.version.to_string(),
                     description: manifest.description.clone(),
                     actions: manifest.contributes.actions().to_vec(),
+                    variables: manifest.contributes.variables().to_vec(),
                     unavailable: convert::unavailable_with(record, &grants),
                 })
             })
@@ -669,11 +694,17 @@ impl PluginService {
     }
 
     /// Stops the plugin's lane: a running invocation is aborted, queued
-    /// ones are refused, the host is stopped.
+    /// ones are refused, the host is stopped (its `dp_shutdown` runs). Every
+    /// lifecycle change that stops a host (disable, update, rollback,
+    /// uninstall, quarantine, crash loop) comes here, so the values the
+    /// plugin published are dropped too, and a late publish from the
+    /// stopped invocation is refused (a new generation).
     fn stop_host(&mut self, id: &PluginId) {
         if let Some(lane) = self.lanes.remove(id.as_str()) {
             lane.stop();
         }
+        let dropped = self.values.forget(id.as_str());
+        self.announce_dropped(id.as_str(), &dropped);
     }
 
     /// The registry's verdict on the installed version; a `disable`
@@ -1265,12 +1296,19 @@ impl PluginService {
         let timeout = Duration::from_millis(node.timeout_ms()).min(MAX_INVOCATION);
         let outputs = super::lane::declared_outputs(&declaration);
         let name = active.manifest.name.clone();
+        let variables = OwnVariables {
+            store: self.values.clone(),
+            namespace: active.manifest.id.variable_namespace(),
+            generation: self.values.generation(id.as_str()),
+            declared: active.manifest.contributes.variables().to_vec(),
+        };
         self.sync_grants(id);
         let executor = Executor::new(
             self.broker.clone(),
             name,
             self.events.agent.clone(),
             self.transport.clone(),
+            variables,
         );
         Ok((
             record,
@@ -1460,7 +1498,7 @@ fn lane_error(error: &LaneError) -> IpcError {
         LaneError::Aborted => self::error(
             ErrorCode::Failed,
             reason::HOST_FAILED,
-            "the action was cancelled before it started",
+            "the action was cancelled (or its plugin stopped); its result, if any, was discarded",
         ),
         LaneError::Panicked => self::error(
             ErrorCode::Failed,
