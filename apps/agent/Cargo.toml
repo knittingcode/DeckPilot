@@ -44,7 +44,7 @@ plugins = [
     "dep:deckpilot-plugin-registry",
     "dep:deckpilot-plugin-store",
     "dep:deckpilot-plugin-supervisor",
-    "dep:deckpilot-module-http",
+    "dep:deckpilot-net",
     "dep:hkdf",
     "dep:reqwest",
     "dep:rustls",
@@ -87,14 +87,14 @@ deckpilot-plugin-package = { workspace = true, optional = true }
 deckpilot-plugin-registry = { workspace = true, optional = true }
 deckpilot-plugin-store = { workspace = true, optional = true }
 deckpilot-plugin-supervisor = { workspace = true, optional = true }
-# The HTTP module's client (address checks, pinned resolution, bounded
-# bodies) carries out the fetches the broker allowed. Already part of the
-# agent through deckpilot-modules.
-deckpilot-module-http = { workspace = true, optional = true }
+# The core HTTP transport (address checks, pinned resolution, bounded
+# bodies) carries out the fetches the broker allowed. Not a module crate,
+# and already part of every agent build through the HTTP module.
+deckpilot-net = { workspace = true, optional = true }
 hkdf = { workspace = true, optional = true }
-# The HTTP module's request type names reqwest's methods. The registry's
+# deckpilot-net's request type names reqwest's methods. The registry's
 # HTTPS source (plugins/fetch.rs) uses reqwest and rustls directly: the
-# HTTP module's stack and versions, already in every agent build.
+# transport's stack and versions, already in every agent build.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 url = { workspace = true, optional = true }

@@ -1,6 +1,6 @@
 //! The plugin registry over HTTPS: a [`RegistrySource`] for the signed
 //! documents and the package download, on one shared reqwest client
-//! (rustls, the HTTP module's stack).
+//! (rustls, the stack of the `deckpilot-net` transport).
 //!
 //! Nothing here decides what is trusted. Every document goes to
 //! `RegistryClient` (signatures, the key set chain, rollback and freeze
@@ -225,7 +225,7 @@ impl std::fmt::Debug for HttpsSource {
 
 impl HttpsSource {
     pub fn new(config: HttpsConfig) -> Result<Self, String> {
-        // rustls' cryptography (as the HTTP module); a no-op once installed.
+        // rustls' cryptography (as deckpilot-net); a no-op once installed.
         let _ = rustls::crypto::ring::default_provider().install_default();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

@@ -21,8 +21,11 @@
 //! verification cannot be turned off. No proxy is used.
 
 pub mod actions;
-pub mod client;
-pub mod policy;
+
+// The transport lives in the core crate `deckpilot-net`
+// (docs/marketplace/module-migration.md, §3). Re-exported so that
+// `deckpilot_module_http::{client, policy}` keep their paths.
+pub use deckpilot_net::{client, policy};
 
 use std::collections::BTreeMap;
 
@@ -39,28 +42,12 @@ pub const PRIVATE_HOSTS: &str = "privateHosts";
 /// Module setting: the most response bytes kept, in KiB.
 pub const MAX_RESPONSE_KB: &str = "maxResponseKb";
 
-/// Stable error codes of the module's actions.
+/// Stable error codes of the module's actions: the transport's
+/// (`deckpilot_net::codes`) and the module's own.
 pub mod codes {
-    pub const INVALID_URL: &str = "invalid-url";
-    pub const CREDENTIALS_IN_URL: &str = "credentials-in-url";
-    pub const INVALID_HEADER: &str = "invalid-header";
-    pub const INVALID_QUERY: &str = "invalid-query";
-    /// A header or query parameter that holds a secret was written into
-    /// the workflow.
-    pub const SENSITIVE_HEADER: &str = "sensitive-header";
+    pub use deckpilot_net::codes::*;
+
     pub const INVALID_BODY: &str = "invalid-body";
-    /// The address is on this computer or a private network.
-    pub const BLOCKED_ADDRESS: &str = "blocked-address";
-    pub const DNS_FAILED: &str = "dns-failed";
-    pub const CONNECTION_FAILED: &str = "connection-failed";
-    /// The certificate or the TLS handshake was refused.
-    pub const TLS_FAILED: &str = "tls-failed";
-    pub const TOO_MANY_REDIRECTS: &str = "too-many-redirects";
-    /// A redirect from https to http.
-    pub const INSECURE_REDIRECT: &str = "insecure-redirect";
-    /// A credential would be sent over plain http.
-    pub const INSECURE_CREDENTIALS: &str = "insecure-credentials";
-    pub const REQUEST_FAILED: &str = "request-failed";
     /// The response has a 4xx or 5xx status.
     pub const HTTP_STATUS: &str = "http-status";
     /// The response is not the JSON the action was asked to read.
