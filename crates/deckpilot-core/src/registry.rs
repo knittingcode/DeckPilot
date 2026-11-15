@@ -10,10 +10,11 @@ use std::fmt;
 
 use thiserror::Error;
 
+use crate::alias::{ActionAlias, ParamRule};
 use crate::{
     ActionInstance, ActionInstanceId, ActionParameters, ActionResult, ActionType, ActionTypeId,
     ButtonState, Capability, ContextEffect, ExecutionContext, KeyFace, ModuleId, ParameterError,
-    Profile, Project, RefreshPolicy, StateError,
+    ParameterKind, ParameterSpec, ParameterValue, Profile, Project, RefreshPolicy, StateError,
 };
 
 /// Implementation of one action type.
@@ -79,6 +80,154 @@ pub trait ActionHandler: Send + Sync {
         _context: &ExecutionContext<'_>,
     ) -> Result<ButtonState, StateError> {
         Ok(ButtonState::default())
+    }
+}
+
+/// Serves a legacy built-in action type with a first-party plugin's
+/// handler ([`crate::alias`]). Its definition is the plugin's, under the
+/// legacy id and hidden from the catalog like a deprecated type, so stored
+/// instances, bindings and workflow nodes keep their id and keep working.
+/// Parameters the plugin cannot declare are translated by the alias's
+/// [`ParamRule`]s before every call.
+pub struct AliasHandler {
+    definition: ActionType,
+    target: Box<dyn ActionHandler>,
+    /// Parameters dropped when empty or equal to the legacy module's
+    /// setting of the same key (`None`: no setting).
+    drops: Vec<(String, Option<ParameterValue>)>,
+}
+
+impl fmt::Debug for AliasHandler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AliasHandler")
+            .field("legacy", &self.definition.id)
+            .field("target", &self.target.definition().id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AliasHandler {
+    /// `target` is the plugin's handler of `alias.target`; `builtin` the
+    /// legacy definition, when it is compiled in, and `legacy_config` the
+    /// legacy module's settings, when it is registered.
+    pub fn new(
+        alias: &ActionAlias,
+        target: Box<dyn ActionHandler>,
+        builtin: Option<&ActionType>,
+        legacy_config: Option<&ActionParameters>,
+    ) -> Self {
+        let mut definition = target.definition().clone();
+        definition.id = alias.legacy_id();
+        definition.deprecated = true;
+        let mut drops = Vec::new();
+        for rule in alias.params {
+            let ParamRule::DropIfDefault(key) = *rule;
+            if !definition.parameters.iter().any(|p| p.key == key) {
+                // Stored instances keep validating with the parameter.
+                let spec = builtin
+                    .and_then(|b| b.parameters.iter().find(|p| p.key == key))
+                    .cloned()
+                    .unwrap_or_else(|| ParameterSpec {
+                        key: key.to_owned(),
+                        label: key.to_owned(),
+                        description: None,
+                        kind: ParameterKind::Credential,
+                        required: false,
+                        default: None,
+                    });
+                definition.parameters.push(ParameterSpec {
+                    required: false,
+                    ..spec
+                });
+            }
+            drops.push((
+                key.to_owned(),
+                legacy_config.and_then(|c| c.get(key)).cloned(),
+            ));
+        }
+        Self {
+            definition,
+            target,
+            drops,
+        }
+    }
+
+    /// The parameters for the plugin's handler.
+    fn translate(&self, parameters: &ActionParameters) -> Result<ActionParameters, String> {
+        let mut translated = ActionParameters::new();
+        for (key, value) in parameters.iter() {
+            let Some((_, default)) = self.drops.iter().find(|(k, _)| k == key) else {
+                translated = translated.with(key.clone(), value.clone());
+                continue;
+            };
+            let empty = matches!(value, ParameterValue::Text(text) if text.trim().is_empty());
+            if !empty && default.as_ref() != Some(value) {
+                return Err(format!(
+                    "parameter `{key}` names something the plugin providing `{}` cannot use; \
+                     leave it empty to use the plugin's own",
+                    self.definition.id
+                ));
+            }
+        }
+        Ok(translated)
+    }
+}
+
+impl ActionHandler for AliasHandler {
+    fn definition(&self) -> &ActionType {
+        &self.definition
+    }
+
+    fn execute(
+        &self,
+        parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> ActionResult {
+        match self.translate(parameters) {
+            Ok(parameters) => self.target.execute(&parameters, context),
+            Err(problem) => ActionResult::failure(problem),
+        }
+    }
+
+    fn runs_detached(&self) -> bool {
+        self.target.runs_detached()
+    }
+
+    fn check(&self, parameters: &ActionParameters, profile: &Profile) -> Vec<String> {
+        match self.translate(parameters) {
+            Ok(parameters) => self.target.check(&parameters, profile),
+            Err(problem) => vec![problem],
+        }
+    }
+
+    fn decorate_face(
+        &self,
+        face: KeyFace,
+        parameters: &ActionParameters,
+        template: &str,
+        project: Option<&Project>,
+    ) -> KeyFace {
+        match self.translate(parameters) {
+            Ok(parameters) => self
+                .target
+                .decorate_face(face, &parameters, template, project),
+            Err(_) => face,
+        }
+    }
+
+    fn state_policy(&self, parameters: &ActionParameters) -> Option<RefreshPolicy> {
+        self.target.state_policy(&self.translate(parameters).ok()?)
+    }
+
+    fn button_state(
+        &self,
+        parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> Result<ButtonState, StateError> {
+        let parameters = self
+            .translate(parameters)
+            .map_err(|problem| StateError::new("invalid-parameters", problem))?;
+        self.target.button_state(&parameters, context)
     }
 }
 
