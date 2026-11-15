@@ -329,3 +329,191 @@ impl FeatureModule for TestModule {
         }
     }
 }
+
+/// Fixture aliases: the built-in `legacy.fetch` of module `legacy`, served
+/// by the first-party plugin fixture `deckpilot.legacy`. The shipped table
+/// is empty, so routing is tested with these.
+pub(crate) const FIXTURE_ALIASES: &[crate::alias::ActionAlias] = &[crate::alias::ActionAlias {
+    legacy: "legacy.fetch",
+    target: "deckpilot.legacy.fetch",
+    module: "legacy",
+    plugin: "deckpilot.legacy",
+    since: "0.0.0-test",
+    params: &[crate::alias::ParamRule::DropIfDefault("credential")],
+}];
+
+const _: () = crate::alias::assert_valid(FIXTURE_ALIASES);
+
+/// The value of the `legacy` module's `credential` setting.
+pub(crate) const LEGACY_CREDENTIAL: &str = "legacy-token";
+
+fn fetch_type(id: &str, message_length: usize) -> ActionType {
+    ActionType {
+        id: ActionTypeId::new(id).unwrap(),
+        name: format!("Fetch ({id})"),
+        description: String::new(),
+        category: "Test".into(),
+        parameters: vec![ParameterSpec {
+            kind: ParameterKind::Text {
+                multiline: false,
+                max_length: Some(message_length),
+            },
+            ..text("message", true)
+        }],
+        requires_project: false,
+        deprecated: false,
+        node: crate::graph::NodeSpec {
+            outputs: vec![crate::graph::OutputSpec::new(
+                "body",
+                "Body",
+                crate::graph::ValueKind::Text,
+            )],
+            ..crate::graph::NodeSpec::default()
+        },
+    }
+}
+
+/// The built-in `legacy.fetch`: `message`, and an optional `credential`
+/// override a plugin cannot declare.
+pub(crate) fn legacy_fetch() -> ActionType {
+    let mut definition = fetch_type("legacy.fetch", 100);
+    definition.parameters.push(ParameterSpec {
+        kind: ParameterKind::Credential,
+        ..text("credential", false)
+    });
+    definition
+}
+
+/// The plugin's `deckpilot.legacy.fetch`: `message` only, longer.
+pub(crate) fn plugin_fetch() -> ActionType {
+    fetch_type("deckpilot.legacy.fetch", 200)
+}
+
+/// Succeeds with `<tag>: <message> [<parameter keys>]`, so a test sees who
+/// ran and with which parameters.
+pub(crate) struct Fetch {
+    definition: ActionType,
+    tag: &'static str,
+}
+
+impl ActionHandler for Fetch {
+    fn definition(&self) -> &ActionType {
+        &self.definition
+    }
+
+    fn execute(
+        &self,
+        parameters: &ActionParameters,
+        _context: &ExecutionContext<'_>,
+    ) -> ActionResult {
+        let keys: Vec<&str> = parameters.iter().map(|(key, _)| key.as_str()).collect();
+        ActionResult::success(format!(
+            "{}: {} [{}]",
+            self.tag,
+            parameters.text("message").unwrap_or_default(),
+            keys.join(",")
+        ))
+    }
+
+    fn runs_detached(&self) -> bool {
+        self.tag == "plugin"
+    }
+}
+
+/// The built-in module `legacy` ("Legacy"): `legacy.fetch` (aliased) and
+/// `legacy.other` (not), a `credential` setting, the network capability.
+pub(crate) struct LegacyModule(ModuleManifest);
+
+impl LegacyModule {
+    pub(crate) fn new() -> Self {
+        let mut manifest = TestModule::manifest("legacy", "Legacy", "Legacy", 40);
+        manifest.pages.clear();
+        manifest.capabilities = vec![Capability::Network];
+        manifest.config = vec![ParameterSpec {
+            default: Some(crate::ParameterValue::Text(LEGACY_CREDENTIAL.into())),
+            ..text("credential", false)
+        }];
+        Self(manifest)
+    }
+}
+
+impl FeatureModule for LegacyModule {
+    fn manifest(&self) -> &ModuleManifest {
+        &self.0
+    }
+
+    fn action_handlers(&self, _config: &ActionParameters) -> Vec<Box<dyn ActionHandler>> {
+        vec![
+            Box::new(Fetch {
+                definition: legacy_fetch(),
+                tag: "builtin",
+            }),
+            Box::new(Fetch {
+                definition: fetch_type("legacy.other", 100),
+                tag: "builtin",
+            }),
+        ]
+    }
+}
+
+/// The first-party plugin fixture `deckpilot.legacy` ("Legacy plugin"),
+/// providing `deckpilot.legacy.fetch` with the credentials capability.
+pub(crate) struct PluginFixture {
+    manifest: ModuleManifest,
+    fetch: ActionType,
+    reason: Option<String>,
+}
+
+impl PluginFixture {
+    /// Enabled and healthy.
+    pub(crate) fn new() -> Self {
+        let mut manifest =
+            TestModule::manifest("deckpilot.legacy", "Legacy plugin", "Legacy plugin", 50);
+        manifest.pages.clear();
+        manifest.capabilities = vec![Capability::Credentials];
+        Self {
+            manifest,
+            fetch: plugin_fetch(),
+            reason: None,
+        }
+    }
+
+    /// Not enabled because of a fault (broken, quarantined, ...).
+    pub(crate) fn faulty(reason: &str) -> Self {
+        let mut plugin = Self::new();
+        plugin.manifest.enabled_by_default = false;
+        plugin.reason = Some(reason.to_owned());
+        plugin
+    }
+
+    /// The same module under another id.
+    pub(crate) fn with_module_id(mut self, id: &str) -> Self {
+        self.manifest.id = ModuleId::new(id).unwrap();
+        self
+    }
+
+    /// Providing `fetch` in place of [`plugin_fetch`].
+    pub(crate) fn providing(fetch: ActionType) -> Self {
+        Self {
+            fetch,
+            ..Self::new()
+        }
+    }
+}
+
+impl FeatureModule for PluginFixture {
+    fn manifest(&self) -> &ModuleManifest {
+        &self.manifest
+    }
+
+    fn action_handlers(&self, _config: &ActionParameters) -> Vec<Box<dyn ActionHandler>> {
+        vec![Box::new(Fetch {
+            definition: self.fetch.clone(),
+            tag: "plugin",
+        })]
+    }
+
+    fn unavailable_reason(&self) -> Option<String> {
+        self.reason.clone()
+    }
+}

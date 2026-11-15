@@ -32,6 +32,11 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::alias::{
+    ACTION_ALIASES, ActionAlias, AliasOutcome, AliasStatus, LegacyRoute, LegacyRouting,
+    RESERVED_MODULE_IDS,
+};
+use crate::registry::AliasHandler;
 use crate::variables::{
     VariableDeclaration, VariableRegistry, VariableRegistryError, VariableSource,
 };
@@ -118,6 +123,15 @@ impl ModuleId {
     /// module ids never contain a `.`.
     pub fn is_plugin(&self) -> bool {
         self.0.contains('.')
+    }
+
+    /// Whether this is one of the [`RESERVED_MODULE_IDS`]
+    /// (`deckpilot.core`, `deckpilot.project`, `deckpilot.resource`),
+    /// which no module may ever use. The id itself stays valid, so stored
+    /// legacy action types such as `deckpilot.core.log` are still read and
+    /// reported as unknown.
+    pub fn is_reserved(&self) -> bool {
+        RESERVED_MODULE_IDS.contains(&self.0.as_str())
     }
 
     /// The module that owns an action type, derived from its namespace:
@@ -369,6 +383,8 @@ pub trait FeatureModule: Send + Sync {
 pub enum ModuleError {
     #[error("module `{0}` is already registered")]
     Duplicate(ModuleId),
+    #[error("the module id `{0}` is reserved")]
+    Reserved(ModuleId),
     #[error("unknown module `{0}`")]
     Unknown(ModuleId),
     #[error("action type `{action_type}` is outside the namespace of module `{module}`")]
@@ -460,6 +476,11 @@ pub struct ModuleRegistry {
     /// The core's variables and those of every registered module, kept in
     /// step with registration and the enabled state.
     variables: VariableRegistry,
+    /// Legacy action types a plugin may serve: [`ACTION_ALIASES`], or a
+    /// fixture table in tests.
+    aliases: &'static [ActionAlias],
+    /// Which migrated modules' legacy types go to their plugin.
+    routing: LegacyRouting,
 }
 
 impl fmt::Debug for ModuleRegistry {
@@ -475,6 +496,8 @@ impl fmt::Debug for ModuleRegistry {
                     .collect::<Vec<_>>(),
             )
             .field("variables", &self.variables)
+            .field("aliases", &self.aliases.len())
+            .field("routing", &self.routing)
             .finish()
     }
 }
@@ -485,12 +508,35 @@ impl ModuleRegistry {
             os,
             modules: BTreeMap::new(),
             variables: VariableRegistry::new(),
+            aliases: ACTION_ALIASES,
+            routing: LegacyRouting::default(),
         }
+    }
+
+    /// The registry with `aliases` in place of [`ACTION_ALIASES`].
+    #[cfg(test)]
+    pub(crate) fn with_aliases(mut self, aliases: &'static [ActionAlias]) -> Self {
+        crate::alias::assert_valid(aliases);
+        self.aliases = aliases;
+        self
+    }
+
+    /// Sets where the legacy action types of migrated modules go. Without
+    /// it, every legacy type is served by its built-in.
+    pub fn set_legacy_routing(&mut self, routing: LegacyRouting) {
+        self.routing = routing;
+    }
+
+    pub fn legacy_routing(&self) -> &LegacyRouting {
+        &self.routing
     }
 
     /// Registers a module with its default state.
     pub fn register(&mut self, module: Box<dyn FeatureModule>) -> Result<(), ModuleError> {
         let manifest = module.manifest().clone();
+        if manifest.id.is_reserved() {
+            return Err(ModuleError::Reserved(manifest.id));
+        }
         if self.modules.contains_key(&manifest.id) {
             return Err(ModuleError::Duplicate(manifest.id));
         }
@@ -819,8 +865,116 @@ impl ModuleRegistry {
         pages
     }
 
-    /// Whether instances of `action_type` can currently run.
+    /// How the alias of a legacy action type is served right now
+    /// (`docs/marketplace/module-migration.md` §5.2).
+    fn resolve_alias(&self, alias: &ActionAlias) -> AliasOutcome {
+        let module = alias.module_id();
+        let plugin_id = alias.plugin_id();
+        let legacy = alias.legacy_id();
+        let target = alias.target_id();
+        let builtin = self.builtin_type(alias);
+        let plugin = self.modules.get(&plugin_id);
+        // "GitHub (`deckpilot.github`)": the plugin's name, or the built-in's.
+        let name = match plugin
+            .map(|e| &e.module.manifest().name)
+            .or_else(|| self.manifest(&module).map(|m| &m.name))
+        {
+            Some(name) => format!("{name} (`{plugin_id}`)"),
+            None => format!("`{plugin_id}`"),
+        };
+        let withdrawn = || AliasOutcome::Unavailable {
+            reason: format!("{name} is disabled"),
+        };
+        match self.routing.route(&module) {
+            LegacyRoute::Builtin => return AliasOutcome::Builtin,
+            LegacyRoute::PluginWithdrawn => return withdrawn(),
+            LegacyRoute::Plugin => {}
+        }
+        let fault = match plugin {
+            None => format!("{name} is not installed"),
+            Some(entry) if !entry.enabled => match entry.module.unavailable_reason() {
+                // Disabled in the registry: the user's choice.
+                None => return withdrawn(),
+                Some(reason) => reason,
+            },
+            Some(entry) => match entry.action_types.iter().find(|t| t.id == target) {
+                None => format!("{name} does not provide `{target}`"),
+                Some(provided) => {
+                    let problems = builtin
+                        .map(|b| crate::alias::incompatibilities(alias, b, provided))
+                        .unwrap_or_default();
+                    if problems.is_empty() {
+                        return AliasOutcome::Plugin;
+                    }
+                    format!(
+                        "`{target}` of {name} cannot replace `{legacy}`: {}",
+                        problems.join("; ")
+                    )
+                }
+            },
+        };
+        if builtin.is_some() {
+            AliasOutcome::Fallback { reason: fault }
+        } else if plugin.is_none() {
+            AliasOutcome::Unavailable {
+                reason: format!("{fault}; install it from the Marketplace"),
+            }
+        } else {
+            AliasOutcome::Unavailable { reason: fault }
+        }
+    }
+
+    /// The built-in definition of an alias's legacy type, if compiled in.
+    fn builtin_type(&self, alias: &ActionAlias) -> Option<&ActionType> {
+        self.modules
+            .get(&alias.module_id())?
+            .action_types
+            .iter()
+            .find(|t| t.id.as_str() == alias.legacy)
+    }
+
+    /// Every action type alias and how it is served right now, e.g. to
+    /// show fallbacks to the built-in as warnings.
+    pub fn action_aliases(&self) -> Vec<AliasStatus> {
+        self.aliases
+            .iter()
+            .map(|alias| AliasStatus {
+                legacy: alias.legacy_id(),
+                target: alias.target_id(),
+                plugin: alias.plugin_id(),
+                outcome: self.resolve_alias(alias),
+            })
+            .collect()
+    }
+
+    /// Whether instances of `action_type` can currently run. A legacy type
+    /// routed to its plugin reports the plugin's availability, also once
+    /// the built-in is gone.
     pub fn availability(&self, action_type: &ActionTypeId) -> Availability {
+        if let Some(alias) = crate::alias::lookup(self.aliases, action_type) {
+            match self.resolve_alias(alias) {
+                AliasOutcome::Builtin | AliasOutcome::Fallback { .. } => {}
+                AliasOutcome::Plugin => return Availability::Available,
+                AliasOutcome::Unavailable { .. } => {
+                    let plugin = alias.plugin_id();
+                    let withdrawn =
+                        self.routing.route(&alias.module_id()) == LegacyRoute::PluginWithdrawn;
+                    return match self.modules.get(&plugin) {
+                        Some(entry) => Availability::ModuleDisabled {
+                            name: entry.module.manifest().name.clone(),
+                            module: plugin,
+                        },
+                        None if withdrawn => Availability::ModuleDisabled {
+                            name: self
+                                .manifest(&alias.module_id())
+                                .map_or_else(|| plugin.to_string(), |m| m.name.clone()),
+                            module: plugin,
+                        },
+                        None => Availability::Unknown,
+                    };
+                }
+            }
+        }
         let Some(module) = ModuleId::owner_of(action_type) else {
             return Availability::Unknown;
         };
@@ -840,19 +994,39 @@ impl ModuleRegistry {
     }
 
     /// Builds the registry that executes actions: the handlers of every
-    /// enabled module, each limited to its module's capabilities.
+    /// enabled module, each limited to its module's capabilities. Legacy
+    /// action types with an alias are then routed: to an [`AliasHandler`]
+    /// with the plugin's handler and capabilities, to the built-in (today's
+    /// behaviour, and the fallback), or to nothing with a reason.
     ///
     /// # Panics
     ///
     /// Never in practice: action type ids are checked for uniqueness and
     /// namespacing when a module is registered.
     pub fn action_registry(&self) -> ActionRegistry {
+        let routed: Vec<(&ActionAlias, AliasOutcome)> = self
+            .aliases
+            .iter()
+            .map(|alias| (alias, self.resolve_alias(alias)))
+            .filter(|(_, outcome)| {
+                matches!(
+                    outcome,
+                    AliasOutcome::Plugin | AliasOutcome::Unavailable { .. }
+                )
+            })
+            .collect();
+        let skipped =
+            |id: &ActionTypeId| routed.iter().any(|(alias, _)| alias.legacy == id.as_str());
         let mut registry = ActionRegistry::default();
         for (id, entry) in &self.modules {
             let manifest = entry.module.manifest();
             if !entry.enabled {
                 registry.mark_unavailable(
-                    entry.action_types.iter().map(|t| t.id.clone()),
+                    entry
+                        .action_types
+                        .iter()
+                        .map(|t| t.id.clone())
+                        .filter(|t| !skipped(t)),
                     entry
                         .module
                         .unavailable_reason()
@@ -861,12 +1035,52 @@ impl ModuleRegistry {
                 continue;
             }
             for handler in entry.module.action_handlers(&entry.config) {
+                if skipped(&handler.definition().id) {
+                    continue;
+                }
                 registry
                     .register_for_module(id.clone(), &manifest.capabilities, handler)
                     .expect("action types are unique per module and namespaced");
             }
         }
+        for (alias, outcome) in routed {
+            let reason = match outcome {
+                AliasOutcome::Plugin => match self.alias_handler(alias) {
+                    Some((plugin, capabilities, handler)) => {
+                        if registry
+                            .register_for_module(plugin, capabilities, Box::new(handler))
+                            .is_ok()
+                        {
+                            continue;
+                        }
+                        format!("`{}` is provided twice", alias.legacy)
+                    }
+                    None => format!("the plugin `{}` cannot provide it", alias.plugin),
+                },
+                AliasOutcome::Unavailable { reason } => reason,
+                AliasOutcome::Builtin | AliasOutcome::Fallback { .. } => continue,
+            };
+            registry.mark_unavailable([alias.legacy_id()], reason);
+        }
         registry
+    }
+
+    /// The handler serving `alias.legacy` with the plugin's handler of
+    /// `alias.target`, with the plugin's id and capabilities.
+    fn alias_handler(
+        &self,
+        alias: &ActionAlias,
+    ) -> Option<(ModuleId, &[Capability], AliasHandler)> {
+        let plugin = alias.plugin_id();
+        let entry = self.modules.get(&plugin)?;
+        let target = entry
+            .module
+            .action_handlers(&entry.config)
+            .into_iter()
+            .find(|handler| handler.definition().id.as_str() == alias.target)?;
+        let legacy_config = self.modules.get(&alias.module_id()).map(|e| &e.config);
+        let handler = AliasHandler::new(alias, target, self.builtin_type(alias), legacy_config);
+        Some((plugin, &entry.module.manifest().capabilities, handler))
     }
 }
 
