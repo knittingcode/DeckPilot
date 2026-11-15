@@ -17,7 +17,8 @@ use deckpilot_plugin_broker::{
     Allowed, ApprovedPermissions, Broker, ManualClock, MemoryAudit, PluginId, RateLimits,
 };
 use deckpilot_plugin_supervisor::{
-    CapabilityExecutor, HostCommand, HostConfig, HostError, PluginHost,
+    AbortSignal, CapabilityExecutor, HostCommand, HostConfig, HostError, PluginHost, RestartPolicy,
+    Supervisor, SupervisorError, SupervisorState,
 };
 use serde_json::json;
 
@@ -186,6 +187,12 @@ fn fake(script: &str) {
                 "result-wrong-id" => result(id + 7, ActionOutcome::ok()),
                 "invalid-outcome" => result(id, ActionOutcome::failed("Not A Code", "x")),
                 "exit-42" => std::process::exit(42),
+                // Answers the first invocation after 300 ms, then hangs.
+                "slow-then-hang" => {
+                    std::thread::sleep(Duration::from_millis(300));
+                    result(id, ActionOutcome::ok());
+                    let _ = next_invoke();
+                }
                 "ignore-shutdown" => {
                     result(id, ActionOutcome::ok());
                     // Ignore shutdown and EOF alike.
@@ -439,6 +446,75 @@ fn invalid_params_are_not_sent() {
     assert!(h.is_running());
 }
 
+fn aborted_invocations_get_a_grace_period_then_the_host_is_killed() {
+    let mut cfg = config("slow-then-hang");
+    cfg.abort_grace = Duration::from_millis(1500);
+    let mut h = PluginHost::spawn(&cfg, broker().session(plugin())).unwrap();
+    // Aborted at once, but the result arrives within the grace: kept.
+    let abort = AbortSignal::new();
+    abort.abort();
+    let r = h.invoke_abortable(
+        "a",
+        &Params::new(),
+        Duration::from_secs(5),
+        &mut Executor::default(),
+        Some(&abort),
+    );
+    assert_eq!(r.unwrap(), ActionOutcome::ok());
+    assert!(h.is_running());
+    drop(h);
+
+    // A hung invocation aborted after 100 ms: killed when the grace ends,
+    // long before its own timeout.
+    let mut cfg = config("slow-then-hang");
+    cfg.abort_grace = Duration::from_millis(300);
+    let clock = ManualClock::default();
+    let mut supervisor = Supervisor::new(
+        cfg,
+        broker(),
+        plugin(),
+        RestartPolicy {
+            max_crashes_in_window: 1,
+            ..RestartPolicy::default()
+        },
+        Arc::new(clock),
+    );
+    let mut ex = Executor::default();
+    assert!(
+        supervisor
+            .invoke("a", &Params::new(), Duration::from_secs(5), &mut ex)
+            .is_ok()
+    );
+    let abort = AbortSignal::new();
+    let later = abort.clone();
+    let raiser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        later.abort();
+    });
+    let t = Instant::now();
+    let r = supervisor.invoke_abortable(
+        "b",
+        &Params::new(),
+        Duration::from_secs(30),
+        &mut ex,
+        Some(&abort),
+    );
+    raiser.join().unwrap();
+    assert!(
+        matches!(r, Err(SupervisorError::Host(HostError::Aborted { .. }))),
+        "{r:?}"
+    );
+    assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+    // Not a crash: no crash loop (one crash would disable it here), no
+    // backoff; the next invocation starts a new host.
+    assert_eq!(supervisor.state(), SupervisorState::Idle);
+    assert!(
+        supervisor
+            .invoke("c", &Params::new(), Duration::from_secs(5), &mut ex)
+            .is_ok()
+    );
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("fake-host") {
@@ -469,6 +545,10 @@ fn main() {
         ),
         ("normal_host_works", normal_host_works),
         ("invalid_params_are_not_sent", invalid_params_are_not_sent),
+        (
+            "aborted_invocations_get_a_grace_period_then_the_host_is_killed",
+            aborted_invocations_get_a_grace_period_then_the_host_is_killed,
+        ),
     ];
     let mut failed = 0;
     let mut ran = 0;

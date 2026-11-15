@@ -12,7 +12,7 @@ use std::time::Duration;
 use deckpilot_plugin_abi::{ActionOutcome, Params};
 use deckpilot_plugin_broker::{Broker, Clock, PluginId};
 
-use crate::host::{CapabilityExecutor, HostConfig, HostError, PluginHost};
+use crate::host::{AbortSignal, CapabilityExecutor, HostConfig, HostError, PluginHost};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RestartPolicy {
@@ -149,11 +149,31 @@ impl Supervisor {
         timeout: Duration,
         executor: &mut dyn CapabilityExecutor,
     ) -> Result<ActionOutcome, SupervisorError> {
+        self.invoke_abortable(action, params, timeout, executor, None)
+    }
+
+    /// [`Supervisor::invoke`] that stops when `abort` is raised (see
+    /// [`PluginHost::invoke_abortable`]). An aborted invocation's host is
+    /// killed but not counted as a crash; the next invocation starts a new
+    /// one without backoff.
+    pub fn invoke_abortable(
+        &mut self,
+        action: &str,
+        params: &Params,
+        timeout: Duration,
+        executor: &mut dyn CapabilityExecutor,
+        abort: Option<&AbortSignal>,
+    ) -> Result<ActionOutcome, SupervisorError> {
         let host = self.ensure_host()?;
-        match host.invoke(action, params, timeout, executor) {
+        match host.invoke_abortable(action, params, timeout, executor, abort) {
             Ok(outcome) => {
                 self.consecutive = 0;
                 Ok(outcome)
+            }
+            Err(e @ HostError::Aborted { .. }) => {
+                self.last_exit = e.status();
+                self.host = None;
+                Err(SupervisorError::Host(e))
             }
             Err(e) if e.host_died() => {
                 self.last_exit = e.status();
