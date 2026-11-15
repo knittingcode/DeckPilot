@@ -55,6 +55,35 @@ pub enum ApprovedPermission {
         origins: BTreeSet<String>,
         schemes: BTreeSet<AuthScheme>,
     },
+    /// A larger storage quota than the default (design §5.2: 257 to
+    /// 10,240 KiB). Without it a plugin still has its own storage, with
+    /// [`DEFAULT_STORAGE_QUOTA_BYTES`].
+    #[serde(rename_all = "camelCase")]
+    Storage { quota_kb: u64 },
+}
+
+/// Storage every plugin has without a `storage` grant (design §5.2).
+pub const DEFAULT_STORAGE_QUOTA_BYTES: u64 = 256 * 1024;
+/// The largest quota a `storage` grant may give (design §5.2).
+pub const MAX_STORAGE_QUOTA_BYTES: u64 = 10 * 1024 * 1024;
+/// Keys one plugin may store, whatever its quota (design §5.2).
+pub const MAX_STORAGE_KEYS: u64 = 1_000;
+
+/// How much one plugin may store: bytes (keys and JSON values, as UTF-8)
+/// and keys. The executor enforces it on every write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StorageQuota {
+    pub bytes: u64,
+    pub keys: u64,
+}
+
+impl Default for StorageQuota {
+    fn default() -> Self {
+        Self {
+            bytes: DEFAULT_STORAGE_QUOTA_BYTES,
+            keys: MAX_STORAGE_KEYS,
+        }
+    }
 }
 
 /// The set of approved permissions of one plugin.
@@ -89,6 +118,8 @@ pub struct Grants {
     pub(crate) network: BTreeMap<Origin, BTreeSet<HttpMethod>>,
     pub(crate) notifications: bool,
     pub(crate) credentials: BTreeMap<String, CredentialGrant>,
+    /// A granted larger quota, in bytes.
+    pub(crate) storage_quota: Option<u64>,
 }
 
 /// Where and how one credential slot may be injected.
@@ -154,6 +185,15 @@ impl Grants {
                         return Err(GrantError::DuplicateCredential);
                     }
                 }
+                ApprovedPermission::Storage { quota_kb } => {
+                    let bytes = quota_kb.saturating_mul(1024);
+                    if bytes <= DEFAULT_STORAGE_QUOTA_BYTES || bytes > MAX_STORAGE_QUOTA_BYTES {
+                        return Err(GrantError::StorageQuota);
+                    }
+                    if g.storage_quota.replace(bytes).is_some() {
+                        return Err(GrantError::StorageQuota);
+                    }
+                }
             }
         }
         if g.network.len() > MAX_ORIGINS {
@@ -185,6 +225,14 @@ impl Grants {
     pub fn notifications(&self) -> bool {
         self.notifications
     }
+
+    /// The plugin's storage quota: the granted one, or the default.
+    pub fn storage_quota(&self) -> StorageQuota {
+        StorageQuota {
+            bytes: self.storage_quota.unwrap_or(DEFAULT_STORAGE_QUOTA_BYTES),
+            keys: MAX_STORAGE_KEYS,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,6 +248,8 @@ pub enum GrantError {
     TooManyCredentials,
     /// A credential slot names an origin without a network grant.
     CredentialOriginNotGranted,
+    /// A storage quota outside 257 to 10,240 KiB, or granted twice.
+    StorageQuota,
 }
 
 impl fmt::Display for GrantError {
@@ -219,6 +269,7 @@ impl fmt::Display for GrantError {
             Self::CredentialOriginNotGranted => {
                 f.write_str("credential origin has no network grant")
             }
+            Self::StorageQuota => f.write_str("storage quota outside 257 to 10240 KiB"),
         }
     }
 }

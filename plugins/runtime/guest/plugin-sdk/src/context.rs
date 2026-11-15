@@ -2,9 +2,10 @@
 
 use std::fmt;
 
+pub use deckpilot_plugin_abi::capability::StorageUsage;
 use deckpilot_plugin_abi::capability::{
-    AuthScheme, Header, HttpAuth, HttpFetch, HttpResponse, Log, LogLevel, Notify, StorageKey,
-    StorageSet, VariableClear, VariablePublish,
+    AuthScheme, CredentialRef, Header, HttpAuth, HttpFetch, HttpResponse, Log, LogLevel, NoArgs,
+    Notify, StorageKey, StoragePrefix, StorageSet, VariableClear, VariablePublish,
 };
 use deckpilot_plugin_abi::limits::MAX_HOST_CALLS_PER_INVOCATION;
 use deckpilot_plugin_abi::{CallError, CallErrorCode, CallResult, CapabilityRequest, HttpMethod};
@@ -263,6 +264,100 @@ impl<'a> Context<'a> {
             &CapabilityRequest::VariablesClear(VariableClear { id: None }),
         )
         .map(drop)
+    }
+
+    /// The plugin's own storage keys (those starting with `prefix`, if
+    /// given), sorted.
+    pub fn storage_keys(&mut self, prefix: Option<&str>) -> Result<Vec<String>, CapabilityError> {
+        let v = self.call(
+            "storage.keys",
+            &CapabilityRequest::StorageKeys(StoragePrefix {
+                prefix: prefix.map(str::to_owned),
+            }),
+        )?;
+        serde_json::from_value(v).map_err(|_| malformed("storage.keys", "a list of keys"))
+    }
+
+    /// How much of its quota the plugin's storage uses. A write beyond the
+    /// quota fails with [`CapabilityErrorKind::Failed`] and a detail that
+    /// starts with `storage-quota`.
+    pub fn storage_usage(&mut self) -> Result<StorageUsage, CapabilityError> {
+        let v = self.call("storage.usage", &CapabilityRequest::StorageUsage(NoArgs {}))?;
+        serde_json::from_value(v).map_err(|_| malformed("storage.usage", "a storage usage"))
+    }
+
+    /// Whether the user stored a secret for `handle`'s slot. Never returns
+    /// the secret; needs the slot's `credentials` grant.
+    pub fn has_credential(&mut self, handle: &SecretHandle) -> Result<bool, CapabilityError> {
+        let v = self.call(
+            "credentials.has",
+            &CapabilityRequest::CredentialHas(CredentialRef {
+                credential: handle.key.clone(),
+            }),
+        )?;
+        v.as_bool()
+            .ok_or_else(|| malformed("credentials.has", "true or false"))
+    }
+
+    /// The plugin's settings (`contributes.settings` in the manifest), as
+    /// the user saved them, with the declared defaults filled in. Always
+    /// granted.
+    pub fn settings(&mut self) -> Result<Settings, CapabilityError> {
+        let v = self.call("settings.get", &CapabilityRequest::SettingsGet(NoArgs {}))?;
+        match v {
+            Value::Object(map) => Ok(Settings(map)),
+            _ => Err(malformed("settings.get", "an object of settings")),
+        }
+    }
+}
+
+fn malformed(op: &'static str, expected: &str) -> CapabilityError {
+    CapabilityError {
+        op,
+        kind: CapabilityErrorKind::MalformedReply,
+        detail: format!("the reply is not {expected}"),
+        target: None,
+    }
+}
+
+/// The plugin's settings, by key ([`Context::settings`]). A setting the
+/// user did not set and that has no default is absent.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Settings(serde_json::Map<String, Value>);
+
+impl Settings {
+    /// The setting `key` as `T` (`String`, `i64`, `bool`, ...); `None`
+    /// when absent or of another type.
+    pub fn get<T: DeserializeOwned>(&self, key: &str) -> Option<T> {
+        self.0
+            .get(key)
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+
+    pub fn text(&self, key: &str) -> Option<&str> {
+        self.0.get(key).and_then(Value::as_str)
+    }
+
+    pub fn integer(&self, key: &str) -> Option<i64> {
+        self.0.get(key).and_then(Value::as_i64)
+    }
+
+    pub fn boolean(&self, key: &str) -> Option<bool> {
+        self.0.get(key).and_then(Value::as_bool)
+    }
+
+    pub fn contains(&self, key: &str) -> bool {
+        self.0.contains_key(key)
+    }
+
+    /// Every setting, as JSON.
+    pub fn as_map(&self) -> &serde_json::Map<String, Value> {
+        &self.0
+    }
+
+    /// Every setting as one JSON object text.
+    pub fn to_json(&self) -> String {
+        Value::Object(self.0.clone()).to_string()
     }
 }
 
@@ -537,6 +632,10 @@ impl fmt::Display for CapabilityError {
                         "Declare the `notifications` permission in manifest.json; it applies \
                          once the user approves it",
                     ),
+                    "credentials.has" => f.write_str(
+                        "Declare the slot in `contributes.credentials` and in a `credentials` \
+                         permission in manifest.json; it applies once the user approves it",
+                    ),
                     _ => f.write_str("It is not grantable to plugins in API 1"),
                 }
             }
@@ -633,6 +732,72 @@ mod tests {
         let c = cut(&s, MAX_LOG_LEN);
         assert!(c.len() <= MAX_LOG_LEN);
         assert!(c.chars().all(|ch| ch == 'é'));
+    }
+
+    #[test]
+    fn storage_credential_and_settings_wrappers_are_typed() {
+        use crate::testing::MockHost;
+        let mut host = MockHost::new(|req| match req {
+            CapabilityRequest::StorageKeys(p) => {
+                assert_eq!(p.prefix.as_deref(), Some("a."));
+                CallResult::Ok(serde_json::json!(["a.1", "a.2"]))
+            }
+            CapabilityRequest::StorageUsage(_) => CallResult::Ok(serde_json::json!({
+                "usedBytes": 12, "keys": 2, "quotaBytes": 262_144, "maxKeys": 1000
+            })),
+            CapabilityRequest::CredentialHas(c) if c.credential == "token" => {
+                CallResult::Ok(Value::Bool(true))
+            }
+            CapabilityRequest::CredentialHas(_) => {
+                CallResult::error(CallErrorCode::NotPermitted, "credential not granted")
+            }
+            CapabilityRequest::SettingsGet(_) => CallResult::Ok(serde_json::json!({
+                "city": "berlin", "count": 3, "metric": true
+            })),
+            _ => CallResult::Ok(Value::Null),
+        });
+        let mut ctx = Context::new(&mut host);
+        assert_eq!(ctx.storage_keys(Some("a.")).unwrap(), ["a.1", "a.2"]);
+        let usage = ctx.storage_usage().unwrap();
+        assert_eq!((usage.used_bytes, usage.keys), (12, 2));
+        let token = SecretHandle::slot("token").unwrap();
+        assert!(ctx.has_credential(&token).unwrap());
+        let other = ctx
+            .has_credential(&SecretHandle::slot("other").unwrap())
+            .unwrap_err();
+        assert!(other.is_denied());
+        assert!(
+            other.to_string().contains("contributes.credentials"),
+            "{other}"
+        );
+        let settings = ctx.settings().unwrap();
+        assert_eq!(settings.text("city"), Some("berlin"));
+        assert_eq!(settings.integer("count"), Some(3));
+        assert_eq!(settings.boolean("metric"), Some(true));
+        assert_eq!(settings.get::<String>("count"), None);
+        assert!(!settings.contains("missing"));
+        assert_eq!(ctx.calls(), 5);
+    }
+
+    #[test]
+    fn malformed_replies_are_reported() {
+        use crate::testing::MockHost;
+        let mut host = MockHost::new(|_| CallResult::Ok(serde_json::json!("nonsense")));
+        let mut ctx = Context::new(&mut host);
+        assert_eq!(
+            ctx.settings().unwrap_err().kind(),
+            CapabilityErrorKind::MalformedReply
+        );
+        assert_eq!(
+            ctx.storage_keys(None).unwrap_err().kind(),
+            CapabilityErrorKind::MalformedReply
+        );
+        assert_eq!(
+            ctx.has_credential(&SecretHandle::slot("token").unwrap())
+                .unwrap_err()
+                .kind(),
+            CapabilityErrorKind::MalformedReply
+        );
     }
 
     #[test]

@@ -414,11 +414,30 @@ async fn a_protocol_9_agent_is_never_asked_about_plugins() {
             consent: vec![],
         },
         Request::DisablePlugin { plugin: plugin() },
-        Request::UninstallPlugin { plugin: plugin() },
+        Request::UninstallPlugin {
+            plugin: plugin(),
+            keep: deckpilot_ipc::plugins::PluginRetention::default(),
+        },
         Request::InvokePluginAction {
             plugin: plugin(),
             action: "greet".into(),
             params: std::collections::BTreeMap::new(),
+        },
+        Request::ListKnownPlugins,
+        Request::GetPluginSettings { plugin: plugin() },
+        Request::SetPluginSettings {
+            plugin: plugin(),
+            values: std::collections::BTreeMap::new(),
+        },
+        Request::ListPluginCredentials { plugin: plugin() },
+        Request::SetPluginCredential {
+            plugin: plugin(),
+            key: "token".into(),
+            secret: deckpilot_ipc::plugins::PluginSecret::new("s3cret"),
+        },
+        Request::DeletePluginCredential {
+            plugin: plugin(),
+            key: "token".into(),
         },
     ] {
         let refused = client.request(request).await;

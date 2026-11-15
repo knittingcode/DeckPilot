@@ -3,7 +3,17 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { backendListeners, emitBackend, resetBackend } from "@/test/tauri"
 
 import { PluginError } from "./api"
-import { PLUGIN_EVENT, createTauriPluginClient } from "./client"
+import {
+  PLUGIN_EVENT,
+  createTauriPluginClient,
+  deletePluginCredential,
+  getPluginSettings,
+  listKnownPlugins,
+  listPluginCredentials,
+  setPluginCredential,
+  setPluginSettings,
+  uninstallPluginKeeping,
+} from "./client"
 import type { PluginEvent } from "./types"
 
 const invoke = vi.hoisted(() => vi.fn())
@@ -123,6 +133,51 @@ describe("the Tauri plugin client", () => {
     invoke.mockResolvedValueOnce(null)
     await expect(client.uninstallPlugin("acme.x")).resolves.toBeUndefined()
     expect(invoke).toHaveBeenCalledWith("uninstall_plugin", { plugin: "acme.x" })
+  })
+
+  it.each([
+    ["listKnownPlugins", () => listKnownPlugins(), "list_known_plugins", undefined],
+    [
+      "uninstallPluginKeeping",
+      () => uninstallPluginKeeping("acme.x", { credentials: true }),
+      "uninstall_plugin",
+      { plugin: "acme.x", keep: { credentials: true } },
+    ],
+    [
+      "getPluginSettings",
+      () => getPluginSettings("acme.x"),
+      "get_plugin_settings",
+      { plugin: "acme.x" },
+    ],
+    [
+      "setPluginSettings",
+      () => setPluginSettings("acme.x", { city: "berlin", retries: null }),
+      "set_plugin_settings",
+      { plugin: "acme.x", values: { city: "berlin", retries: null } },
+    ],
+    [
+      "listPluginCredentials",
+      () => listPluginCredentials("acme.x"),
+      "list_plugin_credentials",
+      { plugin: "acme.x" },
+    ],
+    [
+      "setPluginCredential",
+      () => setPluginCredential("acme.x", "token", "s3cret"),
+      "set_plugin_credential",
+      { plugin: "acme.x", key: "token", secret: "s3cret" },
+    ],
+    [
+      "deletePluginCredential",
+      () => deletePluginCredential("acme.x", "token"),
+      "delete_plugin_credential",
+      { plugin: "acme.x", key: "token" },
+    ],
+  ])("%s invokes %s", async (_name, request, command, args) => {
+    invoke.mockResolvedValueOnce(null)
+    await request()
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith(command, args)
   })
 
   it("sends a copy of the consent, not the caller's array", async () => {

@@ -32,7 +32,8 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use deckpilot_ipc::plugins::{
     PermissionStatus, PluginActionOutcome, PluginDetails, PluginEvent, PluginInstallSource,
-    PluginOperation, PluginStage, PluginState, PluginUpdateOutcome, RegistryFreshness, reason,
+    PluginOperation, PluginRetention, PluginStage, PluginState, PluginUpdateOutcome,
+    RegistryFreshness, reason,
 };
 use deckpilot_ipc::{
     AgentClient, AgentPaths, ClientError, ClientKind, KeyMaterial, Request, Response,
@@ -45,6 +46,13 @@ use support::TempDir;
 
 const HELLO: &str = "acme.hello-weather";
 const CRASHY: &str = "acme.sdk-test";
+/// Two plugins of the SDK test guest with storage, a credential slot and
+/// settings: one with a 512 KiB storage grant, one without.
+const DATA: &str = "acme.sdk-data";
+const TWIN: &str = "acme.sdk-twin";
+/// The secrets the user stores for them.
+const SECRET: &str = "tok-3f9a-data-secret-value";
+const TWIN_SECRET: &str = "tok-77c1-twin-secret-value";
 const FUTURE: &str = "acme.future-weather";
 const REVOKED: &str = "acme.revoked-weather";
 const NETWORK: &str = "network:api.open-meteo.com";
@@ -220,41 +228,96 @@ fn hello_v1_1() -> Value {
     manifest
 }
 
-/// The SDK test guest (it can panic on request) as a plugin, with the
-/// variables it publishes.
-fn crashy_manifest() -> Value {
-    let mut manifest = hello_manifest(CRASHY, "1.0.0");
-    manifest["name"] = json!("SDK test");
-    let outputs: Vec<Value> = ["inits", "refused", "status", "first", "second"]
-        .iter()
-        .map(|key| json!({"key": key, "label": key, "kind": "text"}))
-        .collect();
+/// Every action of the SDK test guest (the supervisor checks that the
+/// manifest declares exactly these), with the parameters of those the
+/// data test calls.
+fn sdk_actions() -> Value {
+    let text =
+        |key: &str| json!({"key": key, "label": key, "required": true, "kind": {"type": "text"}});
+    // Each action declares only the outputs it returns: every action's
+    // definition travels in each plugin answer, which must stay below the
+    // IPC message limit.
+    let outputs = |keys: &[&str]| -> Value {
+        keys.iter()
+            .map(|key| json!({"key": key, "label": key, "kind": "text"}))
+            .collect()
+    };
+    let basic = outputs(&["inits", "refused", "status", "first", "second"]);
+    let store = outputs(&[
+        "error",
+        "detail",
+        "usedBytes",
+        "count",
+        "quotaBytes",
+        "maxKeys",
+        "keys",
+        "found",
+        "value",
+        "written",
+    ]);
+    let fetch = outputs(&["error", "detail", "status", "body", "headers"]);
+    let has = outputs(&["error", "detail", "set"]);
+    let settings = outputs(&["error", "detail", "settings"]);
     let actions: Vec<Value> = [
-        "scale",
-        "inits",
-        "arm-shutdown-panic",
-        "authed",
-        "many-calls",
-        "storage",
-        "bad-code",
-        "panic",
-        "spin",
-        "slow",
-        "publish",
-        "clear",
-        "fetch-publish",
-        "two-fetches",
+        ("scale", vec![]),
+        ("inits", vec![]),
+        ("arm-shutdown-panic", vec![]),
+        ("authed", vec![]),
+        ("many-calls", vec![]),
+        ("storage", vec![]),
+        ("bad-code", vec![]),
+        ("panic", vec![]),
+        ("spin", vec![]),
+        ("slow", vec![]),
+        ("store-put", vec![text("key"), text("value")]),
+        ("store-get", vec![text("key")]),
+        ("store-delete", vec![text("key")]),
+        (
+            "store-fill",
+            vec![json!({"key": "kib", "label": "KiB", "required": true,
+                "kind": {"type": "integer", "min": 1, "max": 10240}})],
+        ),
+        ("store-usage", vec![]),
+        (
+            "cred-fetch",
+            vec![
+                text("url"),
+                text("credential"),
+                json!({"key": "scheme", "label": "Scheme", "required": true,
+                    "kind": {"type": "choice", "options": ["bearer", "basic", "header", "query"]}}),
+            ],
+        ),
+        ("cred-has", vec![text("credential")]),
+        ("settings", vec![]),
+        ("publish", vec![]),
+        ("clear", vec![]),
+        ("fetch-publish", vec![]),
+        ("two-fetches", vec![]),
     ]
-    .iter()
-    .map(|id| {
+    .into_iter()
+    .map(|(id, parameters)| {
+        let outputs = match id {
+            _ if id.starts_with("store-") => &store,
+            "cred-fetch" => &fetch,
+            "cred-has" => &has,
+            "settings" => &settings,
+            _ => &basic,
+        };
         json!({
             "id": id, "name": id, "description": "A test action.",
-            "category": "Test", "parameters": [],
+            "category": "Test", "parameters": parameters,
             "node": {"version": 1, "outputs": outputs}
         })
     })
     .collect();
-    manifest["contributes"]["actions"] = json!(actions);
+    json!(actions)
+}
+
+/// The SDK test guest (it can panic on request) as a plugin.
+fn crashy_manifest() -> Value {
+    let mut manifest = hello_manifest(CRASHY, "1.0.0");
+    manifest["name"] = json!("SDK test");
+    manifest["contributes"]["actions"] = sdk_actions();
     manifest["contributes"]["variables"] = json!([
         {"id": "status", "name": "Status", "valueType": {"type": "string"}, "scope": "machine"},
         {"id": "count", "name": "Count", "valueType": {"type": "integer"}, "scope": "machine"},
@@ -262,6 +325,40 @@ fn crashy_manifest() -> Value {
         {"id": "lastStatus", "name": "Last status", "valueType": {"type": "integer"},
          "scope": "machine"}
     ]);
+    manifest
+}
+
+/// The SDK test guest as a plugin with a credential slot, settings and
+/// (with `quota_kb`) a larger storage quota.
+fn data_manifest(id: &str, name: &str, quota_kb: Option<u64>) -> Value {
+    let mut manifest = hello_manifest(id, "1.0.0");
+    manifest["name"] = json!(name);
+    let mut permissions = vec![
+        json!({"kind": "network", "hosts": ["api.example.com", "cdn.example.com"],
+            "methods": ["GET"], "justification": "Talks to the example API."}),
+        json!({"kind": "credentials", "refs": ["token"],
+            "justification": "Signs in to the example API."}),
+    ];
+    if let Some(quota_kb) = quota_kb {
+        permissions.push(json!({"kind": "storage", "quotaKb": quota_kb,
+            "justification": "Keeps a cache."}));
+    }
+    manifest["permissions"] = json!(permissions);
+    manifest["contributes"]["actions"] = sdk_actions();
+    manifest["contributes"]["credentials"] = json!([{
+        "key": "token", "label": "API token", "hosts": ["api.example.com"],
+        "schemes": ["bearer", "header", "query"],
+        "headerName": "X-Api-Key", "queryName": "api_key"
+    }]);
+    manifest["contributes"]["settings"] = json!({"fields": [
+        {"key": "city", "label": "City", "required": true,
+         "kind": {"type": "choice", "options": ["berlin", "tokyo"]},
+         "default": {"type": "choice", "value": "berlin"}},
+        {"key": "retries", "label": "Retries", "required": false,
+         "kind": {"type": "integer", "min": 0, "max": 5}},
+        {"key": "label", "label": "Label", "required": false,
+         "kind": {"type": "text", "maxLength": 8}, "portability": "portable"}
+    ]});
     manifest
 }
 
@@ -409,6 +506,11 @@ impl Registry {
         registry.add(&hello_manifest(HELLO, "1.0.0"), &artifacts.hello);
         registry.add(&hello_v1_1(), &artifacts.hello);
         registry.add(&crashy_manifest(), &artifacts.sdk_test);
+        registry.add(
+            &data_manifest(DATA, "SDK data", Some(512)),
+            &artifacts.sdk_test,
+        );
+        registry.add(&data_manifest(TWIN, "SDK twin", None), &artifacts.sdk_test);
         let mut future = hello_manifest(FUTURE, "1.0.0");
         future["engines"]["deckpilot"] = json!(">=9.0.0 <10.0.0");
         registry.add(&future, &artifacts.hello);
@@ -475,6 +577,22 @@ fn canned_http(dir: &Path) -> PathBuf {
                 "body": forecast.to_string(),
                 "delayMs": SLOW_MS
             },
+            // The data test's API echoes the request's token back (a
+            // careless server): the agent must not hand it to the plugin.
+            {
+                "url": "https://api.example.com/me",
+                "status": 200,
+                "headers": [["content-type", "application/json"],
+                    ["etag", format!("\"{SECRET}\"")]],
+                "body": json!({"echo": SECRET, "basic": base64::engine::general_purpose::STANDARD.encode(SECRET)}).to_string()
+            },
+            // A redirect off the credential's origin.
+            {
+                "url": "https://api.example.com/hop",
+                "status": 302,
+                "headers": [["location", "https://cdn.example.com/stolen"]]
+            },
+            {"url": "https://cdn.example.com/", "status": 200, "body": "{}"},
             // The SDK test guest's servers: slow, very slow (longer than
             // anyone should wait) and fast.
             {"url": SLOW_URL, "status": 200, "body": "{}", "delayMs": TWO_FETCHES_MS},
@@ -992,15 +1110,29 @@ async fn a_plugin_goes_through_its_whole_lifecycle() {
     assert_eq!(data["city"], "Berlin");
     assert_eq!(data["observedAt"], "2026-11-14T12:00");
     assert_eq!(fetched(&env.http).len(), 1);
-    // Invalid parameters are refused by the plugin's SDK, not the agent.
-    let invalid = agent
-        .invoke(HELLO, "current-temperature", json!({"city": "paris"}))
-        .await
-        .unwrap();
-    assert!(
-        matches!(&invalid, PluginActionOutcome::Failed { code, .. } if code == "invalid-parameters"),
-        "{invalid:?}"
-    );
+    // Invalid parameters are refused by the agent against the manifest,
+    // before the host sees them (nothing is fetched).
+    for (params, says) in [
+        (json!({"city": "paris"}), "`paris` is not one of"),
+        (json!({}), "`city` is required"),
+        (
+            json!({"city": "berlin", "extra": 1}),
+            "unknown parameter `extra`",
+        ),
+        (json!({"city": 7}), "`city` expects text"),
+    ] {
+        let invalid = agent
+            .invoke(HELLO, "current-temperature", params.clone())
+            .await
+            .unwrap();
+        assert!(
+            matches!(&invalid, PluginActionOutcome::Failed { code, message: Some(m), retryable: false }
+                if code == "invalid-parameters" && m.contains(says)
+                    && m.contains("acme.hello-weather.current-temperature")),
+            "{params}: {invalid:?}"
+        );
+    }
+    assert_eq!(fetched(&env.http).len(), 1);
 
     // A redirect to an origin that was never granted is re-checked by the
     // broker and refused; nothing reaches that origin.
@@ -1235,6 +1367,7 @@ async fn a_plugin_goes_through_its_whole_lifecycle() {
         agent
             .request(Request::UninstallPlugin {
                 plugin: HELLO.into(),
+                keep: PluginRetention::default(),
             })
             .await
             .unwrap(),
@@ -1270,6 +1403,16 @@ async fn a_plugin_goes_through_its_whole_lifecycle() {
             .iter()
             .any(|a| a.op == "uninstall")
     );
+    // So does `plugin_known`: the name stays.
+    let Response::KnownPlugins { plugins: known } =
+        agent.request(Request::ListKnownPlugins).await.unwrap()
+    else {
+        panic!("known plugins")
+    };
+    let hello = known.iter().find(|k| k.id == HELLO).unwrap();
+    assert_eq!(hello.name, "Hello Weather");
+    assert!(!hello.installed);
+    assert_eq!(hello.namespace, "plugins.acme.helloWeather");
 
     // Events told the app about the uninstall.
     let seen = drain(&mut events).await;
@@ -1561,6 +1704,7 @@ async fn an_install_interrupted_by_an_agent_crash_is_recovered() {
     agent
         .request(Request::UninstallPlugin {
             plugin: HELLO.into(),
+            keep: PluginRetention::default(),
         })
         .await
         .unwrap();
@@ -2027,18 +2171,25 @@ async fn plugin_actions_run_from_keys_run_action_and_workflows() {
     agent
         .request(Request::UninstallPlugin {
             plugin: HELLO.into(),
+            keep: PluginRetention::default(),
         })
         .await
         .unwrap();
+    // `plugin_known` keeps the plugin's name for them (design §2.3 item 4).
     let refused = agent.run_action(weather).await;
     assert_eq!(refused.status, ActionStatus::Failed, "{refused:?}");
-    assert!(refused.message.contains("not available"), "{refused:?}");
+    assert!(
+        refused
+            .message
+            .contains("Hello Weather (acme.hello-weather): the plugin is not installed"),
+        "{refused:?}"
+    );
     // A workflow with such a node is refused before it starts.
     let refused = agent
         .request(Request::StartWorkflow { workflow: flow })
         .await;
     assert!(
-        message_of(&refused).contains("not available"),
+        message_of(&refused).contains("the plugin is not installed"),
         "{refused:?}"
     );
     assert_eq!(fetched(&env.http).len(), 3);
@@ -2157,6 +2308,451 @@ async fn a_cancelled_plugin_node_is_given_up_after_its_grace() {
         PluginState::Enabled
     );
     agent.stop().await;
+}
+
+// ------------------------------------------- storage, credentials, settings
+
+/// The outputs of an invocation that succeeded.
+fn ok_data(outcome: &PluginActionOutcome) -> &BTreeMap<String, Value> {
+    match outcome {
+        PluginActionOutcome::Ok { data, .. } => data,
+        other => panic!("expected ok, got {other:?}"),
+    }
+}
+
+impl Agent {
+    async fn run(&self, plugin: &str, action: &str, params: Value) -> BTreeMap<String, Value> {
+        ok_data(&self.invoke(plugin, action, params).await.unwrap()).clone()
+    }
+
+    async fn grant(&self, plugin: &str, keys: &[&str]) {
+        self.request(Request::GrantPluginPermissions {
+            plugin: plugin.into(),
+            permissions: keys.iter().map(|k| (*k).to_owned()).collect(),
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn revoke(&self, plugin: &str, key: &str) {
+        self.request(Request::RevokePluginPermission {
+            plugin: plugin.into(),
+            permission: key.into(),
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn credentials(&self, plugin: &str) -> Vec<deckpilot_ipc::plugins::PluginCredentialSlot> {
+        match self
+            .request(Request::ListPluginCredentials {
+                plugin: plugin.into(),
+            })
+            .await
+            .unwrap()
+        {
+            Response::PluginCredentials { credentials, .. } => credentials,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    async fn set_secret(
+        &self,
+        plugin: &str,
+        key: &str,
+        secret: &str,
+    ) -> Result<Response, ClientError> {
+        self.request(Request::SetPluginCredential {
+            plugin: plugin.into(),
+            key: key.into(),
+            secret: deckpilot_ipc::plugins::PluginSecret::new(secret),
+        })
+        .await
+    }
+
+    async fn install_enabled(&self, plugin: &str, consent: &[&str]) {
+        self.install(plugin, None).await.unwrap();
+        self.enable(plugin, consent).await.unwrap();
+    }
+}
+
+const DATA_GRANTS: &[&str] = &[
+    "network:api.example.com",
+    "network:cdn.example.com",
+    "credentials:token",
+    "storage",
+];
+const TWIN_GRANTS: &[&str] = &[
+    "network:api.example.com",
+    "network:cdn.example.com",
+    "credentials:token",
+];
+
+fn fetch_params(url: &str, scheme: &str) -> Value {
+    json!({"url": url, "credential": "token", "scheme": scheme})
+}
+
+/// Storage, credentials and settings through the real agent and host, for
+/// two plugins: isolation, quotas, revocation on the very next call,
+/// secrets that never reach the guest or a log, and what an uninstall
+/// keeps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // one scenario, step by step
+async fn plugin_data_is_isolated_bounded_revocable_and_secret() {
+    let registry = shared_registry();
+    let env = Env::new("plugins-e2e-data");
+    let agent = Agent::started(&env, registry).await;
+    agent.install_enabled(DATA, DATA_GRANTS).await;
+    agent.install_enabled(TWIN, TWIN_GRANTS).await;
+
+    // ---- storage: each plugin sees only its own keys.
+    agent
+        .run(DATA, "store-put", json!({"key": "shared", "value": "mine"}))
+        .await;
+    agent
+        .run(
+            TWIN,
+            "store-put",
+            json!({"key": "shared", "value": "theirs"}),
+        )
+        .await;
+    let mine = agent.run(DATA, "store-get", json!({"key": "shared"})).await;
+    assert_eq!(mine["value"], "mine");
+    let theirs = agent.run(TWIN, "store-get", json!({"key": "shared"})).await;
+    assert_eq!(theirs["value"], "theirs");
+    agent
+        .run(TWIN, "store-delete", json!({"key": "shared"}))
+        .await;
+    assert_eq!(
+        agent.run(TWIN, "store-get", json!({"key": "shared"})).await["found"],
+        false
+    );
+    assert_eq!(
+        agent.run(DATA, "store-get", json!({"key": "shared"})).await["value"],
+        "mine"
+    );
+
+    // ---- quota: 256 KiB without a grant (7 values of 32 KiB fit, the
+    // 8th does not), 512 KiB with the `storage` grant.
+    let twin = agent.run(TWIN, "store-fill", json!({"kib": 400})).await;
+    assert_eq!(twin["written"], 7, "{twin:?}");
+    assert_eq!(twin["error"], "Failed", "{twin:?}");
+    assert!(
+        twin["detail"]
+            .as_str()
+            .unwrap()
+            .starts_with("storage-quota"),
+        "{twin:?}"
+    );
+    let usage = agent.run(TWIN, "store-usage", json!({})).await;
+    assert_eq!(usage["quotaBytes"], 256 * 1024);
+    assert_eq!(usage["maxKeys"], 1000);
+    assert_eq!(usage["count"], 7);
+    let data = agent.run(DATA, "store-fill", json!({"kib": 400})).await;
+    assert_eq!(data["written"], 13, "{data:?}");
+    assert!(!data.contains_key("error"), "{data:?}");
+    let usage = agent.run(DATA, "store-usage", json!({})).await;
+    assert_eq!(usage["quotaBytes"], 512 * 1024);
+    // Too large a value is refused before it is stored.
+    let big = agent
+        .run(
+            DATA,
+            "store-put",
+            json!({"key": "big", "value": "x".repeat(16 * 1024)}),
+        )
+        .await;
+    assert!(!big.contains_key("error"), "{big:?}");
+
+    // ---- revoking `storage` applies to the very next write: the 256 KiB
+    // default is back, and DATA already holds more.
+    agent.revoke(DATA, "storage").await;
+    let refused = agent
+        .run(DATA, "store-put", json!({"key": "more", "value": "x"}))
+        .await;
+    assert_eq!(refused["error"], "Failed", "{refused:?}");
+    assert!(
+        refused["detail"]
+            .as_str()
+            .unwrap()
+            .starts_with("storage-quota")
+    );
+    // Reading what it has still works (storage itself is always on).
+    assert_eq!(
+        agent.run(DATA, "store-get", json!({"key": "shared"})).await["value"],
+        "mine"
+    );
+    agent.grant(DATA, &["storage"]).await;
+    let again = agent
+        .run(DATA, "store-put", json!({"key": "more", "value": "x"}))
+        .await;
+    assert!(!again.contains_key("error"), "{again:?}");
+
+    // ---- credentials: a slot without a secret.
+    let slots = agent.credentials(DATA).await;
+    assert_eq!(slots.len(), 1);
+    assert_eq!(slots[0].key, "token");
+    assert!(!slots[0].set && slots[0].granted, "{slots:?}");
+    assert_eq!(slots[0].hosts, ["api.example.com"]);
+    assert_eq!(
+        agent
+            .run(DATA, "cred-has", json!({"credential": "token"}))
+            .await["set"],
+        false
+    );
+    let missing = agent
+        .run(
+            DATA,
+            "cred-fetch",
+            fetch_params("https://api.example.com/me", "bearer"),
+        )
+        .await;
+    assert_eq!(missing["error"], "Unavailable", "{missing:?}");
+    assert!(
+        missing["detail"]
+            .as_str()
+            .unwrap()
+            .contains("no secret is stored")
+    );
+
+    // The user stores one per plugin; no answer carries it back.
+    let answer = agent.set_secret(DATA, "token", SECRET).await.unwrap();
+    // Never printed: an assertion message is a log too.
+    assert!(
+        !format!("{answer:?}").contains(SECRET),
+        "the answer carries the secret"
+    );
+    agent.set_secret(TWIN, "token", TWIN_SECRET).await.unwrap();
+    let refused = agent.set_secret(DATA, "password", SECRET).await;
+    assert!(
+        matches!(&refused, Err(ClientError::Agent(e))
+            if e.reason.as_deref() == Some(reason::INVALID_DATA)),
+        "a secret for an undeclared slot was not refused as invalid data"
+    );
+    assert!(agent.credentials(DATA).await[0].set);
+    assert_eq!(
+        agent
+            .run(DATA, "cred-has", json!({"credential": "token"}))
+            .await["set"],
+        true
+    );
+
+    // Injected into a request to the slot's host only; the plugin gets
+    // the response with every copy of the secret redacted.
+    let before = fetched(&env.http).len();
+    let got = agent
+        .run(
+            DATA,
+            "cred-fetch",
+            fetch_params("https://api.example.com/me", "bearer"),
+        )
+        .await;
+    assert_eq!(got["status"], 200, "{got:?}");
+    let seen = serde_json::to_string(&got).unwrap();
+    assert!(!seen.contains(SECRET), "the guest saw the secret: {seen}");
+    assert!(
+        !seen.contains(&base64::engine::general_purpose::STANDARD.encode(SECRET)),
+        "{seen}"
+    );
+    assert!(seen.contains("[redacted]"), "{seen}");
+    let wire = fetched(&env.http);
+    assert_eq!(
+        wire[before..],
+        [format!(
+            "https://api.example.com/me\tauthorization: Bearer {SECRET}"
+        )]
+    );
+    // Each plugin's own secret.
+    agent
+        .run(
+            TWIN,
+            "cred-fetch",
+            fetch_params("https://api.example.com/me", "bearer"),
+        )
+        .await;
+    agent
+        .run(
+            DATA,
+            "cred-fetch",
+            fetch_params("https://api.example.com/me", "header"),
+        )
+        .await;
+    agent
+        .run(
+            DATA,
+            "cred-fetch",
+            fetch_params("https://api.example.com/me", "query"),
+        )
+        .await;
+    let wire = fetched(&env.http);
+    assert_eq!(
+        wire[before + 1..],
+        [
+            format!("https://api.example.com/me\tauthorization: Bearer {TWIN_SECRET}"),
+            format!("https://api.example.com/me\tX-Api-Key: {SECRET}"),
+            format!("https://api.example.com/me?api_key={SECRET}"),
+        ]
+    );
+    // Never to another host, in an undeclared scheme, for an undeclared
+    // slot, or across a redirect off its origin.
+    let before = fetched(&env.http).len();
+    for (params, why) in [
+        (
+            fetch_params("https://cdn.example.com/", "bearer"),
+            "credential may not be sent to this origin",
+        ),
+        (
+            fetch_params("https://api.example.com/me", "basic"),
+            "credential may not be sent in this scheme",
+        ),
+        (
+            json!({"url": "https://api.example.com/me", "credential": "other", "scheme": "bearer"}),
+            "credential not granted",
+        ),
+    ] {
+        let refused = agent.run(DATA, "cred-fetch", params.clone()).await;
+        assert_eq!(refused["error"], "NotPermitted", "{params}: {refused:?}");
+        assert!(
+            refused["detail"].as_str().unwrap().contains(why),
+            "{refused:?}"
+        );
+    }
+    assert_eq!(
+        fetched(&env.http).len(),
+        before,
+        "a refused request went out"
+    );
+    let hop = agent
+        .run(
+            DATA,
+            "cred-fetch",
+            fetch_params("https://api.example.com/hop", "bearer"),
+        )
+        .await;
+    assert_eq!(hop["error"], "NotPermitted", "{hop:?}");
+    let wire = fetched(&env.http);
+    assert_eq!(wire.len(), before + 1);
+    assert!(!wire.iter().any(|l| l.contains("cdn.example.com/stolen")));
+
+    // ---- revoking the slot applies to the very next call.
+    agent.revoke(DATA, "credentials:token").await;
+    let before = fetched(&env.http).len();
+    let refused = agent
+        .run(
+            DATA,
+            "cred-fetch",
+            fetch_params("https://api.example.com/me", "bearer"),
+        )
+        .await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    let refused = agent
+        .run(DATA, "cred-has", json!({"credential": "token"}))
+        .await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    assert_eq!(fetched(&env.http).len(), before);
+    assert!(!agent.credentials(DATA).await[0].granted);
+    agent.grant(DATA, &["credentials:token"]).await;
+
+    // ---- settings: defaults, then validated values, per plugin.
+    let shown = agent.run(DATA, "settings", json!({})).await;
+    assert_eq!(shown["settings"], r#"{"city":"berlin"}"#);
+    let Response::PluginSettings { settings } = agent
+        .request(Request::SetPluginSettings {
+            plugin: DATA.into(),
+            values: BTreeMap::from([
+                ("retries".to_owned(), json!(3)),
+                ("city".to_owned(), json!("tokyo")),
+            ]),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("settings")
+    };
+    assert_eq!(settings.values.len(), 2);
+    assert_eq!(settings.effective["city"], "tokyo");
+    assert_eq!(settings.fields.len(), 3);
+    for bad in [
+        json!({"retries": 9}),
+        json!({"city": "paris"}),
+        json!({"label": "far too long"}),
+        json!({"unknown": true}),
+    ] {
+        let refused = agent
+            .request(Request::SetPluginSettings {
+                plugin: DATA.into(),
+                values: serde_json::from_value(bad.clone()).unwrap(),
+            })
+            .await;
+        assert_eq!(reason_of(&refused), reason::INVALID_DATA, "{bad}");
+    }
+    let shown = agent.run(DATA, "settings", json!({})).await;
+    assert_eq!(shown["settings"], r#"{"city":"tokyo","retries":3}"#);
+    let twin = agent.run(TWIN, "settings", json!({})).await;
+    assert_eq!(twin["settings"], r#"{"city":"berlin"}"#);
+
+    // ---- uninstall: TWIN keeps its credentials, nothing else.
+    agent
+        .request(Request::UninstallPlugin {
+            plugin: TWIN.into(),
+            keep: PluginRetention {
+                settings: false,
+                credentials: true,
+            },
+        })
+        .await
+        .unwrap();
+    agent.install_enabled(TWIN, TWIN_GRANTS).await;
+    assert!(agent.credentials(TWIN).await[0].set);
+    assert_eq!(agent.run(TWIN, "store-usage", json!({})).await["count"], 0);
+    // DATA by default: storage, settings and credentials go, the name
+    // stays.
+    agent
+        .request(Request::UninstallPlugin {
+            plugin: DATA.into(),
+            keep: PluginRetention::default(),
+        })
+        .await
+        .unwrap();
+    let store = env.plugin_store();
+    let data_id = PluginId::parse(DATA).unwrap();
+    assert_eq!(store.storage_keys(&data_id).unwrap().len(), 0);
+    assert_eq!(store.credentials(&data_id).unwrap().len(), 0);
+    assert_eq!(store.settings(&data_id).unwrap().len(), 0);
+    let Response::KnownPlugins { plugins } =
+        agent.request(Request::ListKnownPlugins).await.unwrap()
+    else {
+        panic!("known")
+    };
+    let data = plugins.iter().find(|k| k.id == DATA).unwrap();
+    assert_eq!((data.name.as_str(), data.installed), ("SDK data", false));
+    assert!(plugins.iter().any(|k| k.id == TWIN && k.installed));
+    drop(store);
+    agent.stop().await;
+
+    // ---- no secret in the agent's logs or, as clear text, in a file.
+    for entry in std::fs::read_dir(env.dir.path()).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if name.starts_with("agent-") {
+            let log = std::fs::read_to_string(&path).unwrap();
+            assert_ne!(log, "");
+            assert!(!log.contains(SECRET), "{name} holds the secret");
+            assert!(!log.contains(TWIN_SECRET), "{name} holds the secret");
+        }
+    }
+    for entry in std::fs::read_dir(env.plugins_dir()).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            let bytes = std::fs::read(&path).unwrap();
+            for secret in [SECRET, TWIN_SECRET] {
+                assert!(
+                    !bytes.windows(secret.len()).any(|w| w == secret.as_bytes()),
+                    "{} holds a secret in clear text",
+                    path.display()
+                );
+            }
+        }
+    }
 }
 
 // ------------------------------------------------------- plugin variables
@@ -2400,6 +2996,7 @@ async fn plugin_variables_are_published_resolved_and_dropped() {
     agent
         .request(Request::UninstallPlugin {
             plugin: CRASHY.into(),
+            keep: PluginRetention::default(),
         })
         .await
         .unwrap();
@@ -2658,12 +3255,19 @@ async fn lifecycle_events_drive_actions_and_variables() {
     agent
         .request(Request::UninstallPlugin {
             plugin: CRASHY.into(),
+            keep: PluginRetention::default(),
         })
         .await
         .unwrap();
     assert_eq!(changed(&mut events, CRASHY).await, None);
     let refused = agent.run_action(inits).await;
-    assert!(refused.message.contains("not available"), "{refused:?}");
+    // `plugin_known` keeps its name for the message.
+    assert!(
+        refused
+            .message
+            .contains("SDK test (acme.sdk-test): the plugin is not installed"),
+        "{refused:?}"
+    );
     assert_eq!(
         agent.preview(profile.id, &[COUNT_VAR]).await,
         vec![unavailable]

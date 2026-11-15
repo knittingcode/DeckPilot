@@ -17,8 +17,9 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use deckpilot_ipc::plugins::{
-    self, AvailablePlugin, PluginActionOutcome, PluginDetails, PluginInstallSource,
-    PluginRuntimeStatus, PluginSummary, PluginUpdateOutcome, RegistryStatus,
+    self, AvailablePlugin, KnownPlugin, PluginActionOutcome, PluginCredentialSlot, PluginDetails,
+    PluginInstallSource, PluginRetention, PluginRuntimeStatus, PluginSettings, PluginSummary,
+    PluginUpdateOutcome, RegistryStatus,
 };
 use deckpilot_ipc::{
     AgentClient, Capability, ClientError, ClientKind, ErrorCode, Request, Response,
@@ -334,12 +335,19 @@ pub async fn rollback_plugin(
     plugin_details(&state, Request::RollbackPlugin { plugin }).await
 }
 
+/// Uninstalls; by default its storage, settings and credentials go too,
+/// `keep` keeps settings and/or credentials for a later install.
 #[tauri::command]
-pub async fn uninstall_plugin(state: State<'_, AppState>, plugin: String) -> PluginResult<()> {
+pub async fn uninstall_plugin(
+    state: State<'_, AppState>,
+    plugin: String,
+    keep: Option<PluginRetention>,
+) -> PluginResult<()> {
     match plugin_request(
         &state,
         Request::UninstallPlugin {
             plugin: plugin.clone(),
+            keep: keep.unwrap_or_default(),
         },
     )
     .await?
@@ -372,6 +380,89 @@ pub async fn invoke_plugin_action(
         Response::PluginActionResult { outcome } => Ok(outcome),
         other => Err(PluginError::unexpected(&other)),
     }
+}
+
+/// Every plugin installed here at some point (`plugin_known`).
+#[tauri::command]
+pub async fn list_known_plugins(state: State<'_, AppState>) -> PluginResult<Vec<KnownPlugin>> {
+    match plugin_request(&state, Request::ListKnownPlugins).await? {
+        Response::KnownPlugins { plugins } => Ok(plugins),
+        other => Err(PluginError::unexpected(&other)),
+    }
+}
+
+async fn plugin_settings(state: &AppState, request: Request) -> PluginResult<PluginSettings> {
+    match plugin_request(state, request).await? {
+        Response::PluginSettings { settings } => Ok(*settings),
+        other => Err(PluginError::unexpected(&other)),
+    }
+}
+
+#[tauri::command]
+pub async fn get_plugin_settings(
+    state: State<'_, AppState>,
+    plugin: String,
+) -> PluginResult<PluginSettings> {
+    plugin_settings(&state, Request::GetPluginSettings { plugin }).await
+}
+
+/// Merges `values` into the saved settings (`null` resets one); the agent
+/// validates them against the manifest.
+#[tauri::command]
+pub async fn set_plugin_settings(
+    state: State<'_, AppState>,
+    plugin: String,
+    values: BTreeMap<String, serde_json::Value>,
+) -> PluginResult<PluginSettings> {
+    plugin_settings(&state, Request::SetPluginSettings { plugin, values }).await
+}
+
+async fn plugin_credentials(
+    state: &AppState,
+    request: Request,
+) -> PluginResult<Vec<PluginCredentialSlot>> {
+    match plugin_request(state, request).await? {
+        Response::PluginCredentials { credentials, .. } => Ok(credentials),
+        other => Err(PluginError::unexpected(&other)),
+    }
+}
+
+/// The plugin's credential slots and whether each has a secret.
+#[tauri::command]
+pub async fn list_plugin_credentials(
+    state: State<'_, AppState>,
+    plugin: String,
+) -> PluginResult<Vec<PluginCredentialSlot>> {
+    plugin_credentials(&state, Request::ListPluginCredentials { plugin }).await
+}
+
+/// Stores a secret the user typed. It goes to the agent only; nothing
+/// here keeps, logs or returns it.
+#[tauri::command]
+pub async fn set_plugin_credential(
+    state: State<'_, AppState>,
+    plugin: String,
+    key: String,
+    secret: String,
+) -> PluginResult<Vec<PluginCredentialSlot>> {
+    plugin_credentials(
+        &state,
+        Request::SetPluginCredential {
+            plugin,
+            key,
+            secret: plugins::PluginSecret::new(secret),
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_plugin_credential(
+    state: State<'_, AppState>,
+    plugin: String,
+    key: String,
+) -> PluginResult<Vec<PluginCredentialSlot>> {
+    plugin_credentials(&state, Request::DeletePluginCredential { plugin, key }).await
 }
 
 /// Asks for a `.dpplugin` file in a native open dialog. `None` when the

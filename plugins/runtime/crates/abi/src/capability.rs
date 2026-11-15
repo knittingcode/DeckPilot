@@ -41,6 +41,24 @@ pub enum CapabilityRequest {
     /// Clears one published variable, or all of the plugin's.
     #[serde(rename = "variables.clear")]
     VariablesClear(VariableClear),
+    /// The plugin's own storage keys, optionally only those starting with
+    /// `prefix`, sorted. Added compatibly within ABI 1.
+    #[serde(rename = "storage.keys")]
+    StorageKeys(StoragePrefix),
+    /// How much of its storage quota the plugin uses ([`StorageUsage`]).
+    /// Added compatibly within ABI 1.
+    #[serde(rename = "storage.usage")]
+    StorageUsage(NoArgs),
+    /// Whether the user stored a secret for one of the plugin's credential
+    /// slots: `true` or `false`, never the secret (design §5.5). Added
+    /// compatibly within ABI 1.
+    #[serde(rename = "credentials.has")]
+    CredentialHas(CredentialRef),
+    /// The plugin's settings (`contributes.settings`): an object of the
+    /// normalized values, defaults filled in. Added compatibly within
+    /// ABI 1.
+    #[serde(rename = "settings.get")]
+    SettingsGet(NoArgs),
 }
 
 /// A value for one of the plugin's own variables. `id` is relative to the
@@ -194,6 +212,37 @@ pub struct StorageSet {
     pub value: Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoragePrefix {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+}
+
+/// Arguments of an operation that takes none: `"args": {}`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NoArgs {}
+
+/// A credential slot, by key (a handle, never a secret).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialRef {
+    pub credential: String,
+}
+
+/// The `ok` value of `storage.usage`. Unknown fields are ignored (host to
+/// guest only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageUsage {
+    /// Bytes in use: every key and its JSON value, as UTF-8.
+    pub used_bytes: u64,
+    pub keys: u64,
+    pub quota_bytes: u64,
+    pub max_keys: u64,
+}
+
 impl CapabilityRequest {
     /// Stable operation name, for audit records and rate classes.
     pub fn op(&self) -> &'static str {
@@ -204,6 +253,10 @@ impl CapabilityRequest {
             Self::StorageGet(_) => "storage.get",
             Self::StorageSet(_) => "storage.set",
             Self::StorageDelete(_) => "storage.delete",
+            Self::StorageKeys(_) => "storage.keys",
+            Self::StorageUsage(_) => "storage.usage",
+            Self::CredentialHas(_) => "credentials.has",
+            Self::SettingsGet(_) => "settings.get",
             Self::VariablesPublish(_) => "variables.publish",
             Self::VariablesClear(_) => "variables.clear",
         }
@@ -257,6 +310,19 @@ impl CapabilityRequest {
                     return Err(RequestError::TooLarge("value"));
                 }
             }
+            Self::StorageKeys(p) => {
+                if p.prefix.as_deref().is_some_and(|prefix| {
+                    prefix.chars().count() > MAX_STORAGE_KEY || prefix.chars().any(char::is_control)
+                }) {
+                    return Err(RequestError::TooLarge("prefix"));
+                }
+            }
+            Self::CredentialHas(c) => {
+                if !is_credential_key(&c.credential) {
+                    return Err(RequestError::TooLarge("credential"));
+                }
+            }
+            Self::StorageUsage(_) | Self::SettingsGet(_) => {}
             Self::VariablesPublish(p) => {
                 if !is_variable_id(&p.id) {
                     return Err(RequestError::TooLarge("variable"));
@@ -454,6 +520,51 @@ mod tests {
         }
         assert!(is_credential_key("token"));
         assert!(is_credential_key("apiKey2"));
+    }
+
+    #[test]
+    fn storage_credential_and_settings_ops_parse_strictly() {
+        for (json, op) in [
+            (r#"{"op":"storage.keys","args":{}}"#, "storage.keys"),
+            (
+                r#"{"op":"storage.keys","args":{"prefix":"a."}}"#,
+                "storage.keys",
+            ),
+            (r#"{"op":"storage.usage","args":{}}"#, "storage.usage"),
+            (
+                r#"{"op":"credentials.has","args":{"credential":"apiKey"}}"#,
+                "credentials.has",
+            ),
+            (r#"{"op":"settings.get","args":{}}"#, "settings.get"),
+        ] {
+            let r = parse(json).unwrap();
+            assert_eq!(r.op(), op);
+            r.validate().unwrap();
+            assert_eq!(serde_json::to_string(&r).unwrap(), json);
+        }
+        for bad in [
+            r#"{"op":"settings.get","args":{"plugin":"other.plugin"}}"#,
+            r#"{"op":"storage.usage","args":{"quota":1}}"#,
+            r#"{"op":"credentials.has","args":{"credential":"apiKey","secret":"x"}}"#,
+            r#"{"op":"credentials.get","args":{"credential":"apiKey"}}"#,
+            r#"{"op":"credentials.reveal","args":{"credential":"apiKey"}}"#,
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+        let bad_key = parse(r#"{"op":"credentials.has","args":{"credential":"api-key"}}"#).unwrap();
+        assert_eq!(
+            bad_key.validate(),
+            Err(RequestError::TooLarge("credential"))
+        );
+        let long = CapabilityRequest::StorageKeys(StoragePrefix {
+            prefix: Some("p".repeat(MAX_STORAGE_KEY + 1)),
+        });
+        assert_eq!(long.validate(), Err(RequestError::TooLarge("prefix")));
+        let usage: StorageUsage = serde_json::from_str(
+            r#"{"usedBytes":10,"keys":1,"quotaBytes":262144,"maxKeys":1000,"later":true}"#,
+        )
+        .unwrap();
+        assert_eq!(usage.keys, 1);
     }
 
     #[test]

@@ -84,6 +84,10 @@ pub enum StoreError {
         version: String,
         problem: String,
     },
+    /// Plugin data (a credential, settings) the plugin does not declare,
+    /// or out of bounds. Never contains a secret.
+    #[error("{0}")]
+    InvalidData(String),
     #[error("the secret cleanup of plugin {id} failed: {message}")]
     Hook { id: PluginId, message: String },
     /// An injected crash (tests): the operation stopped exactly here, with

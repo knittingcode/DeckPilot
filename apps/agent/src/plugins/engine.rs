@@ -24,7 +24,7 @@ use deckpilot_core::graph::{MAX_TIMEOUT_MS, NodeSpec};
 use deckpilot_core::variables::{VariableSource, module_namespace};
 use deckpilot_core::{
     ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, ExecutionContext,
-    FeatureModule, ModuleId, ModuleManifest, ParameterSpec, ParameterValue, Portability,
+    FeatureModule, ModuleId, ModuleManifest, ParameterValue, Portability,
 };
 use deckpilot_plugin_abi::{ActionOutcome, ParamValue, Params};
 use deckpilot_plugin_manifest::Action;
@@ -157,9 +157,12 @@ pub(crate) fn action_type(plugin: &str, action: &Action) -> Result<ActionType, S
         .parameters
         .iter()
         .map(|parameter| {
+            // Through `core_spec`: the kind's constraints (`maxLength`, …)
+            // are camel case in the manifest and snake case in the core.
             serde_json::to_value(parameter)
-                .and_then(serde_json::from_value::<ParameterSpec>)
-                .map_err(|e| format!("parameter `{}`: {e}", parameter.key))
+                .map_err(|e| e.to_string())
+                .and_then(super::data::core_spec)
+                .map_err(|e| format!("parameter {e}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut node: NodeSpec = match &action.node {
@@ -376,6 +379,14 @@ mod tests {
             "acme.hello-weather"
         );
         assert_eq!(greet.parameters.len(), 2);
+        // The camel-case constraint reached the core's kind.
+        assert_eq!(
+            greet.parameters[0].kind,
+            deckpilot_core::ParameterKind::Text {
+                multiline: false,
+                max_length: Some(64)
+            }
+        );
         assert!(greet.parameters[0].required);
         assert_eq!(greet.node.timeout_ms, 5_000);
         assert!(greet.node.cancellable && !greet.node.changes_context);

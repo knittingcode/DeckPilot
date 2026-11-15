@@ -19,21 +19,52 @@
 //!   invocation started in.
 //! * `notify` as an agent notification, titled with the plugin's name.
 //! * `log` into the agent's log, attributed to the plugin.
-//! * Storage and credential injection are refused explicitly
-//!   (`unavailable`): neither the per-plugin key-value store nor the
-//!   per-plugin secret slots exist in the agent yet.
+//! * Storage (`storage.*`) in the plugin's own rows of plugins.db
+//!   ([`PluginData`]), within the quota the broker passed with the call.
+//! * Credentials as handles (design §5.5): for an `http.fetch` with
+//!   `auth`, the secret of the slot (allowed by the broker for this origin
+//!   and scheme) is read from plugins.db and injected by the HTTP client
+//!   into this request only, header or query parameter as the slot
+//!   declares, again on a same-origin redirect the broker re-allowed.
+//!   The secret never reaches the guest: it is replaced by `[redacted]`
+//!   in the response's body and headers and in error messages, it is
+//!   never logged, and `credentials.has` answers only `true` or `false`.
+//! * `settings.get`: the saved settings, validated against the manifest,
+//!   defaults filled in.
+
+use std::fmt::Write as _;
+use std::sync::{Arc, Mutex};
 
 use deckpilot_core::notify::{Notification, Severity};
 use deckpilot_ipc::AgentEvent;
-use deckpilot_plugin_abi::capability::{Header, HttpResponse, LogLevel};
+use deckpilot_plugin_abi::capability::{AuthScheme, Header, HttpResponse, LogLevel, StorageUsage};
 use deckpilot_plugin_abi::{CallErrorCode, CallResult, HttpMethod};
-use deckpilot_plugin_broker::{Allowed, AllowedFetch, Broker, Decision, PluginId};
-use deckpilot_plugin_manifest::{Variable, VariableScope};
+use deckpilot_plugin_broker::{
+    Allowed, AllowedFetch, Broker, Decision, PluginId, StorageQuota as GrantedQuota,
+};
+use deckpilot_plugin_manifest::{Manifest, Variable, VariableScope};
+use deckpilot_plugin_store::{PluginData, Secret, StorageError, StorageQuota};
 use deckpilot_plugin_supervisor::{CallInterrupt, CapabilityExecutor};
+use serde_json::Value;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
 use super::variables::{PublishedVariables, typed};
+
+/// The plugin data connection the executors share; `None` once the store
+/// is closed (configuration locked).
+pub(super) type SharedData = Arc<Mutex<Option<PluginData>>>;
+
+/// What an executor needs for storage, credentials and settings: the data
+/// connection and the manifest of the version that runs.
+#[derive(Clone)]
+pub(super) struct DataAccess {
+    pub data: SharedData,
+    pub manifest: Arc<Manifest>,
+}
+
+/// What replaces a secret wherever it could reach the guest or a log.
+const REDACTED: &str = "[redacted]";
 
 /// Longest a fetch (all hops) may take.
 const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
@@ -84,14 +115,79 @@ impl Transport {
     fn send(
         &self,
         fetch: &AllowedFetch,
+        auth: Option<&Auth>,
         interrupt: Option<&CallInterrupt>,
     ) -> Result<Exchange, String> {
         match self {
-            Self::Network => network_send(fetch, interrupt),
+            Self::Network => network_send(fetch, auth, interrupt),
             #[cfg(feature = "test-hooks")]
-            Self::Canned(canned) => canned.send(fetch, interrupt),
+            Self::Canned(canned) => canned.send(fetch, auth, interrupt),
         }
     }
+}
+
+/// A credential to inject into one request: the HTTP client's own type,
+/// whose `Debug` never shows the secret.
+pub(super) type Auth = deckpilot_module_http::client::Auth;
+
+/// `secret` as `application/x-www-form-urlencoded` (how a query
+/// parameter carries it).
+fn form_encoded(secret: &str) -> String {
+    let mut out = String::with_capacity(secret.len());
+    for byte in secret.bytes() {
+        match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => {
+                out.push(char::from(byte));
+            }
+            b' ' => out.push('+'),
+            other => {
+                let _ = write!(out, "%{other:02X}");
+            }
+        }
+    }
+    out
+}
+
+/// Standard padded base64 (how `Basic` carries `user:password`).
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            chunk.get(1).copied().unwrap_or(0),
+            chunk.get(2).copied().unwrap_or(0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for (i, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            if i <= chunk.len() {
+                out.push(char::from(ALPHABET[((n >> shift) & 63) as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// Every form in which `secret` could come back from a request: as it is,
+/// form-encoded and base64 (`Basic`).
+fn secret_forms(secret: &str) -> Vec<String> {
+    let mut forms = vec![
+        secret.to_owned(),
+        form_encoded(secret),
+        base64(secret.as_bytes()),
+    ];
+    forms.retain(|f| f.len() >= 4);
+    forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
+    forms.dedup();
+    forms
+}
+
+fn redact(text: &str, forms: &[String]) -> String {
+    forms.iter().fold(text.to_owned(), |text, form| {
+        text.replace(form.as_str(), REDACTED)
+    })
 }
 
 /// How often a running request looks at its invocation's interrupt.
@@ -132,6 +228,7 @@ fn content_type(headers: &[Header]) -> &'static str {
 
 fn network_send(
     fetch: &AllowedFetch,
+    auth: Option<&Auth>,
     interrupt: Option<&CallInterrupt>,
 ) -> Result<Exchange, String> {
     use deckpilot_module_http::client;
@@ -149,7 +246,9 @@ fn network_send(
             .body
             .clone()
             .map(|body| (body, content_type(&fetch.headers))),
-        auth: None,
+        // Only ever a secret the broker allowed for this origin and scheme
+        // (`Executor::fetch`); the client sends it over https only.
+        auth: auth.cloned(),
         timeout: FETCH_TIMEOUT,
         // Every redirect goes back to the broker.
         follow_redirects: false,
@@ -220,6 +319,9 @@ pub(super) struct Executor {
     events: broadcast::Sender<AgentEvent>,
     transport: Transport,
     variables: OwnVariables,
+    /// Storage, credentials and settings; without it they are
+    /// `unavailable`.
+    access: Option<DataAccess>,
 }
 
 impl std::fmt::Debug for Executor {
@@ -244,7 +346,92 @@ impl Executor {
             events,
             transport,
             variables,
+            access: None,
         }
+    }
+
+    /// Gives the executor the plugin's data (storage, credentials,
+    /// settings).
+    pub fn with_data(mut self, access: DataAccess) -> Self {
+        self.access = Some(access);
+        self
+    }
+
+    /// Runs `f` on the data connection, scoped to the plugin the session
+    /// belongs to (which must be the manifest's).
+    fn with_store<T>(
+        &self,
+        plugin: &PluginId,
+        f: impl FnOnce(&mut PluginData, &deckpilot_plugin_manifest::PluginId, &Manifest) -> T,
+    ) -> Result<T, CallResult> {
+        let unavailable = || {
+            CallResult::error(
+                CallErrorCode::Unavailable,
+                "plugin data is not available right now (the configuration is locked)",
+            )
+        };
+        let access = self.access.as_ref().ok_or_else(unavailable)?;
+        if access.manifest.id.as_str() != plugin.as_str() {
+            return Err(CallResult::error(
+                CallErrorCode::Failed,
+                "the executor belongs to another plugin",
+            ));
+        }
+        let mut guard = access.data.lock().map_err(|_| unavailable())?;
+        let data = guard.as_mut().ok_or_else(unavailable)?;
+        Ok(f(data, &access.manifest.id, &access.manifest))
+    }
+
+    /// The secret to inject for an allowed `auth`, as the HTTP client's
+    /// [`Auth`] (header or query name from the slot's declaration).
+    fn credential(
+        &self,
+        plugin: &PluginId,
+        auth: &deckpilot_plugin_abi::capability::HttpAuth,
+    ) -> Result<Auth, CallResult> {
+        let (secret, slot) = self.with_store(plugin, |data, id, manifest| {
+            let slot = manifest
+                .contributes
+                .credentials()
+                .iter()
+                .find(|c| c.key == auth.credential)
+                .cloned();
+            (data.credential_secret(id, &auth.credential), slot)
+        })?;
+        let missing = || {
+            CallResult::error(
+                CallErrorCode::Unavailable,
+                format!(
+                    "no secret is stored for the credential `{}`; the user sets it in the \
+                     plugin's settings",
+                    auth.credential
+                ),
+            )
+        };
+        let secret: Secret = secret
+            .map_err(|e| CallResult::error(CallErrorCode::Failed, e.to_string()))?
+            .ok_or_else(missing)?;
+        let slot = slot.ok_or_else(|| {
+            CallResult::error(
+                CallErrorCode::NotPermitted,
+                "the credential slot is not declared",
+            )
+        })?;
+        let value = deckpilot_core::Secret::new(secret.expose());
+        let named = |name: Option<String>, what: &str| {
+            name.filter(|n| !n.is_empty()).ok_or_else(|| {
+                CallResult::error(
+                    CallErrorCode::Failed,
+                    format!("the credential slot declares no {what} name"),
+                )
+            })
+        };
+        Ok(match auth.scheme {
+            AuthScheme::Bearer => Auth::Bearer(value),
+            AuthScheme::Basic => Auth::Basic(value),
+            AuthScheme::Header => Auth::Header(named(slot.header_name, "header")?, value),
+            AuthScheme::Query => Auth::Query(named(slot.query_name, "query parameter")?, value),
+        })
     }
 
     /// Publishes (`Some`) or clears one of the plugin's declared variables.
@@ -327,21 +514,29 @@ impl Executor {
         allowed: &AllowedFetch,
         interrupt: Option<&CallInterrupt>,
     ) -> CallResult {
-        if allowed.auth.is_some() {
-            return CallResult::error(
-                CallErrorCode::Unavailable,
-                "credentials are not available to plugins in this version of DeckPilot",
-            );
-        }
         let session = self.broker.session(plugin.clone());
         let mut current = allowed.clone();
         let mut hop = 0;
         loop {
             debug!(plugin = %plugin, origin = %current.origin, "plugin fetch");
-            let exchange = match self.transport.send(&current, interrupt) {
-                Ok(exchange) => exchange,
+            // Read for every hop: the broker re-allowed this hop's
+            // credential for its origin (a redirect off the origin never
+            // carries one).
+            let auth = match current.auth.as_ref().map(|a| self.credential(plugin, a)) {
+                Some(Ok(auth)) => Some(auth),
+                Some(Err(refused)) => return refused,
+                None => None,
+            };
+            let forms = auth.as_ref().map_or_else(Vec::new, |a| {
+                let secret = match a {
+                    Auth::Bearer(s) | Auth::Basic(s) | Auth::Header(_, s) | Auth::Query(_, s) => s,
+                };
+                secret_forms(secret.expose())
+            });
+            let exchange = match self.transport.send(&current, auth.as_ref(), interrupt) {
+                Ok(exchange) => redacted(exchange, &forms),
                 Err(message) => {
-                    return CallResult::error(CallErrorCode::Failed, message);
+                    return CallResult::error(CallErrorCode::Failed, redact(&message, &forms));
                 }
             };
             let location = (300..400)
@@ -374,6 +569,46 @@ impl Executor {
                 }
             }
         }
+    }
+}
+
+/// The exchange with every form of the injected secret replaced (a server
+/// that echoes the request must not hand the secret to the plugin).
+fn redacted(exchange: Exchange, forms: &[String]) -> Exchange {
+    if forms.is_empty() {
+        return exchange;
+    }
+    Exchange {
+        status: exchange.status,
+        headers: exchange
+            .headers
+            .into_iter()
+            .map(|(name, value)| (name, redact(&value, forms)))
+            .collect(),
+        body: match String::from_utf8(exchange.body) {
+            Ok(text) => redact(&text, forms).into_bytes(),
+            // Not UTF-8: never delivered in ABI 1 (`reply`).
+            Err(_) => Vec::new(),
+        },
+    }
+}
+
+fn storage_error(error: &StorageError) -> CallResult {
+    let code = match error {
+        StorageError::InvalidKey | StorageError::ValueTooLarge => CallErrorCode::BadRequest,
+        StorageError::QuotaExceeded { .. } | StorageError::TooManyKeys { .. } => {
+            CallErrorCode::Failed
+        }
+        StorageError::NotInstalled => CallErrorCode::Unavailable,
+        StorageError::Store(_) => CallErrorCode::Failed,
+    };
+    CallResult::error(code, error.to_string())
+}
+
+fn quota(granted: GrantedQuota) -> StorageQuota {
+    StorageQuota {
+        bytes: granted.bytes,
+        keys: granted.keys,
     }
 }
 
@@ -441,13 +676,105 @@ impl Executor {
                 }
                 CallResult::Ok(serde_json::Value::Null)
             }
-            Allowed::StorageGet { .. }
-            | Allowed::StorageSet { .. }
-            | Allowed::StorageDelete { .. } => CallResult::error(
-                CallErrorCode::Unavailable,
-                "plugin storage is not available in this version of DeckPilot",
-            ),
+            Allowed::StorageGet { key } => self
+                .with_store(plugin, |data, id, _| match data.storage_get(id, key) {
+                    Ok(value) => CallResult::Ok(value.unwrap_or(Value::Null)),
+                    Err(e) => storage_error(&e),
+                })
+                .unwrap_or_else(|refused| refused),
+            Allowed::StorageSet {
+                key,
+                value,
+                quota: granted,
+            } => self
+                .with_store(plugin, |data, id, _| {
+                    match data.storage_set(id, key, value, quota(*granted)) {
+                        Ok(_) => CallResult::Ok(Value::Null),
+                        Err(e) => storage_error(&e),
+                    }
+                })
+                .unwrap_or_else(|refused| refused),
+            Allowed::StorageDelete { key } => self
+                .with_store(plugin, |data, id, _| match data.storage_delete(id, key) {
+                    Ok(_) => CallResult::Ok(Value::Null),
+                    Err(e) => storage_error(&e),
+                })
+                .unwrap_or_else(|refused| refused),
+            Allowed::StorageKeys { prefix } => self
+                .with_store(plugin, |data, id, _| {
+                    match data.storage_keys(id, prefix.as_deref()) {
+                        Ok(keys) => CallResult::Ok(Value::from(keys)),
+                        Err(e) => CallResult::error(CallErrorCode::Failed, e.to_string()),
+                    }
+                })
+                .unwrap_or_else(|refused| refused),
+            Allowed::StorageUsage { quota } => self
+                .with_store(plugin, |data, id, _| match data.storage_usage(id) {
+                    Ok(usage) => serde_json::to_value(StorageUsage {
+                        used_bytes: usage.bytes,
+                        keys: usage.keys,
+                        quota_bytes: quota.bytes,
+                        max_keys: quota.keys,
+                    })
+                    .map_or_else(
+                        |e| CallResult::error(CallErrorCode::Failed, e.to_string()),
+                        CallResult::Ok,
+                    ),
+                    Err(e) => CallResult::error(CallErrorCode::Failed, e.to_string()),
+                })
+                .unwrap_or_else(|refused| refused),
+            // Only whether a secret is stored, never the secret.
+            Allowed::CredentialHas { key } => self
+                .with_store(plugin, |data, id, _| {
+                    match data.credential_secret(id, key) {
+                        Ok(secret) => CallResult::Ok(Value::Bool(secret.is_some())),
+                        Err(e) => CallResult::error(CallErrorCode::Failed, e.to_string()),
+                    }
+                })
+                .unwrap_or_else(|refused| refused),
+            Allowed::SettingsGet => self
+                .with_store(plugin, |data, id, manifest| match data.settings(id) {
+                    Ok(saved) => {
+                        let (effective, _) = super::data::effective_settings(manifest, &saved);
+                        CallResult::Ok(Value::Object(effective.into_iter().collect()))
+                    }
+                    Err(e) => CallResult::error(CallErrorCode::Failed, e.to_string()),
+                })
+                .unwrap_or_else(|refused| refused),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_form_of_a_secret_is_redacted() {
+        assert_eq!(base64(b"user:pass"), "dXNlcjpwYXNz");
+        assert_eq!(base64(b"ab"), "YWI=");
+        assert_eq!(base64(b"a"), "YQ==");
+        assert_eq!(form_encoded("a b&c/é"), "a+b%26c%2F%C3%A9");
+        let forms = secret_forms("user:p@ss word");
+        let text = format!(
+            "raw user:p@ss word, query {}, basic {}",
+            form_encoded("user:p@ss word"),
+            base64(b"user:p@ss word")
+        );
+        let clean = redact(&text, &forms);
+        assert!(!clean.contains("p@ss"), "{clean}");
+        assert!(!clean.contains(&base64(b"user:p@ss word")), "{clean}");
+        assert_eq!(clean.matches(REDACTED).count(), 3, "{clean}");
+        let exchange = redacted(
+            Exchange {
+                status: 200,
+                headers: vec![("x-echo".into(), "Bearer user:p@ss word".into())],
+                body: b"{\"token\":\"user:p@ss word\"}".to_vec(),
+            },
+            &forms,
+        );
+        assert_eq!(exchange.headers[0].1, "Bearer [redacted]");
+        assert_eq!(exchange.body, b"{\"token\":\"[redacted]\"}");
     }
 }
 
@@ -501,18 +828,32 @@ pub(super) mod test_transport {
             })
         }
 
+        /// Logs what would go on the wire: the URL (with an injected query
+        /// parameter) and, after a tab, an injected credential header.
         pub fn send(
             &self,
             fetch: &AllowedFetch,
+            auth: Option<&super::Auth>,
             interrupt: Option<&CallInterrupt>,
         ) -> Result<Exchange, String> {
-            let url = fetch.url.as_str();
+            use super::Auth;
+            let mut target = fetch.url.clone();
+            if let Some(Auth::Query(name, secret)) = auth {
+                target.query_pairs_mut().append_pair(name, secret.expose());
+            }
+            let header = match auth {
+                Some(Auth::Bearer(s)) => format!("\tauthorization: Bearer {}", s.expose()),
+                Some(Auth::Basic(s)) => format!("\tauthorization: Basic {}", s.expose()),
+                Some(Auth::Header(name, s)) => format!("\t{name}: {}", s.expose()),
+                Some(Auth::Query(..)) | None => String::new(),
+            };
+            let url = target.as_str();
             if let Ok(mut file) = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&self.log)
             {
-                let _ = writeln!(file, "{url}");
+                let _ = writeln!(file, "{url}{header}");
             }
             let route = self
                 .routes

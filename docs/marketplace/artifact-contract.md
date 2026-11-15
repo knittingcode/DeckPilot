@@ -81,6 +81,15 @@ without being compiled or run (`deckpilot_plugin_package::wasm`):
   must have exactly these types;
 - at most one table.
 
+Everything the module reaches outside itself goes through that one import
+as a capability request (`plugins/runtime/crates/abi/src/capability.rs`):
+`http.fetch` (with an optional credential handle), `notify`, `log`,
+`storage.get`, `storage.set`, `storage.delete`, `storage.keys`,
+`storage.usage`, `credentials.has` and `settings.get`. The last four are
+compatible ABI 1 additions; a module that does not use them is unchanged.
+A secret never crosses the import: the module names a credential slot and
+the agent injects its value (agent-integration.md, "Plugin data").
+
 A start function is allowed: the host runs it under the invocation deadline
 and fuel limits, as it does today. The host repeats the import and export
 checks when it loads the module, the supervisor compares the module's

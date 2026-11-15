@@ -188,6 +188,10 @@ pub(crate) enum Payload {
     },
     Uninstall {
         prior_state: PluginState,
+        /// What the uninstall keeps; absent in journals of older builds
+        /// (nothing kept).
+        #[serde(default)]
+        keep: crate::data::Retention,
     },
 }
 
@@ -336,6 +340,34 @@ impl PluginStore {
     /// Unfinished operations (empty after a successful recovery).
     pub fn journal(&self) -> Result<Vec<JournalEntry>> {
         load_journal(self.connection())
+    }
+
+    /// Every plugin ever installed here, installed or not (`plugin_known`).
+    pub fn known(&self) -> Result<Vec<crate::data::KnownPlugin>> {
+        crate::data::known(self.connection())
+    }
+
+    /// Which credential slots of `id` have a secret (never the secrets).
+    pub fn credentials(&self, id: &PluginId) -> Result<Vec<crate::data::CredentialStatus>> {
+        crate::data::credentials(self.connection(), id)
+    }
+
+    /// The settings values the user saved for `id` (without defaults).
+    pub fn settings(
+        &self,
+        id: &PluginId,
+    ) -> Result<std::collections::BTreeMap<String, serde_json::Value>> {
+        crate::data::settings(self.connection(), id)
+    }
+
+    /// What `id`'s storage holds.
+    pub fn storage_usage(&self, id: &PluginId) -> Result<crate::data::StorageUsage> {
+        crate::data::storage_usage(self.connection(), id)
+    }
+
+    /// `id`'s storage keys.
+    pub fn storage_keys(&self, id: &PluginId) -> Result<Vec<String>> {
+        crate::data::storage_keys(self.connection(), id, None)
     }
 }
 
@@ -546,7 +578,9 @@ pub(crate) fn insert_version(
             activated,
         ],
     )?;
-    Ok(())
+    // Every plugin that was ever installed keeps its name (design §2.3
+    // item 4), in the same transaction as its version.
+    crate::data::upsert_known(conn, &pending.manifest()?, now)
 }
 
 pub(crate) fn set_role(
