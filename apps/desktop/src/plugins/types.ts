@@ -109,7 +109,7 @@ export interface PluginRuntimeStatus {
   built: boolean
   /** The agent was started with `--enable-plugins`. */
   enabled: boolean
-  /** The host sandbox is verified here (macOS, Linux): plugins may run. */
+  /** The host sandbox is verified here (macOS, Linux, Windows): plugins may run. */
   executionSupported: boolean
   platform: string
   reason?: string
@@ -171,6 +171,18 @@ export interface PluginSummary {
   previousVersion?: string
   stagedVersion?: string
   actions: PluginActionInfo[]
+  /** Host failures the agent saw since it started; absent when none. */
+  health?: PluginHealth
+}
+
+/** `PluginHealth`: what the agent saw of the plugin's host since it started. */
+export interface PluginHealth {
+  /** Times the host stopped during an invocation (crash or time limit). */
+  crashes: number
+  /** The newest failure, as the invocation reported it. */
+  lastError?: string
+  /** Seconds since the Unix epoch. */
+  lastErrorAt?: number
 }
 
 export interface PermissionChanges {
@@ -207,6 +219,84 @@ export interface PluginDetails {
   /** The active version's manifest.json. */
   manifest: unknown
   audit: PluginAuditEntry[]
+  /**
+   * The active version's 128 px icon (`data:image/png;base64,…`), checked
+   * by the agent against the installed files' integrity record.
+   */
+  icon?: string
+  /** What its storage holds and may hold; absent from older agents. */
+  storage?: PluginStorageUsage
+}
+
+/** `PluginDetails.storage`: bytes are keys plus JSON values, as UTF-8. */
+export interface PluginStorageUsage {
+  usedBytes: number
+  keys: number
+  quotaBytes: number
+  maxKeys: number
+}
+
+// ---- Plugin data (settings, credentials, known plugins) ----
+
+/** What an uninstall keeps for a later install (default: nothing). */
+export interface PluginRetention {
+  settings?: boolean
+  credentials?: boolean
+}
+
+/** A plugin installed here at some point (`plugin_known`). */
+export interface KnownPlugin {
+  id: string
+  name: string
+  publisher: string
+  namespace: string
+  lastVersion: string
+  installed: boolean
+  firstSeenAt: number
+  lastSeenAt: number
+}
+
+/** One declared setting (`contributes.settings.fields`). */
+export interface PluginSettingField {
+  key: string
+  label: string
+  description?: string
+  /** The parameter kind, as in action parameters (`{ type: "integer", min: 1 }`). */
+  kind: { type: string } & Record<string, unknown>
+  required: boolean
+  default?: PluginSettingValue
+  portability: "portable" | "machineSpecific" | "sensitive"
+}
+
+export type PluginSettingValue = boolean | number | string
+
+/** `getPluginSettings` and `setPluginSettings`. */
+export interface PluginSettings {
+  plugin: string
+  fields: PluginSettingField[]
+  /** What the user saved. */
+  values: Record<string, PluginSettingValue>
+  /** What the plugin sees: saved values, otherwise defaults. */
+  effective: Record<string, PluginSettingValue>
+  /** Required settings with neither a value nor a default. */
+  missing?: string[]
+}
+
+/** One credential slot and whether a secret is stored; never the secret. */
+export interface PluginCredentialSlot {
+  key: string
+  label: string
+  description?: string
+  /** The only hosts the secret is ever sent to. */
+  hosts: string[]
+  /** `bearer`, `basic`, `header`, `query`. */
+  schemes: string[]
+  setupUrl?: string
+  set: boolean
+  /** Seconds since the Unix epoch. */
+  updatedAt?: number
+  /** Whether its `credentials:<key>` permission is granted. */
+  granted: boolean
 }
 
 export interface AvailableVersion {
@@ -217,6 +307,22 @@ export interface AvailableVersion {
   withdrawn?: string
   /** Why this DeckPilot cannot run it; absent when it can. */
   incompatible?: string[]
+  /** The DeckPilot versions it needs, e.g. `>=0.5.0 <1.0.0`. */
+  deckpilot?: string
+  /** `macos`, `windows`, `linux`; absent or empty means every platform. */
+  platforms?: string[]
+  /** When the registry published it, in seconds since the Unix epoch. */
+  publishedAt?: number
+}
+
+/** The publisher of a registry plugin, as the registry index lists it. */
+export interface PublisherInfo {
+  namespace: string
+  displayName?: string
+  /** GitHub login. */
+  login: string
+  /** The registry verified who the publisher is. */
+  verified: boolean
 }
 
 export interface AvailablePlugin {
@@ -229,6 +335,16 @@ export interface AvailablePlugin {
   versions: AvailableVersion[]
   /** The installed (active) version. */
   installed?: string
+  /** The registry's description, longer than `summary`. */
+  description?: string
+  categories?: string[]
+  publisherInfo?: PublisherInfo
+  license?: string
+  homepage?: string
+  /** `owner/repository` on GitHub. */
+  sourceRepository?: string
+  /** Why the registry deprecated the plugin. */
+  deprecated?: string
 }
 
 export interface AvailablePlugins {
@@ -303,4 +419,11 @@ export interface MarketplaceSnapshot {
   registryError?: { reason: string; message: string }
   available: AvailablePlugin[]
   installed: PluginDetails[]
+  /** Every plugin installed here at some point (`listKnownPlugins`); empty when unknown. */
+  known?: KnownPlugin[]
+  /**
+   * The labels of required settings without a value or default, by plugin
+   * id (`getPluginSettings.missing`); only plugins with such settings.
+   */
+  missingSettings?: Record<string, string[]>
 }

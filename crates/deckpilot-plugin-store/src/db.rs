@@ -97,6 +97,48 @@ pub const MIGRATIONS: &[&str] = &[
         applied_at INTEGER NOT NULL
     ) STRICT;
     ",
+    // 2: per-plugin data (design §2.3 items 4-6, §12.4) and the plugins
+    // ever installed.
+    r"
+    -- The plugin's key-value storage: deleted with the plugin.
+    CREATE TABLE plugin_storage (
+        plugin_id  TEXT NOT NULL REFERENCES plugins (plugin_id) ON DELETE CASCADE,
+        key        TEXT NOT NULL,
+        value      TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (plugin_id, key)
+    ) STRICT;
+
+    -- Credential secrets by slot. No foreign key: an uninstall may keep
+    -- them for a later install. Never exported, never logged.
+    CREATE TABLE plugin_credentials (
+        plugin_id  TEXT NOT NULL,
+        key        TEXT NOT NULL,
+        secret     TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (plugin_id, key)
+    ) STRICT;
+
+    -- Settings values the user saved (defaults are not stored). No
+    -- foreign key: an uninstall may keep them.
+    CREATE TABLE plugin_settings (
+        plugin_id   TEXT PRIMARY KEY,
+        values_json TEXT NOT NULL,
+        updated_at  INTEGER NOT NULL
+    ) STRICT;
+
+    -- Every plugin ever installed; grows only.
+    CREATE TABLE plugin_known (
+        plugin_id     TEXT PRIMARY KEY,
+        namespace     TEXT NOT NULL UNIQUE,
+        publisher     TEXT NOT NULL,
+        display_name  TEXT NOT NULL,
+        last_version  TEXT NOT NULL,
+        actions_json  TEXT NOT NULL,
+        first_seen_at INTEGER NOT NULL,
+        last_seen_at  INTEGER NOT NULL
+    ) STRICT;
+    ",
 ];
 
 /// The raw 256-bit SQLCipher key of the plugin database, supplied by the
@@ -382,6 +424,39 @@ mod tests {
             .connection()
             .query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(applied, 1);
+        assert_eq!(applied, i64::from(supported_schema_version()));
+    }
+
+    #[cfg(feature = "sqlcipher")]
+    #[test]
+    fn a_schema_1_database_gains_the_data_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plugins.db");
+        let key = StoreKey::from_bytes([9; 32]);
+        {
+            // What a build with only the first migration wrote.
+            let connection = Connection::open(&path).unwrap();
+            apply_key(&connection, &key).unwrap();
+            connection.execute_batch(MIGRATIONS[0]).unwrap();
+            connection.pragma_update(None, "user_version", 1).unwrap();
+        }
+        let db = Database::open(&path, &key, DEFAULT_BUSY_TIMEOUT).unwrap();
+        assert_eq!(db.schema_version().unwrap(), 2);
+        for table in [
+            "plugin_storage",
+            "plugin_credentials",
+            "plugin_settings",
+            "plugin_known",
+        ] {
+            let found: i64 = db
+                .connection()
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(found, 1, "{table}");
+        }
     }
 }

@@ -365,8 +365,10 @@ tag; that push starts the release workflow.
      entry for every platform and package type (macOS app on both
      architectures, Linux AppImage, `.deb` and, for stable releases,
      `.rpm`, Windows MSI and NSIS), attaches `SHA256SUMS` and checks that
-     every required asset is in the draft
-     (`tools/release-pipeline/check-assets.sh --final`).
+     every required asset is in the draft and nothing else is: no plugin
+     package, no registry metadata, no asset outside the application's
+     allowlist (`tools/release-pipeline/check-assets.sh --final`;
+     [marketplace/distribution.md](marketplace/distribution.md)).
 4. **Stage B** (automatic): the *Publication gate* job checks again that
    the `production-release` environment is protected and that the release
    is authorized (see below: under tag authority, that the tag ruleset
@@ -374,11 +376,13 @@ tag; that push starts the release workflow.
    then checks the draft again
    (`tools/release-pipeline/publish.sh`) — exactly one release for the tag,
    the tag still points to the built commit, every required asset and
-   nothing of the other channel, `SHA256SUMS` covers exactly the assets and
+   nothing of the other channel or outside the application's allowlist,
+   `SHA256SUMS` covers exactly the assets and
    matches each of them, `release-meta.json` names this tag, version,
    channel, manifest and commit, every updater signature verifies, the
    manifest announces this version with an update for every platform and
-   package type and points only to assets of this tag, the notes are not
+   package type and points only to assets of this tag, each platform to
+   its own application updater package, the notes are not
    empty — and only then publishes it in **one** update (the repository
    has immutable releases enabled, so nothing of a published release can
    be changed afterwards; every asset is uploaded while it is a draft):

@@ -89,8 +89,10 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
   15 s, 512 KiB, redirects never followed by the client: each one goes back
   to `Session::authorize_redirect`. Response headers are filtered to a safe
   list. `notify` becomes an agent notification titled with the plugin's
-  name; `log` goes to the agent log. Storage and credential injection are
-  refused (`unavailable`): neither exists in the agent yet.
+  name; `log` goes to the agent log; `variables.publish` and
+  `variables.clear` go to the plugin's own variables (below). Storage,
+  credential injection and settings: see
+  [Plugin data](#plugin-data-storage-credentials-settings).
 - **Platform gate.** Enabling and invoking are refused on platforms
   without a host sandbox (`platformUnsupported`): only macOS, Linux and
   Windows may run plugins; elsewhere installing and inspecting work.
@@ -123,7 +125,8 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
   its actions can run, otherwise disabled with the reason above, which keys,
   `runAction` and workflows report. Its state comes from plugins.db, never
   from the `modules` table, and it has no capabilities, settings, pages,
-  windows, variables or migrations. Each action is a `PluginActionHandler`:
+  windows or migrations; its variables are below. Each action is a
+  `PluginActionHandler`:
   parameters and the node contract convert one to one from the manifest
   (`cancellable` always, never `changesContext`); outputs are the declared
   ones, as text.
@@ -140,13 +143,29 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
     the same lanes, so a slow plugin blocks neither the worker nor other
     plugins.
   - *Cancel and deadline.* A cancelled run or one past its deadline raises
-    the invocation's `AbortSignal`. Protocol 1 has no `abort` frame and an
-    ABI 1 guest runs to completion, so the supervisor gives the host 2 s
-    (`HostConfig::abort_grace`) to answer, then kills it
-    (`HostError::Aborted`, not counted as a crash). The handler waits the
-    same 2 s (plus a margin), then fails the action as `cancelled`; a later
-    answer is discarded. A capability call that is already running (an HTTP
-    request, at most 15 s) finishes first.
+    the invocation's `AbortSignal`. A capability call that is running then
+    stops at once: the supervisor hands every call a `CallInterrupt`
+    (abort signal and deadline) through
+    `CapabilityExecutor::execute_interruptible`, and the executor's fetch
+    cancels the HTTP module client's `CancellationToken` (the connection is
+    dropped; the canned test transport stops waiting likewise). Whatever the
+    call returns after the interrupt is replaced by `unavailable` for the
+    guest, and every later call of an aborted invocation is refused without
+    reaching the broker or the executor (no request, publish or
+    notification after an abort). Past the deadline the host is killed at
+    once (`HostError::Timeout`), queued frames unread. Protocol 1 has no
+    `abort` frame and an ABI 1 guest runs to completion, so after an abort
+    the supervisor gives the host 2 s (`HostConfig::abort_grace`) to end
+    the invocation, then kills it (`HostError::Aborted`, not counted as a
+    crash). The answer of an aborted invocation is never applied (design
+    §6.3: discarded): the lane turns it into `LaneError::Aborted`, and the
+    handler fails the action as `cancelled` whatever arrives.
+  - *Revocation during a run.* Grants are read by the broker on every call,
+    and plugin requests are answered by the worker while lanes run, so a
+    revoke (or disable, or uninstall) while an action runs makes the
+    **next** privileged call of that same invocation fail with
+    `not-permitted`; a call that is already running is not interrupted by
+    a revoke.
   - *Containment.* Every invocation on a lane runs in `catch_unwind` (the
     broker's authorization and the executor run there); so do the
     worker's message handling, the grant updates (`sync_grants`) and the
@@ -156,6 +175,71 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
   - *Older clients.* `Response::for_protocol(< 10)` drops catalog entries
     owned by a plugin module; plugin answers never reach such clients.
     Instances in profiles stay and show as unavailable.
+- **Variables** (design §2.3 item 3, §3.7, §5.2 "own variables").
+  - *Grammar* (`deckpilot-core`). `plugins` is a reserved root
+    (`PLUGIN_ROOT`, in `RESERVED_ROOTS`; not in `MODULE_NAMESPACES`, which
+    stays the list of built-in roots). `VariableRef::parse` accepts
+    `plugins.<publisherCamel>.<nameCamel>.<path>` (1 to 3 path segments, at
+    most 6 in all) whenever the two middle segments are the lower camel case
+    of a valid plugin id, without consulting any list, so references parse
+    on every computer, with or without the plugin.
+    `VariableId::owner_namespace` (`plugins.acme.helloWeather`) and
+    `VariableId::plugin_owner` (`acme.hello-weather`; the camel case is
+    injective) name the owner; `module_namespace` of a plugin module is its
+    `plugins.…` namespace, and `register_module` accepts only declarations
+    inside it. A reference whose plugin is not installed resolves as
+    `Unavailable { owner: "<plugin id>" }`. The app's `referenceRoot`
+    (`apps/desktop/src/lib/variables.ts`) treats `plugins.<p>.<n>.<x>` as a
+    module root (`PLUGIN_ROOT`, mirrored and checked by a Rust test).
+  - *Declarations.* The active version's `contributes.variables` become the
+    `PluginModule`'s variables (read-only, with their type, scope,
+    requirements and sensitivity). While the plugin cannot run they are
+    unavailable with its reason; after an uninstall they are gone and
+    references resolve as unavailable.
+  - *Publishing* (ABI 1, compatible addition): `variables.publish {id,
+    value}` (`value: null` clears) and `variables.clear {id?}`; SDK
+    `Context::publish_variable`, `clear_variable`, `clear_variables`. `id`
+    is relative, so a plugin can only name its own namespace. The broker
+    allows them for any plugin that has grants (always-on, like the log),
+    10 per second; the ABI bounds values to 16 KiB. The executor accepts only
+    ids the active manifest declares (`not-permitted` otherwise), of the
+    declared type (`bad-request`), and only `machine` scope (`unavailable`
+    for profile and project variables in this version).
+  - *Values* (`plugins/variables.rs`). Kept per plugin in memory
+    (`PublishedVariables`), never persisted; `PluginVariableSource`
+    resolves from them, so no plugin code runs during a resolution. Every
+    publish announces `sharedVariablesChanged` with the full id. Values are
+    dropped, with a new generation, whenever the host is stopped for a
+    lifecycle reason (`stop_host`: disable, update, approve, rollback,
+    uninstall, quarantine, crash loop or panic) and when the store closes
+    (lock, stop); a publish from an invocation prepared before is refused.
+    A single host crash keeps them (the plugin stays enabled).
+  - *Older clients.* Before protocol 10, catalog entries of plugin
+    modules are dropped (as for actions), previews of `plugins.…`
+    references answer `invalid` as such a client always got, and
+    `AgentEvent::for_protocol` removes plugin ids from
+    `sharedVariablesChanged` (the event is not sent if nothing is left).
+- **Lifecycle.** Every operation that changes an installed plugin sends a
+  `changed` plugin event (`watch_plugin_events` forwards it to the app)
+  and republishes the catalog, so the agent re-registers the plugin's
+  module, actions and variables before the next request is answered:
+  install (`disabled`), enable, disable, grant, revoke, update, approve,
+  decline, rollback, quarantine and release by registry verdicts, a crash
+  loop or broker panic (`disabled`), uninstall (no state). Hosts: disable,
+  update, approve, rollback, uninstall, quarantine and a crash loop stop
+  the lane (the running invocation is aborted as above, queued ones are
+  refused, the host gets `shutdown` and its `dp_shutdown` runs, then it is
+  killed after 1 s); the next invocation of an enabled plugin starts a
+  fresh host for the active version. A single crash restarts the host on
+  demand with backoff and changes no state. Grants and revokes need no
+  restart (grants per call). Locking stops every host.
+  - *Guest hooks.* ABI 1 already has the lifecycle hooks the design asks
+    for (§3.8 `activate`/`deactivate`): the optional exports `dp_init`
+    (run when the module is loaded; a non-zero result fails the load) and
+    `dp_shutdown` (run on `shutdown`). No further export was added: the
+    design's other kinds (`timer`, `settingsChanged`) need background work
+    and settings, which do not exist yet, and a capability call inside a
+    hook is refused locally by the host (`unavailable`).
 
 ## Registry over HTTPS
 
@@ -292,9 +376,9 @@ older clients ignore.
 | Request (`type`) | Fields | Answer |
 | --- | --- | --- |
 | `getPluginRuntime` | — | `pluginRuntime { status }`: `available`, `built`, `enabled`, `executionSupported`, `platform`, `reason`, `registry { source, freshness, seq, staleReason?, expires?, offline? }` (answered even when plugins are off) |
-| `listPlugins` | — | `plugins { plugins: [PluginSummary] }` (each action with its `definition`) |
-| `getPlugin` | `plugin` | `plugin { plugin: PluginDetails }` |
-| `listAvailablePlugins` | `refresh` | `availablePlugins { registry, plugins: [AvailablePlugin] }` (versions newest first, permissions, `withdrawn`, `incompatible`) |
+| `listPlugins` | — | `plugins { plugins: [PluginSummary] }` (each action with its `definition`; `health` once an invocation failed) |
+| `getPlugin` | `plugin` | `plugin { plugin: PluginDetails }` (with `icon` when the installed icon checks out) |
+| `listAvailablePlugins` | `refresh` | `availablePlugins { registry, plugins: [AvailablePlugin] }` (versions newest first, permissions, `withdrawn`, `incompatible`, `deckpilot`, `platforms`, `publishedAt`; per plugin `description`, `categories`, `publisherInfo`, `license`, `homepage`, `sourceRepository`, `deprecated`) |
 | `installPlugin` | `source: {type: "registry", plugin, version?} \| {type: "file", path}`, `consent: [key]` | `plugin` (state `disabled`) |
 | `enablePlugin` | `plugin`, `consent: [key]` | `plugin` (grants `consent` first; all declared permissions must be granted) |
 | `disablePlugin` | `plugin` | `plugin` |
@@ -304,9 +388,42 @@ older clients ignore.
 | `approvePluginUpdate` | `plugin`, `consent: [key]` (every escalated key) | `pluginUpdate` |
 | `declinePluginUpdate` | `plugin` | `plugin` |
 | `rollbackPlugin` | `plugin` | `plugin` |
-| `uninstallPlugin` | `plugin` | `ok` |
-| `invokePluginAction` | `plugin`, `action`, `params: {name: bool \| number \| text \| list}` | `pluginActionResult { outcome: {status: "ok", message?, data} \| {status: "skipped"} \| {status: "failed", code, message?, retryable} }` |
+| `uninstallPlugin` | `plugin`, `keep?: {settings?, credentials?}` | `ok` (see [retention](#uninstall-retention)) |
+| `invokePluginAction` | `plugin`, `action`, `params: {name: bool \| number \| text \| list}` | `pluginActionResult { outcome: {status: "ok", message?, data} \| {status: "skipped"} \| {status: "failed", code, message?, retryable} }` (parameters that do not match the manifest: `failed`, `invalid-parameters`, before the host runs) |
 | `subscribePluginEvents` | — | `ok`; then `pluginEvent` messages on this connection |
+| `listKnownPlugins` | — | `knownPlugins { plugins: [{id, name, publisher, namespace, lastVersion, installed, firstSeenAt, lastSeenAt}] }` |
+| `getPluginSettings` | `plugin` | `pluginSettings { settings: {plugin, fields, values, effective, missing?} }` |
+| `setPluginSettings` | `plugin`, `values: {key: value \| null}` (merged; `null` resets to the default) | `pluginSettings` (refused with `invalidData` unless every value fits its field) |
+| `listPluginCredentials` | `plugin` | `pluginCredentials { plugin, credentials: [{key, label, description?, hosts, schemes, setupUrl?, set, updatedAt?, granted}] }` |
+| `setPluginCredential` | `plugin`, `key`, `secret` (1 B to 16 KiB, no line break or NUL) | `pluginCredentials` (never the secret) |
+| `deletePluginCredential` | `plugin`, `key` | `pluginCredentials` |
+
+Fields added for the marketplace screens, all optional and left out when
+empty (older answers parse unchanged):
+
+- `AvailablePlugin`: the registry detail's `description`, `license`,
+  `homepage`, `sourceRepository`; the index entry's `categories` and
+  `deprecated` reason; `publisherInfo { namespace, displayName?, login,
+  verified }` from the index's publisher list. `AvailableVersion`:
+  `deckpilot` (the `engines.deckpilot` range), `platforms` (empty means
+  every platform) and `publishedAt` (seconds). The registry has no icons,
+  action lists or changelogs, so none of those is sent for a plugin that
+  is not installed.
+- `PluginDetails.icon`: the active version's `icons.128` as a
+  `data:image/png;base64,` URL, only if the installed file is a PNG of at
+  most 256 KiB (`MAX_ICON_BYTES`) whose sha256 is the one the integrity
+  record holds (`convert::icon`).
+- `PluginDetails.storage { usedBytes, keys, quotaBytes, maxKeys }`: what
+  the plugin's storage holds (`plugin_storage`) and the quota its current
+  grants give it, computed as the broker does for every write (256 KiB
+  and 1,000 keys unless a `storage` grant raises the bytes). Left out when
+  plugins.db cannot be read.
+- `PluginSummary.health { crashes, lastError?, lastErrorAt? }`: kept in
+  memory per plugin since the agent started (`HealthLog` in
+  `service.rs`), written on the lane thread when an invocation fails. A
+  host crash or timeout counts as a crash; a refused host (weak sandbox,
+  files modified, backing off) only sets the last error; busy, stopped and
+  cancelled invocations are not recorded. Uninstalling forgets it.
 
 Permission keys are grant keys: `network:<host>`, `notifications`,
 `credentials:<ref>`, `variables:<entry>`, `storage`, `profile`,
@@ -331,7 +448,94 @@ Reasons: `pluginsUnavailable`, `platformUnsupported`, `locked`,
 `storeUnavailable`, `notInstalled`, `alreadyInstalled`, `unknownPlugin`,
 `consentRequired`, `unknownPermission`, `registryUnavailable`, `revoked`,
 `incompatible`, `invalidPackage`, `unsupportedRuntime`, `invalidState`,
-`notEnabled`, `hostFailed`, `broken`.
+`notEnabled`, `hostFailed`, `broken`, `invalidData`.
+
+The app reaches the data requests through the Tauri commands
+`list_known_plugins`, `get_plugin_settings`, `set_plugin_settings`,
+`list_plugin_credentials`, `set_plugin_credential`,
+`delete_plugin_credential` and `uninstall_plugin` (with `keep`), and the
+functions of the same names in `apps/desktop/src/plugins/client.ts`
+(`PluginClient.listKnownPlugins`, `getSettings`, `setSettings`,
+`listCredentials`, `setCredential`, `deleteCredential` and
+`uninstallPlugin(id, keep)`). The marketplace (builds with
+`VITE_DECKPILOT_PLUGINS=1`) uses them in Installed › Configure
+(`plugins/configure.tsx`: a form generated from the fields, the agent's
+`invalidData` problems under their fields, one row per credential slot),
+in the uninstall dialog (keep settings and/or credentials, nothing kept by
+default) and for names of uninstalled plugins (plugin details, and the
+editors' "not installed" reasons). A secret is typed into an uncontrolled
+password input, read once on submit, cleared at once and sent; it is never
+in React state, browser storage or a log, and nothing can show it again.
+
+## Plugin data: storage, credentials, settings
+
+All of it lives in plugins.db (schema 2), keyed by plugin id. The id is
+always the agent's (the plugin whose host the supervisor spawned, through
+the broker session); no capability request names a plugin, so a plugin
+cannot reach another's rows. The executor reads and writes through a
+second connection (`PluginData`), closed when the configuration locks.
+
+| | Storage | Credentials | Settings |
+| --- | --- | --- | --- |
+| Table | `plugin_storage` (deleted with the plugin, foreign key) | `plugin_credentials(plugin_id, key, secret, updated_at)` | `plugin_settings(plugin_id, values_json)` |
+| Declared in the manifest | nothing (always on, design §5.2); `storage` permission (`quotaKb` 257-10,240) for more | `contributes.credentials[]` slot + `credentials` permission `refs` | `contributes.settings.fields` |
+| Guest ABI | `storage.get`, `storage.set`, `storage.delete`, `storage.keys`, `storage.usage` | `http.fetch` with `auth: {credential, scheme}`, `credentials.has` (true or false) | `settings.get` (object, defaults filled) |
+| Set by the user | — | `setPluginCredential` | `setPluginSettings` |
+| Limits | 256 KiB and 1,000 keys by default; key 1-128 characters, no control characters; value ≤ 64 KiB of JSON; bytes = key + JSON value, UTF-8 | ≤ 16 KiB, only declared slots | only declared keys; types, ranges, choices and lengths as for action parameters |
+| Revocation | revoking `storage` returns the quota to 256 KiB on the next write (reading and shrinking still work); disable or uninstall denies everything | revoking `credentials:<key>` denies the next `http.fetch` with that slot and `credentials.has` | no permission; disable or uninstall denies `settings.get` |
+
+- **Quota.** The broker puts the quota into every `storage.set` decision
+  (`Allowed::StorageSet { quota }`), read from the current grants, and the
+  executor checks it in the write transaction: a write that would grow
+  the storage past the quota or add a key past 1,000 fails with
+  `failed` and a message starting `storage-quota` (the design's error
+  name); a write that does not grow it is allowed even above the quota.
+- **Credentials are handles** (design §5.5). The guest names a slot; the
+  broker allows the slot only for its own hosts (exact `https` origins,
+  each also a network grant), its declared schemes, and never across a
+  redirect to another origin. The executor then reads the secret and hands
+  it to the HTTP module's client as `Auth::{Bearer, Basic, Header, Query}`
+  (header and query names from the slot's `headerName` / `queryName`),
+  for that request only; the client sends credentials over https only. No
+  secret stored: `unavailable`, "no secret is stored". Every form of the
+  secret (as is, form-encoded, base64) is replaced by `[redacted]` in the
+  response headers and body and in error messages before anything reaches
+  the guest. The secret is never logged (the IPC request's `Debug` shows
+  `PluginSecret(<redacted>)`, the audit records `credentials:<key>`), never
+  exported, and plugins never see SQLCipher keys or keychain items (there
+  is no capability for them).
+- **Settings** are stored as the user saved them (never the defaults, so
+  a default changed by an update applies). `settings.get` and
+  `getPluginSettings.effective` give each saved value that still fits its
+  field, otherwise the default; a required setting with neither is listed
+  in `missing` and absent for the plugin (actions still run). Fields map to
+  the core's `ParameterSpec` like action parameters, so validation is the
+  core's `ActionType::normalize`.
+- **Parameters.** Every invocation (`invokePluginAction`, keys,
+  `runAction`, workflow nodes) is checked against the action's manifest
+  schema in the agent before it reaches the lane: unknown parameters,
+  wrong types, values out of range, choices not offered, too long texts and
+  missing required parameters fail with `invalid-parameters` and a message
+  that lists every problem and names the action type; defaults are filled
+  in. The manifest's camel-case kind constraints (`maxLength`, `maxItems`,
+  …) are renamed to the core's snake case first (they were silently
+  dropped before), and a constraint the core does not know refuses the
+  action.
+- **`plugin_known`** (design §2.3 item 4): every version written (install,
+  update, staged update) records id, namespace, publisher, name, version
+  and the actions; the table only grows. After an uninstall the agent
+  registers a disabled module from it, so instances of its actions fail
+  with `Hello Weather (acme.hello-weather): the plugin is not installed`.
+
+### Uninstall retention
+
+Default (design §5.6): uninstall deletes the plugin's files, records,
+grants, **storage, settings and credentials**; its audit and its
+`plugin_known` row stay. `keep: {settings: true}` and/or
+`keep: {credentials: true}` keep those for a later install of the same
+plugin id (storage is never kept). The choice is journaled with the
+uninstall, so recovery after a crash honours it. The design's "after
+asking" for credentials is the app's job (the default is to delete).
 
 ## Running it
 
@@ -369,10 +573,44 @@ run by `runAction`, by key presses on a simulated MK.2 and by a workflow
 node (results, outputs and the canned request checked), unavailable again
 after a revoke, a disable and an uninstall; a guest panic during a key's
 action (a failed action, the agent unaffected); and a workflow cancelled
-while its plugin node waits for a slow server (given up after the 2 s
-grace). HTTP goes to canned responses (`DECKPILOT_TEST_PLUGIN_HTTP`, only
-with `test-hooks`, never in a release; a route may answer late with
-`delayMs`).
+while its plugin node waits for a slow server (the request is stopped and
+the run ends at once). Plugin variables: references unavailable before the
+install and while disabled, the SDK test guest's published values resolved
+with their types (an undeclared id and a mistyped value refused), cleared,
+dropped by a disable, unavailable after an uninstall, and invisible to a
+protocol 9 client (catalog, previews, events). Cancellation: a workflow
+cancelled while the guest waits 14 s for a server ends within 1.5 s and the
+answer is never published. A mid-run revoke: the second request of
+`two-fetches` is denied and never goes out. Lifecycle: `changed` events
+for install, enable, quarantine (the test's own registry copy revokes the
+version) and uninstall, with actions and variables following, and a host
+crash that keeps the plugin enabled. Plugin data (`plugin_data_is_isolated_bounded_revocable_and_secret`,
+the SDK test guest as two plugins, one with a 512 KiB storage grant):
+storage isolation between them, the default and the granted quota, a
+revoked `storage` grant on the very next write, credential slots without
+and with a secret (one per plugin), injection as bearer, header and query
+only to the slot's host (checked on the wire), refusals for another host,
+an undeclared scheme or slot and a redirect off the origin, the echoed
+secret redacted before the guest sees it, a revoked slot on the very next
+call, settings with defaults and validation, uninstall with and without
+`keep`, `plugin_known` after it, and no secret in the agent's log or as
+clear text in any file of `plugins/`. HTTP goes to canned responses
+(`DECKPILOT_TEST_PLUGIN_HTTP`, only with `test-hooks`, never in a release;
+a route may answer late with `delayMs`, and stops waiting when the call is
+interrupted; the log records what would go on the wire, injected
+credentials included).
+`cargo test -p deckpilot-agent --features plugins --test plugins_examples`
+installs the example plugins (`plugins/examples/hello-world`,
+`developer-tools`), packaged from their directories with the publishing
+tool (twice, compared: deterministic), from a registry with throwaway keys,
+and runs every action through the real agent and host: Hello World
+enabled with no permission; Developer Tools with exactly its three grants,
+its settings, the token injected as a bearer only towards
+`api.github.com` (checked on the wire) and never in an answer, a log or a
+file, both variables resolved, storage read back, a revoke that removes
+the whole grant set (the credential slot's host lost its network grant)
+and a grant that restores it, and its `listPlugins`/`getPlugin` answers at
+most half of the IPC message limit.
 `cargo test -p deckpilot-agent --features plugins --test plugins_registry_https`
 does the same over HTTPS: a local TLS server (`tests/support/https.rs`,
 rustls with a throwaway CA from rcgen that only the agent under test
@@ -414,11 +652,38 @@ Windows (not a required check).
   install or update. No `If-None-Match`/ETag, no package cache (offline
   installs are not possible), no proxy configuration beyond the
   environment.
-- No plugin storage, credential slots, variables (design §2.3 item 3),
-  settings or background work; their capabilities are refused.
-- An abort does not interrupt a capability call that is already running.
-- `plugin_known` (design §2.3 item 4) does not exist: an uninstalled
-  plugin's actions are reported as "not available" without its name.
+- No background work; its capabilities are refused.
+- Plugin settings live in plugins.db, not in the configuration database's
+  `modules` table as the design has it (§12.4), so they are not exported
+  with the configuration (design §2.3 item 9, by portability); a
+  `settingsChanged` notification to a running plugin (design §3.8) does
+  not exist (the plugin reads `settings.get` when it runs). No settings
+  of kind `project` are offered by any UI.
+- No secret-typed settings: secrets are credential slots
+  (`contributes.credentials`), set with `setPluginCredential`. Request
+  signing, OAuth and other uses beyond injection (design U-3) do not
+  exist.
+- `privateNetwork` and wildcard hosts are still never granted, so a
+  credential slot can only name exact hosts.
+- The app checks only what it cannot send (a whole number that is not
+  one, an empty or too long secret); every other rule is the agent's, and
+  its message is shown under the field it names.
+- The JavaScript SDK skeleton (`plugins/sdk-js`, declarations only, no
+  runtime) still declares the design's synchronous `ctx.settings`; the
+  ABI delivers settings through `settings.get`, which a JavaScript shim
+  would call at the start of an invocation.
+- Plugin variables: only `machine` scope can be published (profile and
+  project values need the `profile` permission and a scope argument, design
+  §6 `VariablesApi.publish`); no reading of other owners' variables
+  (`variables` permission); values are not persisted across agent restarts
+  (as designed), and `plugin_known` records actions, not variables, so the
+  picker cannot list variables of plugins that are not installed.
+- A revoke does not interrupt a capability call that is already running;
+  it denies the next one.
+- No crash-loop end-to-end test: the five crashes with backoff take about
+  15 s. The breaker is tested in the supervisor (`crates/supervisor`); the
+  agent's reaction (`lane_ended`: disable, drop values, `changed`) is not
+  tested end to end.
 - A password change made by the app while the agent is locked makes
   plugins.db unreadable (no rekey protocol between app and agent).
 - Windows execution is verified only on GitHub's `windows-latest` runner

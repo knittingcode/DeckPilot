@@ -9,24 +9,29 @@
 //! a workflow node's execution thread, or the agent's thread for one key
 //! press or `runAction` ([`deckpilot_core::ActionHandler::runs_detached`]:
 //! never the service task). A cancelled run, or one past its deadline,
-//! raises the invocation's abort signal; the host then has 2 s to answer
-//! before it is stopped, and a result that arrives later is discarded.
+//! raises the invocation's abort signal: a capability call that is running
+//! (an HTTP request) is stopped at once and its result dropped, further
+//! calls are refused, and the host has 2 s to end the invocation before it
+//! is stopped. The action is cancelled whatever the plugin still answers.
 
 use std::collections::BTreeSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 use deckpilot_core::graph::{MAX_TIMEOUT_MS, NodeSpec};
+use deckpilot_core::variables::{VariableSource, module_namespace};
 use deckpilot_core::{
     ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, ExecutionContext,
-    FeatureModule, ModuleId, ModuleManifest, ParameterSpec, ParameterValue, Portability,
+    FeatureModule, ModuleId, ModuleManifest, ParameterValue, Portability,
 };
 use deckpilot_plugin_abi::{ActionOutcome, ParamValue, Params};
 use deckpilot_plugin_manifest::Action;
 use deckpilot_plugin_supervisor::AbortSignal;
 use tracing::warn;
 
+use super::variables::{PluginVariableSource, PublishedVariables, declarations};
 use super::worker::{EngineFailure, Invoker};
 
 /// How long the host may take to answer after an abort (the lane's
@@ -47,6 +52,8 @@ pub(crate) struct CatalogPlugin {
     pub description: String,
     /// The active version's actions.
     pub actions: Vec<Action>,
+    /// The active version's variables (`contributes.variables`).
+    pub variables: Vec<deckpilot_plugin_manifest::Variable>,
     /// Why its actions cannot run (disabled, broken, quarantined, this
     /// platform, a permission not granted); `None`: they can.
     pub unavailable: Option<String>,
@@ -54,20 +61,37 @@ pub(crate) struct CatalogPlugin {
 
 /// A plugin as a feature module: no capabilities (a plugin reaches
 /// nothing of DeckPilot's but through the broker), no settings, pages,
-/// windows, variables or migrations. Enabled exactly when its actions can
-/// run.
+/// windows or migrations. Its variables are those it declares, in its
+/// namespace (`plugins.<publisherCamel>.<nameCamel>.…`), resolved from
+/// the values it published (`variables.rs`). Enabled exactly when its
+/// actions can run; while it is not, its variables are unavailable.
 pub(crate) struct PluginModule {
     manifest: ModuleManifest,
     plugin: CatalogPlugin,
     invoker: Invoker,
+    source: Option<Arc<dyn VariableSource>>,
 }
 
 impl PluginModule {
     /// `None` when the plugin id is not a module id (never, for an
     /// installed plugin: both grammars are the same).
-    pub fn new(plugin: CatalogPlugin, invoker: Invoker) -> Option<Self> {
+    pub fn new(
+        plugin: CatalogPlugin,
+        invoker: Invoker,
+        values: PublishedVariables,
+    ) -> Option<Self> {
         let id = ModuleId::new(plugin.id.clone()).ok()?;
+        let namespace = module_namespace(&id);
+        let variables = declarations(&namespace, &plugin.variables);
+        let source = (!variables.is_empty()).then(|| {
+            Arc::new(PluginVariableSource::new(
+                plugin.id.clone(),
+                namespace,
+                values,
+            )) as Arc<dyn VariableSource>
+        });
         Some(Self {
+            source,
             manifest: ModuleManifest {
                 id,
                 version: plugin.version.clone(),
@@ -82,7 +106,7 @@ impl PluginModule {
                 portability: Portability::default(),
                 migrations: Vec::new(),
                 windows: Vec::new(),
-                variables: Vec::new(),
+                variables,
             },
             plugin,
             invoker,
@@ -112,6 +136,10 @@ impl FeatureModule for PluginModule {
             .collect()
     }
 
+    fn variable_source(&self) -> Option<Arc<dyn VariableSource>> {
+        self.source.clone()
+    }
+
     fn unavailable_reason(&self) -> Option<String> {
         self.plugin
             .unavailable
@@ -129,9 +157,12 @@ pub(crate) fn action_type(plugin: &str, action: &Action) -> Result<ActionType, S
         .parameters
         .iter()
         .map(|parameter| {
+            // Through `core_spec`: the kind's constraints (`maxLength`, …)
+            // are camel case in the manifest and snake case in the core.
             serde_json::to_value(parameter)
-                .and_then(serde_json::from_value::<ParameterSpec>)
-                .map_err(|e| format!("parameter `{}`: {e}", parameter.key))
+                .map_err(|e| e.to_string())
+                .and_then(super::data::core_spec)
+                .map_err(|e| format!("parameter {e}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut node: NodeSpec = match &action.node {
@@ -224,16 +255,17 @@ impl PluginActionHandler {
                 }
             }
         };
-        // Abort, give the host its grace, then give up: whatever arrives
-        // later is dropped with the channel.
+        // Abort: a capability call that is running stops at once and the
+        // host gets its grace to finish. Whatever the plugin answers now is
+        // late and never applied (design §6.3: discarded); waiting only
+        // lets a cooperative host end the invocation before the action is
+        // reported, so the next one finds the lane free.
         abort.abort();
-        match answer.recv_timeout(ABORT_WAIT) {
-            Ok(Ok(outcome)) => self.result(Ok(outcome)),
-            Ok(Err(_)) | Err(_) => ActionResult::error(
-                "cancelled",
-                format!("{reason}; the plugin was asked to stop"),
-            ),
-        }
+        let _ = answer.recv_timeout(ABORT_WAIT);
+        ActionResult::error(
+            "cancelled",
+            format!("{reason}; the plugin was asked to stop and its result is discarded"),
+        )
     }
 
     fn result(&self, reply: Result<ActionOutcome, EngineFailure>) -> ActionResult {
@@ -347,6 +379,14 @@ mod tests {
             "acme.hello-weather"
         );
         assert_eq!(greet.parameters.len(), 2);
+        // The camel-case constraint reached the core's kind.
+        assert_eq!(
+            greet.parameters[0].kind,
+            deckpilot_core::ParameterKind::Text {
+                multiline: false,
+                max_length: Some(64)
+            }
+        );
         assert!(greet.parameters[0].required);
         assert_eq!(greet.node.timeout_ms, 5_000);
         assert!(greet.node.cancellable && !greet.node.changes_context);

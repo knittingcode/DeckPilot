@@ -1207,3 +1207,66 @@ fn builtin_action_types_have_two_segments_and_plugin_types_three() {
         assert_eq!(ModuleId::owner_of(&id), Some(plugin.clone()));
     }
 }
+
+/// The variable grammar's plugin root (`docs/marketplace/architecture.md`
+/// §2.3 item 3): no built-in module declares under `plugins`, every
+/// built-in reference parses as before, and a plugin's references parse
+/// on a computer that never had the plugin, resolving as unavailable with
+/// the plugin's id as owner.
+#[test]
+fn plugin_variables_have_a_root_of_their_own() {
+    use deckpilot_core::variables::{
+        NoLiveState, PLUGIN_ROOT, RESERVED_ROOTS, Resolution, ResolutionContext,
+        VariableEnvironment, VariableId, VariableRef, module_namespace,
+    };
+    let registry = builtin(Os::current());
+    assert!(RESERVED_ROOTS.contains(&PLUGIN_ROOT));
+    for variable in registry.variables().variables() {
+        let id = &variable.declaration.id;
+        assert_ne!(id.namespace(), PLUGIN_ROOT, "{id}");
+        assert_eq!(id.plugin_owner(), None, "{id}");
+        assert_eq!(id.owner_namespace(), id.namespace(), "{id}");
+        assert_eq!(
+            VariableRef::parse(id.as_str()).unwrap().registered_id(),
+            Some(id.clone()),
+            "{id}"
+        );
+    }
+    for module in modules(&Arc::new(RecordingLauncher::default())) {
+        let namespace = module_namespace(&module.manifest().id);
+        assert!(!namespace.starts_with(PLUGIN_ROOT), "{namespace}");
+    }
+    let profile = Profile::new("Contract");
+    let context = ResolutionContext::preview(profile.id);
+    let environment = VariableEnvironment {
+        context: &context,
+        profile: &profile,
+        os: Os::current(),
+        live: &NoLiveState,
+    };
+    for (reference, owner) in [
+        (
+            "plugins.acme.helloWeather.temperature",
+            "acme.hello-weather",
+        ),
+        (
+            "plugins.acme.githubPrs.review.mine.count",
+            "acme.github-prs",
+        ),
+    ] {
+        let parsed = VariableRef::parse(reference).unwrap();
+        assert_eq!(parsed.to_string(), reference);
+        let id = VariableId::new(reference).unwrap();
+        assert_eq!(
+            registry.variables().resolve(&id, &environment),
+            Resolution::Unavailable {
+                owner: owner.into()
+            },
+            "{reference}"
+        );
+        assert_eq!(
+            module_namespace(&ModuleId::new(owner).unwrap()),
+            id.owner_namespace()
+        );
+    }
+}

@@ -1,4 +1,4 @@
-import { ChevronDown, Play, RefreshCw, RotateCcw, Trash2 } from "lucide-react"
+import { ChevronDown, Play, RefreshCw, RotateCcw, Settings2, Trash2 } from "lucide-react"
 import { useState } from "react"
 
 import { EmptyState } from "@/components/page"
@@ -15,21 +15,34 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 
-import { pluginErrorText } from "./api"
+import { pluginErrorText, type PluginErrorText } from "./api"
 import { Notice, PermissionList, PluginIcon, PublisherLine } from "./components"
+import { ConfigureDialog } from "./configure"
 import type { MarketplaceActions } from "./marketplace"
-import { STATE_LABELS, type UpdateCandidate } from "./model"
+import {
+  STATE_LABELS,
+  declaredConfiguration,
+  formatTime,
+  manifestCompatibility,
+  platformLabel,
+  platformsText,
+  storageText,
+  type UpdateCandidate,
+} from "./model"
 import { grantOfInfo } from "./permissions"
 import type {
   ActionParamValue,
+  AvailablePlugin,
   MarketplaceSnapshot,
   PluginActionInfo,
   PluginActionOutcome,
   PluginDetails,
+  PluginRetention,
 } from "./types"
 
 export function InstalledView({
@@ -54,34 +67,90 @@ export function InstalledView({
   }
   const byId = new Map(updates.map((u) => [u.plugin.summary.id, u]))
   return (
-    <ul className="grid gap-3" aria-label="Installed plugins">
-      {[...snapshot.installed]
-        .sort((a, b) => a.summary.name.localeCompare(b.summary.name))
-        .map((item) => (
-          <InstalledItem
-            key={item.summary.id}
-            item={item}
-            listed={snapshot.available.some((p) => p.id === item.summary.id)}
-            update={byId.get(item.summary.id)}
-            actions={actions}
-          />
-        ))}
-    </ul>
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="grid gap-0.5">
+          <h3 className="text-sm font-medium">Installed optional plugins</h3>
+          <p className="text-sm text-muted-foreground">
+            Plugins run only while enabled, and only with the permissions you granted.
+          </p>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={actions.busy !== null}
+          onClick={actions.refresh}
+        >
+          <RefreshCw /> Refresh
+        </Button>
+      </div>
+      <ul className="grid gap-3" aria-label="Installed plugins">
+        {[...snapshot.installed]
+          .sort((a, b) => a.summary.name.localeCompare(b.summary.name))
+          .map((item) => (
+            <InstalledItem
+              key={item.summary.id}
+              item={item}
+              listed={snapshot.available.find((p) => p.id === item.summary.id)}
+              platform={snapshot.runtime.platform}
+              runtimeReason={snapshot.runtime.reason}
+              missingSettings={snapshot.missingSettings?.[item.summary.id] ?? []}
+              update={byId.get(item.summary.id)}
+              actions={actions}
+            />
+          ))}
+      </ul>
+    </>
+  )
+}
+
+/** Failures of the plugin's host since the agent started. */
+function HealthNotice({ item }: { item: PluginDetails }) {
+  const health = item.summary.health
+  if (!health || (health.crashes === 0 && !health.lastError)) return null
+  const title =
+    health.crashes > 0
+      ? `The plugin host stopped ${String(health.crashes)} time${health.crashes === 1 ? "" : "s"} since the agent started`
+      : "The last action of this plugin failed"
+  return (
+    <div className="mt-3" role="group" aria-label={`Health of ${item.summary.name}`}>
+      <Notice tone={health.crashes > 0 ? "destructive" : "default"} title={title}>
+        {health.lastError && (
+          <p className="select-text">
+            Last error
+            {health.lastErrorAt !== undefined ? ` (${formatTime(health.lastErrorAt)})` : ""}:{" "}
+            {health.lastError}
+          </p>
+        )}
+      </Notice>
+    </div>
   )
 }
 
 function InstalledItem({
   item,
   listed,
+  platform,
+  runtimeReason,
+  missingSettings,
   update,
   actions,
 }: {
   item: PluginDetails
-  listed: boolean
+  /** The registry's entry of the plugin, when the registry lists it. */
+  listed: AvailablePlugin | undefined
+  platform: string
+  runtimeReason: string | undefined
+  /** Labels of required settings without a value or default. */
+  missingSettings: string[]
   update: UpdateCandidate | undefined
   actions: MarketplaceActions
 }) {
   const [expanded, setExpanded] = useState(false)
+  const [configuring, setConfiguring] = useState(false)
+  const declared = declaredConfiguration(item.manifest)
+  const configurable = declared.settings.length > 0 || declared.credentials.length > 0
+  const compatibility = manifestCompatibility(item.manifest)
   const { summary } = item
   const id = `installed-${summary.id}`
   const enabled = summary.state === "enabled"
@@ -100,7 +169,7 @@ function InstalledItem({
       aria-labelledby={`${id}-name`}
     >
       <div className="flex items-start gap-3">
-        <PluginIcon muted={!enabled} />
+        <PluginIcon muted={!enabled} src={item.icon} />
         <div className="grid min-w-0 flex-1 gap-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span id={`${id}-name`} className="font-medium">
@@ -113,8 +182,21 @@ function InstalledItem({
               {STATE_LABELS[summary.state]}
             </Badge>
             {updateVersion && <Badge>Update {updateVersion} available</Badge>}
+            {missingSettings.length > 0 && <Badge variant="destructive">Settings missing</Badge>}
           </div>
-          <PublisherLine publisher={summary.publisher} />
+          <PublisherLine publisher={summary.publisher} info={listed?.publisherInfo} />
+          <span className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+            {compatibility.deckpilot && <span>DeckPilot {compatibility.deckpilot}</span>}
+            <span>{platformsText(compatibility.platforms)}</span>
+            {listed?.latest && listed.latest !== summary.version && (
+              <span>Latest in the registry: {listed.latest}</span>
+            )}
+          </span>
+          {item.storage && (
+            <span className="text-xs text-muted-foreground">
+              Storage: {storageText(item.storage)}
+            </span>
+          )}
           {notGranted > 0 && (
             <p className="text-xs text-muted-foreground">
               {notGranted} permission{notGranted === 1 ? "" : "s"} not granted; calls that need
@@ -146,6 +228,28 @@ function InstalledItem({
           >
             {summary.stateReason && <p>{summary.stateReason}</p>}
             {blockedState && <p>It cannot run or be enabled. Roll back, update or uninstall it.</p>}
+          </Notice>
+        </div>
+      )}
+
+      {!actions.canRun && (
+        <div className="mt-3">
+          <Notice title={`Cannot run on ${platformLabel(platform)}`}>
+            {runtimeReason && <p>{runtimeReason}</p>}
+            <p>It can be inspected, updated and uninstalled, but not enabled here.</p>
+          </Notice>
+        </div>
+      )}
+
+      <HealthNotice item={item} />
+
+      {missingSettings.length > 0 && (
+        <div className="mt-3">
+          <Notice title="Required settings are missing">
+            <p>
+              {missingSettings.join(", ")} {missingSettings.length === 1 ? "has" : "have"} no value
+              and no default. Set {missingSettings.length === 1 ? "it" : "them"} in Configure.
+            </p>
           </Notice>
         </div>
       )}
@@ -204,6 +308,17 @@ function InstalledItem({
             Details
           </Button>
         )}
+        {configurable && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setConfiguring(true)
+            }}
+          >
+            <Settings2 /> Configure
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="sm"
@@ -216,7 +331,15 @@ function InstalledItem({
           <ChevronDown className={cn("transition-transform", expanded && "rotate-180")} />
           Permissions and actions
         </Button>
-        <UninstallButton item={item} disabled={busy} actions={actions} />
+        <UninstallButton
+          item={item}
+          disabled={busy}
+          actions={actions}
+          declares={{
+            settings: declared.settings.length > 0,
+            credentials: declared.credentials.length > 0,
+          }}
+        />
       </div>
 
       {expanded && (
@@ -263,6 +386,16 @@ function InstalledItem({
           />
           <ActionList item={item} actions={actions} />
         </div>
+      )}
+      {configuring && (
+        <ConfigureDialog
+          item={item}
+          client={actions.client}
+          onChanged={actions.reload}
+          onClose={() => {
+            setConfiguring(false)
+          }}
+        />
       )}
     </li>
   )
@@ -336,7 +469,7 @@ function ActionRow({
   )
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<
-    { outcome: PluginActionOutcome } | { error: { message: string; hint?: string } } | null
+    { outcome: PluginActionOutcome } | { error: PluginErrorText } | null
   >(null)
 
   const run = () => {
@@ -408,7 +541,7 @@ function ActionRow({
         <div role="status" aria-label={`Result of ${action.name}`} className="text-xs">
           {"error" in result ? (
             <p className="text-destructive">
-              {result.error.message}
+              {result.error.title}: {result.error.message}
               {result.error.hint ? ` ${result.error.hint}` : ""}
             </p>
           ) : result.outcome.status === "ok" ? (
@@ -438,13 +571,23 @@ function UninstallButton({
   item,
   disabled,
   actions,
+  declares,
 }: {
   item: PluginDetails
   disabled: boolean
   actions: MarketplaceActions
+  /** What the plugin declares, so what there is to keep. */
+  declares: { settings: boolean; credentials: boolean }
 }) {
+  // The documented default (design §5.6): everything goes.
+  const [keep, setKeep] = useState<PluginRetention>({})
+  const name = item.summary.name
   return (
-    <AlertDialog>
+    <AlertDialog
+      onOpenChange={(open) => {
+        if (open) setKeep({})
+      }}
+    >
       <AlertDialogTrigger asChild>
         <Button variant="ghost" size="sm" disabled={disabled}>
           <Trash2 /> Uninstall
@@ -452,18 +595,51 @@ function UninstallButton({
       </AlertDialogTrigger>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Uninstall {item.summary.name}?</AlertDialogTitle>
+          <AlertDialogTitle>Uninstall {name}?</AlertDialogTitle>
           <AlertDialogDescription>
-            Stops the plugin and removes its files, its permissions and its records, including the
-            version kept for rollback.
+            Stops the plugin and removes its files, its permissions, its records (including the
+            version kept for rollback) and its storage. Its settings and credentials are deleted
+            too, unless you keep them below.
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {(declares.settings || declares.credentials) && (
+          <fieldset className="grid gap-2 text-sm">
+            <legend className="mb-1 font-medium">Keep for a reinstall</legend>
+            {declares.settings && (
+              <label className="flex items-start gap-2">
+                <Checkbox
+                  checked={keep.settings === true}
+                  aria-label="Keep its settings"
+                  onCheckedChange={(checked) => {
+                    setKeep({ ...keep, settings: checked === true })
+                  }}
+                />
+                <span>Keep its settings</span>
+              </label>
+            )}
+            {declares.credentials && (
+              <label className="flex items-start gap-2">
+                <Checkbox
+                  checked={keep.credentials === true}
+                  aria-label="Keep its credentials"
+                  onCheckedChange={(checked) => {
+                    setKeep({ ...keep, credentials: checked === true })
+                  }}
+                />
+                <span>
+                  Keep its credentials (stored secrets stay in DeckPilot until the plugin is
+                  installed again and uninstalled without keeping them)
+                </span>
+              </label>
+            )}
+          </fieldset>
+        )}
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction
             className="bg-destructive text-white hover:bg-destructive/90"
             onClick={() => {
-              actions.uninstall(item)
+              actions.uninstall(item, keep)
             }}
           >
             Uninstall

@@ -217,6 +217,16 @@ describe("referenceRoot", () => {
     expect(referenceRoot("Env.HOME")).toBeNull()
   })
 
+  it("treats the plugins root as a module root, installed or not", () => {
+    expect(referenceRoot("plugins.acme.githubPrs.open")).toBe("module")
+    expect(referenceRoot(" plugins.acme.helloWeather.review.mine.count ")).toBe("module")
+    expect(referenceRoot("plugins.zz.neverInstalled.x")).toBe("module")
+    // The root, publisher and name alone name no variable.
+    expect(referenceRoot("plugins.acme.githubPrs")).toBeNull()
+    expect(referenceRoot("plugins.acme")).toBeNull()
+    expect(referenceRoot("plugins")).toBeNull()
+  })
+
   it("describes an unavailable module without a value", () => {
     const status = describeStatus({ status: "unavailable", owner: "projects" })
     expect(status.label).toBe("Unavailable")

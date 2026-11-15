@@ -76,13 +76,25 @@ const ROOTS = ["steps", "shared", "system", "workflow"] as const
 export const MODULE_NAMESPACES = ["projects", "workSession"]
 
 /**
+ * The root of every plugin's variables:
+ * `plugins.<publisherCamel>.<nameCamel>.<path>`. Mirrors `PLUGIN_ROOT` in
+ * deckpilot-core (checked by a Rust test). Not a list: such a reference is
+ * a module reference whether or not the plugin is installed; the agent
+ * decides whether it is valid and the catalog names its variables.
+ */
+export const PLUGIN_ROOT = "plugins"
+
+/**
  * The root of a reference (`shared`, `system`, …), `module` for a known
- * module's namespace (`projects.current.key`), or `null` for none of them.
+ * module's namespace (`projects.current.key`) or a plugin's
+ * (`plugins.acme.githubPrs.open`), or `null` for none of them.
  */
 export function referenceRoot(reference: string): (typeof ROOTS)[number] | "module" | null {
   const segments = reference.trim().split(".")
   const root = segments[0] ?? ""
   if ((ROOTS as readonly string[]).includes(root)) return root as (typeof ROOTS)[number]
+  // `plugins`, publisher, name and at least one segment of the variable.
+  if (root === PLUGIN_ROOT) return segments.length >= 4 ? "module" : null
   return segments.length >= 2 && MODULE_NAMESPACES.includes(root) ? "module" : null
 }
 

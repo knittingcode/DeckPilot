@@ -2,12 +2,15 @@
 //! protocol 10, and from stored consent to broker grants.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+use base64::Engine as _;
 
 use deckpilot_ipc::plugins as ipc;
 use deckpilot_plugin_abi::capability::AuthScheme;
 use deckpilot_plugin_abi::{ActionOutcome, HttpMethod, ParamValue, Params};
 use deckpilot_plugin_broker::{ApprovedPermission, ApprovedPermissions};
-use deckpilot_plugin_manifest::{Manifest, PermissionKind};
+use deckpilot_plugin_manifest::{Manifest, PermissionKind, Sha256Digest};
 use deckpilot_plugin_store::{
     AuditRecord, GrantKey, GrantScope, GrantStatus, InstallSource, PRIVATE_NETWORK_KEY,
     PermissionDiff, PluginRecord, PluginState, StoredGrant, Tier,
@@ -149,6 +152,7 @@ pub fn summary(record: &PluginRecord, stored: &[StoredGrant]) -> ipc::PluginSumm
         previous_version: record.previous().map(|v| v.version.to_string()),
         staged_version: record.staged().map(|v| v.version.to_string()),
         actions,
+        health: None,
     }
 }
 
@@ -217,7 +221,43 @@ pub fn details(
             .take(AUDIT_SHOWN)
             .map(audit)
             .collect(),
+        icon: None,
+        storage: None,
     }
+}
+
+/// The PNG signature.
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+/// `bytes` as a `data:` URL for [`ipc::PluginDetails::icon`]: only a PNG
+/// of at most [`ipc::MAX_ICON_BYTES`] whose sha256 is `expected`.
+pub fn icon_data(bytes: &[u8], expected: &Sha256Digest) -> Option<String> {
+    use sha2::Digest as _;
+    if bytes.len() > ipc::MAX_ICON_BYTES || !bytes.starts_with(PNG) {
+        return None;
+    }
+    let digest: [u8; 32] = sha2::Sha256::digest(bytes).into();
+    (digest == *expected.as_bytes()).then(|| {
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        )
+    })
+}
+
+/// The active version's 128 px icon (`icons.128` of its manifest), read
+/// from `dir` (its install directory) and checked against the hash its
+/// integrity record has for that file. Anything else gives no icon.
+pub fn icon(dir: &Path, record: &PluginRecord) -> Option<String> {
+    let active = record.active()?;
+    let relative = &active.manifest.icons.size128;
+    let expected = active.integrity.files.get(relative)?;
+    let path = dir.join(relative);
+    let meta = std::fs::symlink_metadata(&path).ok()?;
+    if !meta.is_file() || meta.len() > ipc::MAX_ICON_BYTES as u64 {
+        return None;
+    }
+    icon_data(&std::fs::read(&path).ok()?, expected)
 }
 
 /// Grant keys from a request's consent.
@@ -328,7 +368,7 @@ fn origin_of(host: &str) -> Option<String> {
 
 /// What the broker may allow, from the effective grants of an enabled
 /// plugin (granted ∩ declared). Kinds the broker does not decide
-/// (profile, variables, storage quota, open URL, background, device) are
+/// (profile, variables, open URL, background, device) are
 /// not passed; their capabilities do not exist in ABI 1 or are refused by
 /// the executor.
 pub fn approved(effective: &[(GrantKey, GrantScope)]) -> (ApprovedPermissions, Vec<String>) {
@@ -344,6 +384,12 @@ pub fn approved(effective: &[(GrantKey, GrantScope)]) -> (ApprovedPermissions, V
                 None => skipped.push(key.to_string()),
             },
             (PermissionKind::Notifications, _) => out.push(ApprovedPermission::Notifications {}),
+            // The larger quota; without it the default applies.
+            (PermissionKind::Storage, GrantScope::Storage { quota_kb }) => {
+                out.push(ApprovedPermission::Storage {
+                    quota_kb: *quota_kb,
+                });
+            }
             (PermissionKind::Credentials, GrantScope::Credential { hosts, schemes }) => {
                 let origins: Option<BTreeSet<String>> =
                     hosts.iter().map(|h| origin_of(h)).collect();
@@ -367,6 +413,30 @@ pub fn approved(effective: &[(GrantKey, GrantScope)]) -> (ApprovedPermissions, V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_recorded_png_becomes_an_icon() {
+        use sha2::Digest as _;
+        let digest = |bytes: &[u8]| Sha256Digest::from_bytes(sha2::Sha256::digest(bytes).into());
+        let png = [PNG, b"rest of the image"].concat();
+        let url = icon_data(&png, &digest(&png)).unwrap();
+        assert_eq!(
+            url,
+            format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(&png)
+            )
+        );
+        // Modified after install: not the recorded hash.
+        let other = [PNG, b"another image"].concat();
+        assert_eq!(icon_data(&other, &digest(&png)), None);
+        // Not a PNG, even with the right hash.
+        let svg = b"<svg onload=alert(1)/>";
+        assert_eq!(icon_data(svg, &digest(svg)), None);
+        // Too large.
+        let large = [PNG, &vec![0; ipc::MAX_ICON_BYTES]].concat();
+        assert_eq!(icon_data(&large, &digest(&large)), None);
+    }
 
     #[test]
     fn parameters_become_abi_values() {

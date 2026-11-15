@@ -27,7 +27,7 @@ mod supervisor;
 mod windows;
 
 pub use host::{
-    AbortSignal, CapabilityExecutor, HostCommand, HostConfig, HostError, PluginHost,
+    AbortSignal, CallInterrupt, CapabilityExecutor, HostCommand, HostConfig, HostError, PluginHost,
     fixed_working_dir,
 };
 pub use process::{HostProcess, HostStdin, HostStdout};

@@ -9,12 +9,26 @@ import { listen } from "@tauri-apps/api/event"
 import { toPluginError, type PluginClient } from "./api"
 import type {
   AvailablePlugins,
+  KnownPlugin,
   PluginActionOutcome,
+  PluginCredentialSlot,
   PluginDetails,
   PluginEvent,
+  PluginRetention,
   PluginRuntimeStatus,
+  PluginSettings,
+  PluginSettingValue,
   PluginSummary,
   PluginUpdateResult,
+} from "./types"
+
+export type {
+  KnownPlugin,
+  PluginCredentialSlot,
+  PluginRetention,
+  PluginSettingField,
+  PluginSettings,
+  PluginSettingValue,
 } from "./types"
 
 /** Backend event with a {@link PluginEvent} (`agent::PLUGIN_EVENT`). */
@@ -26,6 +40,48 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   } catch (error) {
     throw toPluginError(error)
   }
+}
+
+/** `listKnownPlugins`. */
+export function listKnownPlugins(): Promise<KnownPlugin[]> {
+  return call<KnownPlugin[]>("list_known_plugins")
+}
+
+/** `uninstallPlugin` with `keep`. */
+export function uninstallPluginKeeping(plugin: string, keep: PluginRetention): Promise<void> {
+  return call<null>("uninstall_plugin", { plugin, keep }).then(() => undefined)
+}
+
+export function getPluginSettings(plugin: string): Promise<PluginSettings> {
+  return call<PluginSettings>("get_plugin_settings", { plugin })
+}
+
+/** Merges `values` into the saved settings; `null` resets one to its default. */
+export function setPluginSettings(
+  plugin: string,
+  values: Record<string, PluginSettingValue | null>,
+): Promise<PluginSettings> {
+  return call<PluginSettings>("set_plugin_settings", { plugin, values })
+}
+
+export function listPluginCredentials(plugin: string): Promise<PluginCredentialSlot[]> {
+  return call<PluginCredentialSlot[]>("list_plugin_credentials", { plugin })
+}
+
+/** Sends a secret to the agent; the answer never contains it. */
+export function setPluginCredential(
+  plugin: string,
+  key: string,
+  secret: string,
+): Promise<PluginCredentialSlot[]> {
+  return call<PluginCredentialSlot[]>("set_plugin_credential", { plugin, key, secret })
+}
+
+export function deletePluginCredential(
+  plugin: string,
+  key: string,
+): Promise<PluginCredentialSlot[]> {
+  return call<PluginCredentialSlot[]>("delete_plugin_credential", { plugin, key })
 }
 
 export function createTauriPluginClient(): PluginClient {
@@ -54,7 +110,20 @@ export function createTauriPluginClient(): PluginClient {
       call<PluginUpdateResult>("approve_plugin_update", { plugin, consent: [...consent] }),
     declineUpdate: (plugin) => call<PluginDetails>("decline_plugin_update", { plugin }),
     rollbackPlugin: (plugin) => call<PluginDetails>("rollback_plugin", { plugin }),
-    uninstallPlugin: (plugin) => call<null>("uninstall_plugin", { plugin }).then(() => undefined),
+    // The original request form unless something is kept.
+    uninstallPlugin: (plugin, keep) =>
+      keep?.settings || keep?.credentials
+        ? uninstallPluginKeeping(plugin, {
+            ...(keep.settings ? { settings: true } : {}),
+            ...(keep.credentials ? { credentials: true } : {}),
+          })
+        : call<null>("uninstall_plugin", { plugin }).then(() => undefined),
+    listKnownPlugins,
+    getSettings: getPluginSettings,
+    setSettings: setPluginSettings,
+    listCredentials: listPluginCredentials,
+    setCredential: setPluginCredential,
+    deleteCredential: deletePluginCredential,
     invokeAction: (plugin, action, params) =>
       call<PluginActionOutcome>("invoke_plugin_action", { plugin, action, params }),
     pickPackage: () => call<string | null>("pick_plugin_package"),

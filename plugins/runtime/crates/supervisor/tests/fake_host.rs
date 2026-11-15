@@ -12,13 +12,15 @@ use deckpilot_plugin_abi::frame::{read_frame, write_frame};
 use deckpilot_plugin_abi::protocol::{
     Enforcement, FatalReason, SandboxReport, ToHost, ToSupervisor,
 };
-use deckpilot_plugin_abi::{ActionOutcome, CallResult, CapabilityRequest, ParamValue, Params};
+use deckpilot_plugin_abi::{
+    ActionOutcome, CallErrorCode, CallResult, CapabilityRequest, ParamValue, Params,
+};
 use deckpilot_plugin_broker::{
     Allowed, ApprovedPermissions, Broker, ManualClock, MemoryAudit, PluginId, RateLimits,
 };
 use deckpilot_plugin_supervisor::{
-    AbortSignal, CapabilityExecutor, HostCommand, HostConfig, HostError, PluginHost, RestartPolicy,
-    Supervisor, SupervisorError, SupervisorState,
+    AbortSignal, CallInterrupt, CapabilityExecutor, HostCommand, HostConfig, HostError, PluginHost,
+    RestartPolicy, Supervisor, SupervisorError, SupervisorState,
 };
 use serde_json::json;
 
@@ -200,6 +202,25 @@ fn fake(script: &str) {
                     let _ = io::stdin().lock().read_to_end(&mut sink);
                     sleep_forever()
                 }
+                // Two calls; reports what each returned.
+                "two-calls" => {
+                    let code = |r: CallResult| match r {
+                        CallResult::Error(e) => serde_json::to_value(e.code)
+                            .unwrap()
+                            .as_str()
+                            .unwrap_or("")
+                            .to_owned(),
+                        CallResult::Ok(v) => format!("ok {v}"),
+                    };
+                    let first = code(call(id, 1, log_request()));
+                    let second = code(call(id, 2, log_request()));
+                    let data = Params::from([
+                        ("first".into(), ParamValue::String(first)),
+                        ("second".into(), ParamValue::String(second)),
+                    ]);
+                    result(id, ActionOutcome::ok_with(data));
+                    let _ = next_invoke();
+                }
                 "denied-fetch" => {
                     let req = serde_json::from_value(json!({
                         "op": "http.fetch",
@@ -238,6 +259,87 @@ impl CapabilityExecutor for Executor {
         self.executed += 1;
         CallResult::Ok(json!(null))
     }
+}
+
+/// Takes 10 s per call (a slow HTTP request), unless interrupted.
+#[derive(Default)]
+struct SlowExecutor {
+    executed: usize,
+    interrupted: usize,
+}
+
+impl CapabilityExecutor for SlowExecutor {
+    fn execute(&mut self, _plugin: &PluginId, _allowed: &Allowed) -> CallResult {
+        unreachable!("the supervisor passes the interrupt")
+    }
+
+    fn execute_interruptible(
+        &mut self,
+        _plugin: &PluginId,
+        _allowed: &Allowed,
+        interrupt: &CallInterrupt,
+    ) -> CallResult {
+        self.executed += 1;
+        let until = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < until {
+            if interrupt.is_raised() {
+                self.interrupted += 1;
+                return CallResult::error(CallErrorCode::Failed, "stopped");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        CallResult::Ok(json!("late"))
+    }
+}
+
+/// An abort or a deadline stops a capability call that is running, at
+/// once: its late result is dropped, and an aborted invocation's further
+/// calls are refused without reaching the executor.
+fn running_calls_stop_on_abort_and_deadline() {
+    let mut cfg = config("two-calls");
+    cfg.abort_grace = Duration::from_millis(1500);
+    let mut h = PluginHost::spawn(&cfg, broker().session(plugin())).unwrap();
+    let abort = AbortSignal::new();
+    let later = abort.clone();
+    let raiser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        later.abort();
+    });
+    let mut ex = SlowExecutor::default();
+    let t = Instant::now();
+    let r = h.invoke_abortable(
+        "a",
+        &Params::new(),
+        Duration::from_secs(30),
+        &mut ex,
+        Some(&abort),
+    );
+    raiser.join().unwrap();
+    assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+    let ActionOutcome::Ok { data, .. } = r.unwrap() else {
+        panic!("no outcome")
+    };
+    // Neither the late value nor the executor's own error reach the guest.
+    assert_eq!(data["first"], ParamValue::String("unavailable".into()));
+    assert_eq!(data["second"], ParamValue::String("unavailable".into()));
+    assert_eq!((ex.executed, ex.interrupted), (1, 1));
+    drop(h);
+
+    // The deadline interrupts the call too, and the host is stopped.
+    let mut h = spawn("two-calls").unwrap();
+    let mut ex = SlowExecutor::default();
+    let t = Instant::now();
+    let r = h.invoke_abortable(
+        "a",
+        &Params::new(),
+        Duration::from_millis(300),
+        &mut ex,
+        None,
+    );
+    assert!(matches!(r, Err(HostError::Timeout { .. })), "{r:?}");
+    assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+    assert_eq!(ex.interrupted, 1);
+    assert!(!h.is_running());
 }
 
 fn config(script: &str) -> HostConfig {
@@ -548,6 +650,10 @@ fn main() {
         (
             "aborted_invocations_get_a_grace_period_then_the_host_is_killed",
             aborted_invocations_get_a_grace_period_then_the_host_is_killed,
+        ),
+        (
+            "running_calls_stop_on_abort_and_deadline",
+            running_calls_stop_on_abort_and_deadline,
         ),
     ];
     let mut failed = 0;

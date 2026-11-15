@@ -3,7 +3,17 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { backendListeners, emitBackend, resetBackend } from "@/test/tauri"
 
 import { PluginError } from "./api"
-import { PLUGIN_EVENT, createTauriPluginClient } from "./client"
+import {
+  PLUGIN_EVENT,
+  createTauriPluginClient,
+  deletePluginCredential,
+  getPluginSettings,
+  listKnownPlugins,
+  listPluginCredentials,
+  setPluginCredential,
+  setPluginSettings,
+  uninstallPluginKeeping,
+} from "./client"
 import type { PluginEvent } from "./types"
 
 const invoke = vi.hoisted(() => vi.fn())
@@ -125,6 +135,108 @@ describe("the Tauri plugin client", () => {
     expect(invoke).toHaveBeenCalledWith("uninstall_plugin", { plugin: "acme.x" })
   })
 
+  it.each([
+    ["listKnownPlugins", () => listKnownPlugins(), "list_known_plugins", undefined],
+    [
+      "uninstallPluginKeeping",
+      () => uninstallPluginKeeping("acme.x", { credentials: true }),
+      "uninstall_plugin",
+      { plugin: "acme.x", keep: { credentials: true } },
+    ],
+    [
+      "getPluginSettings",
+      () => getPluginSettings("acme.x"),
+      "get_plugin_settings",
+      { plugin: "acme.x" },
+    ],
+    [
+      "setPluginSettings",
+      () => setPluginSettings("acme.x", { city: "berlin", retries: null }),
+      "set_plugin_settings",
+      { plugin: "acme.x", values: { city: "berlin", retries: null } },
+    ],
+    [
+      "listPluginCredentials",
+      () => listPluginCredentials("acme.x"),
+      "list_plugin_credentials",
+      { plugin: "acme.x" },
+    ],
+    [
+      "setPluginCredential",
+      () => setPluginCredential("acme.x", "token", "s3cret"),
+      "set_plugin_credential",
+      { plugin: "acme.x", key: "token", secret: "s3cret" },
+    ],
+    [
+      "deletePluginCredential",
+      () => deletePluginCredential("acme.x", "token"),
+      "delete_plugin_credential",
+      { plugin: "acme.x", key: "token" },
+    ],
+  ])("%s invokes %s", async (_name, request, command, args) => {
+    invoke.mockResolvedValueOnce(null)
+    await request()
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith(command, args)
+  })
+
+  it.each([
+    [
+      "uninstallPlugin keeping nothing",
+      () => client.uninstallPlugin("acme.x", {}),
+      "uninstall_plugin",
+      { plugin: "acme.x" },
+    ],
+    [
+      "uninstallPlugin keeping settings",
+      () => client.uninstallPlugin("acme.x", { settings: true, credentials: false }),
+      "uninstall_plugin",
+      { plugin: "acme.x", keep: { settings: true } },
+    ],
+    [
+      "uninstallPlugin keeping both",
+      () => client.uninstallPlugin("acme.x", { settings: true, credentials: true }),
+      "uninstall_plugin",
+      { plugin: "acme.x", keep: { settings: true, credentials: true } },
+    ],
+    ["listKnownPlugins", () => client.listKnownPlugins(), "list_known_plugins", undefined],
+    [
+      "getSettings",
+      () => client.getSettings("acme.x"),
+      "get_plugin_settings",
+      { plugin: "acme.x" },
+    ],
+    [
+      "setSettings",
+      () => client.setSettings("acme.x", { units: null }),
+      "set_plugin_settings",
+      { plugin: "acme.x", values: { units: null } },
+    ],
+    [
+      "listCredentials",
+      () => client.listCredentials("acme.x"),
+      "list_plugin_credentials",
+      { plugin: "acme.x" },
+    ],
+    [
+      "setCredential",
+      () => client.setCredential("acme.x", "token", "s3cret"),
+      "set_plugin_credential",
+      { plugin: "acme.x", key: "token", secret: "s3cret" },
+    ],
+    [
+      "deleteCredential",
+      () => client.deleteCredential("acme.x", "token"),
+      "delete_plugin_credential",
+      { plugin: "acme.x", key: "token" },
+    ],
+  ])("the client's %s invokes %s", async (_name, request, command, args) => {
+    invoke.mockResolvedValueOnce(null)
+    await request()
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith(command, args)
+  })
+
   it("sends a copy of the consent, not the caller's array", async () => {
     const consent = ["notifications"]
     invoke.mockResolvedValueOnce({})
@@ -162,7 +274,7 @@ describe("plugin errors", () => {
     ],
     [
       "platformUnsupported",
-      "Plugins can be installed and inspected here, but only run on macOS and Linux.",
+      "Plugins can be installed and inspected here, but only run where the plugin sandbox is verified: macOS, Linux and Windows.",
     ],
     [
       "invalidPackage",

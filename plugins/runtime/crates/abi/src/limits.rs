@@ -64,3 +64,7 @@ pub const MAX_NOTIFY_BODY: usize = 300;
 pub const MAX_STORAGE_KEY: usize = 128;
 /// Storage value, serialized (design §5.2).
 pub const MAX_STORAGE_VALUE: usize = 64 << 10;
+/// Relative id of one of the plugin's own variables (the manifest's limit).
+pub const MAX_VARIABLE_ID: usize = 100;
+/// Published variable value, serialized (design §5.2: 16 KiB).
+pub const MAX_VARIABLE_VALUE: usize = 16 << 10;
