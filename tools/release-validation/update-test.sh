@@ -119,8 +119,11 @@ manifest() {
   python3 - "$to" "$platform" "http://127.0.0.1:$port/$artifact" "$work/out-$to/DeckPilot.app.tar.gz.sig" > "$serve/latest.json" <<'PY'
 import json, sys
 version, platform, url, sig = sys.argv[1:5]
+# Both keys, as the release manifests have them: the app updates only from
+# the entry of its own package format (`{os}-{arch}-app`).
+entry = {"signature": open(sig).read().strip(), "url": url}
 print(json.dumps({"version": version, "notes": "Update test", "pub_date": "2026-01-01T00:00:00Z",
-                  "platforms": {platform: {"signature": open(sig).read().strip(), "url": url}}}))
+                  "platforms": {platform: entry, platform + "-app": entry}}))
 PY
 }
 rm -rf "$serve" && mkdir -p "$serve"

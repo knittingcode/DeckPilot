@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest"
 
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { toast } from "sonner"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { LayoutEditor } from "./editor"
@@ -112,11 +113,20 @@ const control = (name: string) => screen.getByRole("button", { name })
 const describes = (name: string) => control(name).getAttribute("title")
 
 beforeEach(() => {
-  saveLayout.mockResolvedValue(undefined)
+  saveLayout.mockImplementation((_profile: string, saved: DeviceLayout) =>
+    Promise.resolve({ ...saved, agentReload: { state: "applied" } }),
+  )
 })
 afterEach(cleanup)
 
-describe("LayoutEditor", () => {
+// These tests are long scripts of real interactions with the whole editor,
+// and nearly all of their time is React rendering it: a click is 15-30 ms
+// of commits (every control is a dnd-kit target in its own context menu),
+// with no timers, waits or pending requests in between. They take up to
+// 0.7 s on an idle computer, 1.9 s with one busy process per core, 2.7 s
+// with two and 4.3 s with one per core beside 28 test workers, so on a
+// busy computer they ran past the 5 s default.
+describe("LayoutEditor", { timeout: 20_000 }, () => {
   it("draws every control of the model and describes bound ones", () => {
     renderEditor()
     expect(screen.getAllByRole("button", { name: /^Key \d+$/ })).toHaveLength(8)
@@ -321,5 +331,24 @@ describe("LayoutEditor", () => {
     await user.click(screen.getByRole("button", { name: /Save/ }))
     const [, saved] = saveLayout.mock.calls[0] as [string, DeviceLayout]
     expect(saved.pages[0]?.bindings).toHaveLength(1)
+    await vi.waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Layout saved")
+    })
+  })
+
+  it("says when the agent did not apply the saved layout", async () => {
+    saveLayout.mockImplementation((_profile: string, saved: DeviceLayout) =>
+      Promise.resolve({ ...saved, agentReload: { state: "timedOut" } }),
+    )
+    const user = renderEditor()
+    await user.click(control("Key 1"))
+    await user.keyboard("{Delete}")
+    await user.click(screen.getByRole("button", { name: /Save/ }))
+    await vi.waitFor(() => {
+      expect(toast.warning).toHaveBeenCalledWith("Layout saved", {
+        description: expect.stringContaining("did not confirm") as unknown,
+      })
+    })
+    expect(toast.success).not.toHaveBeenCalled()
   })
 })

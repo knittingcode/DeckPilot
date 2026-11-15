@@ -21,6 +21,7 @@ pub enum CommandError {
     Identifier(#[from] deckpilot_core::IdentifierError),
     #[error(transparent)]
     Agent(#[from] deckpilot_ipc::ClientError),
+    #[cfg(feature = "self-update")]
     #[error(transparent)]
     Updater(#[from] tauri_plugin_updater::Error),
     #[error("the configuration is locked")]

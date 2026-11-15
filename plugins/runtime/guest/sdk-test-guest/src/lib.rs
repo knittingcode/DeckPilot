@@ -76,6 +76,13 @@ fn plugin() -> Plugin {
         )
         .action(Action::new("cred-has", cred_has).param(Param::text("credential").required()))
         .action(Action::new("settings", settings))
+        // `url.open` and response headers, for the agent's end-to-end test.
+        .action(
+            Action::new("open-url", open_url)
+                .param(Param::text("url").required())
+                .param(Param::integer("times").min(1.0).max(10.0).default(1)),
+        )
+        .action(Action::new("headers", headers).param(Param::text("url").required()))
 }
 
 /// A server that answers late (canned in the agent's tests).
@@ -268,4 +275,50 @@ fn settings(ctx: &mut Context<'_>, _: &Args<'_>) -> ActionResult {
         Ok(s) => Ok(Output::ok().with("settings", s.to_json())),
         Err(e) => Ok(refused(&e)),
     }
+}
+
+/// Opens `url` up to `times` times, stopping at the first refusal.
+fn open_url(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
+    let url: String = args.get("url")?;
+    let times: i64 = args.get("times")?;
+    let mut opened: i64 = 0;
+    for _ in 0..times {
+        if let Err(e) = ctx.open_url(url.as_str()) {
+            return Ok(refused(&e).with("opened", opened));
+        }
+        opened += 1;
+    }
+    Ok(Output::ok().with("opened", opened))
+}
+
+/// What a paginated, rate-limited API tells the plugin in its headers.
+fn headers(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
+    let url: String = args.get("url")?;
+    let r = match ctx.http_get(url) {
+        Ok(r) => r,
+        Err(e) => return Ok(refused(&e)),
+    };
+    let names: Vec<String> = r
+        .headers
+        .iter()
+        .map(|h| h.name.to_ascii_lowercase())
+        .collect();
+    let mut out = Output::ok()
+        .with("status", r.status)
+        .with("names", names.join(","))
+        .with("headers", format!("{:?}", r.headers));
+    for (key, value) in [
+        ("next", r.link("next")),
+        ("last", r.link("last")),
+        ("remaining", r.header("x-ratelimit-remaining")),
+        ("reset", r.header("ratelimit-reset")),
+        ("total", r.header("x-total")),
+        ("etag", r.header("etag")),
+        ("cookie", r.header("set-cookie")),
+    ] {
+        if let Some(value) = value {
+            out = out.with(key, value);
+        }
+    }
+    Ok(out)
 }

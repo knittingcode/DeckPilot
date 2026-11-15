@@ -1082,6 +1082,7 @@ dependencies = [
  "deckpilot-agent",
  "deckpilot-core",
  "deckpilot-device",
+ "deckpilot-distribution",
  "deckpilot-ipc",
  "deckpilot-keystore",
  "deckpilot-modules",

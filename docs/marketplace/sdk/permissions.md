@@ -47,7 +47,7 @@ user grants and revokes.
 | `storage` | `quotaKb` (257-10,240) | `storage` | Raises the storage quota from 256 KiB to `quotaKb` KiB. Storage itself needs no permission |
 | `profile` | `read` (`profile`, `project`) | `profile` | Nothing yet: no ABI 1 capability reads the profile or project |
 | `variables` | `read` (variable ids of other owners, a final `.*` allowed) | `variables:<entry>` | Nothing yet: ABI 1 has no capability to read variables. Own variables need no permission |
-| `openUrl` | `hosts` | `openUrl:<host>` | Nothing yet: no ABI 1 capability opens URLs |
+| `openUrl` | `hosts` (1-16 exact DNS names, optional `:port`) | `openUrl:<host>` per host | `url.open` ([`Context::open_url`](capabilities.md#open-url)) for `https://<host>` URLs: no other scheme, no userinfo, at most 2,048 bytes, 1 per 2 s and 20 per 10 minutes, 3 per invocation. Exact hosts only: **wildcard hosts validate but are never granted**. It gives no `network` access to the host, and `network` gives no `openUrl` |
 | `background` | `minIntervalSeconds` (15-86,400) | `background` | Nothing yet: no background work or timers in ABI 1 |
 | `device` | `state`, `icons` (booleans) | `device:state`, `device:icons` | Nothing yet |
 

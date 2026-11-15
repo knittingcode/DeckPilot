@@ -75,7 +75,8 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
 - **Grants.** Stored per permission key in plugins.db. The broker gets the
   effective grants (declared ∩ granted, nothing unless enabled) after every
   change; a revocation applies to the next capability call. Wildcard hosts
-  and `privateNetwork` are never passed to the broker (exact origins only).
+  and `privateNetwork` are never passed to the broker (exact origins only);
+  `openUrl` is passed per exact host, like `network`.
 - **Execution.** Only in the host, through the supervisor: the active
   version's files are re-verified against their integrity record and the
   module re-validated before the host is spawned; the supervisor checks
@@ -87,8 +88,17 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
   client with `allow_private = false` (every resolved address must be
   public; the connection uses only the checked addresses), no proxy,
   15 s, 512 KiB, redirects never followed by the client: each one goes back
-  to `Session::authorize_redirect`. Response headers are filtered to a safe
-  list. `notify` becomes an agent notification titled with the plugin's
+  to `Session::authorize_redirect`. Response headers are filtered to the
+  ABI's allowlist (`RESPONSE_HEADERS`: caching, `link` and GitLab's
+  paging headers, GitHub's `x-ratelimit-*` and the `ratelimit-*` family by
+  exact name; never `set-cookie` or an authentication header), after an
+  injected secret was redacted from every value. `url.open`: the normalized
+  https URL the broker allowed for a granted `openUrl` origin, re-checked
+  (https, no userinfo, the origin's host and port), opened through the
+  core launcher (`launch::plan(OpenTarget::Url)`, no shell), at most 3 per
+  invocation, logged by origin only; agent tests record it instead
+  (`DECKPILOT_TEST_PLUGIN_OPEN_URL`, feature `test-hooks`).
+  `notify` becomes an agent notification titled with the plugin's
   name; `log` goes to the agent log; `variables.publish` and
   `variables.clear` go to the plugin's own variables (below). Storage,
   credential injection and settings: see
