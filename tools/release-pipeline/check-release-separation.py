@@ -4,10 +4,11 @@
     tools/release-pipeline/check-release-separation.py [<workflows dir>]
 
 The distribution contract (docs/marketplace/distribution.md):
-knittingcode/DeckPilot builds and releases the application only. Plugin
+knittingcode/deckpilot builds and releases the application only. Plugin
 packages and the signed registry metadata are published, and signed, by
 the registry repository knittingcode/deckpilot-plugins, with its own keys
-and its own environment (registry-publish), never from here.
+and its own environments (registry-publish, registry-timestamp), never
+from here.
 
 Fails unless, in every workflow of the directory (default
 .github/workflows):
@@ -104,7 +105,7 @@ def check(path, workflow):
             registry_job = True
             problems.append(
                 f"{where} runs in the registry environment {environment}: registry signing happens only "
-                "in knittingcode/deckpilot-plugins (environment registry-publish), never in this repository"
+                "in knittingcode/deckpilot-plugins (environments registry-publish, registry-timestamp), never in this repository"
             )
         if REGISTRY_SECRET.search(job_env_text):
             registry_job = True
@@ -128,7 +129,7 @@ def check(path, workflow):
                 registry_step = True
                 problems.append(
                     f"{label} runs a registry publishing or signing command: registry signing happens only "
-                    "in knittingcode/deckpilot-plugins (environment registry-publish)"
+                    "in knittingcode/deckpilot-plugins (environments registry-publish, registry-timestamp)"
                 )
             if PLUGIN_SIGNING.search(text):
                 registry_step = True

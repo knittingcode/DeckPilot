@@ -1,25 +1,27 @@
 # Distribution contract: application and plugins
 
-Status: **decided** for the separation; the registry's keys and
-environment are **not created yet** (they wait on the owner's approval of
-the trust configuration, U-10 and U-12). Applies to the experimental plugin
-marketplace; nothing here changes what an application release contains
-today.
+Status: **decided** for the separation. The registry repository
+[`knittingcode/deckpilot-plugins`](https://github.com/knittingcode/deckpilot-plugins)
+exists, with its workflows and Pages site; its environments' secrets and
+the production registry keys are **pending** the owner's approval of the
+trust configuration (U-10, U-12), so no signed registry is live yet.
+Applies to the experimental plugin marketplace; nothing here changes what
+an application release contains today.
 
 DeckPilot ships through two channels that never share a release, a key, a
 secret or an environment.
 
 | | Application | Plugins |
 | --- | --- | --- |
-| Repository | `knittingcode/DeckPilot` | `knittingcode/deckpilot-plugins` |
+| Repository | `knittingcode/deckpilot` (formerly `knittingcode/DeckPilot`) | `knittingcode/deckpilot-plugins` |
 | What it holds | application source and application releases | the static plugin registry and the independently distributed plugin packages |
-| Served from | GitHub Releases of `knittingcode/DeckPilot` | registry metadata: GitHub Pages, <https://knittingcode.github.io/deckpilot-plugins/v1/>; packages: GitHub Releases of `knittingcode/deckpilot-plugins` |
+| Served from | GitHub Releases of `knittingcode/deckpilot` (URLs keep the `knittingcode/DeckPilot` spelling installed clients require) | registry metadata: GitHub Pages, <https://knittingcode.github.io/deckpilot-plugins/v1/>; packages: GitHub Releases of `knittingcode/deckpilot-plugins` |
 | Signed with | the application updater key (minisign, `TAURI_SIGNING_PRIVATE_KEY`) and the Apple Developer ID | the registry roles: root keys (offline), index key and timestamp key (`crates/deckpilot-plugin-registry/PUBLISHING.md`) |
-| Signing environment | `production-release` | `registry-publish`, in `knittingcode/deckpilot-plugins` only |
+| Signing environments | `production-release` | `registry-publish` (release tags `*--v*`: index and timestamp keys) and `registry-timestamp` (`main` only: the timestamp key, daily refresh), in `knittingcode/deckpilot-plugins` only |
 | Trusted because | the updater signature, against the public key built into the app | the registry signatures, against the root keys built into the app (`DECKPILOT_REGISTRY_ROOT_PUBKEYS`) |
 | Lifecycle | application versions, tags `v*` of this repository | plugin versions and registry snapshots, on their own schedule |
 
-## `knittingcode/DeckPilot`: the application only
+## `knittingcode/deckpilot`: the application only
 
 An application release (`.github/workflows/release.yml`,
 [docs/releasing.md](../releasing.md)) contains exactly:
@@ -63,11 +65,14 @@ made inside the tests.
 - **GitHub Releases** of that repository hold the signed plugin packages
   (`<id>-<version>.dpplugin`), pinned by sha256 and size in the signed
   index; one release per plugin version.
-- Its workflows sign in its own environment, `registry-publish`, with its
-  own keys. That environment and the production registry keys do not exist
-  yet: creating them waits on the owner's approval of the trust
-  configuration (U-10 key ceremony, U-12). Until then the tooling has been
-  used only with throwaway keys in tests.
+- Its workflows sign only in its own environments, with its own keys:
+  `publish.yml` signs the index and the timestamp in `registry-publish`
+  (release tags `*--v*`), and `refresh-timestamp.yml` re-signs the
+  timestamp daily in `registry-timestamp` (`main` only, the timestamp key
+  only). The secrets of both and the production registry keys are pending
+  the owner's approval of the trust configuration (U-10 key ceremony,
+  U-12). Until then the tooling has been used only with throwaway keys in
+  tests.
 
 ## Independent lifecycles, separate keys
 
