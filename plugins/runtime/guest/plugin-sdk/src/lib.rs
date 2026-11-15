@@ -102,7 +102,7 @@ pub use context::{
 pub use definition::{Action, DefinitionError, Handler, Param, Plugin};
 pub use output::{ActionResult, IntoValue, Output, PluginError, codes};
 
-pub use deckpilot_plugin_abi::capability::{AuthScheme, Header, LogLevel};
+pub use deckpilot_plugin_abi::capability::{AuthScheme, Header, LogLevel, NotifySeverity};
 pub use deckpilot_plugin_abi::describe::{ParamKind, PluginDescriptor};
 pub use deckpilot_plugin_abi::{
     ActionOutcome, CallErrorCode, CallResult, CapabilityRequest, HttpMethod, ParamValue, Params,
@@ -142,8 +142,8 @@ pub const API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 0 };
 pub mod prelude {
     pub use crate::{
         Action, ActionOutcome, ActionResult, Args, AuthScheme, CapabilityError,
-        CapabilityErrorKind, Context, HttpMethod, LogLevel, Output, Param, Plugin, PluginError,
-        Request, Response, SecretHandle, Settings, StorageUsage, codes,
+        CapabilityErrorKind, Context, HttpMethod, LogLevel, NotifySeverity, Output, Param, Plugin,
+        PluginError, Request, Response, SecretHandle, Settings, StorageUsage, codes,
     };
 }
 

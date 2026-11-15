@@ -85,8 +85,9 @@ Everything the module reaches outside itself goes through that one import
 as a capability request (`plugins/runtime/crates/abi/src/capability.rs`):
 `http.fetch` (with an optional credential handle), `notify`, `log`,
 `storage.get`, `storage.set`, `storage.delete`, `storage.keys`,
-`storage.usage`, `credentials.has` and `settings.get`. The last four are
-compatible ABI 1 additions; a module that does not use them is unchanged.
+`storage.usage`, `credentials.has`, `settings.get` and `url.open`. The
+last five are compatible ABI 1 additions; a module that does not use them
+is unchanged.
 A secret never crosses the import: the module names a credential slot and
 the agent injects its value (agent-integration.md, "Plugin data").
 
