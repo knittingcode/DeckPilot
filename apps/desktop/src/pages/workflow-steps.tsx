@@ -40,7 +40,8 @@ import { toastFailure } from "@/lib/failure"
 import { useSnapshot } from "@/hooks/use-status"
 import { EXECUTION_STATE_LABEL, ExecutionStore } from "@/lib/executions"
 import { useTitlebar } from "@/hooks/use-titlebar"
-import { useAppContext } from "@/lib/app-context"
+import { useActionModules, useAppContext } from "@/lib/app-context"
+import { pluginActionUnavailable } from "@/lib/plugin-actions"
 import { ActionIcon } from "@/components/action-icon"
 import { initialValue } from "@/lib/parameters"
 import type { ActionType, ProfileView, StepCondition, Workflow, WorkflowStep } from "@/lib/types"
@@ -102,6 +103,7 @@ export function StepEditor({
   const running = lastRun?.state === "running"
   const [starting, setStarting] = useState(false)
   const actions = view.profile.actions
+  const modules = useActionModules()
   const actionIds = new Set(actions.map((a) => a.id))
   const dirty = JSON.stringify(workflow) !== JSON.stringify(initial)
   const runBlocked = runBlockedReason({
@@ -241,16 +243,21 @@ export function StepEditor({
                 <SelectValue placeholder="Choose an action" />
               </SelectTrigger>
               <SelectContent>
-                {actions.map((action) => (
-                  <SelectItem
-                    key={action.id}
-                    value={action.id}
-                    disabled={!types.some((t) => t.id === action.actionType)}
-                  >
-                    {action.name}
-                    {!types.some((t) => t.id === action.actionType) && " (unavailable)"}
-                  </SelectItem>
-                ))}
+                {actions.map((action) => {
+                  const why = pluginActionUnavailable(modules, action.actionType)
+                  const usable = !why && types.some((t) => t.id === action.actionType)
+                  return (
+                    <SelectItem
+                      key={action.id}
+                      value={action.id}
+                      disabled={!usable}
+                      title={why ?? undefined}
+                    >
+                      {action.name}
+                      {!usable && (why ? ` (unavailable: ${why})` : " (unavailable)")}
+                    </SelectItem>
+                  )
+                })}
               </SelectContent>
             </Select>
             <Button
@@ -367,6 +374,8 @@ function SortableStep({
   const [showParameters, setShowParameters] = useState(Object.keys(step.overrides ?? {}).length > 0)
   const action = view.profile.actions.find((a) => a.id === step.action)
   const type = types.find((t) => t.id === action?.actionType)
+  const modules = useActionModules()
+  const unavailable = action ? pluginActionUnavailable(modules, action.actionType) : null
 
   return (
     <li
@@ -438,6 +447,12 @@ function SortableStep({
           <X />
         </Button>
       </div>
+      {unavailable && (
+        <p className="text-xs text-destructive" role="note">
+          Unavailable: {unavailable}. The step stays in the workflow and runs again once the plugin
+          can.
+        </p>
+      )}
       <div className="grid gap-2 sm:grid-cols-2">
         <Select
           value={conditionValue(step.condition)}

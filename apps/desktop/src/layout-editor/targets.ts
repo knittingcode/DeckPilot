@@ -8,6 +8,11 @@ export interface TargetOption {
   target: BindingTarget
   kind: "action" | "workflow" | "navigation" | "stateful"
   icon?: string | null
+  /**
+   * Why it cannot be placed now (a plugin action whose plugin is disabled
+   * or not installed). Controls that already use it keep it.
+   */
+  unavailable?: string
 }
 
 export interface TargetGroup {
@@ -48,6 +53,8 @@ export function targetGroups(
   profile: Pick<Profile, "actions" | "workflows">,
   layout: DeviceLayout,
   pageId: string,
+  /** Why an action of this type cannot be placed now; `null` when it can. */
+  unavailable: (actionType: string) => string | null = () => null,
 ): TargetGroup[] {
   const option = (target: BindingTarget, label: string, kind: TargetOption["kind"]) => ({
     value: encodeTarget(target),
@@ -58,10 +65,14 @@ export function targetGroups(
   const groups: TargetGroup[] = [
     {
       label: "Actions",
-      options: profile.actions.map((a) => ({
-        ...option({ type: "action", action: a.id }, a.name, "action"),
-        icon: a.icon,
-      })),
+      options: profile.actions.map((a) => {
+        const why = unavailable(a.actionType)
+        return {
+          ...option({ type: "action", action: a.id }, a.name, "action"),
+          icon: a.icon,
+          ...(why ? { unavailable: why } : {}),
+        }
+      }),
     },
     {
       label: "Workflows",
@@ -80,6 +91,15 @@ export function targetGroups(
     },
   ]
   return groups.filter((g) => g.options.length > 0)
+}
+
+/** Why the option of `value` cannot be placed now, if it cannot. */
+export function unavailableTarget(groups: TargetGroup[], value: string): string | undefined {
+  for (const group of groups) {
+    const found = group.options.find((o) => o.value === value)
+    if (found) return found.unavailable
+  }
+  return undefined
 }
 
 /**
