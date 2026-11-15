@@ -742,3 +742,30 @@ fn github_asset_hosts_only_for_the_pinned_url() {
         .is_err()
     );
 }
+
+#[test]
+fn with_roots_and_no_registry_named_the_official_site_is_used() {
+    use crate::plugins::PluginSettings;
+    use crate::plugins::registry::{DEFAULT_REGISTRY_URL, Registry};
+    let site = Site::new("default-url");
+    let state = site.scratch.0.join("state");
+    let roots = site.scratch.0.join("trusted-roots.json");
+    std::fs::copy(site.work().join("roots.json"), &roots).unwrap();
+    // Opening fetches nothing; the name is the official site.
+    let registry = Registry::from_settings(
+        &PluginSettings {
+            registry_roots: Some(roots),
+            ..PluginSettings::default()
+        },
+        &state,
+    )
+    .unwrap()
+    .expect("a registry");
+    assert_eq!(registry.name, DEFAULT_REGISTRY_URL);
+    // Without roots: none, whatever else is set.
+    assert!(
+        Registry::from_settings(&PluginSettings::default(), &state)
+            .unwrap()
+            .is_none()
+    );
+}
