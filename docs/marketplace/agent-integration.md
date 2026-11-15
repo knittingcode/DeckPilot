@@ -270,6 +270,16 @@ the agent nothing and behaves as before.
   name and parameters and show the reason; those of an uninstalled plugin
   say that the plugin is not installed. None is ever dropped. The owner of
   a type is everything before its **last** `.`, as `ModuleId::owner_of`.
+- **Layout and step editors.** The layout editor's library, context menu,
+  inspector and gesture editor, and the step-workflow editor, take the
+  plugin's state from the same modules (`pluginActionUnavailable`), not
+  from the backend's type list: a saved action whose plugin cannot run
+  (disabled, broken, quarantined, a permission not granted, not installed)
+  cannot be dragged, assigned or added as a step, and says why; keys,
+  gestures and steps that already use it keep it and show the reason. The
+  gesture editor's and step editor's parameter overrides use the plugin
+  types available now (`withPluginTypes`), so they appear as soon as the
+  app has read the plugins, without reopening the editor.
 
 ## IPC (protocol 10, capability `plugins`)
 
@@ -406,10 +416,6 @@ Windows (not a required check).
   environment.
 - No plugin storage, credential slots, variables (design §2.3 item 3),
   settings or background work; their capabilities are refused.
-- The layout editor's gesture editor and the step-workflow editor use the
-  backend's action type list as before; plugin types appear there only
-  after the app has read the installed plugins (see
-  [the editors](#plugin-actions-in-the-configuration-app)).
 - An abort does not interrupt a capability call that is already running.
 - `plugin_known` (design §2.3 item 4) does not exist: an uninstalled
   plugin's actions are reported as "not available" without its name.
