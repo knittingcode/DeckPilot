@@ -74,11 +74,16 @@ export function ControlMenu({
                 {group.options.map((option) => (
                   <ContextMenuItem
                     key={option.value}
+                    disabled={option.unavailable !== undefined}
+                    title={option.unavailable}
                     onSelect={() => {
                       commands.assign(option.target)
                     }}
                   >
-                    <span className="truncate">{option.label}</span>
+                    <span className="truncate">
+                      {option.label}
+                      {option.unavailable !== undefined && " (unavailable)"}
+                    </span>
                   </ContextMenuItem>
                 ))}
               </ContextMenuGroup>

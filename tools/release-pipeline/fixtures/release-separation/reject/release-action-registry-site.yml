@@ -1,0 +1,15 @@
+# expect: publishes plugin packages or registry metadata
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: softprops/action-gh-release@0123456789abcdef0123456789abcdef01234567
+        with:
+          files: |
+            site/v1/timestamp.json
+            site/v1/timestamp.json.minisig

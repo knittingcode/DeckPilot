@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# Checks that a release has every required asset, and nothing of the other
-# update channel.
+# Checks that a release has every required asset, nothing of the other
+# update channel, and nothing but the application: every asset must be one
+# of the application's installers, updater archives and their .sig files,
+# the update manifest, release-meta.json or SHA256SUMS. Plugin packages
+# (*.dpplugin) and plugin registry metadata are never part of an
+# application release (docs/marketplace/distribution.md); plugin-host
+# binaries ship only inside the installers, never as assets of their own.
 #
 #   tools/release-pipeline/check-assets.sh <asset list file> [--final]
 #
@@ -18,10 +23,8 @@ set -euo pipefail
 list="${1:?usage: check-assets.sh <asset list file> [--final]}"
 final="${2-}"
 : "${VERSION:?}" "${PRERELEASE:?}" "${MANIFEST:?}"
-fail() {
-  echo "::error::$*" >&2
-  exit 1
-}
+# shellcheck source=tools/release-pipeline/common.sh
+source "$(dirname "$0")/common.sh"
 
 v="$VERSION"
 required=(
@@ -50,4 +53,22 @@ done
 [ -z "$missing" ] || fail "the release lacks:$missing"
 ! grep -q -x -F -- "$other" "$list" \
   || fail "the release contains $other: it would be offered on the wrong update channel"
-echo "all ${#required[@]} required assets are present"
+
+# The allowlist: exactly the application's assets. Stage A writes
+# release-meta.json and SHA256SUMS last, so they are allowed before --final.
+allowed=("${required[@]}" release-meta.json SHA256SUMS)
+foreign=""
+while IFS= read -r name; do
+  [ -n "$name" ] || continue
+  for known in "${allowed[@]}"; do
+    [ "$name" = "$known" ] && continue 2
+  done
+  kind=$(foreign_asset_kind "$name")
+  if [ -n "$kind" ]; then
+    fail "the release contains $name, $kind: plugin packages and registry metadata are distributed by the plugin registry, never with an application release (docs/marketplace/distribution.md)"
+  fi
+  [ "$name" = "$other" ] && continue
+  foreign="$foreign $name"
+done < "$list"
+[ -z "$foreign" ] || fail "the release contains assets that are not application assets:$foreign"
+echo "all ${#required[@]} required assets are present, and nothing else"
