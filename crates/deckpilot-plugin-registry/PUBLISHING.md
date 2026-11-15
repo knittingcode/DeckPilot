@@ -1,10 +1,18 @@
 # Registry publishing tooling
 
-> **Not set up.** Nothing described here runs anywhere. The registry repository
-> (`knittingcode/deckpilot-plugins`), its GitHub environments, its Pages
-> site and every production key still have to be created, and that needs
-> the owner's authorization. This tool has been used only with throwaway
-> keys in tests.
+> **Not live yet.** The registry repository
+> [`knittingcode/deckpilot-plugins`](https://github.com/knittingcode/deckpilot-plugins)
+> exists, with its workflows and its Pages site
+> (<https://knittingcode.github.io/deckpilot-plugins/>). Its environments
+> `registry-publish` and `registry-timestamp`, their secrets and every
+> production key are still pending the owner's approval of the trust
+> configuration, so no signed registry is published. This tool has been
+> used only with throwaway keys in tests.
+
+Registry metadata and plugin packages are published and signed only from
+the registry repository, never with or alongside a DeckPilot application
+release, and with keys and environments of their own: see the distribution
+contract, [`docs/marketplace/distribution.md`](../../docs/marketplace/distribution.md).
 
 `deckpilot-registry` is the offline half of sections 9 to 11 of the plugin
 marketplace design (`docs/marketplace/architecture.md`, pull request #191):
@@ -131,9 +139,12 @@ two root keys with threshold 1). At minimum:
    roots on that machine. Commit `roots.json` and `keys/1.json(.minisig)`.
 3. Root secret keys stay offline (maintainer machine plus an offline
    backup) and never reach GitHub.
-4. The index key and its password become the `REGISTRY_INDEX_KEY(_PASSWORD)`
-   secrets of the `registry-release` environment, the timestamp key the
-   `REGISTRY_TIMESTAMP_KEY(_PASSWORD)` secrets of `registry-timestamp`.
+4. In `knittingcode/deckpilot-plugins`, the index key and its password
+   become the `REGISTRY_INDEX_KEY(_PASSWORD)` secrets of the
+   `registry-publish` environment (tags `*--v*`), and the timestamp key the
+   `REGISTRY_TIMESTAMP_KEY(_PASSWORD)` secrets of both `registry-publish`
+   and `registry-timestamp` (`main` only, the daily refresh). They are
+   never secrets of `knittingcode/DeckPilot`.
 5. `roots.json` becomes the DeckPilot repository variable
    `DECKPILOT_REGISTRY_ROOT_PUBKEYS`.
 
@@ -171,18 +182,18 @@ discards the keys and the output. The job summary shows the permission
 diff and the computed sha256 and size. Its result is advisory (a PR can
 edit the workflow); the `gate` job on `main` repeats it.
 
-### `publish.yml`: push to `main`, protected environments
+### `publish.yml`: release tags, protected environments
+
+Runs for a release tag the owner creates (`<plugin-id>--v<version>`, or
+`registry--v…` to re-sign the index only); tags are admin-only by ruleset.
 
 | Job | Environment | Secrets | Tool |
 | --- | --- | --- | --- |
-| `gate` | — | none | replays `registry/` from `main` (as `validate.yml`) |
-| `environment-gate` | — | none | (repository check of both environments) |
-| `build` (untrusted, `permissions: {}`) | — | none | none: builds packages from pinned sources |
-| `release` | `registry-release` | none | `add-version` only after the built sha256 equals the reviewed pin; uploads the immutable release |
-| `index` | `registry-release` (reviewers) | index key | mirror the live site; `build-index`; `sign-index --password-env KEY_PASSWORD` with the key in a 0600 temp file deleted in the same step |
-| `timestamp` | `registry-timestamp` | timestamp key | `timestamp --expires-in 7d`, same key handling |
-| `verify` | — | none | `verify-site --state <live state> --require-packages --min-remaining 6d`: the client accepts the new site as an existing client would; deploy only if this passes |
-| `deploy` | `github-pages` (`main` only) | none | upload `site/v1` (new files plus the retained snapshots) |
+| `resolve` | — | none | the tag names a reviewed commit on `main` and a recorded version |
+| `build` (untrusted, `contents: read`) | — | none | rebuilds every recorded package from its pinned source; plugin build scripts run only here |
+| `sign` | `registry-publish` | index and timestamp keys | builds nothing; `tools/publish-site.sh index` re-checks each package's sha256 and size against the reviewed pins, signs the index and the timestamp, and runs `verify-site` as an existing client |
+| `release` (`contents: write`) | — | none | uploads the verified package to the GitHub Release of the tag (never creates a tag) |
+| `deploy` | `github-pages` | none | the landing page plus the signed `site/v1` |
 | `verify-published` | — | none | fetch the live site anonymously, `verify-site` on it |
 
 Signing happens only in the protected environments; their secrets are

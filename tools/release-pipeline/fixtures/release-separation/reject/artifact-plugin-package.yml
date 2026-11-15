@@ -1,0 +1,14 @@
+# expect: publishes plugin packages or registry metadata
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@0123456789abcdef0123456789abcdef01234567
+        with:
+          name: plugins
+          path: target/plugins/*.dpplugin

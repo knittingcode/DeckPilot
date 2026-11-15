@@ -1,0 +1,12 @@
+# expect: runs in the registry environment registry-timestamp
+on:
+  schedule:
+    - cron: "23 4 * * *"
+permissions:
+  contents: read
+jobs:
+  timestamp:
+    runs-on: ubuntu-latest
+    environment: registry-timestamp
+    steps:
+      - run: tools/publish-site.sh timestamp --out "$RUNNER_TEMP/ws"
