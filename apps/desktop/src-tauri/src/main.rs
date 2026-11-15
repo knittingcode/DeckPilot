@@ -11,6 +11,8 @@ mod agent;
 mod commands;
 mod dev_server;
 mod error;
+#[cfg(test)]
+mod marketplace_e2e;
 mod modules;
 mod plugin_actions;
 mod state;

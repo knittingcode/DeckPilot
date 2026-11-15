@@ -1,0 +1,214 @@
+# The plugin marketplace end to end through the configuration app
+# (docs/marketplace/e2e.md): the real app, the real agent (built with the
+# `plugins` feature and the test hooks), the real sandboxed plugin host and
+# the sample plugin, a registry signed with throwaway keys and served over
+# local HTTPS, canned HTTP for the plugin, an isolated data directory.
+#
+# - Linux and Windows: the scenario through the UI, with WebDriver
+#   (tauri-driver in front of WebKitWebDriver or msedgedriver), and at the
+#   command layer.
+# - macOS: the command layer only (no WebDriver exists for WKWebView); the
+#   macOS GUI is not driven.
+#
+# Not a required check. No secrets, read-only token, no environment.
+name: Desktop end to end
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/desktop/**
+      - apps/agent/**
+      - crates/**
+      - plugins/**
+      - modules/**
+      - Cargo.toml
+      - Cargo.lock
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - rust-toolchain.toml
+      - .github/workflows/desktop-e2e.yml
+  pull_request:
+    paths:
+      - apps/desktop/**
+      - apps/agent/**
+      - crates/**
+      - plugins/**
+      - modules/**
+      - Cargo.toml
+      - Cargo.lock
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - rust-toolchain.toml
+      - .github/workflows/desktop-e2e.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-e2e-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  # Pinned; installed with `cargo install --locked`.
+  TAURI_DRIVER_VERSION: 2.1.0
+
+jobs:
+  e2e:
+    name: Marketplace e2e (${{ matrix.os }}, ${{ matrix.gui && 'UI and commands' || 'commands' }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            gui: true
+          - os: windows-latest
+            gui: true
+          - os: macos-latest
+            gui: false
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.gui && 100 || 60 }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          tools/ci/install-linux-deps.sh
+          # WebKitWebDriver and a virtual display for the UI test.
+          timeout 600 sudo apt-get install -y webkit2gtk-driver xvfb
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup target add wasm32-unknown-unknown
+          rustc --version
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            plugins/runtime -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The vendored OpenSSL (SQLCipher) is configured with Perl; Git's
+      # minimal Perl lacks modules it needs.
+      - name: Use Strawberry Perl for OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $perl = "C:\Strawberry\perl\bin\perl.exe"
+          if (-not (Test-Path $perl)) { Write-Error "Strawberry Perl not found at $perl"; exit 1 }
+          "OPENSSL_SRC_PERL=$perl" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Build the agent (plugins, test hooks)
+        run: cargo build --locked -p deckpilot-agent --features plugins,test-hooks --bin deckpilot-agent
+      - name: Build the plugin host and the sample plugin
+        working-directory: plugins/runtime
+        run: |
+          cargo build --locked -p deckpilot-plugin-host --bin deckpilot-plugin-host
+          cargo build --locked -p hello-weather --target wasm32-unknown-unknown --profile guest
+      # Copied out of target/: building the tests below replaces
+      # target/debug/deckpilot-desktop with a build that expects the dev
+      # server.
+      - name: Collect the plugin artifacts
+        run: |
+          # Paths for the tests (Windows: D:/a/..., not /d/a/...).
+          native() { if command -v cygpath >/dev/null; then cygpath -m "$1"; else echo "$1"; fi; }
+          E2E="$(native "$RUNNER_TEMP")/e2e"
+          echo "E2E=$E2E" >> "$GITHUB_ENV"
+          mkdir -p "$E2E/bin" "$E2E/wasm" "$E2E/artifacts"
+          exe=""; if [ "$RUNNER_OS" = Windows ]; then exe=.exe; fi
+          cp "target/debug/deckpilot-agent$exe" "$E2E/bin/"
+          cp plugins/runtime/target/wasm32-unknown-unknown/guest/hello_weather.wasm "$E2E/wasm/"
+          {
+            echo "DECKPILOT_E2E_AGENT_BIN=$E2E/bin/deckpilot-agent$exe"
+            echo "DECKPILOT_E2E_PLUGIN_HOST=$(native "$PWD")/plugins/runtime/target/debug/deckpilot-plugin-host$exe"
+            echo "DECKPILOT_E2E_WASM_DIR=$E2E/wasm"
+            echo "DECKPILOT_E2E_ARTIFACTS=$E2E/artifacts"
+          } >> "$GITHUB_ENV"
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        if: matrix.gui
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: matrix.gui
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Build the app (debug, plugins page on)
+        if: matrix.gui
+        env:
+          VITE_DECKPILOT_PLUGINS: "1"
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @deckpilot/desktop tauri build --debug --no-bundle
+          mkdir -p "$E2E/app"
+          exe=""; if [ "$RUNNER_OS" = Windows ]; then exe=.exe; fi
+          cp "target/debug/deckpilot-desktop$exe" "$E2E/app/"
+          echo "DECKPILOT_E2E_APP=$E2E/app/deckpilot-desktop$exe" >> "$GITHUB_ENV"
+      - name: Install tauri-driver
+        if: matrix.gui
+        run: |
+          cargo install tauri-driver --locked --version "$TAURI_DRIVER_VERSION"
+          exe=""; if [ "$RUNNER_OS" = Windows ]; then exe=.exe; fi
+          bin="$HOME/.cargo/bin"
+          if command -v cygpath >/dev/null; then bin=$(cygpath -m "$bin"); fi
+          echo "DECKPILOT_E2E_TAURI_DRIVER=$bin/tauri-driver$exe" >> "$GITHUB_ENV"
+      # msedgedriver must match the WebView2 runtime exactly.
+      - name: Install msedgedriver for WebView2 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $version = (Get-ItemProperty -Path $key -Name pv -ErrorAction SilentlyContinue).pv
+          if (-not $version) {
+            $version = (Get-Item "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe").VersionInfo.ProductVersion
+          }
+          Write-Host "WebView2 runtime $version"
+          $dir = Join-Path $env:RUNNER_TEMP 'msedgedriver'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $zip = Join-Path $dir 'edgedriver.zip'
+          $urls = @(
+            "https://msedgedriver.microsoft.com/$version/edgedriver_win64.zip",
+            "https://msedgewebdriverstorage.blob.core.windows.net/edgewebdriver/$version/edgedriver_win64.zip"
+          )
+          $done = $false
+          foreach ($url in $urls) {
+            try { Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing; $done = $true; break }
+            catch { Write-Host "::warning::$url failed: $_" }
+          }
+          if ($done) {
+            Expand-Archive -Path $zip -DestinationPath $dir -Force
+            $driver = Join-Path $dir 'msedgedriver.exe'
+          } else {
+            $driver = Join-Path $env:EDGEWEBDRIVER 'msedgedriver.exe'
+            Write-Host "::warning::using the runner's msedgedriver"
+          }
+          & $driver --version
+          "DECKPILOT_E2E_NATIVE_DRIVER=$driver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Marketplace at the command layer
+        run: cargo test --locked -p deckpilot-desktop --bin deckpilot-desktop marketplace_e2e -- --ignored --nocapture
+      - name: Marketplace through the UI (Linux)
+        if: matrix.gui && runner.os == 'Linux'
+        run: xvfb-run -a -s "-screen 0 1440x900x24" cargo test --locked -p deckpilot-desktop --test marketplace_gui -- --ignored --nocapture
+      - name: Marketplace through the UI (Windows)
+        if: matrix.gui && runner.os == 'Windows'
+        run: cargo test --locked -p deckpilot-desktop --test marketplace_gui -- --ignored --nocapture
+      - name: Step report
+        if: always()
+        run: cat "$E2E"/artifacts/*-steps.txt 2>/dev/null || true
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-e2e-${{ matrix.os }}
+          path: ${{ env.E2E }}/artifacts
+          if-no-files-found: ignore
+          retention-days: 7

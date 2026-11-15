@@ -5,7 +5,8 @@ Linux: a plugin-enabled agent, the sandboxed plugin host, the sample plugin
 in a local registry signed with throwaway keys, and the configuration app
 with the Plugins page. The automated version of the same flow is
 `apps/agent/tests/plugins_e2e.rs`, and over HTTPS
-`apps/agent/tests/plugins_registry_https.rs` ([agent-integration.md](agent-integration.md#tests)).
+`apps/agent/tests/plugins_registry_https.rs` ([agent-integration.md](agent-integration.md#tests));
+through the app's UI and commands it is [e2e.md](e2e.md).
 Section 5 serves the same registry over HTTPS.
 
 The feature is **off by default** at both ends. Without
