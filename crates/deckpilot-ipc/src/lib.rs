@@ -7,6 +7,7 @@
 //! * [`framing`]: newline-delimited JSON with a size limit.
 //! * [`client`]: an async client used by the configuration app.
 //! * [`work_session`]: the work session shapes of protocol 8.
+//! * [`plugins`]: the plugin shapes of protocol 10.
 //!
 //! Every connection starts with a `hello` carrying the protocol version and a
 //! random token that the agent writes to a file readable only by the current
@@ -17,6 +18,7 @@ pub mod client;
 pub mod endpoint;
 pub mod framing;
 pub mod paths;
+pub mod plugins;
 pub mod protocol;
 pub mod stream;
 pub mod token;

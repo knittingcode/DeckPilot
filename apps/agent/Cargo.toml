@@ -21,6 +21,29 @@ path = "src/main.rs"
 # drive them. Never part of a release build: the configuration app has no
 # way to start, verify or finish a session (decision D11).
 test-hooks = []
+# Experimental plugin marketplace backend (docs/marketplace/): the plugin
+# store, registry client, package verification, supervisor and broker, and
+# IPC protocol 10's plugin requests. Off by default: release builds contain
+# none of it (`tests/plugins_feature.rs` checks the dependency tree), and
+# even with it plugins stay off until `--enable-plugins`. Plugins run only
+# in the separate, sandboxed `deckpilot-plugin-host` (plugins/runtime),
+# never in the agent.
+plugins = [
+    "dep:deckpilot-plugin-abi",
+    "dep:deckpilot-plugin-broker",
+    "dep:deckpilot-plugin-manifest",
+    "dep:deckpilot-plugin-package",
+    "dep:deckpilot-plugin-registry",
+    "dep:deckpilot-plugin-store",
+    "dep:deckpilot-plugin-supervisor",
+    "dep:deckpilot-module-http",
+    "dep:hkdf",
+    "dep:reqwest",
+    "dep:serde",
+    "dep:semver",
+    "dep:sha2",
+    "dep:zeroize",
+]
 
 [dependencies]
 auto-launch.workspace = true
@@ -44,9 +67,38 @@ tracing.workspace = true
 tracing-appender.workspace = true
 tracing-subscriber.workspace = true
 tray-icon.workspace = true
+# Feature `plugins` only.
+deckpilot-plugin-abi = { workspace = true, optional = true }
+deckpilot-plugin-broker = { workspace = true, optional = true }
+deckpilot-plugin-manifest = { workspace = true, optional = true }
+deckpilot-plugin-package = { workspace = true, optional = true }
+deckpilot-plugin-registry = { workspace = true, optional = true }
+deckpilot-plugin-store = { workspace = true, optional = true }
+deckpilot-plugin-supervisor = { workspace = true, optional = true }
+# The HTTP module's client (address checks, pinned resolution, bounded
+# bodies) carries out the fetches the broker allowed. Already part of the
+# agent through deckpilot-modules.
+deckpilot-module-http = { workspace = true, optional = true }
+hkdf = { workspace = true, optional = true }
+# The HTTP module's request type names reqwest's methods.
+reqwest = { version = "0.13", default-features = false, optional = true }
+serde = { workspace = true, optional = true }
+semver = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 deckpilot-agent = { path = ".", features = ["test-hooks"] }
+# plugins_e2e: a local signed registry made with the publishing tool and
+# throwaway keys, packages, and reading plugins.db from outside.
+base64.workspace = true
+deckpilot-plugin-manifest.workspace = true
+deckpilot-plugin-package.workspace = true
+deckpilot-plugin-registry = { workspace = true, features = ["publish"] }
+deckpilot-plugin-store.workspace = true
+flate2.workspace = true
+sha2.workspace = true
+tar.workspace = true
 deckpilot-render.workspace = true
 zeroize.workspace = true
 deckpilot-modules.workspace = true
@@ -55,3 +107,9 @@ serde_json.workspace = true
 
 [lints]
 workspace = true
+
+# End to end through a real agent process, the real plugin host and the
+# sample plugin (built from plugins/runtime by the test).
+[[test]]
+name = "plugins_e2e"
+required-features = ["plugins"]

@@ -144,9 +144,9 @@ Windows design notes and trade-offs:
   executor (the broker only decides; redirects and resolved addresses must be
   checked with `authorize_redirect` and `check_connect_addr`).
 - The agent-side credential store and secret injection (the broker only
-  decides whether a `credential` handle may go to an origin); packaging the
-  sample as a `.dpplugin` (the #209 package format carries a JS bundle,
-  `plugin.js`, not a wasm module).
+  decides whether a `credential` handle may go to an origin). The sample is
+  packaged as a `.dpplugin` with the module as `plugin.wasm`
+  (`docs/marketplace/artifact-contract.md`).
 - Compile time of a hostile module is bounded only by the supervisor's
   `load_timeout` (kill), not inside the host.
 - wasmtime's own freedom from escape bugs (assumed, not tested; no fuzzing).

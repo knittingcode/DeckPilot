@@ -13,15 +13,19 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Issue, IssueCode, ValidationErrors};
-use crate::model::Manifest;
+use crate::model::{
+    LEGACY_JS_ARTIFACT, Manifest, Runtime, RuntimeContract, RuntimeKind, WASM_ARTIFACT,
+};
 use crate::path_rules;
 
 /// Largest `.dpplugin` archive.
 pub const MAX_PACKAGE_BYTES: u64 = 5 * 1024 * 1024;
 /// Most entries in a package.
 pub const MAX_PACKAGE_ENTRIES: usize = 256;
-/// Files every package contains.
-pub const REQUIRED_FILES: [&str; 3] = ["manifest.json", "plugin.js", "LICENSE"];
+/// Files every package of the `wasm` runtime contains (the MVP contract,
+/// `docs/marketplace/artifact-contract.md`). [`Manifest::required_files`]
+/// gives the set for a given manifest.
+pub const REQUIRED_FILES: [&str; 3] = ["manifest.json", WASM_ARTIFACT, "LICENSE"];
 
 /// A sha256 digest, written as 64 lowercase hex digits.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -126,6 +130,32 @@ pub enum IntegrityError {
 }
 
 impl Manifest {
+    /// The runtime contract the manifest declares (absent `runtime`: the
+    /// #191 JavaScript contract).
+    pub fn runtime_contract(&self) -> RuntimeContract {
+        match &self.runtime {
+            Some(Runtime {
+                kind: RuntimeKind::Wasm,
+                abi,
+            }) => RuntimeContract::Wasm { abi: *abi },
+            None => RuntimeContract::LegacyJs,
+        }
+    }
+
+    /// The package file holding the executable artifact: `plugin.wasm`, or
+    /// `plugin.js` for the #191 JavaScript contract.
+    pub fn artifact_file(&self) -> &'static str {
+        match self.runtime_contract() {
+            RuntimeContract::Wasm { .. } => WASM_ARTIFACT,
+            RuntimeContract::LegacyJs => LEGACY_JS_ARTIFACT,
+        }
+    }
+
+    /// Files every package of this manifest contains.
+    pub fn required_files(&self) -> [&'static str; 3] {
+        ["manifest.json", self.artifact_file(), "LICENSE"]
+    }
+
     /// Every package file the manifest names (icons, key icons,
     /// screenshots, readme, changelog). `entry` is a source path and is not
     /// in the package.
@@ -183,6 +213,7 @@ impl PackageIntegrity {
             );
         }
         let referenced = manifest.referenced_files();
+        let required = manifest.required_files();
         let mut folded = HashSet::new();
         for path in self.files.keys() {
             let at = format!("files.{path}");
@@ -200,7 +231,7 @@ impl PackageIntegrity {
                     format!("`{path}` differs from another file only in case"),
                 );
             }
-            let allowed = REQUIRED_FILES.contains(&path.as_str())
+            let allowed = required.contains(&path.as_str())
                 || referenced.contains(path.as_str())
                 || (!path.starts_with("assets/")
                     && matches!(path.as_str(), "README.md" | "CHANGELOG.md"));
@@ -212,7 +243,7 @@ impl PackageIntegrity {
                 );
             }
         }
-        for required in REQUIRED_FILES.iter().copied().chain(referenced) {
+        for required in required.iter().copied().chain(referenced) {
             if !self.files.contains_key(required) {
                 error(
                     "files".into(),

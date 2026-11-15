@@ -26,6 +26,12 @@ fn manifest_json(id: &str, version: &str) -> Vec<u8> {
     text.into_bytes()
 }
 
+/// A valid ABI 1 module that differs per plugin and version (a custom
+/// section carries the name), so packages of different versions differ.
+fn module_for(id: &str, version: &str) -> Vec<u8> {
+    deckpilot_plugin_package::wasm::minimal_abi_module_with_note(&format!("{id} {version}"))
+}
+
 /// Deterministic pseudo-random (incompressible) bytes.
 fn noise(len: usize, seed: u64) -> Vec<u8> {
     let mut x = seed | 1;
@@ -42,11 +48,7 @@ fn noise(len: usize, seed: u64) -> Vec<u8> {
 fn files(id: &str, version: &str) -> Vec<(&'static str, Vec<u8>)> {
     vec![
         ("manifest.json", manifest_json(id, version)),
-        (
-            "plugin.js",
-            format!("export function activate(ctx) {{ ctx.log('{id} {version}'); }}\n")
-                .into_bytes(),
-        ),
+        ("plugin.wasm", module_for(id, version)),
         ("LICENSE", b"MIT License\n".to_vec()),
         ("README.md", b"# GitHub PR Count\n".to_vec()),
         ("assets/icon-128.png", noise(300, 1)),
@@ -645,15 +647,15 @@ fn size_and_count_limits_are_enforced() {
         read(&tar_with(&extra)),
         Err(PackageError::TooManyEntries { limit: 256 })
     ));
-    // The bundle limit.
+    // The artifact limit.
     let built = build("acme.github-prs", "1.0.0");
     let limits = Limits {
-        max_bundle_bytes: 10,
+        max_artifact_bytes: 10,
         ..Limits::default()
     };
     assert!(matches!(
         verify_package(&built.bytes, &expected_for(&built), &limits),
-        Err(PackageError::BundleTooLarge { .. })
+        Err(PackageError::ArtifactTooLarge { .. })
     ));
 }
 
@@ -702,7 +704,7 @@ fn hidden_data_and_malformed_tar_are_rejected() {
 #[test]
 fn contents_must_follow_the_manifest() {
     let base = files("acme.github-prs", "1.0.0");
-    for missing in ["manifest.json", "plugin.js", "LICENSE"] {
+    for missing in ["manifest.json", "plugin.wasm", "LICENSE"] {
         let list: Vec<_> = base
             .iter()
             .filter(|(p, _)| *p != missing)
@@ -835,14 +837,14 @@ fn installed_files_are_checked_at_load() {
     verify_installed(&target, &integrity).unwrap();
 
     // Modified.
-    let bundle = target.join("plugin.js");
+    let bundle = target.join("plugin.wasm");
     make_writable(&bundle);
     std::fs::write(&bundle, b"steal()").unwrap();
     assert!(matches!(
         verify_installed(&target, &integrity),
         Err(PackageError::InstalledMismatch { .. })
     ));
-    std::fs::write(&bundle, &verified.files()["plugin.js"]).unwrap();
+    std::fs::write(&bundle, &verified.files()["plugin.wasm"]).unwrap();
     verify_installed(&target, &integrity).unwrap();
 
     // Extra file.
@@ -885,4 +887,121 @@ fn digests_of_the_integrity_record_match_the_bytes() {
         built.integrity.manifest_sha256,
         Sha256Digest::parse(&sha256(&files["manifest.json"]).to_string()).unwrap()
     );
+}
+
+// ------------------------------------------------------- artifact contract
+
+/// A gzip-compressed ustar archive of `list`, bypassing the builder (which
+/// refuses what the reader refuses).
+fn raw_package(list: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    let mut tar = Vec::new();
+    for (path, bytes) in list {
+        push_entry(
+            &mut tar,
+            &raw_header(path.as_bytes(), b'0', bytes.len() as u64),
+            bytes,
+        );
+    }
+    end_marker(&mut tar);
+    gzip(&tar)
+}
+
+fn pins_for(bytes: &[u8], list: &[(&str, Vec<u8>)]) -> ExpectedPackage {
+    let manifest = &list.iter().find(|(p, _)| *p == "manifest.json").unwrap().1;
+    let raw: Value = serde_json::from_slice(manifest).unwrap();
+    ExpectedPackage {
+        id: PluginId::parse(raw["id"].as_str().unwrap()).unwrap(),
+        version: semver::Version::parse(raw["version"].as_str().unwrap()).unwrap(),
+        package: PackageDigest {
+            sha256: sha256(bytes),
+            size: bytes.len() as u64,
+        },
+        manifest_sha256: sha256(manifest),
+        permissions: None,
+    }
+}
+
+/// The #191 JavaScript contract: no `runtime`, `plugin.js`.
+fn legacy_js_files() -> Vec<(&'static str, Vec<u8>)> {
+    let mut manifest: Value =
+        serde_json::from_slice(&manifest_json("acme.github-prs", "1.0.0")).unwrap();
+    manifest.as_object_mut().unwrap().remove("runtime");
+    let mut list = files("acme.github-prs", "1.0.0");
+    list[0].1 = serde_json::to_vec_pretty(&manifest).unwrap();
+    list[1] = ("plugin.js", b"export default { actions: {} };\n".to_vec());
+    list
+}
+
+#[test]
+fn javascript_packages_are_refused_naming_the_contract() {
+    let list = legacy_js_files();
+    let error = build_files(&list).unwrap_err();
+    assert!(
+        matches!(&error, PackageError::UnsupportedRuntime { found } if found.contains("plugin.js")),
+        "{error}"
+    );
+    let message = error.to_string();
+    assert!(message.contains("plugin.wasm"), "{message}");
+    assert!(message.contains("artifact-contract.md"), "{message}");
+
+    // The same package pinned by a registry is refused after verification
+    // of its bytes, before anything is unpacked.
+    let bytes = raw_package(&list);
+    let error = verify_package(&bytes, &pins_for(&bytes, &list), &Limits::default()).unwrap_err();
+    assert!(
+        matches!(error, PackageError::UnsupportedRuntime { .. }),
+        "{error}"
+    );
+
+    // A wasm runtime declaration with a JavaScript bundle instead of the
+    // module: the module is missing.
+    let mut list = files("acme.github-prs", "1.0.0");
+    list[1] = ("plugin.js", b"export default {};\n".to_vec());
+    let bytes = raw_package(&list);
+    assert_eq!(
+        verify_package(&bytes, &pins_for(&bytes, &list), &Limits::default()).unwrap_err(),
+        PackageError::Missing("plugin.wasm")
+    );
+}
+
+#[test]
+fn the_module_is_checked_at_verify_time() {
+    use deckpilot_plugin_package::wasm::{ModuleError, encode};
+    type Check = fn(&ModuleError) -> bool;
+    let wasi = encode::module(&encode::Spec {
+        extra_imports: vec![("wasi_snapshot_preview1".into(), "proc_exit".into())],
+        ..encode::Spec::default()
+    });
+    let no_invoke = encode::module(&encode::Spec {
+        omit: vec!["dp_invoke"],
+        ..encode::Spec::default()
+    });
+    let cases: Vec<(Vec<u8>, Check)> = vec![
+        (b"\0asm\x01\0\0\0garbage".to_vec(), |e| {
+            matches!(e, ModuleError::Invalid(_))
+        }),
+        (
+            wasi,
+            |e| matches!(e, ModuleError::ForbiddenImport { module, .. } if module == "wasi_snapshot_preview1"),
+        ),
+        (no_invoke, |e| {
+            matches!(e, ModuleError::MissingExport("dp_invoke"))
+        }),
+    ];
+    for (module, expected) in cases {
+        let mut list = files("acme.github-prs", "1.0.0");
+        list[1].1 = module;
+        let built = build_files(&list).unwrap_err();
+        assert!(
+            matches!(&built, PackageError::Module(e) if expected(e)),
+            "{built}"
+        );
+        let bytes = raw_package(&list);
+        let verified =
+            verify_package(&bytes, &pins_for(&bytes, &list), &Limits::default()).unwrap_err();
+        assert!(
+            matches!(&verified, PackageError::Module(e) if expected(e)),
+            "{verified}"
+        );
+    }
 }

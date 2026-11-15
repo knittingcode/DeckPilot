@@ -17,8 +17,8 @@ pub struct Limits {
     /// Any single file: 5 MiB (an incompressible asset cannot be larger
     /// than the archive anyway).
     pub max_file_bytes: u64,
-    /// `plugin.js`: 2 MiB.
-    pub max_bundle_bytes: u64,
+    /// `plugin.wasm`: 4 MiB ([`crate::wasm::MAX_MODULE_BYTES`]).
+    pub max_artifact_bytes: u64,
     /// Entries in the archive: 256.
     pub max_entries: usize,
     /// Largest decompressed-to-compressed ratio, checked once the
@@ -37,7 +37,7 @@ impl Default for Limits {
             max_archive_bytes: MAX_PACKAGE_BYTES,
             max_unpacked_bytes: 10 * 1024 * 1024,
             max_file_bytes: 5 * 1024 * 1024,
-            max_bundle_bytes: 2 * 1024 * 1024,
+            max_artifact_bytes: crate::wasm::MAX_MODULE_BYTES,
             max_entries: MAX_PACKAGE_ENTRIES,
             max_compression_ratio: 100,
             ratio_exempt_bytes: 1024 * 1024,

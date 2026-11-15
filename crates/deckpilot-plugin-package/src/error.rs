@@ -54,8 +54,18 @@ pub enum PackageError {
     NotRegularFile { path: String, kind: String },
     #[error("`{path}` is {size} bytes; the limit per file is {limit} bytes")]
     FileTooLarge { path: String, size: u64, limit: u64 },
-    #[error("plugin.js is {size} bytes; the limit is {limit} bytes")]
-    BundleTooLarge { size: u64, limit: u64 },
+    #[error("plugin.wasm is {size} bytes; the limit is {limit} bytes")]
+    ArtifactTooLarge { size: u64, limit: u64 },
+    /// The package does not follow the artifact contract
+    /// (`docs/marketplace/artifact-contract.md`).
+    #[error(
+        "the package contains {found}; this DeckPilot installs only WebAssembly plugins: \
+         `\"runtime\": {{\"kind\": \"wasm\", \"abi\": 1}}` in manifest.json and the module as \
+         plugin.wasm (plugin ABI 1, docs/marketplace/artifact-contract.md)"
+    )]
+    UnsupportedRuntime { found: String },
+    #[error(transparent)]
+    Module(#[from] crate::wasm::ModuleError),
     #[error("the archive hides data in padding or after its last entry")]
     HiddenData,
     #[error(transparent)]

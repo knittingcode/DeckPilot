@@ -182,6 +182,24 @@ impl Database {
         &self.path
     }
 
+    /// Re-encrypts the database at `path` from `old` to `new` in place
+    /// (SQLCipher `PRAGMA rekey`), for when the key it is derived from
+    /// changes. Nothing else may have it open. A wrong `old` key fails with
+    /// [`StoreError::InvalidKey`] and changes nothing. The journal is
+    /// switched out of WAL for the rekey; the next [`Database::open`]
+    /// switches it back.
+    pub fn rekey(path: &Path, old: &StoreKey, new: &StoreKey) -> Result<()> {
+        let connection = Connection::open(path)?;
+        apply_key(&connection, old)?;
+        connection.pragma_update(None, "journal_mode", "DELETE")?;
+        let literal = new.literal();
+        connection.pragma_update(None, "rekey", literal.as_str())?;
+        drop(connection);
+        // The new key must open it.
+        let check = Connection::open(path)?;
+        apply_key(&check, new)
+    }
+
     pub fn connection(&self) -> &Connection {
         &self.connection
     }
@@ -283,6 +301,28 @@ fn apply_key(_connection: &Connection, _key: &StoreKey) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "sqlcipher")]
+    #[test]
+    fn rekey_replaces_the_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plugins.db");
+        let (old, new) = (StoreKey::from_bytes([1; 32]), StoreKey::from_bytes([2; 32]));
+        let database = Database::open(&path, &old, DEFAULT_BUSY_TIMEOUT).unwrap();
+        let version = database.schema_version().unwrap();
+        drop(database);
+        assert!(matches!(
+            Database::rekey(&path, &new, &old),
+            Err(StoreError::InvalidKey)
+        ));
+        Database::rekey(&path, &old, &new).unwrap();
+        assert!(matches!(
+            Database::open(&path, &old, DEFAULT_BUSY_TIMEOUT),
+            Err(StoreError::InvalidKey)
+        ));
+        let reopened = Database::open(&path, &new, DEFAULT_BUSY_TIMEOUT).unwrap();
+        assert_eq!(reopened.schema_version().unwrap(), version);
+    }
 
     #[test]
     fn key_literal_is_raw_hex_and_debug_hides_it() {

@@ -138,7 +138,7 @@ async fn a_protocol_4_agent_is_used_with_protocol_4_only() {
         .await
         .unwrap();
     // The client stepped down from its own protocol until accepted.
-    assert_eq!(*peer.hellos.lock().unwrap(), [9, 8, 7, 6, 5, 4]);
+    assert_eq!(*peer.hellos.lock().unwrap(), [10, 9, 8, 7, 6, 5, 4]);
     assert_eq!(client.protocol(), 4);
     assert_eq!(client.agent_protocol(), 4);
     assert_eq!(client.agent_version(), "0.5.0-2");
@@ -197,7 +197,7 @@ async fn agents_older_than_protocol_4_need_replacing() {
         "{refused:?}"
     );
     // It never went below the oldest protocol the app works with.
-    assert_eq!(*peer.hellos.lock().unwrap(), [9, 8, 7, 6, 5, 4]);
+    assert_eq!(*peer.hellos.lock().unwrap(), [10, 9, 8, 7, 6, 5, 4]);
     // Protocol 1 still works for stopping it during an update.
     let mut stopper = AgentClient::connect_with_protocol(&peer.paths, ClientKind::Desktop, 1)
         .await
@@ -262,7 +262,7 @@ async fn a_protocol_6_agent_is_never_asked_about_variables() {
     let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
         .await
         .unwrap();
-    assert_eq!(*peer.hellos.lock().unwrap(), [9, 8, 7, 6]);
+    assert_eq!(*peer.hellos.lock().unwrap(), [10, 9, 8, 7, 6]);
     assert_eq!(client.protocol(), 6);
     assert!(client.supports(Capability::Notifications));
     assert!(!client.supports(Capability::Variables));
@@ -301,7 +301,7 @@ async fn a_protocol_7_agent_is_never_asked_about_the_work_session() {
     let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
         .await
         .unwrap();
-    assert_eq!(*peer.hellos.lock().unwrap(), [9, 8, 7]);
+    assert_eq!(*peer.hellos.lock().unwrap(), [10, 9, 8, 7]);
     assert_eq!(client.protocol(), 7);
     assert!(client.supports(Capability::Variables));
     assert!(!client.supports(Capability::WorkSession));
@@ -354,7 +354,7 @@ async fn a_protocol_8_agent_lists_variables_without_the_registry() {
     let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
         .await
         .unwrap();
-    assert_eq!(*peer.hellos.lock().unwrap(), [9, 8]);
+    assert_eq!(*peer.hellos.lock().unwrap(), [10, 9, 8]);
     assert_eq!(client.protocol(), 8);
     assert!(client.supports(Capability::WorkSession));
     assert!(!client.supports(Capability::VariableRegistry));
@@ -383,4 +383,57 @@ async fn a_protocol_8_agent_lists_variables_without_the_registry() {
         entries[0].reference.registered_id().unwrap().as_str(),
         "projects.current.key"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_protocol_9_agent_is_never_asked_about_plugins() {
+    use deckpilot_ipc::plugins::PluginInstallSource;
+    let peer = peer(9, "0.6.0-alpha.2");
+    let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    assert_eq!(*peer.hellos.lock().unwrap(), [10, 9]);
+    assert_eq!(client.protocol(), 9);
+    assert!(client.supports(Capability::VariableRegistry));
+    assert!(!client.supports(Capability::Plugins));
+    let plugin = || "acme.hello-weather".to_owned();
+    for request in [
+        Request::GetPluginRuntime,
+        Request::ListPlugins,
+        Request::GetPlugin { plugin: plugin() },
+        Request::ListAvailablePlugins { refresh: true },
+        Request::InstallPlugin {
+            source: PluginInstallSource::Registry {
+                plugin: plugin(),
+                version: None,
+            },
+            consent: vec![],
+        },
+        Request::EnablePlugin {
+            plugin: plugin(),
+            consent: vec![],
+        },
+        Request::DisablePlugin { plugin: plugin() },
+        Request::UninstallPlugin { plugin: plugin() },
+        Request::InvokePluginAction {
+            plugin: plugin(),
+            action: "greet".into(),
+            params: std::collections::BTreeMap::new(),
+        },
+    ] {
+        let refused = client.request(request).await;
+        assert!(
+            matches!(
+                &refused,
+                Err(ClientError::Unsupported {
+                    needs: 10,
+                    protocol: 9,
+                    ..
+                })
+            ),
+            "{refused:?}"
+        );
+    }
+    // Refused before anything was sent.
+    assert_eq!(peer.received.lock().unwrap().len(), 0);
 }

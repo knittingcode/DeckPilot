@@ -1,0 +1,106 @@
+# The agent's experimental plugin backend (feature `plugins`, off in every
+# release build): the dependency gate, clippy with the feature, and the
+# end-to-end test through the real agent, the real sandboxed plugin host
+# (built from plugins/runtime, a separate workspace) and the sample plugin,
+# with a local registry signed by throwaway keys made in the test.
+#
+# Linux and macOS run the whole lifecycle. Windows checks the refusal path:
+# its host sandbox is not verified (no AppContainer), so plugins install
+# but cannot be enabled or run there.
+#
+# Not a required check. No secrets, read-only token, no environment.
+name: Plugins in the agent
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/agent/**
+      - crates/deckpilot-ipc/**
+      - crates/deckpilot-plugin-*/**
+      - plugins/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .github/workflows/plugins-agent.yml
+  pull_request:
+    paths:
+      - apps/agent/**
+      - crates/deckpilot-ipc/**
+      - crates/deckpilot-plugin-*/**
+      - plugins/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .github/workflows/plugins-agent.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugins-agent-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
+jobs:
+  e2e:
+    name: Plugins in the agent (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: tools/ci/install-linux-deps.sh
+      # rust-toolchain.toml pins the compiler; the sample plugin needs the
+      # wasm32 target.
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup target add wasm32-unknown-unknown
+          rustc --version
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            plugins/runtime -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The vendored OpenSSL (SQLCipher) is configured with Perl. Bash steps
+      # on Windows would find Git's minimal Perl, which lacks modules the
+      # configure script needs; use the runner's Strawberry Perl.
+      - name: Use Strawberry Perl for OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $perl = "C:\Strawberry\perl\bin\perl.exe"
+          if (-not (Test-Path $perl)) { Write-Error "Strawberry Perl not found at $perl"; exit 1 }
+          "OPENSSL_SRC_PERL=$perl" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Release builds pull in no plugin crates
+        run: cargo test -p deckpilot-agent --test plugins_feature --locked
+      - name: Clippy with plugins
+        run: cargo clippy -p deckpilot-agent --features plugins --all-targets --locked -- -D warnings
+      # The test builds these itself when they are missing; building them
+      # first keeps compile time out of the test's timeouts.
+      - name: Build the plugin host
+        if: runner.os != 'Windows'
+        working-directory: plugins/runtime
+        run: cargo build --locked -p deckpilot-plugin-host --bin deckpilot-plugin-host
+      - name: Build the sample plugin and the SDK test guest
+        working-directory: plugins/runtime
+        run: cargo build --locked -p hello-weather -p deckpilot-sdk-test-guest --target wasm32-unknown-unknown --profile guest
+      - name: End to end
+        run: cargo test -p deckpilot-agent --features plugins --test plugins_e2e --locked -- --nocapture

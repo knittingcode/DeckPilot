@@ -63,7 +63,7 @@ fn install_unpacks_into_the_version_directory_and_starts_disabled() {
     assert_eq!(&active.integrity, package.integrity());
 
     let dir = env.data_dir().join("plugins").join(ID).join("1.0.0");
-    assert!(dir.join("plugin.js").is_file());
+    assert!(dir.join("plugin.wasm").is_file());
     assert!(
         std::fs::metadata(dir.join("manifest.json"))
             .unwrap()
@@ -158,7 +158,7 @@ fn modified_files_are_detected_and_mark_the_plugin_broken() {
         .join("plugins")
         .join(ID)
         .join("1.0.0")
-        .join("plugin.js");
+        .join("plugin.wasm");
     let mut permissions = std::fs::metadata(&bundle).unwrap().permissions();
     #[allow(clippy::permissions_set_readonly_false)]
     permissions.set_readonly(false);
@@ -388,8 +388,8 @@ fn an_update_that_only_narrows_applies_at_once() {
             .all(|g| g.key != key_of("background"))
     );
     let files = plugin_files(&manager);
-    assert!(files.contains("acme.github-prs/1.0.0/plugin.js"));
-    assert!(files.contains("acme.github-prs/1.1.0/plugin.js"));
+    assert!(files.contains("acme.github-prs/1.0.0/plugin.wasm"));
+    assert!(files.contains("acme.github-prs/1.1.0/plugin.wasm"));
     assert_eq!(manager.check_consistency().unwrap(), vec![]);
 }
 
