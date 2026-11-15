@@ -46,7 +46,8 @@ pub use compat::{
 };
 pub use error::{Issue, IssueCode, ManifestError, ValidationErrors};
 pub use identity::{
-    IdError, MAX_PLUGIN_NAME_LEN, MAX_PUBLISHER_LEN, PluginId, RESERVED_PUBLISHERS,
+    FIRST_PARTY_PUBLISHER, IdError, MAX_PLUGIN_NAME_LEN, MAX_PUBLISHER_LEN, PluginId,
+    RESERVED_PUBLISHERS,
     is_publisher_id, lower_camel,
 };
 pub use integrity::{
@@ -158,6 +159,36 @@ impl Manifest {
     /// Checks every rule beyond structure; returns all problems found.
     pub fn validate(&self) -> Result<(), ValidationErrors> {
         let errors = validate::check(self).errors;
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(ValidationErrors(errors))
+        }
+    }
+
+    /// [`Manifest::validate`] for a first-party plugin shipped inside the
+    /// application bundle (`docs/marketplace/module-migration.md` §4.4):
+    /// the same rules, except that the publisher must be DeckPilot's own
+    /// ([`FIRST_PARTY_PUBLISHER`]), which [`Manifest::validate`] refuses as
+    /// reserved. Every other reserved publisher stays refused.
+    ///
+    /// Only for manifests whose bytes the caller has already matched
+    /// against digests it trusts (the pins compiled into the agent): this
+    /// says nothing about where a manifest came from.
+    pub fn validate_first_party(&self) -> Result<(), ValidationErrors> {
+        let mut errors = validate::check(self).errors;
+        if self.publisher.id == FIRST_PARTY_PUBLISHER {
+            errors.retain(|issue| !(issue.path == "publisher.id" && issue.code == IssueCode::Reserved));
+        } else {
+            errors.push(Issue {
+                path: "publisher.id".into(),
+                code: IssueCode::Mismatch,
+                message: format!(
+                    "a first-party plugin is published by `{FIRST_PARTY_PUBLISHER}`, not `{}`",
+                    self.publisher.id
+                ),
+            });
+        }
         if errors.is_empty() {
             Ok(())
         } else {

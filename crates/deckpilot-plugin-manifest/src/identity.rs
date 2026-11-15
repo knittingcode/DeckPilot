@@ -15,6 +15,11 @@ pub const MAX_PUBLISHER_LEN: usize = 24;
 /// Longest plugin name inside the id (`$defs/pluginName`).
 pub const MAX_PLUGIN_NAME_LEN: usize = 32;
 
+/// DeckPilot's own publisher id: reserved for every plugin but the
+/// first-party ones the application bundle ships
+/// ([`Manifest::validate_first_party`](crate::Manifest::validate_first_party)).
+pub const FIRST_PARTY_PUBLISHER: &str = "deckpilot";
+
 /// Publisher ids no plugin may use: DeckPilot's own names and every
 /// built-in module id (architecture section 7, rule 1).
 ///

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
+  "id": "deckpilot.example-default",
+  "name": "Bundled Example",
+  "version": "0.1.0",
+  "publisher": { "id": "deckpilot", "name": "DeckPilot", "url": "https://github.com/knittingcode/deckpilot" },
+  "description": "TEST FIXTURE, never shipped: the default-class bundled plugin the bundling, pinning and seeding tests use. One action that greets someone by name.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/knittingcode/deckpilot",
+    "directory": "plugins/first-party/test-fixtures/example-default"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["test", "bundled"],
+  "categories": ["other"],
+  "engines": { "deckpilot": ">=0.5.0 <1.0.0", "pluginApi": "^1.0", "sdk": "0.1.0" },
+  "runtime": { "kind": "wasm", "abi": 1 },
+  "entry": "src/lib.rs",
+  "icons": { "128": "assets/icon-128.png" },
+  "permissions": [
+    {
+      "kind": "notifications",
+      "justification": "Test fixture: a low-tier permission that seeding may grant without asking."
+    }
+  ],
+  "contributes": {
+    "actions": [
+      {
+        "id": "greet",
+        "name": "Greet",
+        "description": "Says hello to someone by name, from the bundled example. Runs entirely inside the plugin.",
+        "category": "Bundled Example",
+        "parameters": [
+          {
+            "key": "name",
+            "label": "Name",
+            "description": "Who to greet.",
+            "required": true,
+            "kind": { "type": "text", "maxLength": 64 }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "hand",
+          "outputs": [{ "key": "greeting", "label": "Greeting", "kind": "text", "always": true }],
+          "timeoutMs": 5000,
+          "retrySafe": true,
+          "idempotent": true,
+          "effect": "readOnly"
+        }
+      }
+    ]
+  }
+}

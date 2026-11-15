@@ -70,6 +70,15 @@ pub enum StoreError {
     },
     #[error("plugin {id} does not declare the permission {key}")]
     UnknownGrant { id: PluginId, key: GrantKey },
+    /// A bundled plugin is seeded with low-tier grants only
+    /// (`docs/marketplace/module-migration.md` §4.2); anything else needs
+    /// the user's consent in the normal dialog.
+    #[error("plugin {id} is bundled: {key} ({tier:?} tier) needs the user's consent")]
+    BundledGrant {
+        id: PluginId,
+        key: GrantKey,
+        tier: crate::grants::Tier,
+    },
     #[error("plugin {0} has no previous version to roll back to")]
     NoPreviousVersion(PluginId),
     #[error("plugin {0} has no update waiting for approval")]

@@ -132,6 +132,85 @@ pub fn verify_package(
     })
 }
 
+/// What the digests compiled into the agent say a first-party plugin
+/// shipped inside the application bundle must be
+/// (`docs/marketplace/module-migration.md` §4.4, option B): its id and
+/// version, and the size and sha256 of **every** file. There is no archive:
+/// a bundled plugin is unpacked files, never a `.dpplugin`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpectedFiles {
+    pub id: PluginId,
+    pub version: semver::Version,
+    /// Every file by package path; nothing else may be present.
+    pub files: std::collections::BTreeMap<String, PackageDigest>,
+}
+
+/// Verifies the unpacked files of a first-party plugin from the
+/// application bundle against `expected`, then checks them like a package.
+///
+/// Order: the file set must be exactly the pinned one and every file must
+/// have its pinned size and sha256, **before** anything is parsed; then the
+/// package shape, the manifest with the first-party rules
+/// ([`Manifest::validate_first_party`]: the id must be `deckpilot.*`), its id
+/// and version against the pins, and the artifact contract. The integrity
+/// record's package digest is that of the deterministic archive
+/// [`PackageBuilder`](crate::PackageBuilder) would write from these files.
+pub fn verify_bundled_files(
+    files: Files,
+    expected: &ExpectedFiles,
+    limits: &Limits,
+) -> Result<VerifiedPackage, PackageError> {
+    for (path, pin) in &expected.files {
+        let bytes = files.get(path).ok_or_else(|| PackageError::InstalledMismatch {
+            path: path.clone(),
+            problem: "is missing".into(),
+        })?;
+        let size = len(bytes);
+        if size != pin.size {
+            return Err(PackageError::InstalledMismatch {
+                path: path.clone(),
+                problem: format!("has {size} bytes, {} are pinned", pin.size),
+            });
+        }
+        let actual = sha256(bytes);
+        if actual != pin.sha256 {
+            return Err(PackageError::InstalledMismatch {
+                path: path.clone(),
+                problem: format!("has sha256 {actual}, {} is pinned", pin.sha256),
+            });
+        }
+    }
+    if let Some(extra) = files.keys().find(|path| !expected.files.contains_key(*path)) {
+        return Err(PackageError::InstalledMismatch {
+            path: extra.clone(),
+            problem: "is not pinned".into(),
+        });
+    }
+    contents::check_shape(&files, limits)?;
+    let manifest = Manifest::from_slice(&files[MANIFEST])?;
+    manifest
+        .validate_first_party()
+        .map_err(deckpilot_plugin_manifest::ManifestError::from)?;
+    if manifest.id != expected.id || manifest.version != expected.version {
+        return Err(PackageError::WrongPlugin {
+            expected: format!("{}@{}", expected.id, expected.version),
+            found: format!("{}@{}", manifest.id, manifest.version),
+        });
+    }
+    contents::check_artifact(&files, &manifest, limits)?;
+    let archive = crate::build::encode(&files)?;
+    let package = PackageDigest {
+        sha256: sha256(&archive),
+        size: len(&archive),
+    };
+    let integrity = contents::integrity(&files, &manifest, package)?;
+    Ok(VerifiedPackage {
+        manifest,
+        files,
+        integrity,
+    })
+}
+
 /// Reads an archive with every structural limit, but **without any
 /// authenticity check**: use [`verify_package`] for registry packages. For
 /// tools and development sideloading.

@@ -9,15 +9,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::{
-    Env, ID, Verdicts, base_permissions, built, grants_of, id, key, package, package_for,
-    plugin_files, with_notifications, without_background,
+    Env, ID, Verdicts, base_permissions, built, bundled_package, grants_of, id, key, package,
+    package_for, plugin_files, with_notifications, without_background,
 };
 use deckpilot_plugin_manifest::PermissionKind;
 use deckpilot_plugin_package::{Limits, PackageError, verify_package};
 use deckpilot_plugin_store::{
     AuditRetention, Consent, GrantKey, GrantSource, GrantStatus, InstallSource, ManagerOptions,
-    NoFailpoints, PluginManager, PluginState, PluginStore, StoreError, StoreKey, UpdateOutcome,
-    VerdictChange, VersionRole,
+    NoFailpoints, PluginManager, PluginState, PluginStore, StoreError, StoreKey, Tier,
+    UpdateOutcome, VerdictChange, VersionRole,
 };
 use serde_json::json;
 
@@ -987,4 +987,52 @@ fn only_first_party_plugins_are_bundled() {
     assert_eq!(record.source, InstallSource::Sideload);
     assert_eq!(record.active().unwrap().version.to_string(), "1.0.0");
     assert_eq!(manager.store().journal().unwrap(), Vec::new());
+}
+
+#[test]
+fn a_bundled_plugin_is_seeded_with_derived_low_tier_grants_only() {
+    let env = Env::new();
+    let mut manager = env.open();
+    let first_party = deckpilot_plugin_manifest::PluginId::parse("deckpilot.github-prs").unwrap();
+    let package = bundled_package(first_party.as_str(), "1.0.0", &with_notifications());
+    let declared = grants_of(&package);
+    let low: Vec<GrantKey> = declared
+        .iter()
+        .filter(|(_, scope)| scope.tier() == Tier::Low)
+        .map(|(key, _)| key.clone())
+        .collect();
+    assert_eq!(low.len(), 2, "notifications and device state: {low:?}");
+
+    // A medium- or high-tier grant is never part of seeding.
+    for (key, scope) in declared.iter().filter(|(_, s)| s.tier() != Tier::Low) {
+        let consent = Consent::of(low.iter().cloned().chain([key.clone()]), "bundled:0.9.0");
+        let result = manager.install(&package, &InstallSource::Bundled, &consent);
+        assert!(
+            matches!(&result, Err(StoreError::BundledGrant { key: k, tier, .. })
+                if k == key && *tier == scope.tier()),
+            "{result:?}"
+        );
+        assert!(manager.store().plugin(&first_party).unwrap().is_none());
+        assert_eq!(manager.store().journal().unwrap(), Vec::new());
+    }
+
+    let record = manager
+        .install(
+            &package,
+            &InstallSource::Bundled,
+            &Consent::of(low.clone(), "bundled:0.9.0"),
+        )
+        .unwrap();
+    assert_eq!(record.source, InstallSource::Bundled);
+    assert_eq!(record.state, PluginState::Disabled);
+    let grants = manager.store().grants(&first_party).unwrap();
+    assert_eq!(grants.len(), low.len());
+    assert!(grants.iter().all(|g| g.status == GrantStatus::Granted
+        && g.source == GrantSource::Derived
+        && g.decided_by == "bundled:0.9.0"));
+    // The rest waits for the user's consent: enabling needs it.
+    assert!(matches!(
+        manager.enable(&first_party),
+        Err(StoreError::ConsentRequired { .. })
+    ));
 }
