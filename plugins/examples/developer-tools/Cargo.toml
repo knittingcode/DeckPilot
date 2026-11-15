@@ -1,0 +1,31 @@
+# Developer Tools: an example DeckPilot plugin with pure utilities (time
+# stamps, base64, JSON, name-based UUIDs) and GitHub checks through the
+# agent's brokered HTTP, a credential handle, settings, storage, variables
+# and notifications. A member of the plugins/runtime workspace (shared
+# Cargo.lock and the `guest` profile), built for wasm32-unknown-unknown; the
+# rlib crate type lets its native unit tests run with plain `cargo test`.
+# Never published.
+[package]
+name = "developer-tools"
+description = "Example DeckPilot plugin: developer utilities and GitHub checks through brokered capabilities"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+publish = false
+workspace = "../../runtime"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+deckpilot-plugin-sdk.workspace = true
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true
+
+[lints]
+workspace = true

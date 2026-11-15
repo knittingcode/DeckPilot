@@ -80,8 +80,34 @@ fn mock_models(list: &str) -> Result<Vec<DeviceModel>, String> {
         .collect()
 }
 
+/// Test only (feature `test-hooks`): arguments taken from this variable,
+/// whitespace-separated, before those of the command line. The
+/// configuration app starts the agent without arguments; the desktop
+/// end-to-end test uses this to have it run headless with a simulated
+/// Stream Deck (`--headless --no-usb --mock-devices mk2`). Never read by
+/// a release build.
+#[cfg(feature = "test-hooks")]
+const TEST_ARGS_ENV: &str = "DECKPILOT_TEST_AGENT_ARGS";
+
+type ArgIter = std::iter::Peekable<std::vec::IntoIter<String>>;
+
+fn arguments() -> Vec<String> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(feature = "test-hooks")]
+    if let Some(extra) = std::env::var_os(TEST_ARGS_ENV) {
+        let mut all: Vec<String> = extra
+            .to_string_lossy()
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect();
+        all.extend(args);
+        return all;
+    }
+    args
+}
+
 fn parse_args() -> Result<Result<Args, String>, ExitCode> {
-    let mut args = std::env::args().skip(1).peekable();
+    let mut args: ArgIter = arguments().into_iter().peekable();
     let mut parsed = Args {
         headless: false,
         mock_models: Vec::new(),
@@ -89,13 +115,13 @@ fn parse_args() -> Result<Result<Args, String>, ExitCode> {
         level: LevelFilter::INFO,
         plugins: deckpilot_agent::plugins::PluginSettings::from_env(),
     };
-    let path = |args: &mut std::iter::Peekable<std::iter::Skip<std::env::Args>>, name: &str| {
+    let path = |args: &mut ArgIter, name: &str| {
         args.next()
             .filter(|v| !v.is_empty())
             .map(std::path::PathBuf::from)
             .ok_or_else(|| format!("{name} needs a path"))
     };
-    let text = |args: &mut std::iter::Peekable<std::iter::Skip<std::env::Args>>, name: &str| {
+    let text = |args: &mut ArgIter, name: &str| {
         args.next()
             .filter(|v| !v.is_empty())
             .ok_or_else(|| format!("{name} needs a URL"))

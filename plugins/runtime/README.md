@@ -30,6 +30,8 @@ cargo fmt --check
 | `guest/test-guest` | Test guest: normal actions and deliberate attacks on the raw ABI |
 | `guest/sdk-test-guest` | Test guest built with the SDK: lifecycle, secret handles, numbers, panic, spin, slow host calls, and storage, credential and settings actions for the agent's end-to-end test |
 | `../examples/hello-weather` | The sample plugin (see its README): a pure action and a brokered HTTPS action, `manifest.json` valid against the #191 schema (copy in `plugins/schemas/`) |
+| `../examples/hello-world` | The smallest example plugin: one pure action, no permissions |
+| `../examples/developer-tools` | An example plugin using every brokered capability: utilities, GitHub checks over HTTPS with a credential handle, settings, storage, variables, notifications. Built reproducibly by `plugins/examples/build.sh`; SDK documentation in `docs/marketplace/sdk/` |
 
 The wasm guests and the sample are built from source by
 `crates/test-fixtures/build.rs` in one locked cargo invocation with the

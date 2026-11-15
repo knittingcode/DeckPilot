@@ -10,6 +10,9 @@ publish.workspace = true
 
 [dependencies]
 base64.workspace = true
+# The build's distribution record, the input of `provider` (pure data, no
+# dependencies of its own).
+deckpilot-distribution.workspace = true
 minisign-verify.workspace = true
 semver.workspace = true
 serde.workspace = true
@@ -18,6 +21,9 @@ thiserror.workspace = true
 
 [dev-dependencies]
 minisign = "0.10"
+# Reads docs/distribution/targets.toml in tests/targets_matrix.rs; already
+# in the lock file (through tauri-build).
+toml = "1"
 
 [lints]
 workspace = true

@@ -12,6 +12,8 @@ mod commands;
 mod dev_server;
 mod error;
 mod lifecycle;
+#[cfg(test)]
+mod marketplace_e2e;
 mod modules;
 mod plugin_actions;
 mod state;
@@ -54,7 +56,9 @@ pub(crate) fn create_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Resul
         config.url = url;
         config.visible = true;
     }
-    WebviewWindowBuilder::from_config(app, &config)?.build()?;
+    // Also used by the agent's "Open DeckPilot" in a single-window app
+    // (macOS), so that path goes through `for_webdriver` too.
+    windows::for_webdriver(WebviewWindowBuilder::from_config(app, &config)?).build()?;
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(15)).await;

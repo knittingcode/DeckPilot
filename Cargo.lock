@@ -1083,17 +1083,23 @@ dependencies = [
  "deckpilot-ipc",
  "deckpilot-keystore",
  "deckpilot-modules",
+ "deckpilot-plugin-manifest",
+ "deckpilot-plugin-registry",
+ "deckpilot-plugin-store",
  "deckpilot-portability",
  "deckpilot-presence",
  "deckpilot-render",
  "deckpilot-storage",
  "deckpilot-update",
+ "hkdf 0.12.4",
  "minisign",
+ "rcgen",
  "reqwest",
  "rustls",
  "semver",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -1132,6 +1138,10 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "deckpilot-distribution"
+version = "0.6.0-alpha.3"
 
 [[package]]
 name = "deckpilot-hid"
@@ -1468,12 +1478,14 @@ name = "deckpilot-update"
 version = "0.6.0-alpha.3"
 dependencies = [
  "base64 0.23.1",
+ "deckpilot-distribution",
  "minisign",
  "minisign-verify",
  "semver",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "toml 1.2.1+spec-1.1.0",
 ]
 
 [[package]]

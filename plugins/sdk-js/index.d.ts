@@ -7,6 +7,9 @@
  * ABI 1 now. These declarations are the #191 design's sdk.d.ts
  * (docs/marketplace/sdk.d.ts on the design branch), unchanged below this
  * header; the shim that implements them on QuickJS does not exist yet.
+ * Several members go beyond what ABI 1 implements today (settings as a
+ * synchronous object, notification options, timers, device, profile,
+ * variable reads, ...): README.md, "Differences from ABI 1", lists them.
  *
  * Rules that hold for every member:
  * - Metadata (ids, parameter schemas, outputs, variables, settings,

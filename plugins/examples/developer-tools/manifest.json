@@ -1,0 +1,334 @@
+{
+  "$schema": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
+  "id": "acme.developer-tools",
+  "name": "Developer Tools",
+  "version": "0.1.0",
+  "publisher": { "id": "acme", "name": "Acme Tools", "url": "https://acme.example" },
+  "description": "Time stamps, base64, JSON formatting and name-based UUIDs, plus the open pull requests and the latest GitHub Actions run of a repository.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/knittingcode/deckpilot",
+    "directory": "plugins/examples/developer-tools"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["developer", "github", "json", "base64", "uuid"],
+  "categories": ["developer-tools"],
+  "engines": { "deckpilot": ">=0.5.0 <1.0.0", "pluginApi": "^1.0", "sdk": "0.1.0" },
+  "runtime": { "kind": "wasm", "abi": 1 },
+  "entry": "src/lib.rs",
+  "icons": { "128": "assets/icon-128.png" },
+  "assets": { "readme": "README.md" },
+  "permissions": [
+    {
+      "kind": "network",
+      "hosts": ["api.github.com"],
+      "methods": ["GET"],
+      "justification": "Reads the open pull requests and the latest Actions run of the repository you name from the GitHub API."
+    },
+    {
+      "kind": "credentials",
+      "refs": ["githubToken"],
+      "justification": "Sends your optional GitHub token to api.github.com for private repositories and higher rate limits."
+    },
+    {
+      "kind": "notifications",
+      "justification": "Tells you when the build status of a repository changes, only if you turn it on in the settings."
+    }
+  ],
+  "contributes": {
+    "actions": [
+      {
+        "id": "timestamp",
+        "name": "Convert time stamp",
+        "description": "Converts Unix seconds or milliseconds to an RFC 3339 date-time in UTC, or an RFC 3339 date-time to Unix time.",
+        "category": "Developer Tools",
+        "parameters": [
+          {
+            "key": "value",
+            "label": "Time stamp",
+            "description": "1731661200, 1731661200000 or 2024-11-15T09:00:00Z.",
+            "required": true,
+            "kind": { "type": "text", "maxLength": 40 }
+          },
+          {
+            "key": "from",
+            "label": "Read as",
+            "description": "auto: a number is seconds, or milliseconds from 100000000000 on; anything else is RFC 3339.",
+            "required": false,
+            "kind": { "type": "choice", "options": ["auto", "seconds", "milliseconds", "rfc3339"] },
+            "default": { "type": "choice", "value": "auto" }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "clock",
+          "outputs": [
+            { "key": "iso", "label": "RFC 3339 (UTC)", "kind": "text", "always": true },
+            { "key": "unixSeconds", "label": "Unix seconds", "kind": "integer", "always": true },
+            {
+              "key": "unixMillis",
+              "label": "Unix milliseconds",
+              "kind": "integer",
+              "always": true
+            },
+            { "key": "readAs", "label": "Read as", "kind": "text", "always": true }
+          ],
+          "timeoutMs": 5000,
+          "retrySafe": true,
+          "idempotent": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "base64",
+        "name": "Base64",
+        "description": "Encodes text as base64, or decodes base64 to text.",
+        "category": "Developer Tools",
+        "parameters": [
+          {
+            "key": "text",
+            "label": "Text",
+            "required": true,
+            "kind": { "type": "text", "multiline": true, "maxLength": 4096 }
+          },
+          {
+            "key": "mode",
+            "label": "Mode",
+            "required": false,
+            "kind": { "type": "choice", "options": ["encode", "decode"] },
+            "default": { "type": "choice", "value": "encode" }
+          },
+          {
+            "key": "alphabet",
+            "label": "Alphabet",
+            "required": false,
+            "kind": { "type": "choice", "options": ["standard", "url-safe"] },
+            "default": { "type": "choice", "value": "standard" }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "code",
+          "outputs": [{ "key": "result", "label": "Result", "kind": "text", "always": true }],
+          "timeoutMs": 5000,
+          "retrySafe": true,
+          "idempotent": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "json-format",
+        "name": "Format JSON",
+        "description": "Pretty-prints or compacts JSON. Object keys come out sorted.",
+        "category": "Developer Tools",
+        "parameters": [
+          {
+            "key": "json",
+            "label": "JSON",
+            "required": true,
+            "kind": { "type": "text", "multiline": true, "maxLength": 4096 }
+          },
+          {
+            "key": "style",
+            "label": "Style",
+            "required": false,
+            "kind": { "type": "choice", "options": ["pretty", "compact"] },
+            "default": { "type": "choice", "value": "pretty" }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "braces",
+          "outputs": [{ "key": "result", "label": "Result", "kind": "text", "always": true }],
+          "timeoutMs": 5000,
+          "retrySafe": true,
+          "idempotent": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "uuid-v5",
+        "name": "Name-based UUID",
+        "description": "The UUID version 5 (RFC 9562) of a name in a standard namespace. Always the same UUID for the same name.",
+        "category": "Developer Tools",
+        "parameters": [
+          {
+            "key": "name",
+            "label": "Name",
+            "required": true,
+            "kind": { "type": "text", "maxLength": 1024 }
+          },
+          {
+            "key": "namespace",
+            "label": "Namespace",
+            "required": false,
+            "kind": { "type": "choice", "options": ["dns", "url", "oid", "x500"] },
+            "default": { "type": "choice", "value": "dns" }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "fingerprint",
+          "outputs": [{ "key": "uuid", "label": "UUID", "kind": "text", "always": true }],
+          "timeoutMs": 5000,
+          "retrySafe": true,
+          "idempotent": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "open-prs",
+        "name": "Open pull requests",
+        "description": "Counts the open pull requests of a GitHub repository and publishes the count as the variable openPrs.",
+        "category": "Developer Tools",
+        "parameters": [
+          {
+            "key": "repo",
+            "label": "Repository",
+            "description": "owner/name; empty uses the default repository from the settings.",
+            "required": false,
+            "kind": { "type": "text", "maxLength": 140 }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "git-pull-request",
+          "outputs": [
+            { "key": "count", "label": "Open pull requests", "kind": "integer", "always": true },
+            { "key": "repo", "label": "Repository", "kind": "text", "always": true },
+            { "key": "checkedAt", "label": "Checked at", "kind": "text" }
+          ],
+          "timeoutMs": 20000,
+          "retrySafe": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "build-status",
+        "name": "Build status",
+        "description": "The result of the latest GitHub Actions run on a branch, published as the variable buildStatus.",
+        "category": "Developer Tools",
+        "parameters": [
+          {
+            "key": "repo",
+            "label": "Repository",
+            "description": "owner/name; empty uses the default repository from the settings.",
+            "required": false,
+            "kind": { "type": "text", "maxLength": 140 }
+          },
+          {
+            "key": "branch",
+            "label": "Branch",
+            "description": "Empty uses the default branch from the settings.",
+            "required": false,
+            "kind": { "type": "text", "maxLength": 100 }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "activity",
+          "outputs": [
+            { "key": "status", "label": "Status", "kind": "text", "always": true },
+            { "key": "repo", "label": "Repository", "kind": "text", "always": true },
+            { "key": "branch", "label": "Branch", "kind": "text", "always": true },
+            { "key": "changed", "label": "Changed", "kind": "boolean", "always": true },
+            { "key": "workflow", "label": "Workflow", "kind": "text" },
+            { "key": "url", "label": "Run URL", "kind": "url" },
+            { "key": "checkedAt", "label": "Checked at", "kind": "text" }
+          ],
+          "timeoutMs": 20000,
+          "retrySafe": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "last-values",
+        "name": "Last results",
+        "description": "What the last pull request and build checks found, from the plugin's storage. Makes no request.",
+        "category": "Developer Tools",
+        "parameters": [],
+        "node": {
+          "version": 1,
+          "icon": "history",
+          "outputs": [
+            { "key": "openPrsRepo", "label": "Pull requests: repository", "kind": "text" },
+            { "key": "openPrs", "label": "Open pull requests", "kind": "integer" },
+            { "key": "openPrsCheckedAt", "label": "Pull requests: checked at", "kind": "text" },
+            { "key": "buildRepo", "label": "Build: repository", "kind": "text" },
+            { "key": "buildBranch", "label": "Build: branch", "kind": "text" },
+            { "key": "buildStatus", "label": "Build status", "kind": "text" },
+            { "key": "buildCheckedAt", "label": "Build: checked at", "kind": "text" },
+            { "key": "storageBytes", "label": "Storage used (bytes)", "kind": "integer" }
+          ],
+          "timeoutMs": 5000,
+          "retrySafe": true,
+          "idempotent": true,
+          "effect": "readOnly"
+        }
+      }
+    ],
+    "variables": [
+      {
+        "id": "openPrs",
+        "name": "Open pull requests",
+        "description": "The count found by the last Open pull requests check.",
+        "valueType": { "type": "integer" },
+        "scope": "machine"
+      },
+      {
+        "id": "buildStatus",
+        "name": "Build status",
+        "description": "success, failure, in_progress, ... from the last Build status check.",
+        "valueType": { "type": "string" },
+        "scope": "machine"
+      }
+    ],
+    "settings": {
+      "fields": [
+        {
+          "key": "defaultRepo",
+          "label": "Default repository",
+          "description": "owner/name, used when an action names none.",
+          "required": false,
+          "kind": { "type": "text", "maxLength": 140 },
+          "portability": "portable"
+        },
+        {
+          "key": "defaultBranch",
+          "label": "Default branch",
+          "required": false,
+          "kind": { "type": "text", "maxLength": 100 },
+          "default": { "type": "text", "value": "main" },
+          "portability": "portable"
+        },
+        {
+          "key": "notifyOnChange",
+          "label": "Notify when the build status changes",
+          "required": false,
+          "kind": { "type": "boolean" },
+          "default": { "type": "boolean", "value": false }
+        }
+      ]
+    },
+    "credentials": [
+      {
+        "key": "githubToken",
+        "label": "GitHub token",
+        "description": "Optional. A fine-grained token with read access to pull requests and Actions of your repositories.",
+        "hosts": ["api.github.com"],
+        "schemes": ["bearer"],
+        "setupUrl": "https://github.com/settings/personal-access-tokens"
+      }
+    ],
+    "errorCodes": {
+      "invalid-input": "The input is not what the action reads (time stamp, base64, JSON, repository or branch).",
+      "repo-required": "No repository was named and no default repository is set.",
+      "repo-not-found": "GitHub does not know the repository or branch, or the token cannot see it.",
+      "github-unauthorized": "GitHub refused the stored token.",
+      "github-error": "GitHub answered with an error status.",
+      "invalid-response": "GitHub answered with something that is not what the API documents.",
+      "output-too-large": "The result is longer than an output can hold (16 KiB)."
+    }
+  }
+}
