@@ -19,8 +19,17 @@
 //! the reason `quit` ([`on_agent_stop`]). The agent's "Open DeckPilot"
 //! reaches a running app as `showWindow` ([`show_target`]); only when no app
 //! is connected does the agent start one, so there is never a second app.
+//!
+//! Both decisions are macOS behaviour: on Windows and Linux the app keeps
+//! what it did before (it stays open after the tray's Quit, and an app
+//! without a main window ignores `showWindow`). They take the platform as a
+//! parameter ([`MACOS`] in the app) so that both sides are tested
+//! everywhere.
 
 use deckpilot_ipc::ShutdownReason;
+
+/// Whether this build follows the macOS lifecycle.
+pub const MACOS: bool = cfg!(target_os = "macos");
 
 /// What the app does when its agent stops.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,8 +41,9 @@ pub enum OnAgentStop {
     Reconnect,
 }
 
-pub fn on_agent_stop(reason: Option<ShutdownReason>) -> OnAgentStop {
-    if ShutdownReason::closes_apps(reason) {
+/// On macOS the tray's Quit ends the app too; elsewhere the app stays.
+pub fn on_agent_stop(reason: Option<ShutdownReason>, macos: bool) -> OnAgentStop {
+    if macos && ShutdownReason::closes_apps(reason) {
         OnAgentStop::Exit
     } else {
         OnAgentStop::Reconnect
@@ -46,17 +56,21 @@ pub enum ShowTarget {
     /// Bring the main window to the front.
     Main,
     /// This process has no main window (it was started for one prompt or
-    /// module window only): create it, so the request is never lost.
+    /// module window only): create it, so the request is never lost
+    /// (macOS).
     CreateMain,
     /// The configuration is locked: the password prompt.
     Prompt,
+    /// No main window and not macOS: nothing, as before.
+    Nothing,
 }
 
-pub fn show_target(unlocked: bool, has_main: bool) -> ShowTarget {
+pub fn show_target(unlocked: bool, has_main: bool, macos: bool) -> ShowTarget {
     match (unlocked, has_main) {
         (false, _) => ShowTarget::Prompt,
         (true, true) => ShowTarget::Main,
-        (true, false) => ShowTarget::CreateMain,
+        (true, false) if macos => ShowTarget::CreateMain,
+        (true, false) => ShowTarget::Nothing,
     }
 }
 
@@ -133,29 +147,74 @@ pub fn menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri
 mod tests {
     use super::*;
 
+    const STAYS: [Option<ShutdownReason>; 5] = [
+        Some(ShutdownReason::Requested),
+        Some(ShutdownReason::Update),
+        Some(ShutdownReason::Signal),
+        Some(ShutdownReason::Other),
+        None,
+    ];
+
     #[test]
-    fn only_quitting_deckpilot_ends_the_app_with_the_agent() {
-        assert_eq!(on_agent_stop(Some(ShutdownReason::Quit)), OnAgentStop::Exit);
+    fn on_macos_only_quitting_deckpilot_ends_the_app_with_the_agent() {
+        assert_eq!(
+            on_agent_stop(Some(ShutdownReason::Quit), true),
+            OnAgentStop::Exit
+        );
         // A restart from the app, an update, a signal, an older agent that
         // gives no reason, a reason added later: the app stays.
-        for reason in [
-            Some(ShutdownReason::Requested),
-            Some(ShutdownReason::Update),
-            Some(ShutdownReason::Signal),
-            Some(ShutdownReason::Other),
-            None,
-        ] {
-            assert_eq!(on_agent_stop(reason), OnAgentStop::Reconnect, "{reason:?}");
+        for reason in STAYS {
+            assert_eq!(
+                on_agent_stop(reason, true),
+                OnAgentStop::Reconnect,
+                "{reason:?}"
+            );
         }
     }
 
     #[test]
-    fn open_deckpilot_always_shows_something() {
-        assert_eq!(show_target(true, true), ShowTarget::Main);
+    fn elsewhere_the_app_always_stays_when_the_agent_stops() {
+        for reason in STAYS.into_iter().chain([Some(ShutdownReason::Quit)]) {
+            assert_eq!(
+                on_agent_stop(reason, false),
+                OnAgentStop::Reconnect,
+                "{reason:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn this_build_follows_its_platform() {
+        assert_eq!(MACOS, cfg!(target_os = "macos"));
+        let expected = if cfg!(target_os = "macos") {
+            (OnAgentStop::Exit, ShowTarget::CreateMain)
+        } else {
+            (OnAgentStop::Reconnect, ShowTarget::Nothing)
+        };
+        assert_eq!(
+            (
+                on_agent_stop(Some(ShutdownReason::Quit), MACOS),
+                show_target(true, false, MACOS)
+            ),
+            expected
+        );
+    }
+
+    #[test]
+    fn open_deckpilot_on_macos_always_shows_something() {
+        assert_eq!(show_target(true, true, true), ShowTarget::Main);
         // A process started for one window only gets a main window.
-        assert_eq!(show_target(true, false), ShowTarget::CreateMain);
-        assert_eq!(show_target(false, true), ShowTarget::Prompt);
-        assert_eq!(show_target(false, false), ShowTarget::Prompt);
+        assert_eq!(show_target(true, false, true), ShowTarget::CreateMain);
+        assert_eq!(show_target(false, true, true), ShowTarget::Prompt);
+        assert_eq!(show_target(false, false, true), ShowTarget::Prompt);
+    }
+
+    #[test]
+    fn open_deckpilot_elsewhere_is_unchanged() {
+        assert_eq!(show_target(true, true, false), ShowTarget::Main);
+        assert_eq!(show_target(true, false, false), ShowTarget::Nothing);
+        assert_eq!(show_target(false, true, false), ShowTarget::Prompt);
+        assert_eq!(show_target(false, false, false), ShowTarget::Prompt);
     }
 
     #[test]

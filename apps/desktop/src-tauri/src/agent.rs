@@ -383,9 +383,11 @@ async fn subscribe<R: Runtime>(app: &AppHandle<R>, paths: &AgentPaths) -> Result
                 }
             }
             AgentEvent::ShuttingDown { reason } => {
-                // The tray's "Quit DeckPilot" ends this app too; a restart
-                // or an update does not.
-                if crate::lifecycle::on_agent_stop(reason) == crate::lifecycle::OnAgentStop::Exit {
+                // On macOS the tray's "Quit DeckPilot" ends this app too; a
+                // restart or an update does not. Elsewhere the app stays.
+                if crate::lifecycle::on_agent_stop(reason, crate::lifecycle::MACOS)
+                    == crate::lifecycle::OnAgentStop::Exit
+                {
                     app.exit(0);
                 }
                 return Ok(());
@@ -499,14 +501,14 @@ async fn unlock_if_needed<R: Runtime>(
 
 /// Brings the app to the front (the agent's "Open DeckPilot" while this app
 /// runs): the main window when unlocked, otherwise the password prompt. A
-/// process started for one window only creates its main window, so the
-/// request is never lost and no second app is started.
+/// process started for one window only creates its main window on macOS,
+/// so the request is never lost and no second app is started.
 fn show_window<R: Runtime>(app: &AppHandle<R>) {
-    use crate::lifecycle::{ShowTarget, show_target};
+    use crate::lifecycle::{MACOS, ShowTarget, show_target};
     let state = app.try_state::<crate::state::AppState>();
     let unlocked = state.as_ref().is_none_or(|state| state.is_unlocked());
     let main = app.get_webview_window(crate::windows::MAIN);
-    match show_target(unlocked, main.is_some()) {
+    match show_target(unlocked, main.is_some(), MACOS) {
         ShowTarget::Prompt => {
             if let Some(state) = state {
                 let id = crate::commands::security::prompt_window(&state);
@@ -518,12 +520,16 @@ fn show_window<R: Runtime>(app: &AppHandle<R>) {
         ShowTarget::Main => {
             crate::windows::show_main(app);
         }
-        // Shown by its page once it has loaded (the configuration is open).
+        // macOS: shown by its page once it has loaded (the configuration
+        // is open).
         ShowTarget::CreateMain => {
             if let Err(error) = crate::create_main_window(app) {
                 eprintln!("cannot open the main window: {error}");
             }
         }
+        // Windows and Linux: unchanged, an app without a main window
+        // ignores the request.
+        ShowTarget::Nothing => {}
     }
 }
 
