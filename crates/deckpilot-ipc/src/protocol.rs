@@ -976,6 +976,34 @@ impl Response {
     }
 }
 
+/// Why the agent stops, as [`AgentEvent::ShuttingDown`] reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ShutdownReason {
+    /// The user quit DeckPilot completely (the tray's "Quit DeckPilot"):
+    /// open configuration apps close too.
+    Quit,
+    /// Stopping so that an update can be installed (`prepareForUpdate`).
+    Update,
+    /// A client asked (`shutdown`), e.g. to restart the agent.
+    Requested,
+    /// The process was asked to terminate (a signal, the service manager,
+    /// logging out).
+    Signal,
+    /// A reason added by a newer agent.
+    #[serde(other)]
+    Other,
+}
+
+impl ShutdownReason {
+    /// Whether a configuration app closes when the agent stops for this
+    /// reason. Otherwise it stays open and reconnects once the agent is
+    /// back (a restart, an update) or offers to start it.
+    pub fn closes_apps(reason: Option<Self>) -> bool {
+        reason == Some(Self::Quit)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AgentEvent {
@@ -991,7 +1019,14 @@ pub enum AgentEvent {
         status: ActionStatus,
     },
     ShowWindow,
-    ShuttingDown,
+    /// The agent is stopping. `reason` says why; agents before DeckPilot
+    /// 0.6 send none, and clients that do not know the field ignore it, so
+    /// it needs no new protocol. Only [`ShutdownReason::Quit`] asks the
+    /// configuration app to close as well.
+    ShuttingDown {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<ShutdownReason>,
+    },
     /// Asks the configuration app to open a native window by its catalog
     /// identifier (e.g. `security.unlock`). Only the identifier is sent; the
     /// app decides whether the window exists and may open. Since protocol 4.
@@ -1156,7 +1191,7 @@ impl AgentEvent {
             Self::State { .. }
             | Self::ActionCompleted { .. }
             | Self::ShowWindow
-            | Self::ShuttingDown => 1,
+            | Self::ShuttingDown { .. } => 1,
         }
     }
 
@@ -1266,6 +1301,61 @@ pub struct AgentStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_shutdown_reason_is_compatible_both_ways() {
+        // The event as clients built before the field know it.
+        #[derive(Debug, PartialEq, Deserialize)]
+        #[serde(tag = "type", rename_all = "camelCase")]
+        enum PreviousEvent {
+            ShowWindow,
+            ShuttingDown,
+        }
+        // Without a reason the event is what every agent sent before.
+        let plain = AgentEvent::ShuttingDown { reason: None };
+        assert_eq!(
+            serde_json::to_value(&plain).unwrap(),
+            serde_json::json!({ "type": "shuttingDown" })
+        );
+        let old: AgentEvent = serde_json::from_str(r#"{"type":"shuttingDown"}"#).unwrap();
+        assert_eq!(old, plain);
+        // With one: newer clients read it, unknown reasons included.
+        let quit = AgentEvent::ShuttingDown {
+            reason: Some(ShutdownReason::Quit),
+        };
+        let json = serde_json::to_string(&quit).unwrap();
+        assert_eq!(json, r#"{"type":"shuttingDown","reason":"quit"}"#);
+        assert_eq!(serde_json::from_str::<AgentEvent>(&json).unwrap(), quit);
+        let future: AgentEvent =
+            serde_json::from_str(r#"{"type":"shuttingDown","reason":"reboot"}"#).unwrap();
+        assert_eq!(
+            future,
+            AgentEvent::ShuttingDown {
+                reason: Some(ShutdownReason::Other)
+            }
+        );
+        // Clients built before the field (a unit variant) ignore it.
+        assert_eq!(
+            serde_json::from_str::<PreviousEvent>(&json).unwrap(),
+            PreviousEvent::ShuttingDown
+        );
+        // Every client receives it, whatever its protocol.
+        assert_eq!(quit.clone().for_protocol(1), Some(quit));
+    }
+
+    #[test]
+    fn only_quitting_closes_the_apps() {
+        assert!(ShutdownReason::closes_apps(Some(ShutdownReason::Quit)));
+        for reason in [
+            None,
+            Some(ShutdownReason::Update),
+            Some(ShutdownReason::Requested),
+            Some(ShutdownReason::Signal),
+            Some(ShutdownReason::Other),
+        ] {
+            assert!(!ShutdownReason::closes_apps(reason), "{reason:?}");
+        }
+    }
 
     #[test]
     fn window_identifiers_are_restricted() {
