@@ -43,6 +43,7 @@ import type {
   ResolutionContext,
   ResourceCheck,
   ResourceKind,
+  Saved,
   ScopeKey,
   SharedVariable,
   UpdateInfo,
@@ -204,8 +205,9 @@ export const api = {
   unbindActionReferences: (profileId: string, actionId: string, selection: ReferenceSelection) =>
     invoke<ReferenceChangeResult>("unbind_action_references", { profileId, actionId, selection }),
 
+  /** Resolves once the agent has read the workflow, so it can be started right away. */
   saveWorkflow: (profileId: string, workflow: Workflow) =>
-    invoke<Workflow>("save_workflow", { profileId, workflow }),
+    invoke<Saved<Workflow>>("save_workflow", { profileId, workflow }),
   duplicateWorkflow: (profileId: string, workflowId: string, name: string) =>
     invoke<Workflow>("duplicate_workflow", { profileId, workflowId, name }),
   deleteWorkflow: (profileId: string, workflowId: string) =>
@@ -266,8 +268,9 @@ export const api = {
 
   createLayout: (profileId: string, modelId: string, name: string, generate: boolean) =>
     invoke<DeviceLayout>("create_layout", { profileId, modelId, name, generate }),
+  /** Resolves once the agent has read the layout, so its keys work right away. */
   saveLayout: (profileId: string, layout: DeviceLayout) =>
-    invoke<DeviceLayout>("save_layout", { profileId, layout }),
+    invoke<Saved<DeviceLayout>>("save_layout", { profileId, layout }),
   duplicateLayout: (profileId: string, layoutId: string, name: string) =>
     invoke<string>("duplicate_layout", { profileId, layoutId, name }),
   deleteLayout: (profileId: string, layoutId: string) =>

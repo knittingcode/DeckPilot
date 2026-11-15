@@ -37,7 +37,10 @@ fn origin(source: &InstallSource) -> ipc::PluginOrigin {
         InstallSource::Registry { registry } => ipc::PluginOrigin::Registry {
             registry: registry.clone(),
         },
-        InstallSource::Sideload => ipc::PluginOrigin::Sideload,
+        // Nothing installs bundled plugins yet (seeding is P5 of
+        // docs/marketplace/module-migration.md); the protocol gains its own
+        // origin with the migration UI (P7). Until then, shown as local.
+        InstallSource::Sideload | InstallSource::Bundled => ipc::PluginOrigin::Sideload,
         InstallSource::Dev => ipc::PluginOrigin::Dev,
     }
 }

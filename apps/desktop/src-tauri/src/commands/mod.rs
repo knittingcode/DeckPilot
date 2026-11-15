@@ -1,7 +1,8 @@
 //! Commands invoked by the frontend.
 //!
 //! Configuration commands load a profile, apply one change through the domain
-//! model, save it in a single write and ask the agent to reload. Runtime
+//! model, save it in a single write and ask the agent to reload (saves the
+//! user may act on right away wait for it, see `reload`). Runtime
 //! state (active profile and project) and execution go through the agent
 //! while it runs; when it does not, runtime state is written to storage and
 //! the agent reads it on its next start.
@@ -20,6 +21,7 @@ mod modules;
 pub(crate) mod plugins;
 pub(crate) mod portability;
 mod profiles;
+pub(crate) mod reload;
 pub(crate) mod security;
 mod shared_variables;
 mod system;
@@ -197,12 +199,37 @@ pub(crate) fn modify_profile<T>(
     id: ProfileId,
     change: impl FnOnce(&mut Profile) -> CommandResult<T>,
 ) -> CommandResult<T> {
+    let result = save_profile_change(state, id, change)?;
+    crate::agent::notify_reload(&state.paths);
+    Ok(result)
+}
+
+/// As `modify_profile`, and returns once the agent has read the change (at
+/// most `reload::RELOAD_TIMEOUT` later), so that a request right after the
+/// save, such as starting the workflow just saved, sees it. The change is
+/// saved whatever the agent answers; the result says what it did.
+pub(crate) async fn modify_profile_and_reload<T>(
+    state: &AppState,
+    id: ProfileId,
+    change: impl FnOnce(&mut Profile) -> CommandResult<T>,
+) -> CommandResult<reload::Saved<T>> {
+    let value = save_profile_change(state, id, change)?;
+    let agent_reload = reload::reload_agent(&state.paths, reload::RELOAD_TIMEOUT).await;
+    Ok(reload::Saved {
+        value,
+        agent_reload,
+    })
+}
+
+fn save_profile_change<T>(
+    state: &AppState,
+    id: ProfileId,
+    change: impl FnOnce(&mut Profile) -> CommandResult<T>,
+) -> CommandResult<T> {
     let store = state.store()?;
     let mut profile = load_profile(&store, id)?;
     let result = change(&mut profile)?;
     deckpilot_storage::ConfigStore::save_profile(&*store, &profile)?;
-    drop(store);
-    crate::agent::notify_reload(&state.paths);
     Ok(result)
 }
 

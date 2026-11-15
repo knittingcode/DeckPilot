@@ -8,7 +8,8 @@ use deckpilot_core::{
 use deckpilot_device::{ControlId, DeviceModelId};
 use deckpilot_storage::ConfigStore;
 
-use super::modify_profile;
+use super::reload::Saved;
+use super::{modify_profile, modify_profile_and_reload};
 use crate::error::{CommandError, CommandResult};
 use crate::state::{AppState, load_profile};
 
@@ -47,13 +48,14 @@ pub fn create_layout(
 
 /// Saves an edited layout. Bindings are checked against the model's
 /// capabilities and the profile's actions; problems are reported and nothing
-/// is saved.
+/// is saved. Returns once the agent has read it, so its keys work right
+/// away.
 #[tauri::command]
-pub fn save_layout(
+pub async fn save_layout(
     state: State<'_, AppState>,
     profile_id: ProfileId,
     layout: DeviceLayout,
-) -> CommandResult<DeviceLayout> {
+) -> CommandResult<Saved<DeviceLayout>> {
     let mut layout = layout;
     super::trim_in_place(&mut layout.name);
     if layout.name.is_empty() {
@@ -77,7 +79,7 @@ pub fn save_layout(
             .and_then(deckpilot_core::KeyAppearance::normalized);
     }
     let registry = state.actions();
-    modify_profile(&state, profile_id, |profile| {
+    modify_profile_and_reload(&state, profile_id, |profile| {
         let mut issues = layout.validate(&state.catalog, profile);
         issues.extend(layout.check_overrides(&registry, profile));
         if !issues.is_empty() {
@@ -99,6 +101,7 @@ pub fn save_layout(
         }
         Ok(layout)
     })
+    .await
 }
 
 #[tauri::command]
