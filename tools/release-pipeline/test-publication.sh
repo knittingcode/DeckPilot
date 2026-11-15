@@ -444,6 +444,15 @@ for spec in darwin-aarch64:SHA256SUMS darwin-x86_64-app:release-meta.json linux-
   change_manifest ".platforms[\"${spec%%:*}\"].url |= sub(\"[^/]*\$\"; \"${spec#*:}\")"
   expect_draft "a manifest pointing ${spec%%:*} to ${spec#*:}" "not to the application's updater package" v0.6.0-rc.1
 done
+# The per-platform check compares with the pinned DOWNLOAD_PREFIX
+# (common.sh) byte for byte: the right package under the repository's
+# renamed spelling is still not the update installed clients accept.
+fresh
+id=$(draft v0.6.0-rc.1)
+jq -r '.platforms[].url' "$STUB_DIR/assets/$id/prerelease.json" | grep -v -q -F "https://github.com/knittingcode/DeckPilot/releases/download/v0.6.0-rc.1/" \
+  && bad "the draft's manifest is not under the pinned prefix" || ok "every update of the draft is under the pinned DeckPilot prefix"
+change_manifest '.platforms["linux-x86_64-deb"].url |= sub("knittingcode/DeckPilot"; "knittingcode/deckpilot")'
+expect_draft "the right package under the renamed repository's spelling" "not to an asset of v0.6.0-rc.1" v0.6.0-rc.1
 fresh
 id=$(draft v0.6.0-rc.1)
 change_manifest '.platforms["linux-aarch64"] = .platforms["linux-x86_64"]'
