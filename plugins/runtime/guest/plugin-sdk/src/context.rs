@@ -5,7 +5,7 @@ use std::fmt;
 pub use deckpilot_plugin_abi::capability::StorageUsage;
 use deckpilot_plugin_abi::capability::{
     AuthScheme, CredentialRef, Header, HttpAuth, HttpFetch, HttpResponse, Log, LogLevel, NoArgs,
-    Notify, StorageKey, StoragePrefix, StorageSet, VariableClear, VariablePublish,
+    Notify, OpenUrl, StorageKey, StoragePrefix, StorageSet, VariableClear, VariablePublish,
 };
 use deckpilot_plugin_abi::limits::MAX_HOST_CALLS_PER_INVOCATION;
 use deckpilot_plugin_abi::{CallError, CallErrorCode, CallResult, CapabilityRequest, HttpMethod};
@@ -148,9 +148,16 @@ impl<'a> Context<'a> {
     /// carry a credential to another origin. Every resolved address must be
     /// public. Limits: URL 8 KiB, 32 headers of at most 4 KiB, request
     /// body 32 KiB, response body 512 KiB, 15 s for all hops, 60 requests
-    /// per minute. The response keeps only the headers `content-type`,
-    /// `content-length`, `cache-control`, `etag`, `last-modified`,
-    /// `retry-after` and `date`. A non-2xx status is a [`Response`], not an
+    /// per minute. The response keeps only the headers listed in
+    /// [`RESPONSE_HEADERS`](deckpilot_plugin_abi::capability::RESPONSE_HEADERS):
+    /// content and caching metadata (`content-type`, `etag`,
+    /// `last-modified`, `retry-after`, ...), pagination (`link`, `x-total`,
+    /// `x-total-pages`, `x-next-page`, ...) and rate limits
+    /// (`x-ratelimit-*`, `ratelimit-*`, by exact name). `set-cookie`,
+    /// `www-authenticate` and every other header are dropped, and an
+    /// injected secret is redacted from the values that are kept. Read
+    /// them with [`Response::header`], [`Response::header_values`] and
+    /// [`Response::link`]. A non-2xx status is a [`Response`], not an
     /// error.
     ///
     /// ```
@@ -232,6 +239,43 @@ impl<'a> Context<'a> {
             }),
         )
         .map(drop)
+    }
+
+    /// Opens an https URL in the user's browser (op `url.open`). Needs an
+    /// `openUrl` permission for the URL's exact host (`openUrl:github.com`
+    /// covers `https://github.com/...` on port 443 only, not
+    /// `gist.github.com`), approved by the user. Only `https:` URLs
+    /// without userinfo are opened: never `file:`, `mailto:` or another
+    /// scheme that could start a program, never an IP address or a local
+    /// name. At most 2,048 bytes; 1 per 2 seconds and 20 per 10 minutes
+    /// (then [`CapabilityErrorKind::Throttled`]), and at most 3 in one
+    /// invocation. The agent records the URL's origin, never its path or
+    /// query. Open URLs only in actions the user starts on purpose (an
+    /// "Open pull request" key), not on every run of a workflow.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::{CallErrorCode, CallResult, CapabilityRequest};
+    ///
+    /// let mut host = MockHost::new(|req| match req {
+    ///     CapabilityRequest::OpenUrl(o) if o.url.starts_with("https://github.com/") => {
+    ///         CallResult::Ok(serde_json::Value::Null)
+    ///     }
+    ///     _ => CallResult::error(CallErrorCode::NotPermitted, "origin not granted"),
+    /// });
+    /// let mut ctx = host.context();
+    /// ctx.open_url("https://github.com/acme/app/pull/7").unwrap();
+    /// let denied = ctx.open_url("https://gitlab.com/acme/app").unwrap_err();
+    /// assert!(denied.is_denied());
+    /// assert_eq!(denied.target(), Some("https://gitlab.com"));
+    /// assert!(denied.to_string().contains("`openUrl` permission"));
+    /// ```
+    pub fn open_url(&mut self, url: impl Into<String>) -> Result<(), CapabilityError> {
+        let url = url.into();
+        let target = origin_of(&url);
+        self.call("url.open", &CapabilityRequest::OpenUrl(OpenUrl { url }))
+            .map(drop)
+            .map_err(|e| e.with_target(target))
     }
 
     /// Reads a value from the plugin's own storage (op `storage.get`,
@@ -597,6 +641,45 @@ fn origin_of(url: &str) -> Option<String> {
     })
 }
 
+/// The entries of one `link` header value: `(target, rel)` for each
+/// `<target>; ...; rel="..."` (RFC 8288; entries without `rel` are
+/// skipped). A comma inside `<...>` or a quoted string does not split.
+fn link_entries(value: &str) -> impl Iterator<Item = (&str, &str)> {
+    let mut entries = Vec::new();
+    let mut rest = value;
+    while let Some(open) = rest.find('<') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('>') else { break };
+        let target = &after[..close];
+        let params_start = &after[close + 1..];
+        // Up to the next entry: a comma outside a quoted string.
+        let mut quoted = false;
+        let mut end = params_start.len();
+        for (i, c) in params_start.char_indices() {
+            match c {
+                '"' => quoted = !quoted,
+                ',' if !quoted => {
+                    end = i;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let params = &params_start[..end];
+        let rel = params.split(';').find_map(|param| {
+            let (name, value) = param.split_once('=')?;
+            name.trim()
+                .eq_ignore_ascii_case("rel")
+                .then(|| value.trim().trim_matches('"'))
+        });
+        if let Some(rel) = rel {
+            entries.push((target.trim(), rel));
+        }
+        rest = &params_start[end..];
+    }
+    entries.into_iter()
+}
+
 fn cut(s: &str, max: usize) -> &str {
     if s.len() <= max {
         return s;
@@ -752,12 +835,63 @@ impl Response {
         (200..300).contains(&self.status)
     }
 
-    /// First header named `name` (ASCII case-insensitive).
+    /// First header named `name` (ASCII case-insensitive). Only the
+    /// headers the agent returns are here (see [`Context::fetch`]).
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::prelude::*;
+    /// use deckpilot_plugin_sdk::Header;
+    ///
+    /// let r = Response {
+    ///     status: 200,
+    ///     headers: vec![Header { name: "x-ratelimit-remaining".into(), value: "4999".into() }],
+    ///     body: None,
+    /// };
+    /// assert_eq!(r.header("X-RateLimit-Remaining"), Some("4999"));
+    /// assert_eq!(r.header("set-cookie"), None); // never returned
+    /// ```
     pub fn header(&self, name: &str) -> Option<&str> {
+        self.header_values(name).next()
+    }
+
+    /// Every value of the headers named `name`, in order (a server may
+    /// send `link` more than once).
+    pub fn header_values<'r>(&'r self, name: &str) -> impl Iterator<Item = &'r str> + use<'r> {
+        let name = name.to_ascii_lowercase();
         self.headers
             .iter()
-            .find(|h| h.name.eq_ignore_ascii_case(name))
+            .filter(move |h| h.name.eq_ignore_ascii_case(&name))
             .map(|h| h.value.as_str())
+    }
+
+    /// The target of the `link` header entry (RFC 8288) whose `rel` is
+    /// `rel` (`next`, `prev`, `first`, `last`; ASCII case-insensitive),
+    /// as the server sent it. Paginated APIs such as GitHub's say where the
+    /// next page is this way. Fetch it like any URL: it must be on a
+    /// granted origin too.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::prelude::*;
+    /// use deckpilot_plugin_sdk::Header;
+    ///
+    /// let link = r#"<https://api.github.com/repositories/1/pulls?page=2>; rel="next", <https://api.github.com/repositories/1/pulls?page=5>; rel="last""#;
+    /// let r = Response {
+    ///     status: 200,
+    ///     headers: vec![Header { name: "link".into(), value: link.into() }],
+    ///     body: None,
+    /// };
+    /// assert_eq!(r.link("next"), Some("https://api.github.com/repositories/1/pulls?page=2"));
+    /// assert_eq!(r.link("last"), Some("https://api.github.com/repositories/1/pulls?page=5"));
+    /// assert_eq!(r.link("prev"), None);
+    /// ```
+    pub fn link(&self, rel: &str) -> Option<&str> {
+        self.header_values("link")
+            .flat_map(link_entries)
+            .find(|(_, rels)| {
+                rels.split_ascii_whitespace()
+                    .any(|r| r.eq_ignore_ascii_case(rel))
+            })
+            .map(|(target, _)| target)
     }
 
     /// The body text (empty if there was none).
@@ -868,6 +1002,11 @@ impl fmt::Display for CapabilityError {
                     "http.fetch" => f.write_str(
                         "Declare a `network` permission for this exact https host and method \
                          in manifest.json; it applies once the user approves it",
+                    ),
+                    "url.open" => f.write_str(
+                        "Declare an `openUrl` permission for this exact https host in \
+                         manifest.json; it applies once the user approves it. Only https URLs \
+                         without userinfo are opened, never an IP address or a local name",
                     ),
                     "notify" => f.write_str(
                         "Declare the `notifications` permission in manifest.json; it applies \
@@ -1096,6 +1235,75 @@ mod tests {
                 .kind(),
             CapabilityErrorKind::MalformedReply
         );
+    }
+
+    #[test]
+    fn open_url_sends_the_url_and_explains_denials() {
+        use crate::testing::MockHost;
+        let mut host = MockHost::new(|req| match req {
+            CapabilityRequest::OpenUrl(o) if o.url.starts_with("https://github.com/") => {
+                CallResult::Ok(Value::Null)
+            }
+            CapabilityRequest::OpenUrl(_) => {
+                CallResult::error(CallErrorCode::NotPermitted, "origin not granted")
+            }
+            _ => CallResult::error(CallErrorCode::Throttled, "rate limited"),
+        });
+        let mut ctx = Context::new(&mut host);
+        ctx.open_url("https://github.com/acme/app?tab=1").unwrap();
+        let e = ctx
+            .open_url("https://user:pw@evil.example.net/x?token=s3cret")
+            .unwrap_err();
+        assert!(e.is_denied());
+        assert_eq!(e.op(), "url.open");
+        // The target is the origin: no userinfo, path or query.
+        assert_eq!(e.target(), Some("https://evil.example.net"));
+        let text = e.to_string();
+        assert!(!text.contains("s3cret") && !text.contains("pw@"), "{text}");
+        assert!(text.contains("`openUrl` permission"), "{text}");
+        assert_eq!(PluginError::from(e).code(), codes::NOT_PERMITTED);
+        let CapabilityRequest::OpenUrl(sent) = &host.requests()[0] else {
+            panic!()
+        };
+        assert_eq!(sent.url, "https://github.com/acme/app?tab=1");
+    }
+
+    #[test]
+    fn link_headers_are_parsed() {
+        let response = |values: &[&str]| Response {
+            status: 200,
+            headers: values
+                .iter()
+                .map(|v| Header {
+                    name: "Link".into(),
+                    value: (*v).into(),
+                })
+                .collect(),
+            body: None,
+        };
+        let r = response(&[
+            r#"<https://a.example.com/x?page=2&q=a,b>; rel="next", <https://a.example.com/x?page=9>; rel="last""#,
+            r#"<https://a.example.com/x?page=1>; title="a, b; c"; rel="first prev""#,
+        ]);
+        assert_eq!(r.link("next"), Some("https://a.example.com/x?page=2&q=a,b"));
+        assert_eq!(r.link("LAST"), Some("https://a.example.com/x?page=9"));
+        assert_eq!(r.link("prev"), Some("https://a.example.com/x?page=1"));
+        assert_eq!(r.link("first"), Some("https://a.example.com/x?page=1"));
+        assert_eq!(r.header_values("link").count(), 2);
+        assert_eq!(r.link("self"), None);
+        // GitLab's form, unquoted rel, and garbage.
+        let r = response(&["<https://g.example.com/p?page=3>; rel=next"]);
+        assert_eq!(r.link("next"), Some("https://g.example.com/p?page=3"));
+        for garbage in [
+            "",
+            "<",
+            "<https://x.example.com/",
+            "no brackets; rel=next",
+            "<a>",
+        ] {
+            assert_eq!(response(&[garbage]).link("next"), None, "{garbage:?}");
+        }
+        assert_eq!(response(&[]).link("next"), None);
     }
 
     #[test]

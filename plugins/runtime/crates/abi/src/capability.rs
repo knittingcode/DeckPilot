@@ -13,8 +13,8 @@ use serde_json::Value;
 
 use crate::limits::{
     MAX_BODY_LEN, MAX_CREDENTIAL_KEY, MAX_HEADER_LEN, MAX_HEADERS, MAX_LOG_LEN, MAX_NOTIFY_BODY,
-    MAX_NOTIFY_TITLE, MAX_STORAGE_KEY, MAX_STORAGE_VALUE, MAX_URL_LEN, MAX_VARIABLE_ID,
-    MAX_VARIABLE_VALUE,
+    MAX_NOTIFY_TITLE, MAX_OPEN_URL_LEN, MAX_STORAGE_KEY, MAX_STORAGE_VALUE, MAX_URL_LEN,
+    MAX_VARIABLE_ID, MAX_VARIABLE_VALUE,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -59,6 +59,21 @@ pub enum CapabilityRequest {
     /// ABI 1.
     #[serde(rename = "settings.get")]
     SettingsGet(NoArgs),
+    /// Asks the agent to open an https URL in the user's browser (design
+    /// §5.2 `openUrl`): only for an exact origin the user approved, never a
+    /// `file:` or custom scheme, an IP literal or a local name, rate
+    /// limited. The answer is `null`; the plugin never learns more than
+    /// whether it was opened. Added compatibly within ABI 1.
+    #[serde(rename = "url.open")]
+    OpenUrl(OpenUrl),
+}
+
+/// A URL to open in the user's browser.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenUrl {
+    /// An absolute `https://` URL, at most [`MAX_OPEN_URL_LEN`] bytes.
+    pub url: String,
 }
 
 /// A value for one of the plugin's own variables. `id` is relative to the
@@ -142,6 +157,56 @@ pub fn is_credential_key(key: &str) -> bool {
     key.len() <= MAX_CREDENTIAL_KEY
         && chars.next().is_some_and(|c| c.is_ascii_lowercase())
         && chars.all(|c| c.is_ascii_alphanumeric())
+}
+
+/// Response headers the agent hands to a plugin, by lowercase name: caching
+/// and content metadata, pagination (`link`, GitLab's `x-total` family) and
+/// rate limits (GitHub's `x-ratelimit-*`, GitLab's and the IETF draft's
+/// `ratelimit-*`). Exact names only, no prefixes: a header is returned only
+/// when it is listed here. Every other header is dropped, in particular
+/// `set-cookie`, `www-authenticate`, `authorization`, `proxy-*` and
+/// anything a server could use to echo a request's credentials; a value
+/// that contains an injected secret is redacted before this filter runs.
+/// Values longer than [`MAX_HEADER_LEN`] are dropped, and at most
+/// [`MAX_HEADERS`] headers are returned.
+pub const RESPONSE_HEADERS: &[&str] = &[
+    "content-type",
+    "content-length",
+    "content-language",
+    "cache-control",
+    "etag",
+    "last-modified",
+    "expires",
+    "age",
+    "vary",
+    "retry-after",
+    "date",
+    "link",
+    "x-total",
+    "x-total-pages",
+    "x-page",
+    "x-per-page",
+    "x-next-page",
+    "x-prev-page",
+    "x-ratelimit-limit",
+    "x-ratelimit-remaining",
+    "x-ratelimit-reset",
+    "x-ratelimit-used",
+    "x-ratelimit-resource",
+    "ratelimit",
+    "ratelimit-policy",
+    "ratelimit-limit",
+    "ratelimit-remaining",
+    "ratelimit-reset",
+    "ratelimit-observed",
+];
+
+/// Whether a response header (any case) is handed to plugins
+/// ([`RESPONSE_HEADERS`]).
+pub fn is_response_header(name: &str) -> bool {
+    RESPONSE_HEADERS
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(name))
 }
 
 /// The `ok` value of an allowed `http.fetch`, as the agent's executor
@@ -259,6 +324,7 @@ impl CapabilityRequest {
             Self::SettingsGet(_) => "settings.get",
             Self::VariablesPublish(_) => "variables.publish",
             Self::VariablesClear(_) => "variables.clear",
+            Self::OpenUrl(_) => "url.open",
         }
     }
 
@@ -337,6 +403,11 @@ impl CapabilityRequest {
             Self::VariablesClear(c) => {
                 if c.id.as_deref().is_some_and(|id| !is_variable_id(id)) {
                     return Err(RequestError::TooLarge("variable"));
+                }
+            }
+            Self::OpenUrl(o) => {
+                if o.url.is_empty() || o.url.len() > MAX_OPEN_URL_LEN {
+                    return Err(RequestError::TooLarge("url"));
                 }
             }
         }
@@ -610,6 +681,77 @@ mod tests {
             parse(r#"{"op":"variables.publish","args":{"id":"x","value":1,"plugin":"o"}}"#)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn open_url_is_a_strict_compatible_addition() {
+        let json = r#"{"op":"url.open","args":{"url":"https://github.com/acme/app/pull/1"}}"#;
+        let r = parse(json).unwrap();
+        assert_eq!(r.op(), "url.open");
+        r.validate().unwrap();
+        assert_eq!(serde_json::to_string(&r).unwrap(), json);
+        for bad in [
+            r#"{"op":"url.open","args":{}}"#,
+            r#"{"op":"url.open","args":{"url":"https://github.com/","plugin":"o"}}"#,
+            r#"{"op":"url.open","args":{"url":"https://github.com/","app":"Safari"}}"#,
+            r#"{"op":"url.open","args":{"url":["https://github.com/"]}}"#,
+            r#"{"op":"open","args":{"url":"https://github.com/"}}"#,
+            r#"{"op":"shell.open","args":{"url":"https://github.com/"}}"#,
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+        let long = CapabilityRequest::OpenUrl(OpenUrl {
+            url: format!("https://github.com/{}", "a".repeat(MAX_OPEN_URL_LEN)),
+        });
+        assert_eq!(long.validate(), Err(RequestError::TooLarge("url")));
+        let empty = CapabilityRequest::OpenUrl(OpenUrl { url: String::new() });
+        assert_eq!(empty.validate(), Err(RequestError::TooLarge("url")));
+    }
+
+    #[test]
+    fn response_headers_never_include_credentials_or_cookies() {
+        for allowed in RESPONSE_HEADERS {
+            assert_eq!(*allowed, allowed.to_ascii_lowercase());
+            assert!(is_response_header(allowed));
+            assert!(is_response_header(&allowed.to_ascii_uppercase()));
+        }
+        for name in [
+            "link",
+            "x-ratelimit-remaining",
+            "ratelimit-reset",
+            "x-total",
+            "x-total-pages",
+            "x-next-page",
+            "etag",
+            "retry-after",
+        ] {
+            assert!(is_response_header(name), "{name}");
+        }
+        for name in [
+            "set-cookie",
+            "set-cookie2",
+            "cookie",
+            "authorization",
+            "proxy-authorization",
+            "www-authenticate",
+            "proxy-authenticate",
+            "authentication-info",
+            "x-api-key",
+            "private-token",
+            "x-auth-token",
+            "x-oauth-scopes",
+            "location",
+            "content-location",
+            "x-ratelimit-token",
+            "ratelimit-",
+            "x-",
+            "",
+        ] {
+            assert!(!is_response_header(name), "{name}");
+        }
+        let unique: std::collections::BTreeSet<_> = RESPONSE_HEADERS.iter().collect();
+        assert_eq!(unique.len(), RESPONSE_HEADERS.len());
+        assert!(RESPONSE_HEADERS.len() <= MAX_HEADERS);
     }
 
     #[test]

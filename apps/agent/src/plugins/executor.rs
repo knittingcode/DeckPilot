@@ -31,13 +31,26 @@
 //!   never logged, and `credentials.has` answers only `true` or `false`.
 //! * `settings.get`: the saved settings, validated against the manifest,
 //!   defaults filled in.
+//! * `url.open`: exactly the normalized https URL the broker allowed for a
+//!   granted origin, re-checked here, opened with the operating system's
+//!   handler through the core launcher (`launch::plan(OpenTarget::Url)`,
+//!   no shell), at most [`MAX_OPENS_PER_INVOCATION`] times per invocation.
+//!   Only the origin is logged, never the path or query.
+//! * Response headers: only the ABI's allowlist
+//!   ([`RESPONSE_HEADERS`](deckpilot_plugin_abi::capability::RESPONSE_HEADERS):
+//!   caching, pagination and rate-limit headers, never `set-cookie` or an
+//!   authentication header), after an injected secret was redacted from
+//!   every value.
 
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
 use deckpilot_core::notify::{Notification, Severity};
 use deckpilot_ipc::AgentEvent;
-use deckpilot_plugin_abi::capability::{AuthScheme, Header, HttpResponse, LogLevel, StorageUsage};
+use deckpilot_plugin_abi::capability::{
+    AuthScheme, Header, HttpResponse, LogLevel, StorageUsage, is_response_header,
+};
+use deckpilot_plugin_abi::limits::{MAX_HEADER_LEN, MAX_HEADERS};
 use deckpilot_plugin_abi::{CallErrorCode, CallResult, HttpMethod};
 use deckpilot_plugin_broker::{
     Allowed, AllowedFetch, Broker, Decision, PluginId, StorageQuota as GrantedQuota,
@@ -71,16 +84,57 @@ const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 /// Largest response body handed to a plugin (the reply must fit into one
 /// `host_call` reply, `MAX_HOST_CALL_REPLY`).
 const MAX_BODY: usize = 512 * 1024;
-/// Response headers a plugin receives (others are dropped).
-const RESPONSE_HEADERS: &[&str] = &[
-    "content-type",
-    "content-length",
-    "cache-control",
-    "etag",
-    "last-modified",
-    "retry-after",
-    "date",
-];
+/// URLs one invocation may open (on top of the broker's rate limits).
+const MAX_OPENS_PER_INVOCATION: u32 = 3;
+
+/// How allowed `url.open` requests are carried out: the operating system's
+/// handler for https URLs, or (agent tests only, feature `test-hooks`) a
+/// file that records them, so that a test never starts a browser.
+#[derive(Debug, Clone)]
+pub(super) enum Opener {
+    System,
+    #[cfg(feature = "test-hooks")]
+    Recorded(Arc<std::path::PathBuf>),
+}
+
+impl Opener {
+    /// The system's handler, unless an agent test asked for a record.
+    pub fn from_env() -> Self {
+        #[cfg(feature = "test-hooks")]
+        if let Some(path) = std::env::var_os(test_opener::ENV) {
+            return Self::Recorded(Arc::new(path.into()));
+        }
+        Self::System
+    }
+
+    fn open(&self, url: &url::Url) -> Result<(), String> {
+        match self {
+            Self::System => {
+                use deckpilot_core::launch::{self, Launcher as _, OpenTarget, SystemLauncher};
+                let plan = launch::plan(
+                    deckpilot_core::Os::current(),
+                    &OpenTarget::Url(url.to_string()),
+                )
+                .map_err(|e| e.to_string())?;
+                SystemLauncher.launch(&plan).map_err(|e| e.to_string())
+            }
+            #[cfg(feature = "test-hooks")]
+            Self::Recorded(path) => test_opener::record(path, url),
+        }
+    }
+}
+
+/// The URL is what the broker allowed for `origin`: https, no userinfo,
+/// the origin's host and port. The broker guarantees it; the executor
+/// refuses anything else before a launcher sees it.
+fn openable(url: &url::Url, origin: &deckpilot_plugin_broker::Origin) -> bool {
+    url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && matches!(url.host(), Some(url::Host::Domain(host)) if host == origin.host())
+        && url.port_or_known_default() == Some(origin.port())
+        && url.as_str().len() <= deckpilot_plugin_abi::limits::MAX_OPEN_URL_LEN
+}
 
 /// One response, before it is handed to the plugin.
 #[derive(Debug, Clone)]
@@ -322,6 +376,9 @@ pub(super) struct Executor {
     /// Storage, credentials and settings; without it they are
     /// `unavailable`.
     access: Option<DataAccess>,
+    opener: Opener,
+    /// URLs this invocation opened (an executor serves one invocation).
+    opened: std::sync::atomic::AtomicU32,
 }
 
 impl std::fmt::Debug for Executor {
@@ -339,6 +396,7 @@ impl Executor {
         events: broadcast::Sender<AgentEvent>,
         transport: Transport,
         variables: OwnVariables,
+        opener: Opener,
     ) -> Self {
         Self {
             broker,
@@ -347,6 +405,43 @@ impl Executor {
             transport,
             variables,
             access: None,
+            opener,
+            opened: std::sync::atomic::AtomicU32::new(0),
+        }
+    }
+
+    /// Opens a URL the broker allowed, in the user's browser.
+    fn open_url(
+        &self,
+        plugin: &PluginId,
+        url: &url::Url,
+        origin: &deckpilot_plugin_broker::Origin,
+    ) -> CallResult {
+        if !openable(url, origin) {
+            warn!(plugin = %plugin, origin = %origin, "a plugin URL was refused before opening");
+            return CallResult::error(CallErrorCode::NotPermitted, "the URL cannot be opened");
+        }
+        let opened = self
+            .opened
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if opened >= MAX_OPENS_PER_INVOCATION {
+            return CallResult::error(
+                CallErrorCode::Throttled,
+                format!("at most {MAX_OPENS_PER_INVOCATION} URLs are opened in one action"),
+            );
+        }
+        match self.opener.open(url) {
+            Ok(()) => {
+                info!(plugin = %plugin, origin = %origin, "a plugin opened a page in the browser");
+                CallResult::Ok(Value::Null)
+            }
+            Err(problem) => {
+                warn!(plugin = %plugin, origin = %origin, %problem, "a plugin page could not be opened");
+                CallResult::error(
+                    CallErrorCode::Failed,
+                    format!("the browser could not be started: {problem}"),
+                )
+            }
         }
     }
 
@@ -612,13 +707,29 @@ fn quota(granted: GrantedQuota) -> StorageQuota {
     }
 }
 
-fn reply(exchange: Exchange) -> CallResult {
-    let headers = exchange
-        .headers
+/// The headers a plugin receives: the ABI's allowlist only, by lowercase
+/// name, values of a sane size without control characters, at most
+/// [`MAX_HEADERS`]. `set-cookie`, authentication challenges and every
+/// header not listed are dropped. Called after [`redacted`], so a kept
+/// value never carries an injected secret.
+fn response_headers(headers: Vec<(String, String)>) -> Vec<Header> {
+    headers
         .into_iter()
-        .filter(|(name, _)| RESPONSE_HEADERS.contains(&name.to_ascii_lowercase().as_str()))
-        .map(|(name, value)| Header { name, value })
-        .collect();
+        .filter(|(name, value)| {
+            is_response_header(name)
+                && value.len() <= MAX_HEADER_LEN
+                && !value.chars().any(char::is_control)
+        })
+        .take(MAX_HEADERS)
+        .map(|(name, value)| Header {
+            name: name.to_ascii_lowercase(),
+            value,
+        })
+        .collect()
+}
+
+fn reply(exchange: Exchange) -> CallResult {
+    let headers = response_headers(exchange.headers);
     let response = HttpResponse {
         status: exchange.status,
         headers,
@@ -661,6 +772,7 @@ impl Executor {
             Allowed::VariablePublish { id, value } => self.publish(plugin, id, Some(value)),
             Allowed::VariableClear { id: Some(id) } => self.publish(plugin, id, None),
             Allowed::VariableClear { id: None } => self.clear(plugin),
+            Allowed::OpenUrl { url, origin } => self.open_url(plugin, url, origin),
             Allowed::Notify { title, body } => {
                 let notification =
                     Notification::new(&format!("{}: {title}", self.name), body, Severity::Info);
@@ -775,6 +887,156 @@ mod tests {
         );
         assert_eq!(exchange.headers[0].1, "Bearer [redacted]");
         assert_eq!(exchange.body, b"{\"token\":\"[redacted]\"}");
+    }
+
+    #[test]
+    fn only_allowlisted_headers_reach_the_plugin_redacted() {
+        let secret = "tok-9d2e-header-secret";
+        let forms = secret_forms(secret);
+        let exchange = redacted(
+            Exchange {
+                status: 200,
+                headers: [
+                    (
+                        "Link",
+                        format!(
+                            "<https://api.example.com/x?page=2&api_key={secret}>; rel=\"next\""
+                        ),
+                    ),
+                    ("X-RateLimit-Remaining", "4999".to_owned()),
+                    ("ratelimit-reset", "60".to_owned()),
+                    ("x-total", "120".to_owned()),
+                    ("etag", format!("W/\"{}\"", base64(secret.as_bytes()))),
+                    ("set-cookie", format!("session={secret}")),
+                    ("Set-Cookie", "plain=1".to_owned()),
+                    ("www-authenticate", "Bearer realm=x".to_owned()),
+                    ("authorization", format!("Bearer {secret}")),
+                    ("x-api-key", secret.to_owned()),
+                    ("x-oauth-scopes", "repo".to_owned()),
+                    ("location", "https://api.example.com/".to_owned()),
+                    ("x-ratelimit-token", "t".to_owned()),
+                    ("retry-after", "a\u{7f}b".to_owned()),
+                    ("x-total-pages", "p".repeat(MAX_HEADER_LEN + 1)),
+                ]
+                .into_iter()
+                .map(|(n, v)| (n.to_owned(), v))
+                .collect(),
+                body: Vec::new(),
+            },
+            &forms,
+        );
+        let headers = response_headers(exchange.headers);
+        let names: Vec<&str> = headers.iter().map(|h| h.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "link",
+                "x-ratelimit-remaining",
+                "ratelimit-reset",
+                "x-total",
+                "etag"
+            ]
+        );
+        let all = format!("{headers:?}");
+        assert!(!all.contains(secret), "{all}");
+        assert!(!all.contains(&base64(secret.as_bytes())), "{all}");
+        assert_eq!(
+            headers[0].value,
+            "<https://api.example.com/x?page=2&api_key=[redacted]>; rel=\"next\""
+        );
+        // Never more than the ABI allows.
+        let many = (0..100).map(|i| ("link".to_owned(), format!("<https://a.example.com/{i}>")));
+        assert_eq!(response_headers(many.collect()).len(), MAX_HEADERS);
+    }
+
+    #[test]
+    fn only_the_allowed_origin_is_opened() {
+        let origin = deckpilot_plugin_broker::Origin::parse_grant("https://github.com").unwrap();
+        let ok = |s: &str| openable(&url::Url::parse(s).unwrap(), &origin);
+        assert!(ok("https://github.com/acme/app/pull/7?tab=files#diff"));
+        for bad in [
+            "http://github.com/",
+            "file:///etc/passwd",
+            "https://u:p@github.com/",
+            "https://github.com:8443/",
+            "https://gist.github.com/",
+            "https://140.82.112.3/",
+            "x-github-client://github.com/",
+        ] {
+            assert!(!ok(bad), "{bad}");
+        }
+        let long = format!("https://github.com/{}", "a".repeat(4096));
+        assert!(!ok(&long));
+    }
+
+    #[cfg(feature = "test-hooks")]
+    #[test]
+    fn an_invocation_opens_at_most_a_few_urls() {
+        let dir = std::env::temp_dir().join(format!("dp-opener-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = dir.join("opened.txt");
+        let _ = std::fs::remove_file(&record);
+        let (events, _) = broadcast::channel(4);
+        let broker = Broker::new(
+            Arc::new(deckpilot_plugin_broker::MemoryAudit::new(10)),
+            Arc::new(deckpilot_plugin_broker::SystemClock::default()),
+            deckpilot_plugin_broker::RateLimits::default(),
+        );
+        let executor = Executor::new(
+            broker,
+            "Test".into(),
+            events,
+            Transport::Network,
+            OwnVariables {
+                store: PublishedVariables::default(),
+                namespace: "plugins.acme.test".into(),
+                generation: 0,
+                declared: Vec::new(),
+            },
+            Opener::Recorded(Arc::new(record.clone())),
+        );
+        let plugin = PluginId::new("acme.test").unwrap();
+        let origin = deckpilot_plugin_broker::Origin::parse_grant("https://github.com").unwrap();
+        let url = url::Url::parse("https://github.com/acme/app?token=x").unwrap();
+        for _ in 0..MAX_OPENS_PER_INVOCATION {
+            assert_eq!(
+                executor.open_url(&plugin, &url, &origin),
+                CallResult::Ok(Value::Null)
+            );
+        }
+        let CallResult::Error(e) = executor.open_url(&plugin, &url, &origin) else {
+            panic!()
+        };
+        assert_eq!(e.code, CallErrorCode::Throttled);
+        let other = url::Url::parse("https://evil.example.net/").unwrap();
+        let CallResult::Error(e) = executor.open_url(&plugin, &other, &origin) else {
+            panic!()
+        };
+        assert_eq!(e.code, CallErrorCode::NotPermitted);
+        let lines = std::fs::read_to_string(&record).unwrap();
+        assert_eq!(lines.lines().count(), MAX_OPENS_PER_INVOCATION as usize);
+        assert!(lines.lines().all(|l| l == url.as_str()), "{lines}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Records opened URLs for agent tests (feature `test-hooks`, never in a
+/// release build): with `DECKPILOT_TEST_PLUGIN_OPEN_URL` set, the agent
+/// appends every URL it would open to that file and starts no browser.
+#[cfg(feature = "test-hooks")]
+pub(super) mod test_opener {
+    use std::io::Write as _;
+    use std::path::Path;
+
+    pub const ENV: &str = "DECKPILOT_TEST_PLUGIN_OPEN_URL";
+
+    pub fn record(path: &Path, url: &url::Url) -> Result<(), String> {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| e.to_string())?;
+        writeln!(file, "{url}").map_err(|e| e.to_string())
     }
 }
 

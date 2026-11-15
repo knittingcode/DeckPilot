@@ -58,6 +58,8 @@ let runs: Runs = response.json().map_err(|_| PluginError::new("invalid-response"
   value)`, `.body(text)`, `.json(&value)` (sets `Content-Type`),
   `.credential(&handle, scheme)`, `.bearer(&handle)`. `Response { status,
   headers, body }` with `is_success()`, `header(name)` (case-insensitive),
+  `header_values(name)` (every value, in order), `link(rel)` (the target
+  of the RFC 8288 `link` entry with that `rel`: `next`, `last`, ...),
   `text()`, `json::<T>()`.
 - Permission: `network` for the exact host and the method
   ([permissions.md](permissions.md)).
@@ -66,16 +68,60 @@ let runs: Runs = response.json().map_err(|_| PluginError::new("invalid-response"
   (text), response body ≤ 512 KiB, 15 s for all hops, at most 5
   redirects (each re-authorized; never `https` to `http`), 60 requests per
   minute. Bodies are text (UTF-8).
-- Response headers are filtered to `content-type`, `content-length`,
-  `cache-control`, `etag`, `last-modified`, `retry-after` and `date`
-  (`RESPONSE_HEADERS` in `apps/agent/src/plugins/executor.rs`); anything
-  else, `Link` and rate-limit headers included, is dropped. Prefer APIs
-  that put what you need in the body (Developer Tools uses GitHub's search
-  `total_count` rather than paging through `Link`).
+- Response headers are filtered to an allowlist of exact names
+  (`RESPONSE_HEADERS` in `plugins/runtime/crates/abi/src/capability.rs`),
+  by lowercase name:
+  - content and caching: `content-type`, `content-length`,
+    `content-language`, `cache-control`, `etag`, `last-modified`,
+    `expires`, `age`, `vary`, `retry-after`, `date`;
+  - pagination: `link`, and GitLab's `x-total`, `x-total-pages`, `x-page`,
+    `x-per-page`, `x-next-page`, `x-prev-page`;
+  - rate limits: GitHub's `x-ratelimit-limit`, `x-ratelimit-remaining`,
+    `x-ratelimit-reset`, `x-ratelimit-used`, `x-ratelimit-resource`, and
+    GitLab's and the IETF draft's `ratelimit`, `ratelimit-policy`,
+    `ratelimit-limit`, `ratelimit-remaining`, `ratelimit-reset`,
+    `ratelimit-observed`.
+
+  Everything else is dropped: `set-cookie`, `www-authenticate`,
+  `authorization`-style and vendor headers (`x-oauth-scopes`, ...),
+  `location` (redirects are followed by the agent). A value longer than
+  4 KiB or with control characters is dropped, and at most 32 headers are
+  returned. When the request carried a credential, every form of the
+  secret is replaced by `[redacted]` in the values first (a `link` that
+  echoes `?api_key=…` arrives as `?api_key=[redacted]`).
 - The agent's HTTP client sends no `User-Agent` of its own for plugins;
   APIs that require one (GitHub does) need `.header("User-Agent", …)`.
 - The agent never uses a proxy for plugin requests and connects only to
   public addresses it resolved and checked.
+
+## Open URL
+
+```rust
+let url = format!("https://github.com/{repo}/pull/{number}");
+ctx.open_url(url)?;
+Ok(Output::message("opened the pull request"))
+```
+
+- `Context::open_url(url)` (op `url.open`) asks the agent to open the page
+  in the user's browser. The answer is only whether it was opened.
+- Permission: `openUrl` for the URL's exact host
+  ([permissions.md](permissions.md)): `openUrl:github.com` opens
+  `https://github.com/...` on port 443, not `gist.github.com` or
+  `github.com:8443`.
+- Only `https:` URLs without userinfo. Never `http:`, `file:`, `mailto:`,
+  `javascript:`, `data:` or a custom scheme (`x-github-client:`,
+  `vscode:`), which could start a program; never an IP address or a local
+  name (`localhost`, `*.local`, ...), whatever the grant. The agent opens
+  exactly the normalized URL through the operating system's handler,
+  without a shell.
+- Limits: 2,048 bytes; 1 per 2 s and 20 per 10 minutes per plugin
+  (`Throttled`); 3 per invocation (`Throttled`).
+- The agent's audit and log name the origin only, never the path or
+  query, which may carry tokens.
+- Open URLs in actions the user starts on purpose (an "Open pull request"
+  key). ABI 1 does not yet tell an action whether a key press or a
+  schedule started it; the agent may refuse `url.open` outside user-started
+  runs in a later version.
 
 ## Credentials
 
@@ -222,7 +268,7 @@ clock and no random source: `std::time::SystemTime::now()` and random
 number generators fail or panic in the guest, so there is no "now", no
 random UUID (v4) and no ULID (Developer Tools uses the `Date` header of a
 response as the time of a check, and name-based UUIDs). No reading of the
-active profile or project, of variables, no opening URLs, no device
+active profile or project, of variables, no device
 access, no timers or background work, no streaming HTTP, no WebSockets.
 The JavaScript design (`plugins/sdk-js`) declares several of these; ABI 1
 does not implement them.

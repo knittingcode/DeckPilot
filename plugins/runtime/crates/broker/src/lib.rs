@@ -206,6 +206,14 @@ pub enum Allowed {
     VariableClear {
         id: Option<String>,
     },
+    /// Opens `url` in the user's browser. The URL is normalized (WHATWG,
+    /// IDNA), `https`, without userinfo, and its origin is one the plugin
+    /// was granted `openUrl` for; the executor must open exactly this URL
+    /// and log at most its origin (the path and query may carry tokens).
+    OpenUrl {
+        url: Url,
+        origin: Origin,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -239,6 +247,8 @@ enum RateClass {
     Log,
     Storage,
     Variables,
+    OpenUrl,
+    OpenUrlWindow,
 }
 
 #[derive(Debug)]
@@ -297,6 +307,13 @@ impl Broker {
         });
     }
 
+    /// Revokes opening URLs of one origin. Effective on the next call.
+    pub fn revoke_open_url(&self, plugin: &PluginId, origin: &Origin) {
+        self.update(plugin, |g| {
+            g.open_url.remove(origin);
+        });
+    }
+
     pub fn revoke_notifications(&self, plugin: &PluginId) {
         self.update(plugin, |g| g.notifications = false);
     }
@@ -346,6 +363,8 @@ impl Broker {
             RateClass::Log => self.inner.limits.log,
             RateClass::Storage => self.inner.limits.storage,
             RateClass::Variables => self.inner.limits.variables,
+            RateClass::OpenUrl => self.inner.limits.open_url,
+            RateClass::OpenUrlWindow => self.inner.limits.open_url_window,
         };
         let now = self.inner.clock.now();
         let mut buckets = self.inner.buckets.lock().unwrap_or_else(|e| e.into_inner());
@@ -512,6 +531,32 @@ impl Session {
                 (d, None)
             }
             CapabilityRequest::SettingsGet(_) => (Decision::Allow(Allowed::SettingsGet), None),
+            // `openUrl` (design §5.2): the request URL goes through the
+            // same strict parser as a fetch (https only, no userinfo, no
+            // IP literal or local name, no control characters), and its
+            // exact origin must be granted. Audited by origin only.
+            CapabilityRequest::OpenUrl(o) => {
+                let (url, origin) = match origin::parse_request_url(&o.url) {
+                    Ok(v) => v,
+                    Err(e) => return (Decision::Deny(DenyReason::Url(e)), None),
+                };
+                let d = if url.as_str().len() > deckpilot_plugin_abi::limits::MAX_OPEN_URL_LEN {
+                    // Normalizing (punycode, percent-encoding) made it longer.
+                    Decision::Deny(DenyReason::TooLarge)
+                } else if !grants.open_url.contains(&origin) {
+                    Decision::Deny(DenyReason::OriginNotGranted)
+                } else if !b.take(&self.plugin, RateClass::OpenUrl)
+                    || !b.take(&self.plugin, RateClass::OpenUrlWindow)
+                {
+                    Decision::Deny(DenyReason::RateLimited)
+                } else {
+                    Decision::Allow(Allowed::OpenUrl {
+                        url,
+                        origin: origin.clone(),
+                    })
+                };
+                (d, Some(origin))
+            }
             // Own variables (design §5.2): always granted, rate limited.
             CapabilityRequest::VariablesPublish(_) | CapabilityRequest::VariablesClear(_) => {
                 if !b.take(&self.plugin, RateClass::Variables) {

@@ -1,7 +1,8 @@
 //! Audit records (design §5.7): operation, target and decision, never a
-//! value. The target is an origin for network requests and absent for
-//! everything else; a URL path or query, a header, a body, a log line, a
-//! notification text and a storage key or value are never recorded.
+//! value. The target is an origin for network requests and URL opens
+//! (`url.open`) and absent for everything else; a URL path or query, a
+//! header, a body, a log line, a notification text and a storage key or
+//! value are never recorded.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -15,7 +16,8 @@ pub struct AuditRecord {
     pub at_ms: u64,
     pub plugin: PluginId,
     pub op: &'static str,
-    /// `https://host[:port]` for network operations; `None` otherwise.
+    /// `https://host[:port]` for network operations and `url.open`; `None`
+    /// otherwise.
     pub target: Option<String>,
     pub decision: AuditDecision,
 }

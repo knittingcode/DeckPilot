@@ -12,7 +12,10 @@
 //!   refused;
 //! * HTTP through canned responses (`DECKPILOT_TEST_PLUGIN_HTTP`, feature
 //!   `test-hooks`): only what the broker allowed reaches them, and every
-//!   URL is logged, so the test sees exactly what went "out".
+//!   URL is logged, so the test sees exactly what went "out";
+//! * opened URLs recorded instead of launched
+//!   (`DECKPILOT_TEST_PLUGIN_OPEN_URL`, feature `test-hooks`): no test
+//!   starts a browser, and each one sees exactly what would have opened.
 //!
 //! The whole flow runs on macOS, Linux and Windows (where the supervisor
 //! launches the host in an `AppContainer`). On every platform a host must
@@ -53,6 +56,9 @@ const TWIN: &str = "acme.sdk-twin";
 /// The secrets the user stores for them.
 const SECRET: &str = "tok-3f9a-data-secret-value";
 const TWIN_SECRET: &str = "tok-77c1-twin-secret-value";
+/// The SDK test guest with `openUrl` for github.com and the example API.
+const OPENER: &str = "acme.sdk-open";
+const OPENER_SECRET: &str = "tok-51b8-opener-secret-value";
 const FUTURE: &str = "acme.future-weather";
 const REVOKED: &str = "acme.revoked-weather";
 const NETWORK: &str = "network:api.open-meteo.com";
@@ -228,6 +234,22 @@ fn hello_v1_1() -> Value {
     manifest
 }
 
+/// What the SDK test guest's `headers` action returns.
+const HEADERS_OUTPUTS: &[&str] = &[
+    "error",
+    "detail",
+    "status",
+    "names",
+    "headers",
+    "next",
+    "last",
+    "remaining",
+    "reset",
+    "total",
+    "etag",
+    "cookie",
+];
+
 /// Every action of the SDK test guest (the supervisor checks that the
 /// manifest declares exactly these), with the parameters of those the
 /// data test calls.
@@ -258,6 +280,8 @@ fn sdk_actions() -> Value {
     let fetch = outputs(&["error", "detail", "status", "body", "headers"]);
     let has = outputs(&["error", "detail", "set"]);
     let settings = outputs(&["error", "detail", "settings"]);
+    let open = outputs(&["error", "detail", "opened"]);
+    let headers = outputs(HEADERS_OUTPUTS);
     let actions: Vec<Value> = [
         ("scale", vec![]),
         ("inits", vec![]),
@@ -293,6 +317,15 @@ fn sdk_actions() -> Value {
         ("clear", vec![]),
         ("fetch-publish", vec![]),
         ("two-fetches", vec![]),
+        (
+            "open-url",
+            vec![
+                text("url"),
+                json!({"key": "times", "label": "Times", "required": false,
+                    "kind": {"type": "integer", "min": 1, "max": 10}}),
+            ],
+        ),
+        ("headers", vec![text("url")]),
     ]
     .into_iter()
     .map(|(id, parameters)| {
@@ -301,6 +334,8 @@ fn sdk_actions() -> Value {
             "cred-fetch" => &fetch,
             "cred-has" => &has,
             "settings" => &settings,
+            "open-url" => &open,
+            "headers" => &headers,
             _ => &basic,
         };
         json!({
@@ -359,6 +394,27 @@ fn data_manifest(id: &str, name: &str, quota_kb: Option<u64>) -> Value {
         {"key": "label", "label": "Label", "required": false,
          "kind": {"type": "text", "maxLength": 8}, "portability": "portable"}
     ]});
+    manifest
+}
+
+/// The SDK test guest as a plugin that opens github.com pages and reads
+/// the example API's paging and rate-limit headers.
+fn opener_manifest() -> Value {
+    let mut manifest = hello_manifest(OPENER, "1.0.0");
+    manifest["name"] = json!("SDK open");
+    manifest["permissions"] = json!([
+        {"kind": "openUrl", "hosts": ["github.com"],
+         "justification": "Opens pull requests in the browser."},
+        {"kind": "network", "hosts": ["api.example.com"], "methods": ["GET"],
+         "justification": "Talks to the example API."},
+        {"kind": "credentials", "refs": ["token"],
+         "justification": "Signs in to the example API."}
+    ]);
+    manifest["contributes"]["actions"] = sdk_actions();
+    manifest["contributes"]["credentials"] = json!([{
+        "key": "token", "label": "API token", "hosts": ["api.example.com"],
+        "schemes": ["bearer", "query"], "queryName": "api_key"
+    }]);
     manifest
 }
 
@@ -511,6 +567,7 @@ impl Registry {
             &artifacts.sdk_test,
         );
         registry.add(&data_manifest(TWIN, "SDK twin", None), &artifacts.sdk_test);
+        registry.add(&opener_manifest(), &artifacts.sdk_test);
         let mut future = hello_manifest(FUTURE, "1.0.0");
         future["engines"]["deckpilot"] = json!(">=9.0.0 <10.0.0");
         registry.add(&future, &artifacts.hello);
@@ -597,7 +654,41 @@ fn canned_http(dir: &Path) -> PathBuf {
             // anyone should wait) and fast.
             {"url": SLOW_URL, "status": 200, "body": "{}", "delayMs": TWO_FETCHES_MS},
             {"url": VERY_SLOW_URL, "status": 200, "body": "{}", "delayMs": VERY_SLOW_MS},
-            {"url": FAST_URL, "status": 200, "body": "{}"}
+            {"url": FAST_URL, "status": 200, "body": "{}"},
+            // A paginated, rate-limited API (GitHub's and GitLab's
+            // headers) that also sets a cookie and asks for credentials:
+            // only the allowlisted headers may reach the plugin.
+            {
+                "url": "https://api.example.com/pages",
+                "status": 200,
+                "headers": [
+                    ["content-type", "application/json"],
+                    ["Link", "<https://api.example.com/pages?page=2>; rel=\"next\", <https://api.example.com/pages?page=7>; rel=\"last\""],
+                    ["X-RateLimit-Remaining", "4999"],
+                    ["RateLimit-Reset", "1731600000"],
+                    ["X-Total", "140"],
+                    ["ETag", "W/\"abc\""],
+                    ["Set-Cookie", "session=s3ss10n-cookie; HttpOnly"],
+                    ["WWW-Authenticate", "Bearer realm=\"example\""],
+                    ["X-OAuth-Scopes", "repo, admin:org"],
+                    ["X-Request-Token", "internal-request-token"]
+                ],
+                "body": "[]"
+            },
+            // A server that echoes the request's token into its paging and
+            // rate-limit headers (and a cookie): redacted before the
+            // allowlist hands them to the plugin.
+            {
+                "url": "https://api.example.com/echo-headers",
+                "status": 200,
+                "headers": [
+                    ["link", format!("<https://api.example.com/echo-headers?page=2&api_key={OPENER_SECRET}>; rel=\"next\"")],
+                    ["x-ratelimit-resource", OPENER_SECRET],
+                    ["etag", format!("\"{}\"", base64::engine::general_purpose::STANDARD.encode(OPENER_SECRET))],
+                    ["set-cookie", format!("token={OPENER_SECRET}")]
+                ],
+                "body": "[]"
+            }
         ]))
         .unwrap(),
     )
@@ -659,6 +750,20 @@ impl Env {
         env
     }
 
+    /// Where the agent records the URLs it would have opened.
+    fn opened(&self) -> PathBuf {
+        self.dir.path().join("opened.txt")
+    }
+
+    /// The URLs the agent would have opened, in order.
+    fn opened_urls(&self) -> Vec<String> {
+        std::fs::read_to_string(self.opened())
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
     fn plugins_dir(&self) -> PathBuf {
         self.paths.data_dir.join("plugins")
     }
@@ -696,6 +801,7 @@ impl Env {
             })
             .env("DECKPILOT_DATA_DIR", &self.paths.data_dir)
             .env("DECKPILOT_TEST_PLUGIN_HTTP", &self.http)
+            .env("DECKPILOT_TEST_PLUGIN_OPEN_URL", self.opened())
             .env_remove("DECKPILOT_ENABLE_PLUGINS")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -2753,6 +2859,198 @@ async fn plugin_data_is_isolated_bounded_revocable_and_secret() {
             }
         }
     }
+}
+
+// ------------------------------------------- open URL, response headers
+
+const OPENER_GRANTS: &[&str] = &[
+    "openUrl:github.com",
+    "network:api.example.com",
+    "credentials:token",
+];
+
+/// `url.open` through the real agent and host: only https pages of the
+/// approved host reach the opener (a test hook here, so nothing is
+/// launched), rate limited, revocable on the next call, logged without
+/// their path or query. And the response headers a plugin gets: the
+/// allowlisted paging and rate-limit headers, never a cookie or an
+/// authentication header, and never an injected secret.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // one scenario, step by step
+async fn plugins_open_granted_pages_and_read_allowlisted_headers() {
+    let registry = shared_registry();
+    let env = Env::new("plugins-e2e-open");
+    let agent = Agent::started(&env, registry).await;
+    agent.install_enabled(OPENER, OPENER_GRANTS).await;
+    assert_eq!(
+        permission_status(&agent.details(OPENER).await, "openUrl:github.com"),
+        Some(PermissionStatus::Granted)
+    );
+
+    // ---- a page of the approved host is opened, exactly as asked.
+    let page = "https://github.com/acme/app/pull/7?tab=files&token=q-s3cret#diff";
+    let opened = agent.run(OPENER, "open-url", json!({"url": page})).await;
+    assert_eq!(opened["opened"], 1, "{opened:?}");
+    assert_eq!(env.opened_urls(), [page]);
+
+    // ---- nothing else is: other hosts, file and custom schemes, private
+    // or local hosts, userinfo, plain http.
+    for url in [
+        "https://gitlab.com/acme/app",
+        "https://gist.github.com/acme",
+        "https://github.com.evil.example.net/",
+        "https://github.com@evil.example.net/",
+        "http://github.com/acme/app",
+        "file:///etc/passwd",
+        "x-github-client://openRepo/https://github.com/acme/app",
+        "javascript:alert(1)",
+        "https://127.0.0.1/",
+        "https://localhost/",
+        "https://router.local/",
+    ] {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let refused = agent.run(OPENER, "open-url", json!({"url": url})).await;
+        assert_eq!(refused["error"], "NotPermitted", "{url}: {refused:?}");
+        assert_eq!(refused["opened"], 0, "{url}");
+    }
+    assert_eq!(
+        env.opened_urls(),
+        [page],
+        "a refused URL reached the opener"
+    );
+
+    // ---- 1 per 2 s: of three opens in a row, the second is throttled.
+    tokio::time::sleep(Duration::from_millis(2_100)).await;
+    let burst = agent
+        .run(
+            OPENER,
+            "open-url",
+            json!({"url": "https://github.com/acme/app", "times": 3}),
+        )
+        .await;
+    assert_eq!(burst["opened"], 1, "{burst:?}");
+    assert_eq!(burst["error"], "Throttled", "{burst:?}");
+    assert_eq!(env.opened_urls().len(), 2);
+
+    // ---- revoking the host applies to the very next call.
+    agent.revoke(OPENER, "openUrl:github.com").await;
+    tokio::time::sleep(Duration::from_millis(2_100)).await;
+    let refused = agent
+        .run(
+            OPENER,
+            "open-url",
+            json!({"url": "https://github.com/acme/app"}),
+        )
+        .await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    assert_eq!(env.opened_urls().len(), 2);
+    agent.grant(OPENER, &["openUrl:github.com"]).await;
+    let again = agent
+        .run(
+            OPENER,
+            "open-url",
+            json!({"url": "https://github.com/acme/app"}),
+        )
+        .await;
+    assert_eq!(again["opened"], 1, "{again:?}");
+    assert_eq!(env.opened_urls().len(), 3);
+
+    // ---- paging and rate-limit headers reach the plugin; cookies and
+    // authentication headers do not.
+    let got = agent
+        .run(
+            OPENER,
+            "headers",
+            json!({"url": "https://api.example.com/pages"}),
+        )
+        .await;
+    assert_eq!(got["status"], 200, "{got:?}");
+    assert_eq!(
+        got["names"], "content-type,link,x-ratelimit-remaining,ratelimit-reset,x-total,etag",
+        "{got:?}"
+    );
+    assert_eq!(got["next"], "https://api.example.com/pages?page=2");
+    assert_eq!(got["last"], "https://api.example.com/pages?page=7");
+    assert_eq!(got["remaining"], "4999");
+    assert_eq!(got["reset"], "1731600000");
+    assert_eq!(got["total"], "140");
+    assert_eq!(got["etag"], "W/\"abc\"");
+    assert!(!got.contains_key("cookie"), "{got:?}");
+    let seen = serde_json::to_string(&got).unwrap();
+    for hidden in [
+        "s3ss10n-cookie",
+        "realm",
+        "admin:org",
+        "internal-request-token",
+        "set-cookie",
+        "www-authenticate",
+    ] {
+        assert!(
+            !seen.to_ascii_lowercase().contains(hidden),
+            "{hidden}: {seen}"
+        );
+    }
+
+    // ---- an injected secret never comes back in a header, in any form.
+    agent
+        .set_secret(OPENER, "token", OPENER_SECRET)
+        .await
+        .unwrap();
+    let before = fetched(&env.http).len();
+    for scheme in ["bearer", "query"] {
+        let echoed = agent
+            .run(
+                OPENER,
+                "cred-fetch",
+                json!({"url": "https://api.example.com/echo-headers",
+                    "credential": "token", "scheme": scheme}),
+            )
+            .await;
+        assert_eq!(echoed["status"], 200, "{scheme}: {echoed:?}");
+        let seen = serde_json::to_string(&echoed).unwrap();
+        assert!(!seen.contains(OPENER_SECRET), "{scheme}: {seen}");
+        assert!(
+            !seen.contains(&base64::engine::general_purpose::STANDARD.encode(OPENER_SECRET)),
+            "{scheme}: {seen}"
+        );
+        assert!(!seen.contains("set-cookie"), "{scheme}: {seen}");
+        assert!(seen.contains("link"), "{scheme}: {seen}");
+        assert!(
+            seen.contains("api_key=[redacted]") && seen.contains("x-ratelimit-resource"),
+            "{scheme}: {seen}"
+        );
+    }
+    // The secret did go out, where it was allowed.
+    let wire = fetched(&env.http);
+    assert_eq!(
+        wire[before..],
+        [
+            format!("https://api.example.com/echo-headers\tauthorization: Bearer {OPENER_SECRET}"),
+            format!("https://api.example.com/echo-headers?api_key={OPENER_SECRET}"),
+        ]
+    );
+    agent.stop().await;
+
+    // ---- the logs name the origin at most: no path, query or secret.
+    let mut logs = 0;
+    for entry in std::fs::read_dir(env.dir.path()).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if name.starts_with("agent-") {
+            logs += 1;
+            let log = std::fs::read_to_string(&path).unwrap();
+            for hidden in [
+                "q-s3cret",
+                "pull/7",
+                "tab=files",
+                "etc/passwd",
+                OPENER_SECRET,
+            ] {
+                assert!(!log.contains(hidden), "{name} holds {hidden}");
+            }
+        }
+    }
+    assert!(logs > 0);
 }
 
 // ------------------------------------------------------- plugin variables
