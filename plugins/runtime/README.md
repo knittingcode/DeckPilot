@@ -86,6 +86,9 @@ unchanged byte for byte (tested in `crates/abi` and `crates/host/tests/lifecycle
   1 per 2 s, and `open_url_window`, 20 per 10 minutes) and audited by
   origin only. `Allowed::OpenUrl` hands the executor the normalized URL.
   SDK: `Context::open_url`.
+- `notify` takes an optional `severity` (`info`, `success`, `warning`,
+  `error`; `Allowed::Notify` always carries one, `info` by default). It
+  sets only how the notification looks. SDK: `Context::notify_with`.
 - `HttpResponse.headers` carries only the names in `RESPONSE_HEADERS`
   (`capability.rs`: caching, `link`, GitLab's `x-total` family, GitHub's
   `x-ratelimit-*` and the `ratelimit-*` family, by exact name; never

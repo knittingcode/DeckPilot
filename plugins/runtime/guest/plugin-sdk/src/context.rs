@@ -5,7 +5,8 @@ use std::fmt;
 pub use deckpilot_plugin_abi::capability::StorageUsage;
 use deckpilot_plugin_abi::capability::{
     AuthScheme, CredentialRef, Header, HttpAuth, HttpFetch, HttpResponse, Log, LogLevel, NoArgs,
-    Notify, OpenUrl, StorageKey, StoragePrefix, StorageSet, VariableClear, VariablePublish,
+    Notify, NotifySeverity, OpenUrl, StorageKey, StoragePrefix, StorageSet, VariableClear,
+    VariablePublish,
 };
 use deckpilot_plugin_abi::limits::MAX_HOST_CALLS_PER_INVOCATION;
 use deckpilot_plugin_abi::{CallError, CallErrorCode, CallResult, CapabilityRequest, HttpMethod};
@@ -231,11 +232,47 @@ impl<'a> Context<'a> {
         title: impl Into<String>,
         body: impl Into<String>,
     ) -> Result<(), CapabilityError> {
+        self.send_notification(title.into(), body.into(), None)
+    }
+
+    /// [`Context::notify`] with a severity (`Info`, `Success`, `Warning`,
+    /// `Error`), which sets how the notification looks. It never changes
+    /// where it is shown, the rate limit or the plugin-name prefix. An
+    /// agent that predates severities refuses the request as malformed
+    /// ([`CapabilityErrorKind::BadRequest`]); fall back to
+    /// [`Context::notify`] then.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::{CapabilityRequest, NotifySeverity};
+    ///
+    /// let mut host = MockHost::allow_all();
+    /// let mut ctx = host.context();
+    /// ctx.notify_with(NotifySeverity::Error, "Build failed", "main is red").unwrap();
+    /// assert!(matches!(&host.requests()[0],
+    ///     CapabilityRequest::Notify(n) if n.severity == Some(NotifySeverity::Error)));
+    /// ```
+    pub fn notify_with(
+        &mut self,
+        severity: NotifySeverity,
+        title: impl Into<String>,
+        body: impl Into<String>,
+    ) -> Result<(), CapabilityError> {
+        self.send_notification(title.into(), body.into(), Some(severity))
+    }
+
+    fn send_notification(
+        &mut self,
+        title: String,
+        body: String,
+        severity: Option<NotifySeverity>,
+    ) -> Result<(), CapabilityError> {
         self.call(
             "notify",
             &CapabilityRequest::Notify(Notify {
-                title: title.into(),
-                body: body.into(),
+                title,
+                body,
+                severity,
             }),
         )
         .map(drop)

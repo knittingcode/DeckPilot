@@ -659,11 +659,15 @@ The plugin-name prefix stays. The rate stays 5 per minute unless the
 manifest declares up to 30 per minute with a justification (medium tier).
 Risk: low. **Offer.**
 
-*Status (P4):* not in P4. Severity is simple, but the routing (the user's
-desktop, status-bar and minimum-severity settings read by the agent's
-notifier per plugin, and a manifest-declared rate up to 30 per minute)
-needs plugin settings the notifier reads and a consent change. It lands
-with G8 before P10.
+*Status (P4):* severity only. `notify` takes an optional `severity`
+(`info`, `success`, `warning`, `error`; SDK `Context::notify_with`) that
+sets how the notification looks and nothing else: the grant, the plugin
+name prefix, the status-bar destination and the 5 per minute rate are
+unchanged. Not yet: `critical`, the routing (the user's desktop,
+status-bar and minimum-severity settings read by the agent's notifier per
+plugin) and a manifest-declared rate up to 30 per minute. They need plugin
+settings the notifier reads and a consent change, and land with G8 before
+P10.
 
 ### G10 Cancellable sleep (general.wait; retries and backoff in any plugin)
 

@@ -246,6 +246,24 @@ pub enum HttpMethod {
 pub struct Notify {
     pub title: String,
     pub body: String,
+    /// How the notification is shown (G9): its colour and icon only. It
+    /// never changes where it goes, its rate or its plugin-name prefix.
+    /// Added compatibly within ABI 1: optional, and omitted from the JSON
+    /// when absent, so requests without it are byte-identical to the
+    /// original form, which an agent shows as `info`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<NotifySeverity>,
+}
+
+/// The severity of a plugin notification.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NotifySeverity {
+    #[default]
+    Info,
+    Success,
+    Warning,
+    Error,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -541,6 +559,7 @@ mod tests {
         let notify = CapabilityRequest::Notify(Notify {
             title: "t".repeat(65),
             body: String::new(),
+            severity: None,
         });
         assert!(notify.validate().is_err());
         let value = CapabilityRequest::StorageSet(StorageSet {
@@ -752,6 +771,43 @@ mod tests {
         let unique: std::collections::BTreeSet<_> = RESPONSE_HEADERS.iter().collect();
         assert_eq!(unique.len(), RESPONSE_HEADERS.len());
         assert!(RESPONSE_HEADERS.len() <= MAX_HEADERS);
+    }
+
+    #[test]
+    fn notification_severity_is_an_optional_compatible_addition() {
+        let old = r#"{"op":"notify","args":{"title":"t","body":"b"}}"#;
+        let r = parse(old).unwrap();
+        assert_eq!(serde_json::to_string(&r).unwrap(), old);
+        let CapabilityRequest::Notify(n) = &r else {
+            panic!()
+        };
+        assert_eq!(n.severity, None);
+        for (text, severity) in [
+            ("info", NotifySeverity::Info),
+            ("success", NotifySeverity::Success),
+            ("warning", NotifySeverity::Warning),
+            ("error", NotifySeverity::Error),
+        ] {
+            let json = format!(
+                r#"{{"op":"notify","args":{{"title":"t","body":"b","severity":"{text}"}}}}"#
+            );
+            let r = parse(&json).unwrap();
+            r.validate().unwrap();
+            assert_eq!(serde_json::to_string(&r).unwrap(), json);
+            let CapabilityRequest::Notify(n) = r else {
+                panic!()
+            };
+            assert_eq!(n.severity, Some(severity));
+        }
+        for bad in [
+            r#"{"op":"notify","args":{"title":"t","body":"b","severity":"critical"}}"#,
+            r#"{"op":"notify","args":{"title":"t","body":"b","severity":"Error"}}"#,
+            r#"{"op":"notify","args":{"title":"t","body":"b","severity":3}}"#,
+            r#"{"op":"notify","args":{"title":"t","body":"b","critical":true}}"#,
+            r#"{"op":"notify","args":{"title":"t","body":"b","desktop":true}}"#,
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

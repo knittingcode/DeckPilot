@@ -48,7 +48,7 @@ use std::sync::{Arc, Mutex};
 use deckpilot_core::notify::{Notification, Severity};
 use deckpilot_ipc::AgentEvent;
 use deckpilot_plugin_abi::capability::{
-    AuthScheme, Header, HttpResponse, LogLevel, StorageUsage, is_response_header,
+    AuthScheme, Header, HttpResponse, LogLevel, NotifySeverity, StorageUsage, is_response_header,
 };
 use deckpilot_plugin_abi::limits::{MAX_HEADER_LEN, MAX_HEADERS};
 use deckpilot_plugin_abi::{CallErrorCode, CallResult, HttpMethod};
@@ -688,6 +688,18 @@ fn redacted(exchange: Exchange, forms: &[String]) -> Exchange {
     }
 }
 
+/// A plugin's severity as the core's: how the notification looks, nothing
+/// else (it is still shown in the status bar only, prefixed and rate
+/// limited).
+fn notification_severity(severity: NotifySeverity) -> Severity {
+    match severity {
+        NotifySeverity::Info => Severity::Info,
+        NotifySeverity::Success => Severity::Success,
+        NotifySeverity::Warning => Severity::Warning,
+        NotifySeverity::Error => Severity::Error,
+    }
+}
+
 fn storage_error(error: &StorageError) -> CallResult {
     let code = match error {
         StorageError::InvalidKey | StorageError::ValueTooLarge => CallErrorCode::BadRequest,
@@ -773,9 +785,16 @@ impl Executor {
             Allowed::VariableClear { id: Some(id) } => self.publish(plugin, id, None),
             Allowed::VariableClear { id: None } => self.clear(plugin),
             Allowed::OpenUrl { url, origin } => self.open_url(plugin, url, origin),
-            Allowed::Notify { title, body } => {
-                let notification =
-                    Notification::new(&format!("{}: {title}", self.name), body, Severity::Info);
+            Allowed::Notify {
+                title,
+                body,
+                severity,
+            } => {
+                let notification = Notification::new(
+                    &format!("{}: {title}", self.name),
+                    body,
+                    notification_severity(*severity),
+                );
                 let _ = self.events.send(AgentEvent::Notification { notification });
                 CallResult::Ok(serde_json::Value::Null)
             }

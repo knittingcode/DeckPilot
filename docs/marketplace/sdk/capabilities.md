@@ -247,6 +247,11 @@ if let Err(e) = ctx.notify(format!("Build {status}"), format!("{repo} {branch}: 
 - `Context::notify(title, body)` (op `notify`). Needs the `notifications`
   permission. Title ≤ 64, body ≤ 300 characters; 5 per minute. The agent
   shows it as its own notification, titled with the plugin's name.
+- `Context::notify_with(NotifySeverity::{Info, Success, Warning, Error},
+  title, body)` sets how it looks. The severity changes nothing else: the
+  same permission, prefix, destination (the app's status bar) and rate.
+  An agent that predates severities refuses it as `BadRequest`; fall back
+  to `notify`.
 
 ## Log
 

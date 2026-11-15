@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, RwLock};
 
-use deckpilot_plugin_abi::capability::{Header, HttpAuth, LogLevel};
+use deckpilot_plugin_abi::capability::{Header, HttpAuth, LogLevel, NotifySeverity};
 use deckpilot_plugin_abi::{CallErrorCode, CapabilityRequest, HttpMethod};
 use serde_json::Value;
 use url::Url;
@@ -158,9 +158,11 @@ pub struct AllowedFetch {
 pub enum Allowed {
     Fetch(AllowedFetch),
     /// The executor must prefix the title with the plugin's display name.
+    /// `severity` changes how it looks, never where it goes.
     Notify {
         title: String,
         body: String,
+        severity: NotifySeverity,
     },
     Log {
         level: LogLevel,
@@ -479,6 +481,7 @@ impl Session {
                     Decision::Allow(Allowed::Notify {
                         title: n.title.clone(),
                         body: n.body.clone(),
+                        severity: n.severity.unwrap_or_default(),
                     })
                 };
                 (d, None)
