@@ -93,7 +93,8 @@ if [ "$(jq -r .draft <<< "$release")" = true ]; then
     jq -e --arg k "$key" '.platforms | has($k)' "$manifest" > /dev/null \
       || fail "$MANIFEST has no update for $key"
   done
-  prefix="https://github.com/$repository/releases/download/$tag/"
+  # The pinned prefix (common.sh) that installed clients require.
+  prefix="$DOWNLOAD_PREFIX$tag/"
   while read -r url; do
     name="${url#"$prefix"}"
     { [ "$url" != "$name" ] && grep -q -x -F -- "$name" "$work/assets.txt"; } \

@@ -7,7 +7,6 @@
 #   tools/ci/assemble-latest-json.sh <fragments dir> <output.json>
 #
 # Environment:
-#   REPOSITORY  owner/name, for the download URLs
 #   TAG         the release tag, e.g. v0.6.0 or v0.6.0-alpha.1 (validated by
 #               the release gate; pre-release tags contain "-")
 #   VERSION     the version announced, e.g. 0.6.0
@@ -16,18 +15,19 @@
 #   ASSETS_FILE optional; the draft release's asset names, one per line:
 #               every package and its .sig must be among them
 #
+# The download URLs use the pinned prefix of tools/release-pipeline/common.sh
+# (installed clients accept no other spelling), never the repository name.
+#
 # Fails if two fragments name the same target key, if a required platform
 # or package type is missing, or if an asset is not in the release.
 set -euo pipefail
 
 fragments="${1:?usage: assemble-latest-json.sh <fragments dir> <output.json>}"
 output="${2:?usage: assemble-latest-json.sh <fragments dir> <output.json>}"
-: "${REPOSITORY:?}" "${TAG:?}" "${VERSION:?}" "${NOTES_FILE:?}"
+: "${TAG:?}" "${VERSION:?}" "${NOTES_FILE:?}"
 pub_date="${PUB_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
-fail() {
-  echo "::error::$*" >&2
-  exit 1
-}
+# shellcheck source=tools/release-pipeline/common.sh
+source "$(cd "$(dirname "$0")/../release-pipeline" && pwd)/common.sh"
 
 shopt -s nullglob
 files=("$fragments"/*.json)
@@ -62,7 +62,7 @@ jq -s \
   --arg version "$VERSION" \
   --rawfile notes "$NOTES_FILE" \
   --arg pub_date "$pub_date" \
-  --arg base "https://github.com/$REPOSITORY/releases/download/$TAG/" \
+  --arg base "$DOWNLOAD_PREFIX$TAG/" \
   '{
     version: $version,
     notes: ($notes | sub("\\s+$"; "")),

@@ -6,7 +6,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::DOWNLOAD_PREFIX;
+use crate::{DOWNLOAD_PREFIX, REPOSITORY};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlatformArtifact {
@@ -107,9 +107,28 @@ pub fn parse_version(value: &str) -> Result<Version, ManifestError> {
         .map_err(|_| ManifestError::InvalidVersion(value.to_owned()))
 }
 
+/// The path after `https://github.com/<owner>/<repo>/releases/download/`
+/// when `url` is a release download of [`REPOSITORY`], or nothing.
+///
+/// Scheme, host and the path segments are compared exactly; only the owner
+/// and repository name are compared ASCII case-insensitively, as GitHub
+/// resolves them (the repository was renamed from `knittingcode/DeckPilot`
+/// to `knittingcode/deckpilot`; both name the same repository). This widens
+/// nothing beyond that one repository. Builds up to 0.6.0-alpha.3 compared
+/// the whole [`DOWNLOAD_PREFIX`] case-sensitively, so the release pipeline
+/// still writes exactly that prefix (`tools/release-pipeline/common.sh`).
+fn release_download_path(url: &str) -> Option<&str> {
+    let (want_owner, want_repo) = REPOSITORY.split_once('/')?;
+    let rest = url.strip_prefix("https://github.com/")?;
+    let (owner, rest) = rest.split_once('/')?;
+    let (repo, rest) = rest.split_once('/')?;
+    let path = rest.strip_prefix("releases/download/")?;
+    (owner.eq_ignore_ascii_case(want_owner) && repo.eq_ignore_ascii_case(want_repo)).then_some(path)
+}
+
 fn validate_artifact(artifact: &PlatformArtifact) -> Result<(), ManifestError> {
     let url = &artifact.url;
-    let path = url.strip_prefix(DOWNLOAD_PREFIX).unwrap_or_default();
+    let path = release_download_path(url).unwrap_or_default();
     if path.is_empty() || path.contains("..") || url.contains(['?', '#', '\\']) {
         return Err(ManifestError::UntrustedUrl(url.clone()));
     }
@@ -198,6 +217,64 @@ mod tests {
             assert!(
                 matches!(Manifest::parse(body), Err(ManifestError::Json(_))),
                 "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn download_prefix_is_the_repository() {
+        assert_eq!(
+            DOWNLOAD_PREFIX,
+            format!("https://github.com/{REPOSITORY}/releases/download/")
+        );
+    }
+
+    #[test]
+    fn accepts_the_repository_name_in_any_case() {
+        let current = Version::parse("0.3.0").unwrap();
+        for good in [
+            "https://github.com/knittingcode/DeckPilot/releases/download/v1/a.msi",
+            "https://github.com/knittingcode/deckpilot/releases/download/v1/a.msi",
+            "https://github.com/KnittingCode/DECKPILOT/releases/download/v1/a.msi",
+        ] {
+            let result = manifest("1.0.0", good).update_for(&current, "linux-x86_64");
+            assert!(matches!(result, Ok(Some(_))), "{good}: {result:?}");
+        }
+    }
+
+    #[test]
+    fn the_case_insensitive_name_widens_nothing() {
+        let current = Version::parse("0.3.0").unwrap();
+        for bad in [
+            "https://github.com/knittingcode/deckpilot-plugins/releases/download/v1/a.msi",
+            "https://github.com/knittingcode/deckpilot2/releases/download/v1/a.msi",
+            "https://github.com/knittingcode/deckpilo/releases/download/v1/a.msi",
+            "https://github.com/knittingcodes/deckpilot/releases/download/v1/a.msi",
+            "https://github.com/knittingcode.evil/deckpilot/releases/download/v1/a.msi",
+            "https://github.com/evil/knittingcode/deckpilot/releases/download/v1/a.msi",
+            "https://github.com//knittingcode/deckpilot/releases/download/v1/a.msi",
+            "https://github.com/knittingcode//deckpilot/releases/download/v1/a.msi",
+            "https://github.com/knittingcode/deckpilot/Releases/download/v1/a.msi",
+            "https://github.com/knittingcode/deckpilot/releases/Download/v1/a.msi",
+            "https://github.com/knittingcode/deckpilot/archive/download/v1/a.msi",
+            "https://GITHUB.com/knittingcode/deckpilot/releases/download/v1/a.msi",
+            "https://github.com.evil.example/knittingcode/deckpilot/releases/download/v1/a.msi",
+            "https://evil.example/https://github.com/knittingcode/deckpilot/releases/download/v1/a.msi",
+            "HTTPS://github.com/knittingcode/deckpilot/releases/download/v1/a.msi",
+            "http://github.com/knittingcode/deckpilot/releases/download/v1/a.msi",
+            "https://github.com/knittingcode/deckpilot/releases/download/",
+            "https://github.com/knittingcode/deckpilot/releases/download/../../x",
+            "https://github.com/knittingcode/deckpilot/releases/download/v1/a.msi?x=1",
+            "https://github.com/knittingcode/deckpilot/releases/download/v1/a.msi#x",
+            "https://github.com/knittingcode/deckpilot",
+            // Non-ASCII look-alikes do not fold to the ASCII name.
+            "https://github.com/knittingcode/deckpiloт/releases/download/v1/a.msi",
+            "https://github.com/knıttingcode/deckpilot/releases/download/v1/a.msi",
+        ] {
+            let result = manifest("1.0.0", bad).update_for(&current, "linux-x86_64");
+            assert!(
+                matches!(result, Err(ManifestError::UntrustedUrl(_))),
+                "{bad}: {result:?}"
             );
         }
     }
