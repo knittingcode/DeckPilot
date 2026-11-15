@@ -273,11 +273,14 @@ fn an_installed_bundled_version_the_agent_does_not_pin_is_refused() {
         pins: Pins::empty(),
         ..bundle
     };
+    let before = manager.store().plugin(&id()).unwrap().unwrap().state;
     let problem = check_installed(&mut manager, &other, &record, &dir).unwrap_err();
     assert!(problem.contains("pins no bundled"), "{problem}");
+    // Refused, but not marked broken: nothing is known to be wrong with it
+    // (an update to the pinned version may wait for the user's consent).
     assert_eq!(
         manager.store().plugin(&id()).unwrap().unwrap().state,
-        PluginState::Broken
+        before
     );
 }
 

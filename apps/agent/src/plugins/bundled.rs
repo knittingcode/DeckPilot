@@ -298,9 +298,13 @@ fn refresh(
     }
 }
 
-/// At every load of `record`: a bundled copy must be a pinned version
-/// whose installed files (in `dir`) still match the pins. A mismatch marks
-/// the plugin broken. Other sources are not pinned (`Ok(None)`).
+/// At every load of `record`: a bundled copy must be a version this agent
+/// pins, and its installed files (in `dir`) must still match the pins. A
+/// mismatch marks the plugin broken. A version this agent does not pin (an
+/// older copy whose update waits for the user's consent, or a copy from
+/// another build) is refused without being marked broken: nothing is known
+/// to be wrong with it, but nothing vouches for it either. Other sources
+/// are not pinned (`Ok(None)`).
 pub(super) fn check_installed<'a>(
     manager: &mut PluginManager,
     bundle: &'a Bundle,
@@ -310,22 +314,23 @@ pub(super) fn check_installed<'a>(
     if record.source != InstallSource::Bundled {
         return Ok(None);
     }
-    let problem = match bundle.pin_of(record) {
-        None => format!(
-            "this agent pins no bundled {} {}",
+    let Some(pin) = bundle.pin_of(record) else {
+        return Err(format!(
+            "this agent pins no bundled {} {}, so it does not load it",
             record.id,
             record
                 .active()
                 .map(|v| v.version.to_string())
                 .unwrap_or_default()
-        ),
-        Some(pin) => match deckpilot_plugin_bundled::verify_installed(dir, pin) {
-            Ok(()) => return Ok(Some(pin)),
-            Err(e) => e.to_string(),
-        },
+        ));
     };
-    let _ = manager.mark_broken(&record.id, &problem);
-    Err(problem)
+    deckpilot_plugin_bundled::verify_installed(dir, pin)
+        .map(|()| Some(pin))
+        .map_err(|e| {
+            let problem = e.to_string();
+            let _ = manager.mark_broken(&record.id, &problem);
+            problem
+        })
 }
 
 /// The module bytes about to go to the host are the pinned ones.
