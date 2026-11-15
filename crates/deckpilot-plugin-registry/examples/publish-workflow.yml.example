@@ -2,8 +2,11 @@
 #
 # What `.github/workflows/publish.yml` of the separate registry repository
 # `knittingcode/deckpilot-plugins` could look like (design §11.5 of
-# docs/marketplace/architecture.md, PR #191), with the trust model of
-# experiments/marketplace-spikes/trust.
+# docs/marketplace/architecture.md, PR #191), with the trust model of the
+# deckpilot-plugin-registry crate (see ../PUBLISHING.md). Written for the
+# retired trust spike (docs/marketplace/spike-findings.md); the commands
+# and tools/* scripts it calls are placeholders, see PUBLISHING.md for the
+# real deckpilot-registry subcommands.
 #
 # Signing-key custody:
 #   * REGISTRY_INDEX_KEY(+_PASSWORD) exist ONLY as environment secrets of

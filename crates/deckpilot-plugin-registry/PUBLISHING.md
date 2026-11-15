@@ -149,7 +149,7 @@ two root keys with threshold 1). At minimum:
 
 **Not set up; requires owner authorization to create the repository and
 keys.** The design is section 11; the workflow sketch is
-`experiments/marketplace-spikes/trust/publish-workflow.yml.example`. The
+[`examples/publish-workflow.yml.example`](examples/publish-workflow.yml.example). The
 tool is built in each job from a pinned DeckPilot commit with `cargo
 build -p deckpilot-plugin-registry --features publish --locked`.
 

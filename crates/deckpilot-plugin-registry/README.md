@@ -6,8 +6,9 @@ crate depends on it, and plugins stay disabled; nothing a user sees changes.
 Client-side verification of the signed static plugin registry: sections 9,
 10, 12.3 steps 1 and 2, 13.5 and 14 of the plugin marketplace design
 (`docs/marketplace/architecture.md`, proposed in pull request #191). It
-promotes the registry half of `experiments/marketplace-spikes/trust`
-(spike 5) and reuses `deckpilot_update::signature::verify` unchanged.
+promotes the registry half of the retired trust spike (spike 5; its
+measurements and open questions are in
+[`docs/marketplace/spike-findings.md`](../../docs/marketplace/spike-findings.md)) and reuses `deckpilot_update::signature::verify` unchanged.
 
 There is no network code. Documents go in as bytes, either through the
 step-by-step API or through a `RegistrySource` the agent's fetcher will
