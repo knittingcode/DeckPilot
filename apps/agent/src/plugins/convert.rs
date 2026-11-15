@@ -222,6 +222,7 @@ pub fn details(
             .map(audit)
             .collect(),
         icon: None,
+        storage: None,
     }
 }
 
