@@ -91,8 +91,14 @@ fn host_starts_sandboxed_and_serves_invocations() {
     };
     assert_eq!(s.mechanism, expected, "{s:?}");
     if cfg!(windows) {
-        // The supervisor's AppContainer and job were verified by the host.
+        // The supervisor's AppContainer and job were verified by the host,
+        // which did not have to add a job of its own.
         assert_eq!(s.enforcement, Enforcement::Full, "{s:?}");
+        assert!(
+            s.notes.iter().any(|n| n.starts_with("job (supervisor):")),
+            "{s:?}"
+        );
+        assert!(!s.notes.iter().any(|n| n.contains("job (own")), "{s:?}");
     }
     let mut ex = Executor::default();
     let o = h
@@ -468,6 +474,151 @@ fn spawned_host_gets_no_environment_and_no_extra_descriptors() {
         };
         assert_eq!(l["detail"], expected, "{l}");
     }
+}
+
+/// From the outside: the host process is in the Job Object the supervisor
+/// holds, alone, with the supervisor's limits; the host reports that job
+/// (not one of its own); and the job's one-active-process limit is
+/// enforced on its own, independently of the child process policy: a
+/// second process assigned to the job from outside is refused, while a
+/// fresh job without limits accepts it.
+#[cfg(windows)]
+#[test]
+fn host_runs_alone_in_the_supervisors_job() {
+    use std::os::windows::io::AsRawHandle;
+    use std::ptr::{null, null_mut};
+
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
+        JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
+        JobObjectExtendedLimitInformation, QueryInformationJobObject,
+    };
+    use windows_sys::Win32::System::Threading::{
+        CREATE_SUSPENDED, CreateProcessW, OpenProcess, PROCESS_INFORMATION,
+        PROCESS_QUERY_LIMITED_INFORMATION, STARTUPINFOW, TerminateProcess,
+    };
+
+    /// A suspended `whoami.exe` outside any job of ours.
+    fn suspended() -> HANDLE {
+        let exe: Vec<u16> = "C:\\Windows\\System32\\whoami.exe\0"
+            .encode_utf16()
+            .collect();
+        let mut cmd = exe.clone();
+        // SAFETY: zeroed structures with `cb` set; out pointers to locals.
+        unsafe {
+            let mut si: STARTUPINFOW = std::mem::zeroed();
+            si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+            let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
+            assert_ne!(
+                CreateProcessW(
+                    exe.as_ptr(),
+                    cmd.as_mut_ptr(),
+                    null(),
+                    null(),
+                    0,
+                    CREATE_SUSPENDED,
+                    null(),
+                    null(),
+                    &si,
+                    &mut pi,
+                ),
+                0,
+                "{}",
+                std::io::Error::last_os_error()
+            );
+            CloseHandle(pi.hThread);
+            pi.hProcess
+        }
+    }
+
+    let mut child = raw_host();
+    let report = match read_frame::<_, ToSupervisor>(child.stdout.as_mut().unwrap(), 1 << 20) {
+        Ok(Some(ToSupervisor::Ready { sandbox, .. })) => sandbox,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(report.mechanism, "windows-appcontainer-job", "{report:?}");
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.starts_with("job (supervisor):")),
+        "{report:?}"
+    );
+    let job = child.job().as_raw_handle();
+    // SAFETY: Win32 calls on valid handles with out structures of the
+    // stated sizes; every handle opened here is closed.
+    unsafe {
+        let host = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, child.id());
+        assert!(!host.is_null(), "{}", std::io::Error::last_os_error());
+        let mut in_job = 0;
+        assert_ne!(IsProcessInJob(host, job, &mut in_job), 0);
+        assert_eq!(in_job, 1, "the host is not in the supervisor's job");
+        CloseHandle(host);
+
+        let mut ext: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        assert_ne!(
+            QueryInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &mut ext as *mut _ as *mut _,
+                std::mem::size_of_val(&ext) as u32,
+                null_mut(),
+            ),
+            0
+        );
+        let need = JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+            | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+        assert_eq!(ext.BasicLimitInformation.LimitFlags & need, need);
+        assert_eq!(ext.BasicLimitInformation.ActiveProcessLimit, 1);
+        assert_eq!(
+            ext.ProcessMemoryLimit,
+            deckpilot_plugin_abi::limits::HOST_PROCESS_MEMORY
+        );
+
+        let accounting = || {
+            let mut acct: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
+            assert_ne!(
+                QueryInformationJobObject(
+                    job,
+                    JobObjectBasicAccountingInformation,
+                    &mut acct as *mut _ as *mut _,
+                    std::mem::size_of_val(&acct) as u32,
+                    null_mut(),
+                ),
+                0
+            );
+            (acct.ActiveProcesses, acct.TotalProcesses)
+        };
+        assert_eq!(accounting(), (1, 1));
+
+        // Control: a fresh job without limits accepts a second process.
+        let free = CreateJobObjectW(null(), null());
+        assert!(!free.is_null());
+        let p = suspended();
+        let assigned = AssignProcessToJobObject(free, p);
+        let e = std::io::Error::last_os_error();
+        TerminateProcess(p, 1);
+        CloseHandle(p);
+        CloseHandle(free);
+        assert_ne!(assigned, 0, "control: assigning to a fresh job: {e}");
+
+        // The supervisor's job refuses it (one active process).
+        let p = suspended();
+        let assigned = AssignProcessToJobObject(job, p);
+        let e = std::io::Error::last_os_error();
+        eprintln!("assign a second process to the host's job: {assigned} ({e})");
+        TerminateProcess(p, 1);
+        CloseHandle(p);
+        assert_eq!(assigned, 0, "the host's job took a second process");
+        assert_eq!(accounting().0, 1, "{:?}", accounting());
+    }
+    assert!(child.try_wait().unwrap().is_none(), "the host died");
+    child.kill().unwrap();
+    child.wait().unwrap();
 }
 
 // --- malformed frames sent straight to the host process ---

@@ -37,6 +37,24 @@ windows-sys = { workspace = true, features = [
     "Win32_Security_Authorization",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
+    # For the test-only probe (deckpilot-sandbox-probe): handle, clipboard,
+    # atom and desktop probes. The host binary calls none of them.
+    "Win32_Storage_FileSystem",
+    "Win32_System_DataExchange",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Isolation",
+    "Win32_System_DataExchange",
+    "Win32_System_JobObjects",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
 ] }
 
 [dev-dependencies]
@@ -46,6 +64,13 @@ deckpilot-plugin-test-fixtures.workspace = true
 serde_json.workspace = true
 wat.workspace = true
 tempfile.workspace = true
+
+# Re-executes itself as a helper "agent" that starts a host through the
+# supervisor and is then killed (its stdout carries the host's pid).
+[[test]]
+name = "parent_death"
+path = "tests/parent_death.rs"
+harness = false
 
 [lints]
 workspace = true
