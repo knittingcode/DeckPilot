@@ -11,8 +11,12 @@ measurements and open questions are in
 [`docs/marketplace/spike-findings.md`](../../docs/marketplace/spike-findings.md)) and reuses `deckpilot_update::signature::verify` unchanged.
 
 There is no network code. Documents go in as bytes, either through the
-step-by-step API or through a `RegistrySource` the agent's fetcher will
-implement; state goes to a `TrustStore`.
+step-by-step API or through a `RegistrySource` (the agent's HTTPS source,
+`apps/agent/src/plugins/fetch.rs`, and its directory source); state goes
+to a `TrustStore`. A source reports `FetchError::NotFound`,
+`Unavailable` (the refresh then reports `Refresh::Offline`) or `Refused`
+(a redirect to another origin, an oversized answer: an error, never
+"offline", and nothing stored changes).
 
 With the optional `publish` feature the crate also builds the offline
 publishing tool `deckpilot-registry` (keys for local use, key sets,

@@ -1820,3 +1820,50 @@ fn offline_part_way_keeps_the_stored_state() {
         })
     ));
 }
+
+/// Serves everything, but refuses one path (as the agent's HTTPS source
+/// refuses a redirect to another origin or an oversized answer).
+struct Refusing<'a>(&'a Site, &'static str);
+
+impl RegistrySource for Refusing<'_> {
+    fn fetch(&self, path: &str, max: usize) -> Result<Vec<u8>, FetchError> {
+        if path.starts_with(self.1) {
+            return Err(FetchError::Refused("redirected to another origin".into()));
+        }
+        self.0.fetch(path, max)
+    }
+}
+
+#[test]
+fn a_refused_answer_is_an_error_not_offline() {
+    let mut registry = setup();
+    let mut c = client(&registry);
+    // Never verified: refused, still never verified.
+    assert!(matches!(
+        c.refresh(&Refusing(&registry.site, "timestamp.json"), t0()),
+        Err(RegistryError::Fetch {
+            error: FetchError::Refused(_),
+            ..
+        })
+    ));
+    assert_eq!(c.freshness(t0()), Freshness::NeverVerified);
+    c.refresh(&registry.site, t0()).unwrap();
+    registry.publish(t0() + days(1), &[plugin("acme.clock", &["1.0.0"])], &[]);
+    for path in ["keys/", "timestamp.json", "index/"] {
+        assert!(
+            matches!(
+                c.refresh(&Refusing(&registry.site, path), t0() + days(1)),
+                Err(RegistryError::Fetch {
+                    error: FetchError::Refused(_),
+                    ..
+                })
+            ),
+            "{path}"
+        );
+        assert_eq!(c.state().seq, 1, "{path}");
+    }
+    assert_eq!(
+        c.refresh(&registry.site, t0() + days(1)),
+        Ok(Refresh::Updated { seq: 2 })
+    );
+}
