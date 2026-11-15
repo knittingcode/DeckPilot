@@ -436,13 +436,46 @@ impl Driver for Gui {
         vec![Via::Ui]
     }
 
-    fn show_configuration(&mut self) -> Option<Vec<Via>> {
+    fn configure(&mut self) -> Vec<Via> {
         self.installed_tab();
         self.click(&button("Configure"));
+        self.wait(&format!("{DIALOG}//form[@aria-label='Settings']"));
+        // The setting: a choice (a Radix select, its options in a portal).
+        self.click(&format!(
+            "{DIALOG}//div[@role='group' and .//label[normalize-space(.)='Default city']]//button[@role='combobox']"
+        ));
+        self.click("//*[@role='option' and normalize-space(.)='tokyo']");
+        self.click(&format!("{DIALOG}{}", button("Save settings")));
+        wait_until(LONG, "the saved setting", || {
+            let settings = self.ok("get_plugin_settings", json!({"plugin": HELLO}));
+            (settings["values"]["defaultCity"] == "tokyo").then_some(())
+        });
+        // The credential: typed into its password field, never shown.
+        self.click(&labelled("Set API token"));
+        let form = "//form[@aria-label='Set API token']";
+        self.wd()
+            .type_into(
+                &format!("{form}//input[@type='password']"),
+                marketplace::SECRET,
+                WAIT,
+            )
+            .unwrap();
+        self.click(&format!("{form}{}", button("Store")));
+        wait_until(LONG, "the stored credential", || {
+            let slots = self.ok("list_plugin_credentials", json!({"plugin": HELLO}));
+            slots
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["key"] == "token" && s["set"] == true)
+                .then_some(())
+        });
         let dialog = self.text_of(DIALOG);
-        assert!(dialog.contains("Default city"), "{dialog}");
-        assert!(dialog.contains("API token"), "{dialog}");
-        self.screenshot("07-configure");
+        assert!(
+            !dialog.contains(marketplace::SECRET),
+            "the dialog shows the secret"
+        );
+        self.screenshot("07-configured");
         // The dialog's close button (`sr-only` text "Close").
         let close = format!("{DIALOG}//button[normalize-space(.)='Close']");
         if self.wd().click(&close, Duration::from_secs(5)).is_err() {
@@ -452,7 +485,7 @@ impl Driver for Gui {
             );
         }
         self.dialog_closed();
-        Some(vec![Via::Ui])
+        vec![Via::Ui]
     }
 
     fn run_plugin_action(&mut self, action: &str, params: Value) -> (Vec<Via>, String) {
@@ -571,6 +604,21 @@ impl Driver for Gui {
         ));
         self.wait(DIALOG);
         self.screenshot("20-uninstall-confirm");
+        // The default retention: nothing kept.
+        for keep in ["Keep its settings", "Keep its credentials"] {
+            let element = self.wait(&format!(
+                "{DIALOG}//button[@role='checkbox' and @aria-label={}]",
+                lit(keep)
+            ));
+            assert_eq!(
+                self.wd()
+                    .attribute(&element, "aria-checked")
+                    .unwrap()
+                    .as_deref(),
+                Some("false"),
+                "{keep}"
+            );
+        }
         self.click(&format!("{DIALOG}{}", button("Uninstall")));
         self.dialog_closed();
         wait_until(LONG, "the plugin to be gone", || {

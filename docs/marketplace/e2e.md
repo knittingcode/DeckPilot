@@ -46,7 +46,7 @@ the test). The report is `<artifacts>/<driver>-steps.txt`.
 | 4 | Inspect its details | UI |
 | 5 | Install 1.0.0 with consent | UI |
 | 6 | Grant permissions (enable, consent dialog) | UI |
-| 7 | Configure | UI shows the declared setting and credential (Configure dialog); the values are set with `set_plugin_settings` and `set_plugin_credential` (app IPC) because the dialog cannot edit them yet; the plugin's storage is written into `plugins.db` (fixture) because the sample never writes storage |
+| 7 | Configure | UI (Configure: the setting chosen and saved, the credential's secret stored); an invalid value is refused (app IPC); the plugin's storage is written into `plugins.db` (fixture) because the sample never writes storage |
 | 8 | Assign the action to a key | app IPC (`create_action`, `save_layout`): drag and drop in the Layout Designer is not driven |
 | 9 | Execute the action | UI (Run in Installed) and agent IPC (key presses on the simulated MK.2) |
 | 10 | Execute it in a workflow | app IPC (`save_workflow`, `start_workflow`) |
@@ -59,7 +59,7 @@ the test). The report is `<artifacts>/<driver>-steps.txt`.
 | 17 | Revoke the network permission | UI |
 | 18 | Verify the denied operation | UI (Run is unavailable, with the reason), app IPC (`run_action` fails), agent IPC (the key fails); nothing reaches the canned HTTP |
 | 19 | Disable | UI |
-| 20 | Uninstall | UI (with the confirmation) |
+| 20 | Uninstall | UI (the confirmation, keeping neither settings nor credentials) |
 | 21 | Verify cleanup: storage, credentials, settings gone, `plugin_known` kept | `plugins.db` read with the derived key, app IPC |
 | 22 | Profiles, workflows and the encrypted configuration intact | app IPC and the SQLCipher database opened with its key |
 

@@ -857,10 +857,19 @@ pub trait Driver {
         vec![Via::AppIpc]
     }
 
-    /// Shows the declared configuration (the Configure dialog); `None`
-    /// without UI.
-    fn show_configuration(&mut self) -> Option<Vec<Via>> {
-        None
+    /// Sets the setting `defaultCity` to `tokyo` and stores [`SECRET`] for
+    /// the credential slot `token` (Configure).
+    fn configure(&mut self) -> Vec<Via> {
+        self.ok(
+            "set_plugin_settings",
+            json!({"plugin": HELLO, "values": {"defaultCity": "tokyo"}}),
+        );
+        let slots = self.ok(
+            "set_plugin_credential",
+            json!({"plugin": HELLO, "key": "token", "secret": SECRET}),
+        );
+        assert!(!slots.to_string().contains(SECRET), "the secret came back");
+        vec![Via::AppIpc]
     }
 
     /// Runs one of the plugin's actions from the marketplace; the text of
@@ -1092,12 +1101,11 @@ pub fn run(d: &mut dyn Driver, fx: &mut Fixture) {
 
     // 7. Configure: a setting, the credential's secret; storage the
     // plugin would write itself.
-    let mut via = d.show_configuration().unwrap_or_default();
-    let settings = d.ok(
-        "set_plugin_settings",
-        json!({"plugin": HELLO, "values": {"defaultCity": "tokyo"}}),
-    );
+    let mut via = d.configure();
+    let settings = settings_of(d);
     assert_eq!(settings["effective"]["defaultCity"], "tokyo", "{settings}");
+    assert!(credential_set(d), "the credential is not set");
+    // The agent validates against the manifest.
     let refused = d
         .invoke(
             "set_plugin_settings",
@@ -1105,12 +1113,6 @@ pub fn run(d: &mut dyn Driver, fx: &mut Fixture) {
         )
         .expect_err("an invalid setting was accepted");
     assert_eq!(refused["reason"], "invalidData", "{refused}");
-    let slots = d.ok(
-        "set_plugin_credential",
-        json!({"plugin": HELLO, "key": "token", "secret": SECRET}),
-    );
-    assert!(!slots.to_string().contains(SECRET), "the secret came back");
-    assert!(credential_set(d));
     via.push(Via::AppIpc);
     fx.seed_storage();
     via.push(Via::Fixture);
@@ -1118,9 +1120,8 @@ pub fn run(d: &mut dyn Driver, fx: &mut Fixture) {
         7,
         "Configure",
         &via,
-        "settings and credential via set_plugin_settings / set_plugin_credential: the \
-         Configure dialog only lists what the plugin declares; storage written into plugins.db \
-         because the sample never writes storage",
+        "an invalid value is refused (app IPC); storage written into plugins.db because the \
+         sample never writes storage",
     );
 
     // 8. Actions of the plugin in the profile, bound to keys of the
