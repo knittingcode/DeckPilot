@@ -46,6 +46,7 @@ jobs:
     outputs:
       keystore: ${{ steps.paths.outputs.keystore }}
       release_manifest: ${{ steps.paths.outputs.release_manifest }}
+      dev_tools: ${{ steps.paths.outputs.dev_tools }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -190,6 +191,35 @@ jobs:
       - name: Test
         if: runner.os != 'Linux'
         run: cargo test -p deckpilot-keystore --locked -- --nocapture
+
+  # The worktree maintenance and build cache scripts of tools/dev, with the
+  # shells developers run them in: bash 3.2 (/bin/bash on macOS) and bash 5
+  # (Linux). Optional, not a required check.
+  dev-tools:
+    name: Dev tooling scripts (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.dev_tools == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Scripts pass shellcheck
+        if: runner.os == 'Linux'
+        run: shellcheck tools/dev/*.sh tools/dev/tests/*.sh
+      - name: Worktree maintenance (throwaway repository)
+        run: /bin/bash --version | head -n 1 && /bin/bash tools/dev/tests/worktree-maintenance.test.sh
+      # Includes two concurrent builds of a tiny crate outside the
+      # repository: in two slots they overlap, in one target dir they block.
+      - name: Target directory slots
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: /bin/bash tools/dev/tests/target-slot.test.sh
 
   # The release assembles latest.json from per-build fragments; release.yml
   # only runs on a tag, so the assembly is tested here with fake packages

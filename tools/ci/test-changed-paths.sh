@@ -24,27 +24,30 @@ expect() {
   fi
 }
 
-none="keystore=false packaging=false release_manifest=false"
+none="dev_tools=false keystore=false packaging=false release_manifest=false"
 expect "$none" apps/desktop/src/App.tsx
 expect "$none" crates/deckpilot-core/src/lib.rs docs/development.md
 expect "$none" apps/agent/src/main.rs
 expect "$none" apps/desktop/src-tauri/src/updates.rs
-expect "keystore=false packaging=true release_manifest=false" apps/agent/build.rs
-expect "keystore=false packaging=true release_manifest=false" apps/agent/Info.plist
-expect "keystore=false packaging=true release_manifest=false" apps/desktop/src-tauri/tauri.release.conf.json
-expect "keystore=false packaging=true release_manifest=false" apps/desktop/src-tauri/Cargo.toml
-expect "keystore=false packaging=true release_manifest=false" apps/desktop/src-tauri/icons/icon.ico
-expect "keystore=false packaging=true release_manifest=false" apps/desktop/src-tauri/capabilities/default.json
-expect "keystore=false packaging=true release_manifest=false" apps/desktop/package.json
-expect "keystore=false packaging=true release_manifest=false" apps/desktop/src-tauri/tauri.conf.json
-expect "keystore=false packaging=true release_manifest=false" Cargo.lock
-expect "keystore=false packaging=true release_manifest=false" packaging/linux/70-deckpilot-streamdeck.rules
-expect "keystore=true packaging=false release_manifest=false" crates/deckpilot-keystore/src/lib.rs
-expect "keystore=true packaging=true release_manifest=true" tools/ci/with-keyring.sh
-expect "keystore=false packaging=true release_manifest=true" tools/ci/check-packages.sh
-expect "keystore=false packaging=true release_manifest=true" .github/workflows/release.yml
-expect "keystore=true packaging=true release_manifest=true" .github/workflows/ci.yml
-expect "keystore=false packaging=true release_manifest=false" .github/workflows/compatibility.yml
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" apps/agent/build.rs
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" apps/agent/Info.plist
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" apps/desktop/src-tauri/tauri.release.conf.json
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" apps/desktop/src-tauri/Cargo.toml
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" apps/desktop/src-tauri/icons/icon.ico
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" apps/desktop/src-tauri/capabilities/default.json
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" apps/desktop/package.json
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" apps/desktop/src-tauri/tauri.conf.json
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" Cargo.lock
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" packaging/linux/70-deckpilot-streamdeck.rules
+expect "dev_tools=false keystore=true packaging=false release_manifest=false" crates/deckpilot-keystore/src/lib.rs
+expect "dev_tools=false keystore=true packaging=true release_manifest=true" tools/ci/with-keyring.sh
+expect "dev_tools=false keystore=false packaging=true release_manifest=true" tools/ci/check-packages.sh
+expect "dev_tools=false keystore=false packaging=true release_manifest=true" .github/workflows/release.yml
+expect "dev_tools=true keystore=true packaging=true release_manifest=true" .github/workflows/ci.yml
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" .github/workflows/compatibility.yml
+expect "dev_tools=true keystore=false packaging=false release_manifest=false" tools/dev/worktree-maintenance.sh
+expect "dev_tools=true keystore=false packaging=false release_manifest=false" tools/dev/tests/target-slot.test.sh
+expect "$none" tools/dev/src/main.rs tools/dev/Cargo.toml
 # Look-alikes do not count.
 expect "$none" crates/deckpilot-keystore-extra/x.rs tools/cix/a.sh xCargo.lock apps/desktop/src-tauri/src/tauri.rs
 
@@ -52,7 +55,7 @@ expect "$none" crates/deckpilot-keystore-extra/x.rs tools/cix/a.sh xCargo.lock a
 : > "$work/push"
 GITHUB_OUTPUT="$work/push" EVENT_NAME=push "$script" 2> /dev/null
 actual=$(sort "$work/push" | tr '\n' ' ')
-if [ "$actual" = "keystore=true packaging=true release_manifest=true " ]; then
+if [ "$actual" = "dev_tools=true keystore=true packaging=true release_manifest=true " ]; then
   echo "ok   push to main runs every optional job"
 else
   echo "FAIL push: got '$actual'"
@@ -85,9 +88,9 @@ merge_group() {
     failures=$((failures + 1))
   fi
 }
-merge_group "$base" "keystore=true packaging=false release_manifest=false"
-merge_group "" "keystore=true packaging=true release_manifest=true"
-merge_group 0000000000000000000000000000000000000000 "keystore=true packaging=true release_manifest=true"
+merge_group "$base" "dev_tools=false keystore=true packaging=false release_manifest=false"
+merge_group "" "dev_tools=true keystore=true packaging=true release_manifest=true"
+merge_group 0000000000000000000000000000000000000000 "dev_tools=true keystore=true packaging=true release_manifest=true"
 
 [ "$failures" -eq 0 ] || { echo "$failures case(s) failed"; exit 1; }
 echo "changed paths: all cases passed"
