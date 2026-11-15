@@ -14,11 +14,12 @@
 //!   `test-hooks`): only what the broker allowed reaches them, and every
 //!   URL is logged, so the test sees exactly what went "out".
 //!
-//! On Windows the host sandbox is not verified: installing works, enabling
-//! and running are refused (`windows_refuses_to_run_plugins`).
+//! The whole flow runs on macOS, Linux and Windows (where the supervisor
+//! launches the host in an `AppContainer`). On every platform a host must
+//! report a full sandbox: one reporting less is stopped before it gets the
+//! plugin (`a_host_without_a_full_sandbox_is_refused`, with the
+//! `deckpilot-test-plugin-host` stand-in).
 #![cfg(feature = "plugins")]
-// Most of the flow runs only where plugins may run (macOS, Linux).
-#![cfg_attr(windows, allow(dead_code, unused_imports))]
 
 mod support;
 
@@ -60,8 +61,7 @@ fn runtime() -> PathBuf {
 // ------------------------------------------------------------ artifacts
 
 struct Artifacts {
-    /// `None` on Windows, where plugins never run.
-    host: Option<PathBuf>,
+    host: PathBuf,
     hello: Vec<u8>,
     sdk_test: Vec<u8>,
 }
@@ -102,25 +102,23 @@ fn artifacts() -> &'static Artifacts {
             },
             PathBuf::from,
         );
-        let host = cfg!(unix).then(|| {
-            std::env::var_os("DECKPILOT_E2E_PLUGIN_HOST").map_or_else(
-                || {
-                    cargo_in_runtime(&[
-                        "build",
-                        "--locked",
-                        "-p",
-                        "deckpilot-plugin-host",
-                        "--bin",
-                        "deckpilot-plugin-host",
-                    ]);
-                    runtime().join(format!(
-                        "target/debug/deckpilot-plugin-host{}",
-                        std::env::consts::EXE_SUFFIX
-                    ))
-                },
-                PathBuf::from,
-            )
-        });
+        let host = std::env::var_os("DECKPILOT_E2E_PLUGIN_HOST").map_or_else(
+            || {
+                cargo_in_runtime(&[
+                    "build",
+                    "--locked",
+                    "-p",
+                    "deckpilot-plugin-host",
+                    "--bin",
+                    "deckpilot-plugin-host",
+                ]);
+                runtime().join(format!(
+                    "target/debug/deckpilot-plugin-host{}",
+                    std::env::consts::EXE_SUFFIX
+                ))
+            },
+            PathBuf::from,
+        );
         Artifacts {
             host,
             hello: std::fs::read(wasm_dir.join("hello_weather.wasm")).unwrap(),
@@ -491,6 +489,16 @@ impl Env {
     }
 
     fn start_with(&self, registry: &Registry, env: &[(&str, &str)], plugins: bool) -> Agent {
+        self.start_with_host(registry, env, plugins.then(|| artifacts().host.as_path()))
+    }
+
+    /// Starts the agent; with `host`, plugins are enabled and run in it.
+    fn start_with_host(
+        &self,
+        registry: &Registry,
+        env: &[(&str, &str)],
+        host: Option<&Path>,
+    ) -> Agent {
         let log = std::fs::File::create(self.dir.path().join(format!(
             "agent-{}.log",
             std::time::SystemTime::now()
@@ -508,16 +516,15 @@ impl Env {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(log);
-        if plugins {
+        if let Some(host) = host {
             command
                 .arg("--enable-plugins")
                 .arg("--plugin-registry")
                 .arg(registry.work.path())
                 .arg("--plugin-registry-roots")
-                .arg(registry.roots());
-            if let Some(host) = &artifacts().host {
-                command.arg("--plugin-host").arg(host);
-            }
+                .arg(registry.roots())
+                .arg("--plugin-host")
+                .arg(host);
         }
         for (name, value) in env {
             command.env(name, value);
@@ -750,7 +757,6 @@ fn shared_registry() -> &'static Registry {
 
 // ---------------------------------------------------------------- tests
 
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)] // one lifecycle, step by step
 async fn a_plugin_goes_through_its_whole_lifecycle() {
@@ -1179,7 +1185,6 @@ async fn a_plugin_goes_through_its_whole_lifecycle() {
     assert_eq!(env.config_rows(), config_before);
 }
 
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn bad_packages_and_registries_are_refused() {
     let registry = shared_registry();
@@ -1365,7 +1370,6 @@ async fn a_registry_with_an_invalid_signature_is_refused() {
     agent.stop().await;
 }
 
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_host_crash_during_an_invocation_is_contained() {
     let registry = shared_registry();
@@ -1540,45 +1544,43 @@ async fn without_enable_plugins_nothing_is_available() {
     );
 }
 
-#[cfg(windows)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn windows_refuses_to_run_plugins() {
+async fn a_host_without_a_full_sandbox_is_refused() {
     let registry = shared_registry();
-    let env = Env::new("plugins-e2e-windows");
-    let agent = Agent::started(&env, registry).await;
+    let env = Env::new("plugins-e2e-partial");
+    // The agent is pointed at a host stand-in whose `ready` reports a
+    // partial sandbox (what the real host reports on Linux without
+    // Landlock, or on Windows outside an AppContainer).
+    let agent = env.start_with_host(
+        registry,
+        &[],
+        Some(Path::new(env!("CARGO_BIN_EXE_deckpilot-test-plugin-host"))),
+    );
+    agent.unlock().await;
     let Response::PluginRuntime { status } =
         agent.request(Request::GetPluginRuntime).await.unwrap()
     else {
         panic!("status")
     };
-    assert!(status.available && !status.execution_supported);
-    assert!(status.reason.unwrap_or_default().contains("AppContainer"));
-    // Installing and inspecting work; enabling and running do not.
-    let Response::Plugin { plugin } = agent.install(HELLO, Some("1.0.0")).await.unwrap() else {
-        panic!("installed")
-    };
-    assert!(plugin.summary.actions.iter().all(|a| !a.available));
-    let refused = agent.enable(HELLO, &[NETWORK]).await;
-    assert_eq!(
-        reason_of(&refused),
-        reason::PLATFORM_UNSUPPORTED,
-        "{refused:?}"
-    );
-    let refused = agent.invoke(HELLO, "greet", json!({"name": "Ada"})).await;
-    assert_eq!(
-        reason_of(&refused),
-        reason::PLATFORM_UNSUPPORTED,
-        "{refused:?}"
-    );
+    assert!(status.available && status.execution_supported, "{status:?}");
+    agent.install(HELLO, Some("1.0.0")).await.unwrap();
+    agent.enable(HELLO, &[NETWORK]).await.unwrap();
+
+    // Every attempt is refused the same way (a refusal is not a crash: no
+    // restart backoff, no crash loop), and the plugin never runs.
+    for _ in 0..4 {
+        let refused = agent.invoke(HELLO, "greet", json!({"name": "Ada"})).await;
+        assert_eq!(reason_of(&refused), reason::HOST_FAILED, "{refused:?}");
+        let message = message_of(&refused);
+        assert!(message.contains("not full"), "{message}");
+        assert!(message.contains("test-partial"), "{message}");
+        assert!(message.contains("partial"), "{message}");
+        assert!(message.contains("did not run"), "{message}");
+    }
+    assert!(fetched(&env.http).is_empty(), "nothing went out");
     assert_eq!(
         agent.details(HELLO).await.summary.state,
-        PluginState::Disabled
+        PluginState::Enabled
     );
-    agent
-        .request(Request::UninstallPlugin {
-            plugin: HELLO.into(),
-        })
-        .await
-        .unwrap();
     agent.stop().await;
 }

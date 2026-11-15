@@ -4,9 +4,10 @@
 # (built from plugins/runtime, a separate workspace) and the sample plugin,
 # with a local registry signed by throwaway keys made in the test.
 #
-# Linux and macOS run the whole lifecycle. Windows checks the refusal path:
-# its host sandbox is not verified (no AppContainer), so plugins install
-# but cannot be enabled or run there.
+# Linux, macOS and Windows run the whole lifecycle; on Windows the
+# supervisor launches the host in an AppContainer. On every OS the agent
+# runs a plugin only in a host that reports a full sandbox, and the test
+# checks that a host reporting a partial one is refused.
 #
 # Not a required check. No secrets, read-only token, no environment.
 name: Plugins in the agent
@@ -100,7 +101,6 @@ jobs:
       # The test builds these itself when they are missing; building them
       # first keeps compile time out of the test's timeouts.
       - name: Build the plugin host
-        if: runner.os != 'Windows'
         working-directory: plugins/runtime
         run: cargo build --locked -p deckpilot-plugin-host --bin deckpilot-plugin-host
       - name: Build the sample plugin and the SDK test guest

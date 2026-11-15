@@ -22,6 +22,7 @@ use deckpilot_ipc::plugins::{
     PluginUpdateOutcome, reason,
 };
 use deckpilot_ipc::{ErrorCode, IpcError, Request, Response};
+use deckpilot_plugin_abi::protocol::{Enforcement, SandboxReport};
 use deckpilot_plugin_broker::{
     AuditDecision, AuditRecord, AuditSink, Broker, RateLimits, SystemClock,
 };
@@ -1126,9 +1127,7 @@ impl PluginService {
                 .actions()
                 .iter()
                 .map(|a| a.id.clone());
-            let mut config = HostConfig::new(HostCommand::new(&self.host), Arc::from(module))
-                .expect_actions(actions);
-            config.shutdown_grace = Duration::from_secs(1);
+            let config = host_config(&self.host, Arc::from(module), actions);
             let broker_id = deckpilot_plugin_broker::PluginId::new(record.id.as_str())
                 .map_err(|_| invalid("the plugin id is not valid for the broker"))?;
             let supervisor = Supervisor::new(
@@ -1205,8 +1204,16 @@ impl PluginService {
             }),
             Err(e) => {
                 let disabled = matches!(e, SupervisorError::Disabled);
+                let weak_sandbox = matches!(e, SupervisorError::Host(HostError::SandboxMissing(_)));
                 warn!(plugin = %id, action, error = %e, "plugin invocation failed");
-                if disabled {
+                if weak_sandbox {
+                    // The supervisor killed the host before the module was
+                    // sent. Drop the supervisor too: the refusal is not a
+                    // crash, so it must not count towards a crash loop
+                    // or a restart backoff; the next invocation checks a
+                    // fresh host again.
+                    self.stop_host(id);
+                } else if disabled {
                     // A crash loop: the plugin stays off until re-enabled.
                     self.stop_host(id);
                     let _ = self.manager.disable(id);
@@ -1239,10 +1246,7 @@ fn host_message(error: &SupervisorError) -> String {
         SupervisorError::Host(HostError::Timeout { .. }) => {
             "the action took longer than its time limit; the plugin host was stopped".to_owned()
         }
-        SupervisorError::Host(HostError::SandboxMissing(report)) => format!(
-            "the plugin host could not confine itself ({}); plugins do not run without it",
-            report.mechanism
-        ),
+        SupervisorError::Host(HostError::SandboxMissing(report)) => sandbox_refusal(report),
         SupervisorError::Host(HostError::Spawn(e)) => {
             format!("the plugin host could not be started: {e}")
         }
@@ -1255,6 +1259,47 @@ fn host_message(error: &SupervisorError) -> String {
             "the plugin crashed repeatedly and was disabled; enable it again to retry".to_owned()
         }
     }
+}
+
+/// The host's configuration for one plugin. Every host must report a
+/// **full** OS sandbox (`Enforcement::Full`) in its `ready` message, on
+/// every platform and on every (re)start: one that reports `partial` (Linux
+/// without Landlock, Windows outside an `AppContainer`) or `none` is killed
+/// before it receives the module.
+fn host_config(
+    host: &Path,
+    module: Arc<[u8]>,
+    actions: impl IntoIterator<Item = String>,
+) -> HostConfig {
+    let mut config = HostConfig::new(HostCommand::new(host), module).expect_actions(actions);
+    config.require_sandbox = true;
+    config.require_full_sandbox = true;
+    config.shutdown_grace = Duration::from_secs(1);
+    config
+}
+
+/// Why a host with a weaker sandbox than full was refused, for the user.
+fn sandbox_refusal(report: &SandboxReport) -> String {
+    let mechanism = if report.mechanism.is_empty() {
+        "no mechanism"
+    } else {
+        report.mechanism.as_str()
+    };
+    let level = match report.enforcement {
+        Enforcement::Full => "full",
+        Enforcement::Partial => "partial",
+        Enforcement::None => "none",
+    };
+    let mut message = format!(
+        "the plugin host's sandbox is not full ({mechanism}, enforcement {level}); the host was \
+         stopped and the plugin did not run: plugins run only in a full sandbox"
+    );
+    if !report.notes.is_empty() {
+        message.push_str(" (");
+        message.push_str(&report.notes.join("; "));
+        message.push(')');
+    }
+    message
 }
 
 /// Reads a package file, refusing anything larger than a package can be.
@@ -1332,6 +1377,31 @@ mod tests {
             package_error(&js).reason.as_deref(),
             Some(reason::UNSUPPORTED_RUNTIME)
         );
+    }
+
+    #[test]
+    fn every_host_must_report_a_full_sandbox() {
+        let config = host_config(
+            Path::new("host"),
+            Arc::from(&b"\0asm"[..]),
+            ["greet".to_owned()],
+        );
+        assert!(config.require_sandbox && config.require_full_sandbox);
+        assert!(config.command.args.is_empty(), "no --no-os-sandbox");
+    }
+
+    #[test]
+    fn a_weak_sandbox_is_explained() {
+        let report = SandboxReport {
+            mechanism: "windows-job-lowil".into(),
+            enforcement: Enforcement::Partial,
+            notes: vec!["not launched in an AppContainer".into()],
+        };
+        let message = host_message(&SupervisorError::Host(HostError::SandboxMissing(report)));
+        assert!(message.contains("windows-job-lowil"), "{message}");
+        assert!(message.contains("partial"), "{message}");
+        assert!(message.contains("did not run"), "{message}");
+        assert!(message.contains("AppContainer"), "{message}");
     }
 
     #[test]
