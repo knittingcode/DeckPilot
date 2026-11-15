@@ -5,7 +5,7 @@ use std::fmt;
 pub use deckpilot_plugin_abi::capability::StorageUsage;
 use deckpilot_plugin_abi::capability::{
     AuthScheme, CredentialRef, Header, HttpAuth, HttpFetch, HttpResponse, Log, LogLevel, NoArgs,
-    Notify, StorageKey, StoragePrefix, StorageSet,
+    Notify, StorageKey, StoragePrefix, StorageSet, VariableClear, VariablePublish,
 };
 use deckpilot_plugin_abi::limits::MAX_HOST_CALLS_PER_INVOCATION;
 use deckpilot_plugin_abi::{CallError, CallErrorCode, CallResult, CapabilityRequest, HttpMethod};
@@ -214,6 +214,54 @@ impl<'a> Context<'a> {
         self.call(
             "storage.delete",
             &CapabilityRequest::StorageDelete(StorageKey { key: key.into() }),
+        )
+        .map(drop)
+    }
+
+    /// Publishes the value of one of the plugin's own variables, declared
+    /// in `contributes.variables` of manifest.json (always granted, 10 per
+    /// second, at most 16 KiB). `id` is relative (`temperature`); workflows
+    /// read it as `{{ plugins.<publisher>.<name>.temperature }}`. The value
+    /// must have the declared type; values are not kept across restarts of
+    /// DeckPilot, and are cleared when the plugin is disabled, updated or
+    /// removed.
+    pub fn publish_variable(
+        &mut self,
+        id: impl Into<String>,
+        value: impl Serialize,
+    ) -> Result<(), CapabilityError> {
+        let value = serde_json::to_value(value).map_err(|_| CapabilityError {
+            op: "variables.publish",
+            kind: CapabilityErrorKind::BadRequest,
+            detail: "the value does not serialize to JSON".into(),
+            target: None,
+        })?;
+        self.call(
+            "variables.publish",
+            &CapabilityRequest::VariablesPublish(VariablePublish {
+                id: id.into(),
+                value,
+            }),
+        )
+        .map(drop)
+    }
+
+    /// Clears one published variable (it then has no value).
+    pub fn clear_variable(&mut self, id: impl Into<String>) -> Result<(), CapabilityError> {
+        self.call(
+            "variables.clear",
+            &CapabilityRequest::VariablesClear(VariableClear {
+                id: Some(id.into()),
+            }),
+        )
+        .map(drop)
+    }
+
+    /// Clears every variable the plugin published.
+    pub fn clear_variables(&mut self) -> Result<(), CapabilityError> {
+        self.call(
+            "variables.clear",
+            &CapabilityRequest::VariablesClear(VariableClear { id: None }),
         )
         .map(drop)
     }

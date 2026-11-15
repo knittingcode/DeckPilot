@@ -50,9 +50,10 @@ use tracing::{info, warn};
 use super::convert;
 use super::data;
 use super::engine::CatalogPlugin;
-use super::executor::{DataAccess, Executor, SharedData, Transport};
+use super::executor::{DataAccess, Executor, OwnVariables, SharedData, Transport};
 use super::lane::{Done, Ended, Job, Lane, LaneEnd, LaneError};
 use super::registry::{Registry, download_error};
+use super::variables::PublishedVariables;
 use super::worker::{EngineFailure, EngineReply, Events};
 use super::{PluginSettings, platform, platform_problem};
 
@@ -281,6 +282,64 @@ pub(super) struct PluginService {
     /// The capability executors' connection to plugins.db (storage,
     /// secrets, settings); emptied when the service shuts down.
     data: SharedData,
+    /// What the plugins published for their own variables.
+    values: PublishedVariables,
+    /// Host failures per plugin since the agent started.
+    health: HealthLog,
+}
+
+/// What the agent saw of each plugin's host since it started
+/// ([`ipc::PluginSummary::health`]); in memory only. Written on the lane
+/// threads when an invocation fails, read when a plugin is listed.
+#[derive(Debug, Clone, Default)]
+struct HealthLog(Arc<Mutex<BTreeMap<String, ipc::PluginHealth>>>);
+
+impl HealthLog {
+    /// Records a failed invocation of `plugin`. Refusals that say nothing
+    /// about the host (busy, stopped, cancelled before it started) are not
+    /// recorded; a crash or a timeout also counts as a crash.
+    fn record(&self, plugin: &str, error: &LaneError, at: i64) {
+        let crashed = match error {
+            LaneError::Busy
+            | LaneError::Stopped
+            | LaneError::Aborted
+            | LaneError::Supervisor(SupervisorError::Host(HostError::Aborted { .. })) => return,
+            LaneError::Supervisor(SupervisorError::Host(
+                HostError::Crashed { .. } | HostError::Timeout { .. },
+            )) => true,
+            LaneError::Supervisor(_) | LaneError::Refused(_) | LaneError::Panicked => false,
+        };
+        let Ok(mut log) = self.0.lock() else {
+            return;
+        };
+        let health = log.entry(plugin.to_owned()).or_default();
+        if crashed {
+            health.crashes = health.crashes.saturating_add(1);
+        }
+        health.last_error = Some(lane_error(error).message);
+        health.last_error_at = Some(at);
+    }
+
+    fn get(&self, plugin: &str) -> Option<ipc::PluginHealth> {
+        self.0.lock().ok()?.get(plugin).cloned()
+    }
+
+    fn forget(&self, plugin: &str) {
+        if let Ok(mut log) = self.0.lock() {
+            log.remove(plugin);
+        }
+    }
+
+    /// `done`, after recording a failure of `plugin`.
+    fn watch(&self, plugin: String, done: Done) -> Done {
+        let log = self.clone();
+        Box::new(move |result| {
+            if let Err(e) = &result {
+                log.record(&plugin, e, Utc::now().timestamp());
+            }
+            done(result);
+        })
+    }
 }
 
 impl std::fmt::Debug for PluginService {
@@ -320,6 +379,7 @@ impl PluginService {
         key: &StoreKey,
         events: Events,
         lane_ended: Ended,
+        values: PublishedVariables,
     ) -> Result<Self, StoreError> {
         let mut manager = PluginManager::open(data_dir, key, manager_options())?;
         let report = manager.recover()?;
@@ -359,6 +419,8 @@ impl PluginService {
             events,
             transport: Transport::from_env(),
             data: Arc::new(Mutex::new(Some(data))),
+            values,
+            health: HealthLog::default(),
         };
         if service.registry.is_some() {
             let _ = service.refresh();
@@ -370,7 +432,7 @@ impl PluginService {
         Ok(service)
     }
 
-    /// Stops every host.
+    /// Stops every host; every published value is dropped.
     pub fn shutdown(&mut self) {
         for (_, lane) in std::mem::take(&mut self.lanes) {
             lane.stop();
@@ -379,6 +441,25 @@ impl PluginService {
         // open after a lock (or a rekey).
         if let Ok(mut data) = self.data.lock() {
             *data = None;
+        }
+        for (plugin, ids) in self.values.forget_all() {
+            self.announce_dropped(&plugin, &ids);
+        }
+    }
+
+    /// Tells clients that a plugin's values are gone (ids only).
+    fn announce_dropped(&self, plugin: &str, ids: &[String]) {
+        let Ok(module) = deckpilot_core::ModuleId::new(plugin) else {
+            return;
+        };
+        let namespace = deckpilot_core::variables::module_namespace(&module);
+        if !ids.is_empty() {
+            let _ = self
+                .events
+                .agent
+                .send(deckpilot_ipc::AgentEvent::SharedVariablesChanged {
+                    keys: ids.iter().map(|id| format!("{namespace}.{id}")).collect(),
+                });
         }
     }
 
@@ -403,6 +484,9 @@ impl PluginService {
                 version: known.last_version,
                 description: String::new(),
                 actions: known.actions,
+                // `plugin_known` keeps no variable declarations: references
+                // to them stay unavailable as before.
+                variables: Vec::new(),
                 unavailable: Some("the plugin is not installed".to_owned()),
             });
         records
@@ -416,6 +500,7 @@ impl PluginService {
                     version: manifest.version.to_string(),
                     description: manifest.description.clone(),
                     actions: manifest.contributes.actions().to_vec(),
+                    variables: manifest.contributes.variables().to_vec(),
                     unavailable: convert::unavailable_with(record, &grants),
                 })
             })
@@ -491,8 +576,13 @@ impl PluginService {
             .manager
             .pending_update(id)
             .map_err(|e| store_error(&e))?;
+        let mut details = convert::details(&record, &grants, &audit, pending);
+        details.summary.health = self.health.get(id.as_str());
+        details.icon = record
+            .active()
+            .and_then(|v| convert::icon(&self.manager.layout().resolve(&v.install_dir), &record));
         Ok(Response::Plugin {
-            plugin: Box::new(convert::details(&record, &grants, &audit, pending)),
+            plugin: Box::new(details),
         })
     }
 
@@ -719,11 +809,17 @@ impl PluginService {
     }
 
     /// Stops the plugin's lane: a running invocation is aborted, queued
-    /// ones are refused, the host is stopped.
+    /// ones are refused, the host is stopped (its `dp_shutdown` runs). Every
+    /// lifecycle change that stops a host (disable, update, rollback,
+    /// uninstall, quarantine, crash loop) comes here, so the values the
+    /// plugin published are dropped too, and a late publish from the
+    /// stopped invocation is refused (a new generation).
     fn stop_host(&mut self, id: &PluginId) {
         if let Some(lane) = self.lanes.remove(id.as_str()) {
             lane.stop();
         }
+        let dropped = self.values.forget(id.as_str());
+        self.announce_dropped(id.as_str(), &dropped);
     }
 
     /// The registry's verdict on the installed version; a `disable`
@@ -771,7 +867,12 @@ impl PluginService {
                     plugins: plugins
                         .iter()
                         .map(|record| {
-                            convert::summary(record, &store.grants(&record.id).unwrap_or_default())
+                            let mut summary = convert::summary(
+                                record,
+                                &store.grants(&record.id).unwrap_or_default(),
+                            );
+                            summary.health = self.health.get(record.id.as_str());
+                            summary
                         })
                         .collect(),
                 })
@@ -914,37 +1015,20 @@ impl PluginService {
                             .iter()
                             .find(|r| r.matches(&entry.id, &v.version))
                             .map(|r| r.reason.clone());
-                        let mut incompatible = Vec::new();
-                        if let Some(host) = &host {
-                            if !v.engines.deckpilot.matches(&host.app_version) {
-                                incompatible.push(format!(
-                                    "needs DeckPilot {}; this is DeckPilot {}",
-                                    v.engines.deckpilot, host.app_version
-                                ));
-                            }
-                            if !v.engines.plugin_api.is_satisfied_by(host.plugin_api) {
-                                incompatible.push(format!(
-                                    "needs plugin API {}; this DeckPilot provides {}",
-                                    v.engines.plugin_api, host.plugin_api
-                                ));
-                            }
-                            if v.platforms
-                                .as_ref()
-                                .is_some_and(|p| !p.contains(&host.platform))
-                            {
-                                incompatible
-                                    .push(format!("is not available for {}", host.platform));
-                            }
-                        }
-                        ipc::AvailableVersion {
-                            version: v.version.to_string(),
-                            permissions: v.permissions.clone(),
-                            withdrawn: v.yanked.as_ref().map(|y| y.reason.clone()).or(revoked),
-                            incompatible,
-                        }
+                        available_version(v, revoked, host.as_ref())
                     })
                     .collect();
                 versions.reverse();
+                let publisher = index
+                    .publishers
+                    .iter()
+                    .find(|p| p.namespace == entry.publisher)
+                    .map(|p| ipc::PublisherInfo {
+                        namespace: p.namespace.clone(),
+                        display_name: p.display_name.clone(),
+                        login: p.login.clone(),
+                        verified: p.verified,
+                    });
                 plugins.push(ipc::AvailablePlugin {
                     id: entry.id.to_string(),
                     name: entry.name.clone(),
@@ -953,6 +1037,13 @@ impl PluginService {
                     latest: entry.latest.stable.as_ref().map(ToString::to_string),
                     versions,
                     installed: installed.get(entry.id.as_str()).cloned(),
+                    description: Some(detail.description.clone()),
+                    categories: entry.categories.clone().unwrap_or_default(),
+                    publisher_info: publisher,
+                    license: Some(detail.license.clone()),
+                    homepage: detail.homepage.clone(),
+                    source_repository: detail.source_repository.clone(),
+                    deprecated: entry.deprecated.as_ref().map(|d| d.reason.clone()),
                 });
             }
         }
@@ -1261,6 +1352,7 @@ impl PluginService {
         self.manager
             .uninstall_keeping(id, keep)
             .map_err(|e| store_error(&e))?;
+        self.health.forget(id.as_str());
         info!(plugin = %id, ?keep, "plugin uninstalled");
         self.progress(
             id.as_str(),
@@ -1420,12 +1512,19 @@ impl PluginService {
             data: self.data.clone(),
             manifest: Arc::new(active.manifest.clone()),
         };
+        let variables = OwnVariables {
+            store: self.values.clone(),
+            namespace: active.manifest.id.variable_namespace(),
+            generation: self.values.generation(id.as_str()),
+            declared: active.manifest.contributes.variables().to_vec(),
+        };
         self.sync_grants(id);
         let executor = Executor::new(
             self.broker.clone(),
             name,
             self.events.agent.clone(),
             self.transport.clone(),
+            variables,
         )
         .with_data(access);
         Ok((
@@ -1495,6 +1594,7 @@ impl PluginService {
             };
             let _ = reply.send(answer);
         });
+        let done = self.health.watch(id.to_string(), done);
         match self.lane(&record) {
             Ok(lane) => lane.submit(Job {
                 action: action.to_owned(),
@@ -1563,6 +1663,7 @@ impl PluginService {
             };
             let _ = reply.try_send(answer);
         });
+        let done = self.health.watch(record.id.to_string(), done);
         match self.lane(&record) {
             Ok(lane) => lane.submit(Job {
                 action: action.to_owned(),
@@ -1596,6 +1697,119 @@ impl PluginService {
                 self.changed(&id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::*;
+
+    #[test]
+    fn host_failures_are_counted_and_refusals_are_not() {
+        let log = HealthLog::default();
+        assert_eq!(log.get("acme.x"), None);
+        for refusal in [LaneError::Busy, LaneError::Stopped, LaneError::Aborted] {
+            log.record("acme.x", &refusal, 1);
+        }
+        assert_eq!(log.get("acme.x"), None);
+
+        log.record(
+            "acme.x",
+            &LaneError::Supervisor(SupervisorError::BackingOff {
+                retry_after: Duration::from_secs(3),
+            }),
+            2,
+        );
+        let health = log.get("acme.x").unwrap();
+        assert_eq!(health.crashes, 0);
+        assert_eq!(health.last_error_at, Some(2));
+        assert_eq!(
+            health.last_error.as_deref(),
+            Some("the plugin host is restarting after a crash; try again in 3 s")
+        );
+
+        log.record(
+            "acme.x",
+            &LaneError::Supervisor(SupervisorError::Host(HostError::Timeout { status: None })),
+            3,
+        );
+        log.record("acme.x", &LaneError::Panicked, 4);
+        let health = log.get("acme.x").unwrap();
+        assert_eq!(health.crashes, 1);
+        assert_eq!(health.last_error_at, Some(4));
+        assert_eq!(
+            health.last_error.as_deref(),
+            Some("the action failed inside DeckPilot; the plugin was disabled")
+        );
+        // Other plugins are not affected; uninstalling forgets.
+        assert_eq!(log.get("acme.y"), None);
+        log.forget("acme.x");
+        assert_eq!(log.get("acme.x"), None);
+    }
+
+    #[test]
+    fn a_watched_answer_is_still_delivered() {
+        let log = HealthLog::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let done: Done = Box::new(move |result| {
+            tx.send(result.is_err()).unwrap();
+        });
+        log.watch("acme.x".into(), done)(Err(LaneError::Panicked));
+        assert!(rx.recv().unwrap());
+        assert!(log.get("acme.x").is_some());
+    }
+}
+
+/// One registry version as the app shows it: what it needs, and why this
+/// DeckPilot (`host`) cannot run it, if it cannot.
+fn available_version(
+    v: &deckpilot_plugin_registry::DetailVersion,
+    revoked: Option<String>,
+    host: Option<&HostEnvironment>,
+) -> ipc::AvailableVersion {
+    let mut incompatible = Vec::new();
+    if let Some(host) = host {
+        if !v.engines.deckpilot.matches(&host.app_version) {
+            incompatible.push(format!(
+                "needs DeckPilot {}; this is DeckPilot {}",
+                v.engines.deckpilot, host.app_version
+            ));
+        }
+        if !v.engines.plugin_api.is_satisfied_by(host.plugin_api) {
+            incompatible.push(format!(
+                "needs plugin API {}; this DeckPilot provides {}",
+                v.engines.plugin_api, host.plugin_api
+            ));
+        }
+        if v.platforms
+            .as_ref()
+            .is_some_and(|p| !p.contains(&host.platform))
+        {
+            incompatible.push(format!("is not available for {}", host.platform));
+        }
+    }
+    ipc::AvailableVersion {
+        version: v.version.to_string(),
+        permissions: v.permissions.clone(),
+        withdrawn: v.yanked.as_ref().map(|y| y.reason.clone()).or(revoked),
+        incompatible,
+        deckpilot: Some(v.engines.deckpilot.to_string()),
+        platforms: v
+            .platforms
+            .iter()
+            .flatten()
+            .map(|p| platform_id(*p).to_owned())
+            .collect(),
+        published_at: Some(v.published_at.timestamp()),
+    }
+}
+
+/// The platform's id as manifests and the runtime status name it.
+fn platform_id(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Macos => "macos",
+        Platform::Windows => "windows",
+        Platform::Linux => "linux",
     }
 }
 
@@ -1647,7 +1861,7 @@ fn lane_error(error: &LaneError) -> IpcError {
         LaneError::Aborted => self::error(
             ErrorCode::Failed,
             reason::HOST_FAILED,
-            "the action was cancelled before it started",
+            "the action was cancelled (or its plugin stopped); its result, if any, was discarded",
         ),
         LaneError::Panicked => self::error(
             ErrorCode::Failed,

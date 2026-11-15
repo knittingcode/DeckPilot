@@ -148,7 +148,14 @@ Settings › Extensions › Plugins.
    (*not built with plugins*; rebuild with it afterwards). *Platform
    unsupported* shows only on Windows, *agent too old* only with an agent
    before protocol 10.
-2. **Discover** lists Hello Weather. Open it, **Install 1.0.0**: the consent
+2. **Discover** lists Hello Weather with *by acme*, **Verified publisher**,
+   *DeckPilot >=0.5.0 <1.0.0* and its platforms; the category filter offers
+   *Other*. Its details show the description, license, homepage, source,
+   the compatibility of the offered version with this computer, each
+   permission with the publisher's reason, and the versions with their
+   publication dates (there is no changelog: the registry has none). Until it
+   is installed, *Actions* says that the registry does not list them.
+   **Install 1.0.0**: the consent
    dialog lists `network:api.open-meteo.com`; check it, **Install**. Progress
    shows while installing; the plugin is then installed and disabled.
 3. **Installed**: switch **Enable Hello Weather** (consent dialog). Open
@@ -156,6 +163,10 @@ Settings › Extensions › Plugins.
    *Greet* → `Hello, <name>.`; **Run** *Current
    temperature* → the temperature of the city. This makes a real request
    to `api.open-meteo.com`.
+   Installed shows the sample's icon, its DeckPilot range and platforms.
+   Hello Weather declares no settings or credentials, so it has no
+   **Configure** button (a plugin that declares them lists them there; the
+   agent cannot store them yet).
 4. Under the permissions, **Revoke** the network permission, **Run** *Current
    temperature* again: it fails with `not-permitted` (denied by the
    permission broker). *Greet* still works. **Grant** allows it again.
@@ -192,8 +203,9 @@ Settings › Extensions › Plugins.
     staged ("Waiting for consent", **Review and update** reopens it).
 12. **Install from package file…**: pick
     `$REG/releases/acme.hello-weather--v1.0.0/acme.hello-weather-1.0.0.dpplugin`
-    (accepted: its bytes are what the registry pins). It is installed with
-    nothing granted; enabling it asks for consent. Any other package for
+    and confirm (accepted: its bytes are what the registry pins). It is
+    installed with nothing granted, and the consent dialog for enabling it
+    opens with its permissions; **Cancel** leaves it installed and disabled. Any other package for
     that version, e.g. one rebuilt with a changed manifest, is refused
     (`invalidPackage`: "the package is … bytes, but the registry pinned …").
 

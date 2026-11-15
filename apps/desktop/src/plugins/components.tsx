@@ -1,17 +1,39 @@
-import { CircleAlert, FlaskConical, Loader2, Puzzle, RefreshCw } from "lucide-react"
+import { BadgeCheck, CircleAlert, FlaskConical, Loader2, Puzzle, RefreshCw } from "lucide-react"
 import type { ReactNode } from "react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
-import { platformLabel } from "./model"
+import { platformLabel, platformsText } from "./model"
 import { grantsByTier, type Grant } from "./permissions"
-import type { PluginOperation, PluginStage, RegistryStatus, RuntimeAvailability } from "./types"
+import type {
+  AvailableVersion,
+  PluginOperation,
+  PluginStage,
+  PublisherInfo,
+  RegistryStatus,
+  RuntimeAvailability,
+} from "./types"
 
-export function PluginIcon({ muted = false }: { muted?: boolean }) {
-  // Manifest icons are PNGs inside the package; every plugin shows the
-  // generic icon for now.
+/**
+ * The plugin's icon: the installed version's PNG as the agent read and
+ * checked it (`PluginDetails.icon`). The registry has no icons, so plugins
+ * that are not installed show the generic one.
+ */
+export function PluginIcon({ muted = false, src }: { muted?: boolean; src?: string | undefined }) {
+  // Only data URLs of PNGs (what the agent sends), never a remote image.
+  if (src?.startsWith("data:image/png;base64,")) {
+    return (
+      <img
+        src={src}
+        alt=""
+        aria-hidden
+        className={cn("size-10 shrink-0 rounded-lg border object-cover", muted && "opacity-60")}
+      />
+    )
+  }
   return (
     <div
       className={cn(
@@ -25,8 +47,43 @@ export function PluginIcon({ muted = false }: { muted?: boolean }) {
   )
 }
 
-export function PublisherLine({ publisher }: { publisher: string }) {
-  return <span className="text-xs text-muted-foreground">by {publisher}</span>
+/**
+ * Who publishes the plugin: the registry's name for the publisher and
+ * whether the registry verified it, when the registry lists it.
+ */
+export function PublisherLine({
+  publisher,
+  info,
+}: {
+  publisher: string
+  info?: PublisherInfo | undefined
+}) {
+  const name = info?.displayName ?? publisher
+  return (
+    <span className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+      <span>by {name}</span>
+      {info && info.displayName && info.displayName !== info.namespace && (
+        <span className="font-mono">({info.namespace})</span>
+      )}
+      {info?.verified ? (
+        <Badge variant="secondary" className="h-5 gap-1 px-1.5 text-[11px]">
+          <BadgeCheck aria-hidden className="size-3" /> Verified publisher
+        </Badge>
+      ) : info ? (
+        <span>· not verified by the registry</span>
+      ) : null}
+    </span>
+  )
+}
+
+/** What a registry version needs: the DeckPilot range and the platforms. */
+export function Compatibility({ version }: { version: AvailableVersion }) {
+  return (
+    <span className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+      {version.deckpilot && <span>DeckPilot {version.deckpilot}</span>}
+      <span>{platformsText(version.platforms)}</span>
+    </span>
+  )
 }
 
 /** Shown above the marketplace in every state: what it is and what it is not. */
@@ -54,7 +111,7 @@ const RUNTIME_TITLES: Record<Exclude<RuntimeAvailability["kind"], "ready">, stri
 
 const RUNTIME_HINTS: Record<Exclude<RuntimeAvailability["kind"], "ready">, string> = {
   platformUnsupported:
-    "Plugins can be installed and inspected here, but not enabled or run: the plugin sandbox is only verified on macOS and Linux.",
+    "Plugins can be installed and inspected here, but not enabled or run: the plugin sandbox is only verified on macOS, Linux and Windows.",
   notBuilt: "Plugins need an agent built with the `plugins` cargo feature.",
   notEnabled: "Start the agent with --enable-plugins (or DECKPILOT_ENABLE_PLUGINS=1).",
   unavailable: "Unlock DeckPilot, or check the agent's log.",

@@ -51,6 +51,8 @@ pub const MAX_ACTION_PARAMS: usize = 64;
 pub const MAX_PLUGIN_TEXT: usize = 256;
 /// Longest package file path.
 pub const MAX_PACKAGE_PATH: usize = 4096;
+/// Largest icon file [`PluginDetails::icon`] carries.
+pub const MAX_ICON_BYTES: usize = 256 * 1024;
 
 /// Stable, machine-readable reasons of plugin errors
 /// ([`IpcError::reason`](crate::IpcError::reason)). The message explains
@@ -293,6 +295,27 @@ pub struct PluginSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staged_version: Option<String>,
     pub actions: Vec<PluginActionInfo>,
+    /// What the agent saw of the plugin's host since it started: absent
+    /// until an invocation failed, and from agents before the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<PluginHealth>,
+}
+
+/// Failures of a plugin's host the agent saw since it started (kept in
+/// memory, never stored). The plugin's lifecycle state and its reason are
+/// [`PluginSummary::state`] and [`PluginSummary::state_reason`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginHealth {
+    /// Times the host stopped during an invocation (crashed or was killed
+    /// after its time limit).
+    pub crashes: u32,
+    /// The newest failure, worded as the invocation reported it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// When it happened, in seconds since the Unix epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error_at: Option<i64>,
 }
 
 /// The permission changes of an update (design section 13.2).
@@ -350,6 +373,11 @@ pub struct PluginDetails {
     pub manifest: serde_json::Value,
     /// The newest audit records, newest first.
     pub audit: Vec<PluginAuditEntry>,
+    /// The active version's 128 px icon as a `data:image/png;base64,` URL,
+    /// when the installed file is a PNG of at most [`MAX_ICON_BYTES`] that
+    /// matches its integrity record. Absent from agents before the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 /// One version a registry offers.
@@ -365,6 +393,31 @@ pub struct AvailableVersion {
     /// Why this DeckPilot cannot run it; empty when it can.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub incompatible: Vec<String>,
+    /// The DeckPilot versions it needs (a range such as `>=0.5.0 <1.0.0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deckpilot: Option<String>,
+    /// The platforms it runs on (`macos`, `windows`, `linux`); empty means
+    /// every platform.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub platforms: Vec<String>,
+    /// When the registry published it, in seconds since the Unix epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<i64>,
+}
+
+/// The publisher of a registry plugin, as the registry index lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublisherInfo {
+    /// The namespace (the first part of its plugin ids).
+    pub namespace: String,
+    /// The name the registry shows, if it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// The publisher's GitHub login.
+    pub login: String,
+    /// The registry verified who the publisher is.
+    pub verified: bool,
 }
 
 /// One plugin a registry offers.
@@ -382,6 +435,25 @@ pub struct AvailablePlugin {
     /// The installed (active) version, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed: Option<String>,
+    /// The registry's description (longer than `summary`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The registry's categories.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub categories: Vec<String>,
+    /// The publisher as the registry index lists it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher_info: Option<PublisherInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+    /// `owner/repository` on GitHub.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_repository: Option<String>,
+    /// Why the registry deprecated the plugin, if it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deprecated: Option<String>,
 }
 
 /// What to install.
@@ -718,6 +790,126 @@ mod tests {
         let keep: PluginRetention = serde_json::from_str("{}").unwrap();
         assert!(keep.is_default());
         assert_eq!(serde_json::to_string(&keep).unwrap(), "{}");
+    }
+
+    #[test]
+    fn registry_metadata_is_additive() {
+        // What an agent before the fields sends still parses, with nothing.
+        let old: AvailablePlugin = serde_json::from_value(serde_json::json!({
+            "id": "acme.hello-weather",
+            "name": "Hello Weather",
+            "summary": "Greets.",
+            "publisher": "acme",
+            "versions": [{"version": "1.0.0", "permissions": []}],
+        }))
+        .unwrap();
+        assert_eq!(old.categories, Vec::<String>::new());
+        assert_eq!(old.publisher_info, None);
+        assert_eq!(old.versions[0].deckpilot, None);
+        assert_eq!(old.versions[0].platforms, Vec::<String>::new());
+        // Without values nothing new is sent.
+        let json = serde_json::to_value(&old).unwrap();
+        let mut keys: Vec<_> = json.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["id", "name", "publisher", "summary", "versions"]);
+        let mut keys: Vec<_> = json["versions"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        assert_eq!(keys, ["permissions", "version"]);
+
+        let full = AvailablePlugin {
+            description: Some("Long text.".into()),
+            categories: vec!["weather".into()],
+            publisher_info: Some(PublisherInfo {
+                namespace: "acme".into(),
+                display_name: Some("Acme Tools".into()),
+                login: "acme".into(),
+                verified: true,
+            }),
+            license: Some("Apache-2.0".into()),
+            homepage: Some("https://acme.example".into()),
+            source_repository: Some("acme/plugins".into()),
+            deprecated: None,
+            versions: vec![AvailableVersion {
+                version: "1.0.0".into(),
+                permissions: vec![],
+                withdrawn: None,
+                incompatible: vec![],
+                deckpilot: Some(">=0.5.0 <1.0.0".into()),
+                platforms: vec!["macos".into(), "linux".into()],
+                published_at: Some(1_700_000_000),
+            }],
+            ..old
+        };
+        let json = serde_json::to_value(&full).unwrap();
+        assert_eq!(json["publisherInfo"]["displayName"], "Acme Tools");
+        assert_eq!(json["publisherInfo"]["verified"], true);
+        assert_eq!(json["sourceRepository"], "acme/plugins");
+        assert_eq!(json["versions"][0]["deckpilot"], ">=0.5.0 <1.0.0");
+        assert_eq!(json["versions"][0]["platforms"][1], "linux");
+        assert_eq!(json["versions"][0]["publishedAt"], 1_700_000_000);
+        let back: AvailablePlugin = serde_json::from_value(json).unwrap();
+        assert_eq!(back, full);
+    }
+
+    #[test]
+    fn health_and_icon_are_additive() {
+        let summary: PluginSummary = serde_json::from_value(serde_json::json!({
+            "id": "acme.hello-weather",
+            "name": "Hello Weather",
+            "publisher": "Acme",
+            "version": "1.0.0",
+            "state": "enabled",
+            "origin": {"type": "sideload"},
+            "actions": [],
+        }))
+        .unwrap();
+        assert_eq!(summary.health, None);
+        assert!(
+            serde_json::to_value(&summary)
+                .unwrap()
+                .get("health")
+                .is_none()
+        );
+        let sick = PluginSummary {
+            health: Some(PluginHealth {
+                crashes: 2,
+                last_error: Some("the plugin host stopped".into()),
+                last_error_at: Some(5),
+            }),
+            ..summary.clone()
+        };
+        let json = serde_json::to_value(&sick).unwrap();
+        assert_eq!(
+            json["health"],
+            serde_json::json!({
+                "crashes": 2,
+                "lastError": "the plugin host stopped",
+                "lastErrorAt": 5,
+            })
+        );
+        assert_eq!(serde_json::from_value::<PluginSummary>(json).unwrap(), sick);
+
+        let details: PluginDetails = serde_json::from_value(serde_json::json!({
+            "summary": serde_json::to_value(&summary).unwrap(),
+            "description": "",
+            "license": "MIT",
+            "permissions": [],
+            "manifest": null,
+            "audit": [],
+        }))
+        .unwrap();
+        assert_eq!(details.icon, None);
+        assert!(
+            serde_json::to_value(&details)
+                .unwrap()
+                .get("icon")
+                .is_none()
+        );
     }
 
     #[test]

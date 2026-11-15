@@ -923,6 +923,28 @@ impl Response {
             Self::Variables { entries } => Self::Variables {
                 entries: entries.into_iter().filter(|e| !plugin_owned(e)).collect(),
             },
+            // A plugin variable (`plugins.<publisher>.<name>.…`) is not a
+            // reference for such a client, exactly as before protocol 10.
+            Self::ReferencePreviews { previews } => Self::ReferencePreviews {
+                previews: previews
+                    .into_iter()
+                    .map(|preview| {
+                        if is_plugin_reference(&preview.reference) {
+                            ReferencePreview {
+                                status: ReferenceStatus::Invalid {
+                                    message: deckpilot_core::variables::ExpressionError::Invalid(
+                                        preview.reference.clone(),
+                                    )
+                                    .to_string(),
+                                },
+                                ..preview
+                            }
+                        } else {
+                            preview
+                        }
+                    })
+                    .collect(),
+            },
             other => other,
         }
     }
@@ -1137,6 +1159,33 @@ impl AgentEvent {
             | Self::ShuttingDown => 1,
         }
     }
+
+    /// The event as a client speaking `protocol` receives it, or `None`
+    /// when it must not receive it at all: events newer than its protocol,
+    /// and before protocol 10 the plugin variables
+    /// (`plugins.<publisher>.<name>.…`) among changed keys.
+    #[must_use]
+    pub fn for_protocol(self, protocol: u32) -> Option<Self> {
+        if self.since_protocol() > protocol {
+            return None;
+        }
+        match self {
+            Self::SharedVariablesChanged { keys } if protocol < 10 => {
+                let keys: Vec<String> = keys
+                    .into_iter()
+                    .filter(|key| !is_plugin_reference(key))
+                    .collect();
+                (!keys.is_empty()).then_some(Self::SharedVariablesChanged { keys })
+            }
+            other => Some(other),
+        }
+    }
+}
+
+/// Whether `reference` names a plugin's variable (protocol 10).
+fn is_plugin_reference(reference: &str) -> bool {
+    deckpilot_core::variables::VariableId::new(reference.trim())
+        .is_ok_and(|id| id.plugin_owner().is_some())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1526,6 +1575,62 @@ mod tests {
         );
         // Answers without plugin data pass unchanged.
         assert_eq!(Response::Ok.for_protocol(9), Response::Ok);
+    }
+
+    #[test]
+    fn clients_before_protocol_10_see_no_plugin_variables() {
+        use deckpilot_core::variables::{ReferencePreview, ReferenceStatus};
+        let preview = |reference: &str, status: ReferenceStatus| ReferencePreview {
+            reference: reference.into(),
+            status,
+        };
+        let unavailable = ReferenceStatus::Unavailable {
+            owner: "acme.hello-weather".into(),
+        };
+        let previews = Response::ReferencePreviews {
+            previews: vec![
+                preview("plugins.acme.helloWeather.temperature", unavailable.clone()),
+                preview("projects.current.key", unavailable.clone()),
+            ],
+        };
+        assert_eq!(previews.clone().for_protocol(10), previews);
+        let Response::ReferencePreviews { previews: old } = previews.for_protocol(9) else {
+            panic!("previews")
+        };
+        // A plugin variable is not a reference, as before protocol 10;
+        // a built-in one keeps its status.
+        assert!(
+            matches!(&old[0].status, ReferenceStatus::Invalid { message }
+                if message.contains("is not a reference")),
+            "{old:?}"
+        );
+        assert_eq!(old[1].status, unavailable);
+
+        let changed = AgentEvent::SharedVariablesChanged {
+            keys: vec![
+                "plugins.acme.helloWeather.temperature".into(),
+                "shared.team.name".into(),
+            ],
+        };
+        assert_eq!(changed.clone().for_protocol(10), Some(changed.clone()));
+        assert_eq!(
+            changed.for_protocol(9),
+            Some(AgentEvent::SharedVariablesChanged {
+                keys: vec!["shared.team.name".into()]
+            })
+        );
+        let only_plugins = AgentEvent::SharedVariablesChanged {
+            keys: vec!["plugins.acme.helloWeather.temperature".into()],
+        };
+        assert_eq!(only_plugins.for_protocol(9), None);
+        assert_eq!(
+            AgentEvent::ShowWindow.for_protocol(9),
+            Some(AgentEvent::ShowWindow)
+        );
+        assert_eq!(
+            AgentEvent::SharedVariablesChanged { keys: vec![] }.for_protocol(6),
+            None
+        );
     }
 
     #[test]

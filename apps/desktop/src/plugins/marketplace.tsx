@@ -2,11 +2,26 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { Loading } from "@/components/page"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAppContext } from "@/lib/app-context"
 
-import { pluginErrorText, usePluginClientOverride, type PluginClient } from "./api"
+import {
+  pluginErrorText,
+  usePluginClientOverride,
+  type PluginClient,
+  type PluginErrorText,
+} from "./api"
 import { createTauriPluginClient } from "./client"
 import {
   ExperimentalNotice,
@@ -46,7 +61,7 @@ type Tab = "discover" | "installed" | "updates"
 type Load =
   | { status: "loading" }
   | { status: "unavailable"; availability: RuntimeAvailability }
-  | { status: "error"; message: string; hint?: string }
+  | { status: "error"; message: string; hint?: string; title: string }
   | { status: "ready"; availability: RuntimeAvailability; snapshot: MarketplaceSnapshot }
 
 /** What the screens can ask the marketplace to do. */
@@ -92,6 +107,12 @@ async function loadAll(client: PluginClient, refresh = false): Promise<Load> {
   }
 }
 
+/** A refusal as a toast: what it means, the agent's words and what to do. */
+function toastError({ title, message, hint }: PluginErrorText) {
+  const description = [message === title ? null : message, hint].filter(Boolean).join(" ")
+  toast.error(title, description ? { description } : undefined)
+}
+
 function updateItems(changes: PermissionChanges): ReviewRequest["items"] {
   return [
     ...changes.added.map((info) => ({ grant: grantOfInfo(info), state: "new" as const })),
@@ -118,6 +139,8 @@ export function PluginsSettings() {
   const [review, setReview] = useState<ReviewRequest | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [progress, setProgress] = useState<Map<string, Progress>>(new Map())
+  /** A package file waiting for the user to confirm its installation. */
+  const [packageFile, setPackageFile] = useState<string | null>(null)
   const returnFocus = useRef<HTMLElement | null>(null)
   const generation = useRef(0)
 
@@ -190,7 +213,9 @@ export function PluginsSettings() {
       <>
         {header}
         <Notice tone="destructive" title="Plugins could not be loaded">
-          <p>{load.message}</p>
+          <p>
+            {load.title}: {load.message}
+          </p>
           {load.hint && <p>{load.hint}</p>}
           <div>
             <Button variant="outline" size="sm" onClick={retry}>
@@ -221,8 +246,7 @@ export function PluginsSettings() {
   /** Like `run`, but reports failures as a toast instead of to a dialog. */
   const runReported = (id: string, request: () => Promise<unknown>, success: string) => {
     run(id, request, success).catch((error: unknown) => {
-      const { message, hint } = pluginErrorText(error)
-      toast.error(message, hint ? { description: hint } : undefined)
+      toastError(pluginErrorText(error))
     })
   }
 
@@ -230,6 +254,46 @@ export function PluginsSettings() {
     returnFocus.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null
     setReview(request)
+  }
+
+  /** The consent dialog for enabling `item` with every declared permission. */
+  const reviewEnable = (item: PluginDetails) => {
+    const id = item.summary.id
+    openReview({
+      mode: "enable",
+      pluginId: id,
+      name: item.summary.name,
+      publisher: item.summary.publisher,
+      version: item.summary.version,
+      items: item.permissions.map((info) => ({
+        grant: grantOfInfo(info),
+        state: info.status === "granted" ? "granted" : "new",
+      })),
+      confirm: (consent) =>
+        run(id, () => client.enablePlugin(id, consent), `${item.summary.name} enabled`),
+    })
+  }
+
+  /** Installs the confirmed package file, then shows its permissions. */
+  const installPackage = (path: string) => {
+    setBusy("package")
+    client
+      .installPlugin({ type: "file", path }, [])
+      .then(async (details) => {
+        toast.success(
+          `${details.summary.name} ${details.summary.version} installed from the package file`,
+        )
+        await reload()
+        // Its permissions are known now that the agent verified it:
+        // nothing is granted until the user consents.
+        if (canRun) reviewEnable(details)
+      })
+      .catch((error: unknown) => {
+        toastError(pluginErrorText(error))
+      })
+      .finally(() => {
+        setBusy(null)
+      })
   }
 
   const reviewUpdate = (item: PluginDetails, version: string, changes: PermissionChanges) => {
@@ -266,6 +330,7 @@ export function PluginsSettings() {
         pluginId: plugin.id,
         name: plugin.name,
         publisher: plugin.publisher,
+        publisherInfo: plugin.publisherInfo,
         version: version.version,
         items: grantsOf(version.permissions).map((grant) => ({ grant, state: "new" })),
         confirm: (consent) =>
@@ -283,18 +348,10 @@ export function PluginsSettings() {
     installFile: () => {
       client.pickPackage().then(
         (path) => {
-          if (!path) return
-          // The package's permissions are known once the agent verified
-          // it: nothing is granted now; enabling asks for consent.
-          runReported(
-            "package",
-            () => client.installPlugin({ type: "file", path }, []),
-            "Plugin installed from the package file; enable it to review its permissions",
-          )
+          if (path) setPackageFile(path)
         },
         (error: unknown) => {
-          const { message, hint } = pluginErrorText(error)
-          toast.error(message, hint ? { description: hint } : undefined)
+          toastError(pluginErrorText(error))
         },
       )
     },
@@ -318,8 +375,7 @@ export function PluginsSettings() {
           await reload()
         })
         .catch((error: unknown) => {
-          const { message, hint } = pluginErrorText(error)
-          toast.error(message, hint ? { description: hint } : undefined)
+          toastError(pluginErrorText(error))
         })
         .finally(() => {
           setBusy(null)
@@ -331,19 +387,7 @@ export function PluginsSettings() {
         runReported(id, () => client.disablePlugin(id), `${item.summary.name} disabled`)
         return
       }
-      openReview({
-        mode: "enable",
-        pluginId: id,
-        name: item.summary.name,
-        publisher: item.summary.publisher,
-        version: item.summary.version,
-        items: item.permissions.map((info) => ({
-          grant: grantOfInfo(info),
-          state: info.status === "granted" ? "granted" : "new",
-        })),
-        confirm: (consent) =>
-          run(id, () => client.enablePlugin(id, consent), `${item.summary.name} enabled`),
-      })
+      reviewEnable(item)
     },
     setGrant: (item, key, granted) => {
       const id = item.summary.id
@@ -365,7 +409,11 @@ export function PluginsSettings() {
         `${item.summary.name} rolled back to ${item.summary.previousVersion ?? "the previous version"}`,
       )
     },
-    invoke: (item, action, params) => client.invokeAction(item.summary.id, action, params),
+    // Read again afterwards: a failure changes the plugin's health.
+    invoke: (item, action, params) =>
+      client.invokeAction(item.summary.id, action, params).finally(() => {
+        void reload()
+      }),
     refresh: () => {
       setBusy("registry")
       void reload(true).finally(() => {
@@ -433,6 +481,35 @@ export function PluginsSettings() {
         </Tabs>
       )}
       {review && <PermissionReviewDialog request={review} onClose={closeReview} />}
+      <AlertDialog
+        open={packageFile !== null}
+        onOpenChange={(open) => {
+          if (!open) setPackageFile(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Install the plugin package?</AlertDialogTitle>
+            <AlertDialogDescription>
+              DeckPilot installs it only if its bytes are a version the verified registry pins.
+              Nothing is granted now: its permissions are shown for your consent before it can be
+              enabled.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <p className="font-mono text-xs break-all select-text">{packageFile}</p>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (packageFile) installPackage(packageFile)
+                setPackageFile(null)
+              }}
+            >
+              Install
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

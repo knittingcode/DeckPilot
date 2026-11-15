@@ -80,6 +80,8 @@ pub struct RateLimits {
     pub notify: Rate,
     pub log: Rate,
     pub storage: Rate,
+    /// Publishing or clearing own variables (10/s).
+    pub variables: Rate,
 }
 
 impl Default for RateLimits {
@@ -90,6 +92,7 @@ impl Default for RateLimits {
             notify: Rate::new(5, Duration::from_secs(60)),
             log: Rate::new(50, Duration::from_secs(1)),
             storage: Rate::new(100, Duration::from_secs(1)),
+            variables: Rate::new(10, Duration::from_secs(1)),
         }
     }
 }

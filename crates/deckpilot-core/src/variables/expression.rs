@@ -25,7 +25,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::registry::{MODULE_NAMESPACES, VariableId};
+use super::registry::{MODULE_NAMESPACES, PLUGIN_ROOT, VariableId};
 use super::{VariableKey, VariableType};
 use crate::graph::Reference;
 use crate::work_session::WorkSessionVariable;
@@ -174,9 +174,11 @@ pub enum VariableRef {
     /// variables, which keep their spelling.
     System(SystemVariable),
     /// `<namespace>.…`: a variable a module declares, by its canonical id,
-    /// in one of the known [`super::registry::MODULE_NAMESPACES`]. While
-    /// the module is disabled or unsupported the reference stays readable
-    /// and resolves as unavailable.
+    /// in one of the known [`super::registry::MODULE_NAMESPACES`], or under
+    /// [`PLUGIN_ROOT`] (`plugins.<publisherCamel>.<nameCamel>.<path>`, a
+    /// plugin's variable). While the module is disabled, unsupported or (a
+    /// plugin) not installed the reference stays readable and resolves as
+    /// unavailable.
     Module(VariableId),
 }
 
@@ -213,6 +215,14 @@ impl VariableRef {
             root if MODULE_NAMESPACES.contains(&root) => VariableId::new(trimmed)
                 .map(Self::Module)
                 .map_err(|_| invalid()),
+            // A plugin's namespace, without consulting a list: the reference
+            // parses on every computer, whether or not the plugin was ever
+            // installed there, and resolves as unavailable without it.
+            PLUGIN_ROOT => VariableId::new(trimmed)
+                .ok()
+                .filter(|id| id.plugin_owner().is_some())
+                .map(Self::Module)
+                .ok_or_else(invalid),
             _ => Err(invalid()),
         }
     }

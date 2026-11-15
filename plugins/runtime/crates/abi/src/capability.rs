@@ -13,7 +13,8 @@ use serde_json::Value;
 
 use crate::limits::{
     MAX_BODY_LEN, MAX_CREDENTIAL_KEY, MAX_HEADER_LEN, MAX_HEADERS, MAX_LOG_LEN, MAX_NOTIFY_BODY,
-    MAX_NOTIFY_TITLE, MAX_STORAGE_KEY, MAX_STORAGE_VALUE, MAX_URL_LEN,
+    MAX_NOTIFY_TITLE, MAX_STORAGE_KEY, MAX_STORAGE_VALUE, MAX_URL_LEN, MAX_VARIABLE_ID,
+    MAX_VARIABLE_VALUE,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -31,6 +32,15 @@ pub enum CapabilityRequest {
     StorageSet(StorageSet),
     #[serde(rename = "storage.delete")]
     StorageDelete(StorageKey),
+    /// Publishes (or, with a `null` value, clears) one of the plugin's own
+    /// declared variables (design §2.3 item 3, §5.2 "own variables").
+    /// Added compatibly within ABI 1: a host or agent that predates it
+    /// refuses the unknown op, and no other request changes.
+    #[serde(rename = "variables.publish")]
+    VariablesPublish(VariablePublish),
+    /// Clears one published variable, or all of the plugin's.
+    #[serde(rename = "variables.clear")]
+    VariablesClear(VariableClear),
     /// The plugin's own storage keys, optionally only those starting with
     /// `prefix`, sorted. Added compatibly within ABI 1.
     #[serde(rename = "storage.keys")]
@@ -49,6 +59,40 @@ pub enum CapabilityRequest {
     /// ABI 1.
     #[serde(rename = "settings.get")]
     SettingsGet(NoArgs),
+}
+
+/// A value for one of the plugin's own variables. `id` is relative to the
+/// plugin's namespace (`temperature`, not
+/// `plugins.acme.helloWeather.temperature`): a plugin can only ever name
+/// its own variables, and the agent adds the namespace.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VariablePublish {
+    pub id: String,
+    /// The value, of the declared type; `null` clears it.
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VariableClear {
+    /// One variable (relative id), or every published one when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+}
+
+/// Checks a relative variable id: 1 to 3 dot-separated segments, each
+/// `[a-z][A-Za-z0-9_]{0,31}` (the manifest's `contributes.variables[].id`).
+pub fn is_variable_id(id: &str) -> bool {
+    let segment = |s: &str| {
+        let mut chars = s.chars();
+        s.len() <= 32
+            && chars.next().is_some_and(|c| c.is_ascii_lowercase())
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    id.len() <= MAX_VARIABLE_ID
+        && (1..=3).contains(&id.split('.').count())
+        && id.split('.').all(segment)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -213,6 +257,8 @@ impl CapabilityRequest {
             Self::StorageUsage(_) => "storage.usage",
             Self::CredentialHas(_) => "credentials.has",
             Self::SettingsGet(_) => "settings.get",
+            Self::VariablesPublish(_) => "variables.publish",
+            Self::VariablesClear(_) => "variables.clear",
         }
     }
 
@@ -277,6 +323,22 @@ impl CapabilityRequest {
                 }
             }
             Self::StorageUsage(_) | Self::SettingsGet(_) => {}
+            Self::VariablesPublish(p) => {
+                if !is_variable_id(&p.id) {
+                    return Err(RequestError::TooLarge("variable"));
+                }
+                let len = serde_json::to_vec(&p.value)
+                    .map(|v| v.len())
+                    .unwrap_or(usize::MAX);
+                if len > MAX_VARIABLE_VALUE {
+                    return Err(RequestError::TooLarge("value"));
+                }
+            }
+            Self::VariablesClear(c) => {
+                if c.id.as_deref().is_some_and(|id| !is_variable_id(id)) {
+                    return Err(RequestError::TooLarge("variable"));
+                }
+            }
         }
         Ok(())
     }
@@ -503,6 +565,51 @@ mod tests {
         )
         .unwrap();
         assert_eq!(usage.keys, 1);
+    }
+
+    #[test]
+    fn variables_name_only_relative_ids_and_are_bounded() {
+        let publish =
+            parse(r#"{"op":"variables.publish","args":{"id":"current.temperature","value":21.5}}"#)
+                .unwrap();
+        assert_eq!(publish.op(), "variables.publish");
+        publish.validate().unwrap();
+        let clear = parse(r#"{"op":"variables.clear","args":{}}"#).unwrap();
+        assert_eq!(clear.op(), "variables.clear");
+        assert_eq!(
+            serde_json::to_string(&clear).unwrap(),
+            r#"{"op":"variables.clear","args":{}}"#
+        );
+        parse(r#"{"op":"variables.clear","args":{"id":"x"}}"#)
+            .unwrap()
+            .validate()
+            .unwrap();
+        // An absolute id, another plugin's, a bad segment, too deep: refused.
+        for id in [
+            "plugins.other.prs.count",
+            "a.b.c.d",
+            "Temperature",
+            "a-b",
+            "",
+            "a..b",
+            &"x".repeat(33),
+        ] {
+            let json = format!(r#"{{"op":"variables.publish","args":{{"id":"{id}","value":1}}}}"#);
+            assert_eq!(
+                parse(&json).unwrap().validate(),
+                Err(RequestError::TooLarge("variable")),
+                "{id}"
+            );
+        }
+        let big = CapabilityRequest::VariablesPublish(VariablePublish {
+            id: "x".into(),
+            value: Value::String("v".repeat(MAX_VARIABLE_VALUE)),
+        });
+        assert_eq!(big.validate(), Err(RequestError::TooLarge("value")));
+        assert!(
+            parse(r#"{"op":"variables.publish","args":{"id":"x","value":1,"plugin":"o"}}"#)
+                .is_err()
+        );
     }
 
     #[test]
