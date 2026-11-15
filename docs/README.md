@@ -57,6 +57,20 @@ led to it; where the code differs, the code and the tests win.
 - [MVP acceptance](mvp-acceptance.md): the repeatable macOS acceptance run
   and its results.
 
+## Distribution
+
+- [Distribution architecture](distribution/README.md): distribution
+  metadata baked into each build, update providers per channel,
+  cross-channel rules, downstream publication and the agent update
+  lifecycle. *Design record; not yet implemented.*
+- [Distribution audit](distribution/audit.md): what packaging, signing,
+  updates and data handling do today, with code references.
+- [Capability matrix](distribution/capability-matrix.md): GitHub, Homebrew,
+  WinGet, APT, Flathub, the Mac App Store and the Microsoft Store compared
+  on sandbox, agent, HID, plugin host, JIT, credentials and updates, with
+  sources. The same matrix in machine-readable form:
+  [`targets.toml`](distribution/targets.toml).
+
 ## Roadmap
 
 - [Roadmap](roadmap.md): milestones, what is done, what comes later and
