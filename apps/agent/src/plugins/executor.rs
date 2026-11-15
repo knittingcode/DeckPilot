@@ -9,7 +9,14 @@
 //!   proxy, a bounded body and a timeout. Redirects are never followed by
 //!   the client: each one goes back to the broker
 //!   (`Session::authorize_redirect`), which re-checks the origin, method,
-//!   headers and hop count exactly like a new request.
+//!   headers and hop count exactly like a new request. A request stops at
+//!   once when its invocation is aborted or runs out of time
+//!   (`CallInterrupt`): the connection is dropped and nothing it would
+//!   still have answered reaches the plugin.
+//! * `variables.publish` / `variables.clear` into the plugin's own values
+//!   (`variables.rs`): only ids its active manifest declares, of the
+//!   declared type, machine scope only, within the generation the
+//!   invocation started in.
 //! * `notify` as an agent notification, titled with the plugin's name.
 //! * `log` into the agent's log, attributed to the plugin.
 //! * Storage and credential injection are refused explicitly
@@ -21,9 +28,12 @@ use deckpilot_ipc::AgentEvent;
 use deckpilot_plugin_abi::capability::{Header, HttpResponse, LogLevel};
 use deckpilot_plugin_abi::{CallErrorCode, CallResult, HttpMethod};
 use deckpilot_plugin_broker::{Allowed, AllowedFetch, Broker, Decision, PluginId};
-use deckpilot_plugin_supervisor::CapabilityExecutor;
+use deckpilot_plugin_manifest::{Variable, VariableScope};
+use deckpilot_plugin_supervisor::{CallInterrupt, CapabilityExecutor};
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
+
+use super::variables::{PublishedVariables, typed};
 
 /// Longest a fetch (all hops) may take.
 const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
@@ -68,14 +78,28 @@ impl Transport {
         Self::Network
     }
 
-    fn send(&self, fetch: &AllowedFetch) -> Result<Exchange, String> {
+    /// Sends one hop. Returns at once, dropping the request, when
+    /// `interrupt` is raised (the invocation was aborted or ran out of
+    /// time).
+    fn send(
+        &self,
+        fetch: &AllowedFetch,
+        interrupt: Option<&CallInterrupt>,
+    ) -> Result<Exchange, String> {
         match self {
-            Self::Network => network_send(fetch),
+            Self::Network => network_send(fetch, interrupt),
             #[cfg(feature = "test-hooks")]
-            Self::Canned(canned) => canned.send(fetch),
+            Self::Canned(canned) => canned.send(fetch, interrupt),
         }
     }
 }
+
+/// How often a running request looks at its invocation's interrupt.
+const INTERRUPT_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// What a request that was interrupted reports (the supervisor replaces it
+/// for the guest anyway).
+const INTERRUPTED: &str = "the action was cancelled or ran out of time; the request was stopped";
 
 fn method(method: HttpMethod) -> reqwest::Method {
     match method {
@@ -106,7 +130,10 @@ fn content_type(headers: &[Header]) -> &'static str {
     }
 }
 
-fn network_send(fetch: &AllowedFetch) -> Result<Exchange, String> {
+fn network_send(
+    fetch: &AllowedFetch,
+    interrupt: Option<&CallInterrupt>,
+) -> Result<Exchange, String> {
     use deckpilot_module_http::client;
     use deckpilot_module_http::policy::NetworkPolicy;
     let request = client::Request {
@@ -135,7 +162,35 @@ fn network_send(fetch: &AllowedFetch) -> Result<Exchange, String> {
         allow_private: false,
         private_hosts: Vec::new(),
     };
-    let response = client::send(request, &policy, None).map_err(|(_, message)| message)?;
+    // The client stops at once when the token is cancelled (it drops the
+    // connection); a watcher cancels it when the invocation is interrupted.
+    let token = deckpilot_core::CancellationToken::new();
+    let done = std::sync::atomic::AtomicBool::new(false);
+    let response = std::thread::scope(|scope| {
+        if let Some(interrupt) = interrupt {
+            let watcher = std::thread::Builder::new()
+                .name("plugin fetch interrupt".into())
+                .spawn_scoped(scope, || {
+                    while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                        if interrupt.is_raised() {
+                            token.cancel();
+                            return;
+                        }
+                        std::thread::sleep(INTERRUPT_POLL);
+                    }
+                });
+            if let Err(error) = watcher {
+                warn!(%error, "a plugin request cannot be interrupted");
+            }
+        }
+        let response = client::send(request, &policy, Some(&token));
+        done.store(true, std::sync::atomic::Ordering::SeqCst);
+        response
+    });
+    if token.is_cancelled() {
+        return Err(INTERRUPTED.to_owned());
+    }
+    let response = response.map_err(|(_, message)| message)?;
     if response.truncated {
         return Err(format!("the response is larger than {MAX_BODY} bytes"));
     }
@@ -146,6 +201,17 @@ fn network_send(fetch: &AllowedFetch) -> Result<Exchange, String> {
     })
 }
 
+/// What an invocation may do with the plugin's own variables: publish the
+/// declared ones into the store, within the generation it started in.
+pub(super) struct OwnVariables {
+    pub store: PublishedVariables,
+    /// `plugins.<publisherCamel>.<nameCamel>`.
+    pub namespace: String,
+    pub generation: u64,
+    /// The active version's `contributes.variables`.
+    pub declared: Vec<Variable>,
+}
+
 /// The executor for one plugin's invocations.
 pub(super) struct Executor {
     broker: Broker,
@@ -153,6 +219,7 @@ pub(super) struct Executor {
     name: String,
     events: broadcast::Sender<AgentEvent>,
     transport: Transport,
+    variables: OwnVariables,
 }
 
 impl std::fmt::Debug for Executor {
@@ -169,16 +236,97 @@ impl Executor {
         name: String,
         events: broadcast::Sender<AgentEvent>,
         transport: Transport,
+        variables: OwnVariables,
     ) -> Self {
         Self {
             broker,
             name,
             events,
             transport,
+            variables,
         }
     }
 
-    fn fetch(&self, plugin: &PluginId, allowed: &AllowedFetch) -> CallResult {
+    /// Publishes (`Some`) or clears one of the plugin's declared variables.
+    fn publish(
+        &self,
+        plugin: &PluginId,
+        id: &str,
+        value: Option<&serde_json::Value>,
+    ) -> CallResult {
+        let own = &self.variables;
+        let Some(variable) = own.declared.iter().find(|v| v.id == id) else {
+            return CallResult::error(
+                CallErrorCode::NotPermitted,
+                format!(
+                    "`{id}` is not one of the plugin's variables: declare it in \
+                     contributes.variables of manifest.json"
+                ),
+            );
+        };
+        if variable.scope != VariableScope::Machine {
+            return CallResult::error(
+                CallErrorCode::Unavailable,
+                format!(
+                    "`{id}` is a {} variable; this version of DeckPilot keeps only values \
+                     that are the same everywhere (scope machine)",
+                    if variable.scope == VariableScope::Profile {
+                        "profile"
+                    } else {
+                        "project"
+                    }
+                ),
+            );
+        }
+        let value = match value.map(|value| typed(variable, value)) {
+            Some(Ok(value)) => value,
+            Some(Err(problem)) => return CallResult::error(CallErrorCode::BadRequest, problem),
+            None => None,
+        };
+        if !own.store.set(plugin.as_str(), own.generation, id, value) {
+            return CallResult::error(
+                CallErrorCode::Unavailable,
+                "the plugin was stopped since this action started; its values were dropped",
+            );
+        }
+        self.announce(vec![format!("{}.{id}", own.namespace)]);
+        CallResult::Ok(serde_json::Value::Null)
+    }
+
+    /// Clears every variable the plugin published.
+    fn clear(&self, plugin: &PluginId) -> CallResult {
+        let own = &self.variables;
+        match own.store.clear(plugin.as_str(), own.generation) {
+            Some(ids) => {
+                self.announce(
+                    ids.iter()
+                        .map(|id| format!("{}.{id}", own.namespace))
+                        .collect(),
+                );
+                CallResult::Ok(serde_json::Value::Null)
+            }
+            None => CallResult::error(
+                CallErrorCode::Unavailable,
+                "the plugin was stopped since this action started; its values were dropped",
+            ),
+        }
+    }
+
+    /// Tells pickers and previews that these variables changed (ids only).
+    fn announce(&self, keys: Vec<String>) {
+        if !keys.is_empty() {
+            let _ = self
+                .events
+                .send(AgentEvent::SharedVariablesChanged { keys });
+        }
+    }
+
+    fn fetch(
+        &self,
+        plugin: &PluginId,
+        allowed: &AllowedFetch,
+        interrupt: Option<&CallInterrupt>,
+    ) -> CallResult {
         if allowed.auth.is_some() {
             return CallResult::error(
                 CallErrorCode::Unavailable,
@@ -190,7 +338,7 @@ impl Executor {
         let mut hop = 0;
         loop {
             debug!(plugin = %plugin, origin = %current.origin, "plugin fetch");
-            let exchange = match self.transport.send(&current) {
+            let exchange = match self.transport.send(&current, interrupt) {
                 Ok(exchange) => exchange,
                 Err(message) => {
                     return CallResult::error(CallErrorCode::Failed, message);
@@ -251,8 +399,33 @@ fn reply(exchange: Exchange) -> CallResult {
 
 impl CapabilityExecutor for Executor {
     fn execute(&mut self, plugin: &PluginId, allowed: &Allowed) -> CallResult {
+        self.run(plugin, allowed, None)
+    }
+
+    /// A fetch stops at once when the invocation is aborted or past its
+    /// deadline; what the server would still have answered is dropped.
+    fn execute_interruptible(
+        &mut self,
+        plugin: &PluginId,
+        allowed: &Allowed,
+        interrupt: &CallInterrupt,
+    ) -> CallResult {
+        self.run(plugin, allowed, Some(interrupt))
+    }
+}
+
+impl Executor {
+    fn run(
+        &self,
+        plugin: &PluginId,
+        allowed: &Allowed,
+        interrupt: Option<&CallInterrupt>,
+    ) -> CallResult {
         match allowed {
-            Allowed::Fetch(fetch) => self.fetch(plugin, fetch),
+            Allowed::Fetch(fetch) => self.fetch(plugin, fetch, interrupt),
+            Allowed::VariablePublish { id, value } => self.publish(plugin, id, Some(value)),
+            Allowed::VariableClear { id: Some(id) } => self.publish(plugin, id, None),
+            Allowed::VariableClear { id: None } => self.clear(plugin),
             Allowed::Notify { title, body } => {
                 let notification =
                     Notification::new(&format!("{}: {title}", self.name), body, Severity::Info);
@@ -289,6 +462,7 @@ pub(super) mod test_transport {
     use std::path::PathBuf;
 
     use deckpilot_plugin_broker::AllowedFetch;
+    use deckpilot_plugin_supervisor::CallInterrupt;
     use serde::Deserialize;
 
     use super::Exchange;
@@ -327,7 +501,11 @@ pub(super) mod test_transport {
             })
         }
 
-        pub fn send(&self, fetch: &AllowedFetch) -> Result<Exchange, String> {
+        pub fn send(
+            &self,
+            fetch: &AllowedFetch,
+            interrupt: Option<&CallInterrupt>,
+        ) -> Result<Exchange, String> {
             let url = fetch.url.as_str();
             if let Ok(mut file) = std::fs::OpenOptions::new()
                 .create(true)
@@ -341,7 +519,16 @@ pub(super) mod test_transport {
                 .iter()
                 .find(|r| url.starts_with(&r.url))
                 .ok_or_else(|| format!("no canned response for {url}"))?;
-            std::thread::sleep(std::time::Duration::from_millis(route.delay_ms));
+            // A slow server, which an interrupt stops waiting for (like
+            // the network client dropping its connection).
+            let answer_at =
+                std::time::Instant::now() + std::time::Duration::from_millis(route.delay_ms);
+            while std::time::Instant::now() < answer_at {
+                if interrupt.is_some_and(CallInterrupt::is_raised) {
+                    return Err(super::INTERRUPTED.to_owned());
+                }
+                std::thread::sleep(super::INTERRUPT_POLL);
+            }
             Ok(Exchange {
                 status: route.status,
                 headers: route.headers.clone(),

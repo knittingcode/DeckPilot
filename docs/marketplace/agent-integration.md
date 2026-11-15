@@ -89,8 +89,10 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
   15 s, 512 KiB, redirects never followed by the client: each one goes back
   to `Session::authorize_redirect`. Response headers are filtered to a safe
   list. `notify` becomes an agent notification titled with the plugin's
-  name; `log` goes to the agent log. Storage and credential injection are
-  refused (`unavailable`): neither exists in the agent yet.
+  name; `log` goes to the agent log; `variables.publish` and
+  `variables.clear` go to the plugin's own variables (below). Storage and
+  credential injection are refused (`unavailable`): neither exists in the
+  agent yet.
 - **Platform gate.** Enabling and invoking are refused on platforms
   without a host sandbox (`platformUnsupported`): only macOS, Linux and
   Windows may run plugins; elsewhere installing and inspecting work.
@@ -123,7 +125,8 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
   its actions can run, otherwise disabled with the reason above, which keys,
   `runAction` and workflows report. Its state comes from plugins.db, never
   from the `modules` table, and it has no capabilities, settings, pages,
-  windows, variables or migrations. Each action is a `PluginActionHandler`:
+  windows or migrations; its variables are below. Each action is a
+  `PluginActionHandler`:
   parameters and the node contract convert one to one from the manifest
   (`cancellable` always, never `changesContext`); outputs are the declared
   ones, as text.
@@ -140,13 +143,29 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
     the same lanes, so a slow plugin blocks neither the worker nor other
     plugins.
   - *Cancel and deadline.* A cancelled run or one past its deadline raises
-    the invocation's `AbortSignal`. Protocol 1 has no `abort` frame and an
-    ABI 1 guest runs to completion, so the supervisor gives the host 2 s
-    (`HostConfig::abort_grace`) to answer, then kills it
-    (`HostError::Aborted`, not counted as a crash). The handler waits the
-    same 2 s (plus a margin), then fails the action as `cancelled`; a later
-    answer is discarded. A capability call that is already running (an HTTP
-    request, at most 15 s) finishes first.
+    the invocation's `AbortSignal`. A capability call that is running then
+    stops at once: the supervisor hands every call a `CallInterrupt`
+    (abort signal and deadline) through
+    `CapabilityExecutor::execute_interruptible`, and the executor's fetch
+    cancels the HTTP module client's `CancellationToken` (the connection is
+    dropped; the canned test transport stops waiting likewise). Whatever the
+    call returns after the interrupt is replaced by `unavailable` for the
+    guest, and every later call of an aborted invocation is refused without
+    reaching the broker or the executor (no request, publish or
+    notification after an abort). Past the deadline the host is killed at
+    once (`HostError::Timeout`), queued frames unread. Protocol 1 has no
+    `abort` frame and an ABI 1 guest runs to completion, so after an abort
+    the supervisor gives the host 2 s (`HostConfig::abort_grace`) to end
+    the invocation, then kills it (`HostError::Aborted`, not counted as a
+    crash). The answer of an aborted invocation is never applied (design
+    §6.3: discarded): the lane turns it into `LaneError::Aborted`, and the
+    handler fails the action as `cancelled` whatever arrives.
+  - *Revocation during a run.* Grants are read by the broker on every call,
+    and plugin requests are answered by the worker while lanes run, so a
+    revoke (or disable, or uninstall) while an action runs makes the
+    **next** privileged call of that same invocation fail with
+    `not-permitted`; a call that is already running is not interrupted by
+    a revoke.
   - *Containment.* Every invocation on a lane runs in `catch_unwind` (the
     broker's authorization and the executor run there); so do the
     worker's message handling, the grant updates (`sync_grants`) and the
@@ -156,6 +175,71 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
   - *Older clients.* `Response::for_protocol(< 10)` drops catalog entries
     owned by a plugin module; plugin answers never reach such clients.
     Instances in profiles stay and show as unavailable.
+- **Variables** (design §2.3 item 3, §3.7, §5.2 "own variables").
+  - *Grammar* (`deckpilot-core`). `plugins` is a reserved root
+    (`PLUGIN_ROOT`, in `RESERVED_ROOTS`; not in `MODULE_NAMESPACES`, which
+    stays the list of built-in roots). `VariableRef::parse` accepts
+    `plugins.<publisherCamel>.<nameCamel>.<path>` (1 to 3 path segments, at
+    most 6 in all) whenever the two middle segments are the lower camel case
+    of a valid plugin id, without consulting any list, so references parse
+    on every computer, with or without the plugin.
+    `VariableId::owner_namespace` (`plugins.acme.helloWeather`) and
+    `VariableId::plugin_owner` (`acme.hello-weather`; the camel case is
+    injective) name the owner; `module_namespace` of a plugin module is its
+    `plugins.…` namespace, and `register_module` accepts only declarations
+    inside it. A reference whose plugin is not installed resolves as
+    `Unavailable { owner: "<plugin id>" }`. The app's `referenceRoot`
+    (`apps/desktop/src/lib/variables.ts`) treats `plugins.<p>.<n>.<x>` as a
+    module root (`PLUGIN_ROOT`, mirrored and checked by a Rust test).
+  - *Declarations.* The active version's `contributes.variables` become the
+    `PluginModule`'s variables (read-only, with their type, scope,
+    requirements and sensitivity). While the plugin cannot run they are
+    unavailable with its reason; after an uninstall they are gone and
+    references resolve as unavailable.
+  - *Publishing* (ABI 1, compatible addition): `variables.publish {id,
+    value}` (`value: null` clears) and `variables.clear {id?}`; SDK
+    `Context::publish_variable`, `clear_variable`, `clear_variables`. `id`
+    is relative, so a plugin can only name its own namespace. The broker
+    allows them for any plugin that has grants (always-on, like the log),
+    10 per second; the ABI bounds values to 16 KiB. The executor accepts only
+    ids the active manifest declares (`not-permitted` otherwise), of the
+    declared type (`bad-request`), and only `machine` scope (`unavailable`
+    for profile and project variables in this version).
+  - *Values* (`plugins/variables.rs`). Kept per plugin in memory
+    (`PublishedVariables`), never persisted; `PluginVariableSource`
+    resolves from them, so no plugin code runs during a resolution. Every
+    publish announces `sharedVariablesChanged` with the full id. Values are
+    dropped, with a new generation, whenever the host is stopped for a
+    lifecycle reason (`stop_host`: disable, update, approve, rollback,
+    uninstall, quarantine, crash loop or panic) and when the store closes
+    (lock, stop); a publish from an invocation prepared before is refused.
+    A single host crash keeps them (the plugin stays enabled).
+  - *Older clients.* Before protocol 10, catalog entries of plugin
+    modules are dropped (as for actions), previews of `plugins.…`
+    references answer `invalid` as such a client always got, and
+    `AgentEvent::for_protocol` removes plugin ids from
+    `sharedVariablesChanged` (the event is not sent if nothing is left).
+- **Lifecycle.** Every operation that changes an installed plugin sends a
+  `changed` plugin event (`watch_plugin_events` forwards it to the app)
+  and republishes the catalog, so the agent re-registers the plugin's
+  module, actions and variables before the next request is answered:
+  install (`disabled`), enable, disable, grant, revoke, update, approve,
+  decline, rollback, quarantine and release by registry verdicts, a crash
+  loop or broker panic (`disabled`), uninstall (no state). Hosts: disable,
+  update, approve, rollback, uninstall, quarantine and a crash loop stop
+  the lane (the running invocation is aborted as above, queued ones are
+  refused, the host gets `shutdown` and its `dp_shutdown` runs, then it is
+  killed after 1 s); the next invocation of an enabled plugin starts a
+  fresh host for the active version. A single crash restarts the host on
+  demand with backoff and changes no state. Grants and revokes need no
+  restart (grants per call). Locking stops every host.
+  - *Guest hooks.* ABI 1 already has the lifecycle hooks the design asks
+    for (§3.8 `activate`/`deactivate`): the optional exports `dp_init`
+    (run when the module is loaded; a non-zero result fails the load) and
+    `dp_shutdown` (run on `shutdown`). No further export was added: the
+    design's other kinds (`timer`, `settingsChanged`) need background work
+    and settings, which do not exist yet, and a capability call inside a
+    hook is refused locally by the host (`unavailable`).
 
 ## Registry over HTTPS
 
@@ -391,10 +475,21 @@ run by `runAction`, by key presses on a simulated MK.2 and by a workflow
 node (results, outputs and the canned request checked), unavailable again
 after a revoke, a disable and an uninstall; a guest panic during a key's
 action (a failed action, the agent unaffected); and a workflow cancelled
-while its plugin node waits for a slow server (given up after the 2 s
-grace). HTTP goes to canned responses (`DECKPILOT_TEST_PLUGIN_HTTP`, only
-with `test-hooks`, never in a release; a route may answer late with
-`delayMs`).
+while its plugin node waits for a slow server (the request is stopped and
+the run ends at once). Plugin variables: references unavailable before the
+install and while disabled, the SDK test guest's published values resolved
+with their types (an undeclared id and a mistyped value refused), cleared,
+dropped by a disable, unavailable after an uninstall, and invisible to a
+protocol 9 client (catalog, previews, events). Cancellation: a workflow
+cancelled while the guest waits 14 s for a server ends within 1.5 s and the
+answer is never published. A mid-run revoke: the second request of
+`two-fetches` is denied and never goes out. Lifecycle: `changed` events
+for install, enable, quarantine (the test's own registry copy revokes the
+version) and uninstall, with actions and variables following, and a host
+crash that keeps the plugin enabled. HTTP goes to canned responses
+(`DECKPILOT_TEST_PLUGIN_HTTP`, only with `test-hooks`, never in a release;
+a route may answer late with `delayMs`, and stops waiting when the call is
+interrupted).
 `cargo test -p deckpilot-agent --features plugins --test plugins_registry_https`
 does the same over HTTPS: a local TLS server (`tests/support/https.rs`,
 rustls with a throwaway CA from rcgen that only the agent under test
@@ -436,9 +531,20 @@ Windows (not a required check).
   install or update. No `If-None-Match`/ETag, no package cache (offline
   installs are not possible), no proxy configuration beyond the
   environment.
-- No plugin storage, credential slots, variables (design §2.3 item 3),
-  settings or background work; their capabilities are refused.
-- An abort does not interrupt a capability call that is already running.
+- No plugin storage, credential slots, settings or background work; their
+  capabilities are refused.
+- Plugin variables: only `machine` scope can be published (profile and
+  project values need the `profile` permission and a scope argument, design
+  §6 `VariablesApi.publish`); no reading of other owners' variables
+  (`variables` permission); values are not persisted across agent restarts
+  (as designed) and there is no `plugin_known`, so the picker cannot list
+  variables of plugins that are not installed.
+- A revoke does not interrupt a capability call that is already running;
+  it denies the next one.
+- No crash-loop end-to-end test: the five crashes with backoff take about
+  15 s. The breaker is tested in the supervisor (`crates/supervisor`); the
+  agent's reaction (`lane_ended`: disable, drop values, `changed`) is not
+  tested end to end.
 - `plugin_known` (design §2.3 item 4) does not exist: an uninstalled
   plugin's actions are reported as "not available" without its name.
 - A password change made by the app while the agent is locked makes

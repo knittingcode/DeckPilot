@@ -50,7 +50,21 @@ fn plugin() -> Plugin {
             let r = ctx.http_get("https://slow.example.com/")?;
             Ok(Output::ok().with("status", r.status))
         }))
+        .action(Action::new("publish", publish))
+        .action(Action::new("clear", |ctx, _| {
+            ctx.clear_variable("status")?;
+            Ok(Output::ok())
+        }))
+        .action(Action::new("fetch-publish", fetch_publish))
+        .action(Action::new("two-fetches", two_fetches))
 }
+
+/// A server that answers late (canned in the agent's tests).
+const SLOW_URL: &str = "https://api.open-meteo.com/v1/test/slow";
+/// A server that answers much later than an action should wait.
+const VERY_SLOW_URL: &str = "https://api.open-meteo.com/v1/test/very-slow";
+/// A server that answers at once.
+const FAST_URL: &str = "https://api.open-meteo.com/v1/test/fast";
 
 deckpilot_plugin_sdk::plugin!(plugin);
 
@@ -91,6 +105,44 @@ fn many_calls(ctx: &mut Context<'_>, _: &Args<'_>) -> ActionResult {
     Ok(Output::ok()
         .with("calls", ctx.calls())
         .with("refusedLocally", refused))
+}
+
+/// Publishes its declared variables, and tries what must be refused: an
+/// undeclared id and a value of the wrong type.
+fn publish(ctx: &mut Context<'_>, _: &Args<'_>) -> ActionResult {
+    ctx.publish_variable("status", "ready")?;
+    ctx.publish_variable("count", 42)?;
+    ctx.publish_variable("online", true)?;
+    let refused = [
+        ctx.publish_variable("undeclared", 1).is_err(),
+        ctx.publish_variable("count", "forty-two").is_err(),
+    ]
+    .iter()
+    .filter(|r| **r)
+    .count();
+    Ok(Output::ok().with("refused", refused as i64))
+}
+
+/// Waits for a very slow server, then publishes what it answered: when the
+/// action is cancelled meanwhile, nothing may be published.
+fn fetch_publish(ctx: &mut Context<'_>, _: &Args<'_>) -> ActionResult {
+    let r = ctx.http_get(VERY_SLOW_URL)?;
+    ctx.publish_variable("lastStatus", i64::from(r.status))?;
+    Ok(Output::ok().with("status", r.status))
+}
+
+/// Two privileged calls in one invocation: the second one must see a
+/// permission revoked while the first was running.
+fn two_fetches(ctx: &mut Context<'_>, _: &Args<'_>) -> ActionResult {
+    let first = ctx.http_get(SLOW_URL)?;
+    let second = match ctx.http_get(FAST_URL) {
+        Ok(r) => format!("status {}", r.status),
+        Err(e) if e.is_denied() => "not-permitted".to_owned(),
+        Err(e) => format!("{:?}", e.kind()),
+    };
+    Ok(Output::ok()
+        .with("first", first.status)
+        .with("second", second))
 }
 
 fn storage(ctx: &mut Context<'_>, _: &Args<'_>) -> ActionResult {

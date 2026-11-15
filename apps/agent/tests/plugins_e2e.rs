@@ -51,6 +51,19 @@ const NETWORK: &str = "network:api.open-meteo.com";
 const STARTUP: Duration = Duration::from_secs(30);
 /// How long the canned server takes to answer for Tokyo.
 const SLOW_MS: u64 = 6_000;
+/// The SDK test guest's servers (`plugins/runtime/guest/sdk-test-guest`).
+const SLOW_URL: &str = "https://api.open-meteo.com/v1/test/slow";
+const VERY_SLOW_URL: &str = "https://api.open-meteo.com/v1/test/very-slow";
+const FAST_URL: &str = "https://api.open-meteo.com/v1/test/fast";
+/// How long the first of `two-fetches` waits for its answer.
+const TWO_FETCHES_MS: u64 = 2_500;
+/// Longer than the HTTP client's own limit (15 s) would let it wait.
+const VERY_SLOW_MS: u64 = 14_000;
+/// The SDK test guest's variables.
+const STATUS_VAR: &str = "plugins.acme.sdkTest.status";
+const COUNT_VAR: &str = "plugins.acme.sdkTest.count";
+const ONLINE_VAR: &str = "plugins.acme.sdkTest.online";
+const LAST_STATUS_VAR: &str = "plugins.acme.sdkTest.lastStatus";
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -207,10 +220,15 @@ fn hello_v1_1() -> Value {
     manifest
 }
 
-/// The SDK test guest (it can panic on request) as a plugin.
+/// The SDK test guest (it can panic on request) as a plugin, with the
+/// variables it publishes.
 fn crashy_manifest() -> Value {
     let mut manifest = hello_manifest(CRASHY, "1.0.0");
     manifest["name"] = json!("SDK test");
+    let outputs: Vec<Value> = ["inits", "refused", "status", "first", "second"]
+        .iter()
+        .map(|key| json!({"key": key, "label": key, "kind": "text"}))
+        .collect();
     let actions: Vec<Value> = [
         "scale",
         "inits",
@@ -222,17 +240,28 @@ fn crashy_manifest() -> Value {
         "panic",
         "spin",
         "slow",
+        "publish",
+        "clear",
+        "fetch-publish",
+        "two-fetches",
     ]
     .iter()
     .map(|id| {
         json!({
             "id": id, "name": id, "description": "A test action.",
             "category": "Test", "parameters": [],
-            "node": {"version": 1, "outputs": [{"key": "inits", "label": "Inits", "kind": "text"}]}
+            "node": {"version": 1, "outputs": outputs}
         })
     })
     .collect();
     manifest["contributes"]["actions"] = json!(actions);
+    manifest["contributes"]["variables"] = json!([
+        {"id": "status", "name": "Status", "valueType": {"type": "string"}, "scope": "machine"},
+        {"id": "count", "name": "Count", "valueType": {"type": "integer"}, "scope": "machine"},
+        {"id": "online", "name": "Online", "valueType": {"type": "boolean"}, "scope": "machine"},
+        {"id": "lastStatus", "name": "Last status", "valueType": {"type": "integer"},
+         "scope": "machine"}
+    ]);
     manifest
 }
 
@@ -445,7 +474,12 @@ fn canned_http(dir: &Path) -> PathBuf {
                 "headers": [["content-type", "application/json"]],
                 "body": forecast.to_string(),
                 "delayMs": SLOW_MS
-            }
+            },
+            // The SDK test guest's servers: slow, very slow (longer than
+            // anyone should wait) and fast.
+            {"url": SLOW_URL, "status": 200, "body": "{}", "delayMs": TWO_FETCHES_MS},
+            {"url": VERY_SLOW_URL, "status": 200, "body": "{}", "delayMs": VERY_SLOW_MS},
+            {"url": FAST_URL, "status": 200, "body": "{}"}
         ]))
         .unwrap(),
     )
@@ -2061,8 +2095,9 @@ async fn a_host_crash_in_an_engine_action_is_a_failed_action() {
 }
 
 /// Cancelling a workflow while its plugin node waits (here for a slow
-/// server) aborts the invocation: the node gives up after the 2 s grace
-/// and the run ends as cancelled; the late result is discarded.
+/// server) aborts the invocation: the request is stopped at once, and the
+/// run ends as cancelled well within the 2 s grace; whatever the plugin
+/// answers is discarded.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cancelled_plugin_node_is_given_up_after_its_grace() {
     use deckpilot_core::{ActionStatus, ExecutionState, ParameterValue};
@@ -2108,18 +2143,530 @@ async fn a_cancelled_plugin_node_is_given_up_after_its_grace() {
         ExecutionState::Cancelled,
         "{record:#?}"
     );
-    // Given up after the grace, well before the server answered (and
-    // before the engine's own 10 s limit for actions that do not stop).
+    // Not even the grace: the request was stopped, and the plugin answered
+    // (with its failed request) at once. Long before the server answered.
     assert!(
-        took < Duration::from_millis(SLOW_MS - 1_000),
+        took < Duration::from_millis(1_500),
         "the cancel took {took:?}"
     );
-    // The plugin is fine: the next action runs once the slow one is over.
+    // The plugin is fine: the next action runs at once.
     let after = agent.run_action(greet).await;
     assert_eq!(after.status, ActionStatus::Succeeded, "{after:?}");
     assert_eq!(
         agent.details(HELLO).await.summary.state,
         PluginState::Enabled
+    );
+    agent.stop().await;
+}
+
+// ------------------------------------------------------- plugin variables
+
+impl Agent {
+    /// What `references` resolve to in a preview of `profile`.
+    async fn preview(
+        &self,
+        profile: deckpilot_core::ProfileId,
+        references: &[&str],
+    ) -> Vec<deckpilot_core::variables::ReferenceStatus> {
+        previews(&mut self.client().await, profile, references).await
+    }
+
+    /// The variable catalog of `profile`, unavailable entries included.
+    async fn catalog(
+        &self,
+        profile: deckpilot_core::ProfileId,
+    ) -> Vec<deckpilot_core::variables::CatalogEntry> {
+        catalog(&mut self.client().await, profile).await
+    }
+
+    /// A client of protocol 9 (an app from before plugins).
+    async fn old_client(&self) -> AgentClient {
+        AgentClient::connect_with_protocol(&self.paths, ClientKind::Other, 9)
+            .await
+            .unwrap()
+    }
+}
+
+async fn previews(
+    client: &mut AgentClient,
+    profile: deckpilot_core::ProfileId,
+    references: &[&str],
+) -> Vec<deckpilot_core::variables::ReferenceStatus> {
+    let items = references
+        .iter()
+        .map(|reference| deckpilot_core::variables::PreviewItem {
+            reference: (*reference).to_owned(),
+            expected: None,
+        })
+        .collect();
+    match client
+        .request(Request::PreviewReferences {
+            context: Box::new(deckpilot_core::variables::ResolutionContext::preview(
+                profile,
+            )),
+            items,
+        })
+        .await
+        .unwrap()
+    {
+        Response::ReferencePreviews { previews } => {
+            previews.into_iter().map(|p| p.status).collect()
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+async fn catalog(
+    client: &mut AgentClient,
+    profile: deckpilot_core::ProfileId,
+) -> Vec<deckpilot_core::variables::CatalogEntry> {
+    match client
+        .request(Request::ListVariables {
+            context: Box::new(deckpilot_core::variables::ResolutionContext::preview(
+                profile,
+            )),
+            filter: Box::new(deckpilot_core::variables::CatalogFilter {
+                include_unavailable: true,
+                ..Default::default()
+            }),
+        })
+        .await
+        .unwrap()
+    {
+        Response::Variables { entries } => entries,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// The references a catalog lists for `plugin`.
+fn listed(entries: &[deckpilot_core::variables::CatalogEntry], plugin: &str) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|e| e.module.as_ref().is_some_and(|m| m.as_str() == plugin))
+        .map(|e| e.reference.to_string())
+        .collect()
+}
+
+/// Waits for `sharedVariablesChanged` naming `key`.
+async fn variable_changed(events: &mut AgentClient, key: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let event = tokio::time::timeout_at(deadline, events.next_event())
+            .await
+            .unwrap_or_else(|_| panic!("no change of {key} was announced"))
+            .unwrap();
+        if let deckpilot_ipc::AgentEvent::SharedVariablesChanged { keys } = event
+            && keys.iter().any(|k| k == key)
+        {
+            return;
+        }
+    }
+}
+
+fn resolved(
+    value: deckpilot_core::variables::VariableValue,
+) -> deckpilot_core::variables::ReferenceStatus {
+    deckpilot_core::variables::ReferenceStatus::Resolved {
+        value,
+        source: deckpilot_core::variables::ValueSource::System,
+    }
+}
+
+/// Plugin-owned variables (design §2.3 item 3, §3.7): a plugin's
+/// references parse before it was ever installed and are unavailable; once
+/// it runs, what it publishes resolves (typed, its own declared ids only);
+/// a disable or an uninstall makes them unavailable and drops the values.
+/// An app of protocol 9 sees none of it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // one path, step by step
+async fn plugin_variables_are_published_resolved_and_dropped() {
+    use deckpilot_core::variables::{MissingReason, ReferenceStatus, VariableValue};
+    let registry = shared_registry();
+    let profile = deckpilot_core::Profile::new("Plugin variables");
+    let env = Env::with_profile("plugins-e2e-variables", &profile);
+    let agent = Agent::started(&env, registry).await;
+    let unavailable = ReferenceStatus::Unavailable {
+        owner: CRASHY.into(),
+    };
+    let no_value = ReferenceStatus::Missing {
+        reason: MissingReason::NoValue,
+    };
+
+    // Never installed on this computer: the reference parses, and is
+    // unavailable, named by its plugin.
+    assert_eq!(
+        agent.preview(profile.id, &[STATUS_VAR]).await,
+        vec![unavailable.clone()]
+    );
+    agent.install(CRASHY, None).await.unwrap();
+    assert_eq!(
+        agent.preview(profile.id, &[STATUS_VAR]).await,
+        vec![unavailable.clone()],
+        "unavailable while disabled"
+    );
+    agent.enable(CRASHY, &[NETWORK]).await.unwrap();
+    assert_eq!(
+        agent.preview(profile.id, &[STATUS_VAR, COUNT_VAR]).await,
+        vec![no_value.clone(), no_value.clone()],
+        "nothing published yet"
+    );
+    let listed_now = listed(&agent.catalog(profile.id).await, CRASHY);
+    for id in [STATUS_VAR, COUNT_VAR, ONLINE_VAR, LAST_STATUS_VAR] {
+        assert!(listed_now.contains(&id.to_owned()), "{listed_now:?}");
+    }
+
+    // The plugin publishes; the values resolve with their types, and the
+    // change is announced. An undeclared id and a mistyped value are
+    // refused.
+    let mut events = agent.events().await;
+    let outcome = agent.invoke(CRASHY, "publish", json!({})).await.unwrap();
+    let PluginActionOutcome::Ok { data, .. } = &outcome else {
+        panic!("{outcome:?}")
+    };
+    assert_eq!(data["refused"], json!(2), "{outcome:?}");
+    variable_changed(&mut events, STATUS_VAR).await;
+    assert_eq!(
+        agent
+            .preview(
+                profile.id,
+                &[
+                    STATUS_VAR,
+                    COUNT_VAR,
+                    ONLINE_VAR,
+                    "plugins.acme.sdkTest.undeclared"
+                ]
+            )
+            .await,
+        vec![
+            resolved(VariableValue::String("ready".into())),
+            resolved(VariableValue::Integer(42)),
+            resolved(VariableValue::Boolean(true)),
+            ReferenceStatus::Missing {
+                reason: MissingReason::UnknownVariable
+            },
+        ]
+    );
+
+    // An app of protocol 9 neither lists them nor takes them for
+    // references, and hears of no change.
+    let mut old = agent.old_client().await;
+    assert_eq!(old.protocol(), 9);
+    assert_eq!(
+        listed(&catalog(&mut old, profile.id).await, CRASHY),
+        Vec::<String>::new()
+    );
+    assert!(
+        matches!(
+            previews(&mut old, profile.id, &[STATUS_VAR])
+                .await
+                .as_slice(),
+            [ReferenceStatus::Invalid { .. }]
+        ),
+        "an older app must not resolve plugin variables"
+    );
+    let mut old_events = agent.old_client().await;
+    old_events.subscribe().await.unwrap();
+
+    // Clearing one leaves the others.
+    agent.invoke(CRASHY, "clear", json!({})).await.unwrap();
+    assert_eq!(
+        agent.preview(profile.id, &[STATUS_VAR, COUNT_VAR]).await,
+        vec![no_value.clone(), resolved(VariableValue::Integer(42))]
+    );
+
+    // Disabled: unavailable; enabled again: the values were dropped.
+    agent
+        .request(Request::DisablePlugin {
+            plugin: CRASHY.into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        agent.preview(profile.id, &[COUNT_VAR]).await,
+        vec![unavailable.clone()]
+    );
+    agent.enable(CRASHY, &[]).await.unwrap();
+    assert_eq!(
+        agent.preview(profile.id, &[COUNT_VAR]).await,
+        vec![no_value.clone()]
+    );
+
+    // Uninstalled: unavailable, the reference still parses.
+    agent.invoke(CRASHY, "publish", json!({})).await.unwrap();
+    assert_eq!(
+        agent.preview(profile.id, &[COUNT_VAR]).await,
+        vec![resolved(VariableValue::Integer(42))]
+    );
+    agent
+        .request(Request::UninstallPlugin {
+            plugin: CRASHY.into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        agent.preview(profile.id, &[COUNT_VAR]).await,
+        vec![unavailable.clone()]
+    );
+    assert_eq!(
+        listed(&agent.catalog(profile.id).await, CRASHY),
+        Vec::<String>::new()
+    );
+    // The protocol 9 connection never heard of a plugin variable.
+    while let Ok(Ok(event)) =
+        tokio::time::timeout(Duration::from_millis(200), old_events.next_event()).await
+    {
+        if let deckpilot_ipc::AgentEvent::SharedVariablesChanged { keys } = &event {
+            assert!(keys.iter().all(|k| !k.starts_with("plugins.")), "{keys:?}");
+        }
+    }
+    agent.stop().await;
+}
+
+/// An abort interrupts a capability call that is running (design §3.7):
+/// cancelling a workflow while its plugin node waits for a server that
+/// would answer only after 14 s ends the run at once, and the answer never
+/// reaches the plugin (it would have published it).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_long_request_ends_at_once_and_its_result_is_dropped() {
+    use deckpilot_core::variables::{MissingReason, ReferenceStatus};
+    use deckpilot_core::{ActionStatus, ExecutionState};
+    let registry = shared_registry();
+    let mut profile = deckpilot_core::Profile::new("Very slow");
+    let fetch = plugin_action(&mut profile, "Fetch", "acme.sdk-test.fetch-publish", &[]);
+    let inits = plugin_action(&mut profile, "Inits", "acme.sdk-test.inits", &[]);
+    let flow = action_workflow(&mut profile, "Very slow flow", "fetch", fetch);
+    let env = Env::with_profile("plugins-e2e-cancel-request", &profile);
+    let agent = Agent::started(&env, registry).await;
+    agent.install(CRASHY, None).await.unwrap();
+    agent.enable(CRASHY, &[NETWORK]).await.unwrap();
+
+    let run = agent.run_workflow(flow).await;
+    let deadline = Instant::now() + STARTUP;
+    while !fetched(&env.http).iter().any(|u| u == VERY_SLOW_URL) {
+        assert!(Instant::now() < deadline, "the request did not go out");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let cancelled_at = Instant::now();
+    agent
+        .request(Request::CancelExecution { execution: run })
+        .await
+        .unwrap();
+    let record = agent.finished(run).await;
+    let took = cancelled_at.elapsed();
+    assert_eq!(
+        record.summary.state,
+        ExecutionState::Cancelled,
+        "{record:#?}"
+    );
+    // At once: the request was stopped, not waited for (nor the 2 s
+    // grace, since the plugin answered as soon as its call failed).
+    assert!(
+        took < Duration::from_millis(1_500),
+        "the cancel took {took:?}"
+    );
+    // The plugin goes on, and nothing of the stopped request arrived.
+    let after = agent.run_action(inits).await;
+    assert_eq!(after.status, ActionStatus::Succeeded, "{after:?}");
+    assert_eq!(
+        agent.preview(profile.id, &[LAST_STATUS_VAR]).await,
+        vec![ReferenceStatus::Missing {
+            reason: MissingReason::NoValue
+        }]
+    );
+    assert_eq!(
+        agent.details(CRASHY).await.summary.state,
+        PluginState::Enabled
+    );
+    agent.stop().await;
+}
+
+/// A permission revoked while an action runs denies the next privileged
+/// call of that same invocation (design §5.1: grants read per call): the
+/// first request of `two-fetches` was allowed and answers late; the
+/// network permission is revoked meanwhile; its second request is denied
+/// and never goes out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_revoke_during_an_action_denies_its_next_call() {
+    let registry = shared_registry();
+    let env = Env::new("plugins-e2e-revoke-mid-run");
+    let agent = Agent::started(&env, registry).await;
+    agent.install(CRASHY, None).await.unwrap();
+    agent.enable(CRASHY, &[NETWORK]).await.unwrap();
+
+    let run = agent.invoke(CRASHY, "two-fetches", json!({}));
+    let revoke = async {
+        let deadline = Instant::now() + STARTUP;
+        while !fetched(&env.http).iter().any(|u| u == SLOW_URL) {
+            assert!(
+                Instant::now() < deadline,
+                "the first request did not go out"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let sent_at = Instant::now();
+        agent
+            .request(Request::RevokePluginPermission {
+                plugin: CRASHY.into(),
+                permission: NETWORK.into(),
+            })
+            .await
+            .unwrap();
+        Instant::now().duration_since(sent_at)
+    };
+    let (outcome, revoke_took) = tokio::join!(run, revoke);
+    let outcome = outcome.unwrap();
+    let PluginActionOutcome::Ok { data, .. } = &outcome else {
+        panic!("{outcome:?}")
+    };
+    // The revoke landed while the first request was still waiting (it
+    // was seen going out, and is answered TWO_FETCHES_MS later).
+    assert!(
+        revoke_took < Duration::from_millis(TWO_FETCHES_MS),
+        "the revoke took {revoke_took:?}"
+    );
+    assert_eq!(data["first"], json!(200), "{outcome:?}");
+    assert_eq!(data["second"], json!("not-permitted"), "{outcome:?}");
+    let requests = fetched(&env.http);
+    assert!(!requests.iter().any(|u| u == FAST_URL), "{requests:?}");
+    agent.stop().await;
+}
+
+/// The next `changed` event of `plugin`.
+async fn changed(events: &mut AgentClient, plugin: &str) -> Option<PluginState> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let event = tokio::time::timeout_at(deadline, events.next_plugin_event())
+            .await
+            .unwrap_or_else(|_| panic!("no change of {plugin} was announced"))
+            .unwrap();
+        if let PluginEvent::Changed { plugin: p, state } = event
+            && p == plugin
+        {
+            return state;
+        }
+    }
+}
+
+/// Lifecycle events keep the agent, its engine and the app consistent:
+/// each change of an installed plugin is announced (`changed`) and
+/// re-registers its actions and variables (available, or unavailable with
+/// the reason). A host crash fails one action and keeps the plugin (and
+/// its values); a registry revocation quarantines it, stops its host and
+/// drops its values; an uninstall removes it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // one path, step by step
+async fn lifecycle_events_drive_actions_and_variables() {
+    use deckpilot_core::ActionStatus;
+    use deckpilot_core::variables::{ReferenceStatus, VariableValue};
+    // A registry of its own, so that revoking the plugin there touches no
+    // other test.
+    let shared = shared_registry();
+    let registry = Registry {
+        work: Dir::Temp(TempDir::new("plugin-registry-quarantine")),
+        keys: Dir::Temp(TempDir::new("plugin-registry-quarantine-keys")),
+    };
+    copy_dir(shared.work.path(), registry.work.path());
+    copy_dir(shared.keys.path(), registry.keys.path());
+    let mut profile = deckpilot_core::Profile::new("Lifecycle");
+    let inits = plugin_action(&mut profile, "Inits", "acme.sdk-test.inits", &[]);
+    let env = Env::with_profile("plugins-e2e-lifecycle-events", &profile);
+    let agent = Agent::started(&env, &registry).await;
+    let mut events = agent.client().await;
+    events.subscribe_plugin_events().await.unwrap();
+
+    agent.install(CRASHY, None).await.unwrap();
+    assert_eq!(
+        changed(&mut events, CRASHY).await,
+        Some(PluginState::Disabled)
+    );
+    let refused = agent.run_action(inits).await;
+    assert!(refused.message.contains("disabled"), "{refused:?}");
+    agent.enable(CRASHY, &[NETWORK]).await.unwrap();
+    assert_eq!(
+        changed(&mut events, CRASHY).await,
+        Some(PluginState::Enabled)
+    );
+    assert_eq!(
+        agent.run_action(inits).await.status,
+        ActionStatus::Succeeded
+    );
+    agent.invoke(CRASHY, "publish", json!({})).await.unwrap();
+    let count = resolved(VariableValue::Integer(42));
+    assert_eq!(
+        agent.preview(profile.id, &[COUNT_VAR]).await,
+        vec![count.clone()]
+    );
+
+    // A crash fails the action; the plugin stays enabled with its values,
+    // and a new host serves the next action after the backoff.
+    let crashed = agent.invoke(CRASHY, "panic", json!({})).await;
+    assert_eq!(reason_of(&crashed), reason::HOST_FAILED, "{crashed:?}");
+    assert_eq!(
+        agent.details(CRASHY).await.summary.state,
+        PluginState::Enabled
+    );
+    assert_eq!(
+        agent.preview(profile.id, &[COUNT_VAR]).await,
+        vec![count.clone()]
+    );
+    tokio::time::sleep(Duration::from_millis(1_300)).await;
+    assert_eq!(
+        agent.run_action(inits).await.status,
+        ActionStatus::Succeeded
+    );
+
+    // The registry revokes the installed version: the next refresh
+    // quarantines the plugin, which is announced; its actions and
+    // variables become unavailable and its values are dropped.
+    registry.run(&[
+        "revoke",
+        "--id",
+        CRASHY,
+        "--versions",
+        "1.0.0",
+        "--action",
+        "disable",
+        "--reason",
+        "misbehaves",
+    ]);
+    registry.run(&["build-index", "--source-commit", &"b".repeat(40)]);
+    registry.run(&["sign-index", "--key", &registry.key("index.key")]);
+    registry.run(&["timestamp", "--key", &registry.key("timestamp.key")]);
+    agent
+        .request(Request::ListAvailablePlugins { refresh: true })
+        .await
+        .unwrap();
+    assert_eq!(
+        changed(&mut events, CRASHY).await,
+        Some(PluginState::Quarantined)
+    );
+    let refused = agent.run_action(inits).await;
+    assert_eq!(refused.status, ActionStatus::Failed, "{refused:?}");
+    assert!(refused.message.contains("SDK test"), "{refused:?}");
+    let unavailable = ReferenceStatus::Unavailable {
+        owner: CRASHY.into(),
+    };
+    assert_eq!(
+        agent.preview(profile.id, &[COUNT_VAR]).await,
+        vec![unavailable.clone()]
+    );
+    let refused = agent.enable(CRASHY, &[]).await;
+    assert_eq!(reason_of(&refused), reason::REVOKED, "{refused:?}");
+
+    // Uninstalled: announced without a state; the action is not
+    // available any more, the reference is still unavailable.
+    agent
+        .request(Request::UninstallPlugin {
+            plugin: CRASHY.into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(changed(&mut events, CRASHY).await, None);
+    let refused = agent.run_action(inits).await;
+    assert!(refused.message.contains("not available"), "{refused:?}");
+    assert_eq!(
+        agent.preview(profile.id, &[COUNT_VAR]).await,
+        vec![unavailable]
     );
     agent.stop().await;
 }

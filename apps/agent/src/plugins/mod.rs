@@ -35,6 +35,8 @@ mod registry;
 #[cfg(feature = "plugins")]
 mod service;
 #[cfg(feature = "plugins")]
+mod variables;
+#[cfg(feature = "plugins")]
 mod worker;
 
 /// Whether this agent was built with the `plugins` feature.
@@ -260,7 +262,9 @@ impl PluginRuntime {
             return worker
                 .catalog()
                 .into_iter()
-                .filter_map(|plugin| engine::PluginModule::new(plugin, invoker.clone()))
+                .filter_map(|plugin| {
+                    engine::PluginModule::new(plugin, invoker.clone(), worker.values())
+                })
                 .map(|module| Box::new(module) as Box<dyn deckpilot_core::FeatureModule>)
                 .collect();
         }

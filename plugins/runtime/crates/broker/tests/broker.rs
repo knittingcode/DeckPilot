@@ -597,3 +597,51 @@ fn credential_grants_are_strict() {
     );
     assert_eq!(derive(&twice), Err(GrantError::DuplicateCredential));
 }
+
+#[test]
+fn own_variables_are_always_allowed_but_rate_limited() {
+    use deckpilot_plugin_abi::capability::{VariableClear, VariablePublish};
+    let publish = |id: &str| {
+        CapabilityRequest::VariablesPublish(VariablePublish {
+            id: id.into(),
+            value: json!(21),
+        })
+    };
+    // No permission is needed: the own namespace is always granted.
+    let f = fixture("[]");
+    let s = f.broker.session(f.plugin.clone());
+    let d = s.authorize(&publish("temperature"));
+    assert_eq!(
+        d,
+        Decision::Allow(Allowed::VariablePublish {
+            id: "temperature".into(),
+            value: json!(21),
+        })
+    );
+    assert_eq!(
+        s.authorize(&CapabilityRequest::VariablesClear(VariableClear {
+            id: None
+        })),
+        Decision::Allow(Allowed::VariableClear { id: None })
+    );
+    // Absolute ids (another plugin's) are malformed, never allowed.
+    assert_eq!(
+        s.authorize(&publish("plugins.other.prs.x")).denial(),
+        Some(DenyReason::TooLarge)
+    );
+    // 10 per second (two already taken above).
+    let mut allowed = 2;
+    while s.authorize(&publish("temperature")).is_allowed() {
+        allowed += 1;
+        assert!(allowed <= 10, "no rate limit");
+    }
+    assert_eq!(allowed, 10);
+    f.clock.advance(Duration::from_secs(1));
+    assert!(s.authorize(&publish("temperature")).is_allowed());
+    // A plugin without grants (disabled, removed) publishes nothing.
+    f.broker.remove_plugin(&f.plugin);
+    assert_eq!(
+        s.authorize(&publish("temperature")).denial(),
+        Some(DenyReason::UnknownPlugin)
+    );
+}

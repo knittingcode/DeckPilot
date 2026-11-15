@@ -38,7 +38,9 @@ pub(super) enum LaneError {
     /// The lane stopped (the plugin was disabled, updated, uninstalled…)
     /// before or while the invocation ran.
     Stopped,
-    /// The invocation was aborted before it started.
+    /// The invocation was aborted (cancelled, past its deadline, or its
+    /// plugin stopped) before it started or before its answer arrived; a
+    /// late answer is discarded.
     Aborted,
     /// The broker or the executor panicked; the plugin is disabled.
     Panicked,
@@ -207,6 +209,9 @@ fn run(
             *slot = None;
         }
         let result = match outcome {
+            // An answer to an aborted invocation (cancelled, or its plugin
+            // stopped meanwhile) is late: never applied.
+            Ok(Ok(_)) if abort.is_aborted() => Err(LaneError::Aborted),
             Ok(Ok(outcome)) => Ok(outcome),
             Ok(Err(e)) => {
                 match &e {

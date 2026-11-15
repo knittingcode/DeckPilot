@@ -194,6 +194,62 @@ fn module_roots_parse_for_known_module_namespaces() {
 }
 
 #[test]
+fn plugin_references_parse_without_the_plugin() {
+    // design §2.3 item 3: `plugins.<publisherCamel>.<nameCamel>.<path>`
+    // parses on every computer, no list consulted, 1 to 3 path segments.
+    for text in [
+        "plugins.acme.githubPrs.open",
+        "plugins.acme.githubPrs.review.mine.count",
+        "plugins.myCo.helloWeather2.temperature_c",
+        "plugins.zz.neverInstalled.x",
+    ] {
+        let parsed = reference(text);
+        assert_eq!(parsed, VariableRef::Module(VariableId::new(text).unwrap()));
+        assert_eq!(parsed.to_string(), text);
+        assert_eq!(parsed.registered_id().unwrap().as_str(), text);
+        assert_eq!(
+            serde_json::from_value::<VariableRef>(json!(text)).unwrap(),
+            parsed
+        );
+        assert_eq!(
+            parse_expression(&format!("t={{{{ {text} }}}}"))
+                .unwrap()
+                .len(),
+            2,
+            "{text}"
+        );
+    }
+    for bad in [
+        // No variable, or more than six segments.
+        "plugins.acme.githubPrs",
+        "plugins.acme",
+        "plugins.acme.githubPrs.a.b.c.d",
+        // No valid plugin id: publisher or name too short, not camel case
+        // of the id grammar.
+        "plugins.a.githubPrs.x",
+        "plugins.acme.p.x",
+        "plugins.acme.github_prs.x",
+        "plugins.acme.2prs.x",
+        "plugins.Acme.prs.x",
+        "plugins.acme.github-prs.x",
+        // Not a segment.
+        "plugins.acme.githubPrs.Open",
+        "plugins.acme.githubPrs.",
+    ] {
+        assert!(VariableRef::parse(bad).is_err(), "{bad}");
+        assert!(
+            serde_json::from_value::<VariableRef>(json!(bad)).is_err(),
+            "{bad}"
+        );
+    }
+    // `shared.plugins.…` stays a shared variable.
+    assert_eq!(
+        reference("shared.plugins.x"),
+        VariableRef::Shared(key("plugins.x"))
+    );
+}
+
+#[test]
 fn values_and_types_have_stable_shapes() {
     let project = profile().projects[0].id;
     assert_eq!(

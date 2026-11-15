@@ -41,8 +41,17 @@ use crate::work_session::WorkSessionSnapshot;
 use crate::{ModuleId, Os, Profile, Project};
 
 /// Roots of the reference grammar that no module can use as its namespace:
-/// node outputs, shared variables and the two namespaces of the core.
-pub const RESERVED_ROOTS: &[&str] = &["steps", "shared", "system", "workflow"];
+/// node outputs, shared variables, the two namespaces of the core and the
+/// root of every plugin's namespace ([`PLUGIN_ROOT`]).
+pub const RESERVED_ROOTS: &[&str] = &["steps", "shared", "system", "workflow", PLUGIN_ROOT];
+/// The root of plugin variables, `plugins.<publisherCamel>.<nameCamel>.<path>`
+/// (`docs/marketplace/architecture.md` §2.3 item 3). Unlike
+/// [`MODULE_NAMESPACES`] it is not a list: a reference under it parses
+/// whenever it names a valid plugin id and a path of 1 to 3 segments,
+/// whether or not the plugin is installed on this computer.
+pub const PLUGIN_ROOT: &str = "plugins";
+/// Segments of a plugin's namespace (`plugins.<publisher>.<name>`).
+const PLUGIN_NAMESPACE_SEGMENTS: usize = 3;
 /// The namespaces the core owns.
 pub const CORE_NAMESPACES: &[&str] = &["system", "workflow"];
 /// The namespaces of the modules that declare variables: the only roots a
@@ -84,9 +93,40 @@ impl VariableId {
         &self.0
     }
 
-    /// The first segment: the owner's namespace.
+    /// The first segment: the root of the owner's namespace (`plugins` for
+    /// every plugin variable; see [`VariableId::owner_namespace`]).
     pub fn namespace(&self) -> &str {
         self.0.split('.').next().unwrap_or_default()
+    }
+
+    /// The owner's whole namespace: the first segment, or for an id under
+    /// [`PLUGIN_ROOT`] the first three (`plugins.acme.helloWeather`).
+    pub fn owner_namespace(&self) -> &str {
+        if self.namespace() != PLUGIN_ROOT {
+            return self.namespace();
+        }
+        match self.0.match_indices('.').nth(PLUGIN_NAMESPACE_SEGMENTS - 1) {
+            Some((end, _)) => &self.0[..end],
+            None => &self.0,
+        }
+    }
+
+    /// The plugin that owns this id, installed or not
+    /// (`plugins.acme.githubPrs.open` → `acme.github-prs`). `None` for ids
+    /// outside [`PLUGIN_ROOT`], and for ids under it that name no valid
+    /// plugin id or no variable.
+    pub fn plugin_owner(&self) -> Option<ModuleId> {
+        let mut segments = self.0.split('.');
+        if segments.next() != Some(PLUGIN_ROOT) {
+            return None;
+        }
+        let publisher = kebab_case(segments.next()?)?;
+        let name = kebab_case(segments.next()?)?;
+        // At least one segment of the variable itself.
+        segments.next()?;
+        ModuleId::new(format!("{publisher}.{name}"))
+            .ok()
+            .filter(ModuleId::is_plugin)
     }
 
     /// Everything after the namespace, e.g. `current.id`.
@@ -131,10 +171,42 @@ impl fmt::Display for VariableId {
 
 /// The namespace of a module's variables: its id in lower camel case, so
 /// that it is a valid reference segment (`work-session` → `workSession`).
+/// A plugin's is under [`PLUGIN_ROOT`], with its publisher and name each
+/// in lower camel case (`acme.github-prs` → `plugins.acme.githubPrs`).
 pub fn module_namespace(module: &ModuleId) -> String {
-    let mut namespace = String::with_capacity(module.as_str().len());
+    if module.is_plugin() {
+        return format!("{PLUGIN_ROOT}.{}", lower_camel(module.as_str()));
+    }
+    lower_camel(module.as_str())
+}
+
+/// The inverse of [`lower_camel`] for one segment of a plugin namespace
+/// (`githubPrs` → `github-prs`); `None` for anything but ASCII letters and
+/// digits starting with a lowercase letter. The plugin id grammar decides
+/// the rest.
+fn kebab_case(segment: &str) -> Option<String> {
+    if !segment.starts_with(|c: char| c.is_ascii_lowercase())
+        || !segment.chars().all(|c| c.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    let mut text = String::with_capacity(segment.len() + 4);
+    for c in segment.chars() {
+        if c.is_ascii_uppercase() {
+            text.push('-');
+            text.push(c.to_ascii_lowercase());
+        } else {
+            text.push(c);
+        }
+    }
+    Some(text)
+}
+
+/// `work-session` → `workSession`; dots are kept.
+fn lower_camel(text: &str) -> String {
+    let mut namespace = String::with_capacity(text.len());
     let mut upper = false;
-    for c in module.as_str().chars() {
+    for c in text.chars() {
         if c == '-' {
             upper = true;
         } else if upper {
@@ -638,7 +710,7 @@ impl VariableRegistry {
         let source = source.ok_or_else(|| VariableRegistryError::NoSource(module.clone()))?;
         let mut seen = std::collections::BTreeSet::new();
         for declaration in declarations {
-            if declaration.id.namespace() != namespace {
+            if declaration.id.owner_namespace() != namespace {
                 return Err(VariableRegistryError::Namespace {
                     module: module.clone(),
                     namespace,
@@ -746,11 +818,14 @@ impl VariableRegistry {
             return Resolution::Missing(MissingReason::OtherProfile);
         }
         let Some(registered) = self.variables.get(id) else {
-            return match self.namespace_owner(id.namespace()) {
+            return match self.namespace_owner(id.owner_namespace()) {
                 Some(_) => Resolution::Missing(MissingReason::UnknownVariable),
-                // Nothing owns the namespace: its module is not installed.
+                // Nothing owns the namespace: its module is not installed
+                // (a plugin is named by its id).
                 None => Resolution::Unavailable {
-                    owner: id.namespace().to_owned(),
+                    owner: id
+                        .plugin_owner()
+                        .map_or_else(|| id.owner_namespace().to_owned(), |m| m.to_string()),
                 },
             };
         };
