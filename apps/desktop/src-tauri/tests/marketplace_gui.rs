@@ -32,6 +32,9 @@ use marketplace::{Driver, Fixture, HELLO, NAME, PASSWORD, Via, wait_until};
 use webdriver::{WAIT, WebDriver};
 
 const LONG: Duration = Duration::from_secs(90);
+/// Whether the app's unlock window cannot be used through `WebDriver`
+/// (Windows, see `Gui::launch_unlocked`).
+const PROMPT_UNREACHABLE: bool = cfg!(windows);
 
 /// An `XPath` string literal for `text` (no quotes of both kinds in it).
 fn lit(text: &str) -> String {
@@ -135,8 +138,11 @@ impl Gui {
     }
 
     /// Starts the app and unlocks it in its unlock window.
-    fn launch(&mut self, fx: &Fixture) -> Vec<Via> {
+    fn launch(&mut self, fx: &mut Fixture) -> Vec<Via> {
         self.starts += 1;
+        if PROMPT_UNREACHABLE {
+            return self.launch_unlocked(fx);
+        }
         let wd = WebDriver::start(self.port, &self.app).expect("a WebDriver session");
         self.wd = Some(wd);
         let main = self.wd().current_window().unwrap();
@@ -161,6 +167,26 @@ impl Gui {
             .wait(&button("Settings"), LONG)
             .expect("the main window");
         via
+    }
+
+    /// Windows: the app finds the agent running and unlocked, takes its
+    /// key and opens no prompt window. Under msedgedriver a second `WebView2`
+    /// window of the app never loaded (`about:blank`) and the app stopped
+    /// answering IPC (CI run 43742773500), so the test starts the agent
+    /// itself (with the arguments the app's agent gets) and unlocks it over
+    /// its IPC, with the key of the password.
+    fn launch_unlocked(&mut self, fx: &mut Fixture) -> Vec<Via> {
+        if !fx.agent_running() {
+            fx.spawn_agent();
+        }
+        fx.unlock_agent();
+        let wd = WebDriver::start(self.port, &self.app).expect("a WebDriver session");
+        self.wd = Some(wd);
+        self.wd()
+            .wait(&button("Settings"), LONG)
+            .expect("the main window");
+        eprintln!("[gui] the agent was started and unlocked by the test (Windows)");
+        vec![Via::Fixture, Via::AgentIpc]
     }
 
     /// Finds the password prompt among the app's windows and submits the
@@ -321,13 +347,21 @@ impl Driver for Gui {
     }
 
     fn start(&mut self, fx: &mut Fixture) -> Vec<Via> {
+        if PROMPT_UNREACHABLE {
+            // As if the user had confirmed this version before: the app
+            // takes the agent's key without asking again (security policy
+            // "after updates"), so no confirmation window opens either.
+            fx.confirm_app_version(env!("CARGO_PKG_VERSION"));
+        }
         self.start_server(fx);
         let mut via = self.launch(fx);
-        // The app started the agent (with the arguments and environment it
-        // passes on), not the test.
         let status = self.ok("agent_status", json!({}));
         assert_eq!(status["running"], true, "{status}");
-        via.push(Via::Ui);
+        if !PROMPT_UNREACHABLE {
+            // The app started the agent (with the arguments and environment
+            // it passes on), not the test.
+            via.push(Via::Ui);
+        }
         via
     }
 
@@ -344,6 +378,9 @@ impl Driver for Gui {
         // which is locked, so the unlock window opens.
         if let Some(wd) = self.wd.take() {
             wd.quit().expect("the app closes");
+        }
+        if PROMPT_UNREACHABLE {
+            fx.stop_agent();
         }
         let mut via = vec![Via::Ui];
         via.extend(self.launch(fx));

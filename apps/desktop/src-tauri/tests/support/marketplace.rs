@@ -599,6 +599,24 @@ impl Fixture {
             .expect("the agent reloads its configuration");
     }
 
+    /// Unlocks the running agent with the configuration's key.
+    pub fn unlock_agent(&self) {
+        self.agent(Request::Unlock {
+            key: deckpilot_ipc::KeyMaterial::new(self.key.to_hex()),
+        })
+        .expect("the agent unlocks");
+    }
+
+    /// Records that the user confirmed app `version` (the setting the
+    /// "after updates" policy checks), as an earlier start would have.
+    pub fn confirm_app_version(&self, version: &str) {
+        let store = SqliteStore::open(&self.paths.database, &Encryption::Key(self.key.clone()))
+            .expect("the configuration opens with its key");
+        store
+            .set_setting("security.confirmedVersion", version)
+            .unwrap();
+    }
+
     /// Whether the agent has the configuration open.
     pub fn agent_unlocked(&self) -> bool {
         matches!(

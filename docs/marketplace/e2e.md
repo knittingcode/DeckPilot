@@ -40,7 +40,7 @@ the test). The report is `<artifacts>/<driver>-steps.txt`.
 
 | # | Step | UI test |
 | --- | --- | --- |
-| 1 | Start the app with an isolated data dir; it starts the agent | UI: the password typed in the unlock window |
+| 1 | Start the app with an isolated data dir; it starts the agent | Linux: UI (the password typed in the unlock window). Windows: the test starts the agent and unlocks it over its IPC before the app starts (fixture, agent IPC), because a second WebView2 window of the app does not load under msedgedriver; the app then opens no prompt |
 | 2 | Open Settings › Extensions › Plugins | UI |
 | 3 | Discover Hello Weather | UI |
 | 4 | Inspect its details | UI |
@@ -51,7 +51,7 @@ the test). The report is `<artifacts>/<driver>-steps.txt`.
 | 9 | Execute the action | UI (Run in Installed) and agent IPC (key presses on the simulated MK.2) |
 | 10 | Execute it in a workflow | app IPC (`save_workflow`, `start_workflow`) |
 | 11 | Verify the results | app IPC, the canned HTTP log |
-| 12 | Restart the agent and the app | UI (Settings › Background Agent › Stop agent; the app is closed and started again, which starts the agent) |
+| 12 | Restart the agent and the app | UI (Settings › Background Agent › Stop agent; the app is closed and started again, which starts the agent; on Windows the test starts and unlocks the agent as in step 1) |
 | 13 | Verify persistence | app IPC, agent IPC, `plugins.db` |
 | 14 | Update to 1.1.0 (adds `notifications`) | UI (Updates › Check for updates › Update, consent dialog) |
 | 15 | Verify state migration (storage, settings, credential, grants) | app IPC, `plugins.db` |

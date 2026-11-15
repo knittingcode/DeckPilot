@@ -209,29 +209,6 @@ jobs:
       - name: Marketplace through the UI (Linux)
         if: matrix.gui && runner.os == 'Linux'
         run: xvfb-run -a -s "-screen 0 1440x900x24" cargo test --locked -p deckpilot-desktop --test marketplace_gui -- --ignored --nocapture
-      # Diagnostic only: does the app's WebView2 take the debugging port
-      # from WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS (what msedgedriver uses),
-      # and where does it keep its profile?
-      - name: WebView2 remote debugging (Windows, diagnostic)
-        if: matrix.gui && runner.os == 'Windows'
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9333"
-          $env:TAURI_WEBVIEW_AUTOMATION = "true"
-          $env:DECKPILOT_DATA_DIR = Join-Path $env:RUNNER_TEMP 'webview2-diagnostic'
-          $env:DECKPILOT_NO_AGENT_AUTOSTART = "1"
-          $app = Start-Process -FilePath $env:DECKPILOT_E2E_APP -PassThru
-          Start-Sleep -Seconds 25
-          Write-Host "app running: $(-not $app.HasExited)"
-          Get-CimInstance Win32_Process -Filter "name='msedgewebview2.exe'" |
-            Select-Object -First 2 -ExpandProperty CommandLine
-          try { (Invoke-WebRequest http://127.0.0.1:9333/json/version -UseBasicParsing).Content }
-          catch { Write-Host "no DevTools on 9333: $_" }
-          Get-ChildItem -Recurse -Filter DevToolsActivePort -Path $env:LOCALAPPDATA, $env:TEMP -ErrorAction SilentlyContinue |
-            ForEach-Object FullName
-          Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
-          Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force
       - name: Marketplace through the UI (Windows)
         if: matrix.gui && runner.os == 'Windows'
         run: cargo test --locked -p deckpilot-desktop --test marketplace_gui -- --ignored --nocapture
