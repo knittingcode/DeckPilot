@@ -175,6 +175,18 @@ pub enum Allowed {
     StorageDelete {
         key: String,
     },
+    /// One of the plugin's own variables (relative id, always allowed for
+    /// a plugin that has grants, rate limited). The executor checks the id
+    /// and type against the manifest's declarations and adds the plugin's
+    /// namespace; a plugin can never name another owner's variable.
+    VariablePublish {
+        id: String,
+        value: Value,
+    },
+    /// Clears one of the plugin's variables, or (`None`) all of them.
+    VariableClear {
+        id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -207,6 +219,7 @@ enum RateClass {
     Notify,
     Log,
     Storage,
+    Variables,
 }
 
 #[derive(Debug)]
@@ -313,6 +326,7 @@ impl Broker {
             RateClass::Notify => self.inner.limits.notify,
             RateClass::Log => self.inner.limits.log,
             RateClass::Storage => self.inner.limits.storage,
+            RateClass::Variables => self.inner.limits.variables,
         };
         let now = self.inner.clock.now();
         let mut buckets = self.inner.buckets.lock().unwrap_or_else(|e| e.into_inner());
@@ -457,6 +471,23 @@ impl Session {
                         key: s.key.clone(),
                         value: s.value.clone(),
                     },
+                    _ => unreachable!("matched above"),
+                };
+                (Decision::Allow(allowed), None)
+            }
+            // Own variables (design §5.2): always granted, rate limited.
+            CapabilityRequest::VariablesPublish(_) | CapabilityRequest::VariablesClear(_) => {
+                if !b.take(&self.plugin, RateClass::Variables) {
+                    return (Decision::Deny(DenyReason::RateLimited), None);
+                }
+                let allowed = match request {
+                    CapabilityRequest::VariablesPublish(p) => Allowed::VariablePublish {
+                        id: p.id.clone(),
+                        value: p.value.clone(),
+                    },
+                    CapabilityRequest::VariablesClear(c) => {
+                        Allowed::VariableClear { id: c.id.clone() }
+                    }
                     _ => unreachable!("matched above"),
                 };
                 (Decision::Allow(allowed), None)

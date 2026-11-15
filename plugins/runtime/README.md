@@ -55,6 +55,22 @@ unchanged byte for byte (tested in `crates/abi` and `crates/host/tests/lifecycle
   never a secret); the broker allows it only for a granted `credential`
   slot, its origins and schemes, and never across a redirect to another
   origin. `HttpResponse` documents the executor's reply shape.
+- `variables.publish {id, value}` and `variables.clear {id?}`: the
+  plugin's own variables (design §2.3 item 3), by relative id (1-3
+  segments, so no other owner can be named), values at most 16 KiB. Always
+  allowed for a plugin with grants, rate limited (`RateLimits::variables`,
+  10/s); the agent checks the id and type against the manifest. SDK:
+  `Context::publish_variable`, `clear_variable`, `clear_variables`. A host
+  or agent that predates them refuses the op.
+
+The supervisor (no protocol change) hands every capability call a
+`CallInterrupt` (`CapabilityExecutor::execute_interruptible`, default: the
+old `execute`): when the invocation's `AbortSignal` is raised or its
+deadline passes, an executor stops the running call at once and its late
+result is replaced by `unavailable`; an aborted invocation's later calls
+are refused without reaching the broker or the executor, and past the
+deadline no queued frame is read (`crates/supervisor/tests/fake_host.rs`,
+`running_calls_stop_on_abort_and_deadline`).
 
 ## Fixes relative to the spike
 
