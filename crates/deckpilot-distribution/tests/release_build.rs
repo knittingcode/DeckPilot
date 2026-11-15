@@ -7,6 +7,8 @@
 //!
 //! * the release binary does not contain the development override's
 //!   variable name, and setting the variable does not change its record;
+//! * it carries the record as text (`RECORD`), which the packaging and
+//!   release checks read from built binaries;
 //! * the debug binary contains the name and honours the override, which
 //!   shows that the search above would have found it;
 //! * invalid compile-time values fail the build.
@@ -107,6 +109,17 @@ fn the_release_build_has_no_override_and_the_debug_build_does() {
     assert!(
         !contains(&bytes, name.as_bytes()),
         "{name} occurs in the release binary {}",
+        release.display()
+    );
+    // The record the packaging and release checks read from a binary
+    // without running it (tools/ci/check-packages.sh record).
+    let embedded = format!(
+        "deckpilot-distribution-record:1;channel=github;format=;version={};end",
+        env!("CARGO_PKG_VERSION")
+    );
+    assert!(
+        contains(&bytes, embedded.as_bytes()),
+        "{embedded} is not embedded in {}",
         release.display()
     );
     let plain = record(&release, None);

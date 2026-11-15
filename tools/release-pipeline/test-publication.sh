@@ -98,6 +98,47 @@ signing() {
   done
 }
 
+# distribution <dir> [<target>=<channel>[/<format>[/<version>]]...]: the
+# distribution records of the four builds (release.yml, "Embedded
+# distribution record"), channel github without a compiled format unless
+# overridden; `missing` drops one.
+distribution() {
+  local dir="$1"
+  shift
+  rm -rf "$dir" && mkdir -p "$dir"
+  local spec target channel format version
+  for spec in aarch64-apple-darwin=github x86_64-apple-darwin=github \
+    x86_64-pc-windows-msvc=github x86_64-unknown-linux-gnu=github "$@"; do
+    target="${spec%%=*}" channel="${spec#*=}"
+    IFS=/ read -r channel format version <<< "$channel"
+    if [ "$channel" = missing ]; then
+      rm -f "$dir/$target.json"
+      continue
+    fi
+    jq -n --arg t "$target" --arg c "$channel" --arg f "${format-}" --arg v "${version:-$VERSION}" \
+      '{target: $t, distribution_channel: $c, package_format: $f, application_version: $v}' > "$dir/$target.json"
+  done
+}
+
+# release_files <dir> <version>: the installers and updater files of a
+# release of <version>, as the builds attach them to the draft.
+release_files() {
+  local dir="$1" v="$2"
+  local names=(
+    "DeckPilot_${v}_aarch64.dmg" "DeckPilot_${v}_x64.dmg"
+    DeckPilot_aarch64.app.tar.gz DeckPilot_aarch64.app.tar.gz.sig
+    DeckPilot_x64.app.tar.gz DeckPilot_x64.app.tar.gz.sig
+    "DeckPilot_${v}_amd64.AppImage" "DeckPilot_${v}_amd64.AppImage.sig"
+    "DeckPilot_${v}_amd64.deb" "DeckPilot_${v}_amd64.deb.sig"
+    "DeckPilot_${v}_x64_en-US.msi" "DeckPilot_${v}_x64_en-US.msi.sig"
+    "DeckPilot_${v}_x64-setup.exe" "DeckPilot_${v}_x64-setup.exe.sig"
+  )
+  [[ "$v" == *-* ]] || names+=("DeckPilot-${v}-1.x86_64.rpm" "DeckPilot-${v}-1.x86_64.rpm.sig")
+  mkdir -p "$dir"
+  local name
+  for name in "${names[@]}"; do printf 'content of %s\n' "$name" > "$dir/$name"; done
+}
+
 # draft <tag>: stage A as the workflow runs it, against the stub: the draft,
 # its assets, the manifest, the signing record and SHA256SUMS.
 draft() {
@@ -108,18 +149,7 @@ draft() {
   local id
   id=$(sed -n 's/^release_id=//p' "$work/draft.out")
   local assets="$STUB_DIR/assets/$id"
-  local names=(
-    "DeckPilot_${v}_aarch64.dmg" "DeckPilot_${v}_x64.dmg"
-    DeckPilot_aarch64.app.tar.gz DeckPilot_aarch64.app.tar.gz.sig
-    DeckPilot_x64.app.tar.gz DeckPilot_x64.app.tar.gz.sig
-    "DeckPilot_${v}_amd64.AppImage" "DeckPilot_${v}_amd64.AppImage.sig"
-    "DeckPilot_${v}_amd64.deb" "DeckPilot_${v}_amd64.deb.sig"
-    "DeckPilot_${v}_x64_en-US.msi" "DeckPilot_${v}_x64_en-US.msi.sig"
-    "DeckPilot_${v}_x64-setup.exe" "DeckPilot_${v}_x64-setup.exe.sig"
-  )
-  [ "$PRERELEASE" = true ] || names+=("DeckPilot-${v}-1.x86_64.rpm" "DeckPilot-${v}-1.x86_64.rpm.sig")
-  local name
-  for name in "${names[@]}"; do printf 'content of %s\n' "$name" > "$assets/$name"; done
+  release_files "$assets" "$v"
   # The manifest as the workflow assembles it (tools/ci/assemble-latest-json.sh).
   jq -n --arg v "$v" --argjson rpm "$([ "$PRERELEASE" = true ] && echo false || echo true)" '
     def update(name): {signature: "s", asset: name};
@@ -141,7 +171,8 @@ draft() {
   TAG="$tag" NOTES_FILE="$work/notes.md" ASSETS_FILE="$work/draft-assets.txt" \
     "$here/../ci/assemble-latest-json.sh" "$work/fragments" "$assets/$MANIFEST" > /dev/null
   signing "$work/signing"
-  TAG="$tag" NOTES_FILE="$work/notes.md" MACOS_SIGNING=true \
+  distribution "$work/distribution"
+  TAG="$tag" NOTES_FILE="$work/notes.md" MACOS_SIGNING=true ASSETS_DIR="$assets" DISTRIBUTION_DIR="$work/distribution" \
     "$here/release-meta.sh" "$work/signing" "$assets/release-meta.json" "$work/body.md" > /dev/null
   "$GH" api -X PATCH "repos/${REPOSITORY:-$GITHUB_REPOSITORY}/releases/$id" -f tag_name="$tag" -F body=@"$work/body.md" > /dev/null
   (cd "$assets" && sha256 -- * > "$work/SHA256SUMS" && mv "$work/SHA256SUMS" SHA256SUMS)
@@ -174,7 +205,12 @@ expect_failure "empty release notes" "release notes are empty" env NOTES_FILE="$
 
 echo "== signing record"
 env_for 0.6.0
-meta() { TAG=v0.6.0 NOTES_FILE="$work/notes.md" "$here/release-meta.sh" "$work/signing" "$work/meta.json" "$work/body.md"; }
+rm -rf "$work/files" && release_files "$work/files" 0.6.0
+distribution "$work/distribution"
+meta() {
+  TAG=v0.6.0 NOTES_FILE="$work/notes.md" ASSETS_DIR="$work/files" DISTRIBUTION_DIR="$work/distribution" \
+    "$here/release-meta.sh" "$work/signing" "$work/meta.json" "$work/body.md"
+}
 signing "$work/signing"
 if MACOS_SIGNING=true run meta.log meta; then
   ok "signed and notarized macOS builds are recorded"
@@ -198,6 +234,74 @@ MACOS_SIGNING=false run meta.log meta && grep -q -F "| aarch64-apple-darwin | **
   && ok "deliberately unsigned macOS builds are recorded as unsigned" || bad "unsigned macOS: $(cat "$work/meta.log")"
 signing "$work/signing"
 MACOS_SIGNING=false expect_failure "signed builds without configured signing" "signing was not configured" meta
+
+echo "== release-meta.json artifacts (packaging matrix, distribution records)"
+signing "$work/signing"
+if MACOS_SIGNING=true run meta.log meta; then
+  [ "$(jq -r 'keys_unsorted | join(" ")' "$work/meta.json")" = "tag version channel commit manifest updater_signature platforms artifacts" ] \
+    && ok "artifacts is added after the existing fields" || bad "fields: $(jq -c 'keys_unsorted' "$work/meta.json")"
+  [ "$(jq -r '[.artifacts[].name] | join(" ")' "$work/meta.json")" = "DeckPilot_0.6.0_aarch64.dmg DeckPilot_aarch64.app.tar.gz DeckPilot_0.6.0_x64.dmg DeckPilot_x64.app.tar.gz DeckPilot_0.6.0_x64_en-US.msi DeckPilot_0.6.0_x64-setup.exe DeckPilot_0.6.0_amd64.deb DeckPilot_0.6.0_amd64.AppImage DeckPilot-0.6.0-1.x86_64.rpm" ] \
+    && ok "a stable release lists every installer and updater file once, in matrix order" || bad "artifacts: $(jq -c '[.artifacts[].name]' "$work/meta.json")"
+  [ "$(jq -c '.artifacts[] | select(.name == "DeckPilot_aarch64.app.tar.gz") | del(.sha256, .size)' "$work/meta.json")" \
+    = '{"name":"DeckPilot_aarch64.app.tar.gz","matrix_id":"github-macos-arm64","target":"aarch64-apple-darwin","platform":"macos","arch":"aarch64","package_format":"app","distribution_channel":"github","update_provider":"github_release","signature":"DeckPilot_aarch64.app.tar.gz.sig"}' ] \
+    && ok "an artifact has its target, platform, arch, format, channel, provider and signature" || bad "artifact: $(jq -c '.artifacts[1]' "$work/meta.json")"
+  [ "$(jq -r '.artifacts[] | select(.name | endswith(".dmg")) | .signature' "$work/meta.json" | sort -u)" = null ] \
+    && ok "disk images have no updater signature" || bad "dmg signatures: $(jq -c '[.artifacts[].signature]' "$work/meta.json")"
+  (cd "$work/files" && sha256 -- *) | awk '{ print $2 " " $1 }' | sort > "$work/sums.txt"
+  jq -r '.artifacts[] | "\(.name) \(.sha256)"' "$work/meta.json" | sort > "$work/listed.txt"
+  [ -z "$(comm -23 "$work/listed.txt" "$work/sums.txt")" ] && ok "every artifact's SHA-256 is its file's" || bad "SHA-256: $(comm -23 "$work/listed.txt" "$work/sums.txt")"
+  size=$(wc -c < "$work/files/DeckPilot_0.6.0_amd64.deb" | tr -d ' ')
+  [ "$(jq -r '.artifacts[] | select(.name == "DeckPilot_0.6.0_amd64.deb") | .size' "$work/meta.json")" = "$size" ] \
+    && ok "every artifact has its size" || bad "size: $(jq -c '.artifacts[]' "$work/meta.json")"
+else
+  bad "artifacts: $(cat "$work/meta.log")"
+fi
+# The published release-meta.json of v0.6.0-alpha.3 and its release notes'
+# signing section, generated again from the same inputs: identical but
+# for the added artifacts.
+env_for 0.6.0-alpha.3 b0b23de9bd1183352cffc059a373d0ba3f550841
+rm -rf "$work/files-alpha3" && release_files "$work/files-alpha3" 0.6.0-alpha.3
+distribution "$work/distribution"
+signing "$work/signing"
+if TAG=v0.6.0-alpha.3 NOTES_FILE="$work/notes.md" ASSETS_DIR="$work/files-alpha3" DISTRIBUTION_DIR="$work/distribution" \
+  MACOS_SIGNING=true run meta.log "$here/release-meta.sh" "$work/signing" "$work/meta.json" "$work/body.md"; then
+  jq 'del(.artifacts)' "$work/meta.json" > "$work/meta-without-artifacts.json"
+  cmp -s "$work/meta-without-artifacts.json" "$here/fixtures/release-meta/v0.6.0-alpha.3.json" \
+    && ok "without artifacts, release-meta.json is the published one of v0.6.0-alpha.3, byte for byte" \
+    || bad "release-meta.json changed: $(diff "$here/fixtures/release-meta/v0.6.0-alpha.3.json" "$work/meta-without-artifacts.json")"
+  sed -n '/^## Code signing$/,$p' "$work/body.md" > "$work/code-signing.md"
+  cmp -s "$work/code-signing.md" "$here/fixtures/release-meta/v0.6.0-alpha.3-code-signing.md" \
+    && ok "the release notes' signing section is the published one of v0.6.0-alpha.3" \
+    || bad "notes changed: $(diff "$here/fixtures/release-meta/v0.6.0-alpha.3-code-signing.md" "$work/code-signing.md")"
+  [ "$(jq '.artifacts | length' "$work/meta.json")" = 8 ] && ! jq -e '.artifacts[] | select(.package_format == "rpm")' "$work/meta.json" > /dev/null \
+    && ok "a pre-release lists no .rpm" || bad "pre-release artifacts: $(jq -c '[.artifacts[].name]' "$work/meta.json")"
+else
+  bad "v0.6.0-alpha.3: $(cat "$work/meta.log")"
+fi
+env_for 0.6.0
+signing "$work/signing"
+export MACOS_SIGNING=true
+distribution "$work/distribution" x86_64-unknown-linux-gnu=apt
+expect_failure "a build of another distribution channel" "compiled for the distribution channel 'apt'" meta
+distribution "$work/distribution" x86_64-pc-windows-msvc=github/msi
+expect_failure "a GitHub build with a compiled-in package format" "has the package format 'msi' compiled in" meta
+distribution "$work/distribution" aarch64-apple-darwin=github//0.5.9
+expect_failure "a build of another version" "records version '0.5.9'" meta
+distribution "$work/distribution" x86_64-apple-darwin=missing
+expect_failure "a build without a distribution record" "no distribution record of the x86_64-apple-darwin build" meta
+distribution "$work/distribution"
+rm "$work/files/DeckPilot_0.6.0_amd64.AppImage.sig"
+expect_failure "a matrix asset missing from the release" "lists DeckPilot_0.6.0_amd64.AppImage.sig, which the release lacks" meta
+release_files "$work/files" 0.6.0
+: > "$work/files/DeckPilot_0.6.0_amd64_apt.deb"
+expect_failure "a file outside the packaging matrix" "outside the packaging matrix" meta
+rm "$work/files/DeckPilot_0.6.0_amd64_apt.deb"
+: > "$work/files/latest.json" && : > "$work/files/release-meta.json" && : > "$work/files/SHA256SUMS"
+run meta.log meta && ok "the manifest, release-meta.json and SHA256SUMS are not artifacts" || bad "non-artifacts: $(cat "$work/meta.log")"
+unset MACOS_SIGNING
+expect_failure "release-meta.sh without the draft's files" "ASSETS_DIR" \
+  env MACOS_SIGNING=true TAG=v0.6.0 NOTES_FILE="$work/notes.md" DISTRIBUTION_DIR="$work/distribution" \
+  "$here/release-meta.sh" "$work/signing" "$work/meta.json" "$work/body.md"
 
 echo "== required assets and channel isolation"
 assets_of() { (cd "$STUB_DIR/assets/$1" && ls -1) > "$work/assets.txt"; }

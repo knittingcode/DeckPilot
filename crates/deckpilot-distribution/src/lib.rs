@@ -602,6 +602,32 @@ pub const DISTRIBUTION: Distribution = match Distribution::new(
     }
 };
 
+/// The compiled record as one line of text, kept in every binary that links
+/// this crate ([`EMBEDDED_RECORD`]), so that the release and packaging
+/// checks can read it from a built binary without running it
+/// (`tools/ci/check-packages.sh record`, docs/distribution/README.md
+/// section 2.2):
+///
+/// `deckpilot-distribution-record:1;channel=<channel>;format=<format or
+/// empty>;version=<version>;end`
+///
+/// The values are the ones `build.rs` validated; the format is empty for a
+/// GitHub build, whose format the bundler patches in per package.
+pub const RECORD: &str = concat!(
+    "deckpilot-distribution-record:1;channel=",
+    env!("DECKPILOT_BUILD_CHANNEL"),
+    ";format=",
+    env!("DECKPILOT_BUILD_PACKAGE_FORMAT"),
+    ";version=",
+    env!("CARGO_PKG_VERSION"),
+    ";end"
+);
+
+/// [`RECORD`], kept by the compiler and the linker even where nothing reads
+/// it (`#[used]`), like the bundler's `__TAURI_BUNDLE_TYPE`.
+#[used]
+pub static EMBEDDED_RECORD: &str = RECORD;
+
 /// The record of the running build.
 ///
 /// Release builds: always [`DISTRIBUTION`]. Debug builds: the same, unless
