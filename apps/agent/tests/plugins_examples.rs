@@ -770,7 +770,12 @@ async fn developer_tools_runs_with_only_its_grants() {
     assert_eq!(agent.run(TOOLS, "open-prs", json!({})).await["count"], 4);
     assert_eq!(fetched(&agent.http).len(), requests + 1);
 
-    // ---- the token is in no log and in no file as clear text.
+    // ---- the token is in no log and in no file as clear text. The agent
+    // is stopped first: Windows does not let another process read a
+    // database the agent holds locked.
+    let mut agent = agent;
+    let _ = agent.child.kill();
+    let _ = agent.child.wait();
     assert!(!agent.log().contains(TOKEN), "the agent log has the token");
     for entry in walk(&agent.paths.data_dir.join("plugins")) {
         let bytes = std::fs::read(&entry).unwrap();
