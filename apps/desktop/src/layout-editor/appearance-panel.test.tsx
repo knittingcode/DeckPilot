@@ -25,6 +25,7 @@ vi.mock("@/lib/api", () => ({
   errorMessage: (error: unknown) => (error instanceof Error ? error.message : String(error)),
 }))
 vi.mock("@/lib/app-context", () => ({
+  useActionModules: () => [],
   useAppContext: () => ({
     profiles: { activeProfileId: null, profiles: [] },
     refresh: vi.fn(),

@@ -127,12 +127,38 @@ pub struct PluginRuntimeStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryStatus {
-    /// Where documents come from (a local directory for now).
+    /// Where documents come from: `local:<dir>`, or the registry's https
+    /// URL.
     pub source: String,
     pub freshness: RegistryFreshness,
     /// Sequence number of the verified index.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seq: Option<u64>,
+    /// Why the registry is stale (with `freshness: stale`). Additive:
+    /// older agents leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_reason: Option<RegistryStaleReason>,
+    /// When the verified timestamp expires (RFC 3339): after it, without
+    /// a successful refresh, the registry is stale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires: Option<String>,
+    /// Set when the last refresh could not reach the registry: why. The
+    /// verified state above is then the stored one (offline).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offline: Option<String>,
+}
+
+/// Why a verified registry may no longer be used for installs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RegistryStaleReason {
+    /// The verified timestamp expired (no successful refresh in time, or
+    /// a frozen registry).
+    Expired,
+    /// The index expired (only where index expiry is enforced).
+    IndexExpired,
+    /// The verified index is not cached any more.
+    IndexUnavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

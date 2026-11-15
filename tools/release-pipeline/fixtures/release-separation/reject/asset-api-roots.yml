@@ -1,0 +1,11 @@
+# expect: publishes plugin packages or registry metadata
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -X POST --data-binary @roots.json "https://uploads.github.com/repos/o/r/releases/1/assets?name=roots.json"

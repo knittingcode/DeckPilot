@@ -20,10 +20,10 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
                                    plugin worker thread ──▶ one lane thread
                                                              per plugin host
        ┌──────────────┬──────────────┬────┴─────────┬────────────────────┐
-  PluginManager   LocalRegistry   package        Broker            Supervisor ×N
+  PluginManager   Registry        package        Broker            Supervisor ×N
   (plugins.db,    (RegistryClient verification   (grants per call, (one per running
-  crash-safe      over a local    (pins, manifest, redirects, rate  plugin; spawns
-  lifecycle)      directory)      plugin.wasm)    limits, audit)     the host)
+  crash-safe      over HTTPS or   (pins, manifest, redirects, rate  plugin; spawns
+  lifecycle)      a directory)    plugin.wasm)    limits, audit)     the host)
                                                       ▲                 │ stdin/stdout
                                          Executor ────┘                 ▼
                              (HTTP module client,               deckpilot-plugin-host
@@ -52,18 +52,26 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
   password change made by the app while the agent is locked leaves
   plugins.db under the old key: the agent then reports the store as
   unavailable (`storeUnavailable`) and never touches the file.
-- **Registry.** `--plugin-registry <dir>` (the publishing tool's layout:
-  `site/v1/`, `releases/`) read through a `RegistrySource`; the root keys
-  come separately from `--plugin-registry-roots <roots.json>` (they stand
-  for the roots a release will embed). The verified state is kept in
-  `<data dir>/plugin-registry/`. No network fetching yet.
+- **Registry.** Over HTTPS (`--plugin-registry-url <https URL of the site>`,
+  [below](#registry-over-https)) or from a local directory
+  (`--plugin-registry <dir>`, the publishing tool's layout: `site/v1/`,
+  `releases/`), both read through a `RegistrySource` (`plugins/registry.rs`,
+  `plugins/fetch.rs`) and verified by the same `RegistryClient`. The root
+  keys come separately from `--plugin-registry-roots <roots.json>`; none is
+  built in (production root keys are not approved, U-10), so without them
+  nothing is fetched and the status says no registry is configured. With
+  roots and neither a URL nor a directory the official site
+  `https://knittingcode.github.io/deckpilot-plugins/` is used
+  (`registry::DEFAULT_REGISTRY_URL`). The verified state is kept in
+  `<data dir>/plugin-registry/` ([why not plugins.db](#trust-state-stays-a-file)).
 - **Install.** Registry refresh (key sets, timestamp, index), revocations,
-  `resolve_install` (compatibility, pins), package read from `releases/`
-  (or a local file, accepted only if its bytes are what the registry
-  pins), `verify_package` (sha256, size, manifest hash, permissions,
-  artifact contract incl. the static `plugin.wasm` check), then the
-  store's journaled install. A crash at any step is completed or undone by
-  `PluginManager::recover` at the next start.
+  `resolve_install` (compatibility, pins), the package downloaded (or read
+  from `releases/`; a local file is accepted only if its bytes are what
+  the registry pins, and needs no download), `verify_package` (sha256,
+  size, manifest hash, permissions, artifact contract incl. the static
+  `plugin.wasm` check), then the store's journaled install. A crash at any
+  step is completed or undone by `PluginManager::recover` at the next
+  start.
 - **Grants.** Stored per permission key in plugins.db. The broker gets the
   effective grants (declared ∩ granted, nothing unless enabled) after every
   change; a revocation applies to the next capability call. Wildcard hosts
@@ -149,6 +157,86 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
     owned by a plugin module; plugin answers never reach such clients.
     Instances in profiles stay and show as unavailable.
 
+## Registry over HTTPS
+
+`plugins/fetch.rs` (`HttpsSource`, a `RegistrySource`) fetches the
+documents and packages; it decides nothing about trust. Every file goes
+through `RegistryClient` exactly as from a directory: the key set chain
+from the configured roots (a root rotation is accepted only as
+`keys/<n+1>.json` signed by the current roots, and by the new ones too),
+the timestamp's signature, seq floor (rollback) and expiry (freeze, at
+most 14 days valid), the index pinned by the timestamp, each detail pinned
+by the index, each package pinned by its detail. Where a file is hosted
+never counts, and no key is ever taken from the network.
+
+- **Configuration.** `--plugin-registry-url` / `DECKPILOT_PLUGIN_REGISTRY_URL`:
+  the site (documents at `<url>v1/…`); `--plugin-registry-releases-url` /
+  `DECKPILOT_PLUGIN_REGISTRY_RELEASES_URL`: where packages come from
+  (`<url><id>--v<version>/<file>`, the tool's `releases/`) instead of the
+  pinned `https://github.com/knittingcode/deckpilot-plugins/releases/download/…`;
+  `--plugin-registry-roots` as above. Both URLs must be https, without
+  credentials, query or fragment. A directory and a URL together are
+  refused.
+- **Client.** One reqwest client (rustls with ring, the HTTP module's
+  stack; no new crate in the agent) and one current-thread runtime per
+  registry, used only by the plugin worker: https only, the operating
+  system's roots (rustls-platform-verifier), connect 10 s, 20 s without
+  data, 30 s per document and 120 s per package in all. Environment
+  proxies are honoured (signatures, not the transport, are the trust).
+- **Redirects.** One hop at a time, at most 5, https only, and only within
+  the request's origin. A package fetched from the pinned GitHub URL may
+  also go to GitHub's asset hosts (`objects.githubusercontent.com`,
+  `release-assets.githubusercontent.com`; design §9.3 step 5); with a
+  releases URL, same origin only. Anything else is refused, not followed.
+- **Sizes.** Each document stops at the client's cap (key set 16 KiB,
+  timestamp 4 KiB, signatures 2 KiB, index 4 MiB, detail 256 KiB), a
+  package at its pinned size (at most 5 MiB); a larger `Content-Length` is
+  refused before the body is read.
+- **Errors.** No answer, a TLS failure, a 5xx/408/429 or a body cut off is
+  `FetchError::Unavailable`: the refresh reports `Offline` and the agent
+  works from its verified state. A refused redirect, an oversized answer,
+  another status or a bad path is `FetchError::Refused` (new in the
+  registry crate): an error, never "offline". Like every refused document,
+  it changes nothing stored.
+- **Packages.** Downloaded into memory and returned only if the size and
+  sha256 are the pinned ones (`verify_package` then checks everything
+  again), so a partial or corrupt download is refused and nothing is
+  written; the store stages only verified bytes. An update whose download
+  fails leaves the installed version active and running. A tampered
+  package is `invalidPackage`, an unreachable or refused one
+  `registryUnavailable`.
+- **Offline cache.** The crate's `FileTrustStore` (trust state, index
+  cache) and the verified details in `plugin-registry/details/<sha256>.json`
+  (content-addressed: re-checked against the verified index whenever read,
+  pruned when an index no longer pins them). Offline, browsing lists the
+  cached plugins, installed plugins run with their stored revocations,
+  installs fail at the download.
+- **Status.** `registry` in `getPluginRuntime` and `listAvailablePlugins`
+  gains three additive fields: `staleReason` (`expired`, `indexExpired`,
+  `indexUnavailable`), `expires` (the verified timestamp's expiry) and
+  `offline` (why the last refresh could not reach the registry). A refused
+  refresh is reported in `reason`, as before.
+- **Revocations.** Every refresh that verifies a new index applies its
+  revocations to the installed plugins (a `disable` quarantines the
+  version and stops its host), not only the one at start and in
+  `listAvailablePlugins`. A refresh is still only done at unlock and on
+  request (browse with `refresh`, install, update); there is no timer.
+- **Refresh from the app.** Already there: `list_available_plugins
+  { refresh: true }` (Tauri) and `listAvailablePlugins(true)` (TS client).
+
+### Trust state stays a file
+
+The trust state and the index cache stay in `<data dir>/plugin-registry/`
+(`FileTrustStore`: atomic replace with fsync) and are not moved into
+plugins.db. Moving them needs a new table and migration in the plugin-store
+crate, which is being changed in parallel; the state is not secret (it is
+signed public data plus a seq and clock floor), and the attacker who could
+reset it, local malware running as the user, is out of scope in the threat
+model (§4.2) and also holds the database key. A missing state starts again
+from the configured roots (trust on first use); a corrupt one is an error,
+never a silent reset. Moving it into plugins.db (§12.4 `registry_state`)
+remains open.
+
 ## Plugin actions in the configuration app
 
 Only in app builds with `VITE_DECKPILOT_PLUGINS=1`; every other build asks
@@ -182,6 +270,16 @@ the agent nothing and behaves as before.
   name and parameters and show the reason; those of an uninstalled plugin
   say that the plugin is not installed. None is ever dropped. The owner of
   a type is everything before its **last** `.`, as `ModuleId::owner_of`.
+- **Layout and step editors.** The layout editor's library, context menu,
+  inspector and gesture editor, and the step-workflow editor, take the
+  plugin's state from the same modules (`pluginActionUnavailable`), not
+  from the backend's type list: a saved action whose plugin cannot run
+  (disabled, broken, quarantined, a permission not granted, not installed)
+  cannot be dragged, assigned or added as a step, and says why; keys,
+  gestures and steps that already use it keep it and show the reason. The
+  gesture editor's and step editor's parameter overrides use the plugin
+  types available now (`withPluginTypes`), so they appear as soon as the
+  app has read the plugins, without reopening the editor.
 
 ## IPC (protocol 10, capability `plugins`)
 
@@ -193,7 +291,7 @@ older clients ignore.
 
 | Request (`type`) | Fields | Answer |
 | --- | --- | --- |
-| `getPluginRuntime` | — | `pluginRuntime { status }`: `available`, `built`, `enabled`, `executionSupported`, `platform`, `reason`, `registry { source, freshness, seq }` (answered even when plugins are off) |
+| `getPluginRuntime` | — | `pluginRuntime { status }`: `available`, `built`, `enabled`, `executionSupported`, `platform`, `reason`, `registry { source, freshness, seq, staleReason?, expires?, offline? }` (answered even when plugins are off) |
 | `listPlugins` | — | `plugins { plugins: [PluginSummary] }` (each action with its `definition`; `health` once an invocation failed) |
 | `getPlugin` | `plugin` | `plugin { plugin: PluginDetails }` (with `icon` when the installed icon checks out) |
 | `listAvailablePlugins` | `refresh` | `availablePlugins { registry, plugins: [AvailablePlugin] }` (versions newest first, permissions, `withdrawn`, `incompatible`, `deckpilot`, `platforms`, `publishedAt`; per plugin `description`, `categories`, `publisherInfo`, `license`, `homepage`, `sourceRepository`, `deprecated`) |
@@ -265,6 +363,8 @@ cargo build -p deckpilot-agent --features plugins
 target/debug/deckpilot-agent --headless --enable-plugins \
   --plugin-host "$PWD/plugins/runtime/target/debug/deckpilot-plugin-host" \
   --plugin-registry <registry dir> --plugin-registry-roots <roots.json>
+# or over HTTPS:
+#   --plugin-registry-url https://<host>/<site>/ --plugin-registry-roots <roots.json>
 ```
 
 The host path must be absolute. A full manual test with a local registry
@@ -295,19 +395,49 @@ while its plugin node waits for a slow server (given up after the 2 s
 grace). HTTP goes to canned responses (`DECKPILOT_TEST_PLUGIN_HTTP`, only
 with `test-hooks`, never in a release; a route may answer late with
 `delayMs`).
+`cargo test -p deckpilot-agent --features plugins --test plugins_registry_https`
+does the same over HTTPS: a local TLS server (`tests/support/https.rs`,
+rustls with a throwaway CA from rcgen that only the agent under test
+trusts, through `DECKPILOT_TEST_REGISTRY_CA`, feature `test-hooks`) serves
+a registry made with the publishing tool. Through the real agent and host:
+install, enable and run over HTTPS; a tampered package, a download cut off
+midway and a package redirected to another origin, each refused with
+nothing installed; an update cut off (the old version keeps running), then
+applied; a revocation that quarantines the installed version; a rollback
+to the older site, a tampered index, a timestamp redirected to another
+origin and an oversized one, all refused with the stored state kept;
+offline from the cache (browsing, the installed plugin runs, installs
+fail), a lost index cache (stale, `indexUnavailable`), back online; a
+frozen registry (expired timestamp: nothing trusted), one that expires
+while the agent runs (stale, `expired`, installs refused until re-signed);
+and an agent without root keys, which fetches nothing. The unit tests in
+`plugins/fetch/tests.rs` (`cargo test -p deckpilot-agent --features plugins
+--lib plugins::`) cover the source with the client directly and a
+controlled clock: verification, offline then stale, reachable but expired,
+freeze, rollback, tampered timestamp, index and key set, key rotation over
+the chain, redirects (other port, other host name, http, endless, same
+origin), oversized (declared or not), cut off, 503 and 403, an untrusted
+certificate, path and URL checks, and package downloads (tampered, short,
+cut off, oversized, foreign URLs, redirects to allowed and other hosts).
 `.github/workflows/plugins-agent.yml` runs all of it on Linux, macOS and
 Windows (not a required check).
 
 ## Not done
 
-- No network fetching of the registry; the registry trust state lives in a
-  file, not in the encrypted database.
+- The registry trust state lives in a file, not in the encrypted database
+  ([why](#trust-state-stays-a-file)).
+- No production root keys and no default trust: the official site URL is
+  known, but without `--plugin-registry-roots` nothing is fetched (U-10).
+  The GitHub asset redirect hosts for packages come from the design, whose
+  §20.1 lists the release-asset redirect host as unverified; no test
+  reaches GitHub.
+- No periodic refresh: the registry is checked at unlock and on request,
+  so a long-running agent goes stale after 7 days without a browse,
+  install or update. No `If-None-Match`/ETag, no package cache (offline
+  installs are not possible), no proxy configuration beyond the
+  environment.
 - No plugin storage, credential slots, variables (design §2.3 item 3),
   settings or background work; their capabilities are refused.
-- The layout editor's gesture editor and the step-workflow editor use the
-  backend's action type list as before; plugin types appear there only
-  after the app has read the installed plugins (see
-  [the editors](#plugin-actions-in-the-configuration-app)).
 - An abort does not interrupt a capability call that is already running.
 - `plugin_known` (design §2.3 item 4) does not exist: an uninstalled
   plugin's actions are reported as "not available" without its name.

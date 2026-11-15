@@ -38,7 +38,13 @@ import type {
   Profile,
 } from "@/lib/types"
 
-import { decodeTarget, encodeTarget, gestureOnlyGroups, type TargetGroup } from "./targets"
+import {
+  decodeTarget,
+  encodeTarget,
+  gestureOnlyGroups,
+  unavailableTarget,
+  type TargetGroup,
+} from "./targets"
 
 interface InspectorProps {
   model: DeviceModel
@@ -103,6 +109,16 @@ export function Inspector(props: InspectorProps) {
     )
   }
   return <ControlInspector {...props} control={focus} />
+}
+
+/** Why the target a control already uses cannot run now; it stays bound. */
+export function UnavailableNote({ reason }: { reason: string | undefined }) {
+  if (!reason) return null
+  return (
+    <p className="text-xs text-destructive" role="note">
+      Unavailable: {reason}. It stays assigned and runs again once the plugin can.
+    </p>
+  )
 }
 
 function ControlInspector({
@@ -195,14 +211,24 @@ function ControlInspector({
                     <SelectGroup key={group.label}>
                       <SelectLabel>{group.label}</SelectLabel>
                       {group.options.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
+                        <SelectItem
+                          key={option.value}
+                          value={option.value}
+                          disabled={option.unavailable !== undefined}
+                        >
                           {option.label}
+                          {option.unavailable !== undefined && " (unavailable)"}
                         </SelectItem>
                       ))}
                     </SelectGroup>
                   ))}
                 </SelectContent>
               </Select>
+              <UnavailableNote
+                reason={
+                  binding ? unavailableTarget(groups, encodeTarget(binding.target)) : undefined
+                }
+              />
               {binding && (
                 <Input
                   aria-label={`Label for ${triggerLabel(trigger)}`}

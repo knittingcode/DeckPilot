@@ -26,7 +26,8 @@ import {
 } from "@/components/ui/select"
 import { IS_MAC } from "@/hooks/use-navigation"
 import { api, errorMessage } from "@/lib/api"
-import { useAppContext } from "@/lib/app-context"
+import { useActionModules, useAppContext } from "@/lib/app-context"
+import { pluginActionUnavailable, withPluginTypes } from "@/lib/plugin-actions"
 import {
   bindingsFor,
   controlKey,
@@ -107,9 +108,16 @@ function usePreviewFaces(
   return preview
 }
 
-/** Action types and default gesture timings for the gesture editor. */
+/**
+ * Action types and default gesture timings for the gesture editor. In
+ * builds with plugins the plugin types are the ones the app read from the
+ * agent (`useActionModules`), available now, rather than whatever the
+ * backend's list held when the editor opened.
+ */
 function useGestureContext() {
-  const [types, setTypes] = useState<ActionType[]>([])
+  const modules = useActionModules()
+  const [listed, setTypes] = useState<ActionType[]>([])
+  const types = useMemo(() => withPluginTypes(listed, modules), [listed, modules])
   const [defaults, setDefaults] = useState<GestureTimings>(DEFAULT_TIMINGS)
   useEffect(() => {
     let cancelled = false
@@ -167,9 +175,11 @@ export function LayoutEditor({
     ...library,
     usage: (icon) => effectiveUsage(icon.usages, icon.id, editing.baseline, draft),
   }
+  const modules = useActionModules()
   const groups = useMemo(
-    () => targetGroups(view.profile, draft, pageId),
-    [view.profile, draft, pageId],
+    () =>
+      targetGroups(view.profile, draft, pageId, (type) => pluginActionUnavailable(modules, type)),
+    [view.profile, draft, pageId, modules],
   )
   const bound = boundControls(draft, pageId)
   const controls = orderedControls(model)

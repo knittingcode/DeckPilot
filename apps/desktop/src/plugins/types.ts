@@ -86,11 +86,19 @@ export type PermissionKind = ManifestPermission["kind"]
 
 export type RegistryFreshness = "neverVerified" | "fresh" | "stale"
 
+export type RegistryStaleReason = "expired" | "indexExpired" | "indexUnavailable"
+
 export interface RegistryStatus {
-  /** Where documents come from (a local directory for now). */
+  /** Where documents come from: `local:<dir>` or the registry's https URL. */
   source: string
   freshness: RegistryFreshness
   seq?: number
+  /** Why the registry is stale (with `freshness: "stale"`). */
+  staleReason?: RegistryStaleReason
+  /** When the verified timestamp expires (RFC 3339). */
+  expires?: string
+  /** Why the last refresh could not reach the registry (working offline). */
+  offline?: string
 }
 
 /** `getPluginRuntime`: whether plugins can be used, and why not. */

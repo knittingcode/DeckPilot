@@ -4,7 +4,9 @@ A manual end-to-end check of the experimental marketplace on macOS or
 Linux: a plugin-enabled agent, the sandboxed plugin host, the sample plugin
 in a local registry signed with throwaway keys, and the configuration app
 with the Plugins page. The automated version of the same flow is
-`apps/agent/tests/plugins_e2e.rs` ([agent-integration.md](agent-integration.md#tests)).
+`apps/agent/tests/plugins_e2e.rs`, and over HTTPS
+`apps/agent/tests/plugins_registry_https.rs` ([agent-integration.md](agent-integration.md#tests)).
+Section 5 serves the same registry over HTTPS.
 
 The feature is **off by default** at both ends. Without
 `VITE_DECKPILOT_PLUGINS=1` the app has no Plugins page; an agent built
@@ -206,6 +208,88 @@ Settings › Extensions › Plugins.
     opens with its permissions; **Cancel** leaves it installed and disabled. Any other package for
     that version, e.g. one rebuilt with a changed manifest, is refused
     (`invalidPackage`: "the package is … bytes, but the registry pinned …").
+
+## 5. The same registry over HTTPS
+
+The agent can also fetch the registry over HTTPS (`--plugin-registry-url`,
+[agent-integration.md](agent-integration.md#registry-over-https)). It
+trusts the operating system's certificate authorities only; to serve the
+registry locally without touching the system trust store, build the agent
+with the test hooks, which let it trust **only** a throwaway CA named by
+`DECKPILOT_TEST_REGISTRY_CA` (never part of a release build):
+
+```sh
+cargo build -p deckpilot-agent --features plugins,test-hooks
+```
+
+A throwaway CA and a certificate for `127.0.0.1` (valid 7 days), kept with
+the other secrets in `$KEYS`:
+
+```sh
+mkdir -p "$KEYS/tls" && cd "$KEYS/tls"
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 7 \
+  -subj "/CN=DeckPilot local test CA" -keyout ca.key -out ca.pem \
+  -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign"
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+  -subj "/CN=127.0.0.1" -keyout server.key -out server.csr
+printf 'subjectAltName=IP:127.0.0.1,DNS:localhost\nextendedKeyUsage=serverAuth\nbasicConstraints=CA:FALSE\n' > server.ext
+openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 7 \
+  -extfile server.ext -out server.pem
+cd "$REPO"
+```
+
+Serve the registry directory (`site/` and `releases/`) in a shell of its
+own, with Python's standard library:
+
+```sh
+cat > "$KEYS/tls/serve.py" <<'PY'
+import http.server, ssl, sys
+root, cert, key = sys.argv[1:4]
+handler = lambda *a: http.server.SimpleHTTPRequestHandler(*a, directory=root)
+httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 8443), handler)
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain(cert, key)
+httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
+httpd.serve_forever()
+PY
+python3 -I "$KEYS/tls/serve.py" "$REG" "$KEYS/tls/server.pem" "$KEYS/tls/server.key"
+```
+
+`curl --cacert "$KEYS/tls/ca.pem" https://127.0.0.1:8443/site/v1/timestamp.json`
+shows the timestamp. Then start the agent (or the app, step 3) with the
+URLs instead of the directory:
+
+```sh
+unset DECKPILOT_PLUGIN_REGISTRY
+export DECKPILOT_PLUGIN_REGISTRY_URL=https://127.0.0.1:8443/site/
+export DECKPILOT_PLUGIN_REGISTRY_RELEASES_URL=https://127.0.0.1:8443/releases/
+export DECKPILOT_TEST_REGISTRY_CA=$KEYS/tls/ca.pem
+target/debug/deckpilot-agent --headless --no-usb --enable-plugins \
+  --plugin-host "$DECKPILOT_PLUGIN_HOST" --plugin-registry-roots "$KEYS/roots.json"
+```
+
+Discover now shows `https://127.0.0.1:8443/site/` as the source, and the
+server's log shows `keys/1.json`, `keys/2.json` (404: the end of the key
+set chain), `timestamp.json`, `index/<seq>.json` and, on install, the
+package. Things to try:
+
+- **Offline.** Stop the server: Check for updates still lists the plugins
+  (from the verified cache), `getPluginRuntime` reports `registry.offline`
+  with the reason, installed plugins run, installs fail.
+- **Stale.** Without a `timestamp` re-sign for 7 days (or with
+  `$R timestamp … --now <8 days ago>` after deleting
+  `$REG/site/v1/timestamp.json*`), the registry turns `stale`
+  (`staleReason: expired`) and installs are refused.
+- **Rollback.** Copy `$REG` aside, `publish` again, refresh, then serve the
+  copy: the refresh is refused (`rollback: seq … is below the stored
+  seq …`), and the stored state stays.
+- **Tampering.** Change a byte of `$REG/site/v1/index/<seq>.json` or of a
+  release asset: refused (`IndexMismatch`, `invalidPackage`).
+
+Without `--plugin-registry-roots` the agent fetches nothing and reports
+that no registry is configured; with roots but without a URL or a
+directory it uses the official site (`https://knittingcode.github.io/deckpilot-plugins/`),
+which only verifies against its production roots (not issued yet).
 
 ## Clean up
 

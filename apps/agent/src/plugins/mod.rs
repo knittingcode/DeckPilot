@@ -25,6 +25,8 @@ mod engine;
 #[cfg(feature = "plugins")]
 mod executor;
 #[cfg(feature = "plugins")]
+mod fetch;
+#[cfg(feature = "plugins")]
 pub mod key;
 #[cfg(feature = "plugins")]
 mod lane;
@@ -46,6 +48,10 @@ pub const HOST_ENV: &str = "DECKPILOT_PLUGIN_HOST";
 pub const REGISTRY_ENV: &str = "DECKPILOT_PLUGIN_REGISTRY";
 /// Environment variable naming the registry's root keys (`roots.json`).
 pub const REGISTRY_ROOTS_ENV: &str = "DECKPILOT_PLUGIN_REGISTRY_ROOTS";
+/// Environment variable with the https URL of a registry site.
+pub const REGISTRY_URL_ENV: &str = "DECKPILOT_PLUGIN_REGISTRY_URL";
+/// Environment variable with the https URL packages are downloaded from.
+pub const REGISTRY_RELEASES_URL_ENV: &str = "DECKPILOT_PLUGIN_REGISTRY_RELEASES_URL";
 
 /// How plugins are set up for this agent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -57,28 +63,40 @@ pub struct PluginSettings {
     pub host: Option<PathBuf>,
     /// A local registry: a directory with the static site in `site/v1/`
     /// and the release assets in `releases/` (the layout the publishing
-    /// tool writes). No network fetching yet.
+    /// tool writes).
     pub registry: Option<PathBuf>,
+    /// A registry served over https: the URL of its site (documents at
+    /// `<url>v1/…`). Exclusive with [`PluginSettings::registry`]. With
+    /// root keys and neither set, the official site
+    /// (`registry::DEFAULT_REGISTRY_URL`); without root keys, none.
+    pub registry_url: Option<String>,
+    /// Where packages are downloaded from (https; `<url><id>--v<version>/
+    /// <file>`), instead of the release URL the registry pins. The bytes
+    /// must still be the pinned ones.
+    pub registry_releases_url: Option<String>,
     /// The registry's root role (`roots.json`). It stands for the roots a
-    /// release build will embed; it must not come from the registry
-    /// directory itself.
+    /// release build will embed (none exist yet); it must not come from
+    /// the registry itself.
     pub registry_roots: Option<PathBuf>,
 }
 
 impl PluginSettings {
     /// Settings from the environment ([`ENABLE_ENV`], [`HOST_ENV`],
-    /// [`REGISTRY_ENV`], [`REGISTRY_ROOTS_ENV`]); command-line options
-    /// override them.
+    /// [`REGISTRY_ENV`], [`REGISTRY_URL_ENV`], [`REGISTRY_RELEASES_URL_ENV`],
+    /// [`REGISTRY_ROOTS_ENV`]); command-line options override them.
     pub fn from_env() -> Self {
         let path = |name: &str| {
             std::env::var_os(name)
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from)
         };
+        let text = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
         Self {
             enabled: std::env::var(ENABLE_ENV).is_ok_and(|v| v == "1"),
             host: path(HOST_ENV),
             registry: path(REGISTRY_ENV),
+            registry_url: text(REGISTRY_URL_ENV),
+            registry_releases_url: text(REGISTRY_RELEASES_URL_ENV),
             registry_roots: path(REGISTRY_ROOTS_ENV),
         }
     }

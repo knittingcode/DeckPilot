@@ -68,7 +68,26 @@ import {
 /** One option of the target selects; the layout editor's `TargetGroup`. */
 export interface GestureTargetGroup {
   label: string
-  options: { value: string; label: string; target: BindingTarget }[]
+  options: { value: string; label: string; target: BindingTarget; unavailable?: string }[]
+}
+
+/** Why the option of `value` cannot be placed now, if it cannot. */
+function unavailableIn(groups: GestureTargetGroup[], value: string): string | undefined {
+  for (const group of groups) {
+    const found = group.options.find((o) => o.value === value)
+    if (found) return found.unavailable
+  }
+  return undefined
+}
+
+/** Why a target already assigned cannot run now; it stays assigned. */
+function UnavailableNote({ reason }: { reason: string | undefined }) {
+  if (!reason) return null
+  return (
+    <p className="text-xs text-destructive" role="note">
+      Unavailable: {reason}. It stays assigned and runs again once the plugin can.
+    </p>
+  )
 }
 
 export interface GestureEditorProps {
@@ -199,6 +218,9 @@ export function GestureEditor(props: GestureEditorProps) {
               )
             }}
           />
+          <UnavailableNote
+            reason={release ? unavailableIn(props.groups, props.encode(release.target)) : undefined}
+          />
           <p className="text-xs text-muted-foreground">
             Runs when the key is let go, without delay. Keys with a double click or long press
             cannot use it.
@@ -281,8 +303,13 @@ function TargetSelect({
           <SelectGroup key={group.label}>
             <SelectLabel>{group.label}</SelectLabel>
             {group.options.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
+              <SelectItem
+                key={option.value}
+                value={option.value}
+                disabled={option.unavailable !== undefined}
+              >
                 {option.label}
+                {option.unavailable !== undefined && " (unavailable)"}
               </SelectItem>
             ))}
           </SelectGroup>
@@ -348,6 +375,13 @@ function GestureRow({
         onValueChange={(value) => {
           onAssign(decode(value))
         }}
+      />
+      <UnavailableNote
+        reason={
+          binding
+            ? unavailableIn([...groups, ...(gestureGroups ?? [])], encode(binding.target))
+            : undefined
+        }
       />
       {binding && (
         <Input
