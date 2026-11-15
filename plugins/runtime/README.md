@@ -144,9 +144,11 @@ Windows design notes and trade-offs:
   Pulley; the Seatbelt interface is deprecated and undocumented.
 - Linux `full` on kernels with Landlock ABI 8 rests on seccomp for
   pathname UNIX sockets (`ResolveUnix` arrives with ABI 9, Linux 7.1); it is
-  verified on Docker Desktop's 7.0 linuxkit kernel (aarch64, local) and
-  GitHub's `ubuntu-latest` (`7.0.0-1017-azure`, x86_64, ABI 8). Kernels with
-  ABI 9 have not been tried.
+  verified on Docker Desktop's 7.0 linuxkit kernel (aarch64, local) and on
+  GitHub's `ubuntu-latest` (image ubuntu-26.04, kernel `7.0.0-1019-azure`,
+  x86_64, ABI 8: plugin runtime CI run 43689909312, job 132738174558, host
+  reports `full` with the `ResolveUnix` note; agent end to end run
+  43689909295, job 132738173732). Kernels with ABI 9 have not been tried.
 - Linux seccomp allowlist on distributions other than the Debian-based
   `rust:1` image and CI's Ubuntu; other libc versions may need more
   syscalls (they then fail with `EPERM`, not silently succeed).

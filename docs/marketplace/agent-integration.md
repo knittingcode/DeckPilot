@@ -199,13 +199,16 @@ Windows (not a required check).
 - A password change made by the app while the agent is locked makes
   plugins.db unreadable (no rekey protocol between app and agent).
 - Windows execution is verified only on GitHub's `windows-latest` runner
-  (Windows Server 2025), through the CI workflow. Desktop Windows editions
-  (10, 11), per-user and `Program Files` installs, and machines with
-  third-party security software are untested; on any of them a host that
-  cannot get its AppContainer reports `partial` and is refused rather than
-  run.
+  (Windows Server 2025), through the CI workflow (run 43689909295, job
+  132738173666). Desktop Windows editions (10, 11), per-user and
+  `Program Files` installs, and machines with third-party security
+  software are untested; on any of them a host that cannot get its
+  AppContainer reports `partial` and is refused rather than run.
 - The sandbox is verified locally on macOS only for this integration; Linux
-  and Windows rely on the CI workflow (Linux: GitHub's `ubuntu-latest`,
-  kernel 7.0, Landlock ABI 8). A Linux kernel without Landlock, or with an
-  ABI below 8 (before Linux 7.0), makes the host report `partial`, so
-  plugins do not run there; that excludes most current LTS kernels.
+  and Windows rely on the CI workflow, run 43689909295: Linux job
+  132738173732 (GitHub's `ubuntu-latest`, image ubuntu-26.04, kernel
+  `7.0.0-1019-azure`, Landlock ABI 8), Windows job 132738173666 (Windows
+  Server 2025), macOS job 132738173797. A Linux kernel without Landlock,
+  or with an ABI below 8 (before Linux 7.0), makes the host report
+  `partial`, so plugins do not run there; that excludes most current LTS
+  kernels.
