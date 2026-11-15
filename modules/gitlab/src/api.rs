@@ -2,7 +2,7 @@
 //! sent, how answers and failures are read, how far lists are paged, and
 //! how results are kept free of the token.
 //!
-//! Requests go through the HTTP module's [`client::send`] with its
+//! Requests go through `deckpilot-net`'s [`client::send`] with its
 //! [`NetworkPolicy`]; nothing here opens a connection itself.
 
 use std::net::IpAddr;
@@ -12,8 +12,8 @@ use deckpilot_core::{
     ActionParameters, ActionResult, CancellationToken, Capability, CredentialError, CredentialId,
     ExecutionContext, Secret,
 };
-use deckpilot_module_http::client::{self, Auth};
-use deckpilot_module_http::policy::{self, NetworkPolicy};
+use deckpilot_net::client::{self, Auth};
+use deckpilot_net::policy::{self, NetworkPolicy};
 use serde_json::Value;
 
 use crate::{GitlabSettings, codes};
@@ -360,7 +360,7 @@ impl<'a> Api<'a> {
     }
 
     fn network_failure(&self, (code, message): client::Failure) -> Failure {
-        if code == deckpilot_module_http::codes::BLOCKED_ADDRESS {
+        if code == deckpilot_net::codes::BLOCKED_ADDRESS {
             return fail(
                 code,
                 format!(

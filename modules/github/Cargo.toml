@@ -10,7 +10,7 @@ publish.workspace = true
 
 [dependencies]
 deckpilot-core.workspace = true
-deckpilot-module-http.workspace = true
+deckpilot-net.workspace = true
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 serde_json.workspace = true
 url.workspace = true
