@@ -932,7 +932,12 @@ fn permission(details: &Value, key: &str) -> String {
 }
 
 fn profile_of(d: &mut dyn Driver, id: ProfileId) -> Value {
-    d.ok("get_profile", json!({"profileId": id}))["profile"].clone()
+    // Through `Profile`, so that numbers compare alike whether they came
+    // through the webview's JSON (`0`) or straight from Rust (`0.0`).
+    let profile: Profile =
+        serde_json::from_value(d.ok("get_profile", json!({"profileId": id}))["profile"].clone())
+            .unwrap();
+    serde_json::to_value(profile).unwrap()
 }
 
 fn settings_of(d: &mut dyn Driver) -> Value {

@@ -124,6 +124,13 @@ impl Gui {
             .stdin(Stdio::null())
             .stdout(log.try_clone().unwrap())
             .stderr(log);
+        if cfg!(windows) {
+            // A WebView2 profile of this run. msedgedriver finds the
+            // webview's DevToolsActivePort in this folder (the app's own,
+            // under %LOCALAPPDATA%, is not where it looks); the variable
+            // takes precedence over the folder the app asks for.
+            command.env("WEBVIEW2_USER_DATA_FOLDER", fx.root.path().join("webview2"));
+        }
         if let Some(native) = &self.native_driver {
             command.arg("--native-driver").arg(native);
         }
