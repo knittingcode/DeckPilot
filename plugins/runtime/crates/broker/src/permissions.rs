@@ -60,6 +60,10 @@ pub enum ApprovedPermission {
     /// [`DEFAULT_STORAGE_QUOTA_BYTES`].
     #[serde(rename_all = "camelCase")]
     Storage { quota_kb: u64 },
+    /// Opening https URLs of one exact origin in the user's browser
+    /// (design §5.2 `openUrl`). Independent of `network`: it gives no
+    /// request to that origin, and a network grant gives no `openUrl`.
+    OpenUrl { origin: String },
 }
 
 /// Storage every plugin has without a `storage` grant (design §5.2).
@@ -120,6 +124,8 @@ pub struct Grants {
     pub(crate) credentials: BTreeMap<String, CredentialGrant>,
     /// A granted larger quota, in bytes.
     pub(crate) storage_quota: Option<u64>,
+    /// Origins whose URLs the plugin may open in the browser.
+    pub(crate) open_url: BTreeSet<Origin>,
 }
 
 /// Where and how one credential slot may be injected.
@@ -185,6 +191,10 @@ impl Grants {
                         return Err(GrantError::DuplicateCredential);
                     }
                 }
+                ApprovedPermission::OpenUrl { origin } => {
+                    g.open_url
+                        .insert(Origin::parse_grant(origin).map_err(GrantError::Origin)?);
+                }
                 ApprovedPermission::Storage { quota_kb } => {
                     let bytes = quota_kb.saturating_mul(1024);
                     if bytes <= DEFAULT_STORAGE_QUOTA_BYTES || bytes > MAX_STORAGE_QUOTA_BYTES {
@@ -196,7 +206,7 @@ impl Grants {
                 }
             }
         }
-        if g.network.len() > MAX_ORIGINS {
+        if g.network.len() > MAX_ORIGINS || g.open_url.len() > MAX_ORIGINS {
             return Err(GrantError::TooManyOrigins);
         }
         if g.credentials.len() > MAX_CREDENTIALS {
@@ -220,6 +230,11 @@ impl Grants {
 
     pub fn origins(&self) -> impl Iterator<Item = &Origin> {
         self.network.keys()
+    }
+
+    /// Origins whose URLs the plugin may open in the browser.
+    pub fn open_url_origins(&self) -> impl Iterator<Item = &Origin> {
+        self.open_url.iter()
     }
 
     pub fn notifications(&self) -> bool {
@@ -293,6 +308,56 @@ mod tests {
         let methods = g.network.values().next().unwrap();
         assert_eq!(methods.len(), 2);
         assert!(g.notifications());
+    }
+
+    #[test]
+    fn open_url_grants_are_exact_origins_of_their_own() {
+        let p = ApprovedPermissions::from_json(
+            r#"[{"kind":"openUrl","origin":"https://GitHub.com"},
+                {"kind":"openUrl","origin":"https://github.com:443/"}]"#,
+        )
+        .unwrap();
+        let g = Grants::derive(&p).unwrap();
+        assert_eq!(
+            g.open_url_origins()
+                .map(Origin::to_string)
+                .collect::<Vec<_>>(),
+            ["https://github.com"]
+        );
+        // Opening gives no network access, and no notifications.
+        assert_eq!(g.origins().count(), 0);
+        assert!(!g.notifications());
+        for bad in [
+            r#"[{"kind":"openUrl","origin":"https://*.github.com"}]"#,
+            r#"[{"kind":"openUrl","origin":"http://github.com"}]"#,
+            r#"[{"kind":"openUrl","origin":"file:///etc"}]"#,
+            r#"[{"kind":"openUrl","origin":"https://localhost"}]"#,
+            r#"[{"kind":"openUrl","origin":"https://192.168.1.1"}]"#,
+            r#"[{"kind":"openUrl","origin":"https://github.com/acme"}]"#,
+            r#"[{"kind":"openUrl","origin":"https://u@github.com"}]"#,
+        ] {
+            let p = ApprovedPermissions::from_json(bad).unwrap();
+            assert!(
+                matches!(Grants::derive(&p), Err(GrantError::Origin(_))),
+                "{bad}"
+            );
+        }
+        for malformed in [
+            r#"[{"kind":"openUrl"}]"#,
+            r#"[{"kind":"openUrl","origin":"https://github.com","hosts":["*"]}]"#,
+            r#"[{"kind":"openUrl","origins":["https://github.com"]}]"#,
+        ] {
+            assert_eq!(
+                ApprovedPermissions::from_json(malformed),
+                Err(GrantError::Malformed),
+                "{malformed}"
+            );
+        }
+        let many: Vec<String> = (0..=MAX_ORIGINS)
+            .map(|i| format!(r#"{{"kind":"openUrl","origin":"https://h{i}.example.com"}}"#))
+            .collect();
+        let p = ApprovedPermissions::from_json(&format!("[{}]", many.join(","))).unwrap();
+        assert_eq!(Grants::derive(&p), Err(GrantError::TooManyOrigins));
     }
 
     #[test]

@@ -26,7 +26,7 @@ cargo fmt --check
 | `crates/host` (`deckpilot-plugin-host`) | The host process. Sandboxes itself, receives the module bytes over stdin (opens no file), runs one wasmtime Store with no WASI, epoch deadline, fuel, `StoreLimits` (memory, tables, instances), bounded wasm stack, and exits non-zero after any trap. Also `deckpilot-sandbox-probe` (test only, not shipped) |
 | `crates/supervisor` (`deckpilot-plugin-supervisor`) | Agent side. Spawns the host with an empty environment, fixed working directory and only stdin/stdout; handshake with sandbox check; per-invocation wall-clock timeout and kill; an abort signal (2 s grace, then kill; not counted as a crash); relays capability requests to the broker session and an executor; restart backoff 1, 2, 4 … 60 s and a crash-loop breaker (5 in 10 min); shutdown with grace period and kill |
 | `guest/sdk` (`deckpilot-plugin-guest`) | Raw guest ABI bindings for `wasm32-unknown-unknown`: `export_plugin!`, `Context::call`. Plugin authors use `deckpilot-plugin-sdk` instead |
-| `guest/plugin-sdk` (`deckpilot-plugin-sdk`, own semver, 0.1.0) | The Rust plugin SDK (plugin API 1.0 on ABI 1): `Plugin`/`Action`/`Param` builders and `plugin!`; typed parameters (`text`, `integer`, `number`, `boolean`, `choice`, `secret` handle) checked before the handler; `Output`/`PluginError` with shared codes; brokered `Context` (HTTP to an exact origin, credentials as handles and `has_credential`, notifications, storage with `storage_keys`/`storage_usage`, `settings`, log) with explanatory `CapabilityError`s; init/shutdown hooks; `testing::MockHost` for native tests. No `unsafe` in plugin code |
+| `guest/plugin-sdk` (`deckpilot-plugin-sdk`, own semver, 0.1.0) | The Rust plugin SDK (plugin API 1.0 on ABI 1): `Plugin`/`Action`/`Param` builders and `plugin!`; typed parameters (`text`, `integer`, `number`, `boolean`, `choice`, `secret` handle) checked before the handler; `Output`/`PluginError` with shared codes; brokered `Context` (HTTP to an exact origin, credentials as handles and `has_credential`, notifications, storage with `storage_keys`/`storage_usage`, `settings`, log) with explanatory `CapabilityError`s; `open_url`, response headers with `header`/`header_values`/`link`; init/shutdown hooks; `testing::MockHost` for native tests. No `unsafe` in plugin code |
 | `guest/test-guest` | Test guest: normal actions and deliberate attacks on the raw ABI |
 | `guest/sdk-test-guest` | Test guest built with the SDK: lifecycle, secret handles, numbers, panic, spin, slow host calls, and storage, credential and settings actions for the agent's end-to-end test |
 | `../examples/hello-weather` | The sample plugin (see its README): a pure action and a brokered HTTPS action, `manifest.json` valid against the #191 schema (copy in `plugins/schemas/`) |
@@ -76,6 +76,24 @@ unchanged byte for byte (tested in `crates/abi` and `crates/host/tests/lifecycle
   (`ApprovedPermission::Storage { quotaKb }`, 257-10,240). Storage and
   settings are always allowed while the plugin has grants (it is
   enabled), never otherwise.
+- `url.open {url}`: opens an https URL in the user's browser, only for an
+  exact origin of an approved `openUrl` permission
+  (`ApprovedPermission::OpenUrl { origin }`, independent of `network`).
+  The URL goes through the same strict parser as a fetch (no other
+  scheme, no userinfo, no IP literal or local name, no control
+  characters), at most 2,048 bytes before and after normalization
+  (`MAX_OPEN_URL_LEN`), rate limited per plugin (`RateLimits::open_url`,
+  1 per 2 s, and `open_url_window`, 20 per 10 minutes) and audited by
+  origin only. `Allowed::OpenUrl` hands the executor the normalized URL.
+  SDK: `Context::open_url`.
+- `notify` takes an optional `severity` (`info`, `success`, `warning`,
+  `error`; `Allowed::Notify` always carries one, `info` by default). It
+  sets only how the notification looks. SDK: `Context::notify_with`.
+- `HttpResponse.headers` carries only the names in `RESPONSE_HEADERS`
+  (`capability.rs`: caching, `link`, GitLab's `x-total` family, GitHub's
+  `x-ratelimit-*` and the `ratelimit-*` family, by exact name; never
+  `set-cookie` or an authentication header). SDK: `Response::header`,
+  `header_values` and `link(rel)` (RFC 8288).
 
 The supervisor (no protocol change) hands every capability call a
 `CallInterrupt` (`CapabilityExecutor::execute_interruptible`, default: the
