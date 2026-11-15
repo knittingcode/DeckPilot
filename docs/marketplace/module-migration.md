@@ -560,6 +560,16 @@ opens the URL through the core launcher (`launch::plan(OpenTarget::Url)`),
 which never accepts `file:` or custom schemes, and audits the origin. Risk:
 low to medium (phishing pages on granted origins only). **Offer.**
 
+*Status (P4):* implemented as the op `url.open` (`Context::open_url`):
+exact `openUrl` origins from the manifest (wildcards are not granted), the
+broker's strict URL parser (https only, no userinfo, no IP literal or
+local name, at most 2,048 bytes), 1 per 2 s plus 20 per 10 minutes per
+plugin and 3 per invocation, audited and logged by origin only, opened
+through the core launcher. Not yet: the restriction to invocations a key
+press or the app started. The invocation does not carry its trigger in
+ABI 1; that arrives with G8's run context, and the consent text says only
+what is enforced today.
+
 ### G2 User-entered origins (github GHE, gitlab self-managed, jira, http)
 
 Sketch: the manifest declares `network.userOrigins: { setting: "apiUrl",
@@ -613,6 +623,15 @@ The executor passes seven headers (`executor.rs:34-42`). Sketch: add
 list. They carry no secrets. `set-cookie` and `www-authenticate` stay out.
 Risk: none. **Offer.**
 
+*Status (P4):* implemented. The allowlist moved to the ABI
+(`RESPONSE_HEADERS`, exact names: the seven above plus `link`, GitLab's
+`x-total`, `x-total-pages`, `x-page`, `x-per-page`, `x-next-page`,
+`x-prev-page`, GitHub's `x-ratelimit-limit|remaining|reset|used|resource`,
+`ratelimit`, `ratelimit-policy|limit|remaining|reset|observed`, and
+`content-language`, `expires`, `age`, `vary`), applied after credential
+redaction, with values bounded to 4 KiB and 32 headers. The SDK reads them
+with `Response::header`, `header_values` and `link(rel)`.
+
 ### G7 Button state and polling (git, docker)
 
 The manifest kinds `device.state` and `background` exist, but no operation
@@ -639,6 +658,16 @@ plugin, not by plugin code. `critical` maps to the existing status-bar path.
 The plugin-name prefix stays. The rate stays 5 per minute unless the
 manifest declares up to 30 per minute with a justification (medium tier).
 Risk: low. **Offer.**
+
+*Status (P4):* severity only. `notify` takes an optional `severity`
+(`info`, `success`, `warning`, `error`; SDK `Context::notify_with`) that
+sets how the notification looks and nothing else: the grant, the plugin
+name prefix, the status-bar destination and the 5 per minute rate are
+unchanged. Not yet: `critical`, the routing (the user's desktop,
+status-bar and minimum-severity settings read by the agent's notifier per
+plugin) and a manifest-declared rate up to 30 per minute. They need plugin
+settings the notifier reads and a consent change, and land with G8 before
+P10.
 
 ### G10 Cancellable sleep (general.wait; retries and backoff in any plugin)
 
