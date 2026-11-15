@@ -219,6 +219,7 @@ fn deny_by_default() {
     let n = CapabilityRequest::Notify(Notify {
         title: "t".into(),
         body: "b".into(),
+        severity: None,
     });
     assert_eq!(s.authorize(&n).denial(), Some(DenyReason::NotGranted));
     // always-on capabilities
@@ -272,6 +273,7 @@ fn revocation_applies_to_the_next_call() {
     let n = CapabilityRequest::Notify(Notify {
         title: "t".into(),
         body: "b".into(),
+        severity: None,
     });
     assert!(s.authorize(&n).is_allowed());
     f.broker.revoke_notifications(&f.plugin);
@@ -435,6 +437,7 @@ fn audit_records_never_contain_values() {
     s.authorize(&CapabilityRequest::Notify(Notify {
         title: SECRET.into(),
         body: SECRET.into(),
+        severity: None,
     }));
     s.authorize(&log(SECRET));
     s.authorize(&CapabilityRequest::StorageSet(StorageSet {

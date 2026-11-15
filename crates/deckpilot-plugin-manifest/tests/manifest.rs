@@ -1173,3 +1173,47 @@ fn runtime_declares_the_artifact() {
     let json: Value = serde_json::from_str(&wasm.to_json_pretty()).unwrap();
     assert_eq!(json["runtime"], json!({ "kind": "wasm", "abi": 1 }));
 }
+
+// -------------------------------------------------------------- first party
+
+fn with_publisher(publisher: &str) -> Manifest {
+    let mut value = example();
+    set(&mut value, "/id", json!(format!("{publisher}.github-prs")));
+    set(&mut value, "/publisher/id", json!(publisher));
+    serde_json::from_value(value).unwrap()
+}
+
+#[test]
+fn only_the_first_party_rules_accept_the_deckpilot_publisher() {
+    let first_party = with_publisher("deckpilot");
+    let refused = first_party.validate().unwrap_err();
+    assert!(
+        refused.has("publisher.id", IssueCode::Reserved),
+        "{refused}"
+    );
+    first_party.validate_first_party().unwrap();
+
+    // Every other reserved publisher stays reserved, and a third-party
+    // manifest is not first-party.
+    for publisher in ["knittingcode", "github", "core"] {
+        let errors = with_publisher(publisher)
+            .validate_first_party()
+            .unwrap_err();
+        assert!(
+            errors.has("publisher.id", IssueCode::Reserved),
+            "{publisher}: {errors}"
+        );
+    }
+    let third_party = with_publisher("acme");
+    third_party.validate().unwrap();
+    let errors = third_party.validate_first_party().unwrap_err();
+    assert!(errors.has("publisher.id", IssueCode::Mismatch), "{errors}");
+
+    // The other rules still apply.
+    let mut value = serde_json::to_value(&first_party).unwrap();
+    set(&mut value, "/id", json!("deckpilot.other"));
+    set(&mut value, "/publisher/id", json!("acme"));
+    let mismatched: Manifest = serde_json::from_value(value).unwrap();
+    let errors = mismatched.validate_first_party().unwrap_err();
+    assert!(errors.has("id", IssueCode::Mismatch), "{errors}");
+}

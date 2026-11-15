@@ -114,7 +114,7 @@ jobs:
         run: cargo build --locked -p deckpilot-plugin-host --bin deckpilot-plugin-host
       - name: Build the example plugins and the SDK test guest
         working-directory: plugins/runtime
-        run: cargo build --locked -p hello-weather -p hello-world -p developer-tools -p deckpilot-sdk-test-guest --target wasm32-unknown-unknown --profile guest
+        run: cargo build --locked -p hello-weather -p hello-world -p developer-tools -p deckpilot-sdk-test-guest -p deckpilot-example-default --target wasm32-unknown-unknown --profile guest
       - name: Plugin unit tests (incl. the registry over HTTPS)
         run: "cargo test -p deckpilot-agent --features plugins --lib --locked plugins::"
       - name: End to end
@@ -127,3 +127,25 @@ jobs:
       # trusts; nothing reaches the network or the real registry.
       - name: End to end over HTTPS
         run: cargo test -p deckpilot-agent --features plugins --test plugins_registry_https --locked -- --nocapture
+      # The test fixture bundled as an installed application ships it,
+      # seeded offline, checked against its pins and run in the host.
+      - name: Bundled plugins end to end
+        run: cargo test -p deckpilot-agent --features plugins --test plugins_bundled --locked -- --nocapture
+      # The bundle layout as a release with DECKPILOT_RELEASE_PLUGINS=1
+      # would build it, with the test fixture: built twice from clean
+      # target directories (reproducible on this platform), the agent
+      # compiled with the pins, and the release check against both. Last,
+      # because it rebuilds the agent.
+      - name: Bundle layout dry run
+        run: |
+          exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
+          # The release set (no plugin yet) against the agent built without pins.
+          plugins/first-party/build.sh --out "$RUNNER_TEMP/bundle-release"
+          tools/release-pipeline/check-bundled-plugins.sh "$RUNNER_TEMP/bundle-release/bundled" "target/debug/deckpilot-agent$exe"
+          for run in a b; do
+            plugins/first-party/build.sh --test-fixtures --out "$RUNNER_TEMP/bundle-$run" --target-dir "$RUNNER_TEMP/first-party-$run"
+          done
+          diff -r "$RUNNER_TEMP/bundle-a" "$RUNNER_TEMP/bundle-b"
+          DECKPILOT_BUNDLED_PINS="$RUNNER_TEMP/bundle-a/bundled/pins.json" \
+            cargo build --locked -p deckpilot-agent --features plugins --bin deckpilot-agent
+          tools/release-pipeline/check-bundled-plugins.sh "$RUNNER_TEMP/bundle-a/bundled" "target/debug/deckpilot-agent$exe"

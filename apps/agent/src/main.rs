@@ -16,7 +16,7 @@ DeckPilot background agent
 
 Usage:
   deckpilot-agent [--headless] [--mock-devices [<models>]] [--no-usb] [--log-level <level>]
-                  [--enable-plugins] [--plugin-host <path>]
+                  [--enable-plugins] [--plugin-host <path>] [--bundled-plugins <dir>]
                   [--plugin-registry <dir> | --plugin-registry-url <https url>]
                   [--plugin-registry-releases-url <https url>]
                   [--plugin-registry-roots <roots.json>]
@@ -33,7 +33,11 @@ Options:
   --enable-plugins    Answer plugin requests (experimental; only in builds with
                       the `plugins` feature)
   --plugin-host <path>
-                      The plugin host executable (default: next to the agent)
+                      The plugin host executable (default: next to the agent,
+                      where the installers put it)
+  --bundled-plugins <dir>
+                      A bundled/ directory of first-party plugins (debug and
+                      test builds only; default: the application's resources)
   --plugin-registry <dir>
                       A local plugin registry (site/v1 and releases/)
   --plugin-registry-url <https url>
@@ -53,7 +57,8 @@ Options:
 Environment:
   DECKPILOT_DATA_DIR    Use a different data directory
   DECKPILOT_DESKTOP_BIN Path of the configuration app executable
-  DECKPILOT_ENABLE_PLUGINS=1, DECKPILOT_PLUGIN_HOST, DECKPILOT_PLUGIN_REGISTRY,
+  DECKPILOT_ENABLE_PLUGINS=1, DECKPILOT_PLUGIN_HOST, DECKPILOT_BUNDLED_PLUGINS,
+  DECKPILOT_PLUGIN_REGISTRY,
   DECKPILOT_PLUGIN_REGISTRY_URL, DECKPILOT_PLUGIN_REGISTRY_RELEASES_URL,
   DECKPILOT_PLUGIN_REGISTRY_ROOTS
                         Like the plugin options";
@@ -135,6 +140,18 @@ fn parse_args() -> Result<Result<Args, String>, ExitCode> {
                 Ok(p) => parsed.plugins.host = Some(p),
                 Err(message) => return Ok(Err(message)),
             },
+            "--bundled-plugins" => match path(&mut args, "--bundled-plugins") {
+                Ok(p) => parsed.plugins.bundled = Some(p),
+                Err(message) => return Ok(Err(message)),
+            },
+            // Hidden: for the release check (check-bundled-plugins.sh).
+            "--print-bundled-pins" => {
+                use std::io::Write as _;
+                let mut out = std::io::stdout();
+                let _ = out.write_all(deckpilot_agent::plugins::embedded_pins());
+                let _ = out.flush();
+                return Err(ExitCode::SUCCESS);
+            }
             "--plugin-registry" => match path(&mut args, "--plugin-registry") {
                 Ok(p) => parsed.plugins.registry = Some(p),
                 Err(message) => return Ok(Err(message)),

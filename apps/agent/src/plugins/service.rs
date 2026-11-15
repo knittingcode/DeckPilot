@@ -47,10 +47,11 @@ use semver::Version;
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
+use super::bundled::{self, Bundle};
 use super::convert;
 use super::data;
 use super::engine::CatalogPlugin;
-use super::executor::{DataAccess, Executor, OwnVariables, SharedData, Transport};
+use super::executor::{DataAccess, Executor, Opener, OwnVariables, SharedData, Transport};
 use super::lane::{Done, Ended, Job, Lane, LaneEnd, LaneError};
 use super::registry::{Registry, download_error};
 use super::variables::PublishedVariables;
@@ -114,8 +115,11 @@ fn store_error(error: &StoreError) -> IpcError {
         E::AlreadyInstalled { .. } => {
             self::error(ErrorCode::Failed, reason::ALREADY_INSTALLED, message)
         }
-        E::ConsentRequired { .. } => {
+        E::ConsentRequired { .. } | E::BundledGrant { .. } => {
             self::error(ErrorCode::Failed, reason::CONSENT_REQUIRED, message)
+        }
+        E::SourceNotAllowed { .. } => {
+            self::error(ErrorCode::InvalidRequest, reason::INVALID_PACKAGE, message)
         }
         E::UnknownGrant { .. } => self::error(
             ErrorCode::InvalidRequest,
@@ -132,7 +136,8 @@ fn store_error(error: &StoreError) -> IpcError {
         | E::NoStagedUpdate(_)
         | E::UpdatePending { .. }
         | E::VersionInstalled { .. }
-        | E::NotNewer { .. } => self::error(ErrorCode::Failed, reason::INVALID_STATE, message),
+        | E::NotNewer { .. }
+        | E::Tombstoned { .. } => self::error(ErrorCode::Failed, reason::INVALID_STATE, message),
         _ => {
             warn!(%error, "plugin store error");
             IpcError::new(ErrorCode::Failed, message)
@@ -279,6 +284,8 @@ pub(super) struct PluginService {
     host: PathBuf,
     events: Events,
     transport: Transport,
+    /// Where allowed `url.open` requests go.
+    opener: Opener,
     /// The capability executors' connection to plugins.db (storage,
     /// secrets, settings); emptied when the service shuts down.
     data: SharedData,
@@ -286,6 +293,9 @@ pub(super) struct PluginService {
     values: PublishedVariables,
     /// Host failures per plugin since the agent started.
     health: HealthLog,
+    /// The first-party plugins of the application bundle and the pins
+    /// compiled into the agent (`bundled.rs`).
+    bundle: Bundle,
 }
 
 /// What the agent saw of each plugin's host since it started
@@ -383,6 +393,11 @@ impl PluginService {
     ) -> Result<Self, StoreError> {
         let mut manager = PluginManager::open(data_dir, key, manager_options())?;
         let report = manager.recover()?;
+        // Offline, before anything reads the installed plugins: the
+        // bundled first-party plugins, checked against the pins compiled
+        // into the agent.
+        let bundle = Bundle::locate(settings);
+        bundled::seed(&mut manager, &bundle);
         let data = PluginData::open(
             &manager.layout().database(),
             key,
@@ -418,9 +433,11 @@ impl PluginService {
             host: host_program(settings),
             events,
             transport: Transport::from_env(),
+            opener: Opener::from_env(),
             data: Arc::new(Mutex::new(Some(data))),
             values,
             health: HealthLog::default(),
+            bundle,
         };
         if service.registry.is_some() {
             let _ = service.refresh();
@@ -1126,6 +1143,14 @@ impl PluginService {
                 if manifest.manifest_version != MANIFEST_VERSION {
                     return Err(invalid("unsupported manifest version"));
                 }
+                // First-party plugins come only from the application bundle
+                // or a registry, never from a file.
+                if deckpilot_plugin_store::is_first_party(&manifest.id) {
+                    return Err(store_error(&StoreError::SourceNotAllowed {
+                        id: manifest.id,
+                        origin: InstallSource::Sideload.as_str(),
+                    }));
+                }
                 // The artifact contract first: a JavaScript package is
                 // refused as such, whatever the registry says.
                 if manifest.runtime_contract() == RuntimeContract::LegacyJs {
@@ -1174,6 +1199,15 @@ impl PluginService {
                 .grant(id, &consent)
                 .map_err(|e| store_error(&e))?;
         }
+        // The user enabling a first-party plugin they disabled is the one
+        // way its tombstone goes (seeding never clears it).
+        if let Ok(Some(tombstone)) = self.manager.store().tombstone(id)
+            && tombstone.decision == deckpilot_plugin_store::TombstoneDecision::Disabled
+        {
+            self.manager
+                .clear_tombstone(id)
+                .map_err(|e| store_error(&e))?;
+        }
         let result = self.manager.enable(id).map_err(|e| store_error(&e));
         if let Err(e) = &result {
             self.failed(id.as_str(), PluginOperation::Enable, e);
@@ -1190,7 +1224,11 @@ impl PluginService {
 
     fn disable(&mut self, id: &PluginId) -> Result<Response, IpcError> {
         self.stop_host(id);
-        self.manager.disable(id).map_err(|e| store_error(&e))?;
+        // The user's choice: a first-party plugin keeps it (a tombstone),
+        // so seeding never enables it again.
+        self.manager
+            .disable_by_user(id)
+            .map_err(|e| store_error(&e))?;
         self.sync_grants(id);
         self.changed(id);
         self.details(id)
@@ -1367,8 +1405,10 @@ impl PluginService {
         if let Ok(broker_id) = deckpilot_plugin_broker::PluginId::new(id.as_str()) {
             self.broker.remove_plugin(&broker_id);
         }
+        // The user's choice: a first-party plugin keeps it (a tombstone),
+        // so seeding never installs it again.
         self.manager
-            .uninstall_keeping(id, keep)
+            .uninstall_by_user(id, keep)
             .map_err(|e| store_error(&e))?;
         self.health.forget(id.as_str());
         info!(plugin = %id, ?keep, "plugin uninstalled");
@@ -1420,11 +1460,16 @@ impl PluginService {
             self.manager
                 .verify(&record.id)
                 .map_err(|e| store_error(&e))?;
-            let path = self
-                .manager
-                .layout()
-                .resolve(&active.install_dir)
-                .join(deckpilot_plugin_package::ARTIFACT);
+            let dir = self.manager.layout().resolve(&active.install_dir);
+            // A bundled copy is also checked against the pins compiled into
+            // the agent, and so are the very module bytes the host gets.
+            let pin = bundled::check_installed(&mut self.manager, &self.bundle, record, &dir)
+                .map_err(|why| {
+                    self.changed(&record.id);
+                    error(ErrorCode::Failed, reason::BROKEN, why)
+                })?
+                .cloned();
+            let path = dir.join(deckpilot_plugin_package::ARTIFACT);
             let module = std::fs::read(&path).map_err(|e| {
                 error(
                     ErrorCode::Failed,
@@ -1432,6 +1477,12 @@ impl PluginService {
                     format!("the plugin module cannot be read: {e}"),
                 )
             })?;
+            bundled::check_module(&mut self.manager, record, pin.as_ref(), &module).map_err(
+                |why| {
+                    self.changed(&record.id);
+                    error(ErrorCode::Failed, reason::BROKEN, why)
+                },
+            )?;
             deckpilot_plugin_package::wasm::validate_module(&module).map_err(|e| {
                 error(
                     ErrorCode::Failed,
@@ -1543,6 +1594,7 @@ impl PluginService {
             self.events.agent.clone(),
             self.transport.clone(),
             variables,
+            self.opener.clone(),
         )
         .with_data(access);
         Ok((

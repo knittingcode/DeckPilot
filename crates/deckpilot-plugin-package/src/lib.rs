@@ -45,7 +45,10 @@ pub use contents::{ARTIFACT, Files, LICENSE, MANIFEST};
 pub use error::{PackageError, PathError};
 pub use limits::Limits;
 pub use paths::{check_entry_path, check_entry_set};
-pub use read::{ExpectedPackage, VerifiedPackage, read_archive, verify_package};
+pub use read::{
+    ExpectedFiles, ExpectedPackage, VerifiedPackage, read_archive, verify_bundled_files,
+    verify_package,
+};
 pub use unpack::verify_installed;
 
 use deckpilot_plugin_manifest::Sha256Digest;
