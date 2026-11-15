@@ -96,6 +96,16 @@ jobs:
         run: cargo clippy -p deckpilot-agent --features plugins --all-targets --locked -- -D warnings
       # The test builds these itself when they are missing; building them
       # first keeps compile time out of the test's timeouts.
+      # Diagnostic only: the kernel and the Landlock ABI it provides
+      # (landlock_create_ruleset with LANDLOCK_CREATE_RULESET_VERSION). The
+      # host asks for every right up to its newest ABI and reports
+      # `partial` when the kernel has fewer; the agent then refuses it.
+      - name: Kernel and Landlock ABI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          uname -a
+          cat /sys/kernel/security/lsm || true
+          python3 -c 'import ctypes; libc = ctypes.CDLL(None, use_errno=True); v = libc.syscall(444, None, 0, 1); print("landlock ABI:", v if v >= 0 else "error %d" % ctypes.get_errno())'
       - name: Build the plugin host
         working-directory: plugins/runtime
         run: cargo build --locked -p deckpilot-plugin-host --bin deckpilot-plugin-host
