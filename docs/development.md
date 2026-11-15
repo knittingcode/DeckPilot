@@ -363,7 +363,9 @@ more. With a dozen worktrees that is the whole disk. The options:
   cargo takes an exclusive lock on the target directory for the whole build
   ("Blocking waiting for file lock on build directory"), so parallel agents
   wait for each other, and differing features or flags between worktrees
-  rebuild crates back and forth. Not recommended for parallel agents.
+  rebuild crates back and forth. Worse, a worktree can silently run
+  another worktree's code (see [Slots and worktrees](#slots-and-worktrees)).
+  Do not use it.
 - **A bounded pool of target directories**, one per concurrent build:
   `tools/dev/target-slot.sh` (below). Disk use is bounded by the number of
   slots instead of the number of worktrees, builds in different slots run
@@ -411,6 +413,59 @@ total); in two slots both finish in about 4–5 s. The test also runs 2–6
 concurrent acquisitions against 2 slots and checks that no slot is ever
 held twice. Note that cargo's package cache in `~/.cargo` has a lock of its
 own, held only briefly while dependencies are resolved or downloaded.
+
+### Slots and worktrees
+
+A target directory shared by two worktrees is not safe as such. Cargo
+names the output of a path package (every crate of this repository) after
+a hash that includes the package's path *relative to the workspace root*,
+not the absolute path, so `crates/deckpilot-core` in worktree A and in
+worktree B get the same file names (`deps/libdeckpilot_core-<hash>.rlib`,
+`.fingerprint/deckpilot-core-<hash>`). Path packages are judged fresh by
+mtime: their output is reused when it is newer than every source file. So
+if B builds a crate after A last edited it, A's next build reports the
+crate as `Fresh` and links B's version. A's tests then run against B's
+code until `cargo clean -p`. Shown with a two-crate workspace copied to
+two directories that share one `CARGO_TARGET_DIR` (cargo 1.99.1,
+`CARGO_INCREMENTAL=0`): after building B, a build of A prints B's string
+and `cargo build -v` in A says `Fresh` for both crates. Dependencies from
+crates.io and git are not affected: their hash covers the version and the
+source, and their fingerprint is that version, not an mtime.
+
+So `target-slot.sh` gives each slot an affinity: it records the worktree
+that used it last (`.deckpilot-slot-user`), and when another worktree
+acquires it, it first removes the output of that worktree's own packages:
+every `[package]` name of a `Cargo.toml` in the worktree (both workspaces,
+the excluded `plugins/` crates, examples), in every profile and target
+directory, namely fingerprints (which forces cargo to rebuild them),
+artifacts in `deps`, build script output, incremental state, binaries
+copied into the profile directory, `examples`, and docs. Dependencies stay,
+so a slot that changes worktree rebuilds only this repository's crates. If
+no package can be found, the slot is emptied; if a fingerprint could not be
+removed, acquisition fails. A slot that the same worktree used last is not
+touched. `tools/dev/tests/target-slot.test.sh` reproduces the bug with two
+copies of a small workspace built alternately through one slot (a member
+with a `rerun-if-changed` build script and an excluded path crate) and
+checks that each build runs its own code.
+
+The alternatives considered:
+
+- **A target directory per worktree, keyed by a hash of its path, with LRU
+  eviction**: correct, but shares nothing (every new worktree builds all
+  dependencies again) and bounds disk only by evicting whole directories.
+- **`build.build-dir` (`CARGO_BUILD_BUILD_DIR`)**, stable in this toolchain,
+  with the `{workspace-path-hash}` template: the same as the previous point
+  for intermediate files, and unbounded.
+- **Removing only fingerprints**: enough to force rebuilds, but leaves the
+  other worktree's binaries in `target/debug`, where a direct run would
+  pick them up.
+
+The affinity is keyed by the worktree of the current directory when the
+slot is acquired. Build in that worktree: do not point cargo at another
+worktree with `--manifest-path`, and do not `cd` into another worktree in a
+shell that holds a slot from `env`; release it and acquire again there.
+Removing worktrees (`worktree-maintenance.sh cleanup`) needs nothing extra:
+a slot whose last user is gone is scrubbed by its next user.
 
 Slots are opt-in and meant for agents' checks (`cargo check`, `clippy`,
 `test`). Commands that expect `./target` keep the default: `make up` and
