@@ -38,3 +38,38 @@ published_versions() {
     --jq '.[] | select(.draft | not) | .tag_name' \
     | grep -E "$TAG_PATTERN" | sed 's/^v//' || true
 }
+
+# Release separation (docs/marketplace/distribution.md): an application
+# release carries the application only. Plugin packages and the plugin
+# registry's metadata have their own repository, lifecycle and keys.
+
+# updater_asset <platform key> <version>: the one release asset the update
+# manifest may name for <platform key> (the names of
+# tools/ci/updater-fragment.sh); fails for a key that is not an
+# application platform.
+updater_asset() {
+  local v="$2"
+  case "$1" in
+    darwin-aarch64 | darwin-aarch64-app) echo "DeckPilot_aarch64.app.tar.gz" ;;
+    darwin-x86_64 | darwin-x86_64-app) echo "DeckPilot_x64.app.tar.gz" ;;
+    linux-x86_64 | linux-x86_64-appimage) echo "DeckPilot_${v}_amd64.AppImage" ;;
+    linux-x86_64-deb) echo "DeckPilot_${v}_amd64.deb" ;;
+    linux-x86_64-rpm) echo "DeckPilot-${v}-1.x86_64.rpm" ;;
+    windows-x86_64 | windows-x86_64-msi) echo "DeckPilot_${v}_x64_en-US.msi" ;;
+    windows-x86_64-nsis) echo "DeckPilot_${v}_x64-setup.exe" ;;
+    *) return 1 ;;
+  esac
+}
+
+# foreign_asset_kind <name>: "a plugin package" or "plugin registry
+# metadata" for a file of the plugin registry's repository, nothing
+# otherwise. It only names the reason: check-assets.sh refuses every asset
+# outside the application allowlist anyway.
+foreign_asset_kind() {
+  case "$1" in
+    *.dpplugin | *.dpplugin.*) echo "a plugin package" ;;
+    *.minisig | roots.json | timestamp.json | keys-*.json | keyset*.json | index-*.json | registry* | site-v1*)
+      echo "plugin registry metadata"
+      ;;
+  esac
+}

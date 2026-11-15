@@ -4,7 +4,9 @@
 # draft creation and tag reuse, the signing record (failed signing and
 # notarization), required assets and channel isolation, the publication
 # gate, publication as pre-release or (latest) stable, everything that
-# must keep a draft unpublished, idempotent re-runs and recovery.
+# must keep a draft unpublished, idempotent re-runs and recovery, and the
+# release separation: nothing but application assets, never a plugin
+# package or registry metadata, in the release or its manifest.
 #
 #   tools/release-pipeline/test-publication.sh [<work dir>]
 #
@@ -215,6 +217,25 @@ run assets.log "$here/check-assets.sh" "$work/assets.txt" --final && ok "a pre-r
 { cat "$work/assets.txt"; echo latest.json; } > "$work/a.txt"
 expect_failure "a pre-release with latest.json" "contains latest.json" "$here/check-assets.sh" "$work/a.txt"
 
+echo "== release separation: application assets only (docs/marketplace/distribution.md)"
+# with_asset <name>: the complete pre-release's asset list plus <name>.
+with_asset() { { cat "$work/assets.txt"; echo "$1"; } > "$work/a.txt"; }
+for name in com.example.clock-1.2.0.dpplugin com.example.clock-1.2.0.dpplugin.sig; do
+  with_asset "$name"
+  expect_failure "a plugin package as an asset ($name)" "$name, a plugin package" "$here/check-assets.sh" "$work/a.txt" --final
+done
+for name in roots.json timestamp.json timestamp.json.minisig index-12.json keys-1.json.minisig keyset.json registry-site.tar.gz site-v1.zip; do
+  with_asset "$name"
+  expect_failure "registry metadata as an asset ($name)" "$name, plugin registry metadata" "$here/check-assets.sh" "$work/a.txt" --final
+done
+for name in deckpilot-plugin-host deckpilot-plugin-host-x86_64-unknown-linux-gnu notes.txt DeckPilot_0.6.0-beta.1_amd64.rpm DeckPilot-0.6.0-beta.1-1.x86_64.rpm; do
+  with_asset "$name"
+  expect_failure "an asset outside the application allowlist ($name)" "not application assets: $name" "$here/check-assets.sh" "$work/a.txt" --final
+done
+grep -v -x -E 'release-meta.json|SHA256SUMS' "$work/assets.txt" > "$work/a.txt"
+run assets.log "$here/check-assets.sh" "$work/a.txt" && ok "before --final, a release without release-meta.json and SHA256SUMS is still complete" \
+  || bad "not final: $(cat "$work/assets.log")"
+
 echo "== environment gate (before any secret) and publication gate"
 envfile="$STUB_DIR/environments/production-release.json"
 # environment <protection rules JSON> [<custom: true|false> <protected: true|false>]
@@ -354,7 +375,25 @@ expect_draft "a changed asset" "does not match SHA256SUMS" v0.6.0-rc.1
 fresh
 id=$(draft v0.6.0-rc.1)
 echo extra > "$STUB_DIR/assets/$id/unexpected.bin"
+expect_draft "an asset outside SHA256SUMS and the allowlist" "not application assets: unexpected.bin" v0.6.0-rc.1
+fresh
+id=$(draft v0.6.0-rc.1)
+grep -v -F "DeckPilot_0.6.0-rc.1_amd64.deb.sig" "$STUB_DIR/assets/$id/SHA256SUMS" > "$work/S"
+mv "$work/S" "$STUB_DIR/assets/$id/SHA256SUMS"
 expect_draft "an asset outside SHA256SUMS" "does not cover exactly the assets" v0.6.0-rc.1
+# resum: SHA256SUMS covering the draft's assets again, as stage A writes it.
+resum() { (cd "$STUB_DIR/assets/$id" && rm SHA256SUMS && sha256 -- * > ../S && mv ../S SHA256SUMS); }
+fresh
+id=$(draft v0.6.0-rc.1)
+echo plugin > "$STUB_DIR/assets/$id/com.example.clock-1.2.0.dpplugin"
+resum
+expect_draft "a plugin package covered by SHA256SUMS" "com.example.clock-1.2.0.dpplugin, a plugin package" v0.6.0-rc.1
+fresh
+id=$(draft v0.6.0-rc.1)
+echo '{}' > "$STUB_DIR/assets/$id/timestamp.json"
+echo sig > "$STUB_DIR/assets/$id/timestamp.json.minisig"
+resum
+expect_draft "registry metadata covered by SHA256SUMS" "plugin registry metadata" v0.6.0-rc.1
 fresh
 id=$(draft v0.6.0-rc.1)
 rm "$STUB_DIR/assets/$id/DeckPilot_0.6.0-rc.1_x64.dmg"
@@ -381,6 +420,37 @@ fresh
 id=$(draft v0.6.0-rc.1)
 change_manifest '.platforms["darwin-x86_64"].url |= sub("x64.app.tar.gz$"; "x64.zip")'
 expect_draft "a manifest URL of a missing asset" "not to an asset of v0.6.0-rc.1" v0.6.0-rc.1
+# Release separation: an update is always the platform's own application
+# package (docs/marketplace/distribution.md).
+fresh
+id=$(draft v0.6.0-rc.1)
+change_manifest '.platforms["windows-x86_64"].url |= sub("[^/]*$"; "com.example.clock-1.2.0.dpplugin")'
+expect_draft "a manifest URL of a plugin package" "com.example.clock-1.2.0.dpplugin, a plugin package" v0.6.0-rc.1
+fresh
+id=$(draft v0.6.0-rc.1)
+change_manifest '.platforms["linux-x86_64"].url = "https://knittingcode.github.io/deckpilot-plugins/v1/timestamp.json"'
+expect_draft "a manifest URL of registry metadata" "timestamp.json, plugin registry metadata" v0.6.0-rc.1
+for spec in darwin-aarch64:SHA256SUMS darwin-x86_64-app:release-meta.json linux-x86_64-deb:DeckPilot_0.6.0-rc.1_amd64.deb.sig \
+  windows-x86_64-nsis:DeckPilot_0.6.0-rc.1_x64_en-US.msi linux-x86_64-appimage:DeckPilot_0.6.0-rc.1_x64.dmg; do
+  fresh
+  id=$(draft v0.6.0-rc.1)
+  change_manifest ".platforms[\"${spec%%:*}\"].url |= sub(\"[^/]*\$\"; \"${spec#*:}\")"
+  expect_draft "a manifest pointing ${spec%%:*} to ${spec#*:}" "not to the application's updater package" v0.6.0-rc.1
+done
+fresh
+id=$(draft v0.6.0-rc.1)
+change_manifest '.platforms["linux-aarch64"] = .platforms["linux-x86_64"]'
+expect_draft "a manifest with an update for an unknown platform" "linux-aarch64, which is not an application platform" v0.6.0-rc.1
+# A plugin host is an application component: inside the installers, never
+# an asset of its own. Such a release publishes as any other.
+fresh
+id=$(draft v0.6.0-rc.1)
+for name in DeckPilot_0.6.0-rc.1_amd64.deb DeckPilot_0.6.0-rc.1_amd64.AppImage DeckPilot_0.6.0-rc.1_x64-setup.exe; do
+  printf 'installer with /usr/lib/DeckPilot/deckpilot-plugin-host\n' > "$STUB_DIR/assets/$id/$name"
+done
+resum
+run publish.log publish v0.6.0-rc.1 && ok "installers that bundle the plugin host are published" \
+  || bad "plugin host inside the installers: $(cat "$work/publish.log")"
 fresh
 id=$(draft v0.6.0-rc.1)
 change_manifest '.version = "0.6.0-rc.0"'

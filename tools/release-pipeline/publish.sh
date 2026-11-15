@@ -14,12 +14,15 @@
 #
 # Before publishing (fail closed, the release stays a draft):
 #   - exactly one release exists for the tag and the tag still points to SHA;
-#   - every required asset, nothing of the other channel (check-assets.sh);
+#   - every required asset, nothing of the other channel, nothing but
+#     application assets: no plugin package or registry metadata
+#     (check-assets.sh);
 #   - SHA256SUMS covers exactly the assets and every checksum matches;
 #   - release-meta.json names this tag, version, channel, manifest and SHA;
 #   - every updater signature verifies (deckpilot-dev verify-release);
 #   - the manifest announces this version, has an update for every
-#     platform and package type, and points only to assets of this tag;
+#     platform and package type, and points only to assets of this tag,
+#     each platform to its own application updater package;
 #   - the release notes are not empty.
 # Then one update publishes it: a pre-release for alpha, beta and rc; a
 # stable release, marked latest only if it is newer than every published
@@ -96,9 +99,21 @@ if [ "$(jq -r .draft <<< "$release")" = true ]; then
   prefix="https://github.com/$repository/releases/download/$tag/"
   while read -r url; do
     name="${url#"$prefix"}"
+    kind=$(foreign_asset_kind "${url##*/}")
+    [ -z "$kind" ] || fail "$MANIFEST points to $url, $kind: an update is always an application package"
     { [ "$url" != "$name" ] && grep -q -x -F -- "$name" "$work/assets.txt"; } \
       || fail "$MANIFEST points to $url, not to an asset of $tag"
   done < <(jq -r '.platforms[].url' "$manifest")
+  # Release separation: each platform's update is that platform's
+  # application package, never a plugin package, registry file or any
+  # other asset of the release (docs/marketplace/distribution.md).
+  while IFS=$'\t' read -r key url; do
+    expected=$(updater_asset "$key" "$VERSION") \
+      || fail "$MANIFEST has an update for $key, which is not an application platform"
+    name="${url#"$prefix"}"
+    [ "$name" = "$expected" ] \
+      || fail "$MANIFEST points $key to $url, not to the application's updater package $prefix$expected"
+  done < <(jq -r '.platforms | to_entries[] | [.key, .value.url] | @tsv' "$manifest")
 
   # Latest: a stable release newer than every published stable release.
   latest=false
