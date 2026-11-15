@@ -20,7 +20,26 @@ function LibraryEntry({ option }: { option: TargetOption }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `library:${option.value}`,
     data: source,
+    // Plugin actions that cannot run now cannot be newly placed.
+    disabled: option.unavailable !== undefined,
   })
+  if (option.unavailable !== undefined) {
+    return (
+      <li
+        className="grid min-w-0 gap-0.5 rounded-md border border-dashed px-2 py-1.5 text-sm text-muted-foreground"
+        aria-label={`${option.label}: unavailable, ${option.unavailable}`}
+        aria-disabled
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <OptionIcon option={option} />
+          <span className="min-w-0 flex-1 truncate" title={option.label}>
+            {option.label}
+          </span>
+        </span>
+        <span className="text-xs">{option.unavailable}</span>
+      </li>
+    )
+  }
   return (
     <li
       ref={setNodeRef}

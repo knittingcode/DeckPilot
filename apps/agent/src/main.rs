@@ -16,7 +16,9 @@ DeckPilot background agent
 
 Usage:
   deckpilot-agent [--headless] [--mock-devices [<models>]] [--no-usb] [--log-level <level>]
-                  [--enable-plugins] [--plugin-host <path>] [--plugin-registry <dir>]
+                  [--enable-plugins] [--plugin-host <path>]
+                  [--plugin-registry <dir> | --plugin-registry-url <https url>]
+                  [--plugin-registry-releases-url <https url>]
                   [--plugin-registry-roots <roots.json>]
   deckpilot-agent autostart <enable|disable|status>
 
@@ -34,8 +36,17 @@ Options:
                       The plugin host executable (default: next to the agent)
   --plugin-registry <dir>
                       A local plugin registry (site/v1 and releases/)
+  --plugin-registry-url <https url>
+                      A plugin registry served over https: the URL of its
+                      site (documents at <url>v1/...). Default, once
+                      --plugin-registry-roots is given:
+                      https://knittingcode.github.io/deckpilot-plugins/
+  --plugin-registry-releases-url <https url>
+                      Download packages from here instead of the release URL
+                      the registry pins (they must still match the pins)
   --plugin-registry-roots <roots.json>
-                      The root keys that registry must be signed with
+                      The root keys the registry must be signed with. None
+                      is built in: without them no registry is used
   --version           Print the version
   --help              Print this help
 
@@ -43,6 +54,7 @@ Environment:
   DECKPILOT_DATA_DIR    Use a different data directory
   DECKPILOT_DESKTOP_BIN Path of the configuration app executable
   DECKPILOT_ENABLE_PLUGINS=1, DECKPILOT_PLUGIN_HOST, DECKPILOT_PLUGIN_REGISTRY,
+  DECKPILOT_PLUGIN_REGISTRY_URL, DECKPILOT_PLUGIN_REGISTRY_RELEASES_URL,
   DECKPILOT_PLUGIN_REGISTRY_ROOTS
                         Like the plugin options";
 
@@ -83,6 +95,11 @@ fn parse_args() -> Result<Result<Args, String>, ExitCode> {
             .map(std::path::PathBuf::from)
             .ok_or_else(|| format!("{name} needs a path"))
     };
+    let text = |args: &mut std::iter::Peekable<std::iter::Skip<std::env::Args>>, name: &str| {
+        args.next()
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| format!("{name} needs a URL"))
+    };
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--headless" => parsed.headless = true,
@@ -96,6 +113,16 @@ fn parse_args() -> Result<Result<Args, String>, ExitCode> {
                 Ok(p) => parsed.plugins.registry = Some(p),
                 Err(message) => return Ok(Err(message)),
             },
+            "--plugin-registry-url" => match text(&mut args, "--plugin-registry-url") {
+                Ok(url) => parsed.plugins.registry_url = Some(url),
+                Err(message) => return Ok(Err(message)),
+            },
+            "--plugin-registry-releases-url" => {
+                match text(&mut args, "--plugin-registry-releases-url") {
+                    Ok(url) => parsed.plugins.registry_releases_url = Some(url),
+                    Err(message) => return Ok(Err(message)),
+                }
+            }
             "--plugin-registry-roots" => match path(&mut args, "--plugin-registry-roots") {
                 Ok(p) => parsed.plugins.registry_roots = Some(p),
                 Err(message) => return Ok(Err(message)),
