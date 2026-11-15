@@ -12,7 +12,7 @@ fn dependencies(features: &[&str], direct: bool) -> Vec<String> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     let mut command = Command::new(option_env!("CARGO").unwrap_or("cargo"));
     command
-        .args(["tree", "--offline", "--locked", "--manifest-path"])
+        .args(["tree", "--locked", "--manifest-path"])
         .arg(&manifest)
         .args([
             "-p",
