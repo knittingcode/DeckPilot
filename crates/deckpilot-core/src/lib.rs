@@ -7,6 +7,7 @@
 //! values are resolved at execution time through [`MachineConfig`].
 
 pub mod action;
+pub mod alias;
 pub mod appearance;
 pub mod button_state;
 pub mod cancel;
@@ -43,6 +44,10 @@ pub(crate) mod testing;
 pub use action::{
     ActionInstance, ActionParameters, ActionType, ActionTypeId, MAX_LABEL_CHARS, ParameterError,
     ParameterKind, ParameterSpec, ParameterValue, lines_of, looks_secret, validate_presentation,
+};
+pub use alias::{
+    ACTION_ALIASES, ActionAlias, AliasOutcome, AliasStatus, FIRST_PARTY_PUBLISHER, LegacyRoute,
+    LegacyRouting, ParamRule, RESERVED_MODULE_IDS,
 };
 pub use appearance::{
     Color, FontSize, Icon, IconData, IconFit, IconRef, KeyAppearance, MAX_ICON_BYTES,
@@ -84,7 +89,7 @@ pub use project::{
     ActiveProjectContext, CycleDirection, Project, ProjectContextError, ProjectKey,
     ProjectStepError, ProjectSwitcher,
 };
-pub use registry::{ActionHandler, ActionRegistry, RegistryError};
+pub use registry::{ActionHandler, ActionRegistry, AliasHandler, RegistryError};
 pub use resource::{
     MachineConfig, MachineResourceBinding, ResolveError, ResourceKey, ResourceKind, ResourceRef,
 };

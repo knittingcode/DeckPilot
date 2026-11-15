@@ -382,7 +382,16 @@ async fn subscribe<R: Runtime>(app: &AppHandle<R>, paths: &AgentPaths) -> Result
                     eprintln!("the agent asked for window `{window}`: {error}");
                 }
             }
-            AgentEvent::ShuttingDown => return Ok(()),
+            AgentEvent::ShuttingDown { reason } => {
+                // On macOS the tray's "Quit DeckPilot" ends this app too; a
+                // restart or an update does not. Elsewhere the app stays.
+                if crate::lifecycle::on_agent_stop(reason, crate::lifecycle::MACOS)
+                    == crate::lifecycle::OnAgentStop::Exit
+                {
+                    app.exit(0);
+                }
+                return Ok(());
+            }
             AgentEvent::ActionCompleted { .. } => {}
             event @ (AgentEvent::ExecutionStarted { .. }
             | AgentEvent::ExecutionProgress { .. }
@@ -490,22 +499,37 @@ async fn unlock_if_needed<R: Runtime>(
     }
 }
 
-/// Brings the app to the front: the main window when unlocked, otherwise
-/// the password prompt.
+/// Brings the app to the front (the agent's "Open DeckPilot" while this app
+/// runs): the main window when unlocked, otherwise the password prompt. A
+/// process started for one window only creates its main window on macOS,
+/// so the request is never lost and no second app is started.
 fn show_window<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(state) = app.try_state::<crate::state::AppState>()
-        && !state.is_unlocked()
-    {
-        let id = crate::commands::security::prompt_window(&state);
-        if let Err(error) = crate::commands::windows::open_by_id(app, &state, id) {
-            eprintln!("cannot open the password prompt: {error}");
+    use crate::lifecycle::{MACOS, ShowTarget, show_target};
+    let state = app.try_state::<crate::state::AppState>();
+    let unlocked = state.as_ref().is_none_or(|state| state.is_unlocked());
+    let main = app.get_webview_window(crate::windows::MAIN);
+    match show_target(unlocked, main.is_some(), MACOS) {
+        ShowTarget::Prompt => {
+            if let Some(state) = state {
+                let id = crate::commands::security::prompt_window(&state);
+                if let Err(error) = crate::commands::windows::open_by_id(app, &state, id) {
+                    eprintln!("cannot open the password prompt: {error}");
+                }
+            }
         }
-        return;
-    }
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
+        ShowTarget::Main => {
+            crate::windows::show_main(app);
+        }
+        // macOS: shown by its page once it has loaded (the configuration
+        // is open).
+        ShowTarget::CreateMain => {
+            if let Err(error) = crate::create_main_window(app) {
+                eprintln!("cannot open the main window: {error}");
+            }
+        }
+        // Windows and Linux: unchanged, an app without a main window
+        // ignores the request.
+        ShowTarget::Nothing => {}
     }
 }
 
