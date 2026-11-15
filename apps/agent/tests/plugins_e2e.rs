@@ -868,6 +868,26 @@ async fn a_plugin_goes_through_its_whole_lifecycle() {
         ]
     );
     assert!(plugin.summary.actions.iter().all(|a| !a.available));
+    // Each action carries the definition the engine registers, available
+    // or not, so the configuration app can offer it and its parameters.
+    for action in &plugin.summary.actions {
+        let definition = action
+            .definition
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} has no definition", action.action_type));
+        assert_eq!(definition.id.as_str(), action.action_type);
+        assert_eq!(definition.name, action.name);
+        assert!(definition.node.cancellable && !definition.node.changes_context);
+    }
+    let greet = plugin.summary.actions[0].definition.as_ref().unwrap();
+    assert_eq!(
+        greet
+            .parameters
+            .iter()
+            .map(|p| p.key.as_str())
+            .collect::<Vec<_>>(),
+        ["name", "style"]
+    );
     // Disabled plugins do not run.
     let refused = agent.invoke(HELLO, "greet", json!({"name": "Ada"})).await;
     assert_eq!(reason_of(&refused), reason::NOT_ENABLED);

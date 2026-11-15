@@ -223,6 +223,15 @@ pub struct PluginActionInfo {
     /// Why not, when not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unavailable_reason: Option<String>,
+    /// The action type exactly as the agent's engine registers it: the
+    /// manifest's parameters and node contract, converted one to one
+    /// (`cancellable` always, never `changesContext`). The configuration
+    /// app offers it in its action editors and validates instances
+    /// against it. Present whether or not the action is available now;
+    /// absent when the manifest action does not convert (the engine does
+    /// not offer it either) and from agents that predate the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<deckpilot_core::ActionType>,
 }
 
 /// An installed plugin, as listed.
@@ -490,5 +499,60 @@ impl PluginInstallSource {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn greet(definition: Option<deckpilot_core::ActionType>) -> PluginActionInfo {
+        PluginActionInfo {
+            action: "greet".into(),
+            action_type: "acme.hello-weather.greet".into(),
+            name: "Greet".into(),
+            description: None,
+            available: true,
+            unavailable_reason: None,
+            definition,
+        }
+    }
+
+    #[test]
+    fn an_action_without_a_definition_keeps_its_old_shape() {
+        let json = serde_json::to_value(greet(None)).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "action": "greet",
+                "actionType": "acme.hello-weather.greet",
+                "name": "Greet",
+                "available": true,
+            })
+        );
+        // What an agent before the field sends still parses.
+        let parsed: PluginActionInfo = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.definition, None);
+    }
+
+    #[test]
+    fn an_action_carries_its_definition() {
+        let definition: deckpilot_core::ActionType = serde_json::from_value(serde_json::json!({
+            "id": "acme.hello-weather.greet",
+            "name": "Greet",
+            "description": "Says hello.",
+            "category": "Fun",
+            "parameters": [
+                {"key": "name", "label": "Name", "kind": {"type": "text"}, "required": true}
+            ],
+            "requiresProject": false,
+        }))
+        .unwrap();
+        let info = greet(Some(definition.clone()));
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["definition"]["id"], "acme.hello-weather.greet");
+        assert_eq!(json["definition"]["parameters"][0]["key"], "name");
+        let back: PluginActionInfo = serde_json::from_value(json).unwrap();
+        assert_eq!(back.definition, Some(definition));
     }
 }
