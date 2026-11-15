@@ -264,6 +264,13 @@ macos 0.6.0-alpha.1
 mac pass "" "a complete macOS build passes"
 check macos fail "DeckPilot_0.6.0-alpha.1_x64.dmg" "the disk image of the other architecture is missing" \
   HDIUTIL="$work/hdiutil" PRERELEASE=true PACKAGE_VERSION=0.6.0-alpha.1 MACOS_ARCH=x64
+# Without MACOS_ARCH, the host's architecture (as in the Packaging job).
+host=x64
+if [ "$(uname -m)" = arm64 ] || [ "$(uname -m)" = aarch64 ]; then host=aarch64; fi
+macos 0.6.0-alpha.1 "$host"
+check macos pass "" "the disk image of the host's architecture is found without MACOS_ARCH" \
+  HDIUTIL="$work/hdiutil" PRERELEASE=true PACKAGE_VERSION=0.6.0-alpha.1
+macos 0.6.0-alpha.1
 rm "$work/bundle/macos/DeckPilot.app.tar.gz.sig"
 mac fail "has no updater signature" "an updater archive without its signature fails"
 macos 0.6.0-alpha.1

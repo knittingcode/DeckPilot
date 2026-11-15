@@ -345,7 +345,12 @@ case "$platform" in
     signed_for_version "$msi"
     ;;
   macos)
-    arch="${MACOS_ARCH:-$(case "$(uname -m)" in arm64 | aarch64) echo aarch64 ;; *) echo x64 ;; esac)}"
+    # (No `case` inside $(...): macOS's bash 3.2 cannot parse it.)
+    arch="${MACOS_ARCH-}"
+    if [ -z "$arch" ]; then
+      arch=x64
+      if [ "$(uname -m)" = arm64 ] || [ "$(uname -m)" = aarch64 ]; then arch=aarch64; fi
+    fi
     case "$arch" in aarch64 | x64) ;; *) fail "MACOS_ARCH must be aarch64 or x64, not $arch" ;; esac
     app="$bundle/macos/DeckPilot.app"
     archive="$bundle/macos/DeckPilot.app.tar.gz"
