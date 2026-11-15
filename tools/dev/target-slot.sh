@@ -8,7 +8,9 @@
 #
 # The lock is a directory (mkdir is atomic on every file system; macOS has
 # no flock(1)) holding the owner's PID and start time; a lock whose owner is
-# gone is taken over. Runs with bash 3.2 and newer, on macOS and Linux.
+# gone is taken over. A slot changing worktree is scrubbed of that
+# worktree's own crates first (scrub_slot). Runs with bash 3.2 and newer, on
+# macOS and Linux.
 set -euo pipefail
 
 usage() {
@@ -43,7 +45,11 @@ Environment:
 
 Exit codes: 0 ok, 1 error, 2 usage, 3 no free slot within --wait.
 A slot that the same worktree used last is preferred, so its incremental
-state is reused.
+state is reused. A slot that another worktree used last first loses the
+output of this worktree's own crates (cargo would otherwise reuse the other
+worktree's build of them); dependencies from crates.io and git are kept.
+The worktree is that of the current directory: build in it, not elsewhere
+(no --manifest-path to another worktree, no cd to one in the same shell).
 EOF
 }
 
@@ -110,6 +116,80 @@ try_slot() { # <n> <owner>
 # The worktree of the current directory, for slot affinity.
 worktree_key() { git rev-parse --show-toplevel 2> /dev/null || pwd -P; }
 
+# The names of the packages whose sources live in worktree <dir>: the
+# [package] name of every Cargo.toml in it (both workspaces, excluded
+# crates, examples). Reading the manifests needs no network and no lock
+# file; a name too many only costs a rebuild.
+local_packages() { # <dir>
+  {
+    git -C "$1" ls-files -co --exclude-standard -- 'Cargo.toml' '*/Cargo.toml' 2> /dev/null \
+      || (cd "$1" && find . \( -name target -o -name node_modules -o -name .git \) -prune -o -name Cargo.toml -print)
+  } | while IFS= read -r m; do
+    [ -f "$1/$m" ] || continue
+    awk -v sq="'" '
+      /^[[:space:]]*\[/ { inpkg = ($0 ~ /^[[:space:]]*\[package\][[:space:]]*(#.*)?$/); next }
+      inpkg && /^[[:space:]]*name[[:space:]]*=/ {
+        v = $0; sub(/^[^=]*=[[:space:]]*/, "", v)
+        q = substr(v, 1, 1)
+        if (q == "\"" || q == sq) { v = substr(v, 2); sub(q ".*", "", v); print v }
+        inpkg = 0
+      }' "$1/$m"
+  done | sort -u
+}
+
+# Cargo names the artifacts and fingerprints of a path package after a hash
+# of its path RELATIVE to the workspace root, and judges them fresh when they
+# are newer than the sources. So the same crate in two worktrees maps to the
+# same files in a shared target directory, and a build in worktree A can
+# reuse what worktree B compiled after A's last edit: A runs B's code. When a
+# slot changes worktree, this removes the output of every package whose
+# sources live in the new one (fingerprints, which forces a rebuild, plus
+# their artifacts, build script output, incremental state, uplifted
+# binaries, examples, docs). Registry and git dependencies are keyed by
+# version and source, are identical across worktrees, and are kept. If the
+# packages cannot be determined, the whole slot is emptied.
+own_entries() { # stdin: paths; prints those named <one of $names>-*
+  while IFS= read -r f; do
+    for n in $names; do
+      case "${f##*/}" in "$n"-*) echo "$f" ;; esac
+    done
+  done
+}
+
+scrub_slot() { # <slot dir> <worktree>
+  dir="$1"
+  [ -n "$(ls -A "$dir" 2> /dev/null)" ] || return 0
+  names=$(local_packages "$2" | grep -E '^[A-Za-z0-9_-]+$' || true)
+  if [ -z "$names" ]; then
+    echo "target-slot: no cargo packages found in $2; emptying $(basename "$dir")" >&2
+    find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    return 0
+  fi
+  echo "target-slot: $(basename "$dir") was last used by another worktree; removing its workspace crates" >&2
+  # Profile directories (debug, release, <triple>/debug, ...) are those
+  # holding a .fingerprint directory.
+  find "$dir" -mindepth 2 -maxdepth 4 -type d -name .fingerprint | while IFS= read -r fp; do
+    p=$(dirname "$fp")
+    for e in "$p"/* "$p"/.[!.]*; do
+      case "${e##*/}" in .fingerprint | build | deps | incremental | .cargo-lock | '*' | '.[!.]*') ;; *) rm -rf "$e" ;; esac
+    done
+    for n in $names; do
+      c=$(printf '%s' "$n" | tr - _)
+      rm -rf "$p/.fingerprint/$n"-* "$p/build/$n"-* \
+        "$p/deps/$c"-* "$p/deps/lib$c"-* "$p/incremental/$c"-*
+    done
+  done
+  find "$dir" -mindepth 1 -maxdepth 2 -type d -name doc | while IFS= read -r d; do
+    for n in $names; do
+      c=$(printf '%s' "$n" | tr - _)
+      rm -rf "${d:?}/$c" "${d:?}/src/$c"
+    done
+  done
+  # A fingerprint left behind would let a stale artifact through: fail.
+  left=$(find "$dir" -mindepth 3 -maxdepth 5 -path '*/.fingerprint/*' -prune -print | own_entries)
+  [ -z "$left" ] || { echo "target-slot: could not remove: $left" >&2; return 1; }
+}
+
 acquire() { # <owner> <wait seconds>
   [ -n "$(start_of "$1")" ] || die "owner process $1 is not running"
   mkdir -p "$pool"
@@ -130,7 +210,15 @@ acquire() { # <owner> <wait seconds>
     for n in $mine $others; do
       if try_slot "$n" "$1"; then
         mkdir -p "$pool/slot-$n"
-        printf '%s\n' "$key" > "$pool/slot-$n/.deckpilot-slot-user"
+        # The record is written only after the scrub, so an interrupted
+        # scrub is redone by the next acquisition.
+        if [ "$(cat "$pool/slot-$n/.deckpilot-slot-user" 2> /dev/null || true)" != "$key" ]; then
+          if ! (scrub_slot "$pool/slot-$n" "$key"); then
+            rm -rf "$pool/slot-$n.lock"
+            die "could not clean slot-$n for $key"
+          fi
+          printf '%s\n' "$key" > "$pool/slot-$n/.deckpilot-slot-user"
+        fi
         echo "$pool/slot-$n"
         return 0
       fi
