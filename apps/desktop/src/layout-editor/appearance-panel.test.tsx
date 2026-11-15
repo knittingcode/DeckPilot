@@ -126,7 +126,9 @@ beforeEach(() => {
   api.previewLayout.mockImplementation(rendered)
   api.pageTree.mockResolvedValue({ pages: [], warnings: [] })
   api.listIcons.mockResolvedValue([icon("rocket", "Rocket", 1), icon("star", "Star", 0)])
-  api.saveLayout.mockResolvedValue(undefined)
+  api.saveLayout.mockImplementation((_, saved) =>
+    Promise.resolve({ ...saved, agentReload: { state: "applied" } }),
+  )
   api.listActionTypes.mockResolvedValue([])
   api.getGestureDefaults.mockResolvedValue({ doubleClickMs: 300, longPressMs: 700 })
 })

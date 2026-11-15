@@ -952,3 +952,39 @@ fn sources_are_recorded() {
     let record = manager.store().plugin(&id()).unwrap().unwrap();
     assert_eq!(record.source, InstallSource::Dev);
 }
+
+#[test]
+fn only_first_party_plugins_are_bundled() {
+    let env = Env::new();
+    let mut manager = env.open();
+    let package = package("1.0.0", &base_permissions());
+    let result = manager.install(&package, &InstallSource::Bundled, &Consent::none("user"));
+    assert!(
+        matches!(
+            result,
+            Err(StoreError::SourceNotAllowed {
+                origin: "bundled",
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+    // Refused before anything was written.
+    assert!(manager.store().plugin(&id()).unwrap().is_none());
+    assert_eq!(manager.store().journal().unwrap(), Vec::new());
+    assert!(!manager.layout().plugin_dir(&id()).exists());
+
+    manager
+        .install(&package, &InstallSource::Sideload, &Consent::none("user"))
+        .unwrap();
+    let result = manager.update(
+        &package_for(ID, "1.1.0", &base_permissions()),
+        &InstallSource::Bundled,
+    );
+    assert!(matches!(result, Err(StoreError::SourceNotAllowed { .. })));
+    let record = manager.store().plugin(&id()).unwrap().unwrap();
+    assert_eq!(record.state, PluginState::Disabled);
+    assert_eq!(record.source, InstallSource::Sideload);
+    assert_eq!(record.active().unwrap().version.to_string(), "1.0.0");
+    assert_eq!(manager.store().journal().unwrap(), Vec::new());
+}

@@ -469,7 +469,10 @@ in React state, browser storage or a log, and nothing can show it again.
 
 ## Plugin data: storage, credentials, settings
 
-All of it lives in plugins.db (schema 2), keyed by plugin id. The id is
+All of it lives in plugins.db (tables of schema 2; schema 3 adds the
+`bundled` source, `module_migrations` and `plugin_tombstones`,
+[module-migration.md §5.6](module-migration.md#56-the-migration)), keyed
+by plugin id. The id is
 always the agent's (the plugin whose host the supervisor spawned, through
 the broker session); no capability request names a plugin, so a plugin
 cannot reach another's rows. The executor reads and writes through a

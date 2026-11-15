@@ -8,7 +8,6 @@ import {
 } from "@dnd-kit/core"
 import { Redo2, RotateCcw, Save, Undo2 } from "lucide-react"
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react"
-import { toast } from "sonner"
 
 import { DeviceCanvas } from "@/components/device-canvas"
 import { EmptyState, ErrorNotice } from "@/components/page"
@@ -26,6 +25,7 @@ import {
 } from "@/components/ui/select"
 import { IS_MAC } from "@/hooks/use-navigation"
 import { api, errorMessage } from "@/lib/api"
+import { appliedByAgent, toastSaved } from "@/lib/agent-reload"
 import { useActionModules, useAppContext } from "@/lib/app-context"
 import { pluginActionUnavailable, withPluginTypes } from "@/lib/plugin-actions"
 import {
@@ -261,11 +261,12 @@ export function LayoutEditor({
   const save = async () => {
     setErrors([])
     try {
-      await api.saveLayout(profileId, draft)
-      toast.success(
-        profiles.activeProfileId === profileId
+      const saved = await api.saveLayout(profileId, draft)
+      toastSaved(
+        profiles.activeProfileId === profileId && appliedByAgent(saved.agentReload)
           ? "Layout saved and sent to the agent"
           : "Layout saved",
+        saved.agentReload,
       )
       onSaved()
       refresh()

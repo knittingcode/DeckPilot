@@ -7,6 +7,7 @@ import type {
   ActionInstance,
   ActionType,
   AgentCompatibility,
+  AgentReload,
   AgentConnection,
   AgentStatus,
   DeviceInfo,
@@ -17,10 +18,19 @@ import type {
   ProfileView,
   ProfilesView,
   Project,
+  Saved,
   Workflow,
 } from "@/lib/types"
 
 export { moduleInfo }
+
+/** `value` as a save returns it: once the agent has read it. */
+export function savedByAgent<T>(
+  value: T,
+  agentReload: AgentReload = { state: "applied" },
+): Saved<T> {
+  return { ...value, agentReload }
+}
 
 const text = (key: string, label: string, required = true): ParameterSpec => ({
   key,

@@ -1,0 +1,19 @@
+[package]
+name = "deckpilot-net"
+description = "DeckPilot's HTTP transport: address policy, pinned resolution, redirects and bounded bodies"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+deckpilot-core.workspace = true
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio = { workspace = true, features = ["net"] }
+url.workspace = true
+
+[lints]
+workspace = true
