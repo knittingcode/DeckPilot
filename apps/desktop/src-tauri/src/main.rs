@@ -18,6 +18,7 @@ mod plugin_actions;
 mod state;
 #[cfg(test)]
 mod tests;
+mod update_provider;
 mod updates;
 mod windows;
 
@@ -92,9 +93,11 @@ fn main() {
             }
         });
     }
+    // Store builds leave the updater out (feature `self-update`).
+    #[cfg(feature = "self-update")]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     builder
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(updates::UpdateManager::default())
         .manage(windows::WindowRegistry::default())
         .manage(commands::portability::PendingImport::default())
