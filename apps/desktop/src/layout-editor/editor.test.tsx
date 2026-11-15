@@ -119,7 +119,14 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-describe("LayoutEditor", () => {
+// These tests are long scripts of real interactions with the whole editor,
+// and nearly all of their time is React rendering it: a click is 15-30 ms
+// of commits (every control is a dnd-kit target in its own context menu),
+// with no timers, waits or pending requests in between. They take up to
+// 0.7 s on an idle computer, 1.9 s with one busy process per core, 2.7 s
+// with two and 4.3 s with one per core beside 28 test workers, so on a
+// busy computer they ran past the 5 s default.
+describe("LayoutEditor", { timeout: 20_000 }, () => {
   it("draws every control of the model and describes bound ones", () => {
     renderEditor()
     expect(screen.getAllByRole("button", { name: /^Key \d+$/ })).toHaveLength(8)
