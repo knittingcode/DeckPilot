@@ -34,8 +34,9 @@ pub use expression::{
 };
 pub use registry::{
     ALIASES, ContextDevice, DeclaredScope, Deprecation, LiveState, MODULE_NAMESPACES, NoLiveState,
-    Requirement, VariableAlias, VariableDeclaration, VariableEnvironment, VariableId,
-    VariableOwner, VariableRegistry, VariableRegistryError, VariableSource, module_namespace,
+    PLUGIN_ROOT, RESERVED_ROOTS, Requirement, VariableAlias, VariableDeclaration,
+    VariableEnvironment, VariableId, VariableOwner, VariableRegistry, VariableRegistryError,
+    VariableSource, module_namespace,
 };
 pub use resolution::{
     DeviceContext, ExecutionDependencies, MissingReason, PreviewItem, ProjectResolver,

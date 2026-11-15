@@ -566,3 +566,144 @@ fn the_frontend_knows_the_module_namespaces() {
         "variables.ts lacks MODULE_NAMESPACES = [{list}]"
     );
 }
+
+#[test]
+fn the_frontend_knows_the_plugin_root() {
+    assert!(
+        FRONTEND_VARIABLES.contains(&format!("PLUGIN_ROOT = \"{PLUGIN_ROOT}\"")),
+        "variables.ts lacks PLUGIN_ROOT = \"{PLUGIN_ROOT}\""
+    );
+}
+
+// ------------------------------------------------------- plugin namespaces
+
+#[test]
+fn plugin_namespaces_are_under_the_plugins_root() {
+    assert!(RESERVED_ROOTS.contains(&PLUGIN_ROOT));
+    assert!(!MODULE_NAMESPACES.contains(&PLUGIN_ROOT));
+    assert_eq!(
+        module_namespace(&module("acme.github-prs")),
+        "plugins.acme.githubPrs"
+    );
+    assert_eq!(
+        module_namespace(&module("my-co.hello-weather2")),
+        "plugins.myCo.helloWeather2"
+    );
+    let id = VariableId::new("plugins.acme.githubPrs.open.count").unwrap();
+    assert_eq!(id.namespace(), "plugins");
+    assert_eq!(id.owner_namespace(), "plugins.acme.githubPrs");
+    assert_eq!(id.plugin_owner(), Some(module("acme.github-prs")));
+    // Built-in ids keep their one-segment namespace and have no plugin.
+    let projects = VariableId::new("projects.current.id").unwrap();
+    assert_eq!(projects.owner_namespace(), "projects");
+    assert_eq!(projects.plugin_owner(), None);
+    // Ids under `plugins` that name no plugin id, or no variable.
+    for bad in [
+        "plugins.acme.githubPrs",
+        "plugins.a.githubPrs.x",
+        "plugins.acme.github_prs.x",
+        "plugins.Acme.prs.x",
+        "plugins.acme.p.x",
+        "plugins.acme.2prs.x",
+    ] {
+        if let Ok(id) = VariableId::new(bad) {
+            assert_eq!(id.plugin_owner(), None, "{bad}");
+        }
+    }
+    // The camel case is injective: every plugin id comes back.
+    for plugin in ["acme.github-prs", "a1.b2-c3", "my-co.x1-y-z", "ab.cd"] {
+        let namespace = module_namespace(&module(plugin));
+        let id = VariableId::new(format!("{namespace}.value")).unwrap();
+        assert_eq!(id.plugin_owner(), Some(module(plugin)), "{plugin}");
+        assert_eq!(id.owner_namespace(), namespace);
+    }
+}
+
+#[test]
+fn a_plugin_registers_only_inside_its_namespace() {
+    let profile = testing::with_projects("Work", &["SHOP"]);
+    let mut registry = VariableRegistry::new();
+    let plugin = module("acme.github-prs");
+    let value = || fixed(VariableValue::String("7".into()));
+    // Not installed: its references are unavailable, named by its id.
+    assert_eq!(
+        resolve(&registry, "plugins.acme.githubPrs.open", &profile),
+        Resolution::Unavailable {
+            owner: "acme.github-prs".into()
+        }
+    );
+    // Outside its namespace: another plugin's, a built-in's, no root.
+    for outside in [
+        "plugins.acme.githubPr.open",
+        "plugins.other.githubPrs.open",
+        "acmeGithubPrs.open",
+        "projects.current.id",
+    ] {
+        assert!(
+            matches!(
+                registry.register_module(&plugin, &[text(outside)], value()),
+                Err(VariableRegistryError::Namespace { .. })
+            ),
+            "{outside}"
+        );
+    }
+    // A built-in module cannot declare under `plugins`, nor own the root.
+    assert!(matches!(
+        registry.register_module(
+            &module("git"),
+            &[text("plugins.acme.githubPrs.open")],
+            value()
+        ),
+        Err(VariableRegistryError::Namespace { .. })
+    ));
+    assert!(matches!(
+        registry.register_module(&module("plugins"), &[text("plugins.x")], value()),
+        Err(VariableRegistryError::ReservedNamespace { .. })
+    ));
+    registry
+        .register_module(
+            &plugin,
+            &[
+                text("plugins.acme.githubPrs.open"),
+                text("plugins.acme.githubPrs.review.mine.count"),
+            ],
+            value(),
+        )
+        .unwrap();
+    assert!(matches!(
+        resolve(&registry, "plugins.acme.githubPrs.open", &profile),
+        Resolution::Value { value: VariableValue::String(v), .. } if v == "7"
+    ));
+    // An id the plugin does not declare is unknown, not unavailable.
+    assert_eq!(
+        resolve(&registry, "plugins.acme.githubPrs.closed", &profile),
+        Resolution::Missing(MissingReason::UnknownVariable)
+    );
+    // Another plugin of the same publisher is another owner.
+    assert_eq!(
+        resolve(&registry, "plugins.acme.helloWeather.temperature", &profile),
+        Resolution::Unavailable {
+            owner: "acme.hello-weather".into()
+        }
+    );
+    assert_eq!(
+        registry.namespace_owner("plugins.acme.githubPrs"),
+        Some(VariableOwner::Module {
+            module: plugin.clone()
+        })
+    );
+    registry.set_available(&plugin, Some("the plugin is disabled".into()));
+    assert_eq!(
+        resolve(&registry, "plugins.acme.githubPrs.open", &profile),
+        Resolution::Unavailable {
+            owner: "acme.github-prs".into()
+        }
+    );
+    registry.unregister_module(&plugin);
+    assert_eq!(
+        resolve(&registry, "plugins.acme.githubPrs.open", &profile),
+        Resolution::Unavailable {
+            owner: "acme.github-prs".into()
+        }
+    );
+}

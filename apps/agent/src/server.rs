@@ -191,10 +191,12 @@ async fn serve(
                 }
             }
             event = next_event(&mut events) => match event {
-                // Clients of an older protocol do not know newer events.
-                Ok(event) if event.since_protocol() > protocol => {}
+                // Clients of an older protocol do not know newer events
+                // (nor, before protocol 10, plugin variables).
                 Ok(event) => {
-                    if !send(&mut writer, &ServerMessage::Event { event }).await {
+                    if let Some(event) = event.for_protocol(protocol)
+                        && !send(&mut writer, &ServerMessage::Event { event }).await
+                    {
                         break;
                     }
                 }
@@ -216,10 +218,9 @@ async fn serve(
                 // Deliver the final notifications before closing.
                 if let Some(events) = events.as_mut() {
                     while let Ok(event) = events.try_recv() {
-                        if event.since_protocol() > protocol {
-                            continue;
+                        if let Some(event) = event.for_protocol(protocol) {
+                            send(&mut writer, &ServerMessage::Event { event }).await;
                         }
-                        send(&mut writer, &ServerMessage::Event { event }).await;
                     }
                 }
                 break;

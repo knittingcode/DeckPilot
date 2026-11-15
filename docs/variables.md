@@ -142,9 +142,18 @@ sent (`server.rs`).
   "open except reserved"): a user variable `shared.projects.favorite` is
   fine; it can never collide with a module id because shared variables
   always have the `shared.` root.
+- **Plugins** (experimental, `docs/marketplace/agent-integration.md`) own
+  the variables they declare under the root `plugins`:
+  `plugins.<publisherCamel>.<nameCamel>.<path>` (`acme.github-prs` →
+  `{{ plugins.acme.githubPrs.open }}`, 1 to 3 path segments). This root is
+  not a list: such a reference parses whenever it names a valid plugin id,
+  on every computer, and resolves as unavailable (owner: the plugin id)
+  where the plugin is not installed or cannot run. Values are what the
+  plugin published; no plugin code runs during a resolution.
 - Reserved roots that no module may use as its namespace: `steps`,
-  `shared`, `system`, `workflow`. A module named after one (the `system`
-  module) cannot declare variables.
+  `shared`, `system`, `workflow`, `plugins`. A module named after one (the
+  `system` module) cannot declare variables. Shared variable keys are not
+  affected (`shared.plugins.x` stays a shared variable).
 
 ### 2.2 Declarations and the registry
 
