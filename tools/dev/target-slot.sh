@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+# A bounded pool of cargo target directories shared by worktrees: instead of
+# one target/ per worktree (1-18 GB each), builds use one of N slots under
+# ~/.cache/deckpilot/target-pool. A slot is held by one process at a time
+# (cargo serializes builds that share a target directory, so a shared one
+# would make parallel agents wait for each other). Opt-in; see
+# docs/development.md, "Worktrees and build caches".
+#
+# The lock is a directory (mkdir is atomic on every file system; macOS has
+# no flock(1)) holding the owner's PID and start time; a lock whose owner is
+# gone is taken over. Runs with bash 3.2 and newer, on macOS and Linux.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: tools/dev/target-slot.sh <command> [options]
+
+Commands:
+  run [--wait <s>] -- <command...>
+        Runs the command with CARGO_TARGET_DIR set to a free slot, held for
+        the command's lifetime and released afterwards. Exit status: the
+        command's.
+  env [--wait <s>] [--owner <pid>]
+        Prints `export CARGO_TARGET_DIR=...` lines for eval, holding the slot
+        for <pid> (default: the calling shell, $PPID):
+          eval "$(tools/dev/target-slot.sh env --owner $$)"
+        Release it with `tools/dev/target-slot.sh release --owner $$`.
+  acquire [--wait <s>] [--owner <pid>]
+        Prints the path of a slot held for <pid> (default: $PPID).
+  release [--owner <pid>] [<slot path>]
+        Releases a slot (default: $CARGO_TARGET_DIR) held by <pid> (default:
+        $PPID) or by a process that is gone.
+  status
+        Lists the slots, their owners and sizes.
+
+Options:
+  --wait <s>   Wait up to <s> seconds for a free slot (default: 0 = fail at
+               once).
+
+Environment:
+  DECKPILOT_TARGET_POOL   pool directory (default ~/.cache/deckpilot/target-pool)
+  DECKPILOT_TARGET_SLOTS  number of slots (default 3)
+
+Exit codes: 0 ok, 1 error, 2 usage, 3 no free slot within --wait.
+A slot that the same worktree used last is preferred, so its incremental
+state is reused.
+EOF
+}
+
+die() { echo "target-slot: $*" >&2; exit 1; }
+usage_error() { echo "target-slot: $*" >&2; echo "Try --help." >&2; exit 2; }
+
+pool="${DECKPILOT_TARGET_POOL:-$HOME/.cache/deckpilot/target-pool}"
+slots="${DECKPILOT_TARGET_SLOTS:-3}"
+case "$slots" in '' | *[!0-9]* | 0) usage_error "DECKPILOT_TARGET_SLOTS must be a positive number" ;; esac
+
+# Start time of a process, to tell a live owner from a reused PID.
+start_of() { ps -o lstart= -p "$1" 2> /dev/null | sed 's/^ *//; s/ *$//'; }
+
+# Seconds since a file was last modified (0 if it is gone).
+age_of() {
+  mtime=$(stat -c %Y "$1" 2> /dev/null || stat -f %m "$1" 2> /dev/null || date +%s)
+  echo $(( $(date +%s) - mtime ))
+}
+
+# Whether the lock of slot <n> has an owner that is still running. A lock
+# without an owner file is being created (or its creator died right after
+# mkdir): it counts as held for 30 seconds.
+lock_held() { # <n>
+  lock="$pool/slot-$1.lock"
+  [ -d "$lock" ] || return 1
+  if [ ! -f "$lock/owner" ]; then
+    [ "$(age_of "$lock")" -lt 30 ]
+    return
+  fi
+  read -r opid ostart < "$lock/owner" || return 1
+  [ -n "$opid" ] && [ "$(start_of "$opid")" = "$ostart" ]
+}
+
+# Tries to take slot <n> for <owner pid>; takes over a stale lock.
+try_slot() { # <n> <owner>
+  lock="$pool/slot-$1.lock"
+  if mkdir "$lock" 2> /dev/null; then
+    printf '%s %s\n' "$2" "$(start_of "$2")" > "$lock/owner"
+    return 0
+  fi
+  lock_held "$1" && return 1
+  # Taking over a stale lock is serialized by a second lock, so that a
+  # process that saw the old lock as stale cannot remove the new one that
+  # another process has just created in its place.
+  reclaim="$pool/slot-$1.reclaim"
+  if ! mkdir "$reclaim" 2> /dev/null; then
+    # Its holder died while reclaiming (it holds it for milliseconds).
+    if [ "$(age_of "$reclaim")" -ge 30 ]; then rm -rf "$reclaim"; fi
+    return 1
+  fi
+  taken=1
+  if ! lock_held "$1"; then
+    rm -rf "$lock"
+    echo "target-slot: took over the stale lock of slot-$1" >&2
+    if mkdir "$lock" 2> /dev/null; then
+      printf '%s %s\n' "$2" "$(start_of "$2")" > "$lock/owner"
+      taken=0
+    fi
+  fi
+  rmdir "$reclaim"
+  return "$taken"
+}
+
+# The worktree of the current directory, for slot affinity.
+worktree_key() { git rev-parse --show-toplevel 2> /dev/null || pwd -P; }
+
+acquire() { # <owner> <wait seconds>
+  [ -n "$(start_of "$1")" ] || die "owner process $1 is not running"
+  mkdir -p "$pool"
+  key=$(worktree_key)
+  deadline=$(( $(date +%s) + $2 ))
+  while :; do
+    # Slots last used by this worktree first, then the rest.
+    mine=""; others=""
+    n=1
+    while [ "$n" -le "$slots" ]; do
+      if [ "$(cat "$pool/slot-$n/.deckpilot-slot-user" 2> /dev/null || true)" = "$key" ]; then
+        mine="$mine $n"
+      else
+        others="$others $n"
+      fi
+      n=$((n + 1))
+    done
+    for n in $mine $others; do
+      if try_slot "$n" "$1"; then
+        mkdir -p "$pool/slot-$n"
+        printf '%s\n' "$key" > "$pool/slot-$n/.deckpilot-slot-user"
+        echo "$pool/slot-$n"
+        return 0
+      fi
+    done
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "target-slot: all $slots slots of $pool are in use" >&2
+      exit 3
+    fi
+    sleep 1
+  done
+}
+
+release() { # <owner> <slot path>
+  slot="${2%/}"
+  case "$slot" in "$pool"/slot-[0-9]*) ;; *) die "not a slot of $pool: $slot" ;; esac
+  n="${slot##*/slot-}"
+  lock="$pool/slot-$n.lock"
+  [ -d "$lock" ] || return 0
+  opid=""
+  [ ! -f "$lock/owner" ] || read -r opid _ < "$lock/owner" || true
+  if [ "$opid" = "$1" ] || ! lock_held "$n"; then
+    rm -rf "$lock"
+  else
+    die "slot-$n is held by process $opid, not $1"
+  fi
+}
+
+cmd="${1:-}"
+[ -n "$cmd" ] || { usage >&2; exit 2; }
+shift
+wait_s=0
+owner="$PPID"
+slot_arg=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h | --help) usage; exit 0 ;;
+    --wait) [ "$#" -ge 2 ] || usage_error "--wait needs seconds"
+      case "$2" in '' | *[!0-9]*) usage_error "--wait needs seconds" ;; esac
+      wait_s="$2"; shift ;;
+    --owner) [ "$#" -ge 2 ] || usage_error "--owner needs a pid"
+      case "$2" in '' | *[!0-9]*) usage_error "--owner needs a pid" ;; esac
+      owner="$2"; shift ;;
+    --) shift; break ;;
+    -*) usage_error "unknown option: $1" ;;
+    *) [ "$cmd" = release ] && [ -z "$slot_arg" ] || usage_error "unexpected argument: $1"
+      slot_arg="$1" ;;
+  esac
+  shift
+done
+
+case "$cmd" in
+  -h | --help) usage ;;
+  acquire) acquire "$owner" "$wait_s" ;;
+  env)
+    slot=$(acquire "$owner" "$wait_s")
+    printf 'export CARGO_TARGET_DIR=%q\n' "$slot"
+    ;;
+  release)
+    [ -n "$slot_arg" ] || slot_arg="${CARGO_TARGET_DIR:-}"
+    [ -n "$slot_arg" ] || usage_error "no slot given and CARGO_TARGET_DIR is not set"
+    release "$owner" "$slot_arg"
+    ;;
+  run)
+    [ "$#" -gt 0 ] || usage_error "run needs a command after --"
+    slot=$(acquire "$$" "$wait_s")
+    trap 'release "$$" "$slot"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    status=0
+    CARGO_TARGET_DIR="$slot" "$@" || status=$?
+    exit "$status"
+    ;;
+  status)
+    n=1
+    while [ "$n" -le "$slots" ]; do
+      dir="$pool/slot-$n"
+      state=free
+      if [ -d "$pool/slot-$n.lock" ]; then
+        owner_line=$(cat "$pool/slot-$n.lock/owner" 2> /dev/null || echo "?")
+        if lock_held "$n"; then state="held by pid ${owner_line%% *}"; else state="stale (pid ${owner_line%% *} gone)"; fi
+      fi
+      size=$( (du -sh "$dir" 2> /dev/null || true) | awk 'NR == 1 { print $1 }')
+      user=$(cat "$dir/.deckpilot-slot-user" 2> /dev/null || echo "-")
+      printf 'slot-%s  %-28s  %6s  last used by %s\n' "$n" "$state" "${size:-0}" "$user"
+      n=$((n + 1))
+    done
+    ;;
+  *) usage_error "unknown command: $cmd" ;;
+esac

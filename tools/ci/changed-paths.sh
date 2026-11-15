@@ -14,7 +14,7 @@
 # doubt, run.
 set -euo pipefail
 
-groups="packaging keystore release_manifest"
+groups="packaging keystore release_manifest dev_tools"
 # The paths of a group: an extended regular expression on whole paths.
 pattern() {
   case "$1" in
@@ -27,6 +27,8 @@ pattern() {
     # Assembly of the release's latest.json, including the pinned download
     # prefix (common.sh) and the client checks it must satisfy.
     release_manifest) echo '^tools/ci/|^tools/release-pipeline/common\.sh$|^crates/deckpilot-update/|^\.github/workflows/(release|ci)\.yml$' ;;
+    # The worktree and build cache scripts of tools/dev and their tests.
+    dev_tools) echo '^tools/dev/[^/]+\.sh$|^tools/dev/tests/|^\.github/workflows/ci\.yml$' ;;
   esac
 }
 
