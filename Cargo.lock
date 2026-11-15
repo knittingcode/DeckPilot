@@ -1349,6 +1349,7 @@ dependencies = [
  "deckpilot-plugin-broker",
  "libc",
  "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
