@@ -292,9 +292,9 @@ older clients ignore.
 | Request (`type`) | Fields | Answer |
 | --- | --- | --- |
 | `getPluginRuntime` | — | `pluginRuntime { status }`: `available`, `built`, `enabled`, `executionSupported`, `platform`, `reason`, `registry { source, freshness, seq, staleReason?, expires?, offline? }` (answered even when plugins are off) |
-| `listPlugins` | — | `plugins { plugins: [PluginSummary] }` (each action with its `definition`) |
-| `getPlugin` | `plugin` | `plugin { plugin: PluginDetails }` |
-| `listAvailablePlugins` | `refresh` | `availablePlugins { registry, plugins: [AvailablePlugin] }` (versions newest first, permissions, `withdrawn`, `incompatible`) |
+| `listPlugins` | — | `plugins { plugins: [PluginSummary] }` (each action with its `definition`; `health` once an invocation failed) |
+| `getPlugin` | `plugin` | `plugin { plugin: PluginDetails }` (with `icon` when the installed icon checks out) |
+| `listAvailablePlugins` | `refresh` | `availablePlugins { registry, plugins: [AvailablePlugin] }` (versions newest first, permissions, `withdrawn`, `incompatible`, `deckpilot`, `platforms`, `publishedAt`; per plugin `description`, `categories`, `publisherInfo`, `license`, `homepage`, `sourceRepository`, `deprecated`) |
 | `installPlugin` | `source: {type: "registry", plugin, version?} \| {type: "file", path}`, `consent: [key]` | `plugin` (state `disabled`) |
 | `enablePlugin` | `plugin`, `consent: [key]` | `plugin` (grants `consent` first; all declared permissions must be granted) |
 | `disablePlugin` | `plugin` | `plugin` |
@@ -307,6 +307,28 @@ older clients ignore.
 | `uninstallPlugin` | `plugin` | `ok` |
 | `invokePluginAction` | `plugin`, `action`, `params: {name: bool \| number \| text \| list}` | `pluginActionResult { outcome: {status: "ok", message?, data} \| {status: "skipped"} \| {status: "failed", code, message?, retryable} }` |
 | `subscribePluginEvents` | — | `ok`; then `pluginEvent` messages on this connection |
+
+Fields added for the marketplace screens, all optional and left out when
+empty (older answers parse unchanged):
+
+- `AvailablePlugin`: the registry detail's `description`, `license`,
+  `homepage`, `sourceRepository`; the index entry's `categories` and
+  `deprecated` reason; `publisherInfo { namespace, displayName?, login,
+  verified }` from the index's publisher list. `AvailableVersion`:
+  `deckpilot` (the `engines.deckpilot` range), `platforms` (empty means
+  every platform) and `publishedAt` (seconds). The registry has no icons,
+  action lists or changelogs, so none of those is sent for a plugin that
+  is not installed.
+- `PluginDetails.icon`: the active version's `icons.128` as a
+  `data:image/png;base64,` URL, only if the installed file is a PNG of at
+  most 256 KiB (`MAX_ICON_BYTES`) whose sha256 is the one the integrity
+  record holds (`convert::icon`).
+- `PluginSummary.health { crashes, lastError?, lastErrorAt? }`: kept in
+  memory per plugin since the agent started (`HealthLog` in
+  `service.rs`), written on the lane thread when an invocation fails. A
+  host crash or timeout counts as a crash; a refused host (weak sandbox,
+  files modified, backing off) only sets the last error; busy, stopped and
+  cancelled invocations are not recorded. Uninstalling forgets it.
 
 Permission keys are grant keys: `network:<host>`, `notifications`,
 `credentials:<ref>`, `variables:<entry>`, `storage`, `profile`,

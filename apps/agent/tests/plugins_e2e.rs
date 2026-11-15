@@ -832,6 +832,18 @@ async fn a_plugin_goes_through_its_whole_lifecycle() {
     );
     let v1 = &hello.versions[1];
     assert_eq!(v1.permissions[0]["hosts"], json!(["api.open-meteo.com"]));
+    // The registry's metadata for the marketplace: categories, the
+    // verified publisher, description, license, source, and per version
+    // the DeckPilot range, platforms and publication time.
+    assert_eq!(hello.categories, ["other"]);
+    let publisher = hello.publisher_info.as_ref().expect("publisher listed");
+    assert_eq!(publisher.namespace, "acme");
+    assert!(publisher.verified, "{publisher:?}");
+    assert!(hello.description.as_deref().is_some_and(|d| !d.is_empty()));
+    assert_eq!(hello.license.as_deref(), Some("Apache-2.0"));
+    assert_eq!(hello.source_repository.as_deref(), Some("acme/plugins"));
+    assert_eq!(v1.deckpilot.as_deref(), Some(">=0.5.0 <1.0.0"));
+    assert!(v1.published_at.is_some_and(|at| at > 0));
     assert_eq!(hello.versions[0].permissions.len(), 2);
     let future = plugins.iter().find(|p| p.id == FUTURE).unwrap();
     assert_ne!(future.versions[0].incompatible, Vec::<String>::new());
@@ -855,6 +867,10 @@ async fn a_plugin_goes_through_its_whole_lifecycle() {
         permission_status(&plugin, NETWORK),
         Some(PermissionStatus::NotGranted)
     );
+    // The installed icon, checked against its integrity record.
+    let icon = plugin.icon.as_deref().expect("the installed icon");
+    assert!(icon.starts_with("data:image/png;base64,"), "{icon:.40}");
+    assert_eq!(plugin.summary.health, None);
     assert_eq!(
         plugin
             .summary
@@ -1446,11 +1462,20 @@ async fn a_host_crash_during_an_invocation_is_contained() {
     tokio::time::sleep(Duration::from_millis(1300)).await;
     let again = agent.invoke(CRASHY, "inits", json!({})).await.unwrap();
     assert!(matches!(again, PluginActionOutcome::Ok { .. }), "{again:?}");
-    // The plugin is still enabled (one crash is not a crash loop).
-    assert_eq!(
-        agent.details(CRASHY).await.summary.state,
-        PluginState::Enabled
+    // The plugin is still enabled (one crash is not a crash loop), and
+    // its health says what happened.
+    let details = agent.details(CRASHY).await;
+    assert_eq!(details.summary.state, PluginState::Enabled);
+    let health = details.summary.health.expect("health after a crash");
+    assert_eq!(health.crashes, 1, "{health:?}");
+    assert!(
+        health
+            .last_error
+            .as_deref()
+            .is_some_and(|e| e.contains("stopped")),
+        "{health:?}"
     );
+    assert!(health.last_error_at.is_some());
     agent.stop().await;
 }
 
@@ -1630,9 +1655,17 @@ async fn a_host_without_a_full_sandbox_is_refused() {
         assert!(message.contains("did not run"), "{message}");
     }
     assert!(fetched(&env.http).is_empty(), "nothing went out");
-    assert_eq!(
-        agent.details(HELLO).await.summary.state,
-        PluginState::Enabled
+    let details = agent.details(HELLO).await;
+    assert_eq!(details.summary.state, PluginState::Enabled);
+    // The refusal is the last error, but no crash.
+    let health = details.summary.health.expect("health after a refusal");
+    assert_eq!(health.crashes, 0, "{health:?}");
+    assert!(
+        health
+            .last_error
+            .as_deref()
+            .is_some_and(|e| e.contains("not full")),
+        "{health:?}"
     );
     agent.stop().await;
 }
