@@ -46,7 +46,8 @@ status=0; ts acquire --owner "$h3" > /dev/null 2>&1 || status=$?
 check "with every slot held, acquire --wait 0 exits 3" test "$status" = 3
 status=0; ts release --owner "$h3" "$s1" > /dev/null 2>&1 || status=$?
 check "a slot cannot be released by another live process" test "$status" = 1
-check "status lists the holders" sh -c "'$BASH' '$script' status | grep -q 'held by pid $h1'"
+ts status > "$work/status.txt"
+check "status lists the holders" grep -q "held by pid $h1" "$work/status.txt"
 ts release --owner "$h1" "$s1"
 check "release frees the slot" test ! -e "$work/pool/slot-1.lock"
 check "release keeps the build output" test -d "$s1"
@@ -141,10 +142,19 @@ if [ "${TARGET_SLOT_SKIP_CARGO:-0}" != 1 ] && command -v cargo > /dev/null 2>&1;
   shared=$(build_pair "$work/shared-target" "$work/shared-target" shared)
   slotted=$(build_pair "$work/pool/slot-1" "$work/pool/slot-2" slotted)
   echo "     two builds sharing one target dir: ${shared}s; in two slots: ${slotted}s"
-  check "builds sharing a target dir block each other" \
-    sh -c "cat '$work'/shared.*.log | grep -q -E 'Blocking waiting for file lock on (build|artifact) directory'"
-  check "builds in different slots do not block" \
-    sh -c "! cat '$work'/slotted.*.log | grep -q -E 'Blocking waiting for file lock on (build|artifact) directory'"
+  # The build script sleeps 4 s: builds that wait for each other take at
+  # least 8 s in total. Cargo's wording of the wait message varies between
+  # versions ("Blocking waiting for file lock on build directory" or "on
+  # artifact directory"), so the timing decides; the logs are shown.
+  lock_msg='file lock on (build|artifact) directory'
+  cat "$work"/shared.*.log "$work"/slotted.*.log | sed 's/^/     | /'
+  check "builds sharing a target dir block each other (>= 8 s)" test "$shared" -ge 8
+  check "builds in different slots overlap (< 8 s)" test "$slotted" -lt 8
+  if cat "$work"/slotted.*.log | grep -E "$lock_msg" > /dev/null; then
+    fail "builds in different slots waited for a target dir lock"
+  else
+    ok "builds in different slots never wait for a target dir lock"
+  fi
 else
   echo "skip cargo build overlap (cargo not installed or TARGET_SLOT_SKIP_CARGO=1)"
 fi

@@ -186,7 +186,7 @@ case "$cmd" in
   acquire) acquire "$owner" "$wait_s" ;;
   env)
     slot=$(acquire "$owner" "$wait_s")
-    printf 'export CARGO_TARGET_DIR=%s\n' "$slot"
+    printf 'export CARGO_TARGET_DIR=%q\n' "$slot"
     ;;
   release)
     [ -n "$slot_arg" ] || slot_arg="${CARGO_TARGET_DIR:-}"
