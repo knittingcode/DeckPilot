@@ -8,6 +8,7 @@ members = [
     "crates/deckpilot-ipc",
     "crates/deckpilot-update",
     "crates/deckpilot-distribution",
+    "crates/deckpilot-net",
     "crates/deckpilot-modules",
     "crates/deckpilot-portability",
     "crates/deckpilot-keystore",
@@ -58,6 +59,7 @@ deckpilot-hid = { path = "crates/deckpilot-hid" }
 deckpilot-ipc = { path = "crates/deckpilot-ipc" }
 deckpilot-update = { path = "crates/deckpilot-update" }
 deckpilot-distribution = { path = "crates/deckpilot-distribution" }
+deckpilot-net = { path = "crates/deckpilot-net" }
 deckpilot-modules = { path = "crates/deckpilot-modules" }
 deckpilot-module-general = { path = "modules/general" }
 deckpilot-module-projects = { path = "modules/projects" }

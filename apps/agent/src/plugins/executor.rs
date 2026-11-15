@@ -2,7 +2,7 @@
 //!
 //! The broker decides; this executor only performs what it was handed:
 //!
-//! * `http.fetch` with the HTTP module's client: exactly the normalized
+//! * `http.fetch` with the `deckpilot-net` client: exactly the normalized
 //!   URL the broker allowed, addresses resolved once, checked against the
 //!   private-network policy (loopback, private, link-local, metadata and
 //!   other non-public addresses refused) and pinned for the connection, no
@@ -182,7 +182,7 @@ impl Transport {
 
 /// A credential to inject into one request: the HTTP client's own type,
 /// whose `Debug` never shows the secret.
-pub(super) type Auth = deckpilot_module_http::client::Auth;
+pub(super) type Auth = deckpilot_net::client::Auth;
 
 /// `secret` as `application/x-www-form-urlencoded` (how a query
 /// parameter carries it).
@@ -285,8 +285,8 @@ fn network_send(
     auth: Option<&Auth>,
     interrupt: Option<&CallInterrupt>,
 ) -> Result<Exchange, String> {
-    use deckpilot_module_http::client;
-    use deckpilot_module_http::policy::NetworkPolicy;
+    use deckpilot_net::client;
+    use deckpilot_net::policy::NetworkPolicy;
     let request = client::Request {
         method: method(fetch.method),
         url: fetch.url.clone(),

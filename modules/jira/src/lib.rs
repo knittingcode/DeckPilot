@@ -16,7 +16,7 @@
 //! never appears in parameters, settings, outputs, messages or logs, and
 //! every result is checked for it before it is returned.
 //!
-//! **Network.** Requests go through the HTTP module's client and its
+//! **Network.** Requests go through the `deckpilot-net` client and its
 //! network policy, as for the GitHub and GitLab modules.
 
 pub mod actions;
@@ -49,7 +49,7 @@ pub const DEFAULT_CREDENTIAL: &str = "jira.token";
 pub const DEPLOYMENTS: [&str; 2] = ["cloud", "data-center"];
 
 /// Stable error codes of the module's actions. Network failures use the
-/// HTTP module's codes (`blocked-address`, `dns-failed`,
+/// transport's codes (`deckpilot_net::codes`: `blocked-address`, `dns-failed`,
 /// `connection-failed`, `tls-failed`, `insecure-credentials`, …).
 pub mod codes {
     /// The site URL is missing or not a valid https address.
