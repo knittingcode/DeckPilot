@@ -4,11 +4,13 @@ import { toPluginError, type PluginClient } from "./api"
 import type {
   AvailablePlugin,
   AvailableVersion,
+  KnownPlugin,
   MarketplaceSnapshot,
   PendingPluginUpdate,
   PluginDetails,
   PluginRuntimeStatus,
   PluginState,
+  PluginStorageUsage,
   RuntimeAvailability,
 } from "./types"
 
@@ -50,6 +52,13 @@ export async function loadSnapshot(
     available: [],
     installed,
   }
+  const missing = await missingSettings(client, installed)
+  if (Object.keys(missing).length > 0) snapshot = { ...snapshot, missingSettings: missing }
+  try {
+    snapshot = { ...snapshot, known: await client.listKnownPlugins() }
+  } catch {
+    // Only names for messages; the marketplace works without them.
+  }
   try {
     const available = await client.listAvailablePlugins(refresh)
     snapshot = { ...snapshot, registry: available.registry, available: available.plugins }
@@ -58,6 +67,114 @@ export async function loadSnapshot(
     snapshot = { ...snapshot, registryError: { reason: e.reason, message: e.message } }
   }
   return snapshot
+}
+
+/**
+ * The required settings each plugin lacks. Only plugins whose manifest has
+ * a required setting without a default can lack one, so only they are
+ * asked; a refusal leaves the plugin out.
+ */
+async function missingSettings(
+  client: PluginClient,
+  installed: PluginDetails[],
+): Promise<Record<string, string[]>> {
+  const out: Record<string, string[]> = {}
+  await Promise.all(
+    installed
+      .filter((p) => declaredConfiguration(p.manifest).settings.some((f) => f.mayBeMissing))
+      .map(async (p) => {
+        try {
+          const settings = await client.getSettings(p.summary.id)
+          const labels = (settings.missing ?? []).map(
+            (key) => settings.fields.find((f) => f.key === key)?.label ?? key,
+          )
+          if (labels.length > 0) out[p.summary.id] = labels
+        } catch {
+          // Shown when the user opens Configure.
+        }
+      }),
+  )
+  return out
+}
+
+/** What `plugin_known` has for a plugin that is not installed now. */
+export function knownUninstalled(
+  snapshot: MarketplaceSnapshot,
+  id: string,
+): KnownPlugin | undefined {
+  return snapshot.known?.find((k) => k.id === id && !k.installed)
+}
+
+function oneDecimal(n: number): string {
+  return n < 10 ? String(Math.round(n * 10) / 10) : String(Math.round(n))
+}
+
+/** `512 B`, `1.5 KiB`, `256 KiB`, `2 MiB`. */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${String(bytes)} B`
+  const kib = bytes / 1024
+  if (kib < 1024) return `${oneDecimal(kib)} KiB`
+  return `${oneDecimal(kib / 1024)} MiB`
+}
+
+/** What a plugin's storage holds, against its quota. */
+export function storageText(usage: PluginStorageUsage): string {
+  const keys = `${String(usage.keys)} of ${String(usage.maxKeys)} keys`
+  return `${formatBytes(usage.usedBytes)} of ${formatBytes(usage.quotaBytes)} used (${keys})`
+}
+
+/**
+ * The kinds of functionality the marketplace distinguishes, from data it
+ * already has: the built-in modules (core functionality, not plugins),
+ * plugins that ship with DeckPilot (none yet), optional plugins the user
+ * installed, and registry plugins that are not installed.
+ */
+export interface PluginClasses {
+  core: { id: string; name: string }[]
+  bundled: PluginDetails[]
+  installed: PluginDetails[]
+  available: AvailablePlugin[]
+}
+
+/**
+ * The plugins that ship with DeckPilot as system plugins. None does yet
+ * (protocol 10 has no such origin); when one does, this is where it is
+ * recognized, and the screens show it apart from the optional plugins.
+ */
+export const BUNDLED_PLUGINS: ReadonlySet<string> = new Set<string>()
+
+export function isBundledPlugin(plugin: PluginDetails): boolean {
+  return BUNDLED_PLUGINS.has(plugin.summary.id)
+}
+
+/** The longest secret the agent accepts (`MAX_PLUGIN_SECRET`), in UTF-8 bytes. */
+export const MAX_SECRET_BYTES = 16 * 1024
+
+/** Why `secret` cannot be sent to the agent; never repeats the secret. */
+export function secretProblem(secret: string): string | null {
+  if (secret === "") return "Enter the secret."
+  if (/[\r\n\0]/.test(secret)) return "A secret cannot contain line breaks."
+  if (new TextEncoder().encode(secret).length > MAX_SECRET_BYTES) {
+    return "The secret is longer than 16 KiB."
+  }
+  return null
+}
+
+export function classifyPlugins(
+  snapshot: MarketplaceSnapshot,
+  modules: { id: string; name: string }[],
+): PluginClasses {
+  const installedIds = new Set(snapshot.installed.map((p) => p.summary.id))
+  return {
+    // Built-in module ids never contain a `.`; plugin ids always do.
+    core: modules
+      .filter((m) => !m.id.includes("."))
+      .map((m) => ({ id: m.id, name: m.name }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    bundled: snapshot.installed.filter(isBundledPlugin),
+    installed: snapshot.installed.filter((p) => !isBundledPlugin(p)),
+    available: snapshot.available.filter((p) => !installedIds.has(p.id) && !p.installed),
+  }
 }
 
 /** Why nothing can be installed or updated right now, or `null`. */
@@ -252,6 +369,8 @@ export interface DeclaredField {
   key: string
   label: string
   description?: string
+  /** A required setting without a default: unset until the user sets it. */
+  mayBeMissing?: boolean
 }
 
 /** The settings and credential slots of a manifest (`contributes`). */
@@ -270,6 +389,7 @@ export function declaredConfiguration(manifest: unknown): {
               key: r.key,
               label: typeof r.label === "string" ? r.label : r.key,
               ...(typeof r.description === "string" ? { description: r.description } : {}),
+              ...(r.required === true && r.default === undefined ? { mayBeMissing: true } : {}),
             },
           ]
         })

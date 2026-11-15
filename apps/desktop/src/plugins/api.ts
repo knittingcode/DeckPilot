@@ -9,11 +9,16 @@ import { createContext, useContext } from "react"
 import type {
   ActionParamValue,
   AvailablePlugins,
+  KnownPlugin,
   PluginActionOutcome,
+  PluginCredentialSlot,
   PluginDetails,
   PluginEvent,
   PluginInstallSource,
+  PluginRetention,
   PluginRuntimeStatus,
+  PluginSettings,
+  PluginSettingValue,
   PluginSummary,
   PluginUpdateResult,
 } from "./types"
@@ -49,14 +54,32 @@ export interface PluginClient {
   declineUpdate(id: string): Promise<PluginDetails>
   /** `rollbackPlugin`. */
   rollbackPlugin(id: string): Promise<PluginDetails>
-  /** `uninstallPlugin`. */
-  uninstallPlugin(id: string): Promise<void>
+  /**
+   * `uninstallPlugin`: deletes its storage, settings and credentials too,
+   * unless `keep` keeps settings and/or credentials for a later install.
+   */
+  uninstallPlugin(id: string, keep?: PluginRetention): Promise<void>
   /** `invokePluginAction`. */
   invokeAction(
     id: string,
     action: string,
     params: Record<string, ActionParamValue>,
   ): Promise<PluginActionOutcome>
+  /** `listKnownPlugins`: every plugin installed here at some point. */
+  listKnownPlugins(): Promise<KnownPlugin[]>
+  /** `getPluginSettings`. */
+  getSettings(id: string): Promise<PluginSettings>
+  /** `setPluginSettings`: merged; `null` resets one to its default. */
+  setSettings(
+    id: string,
+    values: Record<string, PluginSettingValue | null>,
+  ): Promise<PluginSettings>
+  /** `listPluginCredentials`: the slots and whether each is set, never a secret. */
+  listCredentials(id: string): Promise<PluginCredentialSlot[]>
+  /** `setPluginCredential`: the secret goes to the agent; the answer never has it. */
+  setCredential(id: string, key: string, secret: string): Promise<PluginCredentialSlot[]>
+  /** `deletePluginCredential`. */
+  deleteCredential(id: string, key: string): Promise<PluginCredentialSlot[]>
   /** A `.dpplugin` chosen in a native dialog; `null` when cancelled. */
   pickPackage(): Promise<string | null>
   /** Plugin events while subscribed; returns the unsubscribe function. */
@@ -92,6 +115,7 @@ export type PluginErrorReason =
   | "broken"
   | "busy"
   | "invalidParameters"
+  | "invalidData"
   | "failed"
 
 /** What each reason means, as a headline; the agent's message has the details. */
@@ -120,6 +144,7 @@ const TITLES: Partial<Record<string, string>> = {
   broken: "The plugin's files were modified",
   busy: "The plugin is busy",
   invalidParameters: "Invalid parameters",
+  invalidData: "The values do not fit what the plugin declares",
   failed: "The request failed",
 }
 

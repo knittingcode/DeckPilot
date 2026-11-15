@@ -581,8 +581,26 @@ impl PluginService {
         details.icon = record
             .active()
             .and_then(|v| convert::icon(&self.manager.layout().resolve(&v.install_dir), &record));
+        details.storage = self.storage_usage(id);
         Ok(Response::Plugin {
             plugin: Box::new(details),
+        })
+    }
+
+    /// What `id`'s storage holds, and the quota its current grants give it
+    /// (as the broker computes it for every write).
+    fn storage_usage(&self, id: &PluginId) -> Option<ipc::PluginStorageUsage> {
+        let store = self.manager.store();
+        let usage = store.storage_usage(id).ok()?;
+        let effective = store.effective_grants(id).unwrap_or_default();
+        let quota = deckpilot_plugin_broker::Grants::derive(&convert::approved(&effective).0)
+            .map(|g| g.storage_quota())
+            .unwrap_or_default();
+        Some(ipc::PluginStorageUsage {
+            used_bytes: usage.bytes,
+            keys: usage.keys,
+            quota_bytes: quota.bytes,
+            max_keys: quota.keys,
         })
     }
 

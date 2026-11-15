@@ -180,6 +180,63 @@ describe("the Tauri plugin client", () => {
     expect(invoke).toHaveBeenCalledWith(command, args)
   })
 
+  it.each([
+    [
+      "uninstallPlugin keeping nothing",
+      () => client.uninstallPlugin("acme.x", {}),
+      "uninstall_plugin",
+      { plugin: "acme.x" },
+    ],
+    [
+      "uninstallPlugin keeping settings",
+      () => client.uninstallPlugin("acme.x", { settings: true, credentials: false }),
+      "uninstall_plugin",
+      { plugin: "acme.x", keep: { settings: true } },
+    ],
+    [
+      "uninstallPlugin keeping both",
+      () => client.uninstallPlugin("acme.x", { settings: true, credentials: true }),
+      "uninstall_plugin",
+      { plugin: "acme.x", keep: { settings: true, credentials: true } },
+    ],
+    ["listKnownPlugins", () => client.listKnownPlugins(), "list_known_plugins", undefined],
+    [
+      "getSettings",
+      () => client.getSettings("acme.x"),
+      "get_plugin_settings",
+      { plugin: "acme.x" },
+    ],
+    [
+      "setSettings",
+      () => client.setSettings("acme.x", { units: null }),
+      "set_plugin_settings",
+      { plugin: "acme.x", values: { units: null } },
+    ],
+    [
+      "listCredentials",
+      () => client.listCredentials("acme.x"),
+      "list_plugin_credentials",
+      { plugin: "acme.x" },
+    ],
+    [
+      "setCredential",
+      () => client.setCredential("acme.x", "token", "s3cret"),
+      "set_plugin_credential",
+      { plugin: "acme.x", key: "token", secret: "s3cret" },
+    ],
+    [
+      "deleteCredential",
+      () => client.deleteCredential("acme.x", "token"),
+      "delete_plugin_credential",
+      { plugin: "acme.x", key: "token" },
+    ],
+  ])("the client's %s invokes %s", async (_name, request, command, args) => {
+    invoke.mockResolvedValueOnce(null)
+    await request()
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith(command, args)
+  })
+
   it("sends a copy of the consent, not the caller's array", async () => {
     const consent = ["notifications"]
     invoke.mockResolvedValueOnce({})

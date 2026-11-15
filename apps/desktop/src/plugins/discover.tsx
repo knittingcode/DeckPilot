@@ -6,11 +6,14 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
+import { useAppContext } from "@/lib/app-context"
+
 import { Compatibility, PluginIcon, PublisherLine } from "./components"
 import type { MarketplaceActions } from "./marketplace"
 import {
   categoriesOf,
   categoryLabel,
+  classifyPlugins,
   compareSemver,
   inCategory,
   matchesQuery,
@@ -18,6 +21,60 @@ import {
   type UpdateCandidate,
 } from "./model"
 import type { AvailablePlugin, MarketplaceSnapshot } from "./types"
+
+type Classes = ReturnType<typeof classifyPlugins>
+
+/**
+ * What DeckPilot's functionality is made of: core functionality (the
+ * built-in modules, always there and configured in Settings › Modules),
+ * system plugins bundled with DeckPilot (none yet), the optional plugins
+ * installed here, and the registry's plugins that are not installed.
+ */
+function Classification({ classes }: { classes: Classes }) {
+  const rows: { title: string; text: string }[] = [
+    {
+      title: "Core functionality",
+      text:
+        classes.core.length > 0
+          ? `Built into DeckPilot, not plugins: ${classes.core.map((m) => m.name).join(", ")}.`
+          : "Built into DeckPilot, not plugins; see Settings › Modules.",
+    },
+    ...(classes.bundled.length > 0
+      ? [
+          {
+            title: "Bundled system plugins",
+            text: `${String(classes.bundled.length)} shipped with DeckPilot.`,
+          },
+        ]
+      : []),
+    {
+      title: "Installed optional plugins",
+      text:
+        classes.installed.length === 0
+          ? "None installed."
+          : `${String(classes.installed.length)} installed by you; see Installed.`,
+    },
+    {
+      title: "Available plugins",
+      text:
+        classes.available.length === 0
+          ? "Nothing more in the registry."
+          : `${String(classes.available.length)} in the registry, not installed.`,
+    },
+  ]
+  return (
+    <section aria-label="What DeckPilot includes" className="rounded-xl border p-3">
+      <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
+        {rows.map((row) => (
+          <div key={row.title} className="contents">
+            <dt className="font-medium">{row.title}</dt>
+            <dd className="text-muted-foreground">{row.text}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  )
+}
 
 /** What a card says about installing a registry plugin here. */
 function installability(
@@ -46,6 +103,8 @@ export function DiscoverView({
     .sort((a, b) => a.name.localeCompare(b.name))
   const updated = new Set(updates.map((u) => u.plugin.summary.id))
   const icons = new Map(snapshot.installed.map((p) => [p.summary.id, p.icon]))
+  const { modules } = useAppContext()
+  const classes = classifyPlugins(snapshot, modules)
 
   const toolbar = (
     <div className="flex flex-wrap items-center gap-2">
@@ -66,9 +125,12 @@ export function DiscoverView({
     </div>
   )
 
+  const overview = <Classification classes={classes} />
+
   if (snapshot.available.length === 0) {
     return (
       <>
+        {overview}
         {toolbar}
         <EmptyState title="No plugins to show">
           {snapshot.registryError
@@ -85,6 +147,7 @@ export function DiscoverView({
 
   return (
     <>
+      {overview}
       {toolbar}
       <div className="relative">
         <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -153,8 +216,13 @@ export function DiscoverView({
                     {versionShown && <Compatibility version={versionShown} />}
                     <span className="flex flex-wrap gap-1">
                       {item.latest && <Badge variant="outline">Latest {item.latest}</Badge>}
-                      {item.installed && (
-                        <Badge variant="secondary">Installed {item.installed}</Badge>
+                      {item.installed ? (
+                        <>
+                          <Badge variant="secondary">Installed {item.installed}</Badge>
+                          <Badge variant="outline">Optional plugin</Badge>
+                        </>
+                      ) : (
+                        <Badge variant="outline">Available plugin</Badge>
                       )}
                       {updated.has(item.id) && <Badge>Update available</Badge>}
                       {!item.installed && blocked && (
