@@ -1,9 +1,21 @@
 # Application updates
 
 DeckPilot updates itself from **GitHub Releases** of
-`knittingcode/DeckPilot`. Releases contain application binaries and update
+`knittingcode/deckpilot`. Releases contain application binaries and update
 metadata only. No profile, database, token or other user data is ever
 uploaded.
+
+The repository was renamed from `knittingcode/DeckPilot` to
+`knittingcode/deckpilot` (a change of case only). The app's endpoints and
+the download prefix it accepts keep the former spelling, which GitHub
+still serves: installed builds up to 0.6.0-alpha.3 compare every package
+URL in a manifest case-sensitively with
+`https://github.com/knittingcode/DeckPilot/releases/download/`. The release
+pipeline therefore writes exactly that prefix, pinned in
+`tools/release-pipeline/common.sh` rather than taken from
+`github.repository`, and a test keeps it equal to
+`deckpilot_update::DOWNLOAD_PREFIX`. Newer builds accept the owner and
+repository name in any case, but only for this one repository.
 
 ## Channels and discovery
 
@@ -195,7 +207,7 @@ never installs an older version than the running one.
   stays "Notify me".
 - Keychain continuity across a signed update has been verified on
   `v0.6.0-alpha.2` by the *Update continuity* workflow
-  ([run 43606772522](https://github.com/knittingcode/DeckPilot/actions/runs/43606772522)):
+  ([run 43606772522](https://github.com/knittingcode/deckpilot/actions/runs/43606772522)):
   two Developer ID signed builds with the same code identity, a tampered
   update rejected, the signed update from 0.5.0 to 0.5.1 installed, the
   configuration opened from the Keychain without a prompt before and after

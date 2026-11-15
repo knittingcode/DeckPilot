@@ -21,19 +21,19 @@ This section replaces the blockers of the
   (`tools/release-pipeline/check-environment.sh`) verifies this on every
   run; the *Release authorization* job of the *Signing check* workflow
   passed on `9f8a84a`
-  ([run 43609631711](https://github.com/knittingcode/DeckPilot/actions/runs/43609631711)).
+  ([run 43609631711](https://github.com/knittingcode/deckpilot/actions/runs/43609631711)).
 - **Signing secrets** are environment secrets of `production-release`
   only; the repository-level copies have been deleted.
 - **Signed and notarized 0.6.0 build.** The draft release of
   `v0.6.0-alpha.2` (`13cabe6`) was built in
-  [run 43597399166](https://github.com/knittingcode/DeckPilot/actions/runs/43597399166):
+  [run 43597399166](https://github.com/knittingcode/deckpilot/actions/runs/43597399166):
   macOS arm64 and x86_64 Developer ID signed (team `PUB9L83UMZ`) with the
   hardened runtime, notarized, stapled and accepted by Gatekeeper; updater
   signatures, `SHA256SUMS`, `release-meta.json` and `prerelease.json`
   verified; 17 assets. It was **not** published: its *Publish and verify*
   deployment was cancelled when the required reviewers were removed.
 - **Update continuity** passed on `v0.6.0-alpha.2`
-  ([run 43606772522](https://github.com/knittingcode/DeckPilot/actions/runs/43606772522)):
+  ([run 43606772522](https://github.com/knittingcode/deckpilot/actions/runs/43606772522)):
   two Developer ID signed builds with the same code identity, a tampered
   update rejected, the signed update 0.5.0 → 0.5.1 installed, the
   configuration opened from the Keychain without a prompt before and after
@@ -166,21 +166,21 @@ device was connected.
 
 | Check | Result | Run |
 | ----- | ------ | --- |
-| Frontend (required) | success | [CI run 43398938268](https://github.com/knittingcode/DeckPilot/actions/runs/43398938268/job/131796655391) |
-| Storage with SQLCipher (required) | success | [CI run 43398938268](https://github.com/knittingcode/DeckPilot/actions/runs/43398938268/job/131796655964) |
-| Rust (ubuntu-latest) (required) | success | [CI run 43398938268](https://github.com/knittingcode/DeckPilot/actions/runs/43398938268/job/131796656557) |
-| Rust (macos-latest) (required) | success | [CI run 43398938268](https://github.com/knittingcode/DeckPilot/actions/runs/43398938268/job/131796655588) |
-| Rust (windows-latest) (required) | success | [CI run 43398938268](https://github.com/knittingcode/DeckPilot/actions/runs/43398938268/job/131796655647) |
-| Updater signing keys match (required) | success | [Signing check run 43398938208](https://github.com/knittingcode/DeckPilot/actions/runs/43398938208/job/131796655145) |
-| Credential store (macOS, Linux, Windows; real system stores, throwaway names) | success | [CI run 43398938268](https://github.com/knittingcode/DeckPilot/actions/runs/43398938268) |
-| Release manifest assembly | success | [CI run 43398938268](https://github.com/knittingcode/DeckPilot/actions/runs/43398938268/job/131796733856) |
-| Compatibility: previous release (v0.5.0-2) with this commit | success | [Compatibility run 43398938221](https://github.com/knittingcode/DeckPilot/actions/runs/43398938221) |
-| Developer ID and notarization credentials | skipped on pushes to main (by design) | [Signing check run 43398938208](https://github.com/knittingcode/DeckPilot/actions/runs/43398938208). Last success was on the pull request of this commit (#67, head `55e8aaf`): [run 43396899637](https://github.com/knittingcode/DeckPilot/actions/runs/43396899637/job/131789912995) |
-| Package check (Linux .deb) | not run on `1f1de25` (no packaging path changed); success on its parent `d9e2905` | [Packaging run 43396604797](https://github.com/knittingcode/DeckPilot/actions/runs/43396604797/job/131789002106) |
-| Package check (Windows installers) | not run on `1f1de25`; success on `d9e2905` | [Packaging run 43396604797](https://github.com/knittingcode/DeckPilot/actions/runs/43396604797/job/131789002225) |
-| Update continuity | never run on main; last success on a pull request branch (`fix/updater-robustness`, `d69c967`, 2026-11-12) | [run 43174801300](https://github.com/knittingcode/DeckPilot/actions/runs/43174801300) |
-| Release (signed, notarized) | not run for 0.6.0; last run `v0.5.0-2` (success, draft) | [run 42875993140](https://github.com/knittingcode/DeckPilot/actions/runs/42875993140) |
-| CodeQL | Analyze (actions, javascript-typescript, python) success; Analyze (rust) was still running when this was written | [run 43398937728](https://github.com/knittingcode/DeckPilot/actions/runs/43398937728) |
+| Frontend (required) | success | [CI run 43398938268](https://github.com/knittingcode/deckpilot/actions/runs/43398938268/job/131796655391) |
+| Storage with SQLCipher (required) | success | [CI run 43398938268](https://github.com/knittingcode/deckpilot/actions/runs/43398938268/job/131796655964) |
+| Rust (ubuntu-latest) (required) | success | [CI run 43398938268](https://github.com/knittingcode/deckpilot/actions/runs/43398938268/job/131796656557) |
+| Rust (macos-latest) (required) | success | [CI run 43398938268](https://github.com/knittingcode/deckpilot/actions/runs/43398938268/job/131796655588) |
+| Rust (windows-latest) (required) | success | [CI run 43398938268](https://github.com/knittingcode/deckpilot/actions/runs/43398938268/job/131796655647) |
+| Updater signing keys match (required) | success | [Signing check run 43398938208](https://github.com/knittingcode/deckpilot/actions/runs/43398938208/job/131796655145) |
+| Credential store (macOS, Linux, Windows; real system stores, throwaway names) | success | [CI run 43398938268](https://github.com/knittingcode/deckpilot/actions/runs/43398938268) |
+| Release manifest assembly | success | [CI run 43398938268](https://github.com/knittingcode/deckpilot/actions/runs/43398938268/job/131796733856) |
+| Compatibility: previous release (v0.5.0-2) with this commit | success | [Compatibility run 43398938221](https://github.com/knittingcode/deckpilot/actions/runs/43398938221) |
+| Developer ID and notarization credentials | skipped on pushes to main (by design) | [Signing check run 43398938208](https://github.com/knittingcode/deckpilot/actions/runs/43398938208). Last success was on the pull request of this commit (#67, head `55e8aaf`): [run 43396899637](https://github.com/knittingcode/deckpilot/actions/runs/43396899637/job/131789912995) |
+| Package check (Linux .deb) | not run on `1f1de25` (no packaging path changed); success on its parent `d9e2905` | [Packaging run 43396604797](https://github.com/knittingcode/deckpilot/actions/runs/43396604797/job/131789002106) |
+| Package check (Windows installers) | not run on `1f1de25`; success on `d9e2905` | [Packaging run 43396604797](https://github.com/knittingcode/deckpilot/actions/runs/43396604797/job/131789002225) |
+| Update continuity | never run on main; last success on a pull request branch (`fix/updater-robustness`, `d69c967`, 2026-11-12) | [run 43174801300](https://github.com/knittingcode/deckpilot/actions/runs/43174801300) |
+| Release (signed, notarized) | not run for 0.6.0; last run `v0.5.0-2` (success, draft) | [run 42875993140](https://github.com/knittingcode/deckpilot/actions/runs/42875993140) |
+| CodeQL | Analyze (actions, javascript-typescript, python) success; Analyze (rust) was still running when this was written | [run 43398937728](https://github.com/knittingcode/deckpilot/actions/runs/43398937728) |
 
 `1f1de25` differs from `d9e2905` only in `tools/dev/src/hardware.rs` and
 `docs/release-validation.md`, and neither is packaged. No workflow that
@@ -226,7 +226,7 @@ Security alerts (read with `gh api`, open alerts only): code scanning
 | Config survives restart and update | partially verified | Agent restart: native, simulated (full persistence) and physical (layout, project and brightness restored). Database upgrades: automated. No real reboot and no signed update for 0.6.0 (acceptance steps 14–15) |
 | Signed and notarized macOS build verified | not verified | Verified for `v0.5.0-2` only; there is no 0.6.0 test release. The native build was ad-hoc signed |
 | No critical data-loss or security defects | met, as far as known | Security and packaging check (#168): SQLCipher, credential redaction, signing configuration, tag gate, packaging workflows and update channels PASS; 0 open code scanning and 0 open Dependabot alerts. #170 (merged, `592d5f1`) creates the unencrypted copy with mode `0600` and refuses a plaintext database that has credentials. No security review of 0.6.0 beyond these |
-| Required CI green | met on `95a3006`; not yet complete on `main` at `c683489` | On `c683489` ([CI run 43422946363](https://github.com/knittingcode/DeckPilot/actions/runs/43422946363)): Frontend, Storage with SQLCipher, Rust (ubuntu-latest) and Rust (macos-latest) success, Rust (windows-latest) still running when this was written; [Signing check run 43422946235](https://github.com/knittingcode/DeckPilot/actions/runs/43422946235) and [Compatibility run 43422946370](https://github.com/knittingcode/DeckPilot/actions/runs/43422946370) success. On `95a3006`: [CI run 43414247478](https://github.com/knittingcode/DeckPilot/actions/runs/43414247478): Frontend, Storage with SQLCipher, Rust (ubuntu-latest, macos-latest, windows-latest) success; [Signing check run 43414247273](https://github.com/knittingcode/DeckPilot/actions/runs/43414247273): Updater signing keys match success. CodeQL (all four analyses success, run still finishing) and the scheduled Packaging run were in progress when this was written |
+| Required CI green | met on `95a3006`; not yet complete on `main` at `c683489` | On `c683489` ([CI run 43422946363](https://github.com/knittingcode/deckpilot/actions/runs/43422946363)): Frontend, Storage with SQLCipher, Rust (ubuntu-latest) and Rust (macos-latest) success, Rust (windows-latest) still running when this was written; [Signing check run 43422946235](https://github.com/knittingcode/deckpilot/actions/runs/43422946235) and [Compatibility run 43422946370](https://github.com/knittingcode/deckpilot/actions/runs/43422946370) success. On `95a3006`: [CI run 43414247478](https://github.com/knittingcode/deckpilot/actions/runs/43414247478): Frontend, Storage with SQLCipher, Rust (ubuntu-latest, macos-latest, windows-latest) success; [Signing check run 43414247273](https://github.com/knittingcode/deckpilot/actions/runs/43414247273): Updater signing keys match success. CodeQL (all four analyses success, run still finishing) and the scheduled Packaging run were in progress when this was written |
 | Physical results documented | yes | [Physical MK.2 (2026-11-13)](mvp-acceptance.md#physical-mk2-2026-11-13) |
 | Release configuration blockers identified | yes | (1) the `production-release` environment does not exist and the repository has no environments; #169 adds a fail-closed environment-gate job before any job that uses a secret (open; its *Release gate* check fails, as intended, while the environment is missing); (2) no Developer ID signed, notarized 0.6.0 build; (3) *Update continuity* has never run on `main`; (4) the tag ruleset does not restrict who creates `v*` tags; (5) Dependabot #159–#165 wait for an owner decision (#163 fails CI on deprecations, #159 changes the release workflows, #161, #162, #164 and #165 are major or 0.x-breaking) |
 | Acceptance checklist updated | yes | [mvp-acceptance.md](mvp-acceptance.md), 2026-11-13 |
@@ -359,9 +359,9 @@ kept as the record.
    equivalent `gh api` calls are in
    [releasing.md](releasing.md#publication-gate-and-signing-environment-repository-settings).
 2. *Owner action.* Verify it:
-   `gh api repos/knittingcode/DeckPilot/environments/production-release --jq '{reviewers: [.protection_rules[] | select(.type == "required_reviewers") | .reviewers[].reviewer.login], branch_policy: .deployment_branch_policy}'`
+   `gh api repos/knittingcode/deckpilot/environments/production-release --jq '{reviewers: [.protection_rules[] | select(.type == "required_reviewers") | .reviewers[].reviewer.login], branch_policy: .deployment_branch_policy}'`
    and
-   `gh api repos/knittingcode/DeckPilot/environments/production-release/deployment-branch-policies --jq '.branch_policies[] | "\(.type) \(.name)"'`
+   `gh api repos/knittingcode/deckpilot/environments/production-release/deployment-branch-policies --jq '.branch_policies[] | "\(.type) \(.name)"'`
    (at least one reviewer, only `tag v*`).
 3. *Owner action.* Optionally move the five signing secrets into the
    environment, run the non-publishing validation, and decide about

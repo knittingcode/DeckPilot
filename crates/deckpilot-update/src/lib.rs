@@ -21,6 +21,14 @@ pub mod manifest;
 pub mod policy;
 pub mod signature;
 
+// The constants below keep the repository's former spelling
+// `knittingcode/DeckPilot` on purpose; it is now named
+// `knittingcode/deckpilot`, and GitHub serves both. Installed builds (up to
+// 0.6.0-alpha.3) compare manifest URLs case-sensitively with
+// `DOWNLOAD_PREFIX`, so the release pipeline writes exactly this prefix
+// (`tools/release-pipeline/common.sh`, kept equal by
+// `tests/pipeline_prefix.rs`). Do not change their case.
+
 /// Repository whose releases provide updates.
 pub const REPOSITORY: &str = "knittingcode/DeckPilot";
 

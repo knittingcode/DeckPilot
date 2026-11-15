@@ -22,7 +22,11 @@ missing() {
   exit 22
 }
 
-prefix="https://github.com/${REPOSITORY:?}/releases/"
+# Only under the pinned release URL (common.sh) that installations use.
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=tools/release-pipeline/common.sh
+source "$here/common.sh"
+prefix="$RELEASES_URL/"
 rest="${url#"$prefix"}"
 [ "$rest" != "$url" ] || missing
 case "$rest" in

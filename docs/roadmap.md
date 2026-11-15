@@ -142,9 +142,9 @@ Remaining:
 ## Proposed (not planned)
 
 - Plugin marketplace: a design proposal (pull request
-  [#191](https://github.com/knittingcode/DeckPilot/pull/191)) and
+  [#191](https://github.com/knittingcode/deckpilot/pull/191)) and
   experimental feasibility spikes for its runtime and trust model (pull
-  request [#202](https://github.com/knittingcode/DeckPilot/pull/202)).
+  request [#202](https://github.com/knittingcode/deckpilot/pull/202)).
   Nothing of it is part of DeckPilot, and it is not scheduled.
 
 ## Out of scope
