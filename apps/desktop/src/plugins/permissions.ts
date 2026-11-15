@@ -115,7 +115,8 @@ function describe(key: string, facts: Facts): Omit<Grant, "key" | "justification
       return {
         tier: "medium",
         title: `Open links to ${describeHost(target)} in your browser`,
-        detail: "Only right after a key press or an action in DeckPilot.",
+        detail:
+          "Only https pages of this host, while one of its actions runs; at most one every 2 seconds.",
       }
     case "background":
       return {

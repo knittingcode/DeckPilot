@@ -52,7 +52,7 @@ use super::bundled::{self, Bundle};
 use super::convert;
 use super::data;
 use super::engine::CatalogPlugin;
-use super::executor::{DataAccess, Executor, OwnVariables, SharedData, Transport};
+use super::executor::{DataAccess, Executor, Opener, OwnVariables, SharedData, Transport};
 use super::lane::{Done, Ended, Job, Lane, LaneEnd, LaneError};
 use super::migration::LegacySnapshot;
 use super::registry::{Registry, download_error};
@@ -286,6 +286,8 @@ pub(super) struct PluginService {
     host: PathBuf,
     events: Events,
     transport: Transport,
+    /// Where allowed `url.open` requests go.
+    opener: Opener,
     /// The capability executors' connection to plugins.db (storage,
     /// secrets, settings); emptied when the service shuts down.
     data: SharedData,
@@ -433,6 +435,7 @@ impl PluginService {
             host: host_program(settings),
             events,
             transport: Transport::from_env(),
+            opener: Opener::from_env(),
             data: Arc::new(Mutex::new(Some(data))),
             values,
             health: HealthLog::default(),
@@ -1609,6 +1612,7 @@ impl PluginService {
             self.events.agent.clone(),
             self.transport.clone(),
             variables,
+            self.opener.clone(),
         )
         .with_data(access);
         Ok((
