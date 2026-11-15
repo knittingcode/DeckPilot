@@ -43,8 +43,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$out" ] || { echo "build.sh: --out DIR is required" >&2; exit 2; }
+# Cargo runs in plugins/runtime: a relative target directory is the caller's.
+mkdir -p "$target_dir"
+target_dir=$(cd "$target_dir" && pwd)
 fail() { echo "build.sh: $*" >&2; exit 1; }
 command -v jq > /dev/null || fail "jq is required"
+# jq on Windows ends its lines with CRLF; every value here is one line.
+jq() { command jq "$@" | tr -d '\r'; }
 
 if command -v sha256sum > /dev/null; then
   sha() { sha256sum "$1" | cut -d' ' -f1; }

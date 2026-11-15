@@ -12,6 +12,8 @@
 # ok and bad never fail, so `check && ok || bad` is an if-then-else here.
 # shellcheck disable=SC2015
 set -euo pipefail
+# jq on Windows ends its lines with CRLF; every value here is one line.
+jq() { command jq "$@" | tr -d '\r'; }
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 here="$root/tools/release-pipeline"

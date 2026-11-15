@@ -31,6 +31,8 @@ bundled="${1:?usage: check-bundled-plugins.sh <bundled dir> <agent executable>}"
 agent="${2:?usage: check-bundled-plugins.sh <bundled dir> <agent executable>}"
 # shellcheck source=tools/release-pipeline/common.sh
 source "$(dirname "$0")/common.sh"
+# jq on Windows ends its lines with CRLF; every value here is one line.
+jq() { command jq "$@" | tr -d '\r'; }
 
 if command -v sha256sum > /dev/null; then
   sha() { sha256sum "$1" | cut -d' ' -f1; }
