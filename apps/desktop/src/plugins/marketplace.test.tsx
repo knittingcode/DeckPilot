@@ -674,21 +674,6 @@ describe("installed plugins", () => {
     expect(li).toHaveTextContent("by Acme Tools")
   })
 
-  it("opens Configure with the declared settings and credentials, and says they cannot be saved yet", async () => {
-    const { user } = renderMarketplace({ helloInstalled: true })
-    await openInstalled(user)
-    await user.click(installedItem("Hello Weather").getByRole("button", { name: "Configure" }))
-    const dialog = screen.getByRole("dialog", { name: "Configure Hello Weather" })
-    expect(dialog).toHaveTextContent("cannot store plugin settings or credentials yet")
-    expect(within(dialog).getByRole("region", { name: "Declared settings" })).toHaveTextContent(
-      "Units unitsCelsius or Fahrenheit.",
-    )
-    expect(within(dialog).getByRole("region", { name: "Declared credentials" })).toHaveTextContent(
-      "API key apiKey",
-    )
-    expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument()
-  })
-
   it("reads the plugins again after an action, so its health is current", async () => {
     const { user, client } = renderMarketplace({ helloInstalled: true })
     await openInstalled(user)

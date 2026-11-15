@@ -224,6 +224,79 @@ export interface PluginDetails {
    * by the agent against the installed files' integrity record.
    */
   icon?: string
+  /** What its storage holds and may hold; absent from older agents. */
+  storage?: PluginStorageUsage
+}
+
+/** `PluginDetails.storage`: bytes are keys plus JSON values, as UTF-8. */
+export interface PluginStorageUsage {
+  usedBytes: number
+  keys: number
+  quotaBytes: number
+  maxKeys: number
+}
+
+// ---- Plugin data (settings, credentials, known plugins) ----
+
+/** What an uninstall keeps for a later install (default: nothing). */
+export interface PluginRetention {
+  settings?: boolean
+  credentials?: boolean
+}
+
+/** A plugin installed here at some point (`plugin_known`). */
+export interface KnownPlugin {
+  id: string
+  name: string
+  publisher: string
+  namespace: string
+  lastVersion: string
+  installed: boolean
+  firstSeenAt: number
+  lastSeenAt: number
+}
+
+/** One declared setting (`contributes.settings.fields`). */
+export interface PluginSettingField {
+  key: string
+  label: string
+  description?: string
+  /** The parameter kind, as in action parameters (`{ type: "integer", min: 1 }`). */
+  kind: { type: string } & Record<string, unknown>
+  required: boolean
+  default?: PluginSettingValue
+  portability: "portable" | "machineSpecific" | "sensitive"
+}
+
+export type PluginSettingValue = boolean | number | string
+
+/** `getPluginSettings` and `setPluginSettings`. */
+export interface PluginSettings {
+  plugin: string
+  fields: PluginSettingField[]
+  /** What the user saved. */
+  values: Record<string, PluginSettingValue>
+  /** What the plugin sees: saved values, otherwise defaults. */
+  effective: Record<string, PluginSettingValue>
+  /** Required settings with neither a value nor a default. */
+  missing?: string[]
+}
+
+/** One credential slot and whether a secret is stored; never the secret. */
+export interface PluginCredentialSlot {
+  key: string
+  label: string
+  description?: string
+  /** The only hosts the secret is ever sent to. */
+  hosts: string[]
+  /** `bearer`, `basic`, `header`, `query`. */
+  schemes: string[]
+  setupUrl?: string
+  set: boolean
+  /** Seconds since the Unix epoch. */
+  updatedAt?: number
+  /** Whether its `credentials:<key>` permission is granted. */
+  granted: boolean
 }
 
 export interface AvailableVersion {
@@ -346,4 +419,11 @@ export interface MarketplaceSnapshot {
   registryError?: { reason: string; message: string }
   available: AvailablePlugin[]
   installed: PluginDetails[]
+  /** Every plugin installed here at some point (`listKnownPlugins`); empty when unknown. */
+  known?: KnownPlugin[]
+  /**
+   * The labels of required settings without a value or default, by plugin
+   * id (`getPluginSettings.missing`); only plugins with such settings.
+   */
+  missingSettings?: Record<string, string[]>
 }

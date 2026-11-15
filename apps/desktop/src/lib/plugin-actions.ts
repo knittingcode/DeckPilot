@@ -9,7 +9,7 @@
 // action type belongs to everything before its last `.`. Without the flag
 // none of this runs and the editors see the built-in modules only.
 
-import type { PluginSummary } from "@/plugins/types"
+import type { KnownPlugin, PluginSummary } from "@/plugins/types"
 
 import type { ActionType, ModuleInfo } from "./types"
 
@@ -39,11 +39,38 @@ export function isPluginType(typeId: string): boolean {
   return owner !== null && isPluginId(owner)
 }
 
-/** One module per installed plugin, from a `listPlugins` answer. */
-export function pluginModules(plugins: PluginSummary[]): ModuleInfo[] {
+/** `PluginModuleState.state` of a plugin that `plugin_known` has but is not installed. */
+export const NOT_INSTALLED = "notInstalled"
+
+/**
+ * One module per installed plugin, from a `listPlugins` answer, and one
+ * without action types per plugin that was installed here before
+ * (`listKnownPlugins`), so that actions still using it name it.
+ */
+export function pluginModules(plugins: PluginSummary[], known: KnownPlugin[] = []): ModuleInfo[] {
+  const installed = new Set(plugins.map((p) => p.id))
+  const gone: ModuleInfo[] = known
+    .filter((k) => !k.installed && !installed.has(k.id) && isPluginId(k.id))
+    .map((k) => ({
+      id: k.id,
+      version: k.lastVersion,
+      name: k.name || k.id,
+      description: k.publisher ? `Plugin by ${k.publisher}` : "Plugin",
+      platforms: [],
+      pages: [],
+      capabilities: [],
+      config: [],
+      dependencies: [],
+      enabledByDefault: false,
+      enabled: false,
+      supported: true,
+      configValues: {},
+      actionTypes: [],
+      plugin: { state: NOT_INSTALLED, unavailable: {} },
+    }))
   return plugins
     .filter((plugin) => isPluginId(plugin.id))
-    .map((plugin) => {
+    .map((plugin): ModuleInfo => {
       const actionTypes: ActionType[] = []
       const unavailable: Record<string, string> = {}
       for (const action of plugin.actions) {
@@ -75,6 +102,7 @@ export function pluginModules(plugins: PluginSummary[]): ModuleInfo[] {
         plugin: { state: plugin.state, unavailable },
       }
     })
+    .concat(gone)
 }
 
 /** The built-in modules followed by the plugin modules; `modules` itself without plugins. */
@@ -141,6 +169,14 @@ export function typeAvailability(modules: ModuleInfo[], typeId: string): TypeAva
     (pluginsEnabled() && isPluginType(typeId)
       ? modules.find((m) => m.plugin && m.id === ownerOf(typeId))
       : undefined)
+  if (owner?.plugin?.state === NOT_INSTALLED) {
+    // The agent's words for it: `Hello Weather (acme.hello-weather): the plugin is not installed`.
+    return {
+      available: false,
+      owner,
+      reason: `${owner.name} (${owner.id}): the plugin is not installed`,
+    }
+  }
   if (owner?.plugin) {
     const known = owner.actionTypes.some((t) => t.id === typeId)
     const why = known

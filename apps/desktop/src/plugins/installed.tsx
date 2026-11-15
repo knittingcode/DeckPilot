@@ -15,19 +15,14 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 
 import { pluginErrorText, type PluginErrorText } from "./api"
 import { Notice, PermissionList, PluginIcon, PublisherLine } from "./components"
+import { ConfigureDialog } from "./configure"
 import type { MarketplaceActions } from "./marketplace"
 import {
   STATE_LABELS,
@@ -36,6 +31,7 @@ import {
   manifestCompatibility,
   platformLabel,
   platformsText,
+  storageText,
   type UpdateCandidate,
 } from "./model"
 import { grantOfInfo } from "./permissions"
@@ -46,6 +42,7 @@ import type {
   PluginActionInfo,
   PluginActionOutcome,
   PluginDetails,
+  PluginRetention,
 } from "./types"
 
 export function InstalledView({
@@ -72,9 +69,12 @@ export function InstalledView({
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-muted-foreground">
-          Plugins run only while enabled, and only with the permissions you granted.
-        </p>
+        <div className="grid gap-0.5">
+          <h3 className="text-sm font-medium">Installed optional plugins</h3>
+          <p className="text-sm text-muted-foreground">
+            Plugins run only while enabled, and only with the permissions you granted.
+          </p>
+        </div>
         <Button
           variant="ghost"
           size="sm"
@@ -94,6 +94,7 @@ export function InstalledView({
               listed={snapshot.available.find((p) => p.id === item.summary.id)}
               platform={snapshot.runtime.platform}
               runtimeReason={snapshot.runtime.reason}
+              missingSettings={snapshot.missingSettings?.[item.summary.id] ?? []}
               update={byId.get(item.summary.id)}
               actions={actions}
             />
@@ -126,70 +127,12 @@ function HealthNotice({ item }: { item: PluginDetails }) {
   )
 }
 
-/**
- * The plugin's settings and credentials. The agent has no requests for
- * them yet, so this shows what the plugin declares and says so; the
- * forms come with the agent's settings support.
- */
-function ConfigureDialog({ item, onClose }: { item: PluginDetails; onClose: () => void }) {
-  const { settings, credentials } = declaredConfiguration(item.manifest)
-  return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose()
-      }}
-    >
-      <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Configure {item.summary.name}</DialogTitle>
-          <DialogDescription>
-            The running agent cannot store plugin settings or credentials yet, so they cannot be
-            changed here. This is what version {item.summary.version} declares.
-          </DialogDescription>
-        </DialogHeader>
-        {settings.length > 0 && (
-          <section className="grid gap-1" aria-label="Declared settings">
-            <h4 className="text-xs font-medium text-muted-foreground uppercase">Settings</h4>
-            <ul className="grid gap-1 text-sm">
-              {settings.map((f) => (
-                <li key={f.key}>
-                  <span className="font-medium">{f.label}</span>{" "}
-                  <span className="font-mono text-xs text-muted-foreground">{f.key}</span>
-                  {f.description && (
-                    <span className="block text-xs text-muted-foreground">{f.description}</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-        {credentials.length > 0 && (
-          <section className="grid gap-1" aria-label="Declared credentials">
-            <h4 className="text-xs font-medium text-muted-foreground uppercase">Credentials</h4>
-            <ul className="grid gap-1 text-sm">
-              {credentials.map((f) => (
-                <li key={f.key}>
-                  <span className="font-medium">{f.label}</span>{" "}
-                  <span className="font-mono text-xs text-muted-foreground">{f.key}</span>
-                  {f.description && (
-                    <span className="block text-xs text-muted-foreground">{f.description}</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 function InstalledItem({
   item,
   listed,
   platform,
   runtimeReason,
+  missingSettings,
   update,
   actions,
 }: {
@@ -198,6 +141,8 @@ function InstalledItem({
   listed: AvailablePlugin | undefined
   platform: string
   runtimeReason: string | undefined
+  /** Labels of required settings without a value or default. */
+  missingSettings: string[]
   update: UpdateCandidate | undefined
   actions: MarketplaceActions
 }) {
@@ -237,6 +182,7 @@ function InstalledItem({
               {STATE_LABELS[summary.state]}
             </Badge>
             {updateVersion && <Badge>Update {updateVersion} available</Badge>}
+            {missingSettings.length > 0 && <Badge variant="destructive">Settings missing</Badge>}
           </div>
           <PublisherLine publisher={summary.publisher} info={listed?.publisherInfo} />
           <span className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
@@ -246,6 +192,11 @@ function InstalledItem({
               <span>Latest in the registry: {listed.latest}</span>
             )}
           </span>
+          {item.storage && (
+            <span className="text-xs text-muted-foreground">
+              Storage: {storageText(item.storage)}
+            </span>
+          )}
           {notGranted > 0 && (
             <p className="text-xs text-muted-foreground">
               {notGranted} permission{notGranted === 1 ? "" : "s"} not granted; calls that need
@@ -291,6 +242,17 @@ function InstalledItem({
       )}
 
       <HealthNotice item={item} />
+
+      {missingSettings.length > 0 && (
+        <div className="mt-3">
+          <Notice title="Required settings are missing">
+            <p>
+              {missingSettings.join(", ")} {missingSettings.length === 1 ? "has" : "have"} no value
+              and no default. Set {missingSettings.length === 1 ? "it" : "them"} in Configure.
+            </p>
+          </Notice>
+        </div>
+      )}
 
       {update?.kind === "staged" && (
         <div className="mt-3">
@@ -369,7 +331,15 @@ function InstalledItem({
           <ChevronDown className={cn("transition-transform", expanded && "rotate-180")} />
           Permissions and actions
         </Button>
-        <UninstallButton item={item} disabled={busy} actions={actions} />
+        <UninstallButton
+          item={item}
+          disabled={busy}
+          actions={actions}
+          declares={{
+            settings: declared.settings.length > 0,
+            credentials: declared.credentials.length > 0,
+          }}
+        />
       </div>
 
       {expanded && (
@@ -420,6 +390,8 @@ function InstalledItem({
       {configuring && (
         <ConfigureDialog
           item={item}
+          client={actions.client}
+          onChanged={actions.reload}
           onClose={() => {
             setConfiguring(false)
           }}
@@ -599,13 +571,23 @@ function UninstallButton({
   item,
   disabled,
   actions,
+  declares,
 }: {
   item: PluginDetails
   disabled: boolean
   actions: MarketplaceActions
+  /** What the plugin declares, so what there is to keep. */
+  declares: { settings: boolean; credentials: boolean }
 }) {
+  // The documented default (design §5.6): everything goes.
+  const [keep, setKeep] = useState<PluginRetention>({})
+  const name = item.summary.name
   return (
-    <AlertDialog>
+    <AlertDialog
+      onOpenChange={(open) => {
+        if (open) setKeep({})
+      }}
+    >
       <AlertDialogTrigger asChild>
         <Button variant="ghost" size="sm" disabled={disabled}>
           <Trash2 /> Uninstall
@@ -613,18 +595,51 @@ function UninstallButton({
       </AlertDialogTrigger>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Uninstall {item.summary.name}?</AlertDialogTitle>
+          <AlertDialogTitle>Uninstall {name}?</AlertDialogTitle>
           <AlertDialogDescription>
-            Stops the plugin and removes its files, its permissions and its records, including the
-            version kept for rollback.
+            Stops the plugin and removes its files, its permissions, its records (including the
+            version kept for rollback) and its storage. Its settings and credentials are deleted
+            too, unless you keep them below.
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {(declares.settings || declares.credentials) && (
+          <fieldset className="grid gap-2 text-sm">
+            <legend className="mb-1 font-medium">Keep for a reinstall</legend>
+            {declares.settings && (
+              <label className="flex items-start gap-2">
+                <Checkbox
+                  checked={keep.settings === true}
+                  aria-label="Keep its settings"
+                  onCheckedChange={(checked) => {
+                    setKeep({ ...keep, settings: checked === true })
+                  }}
+                />
+                <span>Keep its settings</span>
+              </label>
+            )}
+            {declares.credentials && (
+              <label className="flex items-start gap-2">
+                <Checkbox
+                  checked={keep.credentials === true}
+                  aria-label="Keep its credentials"
+                  onCheckedChange={(checked) => {
+                    setKeep({ ...keep, credentials: checked === true })
+                  }}
+                />
+                <span>
+                  Keep its credentials (stored secrets stay in DeckPilot until the plugin is
+                  installed again and uninstalled without keeping them)
+                </span>
+              </label>
+            )}
+          </fieldset>
+        )}
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction
             className="bg-destructive text-white hover:bg-destructive/90"
             onClick={() => {
-              actions.uninstall(item)
+              actions.uninstall(item, keep)
             }}
           >
             Uninstall

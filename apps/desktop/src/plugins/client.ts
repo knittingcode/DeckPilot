@@ -9,12 +9,26 @@ import { listen } from "@tauri-apps/api/event"
 import { toPluginError, type PluginClient } from "./api"
 import type {
   AvailablePlugins,
+  KnownPlugin,
   PluginActionOutcome,
+  PluginCredentialSlot,
   PluginDetails,
   PluginEvent,
+  PluginRetention,
   PluginRuntimeStatus,
+  PluginSettings,
+  PluginSettingValue,
   PluginSummary,
   PluginUpdateResult,
+} from "./types"
+
+export type {
+  KnownPlugin,
+  PluginCredentialSlot,
+  PluginRetention,
+  PluginSettingField,
+  PluginSettings,
+  PluginSettingValue,
 } from "./types"
 
 /** Backend event with a {@link PluginEvent} (`agent::PLUGIN_EVENT`). */
@@ -26,63 +40,6 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   } catch (error) {
     throw toPluginError(error)
   }
-}
-
-/** What `uninstallPluginKeeping` keeps for a later install (default: nothing). */
-export interface PluginRetention {
-  settings?: boolean
-  credentials?: boolean
-}
-
-/** A plugin installed here at some point (`plugin_known`). */
-export interface KnownPlugin {
-  id: string
-  name: string
-  publisher: string
-  namespace: string
-  lastVersion: string
-  installed: boolean
-  firstSeenAt: number
-  lastSeenAt: number
-}
-
-/** One declared setting (`contributes.settings.fields`). */
-export interface PluginSettingField {
-  key: string
-  label: string
-  description?: string
-  /** The parameter kind, as in action parameters. */
-  kind: { type: string } & Record<string, unknown>
-  required: boolean
-  default?: boolean | number | string
-  portability: "portable" | "machineSpecific" | "sensitive"
-}
-
-export type PluginSettingValue = boolean | number | string
-
-export interface PluginSettings {
-  plugin: string
-  fields: PluginSettingField[]
-  /** What the user saved. */
-  values: Record<string, PluginSettingValue>
-  /** What the plugin sees: saved values, otherwise defaults. */
-  effective: Record<string, PluginSettingValue>
-  /** Required settings with neither a value nor a default. */
-  missing?: string[]
-}
-
-/** One credential slot; never the secret. */
-export interface PluginCredentialSlot {
-  key: string
-  label: string
-  description?: string
-  hosts: string[]
-  schemes: string[]
-  setupUrl?: string
-  set: boolean
-  updatedAt?: number
-  /** Whether its `credentials:<key>` permission is granted. */
-  granted: boolean
 }
 
 /** `listKnownPlugins`. */
@@ -153,7 +110,20 @@ export function createTauriPluginClient(): PluginClient {
       call<PluginUpdateResult>("approve_plugin_update", { plugin, consent: [...consent] }),
     declineUpdate: (plugin) => call<PluginDetails>("decline_plugin_update", { plugin }),
     rollbackPlugin: (plugin) => call<PluginDetails>("rollback_plugin", { plugin }),
-    uninstallPlugin: (plugin) => call<null>("uninstall_plugin", { plugin }).then(() => undefined),
+    // The original request form unless something is kept.
+    uninstallPlugin: (plugin, keep) =>
+      keep?.settings || keep?.credentials
+        ? uninstallPluginKeeping(plugin, {
+            ...(keep.settings ? { settings: true } : {}),
+            ...(keep.credentials ? { credentials: true } : {}),
+          })
+        : call<null>("uninstall_plugin", { plugin }).then(() => undefined),
+    listKnownPlugins,
+    getSettings: getPluginSettings,
+    setSettings: setPluginSettings,
+    listCredentials: listPluginCredentials,
+    setCredential: setPluginCredential,
+    deleteCredential: deletePluginCredential,
     invokeAction: (plugin, action, params) =>
       call<PluginActionOutcome>("invoke_plugin_action", { plugin, action, params }),
     pickPackage: () => call<string | null>("pick_plugin_package"),

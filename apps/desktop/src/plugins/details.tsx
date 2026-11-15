@@ -11,9 +11,11 @@ import {
   categoryLabel,
   compareSemver,
   formatDate,
+  knownUninstalled,
   offeredVersion,
   platformLabel,
   platformsText,
+  storageText,
   type UpdateCandidate,
 } from "./model"
 import { grantsOf } from "./permissions"
@@ -45,6 +47,7 @@ export function PluginDetailsView({
   }, [])
 
   const installed = snapshot.installed.find((p) => p.summary.id === plugin.id)
+  const known = installed ? undefined : knownUninstalled(snapshot, plugin.id)
   const update = updates.find((u) => u.plugin.summary.id === plugin.id)
   const offered = offeredVersion(plugin)
   const versions = [...plugin.versions].sort((a, b) => compareSemver(b.version, a.version))
@@ -157,7 +160,26 @@ export function PluginDetailsView({
               {installReason}
             </span>
           )}
+          {known && (
+            <span className="text-sm text-muted-foreground">
+              Installed here before as {known.name}, last version {known.lastVersion} (
+              {formatDate(known.lastSeenAt)}). Actions that still use it say it is not installed.
+            </span>
+          )}
         </section>
+
+        {installed?.storage && (
+          <section aria-labelledby="plugin-detail-storage" className="grid gap-1">
+            <h4 id="plugin-detail-storage" className="text-sm font-medium">
+              Storage
+            </h4>
+            <p className="text-sm">{storageText(installed.storage)}</p>
+            <p className="text-xs text-muted-foreground">
+              What the plugin keeps for itself in DeckPilot. It is deleted when the plugin is
+              uninstalled.
+            </p>
+          </section>
+        )}
 
         {shown && (
           <section aria-labelledby="plugin-detail-compatibility" className="grid gap-2">
