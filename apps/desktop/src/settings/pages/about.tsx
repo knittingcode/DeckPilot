@@ -30,7 +30,7 @@ export function AboutSettings() {
             <dt className="text-muted-foreground">Operating system</dt>
             <dd>{osLabel(state.data[0].os)}</dd>
             <dt className="text-muted-foreground">Source code</dt>
-            <dd className="select-text">github.com/knittingcode/DeckPilot</dd>
+            <dd className="select-text">github.com/knittingcode/deckpilot</dd>
           </dl>
         )}
       </CardContent>

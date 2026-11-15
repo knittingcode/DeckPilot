@@ -30,7 +30,9 @@ bad() {
 unset GITHUB_OUTPUT GITHUB_REPOSITORY GH_TOKEN GITHUB_TOKEN
 export GH="$here/gh-stub.sh" CURL="$here/curl-stub.sh" REPOSITORY=example/DeckPilot
 export VERIFY_RELEASE=true
-base="https://github.com/$REPOSITORY/releases"
+# The release URLs installations use: the pinned prefix of common.sh, not
+# the REPOSITORY above (which only addresses the API).
+base="https://github.com/knittingcode/DeckPilot/releases"
 sha_a=$(printf 'a%.0s' {1..40})
 sha_b=$(printf 'b%.0s' {1..40})
 sha256() { if command -v sha256sum > /dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
@@ -116,9 +118,10 @@ draft() {
   [ "$PRERELEASE" = true ] || names+=("DeckPilot-${v}-1.x86_64.rpm" "DeckPilot-${v}-1.x86_64.rpm.sig")
   local name
   for name in "${names[@]}"; do printf 'content of %s\n' "$name" > "$assets/$name"; done
-  jq -n --arg v "$v" --arg base "$base/download/$tag/" --argjson rpm "$([ "$PRERELEASE" = true ] && echo false || echo true)" '
-    def update(name): {signature: "s", url: ($base + name)};
-    {version: $v, notes: "n", platforms: ({
+  # The manifest as the workflow assembles it (tools/ci/assemble-latest-json.sh).
+  jq -n --arg v "$v" --argjson rpm "$([ "$PRERELEASE" = true ] && echo false || echo true)" '
+    def update(name): {signature: "s", asset: name};
+    {platforms: ({
       "darwin-aarch64": update("DeckPilot_aarch64.app.tar.gz"),
       "darwin-aarch64-app": update("DeckPilot_aarch64.app.tar.gz"),
       "darwin-x86_64": update("DeckPilot_x64.app.tar.gz"),
@@ -130,11 +133,15 @@ draft() {
       "windows-x86_64-msi": update("DeckPilot_" + $v + "_x64_en-US.msi"),
       "windows-x86_64-nsis": update("DeckPilot_" + $v + "_x64-setup.exe")}
       + if $rpm then {"linux-x86_64-rpm": update("DeckPilot-" + $v + "-1.x86_64.rpm")} else {} end)}' \
-    > "$assets/$MANIFEST"
+    > "$work/fragment.json"
+  rm -rf "$work/fragments" && mkdir -p "$work/fragments" && mv "$work/fragment.json" "$work/fragments/"
+  (cd "$assets" && ls -1) > "$work/draft-assets.txt"
+  TAG="$tag" NOTES_FILE="$work/notes.md" ASSETS_FILE="$work/draft-assets.txt" \
+    "$here/../ci/assemble-latest-json.sh" "$work/fragments" "$assets/$MANIFEST" > /dev/null
   signing "$work/signing"
   TAG="$tag" NOTES_FILE="$work/notes.md" MACOS_SIGNING=true \
     "$here/release-meta.sh" "$work/signing" "$assets/release-meta.json" "$work/body.md" > /dev/null
-  "$GH" api -X PATCH "repos/$REPOSITORY/releases/$id" -f tag_name="$tag" -F body=@"$work/body.md" > /dev/null
+  "$GH" api -X PATCH "repos/${REPOSITORY:-$GITHUB_REPOSITORY}/releases/$id" -f tag_name="$tag" -F body=@"$work/body.md" > /dev/null
   (cd "$assets" && sha256 -- * > "$work/SHA256SUMS" && mv "$work/SHA256SUMS" SHA256SUMS)
   echo "$id"
 }
@@ -434,6 +441,48 @@ run discard.log "$here/discard-draft.sh" v0.6.0-rc.3 && [ -z "$(release v0.6.0-r
 draft v0.6.0-rc.3 > /dev/null && ok "and built again" || bad "rebuilding the draft"
 expect_failure "a published release is never discarded" "is published" "$here/discard-draft.sh" v0.6.0-rc.2
 [ "$(release v0.6.0-rc.2 | jq -r .draft)" = false ] && ok "the published release is untouched" || bad "published release changed"
+
+echo "== the renamed repository (knittingcode/deckpilot)"
+# GitHub now reports the repository as knittingcode/deckpilot. Installed
+# builds accept only manifest URLs under deckpilot_update::DOWNLOAD_PREFIX
+# (case-sensitive), so the pipeline pins that prefix (common.sh).
+client_prefix=$(sed -n 's/^pub const DOWNLOAD_PREFIX: &str = "\(.*\)";$/\1/p' "$here/../../crates/deckpilot-update/src/lib.rs")
+# shellcheck disable=SC2016
+pipeline_prefix=$(bash -c 'source "$1"; printf %s "$DOWNLOAD_PREFIX"' _ "$here/common.sh")
+[ -n "$client_prefix" ] && [ "$pipeline_prefix" = "$client_prefix" ] && [ "$pipeline_prefix" = "$base/download/" ] \
+  && ok "the pipeline's pinned prefix is the client's DOWNLOAD_PREFIX" \
+  || bad "pinned prefix '$pipeline_prefix', client '$client_prefix'"
+saved_repository="$REPOSITORY"
+unset REPOSITORY
+export GITHUB_REPOSITORY=knittingcode/deckpilot
+fresh
+env_for 0.6.0-alpha.4
+id=$(draft v0.6.0-alpha.4)
+manifest="$STUB_DIR/assets/$id/prerelease.json"
+[ "$(jq -r --arg p "$base/download/v0.6.0-alpha.4/" '[.platforms[].url | select(startswith($p) | not)] | length' "$manifest")" = 0 ] \
+  && ok "with GITHUB_REPOSITORY=knittingcode/deckpilot the manifest uses the pinned DeckPilot prefix" \
+  || bad "manifest URLs: $(jq -r '.platforms[].url' "$manifest" | sort -u | tr '\n' ' ')"
+! grep -q -F "knittingcode/deckpilot" "$manifest" && ok "and never the repository's current spelling" || bad "lowercase URL in the manifest"
+if run publish.log publish v0.6.0-alpha.4; then
+  ok "publish.sh accepts it and publishes"
+  grep -q -F -- "-X PATCH repos/knittingcode/deckpilot/releases/$id" "$STUB_DIR/calls.log" \
+    && ok "the API is addressed by GITHUB_REPOSITORY" || bad "API calls: $(grep PATCH "$STUB_DIR/calls.log")"
+  grep -q -F "curl $base/download/v0.6.0-alpha.4/prerelease.json" "$STUB_DIR/calls.log" \
+    && ok "the published manifest is verified at the pinned URL" || bad "manifest URL not verified"
+else
+  bad "publication under the renamed repository: $(cat "$work/publish.log")"
+fi
+# What an unpinned pipeline would have produced: URLs from GITHUB_REPOSITORY.
+env_for 0.6.0-alpha.5
+id=$(draft v0.6.0-alpha.5)
+assets="$STUB_DIR/assets/$id"
+sed 's|https://github.com/knittingcode/DeckPilot/releases/download/|https://github.com/knittingcode/deckpilot/releases/download/|g' \
+  "$assets/prerelease.json" > "$work/lower.json" && mv "$work/lower.json" "$assets/prerelease.json"
+(cd "$assets" && rm SHA256SUMS && sha256 -- * > "$work/SHA256SUMS" && mv "$work/SHA256SUMS" SHA256SUMS)
+expect_draft "manifest URLs in the repository's new spelling (installed clients reject them)" \
+  "points to https://github.com/knittingcode/deckpilot/releases/download/v0.6.0-alpha.5/" v0.6.0-alpha.5
+unset GITHUB_REPOSITORY
+export REPOSITORY="$saved_repository"
 
 echo
 echo "$passed passed, $failures failed (work dir: $work)"
