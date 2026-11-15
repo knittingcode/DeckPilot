@@ -87,7 +87,7 @@ checksum = "8fd9f3db6f2cfef61c10613071955154ffdc9e515daebff26de4b54e35038fdd"
 
 [[package]]
 name = "deckpilot-update"
-version = "0.6.0-alpha.2"
+version = "0.6.0-alpha.3"
 dependencies = [
  "base64",
  "minisign-verify",
