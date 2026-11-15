@@ -1,0 +1,11 @@
+# expect: runs a registry publishing or signing command
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  timestamp:
+    runs-on: ubuntu-latest
+    steps:
+      - run: cargo run --locked -p deckpilot-plugin-registry --features publish -- timestamp --key k --expires-in 7d

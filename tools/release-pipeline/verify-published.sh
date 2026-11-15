@@ -13,7 +13,8 @@
 # - the channel's manifest URL announces this version: for a stable release
 #   that became latest, the stable channel's URL
 #   (releases/latest/download/latest.json); otherwise the release's own;
-# - every package URL in the manifest is one of the verified assets;
+# - every package URL in the manifest is one of the verified assets, and
+#   each platform's is that platform's application updater package;
 # - the stable channel's manifest never announces a pre-release.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -63,6 +64,12 @@ while read -r url; do
     fail "the manifest points to $url, which is not a verified asset of $tag"
   fi
 done < <(jq -r '.platforms[].url' "$work/manifest.json")
+# Release separation: each platform's own application updater package.
+while IFS=$'\t' read -r key url; do
+  expected=$(updater_asset "$key" "$VERSION") || fail "the manifest has an update for $key, which is not an application platform"
+  [ "$url" = "$base/download/$tag/$expected" ] \
+    || fail "the manifest points $key to $url, not to the application's updater package $expected"
+done < <(jq -r '.platforms | to_entries[] | [.key, .value.url] | @tsv' "$work/manifest.json")
 echo "$manifest_url announces $VERSION; every package URL is a verified asset"
 
 # Channel isolation, as installations see it.

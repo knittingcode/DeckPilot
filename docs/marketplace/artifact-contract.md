@@ -3,7 +3,8 @@
 Status: **decided** (owner-delegated, 2026-11-14). Applies to the
 experimental plugin marketplace (`docs/marketplace/architecture.md` on
 `docs/plugin-marketplace-design`, #191). Nothing here is enabled in a
-release build.
+release build. Where packages are published, and that they never ship
+with an application release: [distribution.md](distribution.md).
 
 ## Decision
 

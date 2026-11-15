@@ -101,6 +101,21 @@ export function withPluginTypes(types: ActionType[], modules: ModuleInfo[]): Act
   return [...types.filter((t) => !isPluginType(t.id)), ...available]
 }
 
+/**
+ * Why an action of `typeId` cannot be newly placed (on a key, a gesture, a
+ * workflow step) because of its plugin: disabled, broken, quarantined, a
+ * permission not granted, or not installed at all. `null` for built-in
+ * types, in builds without plugins, and for plugin actions that can run.
+ * Places that already use such an action keep it and show this reason.
+ */
+export function pluginActionUnavailable(modules: ModuleInfo[], typeId: string): string | null {
+  if (!pluginsEnabled() || !isPluginType(typeId)) return null
+  const availability = typeAvailability(modules, typeId)
+  return availability.available
+    ? null
+    : (availability.reason ?? `The plugin ${ownerOf(typeId) ?? ""} is not available`)
+}
+
 /** Whether an action of `typeId` can be edited and run now, and why not. */
 export interface TypeAvailability {
   available: boolean
