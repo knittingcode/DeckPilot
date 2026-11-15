@@ -115,6 +115,21 @@ fn fake(script: &str) {
             sleep_forever()
         }
         "unsandboxed" => ready(Enforcement::None, 1),
+        // A partial sandbox (Linux without Landlock, the Windows fallback
+        // outside an AppContainer); serves one action when let through.
+        "partial-sandbox" => {
+            ready(Enforcement::Partial, 1);
+            match recv() {
+                Some(ToHost::Load { .. }) => out_frame(&ToSupervisor::Loaded {
+                    abi_version: 1,
+                    descriptor: None,
+                }),
+                _ => std::process::exit(99),
+            }
+            let id = next_invoke();
+            result(id, ActionOutcome::ok());
+            let _ = next_invoke();
+        }
         "protocol-2" => ready(Enforcement::Full, 2),
         "result-before-ready" => result(1, ActionOutcome::ok()),
         "exit-after-ready" => {
@@ -292,6 +307,44 @@ fn handshake_failures() {
     ));
 }
 
+fn full_sandbox_can_be_required() {
+    // By default a partial sandbox is accepted (only `none` is refused).
+    let mut h = spawn("partial-sandbox").unwrap();
+    assert_eq!(h.sandbox().enforcement, Enforcement::Partial);
+    let mut ex = Executor::default();
+    assert!(
+        h.invoke("a", &Params::new(), Duration::from_secs(5), &mut ex)
+            .is_ok()
+    );
+    drop(h);
+
+    // Required full: partial and none are refused before `load`, and the
+    // host is killed; a full sandbox still starts.
+    let strict = |script: &str| {
+        let mut cfg = config(script);
+        cfg.require_full_sandbox = true;
+        PluginHost::spawn(&cfg, broker().session(plugin()))
+    };
+    for (script, enforcement) in [
+        ("partial-sandbox", Enforcement::Partial),
+        ("unsandboxed", Enforcement::None),
+    ] {
+        match strict(script) {
+            Err(HostError::SandboxMissing(r)) => assert_eq!(r.enforcement, enforcement),
+            other => panic!("{script}: {other:?}"),
+        }
+    }
+    let mut cfg = config("unsandboxed");
+    cfg.require_sandbox = false;
+    cfg.require_full_sandbox = true;
+    assert!(matches!(
+        PluginHost::spawn(&cfg, broker().session(plugin())),
+        Err(HostError::SandboxMissing(_))
+    ));
+    let h = strict("ok").unwrap();
+    assert_eq!(h.sandbox().enforcement, Enforcement::Full);
+}
+
 fn protocol_violations_kill_the_host() {
     for script in [
         "call-wrong-invocation",
@@ -395,6 +448,7 @@ fn main() {
     let filter = args.iter().skip(1).find(|a| !a.starts_with('-')).cloned();
     let tests: &[(&str, fn())] = &[
         ("handshake_failures", handshake_failures),
+        ("full_sandbox_can_be_required", full_sandbox_can_be_required),
         (
             "protocol_violations_kill_the_host",
             protocol_violations_kill_the_host,

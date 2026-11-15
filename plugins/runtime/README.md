@@ -67,6 +67,12 @@ unchanged byte for byte (tested in `crates/abi` and `crates/host/tests/lifecycle
   capability for plugins (#191), hence no need for cap-std/`openat2`.
 - The OS sandbox is applied by the host to itself (`sandbox_init` instead of
   `sandbox-exec`), plus Linux and Windows implementations.
+- The supervisor refuses a host whose `ready` reports `none`
+  (`HostConfig::require_sandbox`, on by default) and, with
+  `HostConfig::require_full_sandbox` (off by default; the agent sets it),
+  anything but `full`. The host is killed before `load` (`SandboxMissing`),
+  on every spawn including restarts (`crates/supervisor/tests/fake_host.rs`,
+  `full_sandbox_can_be_required`).
 
 ## OS sandbox
 
