@@ -244,7 +244,7 @@ fn build_menu(status: Option<&AgentStatus>) -> Menu {
         name: Some("DeckPilot".into()),
         version: Some(VERSION.into()),
         license: Some("Apache-2.0".into()),
-        website: Some("https://github.com/knittingcode/DeckPilot".into()),
+        website: Some("https://github.com/knittingcode/deckpilot".into()),
         ..Default::default()
     };
     append(menu.append(&PredefinedMenuItem::about(

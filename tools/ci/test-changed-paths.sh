@@ -43,6 +43,8 @@ expect "keystore=true packaging=false release_manifest=false" crates/deckpilot-k
 expect "keystore=true packaging=true release_manifest=true" tools/ci/with-keyring.sh
 expect "keystore=false packaging=true release_manifest=true" tools/ci/check-packages.sh
 expect "keystore=false packaging=true release_manifest=true" .github/workflows/release.yml
+expect "keystore=false packaging=false release_manifest=true" tools/release-pipeline/common.sh
+expect "keystore=false packaging=false release_manifest=true" crates/deckpilot-update/src/lib.rs
 expect "keystore=true packaging=true release_manifest=true" .github/workflows/ci.yml
 expect "keystore=false packaging=true release_manifest=false" .github/workflows/compatibility.yml
 # Look-alikes do not count.
