@@ -139,3 +139,10 @@ required-features = ["plugins"]
 [[test]]
 name = "plugins_registry_https"
 required-features = ["plugins"]
+
+# The example plugins (plugins/examples/hello-world, developer-tools)
+# packaged, installed and run through a real agent process and the real
+# plugin host, with canned HTTP.
+[[test]]
+name = "plugins_examples"
+required-features = ["plugins"]

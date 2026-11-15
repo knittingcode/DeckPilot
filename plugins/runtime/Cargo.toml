@@ -16,13 +16,15 @@ members = [
     "guest/plugin-sdk",
     "guest/test-guest",
     "guest/sdk-test-guest",
-    # The sample plugin lives next to the runtime, not inside it.
+    # The example plugins live next to the runtime, not inside it.
     "../examples/hello-weather",
+    "../examples/hello-world",
+    "../examples/developer-tools",
 ]
 # The test guests are wasm32 cdylibs, compiled for wasm32-unknown-unknown by
 # crates/test-fixtures/build.rs, together with the sample plugin. Plain
 # `cargo test` and `cargo clippy` cover the host-side crates, both guest
-# SDKs and the sample plugin (all of which also compile natively).
+# SDKs and the example plugins (all of which also compile natively).
 default-members = [
     "crates/abi",
     "crates/broker",
@@ -32,6 +34,8 @@ default-members = [
     "guest/sdk",
     "guest/plugin-sdk",
     "../examples/hello-weather",
+    "../examples/hello-world",
+    "../examples/developer-tools",
 ]
 
 [workspace.package]
