@@ -85,4 +85,21 @@ fn default_features_pull_no_plugin_crates() {
             .any(|p| p.starts_with("wasmtime") || p == "deckpilot-plugin-host"),
         "the agent must never link the plugin host or its engine"
     );
+
+    // The broker's transport is the core crate `deckpilot-net`, not a
+    // module crate (docs/marketplace/module-migration.md, §3): the plugins
+    // feature adds no direct dependency on a built-in module. `deckpilot-net`
+    // is not a plugin crate, and the default build has it through the HTTP
+    // module.
+    assert!(default.iter().any(|p| p == "deckpilot-net"), "{default:?}");
+    let direct = dependencies(&["plugins"], true);
+    assert!(direct.iter().any(|p| p == "deckpilot-net"), "{direct:?}");
+    let modules: Vec<&String> = direct
+        .iter()
+        .filter(|p| p.starts_with("deckpilot-module-"))
+        .collect();
+    assert!(
+        modules.is_empty(),
+        "the plugins feature depends on module crates: {modules:?}"
+    );
 }

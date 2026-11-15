@@ -15,6 +15,22 @@
 //! schema are never opened or changed, so installing this crate cannot
 //! bump the configuration schema or break a downgrade.
 //!
+//! Schema 3 adds the `bundled` install source, the journal of built-in
+//! modules moving to their plugins ([`ModuleMigration`]) and the user's
+//! [`Tombstone`]s (`docs/marketplace/module-migration.md` §4.2, §5.6). A
+//! build that knows an older schema refuses a newer file with
+//! [`StoreError::UnsupportedSchema`] before writing anything.
+//!
+//! # First-party plugins
+//!
+//! A `deckpilot.*` id is installed only from the application bundle
+//! ([`InstallSource::Bundled`]) or a registry, and a bundled plugin is
+//! always first-party ([`InstallSource::allows`]); the schema checks the
+//! same rule. A user's uninstall or disable of a first-party plugin
+//! ([`PluginManager::uninstall_by_user`], [`PluginManager::disable_by_user`])
+//! leaves a tombstone, and the store refuses to install or enable a
+//! tombstoned plugin until the user clears it.
+//!
 //! # Lifecycle
 //!
 //! [`PluginManager`] is the single writer. Its operations follow the state
@@ -89,10 +105,11 @@ pub use manager::{
     VerdictSource,
 };
 pub use recover::{Inconsistency, RecoveryReport};
-pub use state::PluginState;
+pub use state::{MigrationPhase, PluginState, TombstoneDecision};
 pub use store::{
-    AuditRecord, AuditRetention, InstallSource, JournalEntry, PluginRecord, PluginStore,
-    VersionRecord, VersionRole,
+    AuditRecord, AuditRetention, FIRST_PARTY_PUBLISHER, InstallSource, JournalEntry,
+    MAX_MIGRATION_ATTEMPTS, MAX_MIGRATION_REASON_CHARS, MigrationStep, ModuleMigration,
+    PluginRecord, PluginStore, Tombstone, VersionRecord, VersionRole, is_first_party,
 };
 
 /// Seconds since the Unix epoch, from the system clock.

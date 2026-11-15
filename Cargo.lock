@@ -1024,8 +1024,8 @@ dependencies = [
  "deckpilot-hid",
  "deckpilot-ipc",
  "deckpilot-keystore",
- "deckpilot-module-http",
  "deckpilot-modules",
+ "deckpilot-net",
  "deckpilot-plugin-abi",
  "deckpilot-plugin-broker",
  "deckpilot-plugin-manifest",
@@ -1213,7 +1213,7 @@ name = "deckpilot-module-github"
 version = "0.6.0-alpha.3"
 dependencies = [
  "deckpilot-core",
- "deckpilot-module-http",
+ "deckpilot-net",
  "reqwest",
  "serde_json",
  "url",
@@ -1224,7 +1224,7 @@ name = "deckpilot-module-gitlab"
 version = "0.6.0-alpha.3"
 dependencies = [
  "deckpilot-core",
- "deckpilot-module-http",
+ "deckpilot-net",
  "reqwest",
  "serde_json",
  "url",
@@ -1235,11 +1235,9 @@ name = "deckpilot-module-http"
 version = "0.6.0-alpha.3"
 dependencies = [
  "deckpilot-core",
+ "deckpilot-net",
  "reqwest",
- "rustls",
  "serde_json",
- "tokio",
- "url",
 ]
 
 [[package]]
@@ -1248,7 +1246,7 @@ version = "0.6.0-alpha.3"
 dependencies = [
  "base64 0.23.1",
  "deckpilot-core",
- "deckpilot-module-http",
+ "deckpilot-net",
  "reqwest",
  "serde_json",
  "url",
@@ -1317,6 +1315,17 @@ dependencies = [
  "deckpilot-module-workspace",
  "rustls",
  "serde_json",
+ "url",
+]
+
+[[package]]
+name = "deckpilot-net"
+version = "0.6.0-alpha.3"
+dependencies = [
+ "deckpilot-core",
+ "reqwest",
+ "rustls",
+ "tokio",
  "url",
 ]
 
