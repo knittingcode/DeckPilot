@@ -46,9 +46,11 @@ plugins = [
     "dep:deckpilot-module-http",
     "dep:hkdf",
     "dep:reqwest",
+    "dep:rustls",
     "dep:serde",
     "dep:semver",
     "dep:sha2",
+    "dep:url",
     "dep:zeroize",
 ]
 
@@ -87,8 +89,12 @@ deckpilot-plugin-supervisor = { workspace = true, optional = true }
 # agent through deckpilot-modules.
 deckpilot-module-http = { workspace = true, optional = true }
 hkdf = { workspace = true, optional = true }
-# The HTTP module's request type names reqwest's methods.
-reqwest = { version = "0.13", default-features = false, optional = true }
+# The HTTP module's request type names reqwest's methods. The registry's
+# HTTPS source (plugins/fetch.rs) uses reqwest and rustls directly: the
+# HTTP module's stack and versions, already in every agent build.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+url = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 semver = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
@@ -111,6 +117,10 @@ zeroize.workspace = true
 deckpilot-modules.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
+# The registry's HTTPS tests: a local TLS server whose throwaway CA only
+# the test trusts.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [lints]
 workspace = true
@@ -119,4 +129,10 @@ workspace = true
 # sample plugin (built from plugins/runtime by the test).
 [[test]]
 name = "plugins_e2e"
+required-features = ["plugins"]
+
+# The registry over HTTPS (a local TLS server, a throwaway CA) through a
+# real agent process and the real plugin host.
+[[test]]
+name = "plugins_registry_https"
 required-features = ["plugins"]
