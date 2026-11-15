@@ -33,5 +33,7 @@ pub use value::{ActionOutcome, ParamValue, Params, ValidationError};
 /// messages without them are unchanged): the optional guest exports
 /// `dp_describe`, `dp_init` and `dp_shutdown` ([`guest`]); `auth` (a
 /// credential handle) in `http.fetch` and the [`capability::HttpResponse`]
-/// shape of its reply; `descriptor` in the `loaded` message.
+/// shape of its reply; `descriptor` in the `loaded` message; the
+/// capability operations `storage.keys`, `storage.usage`,
+/// `credentials.has` and `settings.get`.
 pub const ABI_VERSION: u32 = 1;

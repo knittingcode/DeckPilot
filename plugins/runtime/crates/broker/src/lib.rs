@@ -36,7 +36,8 @@ pub use addr::{BlockedAddr, check_connect_addr};
 pub use audit::{AuditDecision, AuditRecord, AuditSink, MemoryAudit};
 pub use origin::{Origin, OriginError};
 pub use permissions::{
-    ApprovedPermission, ApprovedPermissions, CredentialGrant, GrantError, Grants,
+    ApprovedPermission, ApprovedPermissions, CredentialGrant, DEFAULT_STORAGE_QUOTA_BYTES,
+    GrantError, Grants, MAX_STORAGE_KEYS, MAX_STORAGE_QUOTA_BYTES, StorageQuota,
 };
 pub use plugin_id::PluginId;
 pub use rate::{Clock, ManualClock, Rate, RateLimits, SystemClock};
@@ -165,16 +166,34 @@ pub enum Allowed {
         level: LogLevel,
         message: String,
     },
+    /// The plugin's own storage (always granted while it is enabled). The
+    /// executor scopes every storage operation by the session's plugin.
     StorageGet {
         key: String,
     },
+    /// The executor must refuse the write when it would exceed `quota`
+    /// (read per call, so a revoked `storage` grant applies at once).
     StorageSet {
         key: String,
         value: Value,
+        quota: StorageQuota,
     },
     StorageDelete {
         key: String,
     },
+    StorageKeys {
+        prefix: Option<String>,
+    },
+    StorageUsage {
+        quota: StorageQuota,
+    },
+    /// Whether a secret is stored for a granted credential slot. The
+    /// executor answers `true` or `false`, never the secret.
+    CredentialHas {
+        key: String,
+    },
+    /// The plugin's own settings.
+    SettingsGet,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -444,10 +463,13 @@ impl Session {
             }
             CapabilityRequest::StorageGet(_)
             | CapabilityRequest::StorageSet(_)
-            | CapabilityRequest::StorageDelete(_) => {
+            | CapabilityRequest::StorageDelete(_)
+            | CapabilityRequest::StorageKeys(_)
+            | CapabilityRequest::StorageUsage(_) => {
                 if !b.take(&self.plugin, RateClass::Storage) {
                     return (Decision::Deny(DenyReason::RateLimited), None);
                 }
+                let quota = grants.storage_quota();
                 let allowed = match request {
                     CapabilityRequest::StorageGet(k) => Allowed::StorageGet { key: k.key.clone() },
                     CapabilityRequest::StorageDelete(k) => {
@@ -456,11 +478,26 @@ impl Session {
                     CapabilityRequest::StorageSet(s) => Allowed::StorageSet {
                         key: s.key.clone(),
                         value: s.value.clone(),
+                        quota,
                     },
-                    _ => unreachable!("matched above"),
+                    CapabilityRequest::StorageKeys(p) => Allowed::StorageKeys {
+                        prefix: p.prefix.clone(),
+                    },
+                    _ => Allowed::StorageUsage { quota },
                 };
                 (Decision::Allow(allowed), None)
             }
+            CapabilityRequest::CredentialHas(c) => {
+                let d = if grants.credentials.contains_key(&c.credential) {
+                    Decision::Allow(Allowed::CredentialHas {
+                        key: c.credential.clone(),
+                    })
+                } else {
+                    Decision::Deny(DenyReason::CredentialNotGranted)
+                };
+                (d, None)
+            }
+            CapabilityRequest::SettingsGet(_) => (Decision::Allow(Allowed::SettingsGet), None),
         }
     }
 

@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use deckpilot_plugin_abi::CapabilityRequest;
 use deckpilot_plugin_abi::capability::{
-    AuthScheme, Header, HttpAuth, HttpFetch, Log, LogLevel, Notify, StorageKey, StorageSet,
+    AuthScheme, CredentialRef, Header, HttpAuth, HttpFetch, Log, LogLevel, NoArgs, Notify,
+    StorageKey, StoragePrefix, StorageSet,
 };
 use deckpilot_plugin_abi::{CallErrorCode, HttpMethod};
 use deckpilot_plugin_broker::*;
@@ -596,4 +597,167 @@ fn credential_grants_are_strict() {
             {{"kind":"credential","key":"t","origins":["https://api.example.com"],"schemes":["basic"]}}]"#
     );
     assert_eq!(derive(&twice), Err(GrantError::DuplicateCredential));
+}
+
+fn storage_set(key: &str) -> CapabilityRequest {
+    CapabilityRequest::StorageSet(StorageSet {
+        key: key.into(),
+        value: json!(1),
+    })
+}
+
+fn quota_of(d: &Decision) -> StorageQuota {
+    match d {
+        Decision::Allow(Allowed::StorageSet { quota, .. } | Allowed::StorageUsage { quota }) => {
+            *quota
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn storage_is_always_on_with_a_quota_a_grant_can_raise() {
+    let f = fixture("[]");
+    let s = f.broker.session(f.plugin.clone());
+    let d = s.authorize(&storage_set("k"));
+    assert_eq!(quota_of(&d), StorageQuota::default());
+    assert_eq!(quota_of(&d).bytes, 256 * 1024);
+    assert_eq!(quota_of(&d).keys, 1_000);
+    let usage = s.authorize(&CapabilityRequest::StorageUsage(NoArgs {}));
+    assert_eq!(quota_of(&usage), StorageQuota::default());
+    let keys = s.authorize(&CapabilityRequest::StorageKeys(StoragePrefix {
+        prefix: Some("a.".into()),
+    }));
+    assert_eq!(
+        keys,
+        Decision::Allow(Allowed::StorageKeys {
+            prefix: Some("a.".into())
+        })
+    );
+
+    // A `storage` grant raises the quota; the next call sees it.
+    f.broker
+        .set_grants(
+            &f.plugin,
+            &ApprovedPermissions::from_json(r#"[{"kind":"storage","quotaKb":1024}]"#).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(quota_of(&s.authorize(&storage_set("k"))).bytes, 1024 * 1024);
+    // Revoked (grants replaced without it): the very next call is back to
+    // the default quota.
+    f.broker
+        .set_grants(&f.plugin, &ApprovedPermissions::default())
+        .unwrap();
+    assert_eq!(quota_of(&s.authorize(&storage_set("k"))).bytes, 256 * 1024);
+    // Disabled or uninstalled: storage is denied too.
+    f.broker.remove_plugin(&f.plugin);
+    assert_eq!(
+        s.authorize(&storage_set("k")).denial(),
+        Some(DenyReason::UnknownPlugin)
+    );
+}
+
+#[test]
+fn storage_quota_grants_are_bounded() {
+    for (kb, ok) in [
+        (256, false),
+        (257, true),
+        (10_240, true),
+        (10_241, false),
+        (0, false),
+    ] {
+        let json = format!(r#"[{{"kind":"storage","quotaKb":{kb}}}]"#);
+        let derived = Grants::derive(&ApprovedPermissions::from_json(&json).unwrap());
+        assert_eq!(derived.is_ok(), ok, "{kb}");
+        if !ok {
+            assert_eq!(derived, Err(GrantError::StorageQuota));
+        }
+    }
+    assert!(
+        ApprovedPermissions::from_json(r#"[{"kind":"storage","quotaKb":512,"keys":5000}]"#)
+            .is_err()
+    );
+}
+
+#[test]
+fn storage_is_scoped_to_the_session_and_rate_limited() {
+    let f = fixture_with(
+        "[]",
+        RateLimits {
+            storage: Rate::new(2, Duration::from_secs(1)),
+            ..RateLimits::default()
+        },
+    );
+    // A plugin the broker has no grants for gets nothing, not even
+    // storage; no request can name another plugin's storage.
+    let other = f.broker.session(PluginId::new("evil.reader").unwrap());
+    assert_eq!(
+        other
+            .authorize(&CapabilityRequest::StorageGet(StorageKey {
+                key: "k".into()
+            }))
+            .denial(),
+        Some(DenyReason::UnknownPlugin)
+    );
+    let s = f.broker.session(f.plugin.clone());
+    assert!(s.authorize(&storage_set("a")).is_allowed());
+    assert!(s.authorize(&storage_set("b")).is_allowed());
+    assert_eq!(
+        s.authorize(&storage_set("c")).denial(),
+        Some(DenyReason::RateLimited)
+    );
+    f.clock.advance(Duration::from_secs(1));
+    assert!(s.authorize(&storage_set("c")).is_allowed());
+    assert_eq!(s.plugin(), &f.plugin);
+}
+
+#[test]
+fn credential_presence_needs_the_slot_grant_and_is_revoked_at_once() {
+    let f = fixture(WITH_TOKEN);
+    let s = f.broker.session(f.plugin.clone());
+    let has = |key: &str| {
+        CapabilityRequest::CredentialHas(CredentialRef {
+            credential: key.into(),
+        })
+    };
+    assert_eq!(
+        s.authorize(&has("token")),
+        Decision::Allow(Allowed::CredentialHas {
+            key: "token".into()
+        })
+    );
+    assert_eq!(
+        s.authorize(&has("other")).denial(),
+        Some(DenyReason::CredentialNotGranted)
+    );
+    f.broker.revoke_credential(&f.plugin, "token");
+    assert_eq!(
+        s.authorize(&has("token")).denial(),
+        Some(DenyReason::CredentialNotGranted)
+    );
+    assert_eq!(
+        s.authorize(&get_with(
+            "https://api.example.com/me",
+            "token",
+            AuthScheme::Bearer
+        ))
+        .denial(),
+        Some(DenyReason::CredentialNotGranted)
+    );
+}
+
+#[test]
+fn settings_are_the_plugins_own_while_it_runs() {
+    let f = fixture("[]");
+    let s = f.broker.session(f.plugin.clone());
+    assert_eq!(
+        s.authorize(&CapabilityRequest::SettingsGet(NoArgs {})),
+        Decision::Allow(Allowed::SettingsGet)
+    );
+    f.broker.remove_plugin(&f.plugin);
+    assert_eq!(
+        s.authorize(&CapabilityRequest::SettingsGet(NoArgs {}))
+            .denial(),
+        Some(DenyReason::UnknownPlugin)
+    );
 }
