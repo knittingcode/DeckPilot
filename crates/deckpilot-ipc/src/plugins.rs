@@ -15,8 +15,11 @@
 //! | `updatePlugin` | `pluginUpdate` | installs a newer version; an escalation stays staged unless `consent` covers it |
 //! | `approvePluginUpdate` / `declinePluginUpdate` | `pluginUpdate` / `plugin` | decides a staged update |
 //! | `rollbackPlugin` | `plugin` | returns to the kept previous version |
-//! | `uninstallPlugin` | `ok` | removes files, records and grants |
-//! | `invokePluginAction` | `pluginActionResult` | runs one action out of process (for testing and the UI) |
+//! | `uninstallPlugin` | `ok` | removes files, records, grants and storage; settings and credentials too unless `keep` says otherwise |
+//! | `invokePluginAction` | `pluginActionResult` | runs one action out of process (for testing and the UI); parameters are validated against the manifest first |
+//! | `listKnownPlugins` | `knownPlugins` | every plugin installed here at some point (`plugin_known`) |
+//! | `getPluginSettings` / `setPluginSettings` | `pluginSettings` | a plugin's settings fields and values, validated against the manifest |
+//! | `listPluginCredentials` / `setPluginCredential` / `deletePluginCredential` | `pluginCredentials` | a plugin's credential slots and whether each has a secret; a secret goes in, never out ([`PluginSecret`]) |
 //!
 //! Progress and state changes arrive as `pluginEvent` messages
 //! ([`PluginEvent`]) on connections that sent `subscribePluginEvents`
@@ -31,7 +34,8 @@
 //! [`IpcError::reason`](crate::IpcError::reason) from [`reason`].
 //!
 //! Every value is checked by the agent: identifiers are bounded and
-//! validated there, and nothing here carries a secret.
+//! validated there. Only `setPluginCredential` carries a secret, from the
+//! app to the agent; no answer or event ever does.
 //!
 //! [`Capability::Plugins`]: crate::Capability::Plugins
 
@@ -91,7 +95,15 @@ pub mod reason {
     pub const BROKEN: &str = "broken";
     /// Too many invocations of the plugin are already waiting for its host.
     pub const BUSY: &str = "busy";
+    /// Settings values or a credential that the plugin's manifest does not
+    /// declare, or that do not fit their declaration.
+    pub const INVALID_DATA: &str = "invalidData";
 }
+
+/// Longest credential secret a request may carry.
+pub const MAX_PLUGIN_SECRET: usize = 16 * 1024;
+/// Most settings values one `setPluginSettings` may pass.
+pub const MAX_SETTINGS_VALUES: usize = 64;
 
 /// Whether plugins can be used, and why not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -456,6 +468,141 @@ pub enum PluginEvent {
     },
 }
 
+/// A credential secret the user enters (`setPluginCredential`). It goes
+/// from the app to the agent only: no answer carries it, `Debug` shows
+/// `<redacted>`, and it is zeroized when dropped. Only sent over the
+/// authenticated local socket, like the database key.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PluginSecret(zeroize::Zeroizing<String>);
+
+impl PluginSecret {
+    pub fn new(secret: impl Into<String>) -> Self {
+        Self(zeroize::Zeroizing::new(secret.into()))
+    }
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for PluginSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PluginSecret(<redacted>)")
+    }
+}
+
+/// One credential slot of a plugin (`contributes.credentials`) and whether
+/// the user stored a secret for it. Never the secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginCredentialSlot {
+    pub key: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The only hosts the secret is ever sent to.
+    pub hosts: Vec<String>,
+    /// `bearer`, `basic`, `header`, `query`.
+    pub schemes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_url: Option<String>,
+    /// Whether a secret is stored.
+    pub set: bool,
+    /// When it was stored (seconds since the Unix epoch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<i64>,
+    /// Whether its `credentials:<key>` permission is granted: without it
+    /// the secret is stored but never used.
+    pub granted: bool,
+}
+
+/// One setting of a plugin (`contributes.settings.fields`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSettingField {
+    pub key: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The parameter kind, as in action parameters (`{"type": "integer",
+    /// "min": 1}`).
+    pub kind: serde_json::Value,
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<serde_json::Value>,
+    /// `portable`, `machineSpecific` or `sensitive`.
+    pub portability: String,
+}
+
+/// A plugin's settings: the declared fields, the values the user saved,
+/// and the values the plugin sees (saved, or the defaults).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSettings {
+    pub plugin: String,
+    pub fields: Vec<PluginSettingField>,
+    /// What the user saved.
+    pub values: BTreeMap<String, serde_json::Value>,
+    /// What `settings.get` gives the plugin: saved values that still fit
+    /// their field, otherwise the defaults.
+    pub effective: BTreeMap<String, serde_json::Value>,
+    /// Required settings with neither a value nor a default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
+}
+
+/// A plugin the agent installed at some point (`plugin_known`), installed
+/// now or not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownPlugin {
+    pub id: String,
+    pub name: String,
+    pub publisher: String,
+    /// Its variable namespace, `plugins.<publisher>.<name>` in camel case.
+    pub namespace: String,
+    pub last_version: String,
+    pub installed: bool,
+    pub first_seen_at: i64,
+    pub last_seen_at: i64,
+}
+
+/// What `uninstallPlugin` keeps for a later install of the same plugin.
+/// By default nothing: its storage, settings and credentials are deleted
+/// (its name stays in `plugin_known`, its audit stays).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginRetention {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub settings: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub credentials: bool,
+}
+
+impl PluginRetention {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+pub(crate) fn check_secret(secret: &PluginSecret) -> Result<(), String> {
+    if secret.expose().is_empty() || secret.expose().len() > MAX_PLUGIN_SECRET {
+        Err(format!(
+            "a secret must be between 1 and {MAX_PLUGIN_SECRET} bytes"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn check_settings(values: &BTreeMap<String, serde_json::Value>) -> Result<(), String> {
+    if values.len() > MAX_SETTINGS_VALUES {
+        return Err(format!("at most {MAX_SETTINGS_VALUES} settings at once"));
+    }
+    values.keys().try_for_each(|key| check_text("setting", key))
+}
+
 /// Checks a plugin id, action id, version or permission key from a request
 /// (bounded, printable, no whitespace). The agent parses it afterwards.
 pub(crate) fn check_text(field: &str, text: &str) -> Result<(), String> {
@@ -533,6 +680,18 @@ mod tests {
         // What an agent before the field sends still parses.
         let parsed: PluginActionInfo = serde_json::from_value(json).unwrap();
         assert_eq!(parsed.definition, None);
+    }
+
+    #[test]
+    fn secrets_are_redacted_and_retention_defaults_to_nothing() {
+        let secret = PluginSecret::new("s3cret");
+        assert_eq!(format!("{secret:?}"), "PluginSecret(<redacted>)");
+        assert_eq!(serde_json::to_string(&secret).unwrap(), r#""s3cret""#);
+        assert!(check_secret(&PluginSecret::new("")).is_err());
+        assert!(check_secret(&PluginSecret::new("x".repeat(MAX_PLUGIN_SECRET + 1))).is_err());
+        let keep: PluginRetention = serde_json::from_str("{}").unwrap();
+        assert!(keep.is_default());
+        assert_eq!(serde_json::to_string(&keep).unwrap(), "{}");
     }
 
     #[test]

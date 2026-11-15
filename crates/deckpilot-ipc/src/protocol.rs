@@ -515,9 +515,13 @@ pub enum Request {
     RollbackPlugin {
         plugin: String,
     },
-    /// Removes the plugin, its files and its records. Since protocol 10.
+    /// Removes the plugin, its files and its records, its storage and, unless
+    /// `keep` says otherwise, its settings and credentials. Since protocol
+    /// 10 (`keep` is optional and omitted when nothing is kept).
     UninstallPlugin {
         plugin: String,
+        #[serde(default, skip_serializing_if = "plugins::PluginRetention::is_default")]
+        keep: plugins::PluginRetention,
     },
     /// Runs one action of an enabled plugin in its sandboxed host. Since
     /// protocol 10.
@@ -526,6 +530,38 @@ pub enum Request {
         action: String,
         #[serde(default)]
         params: BTreeMap<String, serde_json::Value>,
+    },
+    /// Every plugin installed here at some point, installed now or not.
+    /// Since protocol 10.
+    ListKnownPlugins,
+    /// A plugin's settings: fields, saved and effective values. Since
+    /// protocol 10.
+    GetPluginSettings {
+        plugin: String,
+    },
+    /// Saves settings values (merged into the saved ones; `null` resets a
+    /// setting to its default) after validating them against the
+    /// manifest. Since protocol 10.
+    SetPluginSettings {
+        plugin: String,
+        values: BTreeMap<String, serde_json::Value>,
+    },
+    /// A plugin's credential slots and whether each has a secret (never
+    /// the secrets). Since protocol 10.
+    ListPluginCredentials {
+        plugin: String,
+    },
+    /// Stores the secret of one credential slot. The answer never carries
+    /// it. Since protocol 10.
+    SetPluginCredential {
+        plugin: String,
+        key: String,
+        secret: plugins::PluginSecret,
+    },
+    /// Deletes the secret of one credential slot. Since protocol 10.
+    DeletePluginCredential {
+        plugin: String,
+        key: String,
     },
 }
 
@@ -564,7 +600,26 @@ impl Request {
             | Self::DisablePlugin { plugin }
             | Self::DeclinePluginUpdate { plugin }
             | Self::RollbackPlugin { plugin }
-            | Self::UninstallPlugin { plugin } => plugins::check_text("plugin", plugin),
+            | Self::UninstallPlugin { plugin, .. }
+            | Self::GetPluginSettings { plugin }
+            | Self::ListPluginCredentials { plugin } => plugins::check_text("plugin", plugin),
+            Self::SetPluginSettings { plugin, values } => {
+                plugins::check_text("plugin", plugin)?;
+                plugins::check_settings(values)
+            }
+            Self::SetPluginCredential {
+                plugin,
+                key,
+                secret,
+            } => {
+                plugins::check_text("plugin", plugin)?;
+                plugins::check_text("credential", key)?;
+                plugins::check_secret(secret)
+            }
+            Self::DeletePluginCredential { plugin, key } => {
+                plugins::check_text("plugin", plugin)?;
+                plugins::check_text("credential", key)
+            }
             Self::InstallPlugin { source, consent } => {
                 source.check()?;
                 plugins::check_consent(consent)
@@ -792,6 +847,22 @@ pub enum Response {
     PluginActionResult {
         outcome: plugins::PluginActionOutcome,
     },
+    /// Answer to `listKnownPlugins`. Since protocol 10.
+    KnownPlugins {
+        plugins: Vec<plugins::KnownPlugin>,
+    },
+    /// Answer to `getPluginSettings` and `setPluginSettings`. Since
+    /// protocol 10.
+    PluginSettings {
+        settings: Box<plugins::PluginSettings>,
+    },
+    /// Answer to `listPluginCredentials`, `setPluginCredential` and
+    /// `deletePluginCredential`: the slots, never a secret. Since protocol
+    /// 10.
+    PluginCredentials {
+        plugin: String,
+        credentials: Vec<plugins::PluginCredentialSlot>,
+    },
     Ok,
 }
 
@@ -1005,7 +1076,13 @@ impl Request {
             | Self::DeclinePluginUpdate { .. }
             | Self::RollbackPlugin { .. }
             | Self::UninstallPlugin { .. }
-            | Self::InvokePluginAction { .. } => 10,
+            | Self::InvokePluginAction { .. }
+            | Self::ListKnownPlugins
+            | Self::GetPluginSettings { .. }
+            | Self::SetPluginSettings { .. }
+            | Self::ListPluginCredentials { .. }
+            | Self::SetPluginCredential { .. }
+            | Self::DeletePluginCredential { .. } => 10,
             Self::RunWorkflow { .. } | Self::PrepareForUpdate => 2,
             Self::GetStatus
             | Self::ListDevices
@@ -1767,5 +1844,67 @@ mod tests {
         let json = serde_json::to_value(&new).unwrap();
         assert_eq!(json["reason"], "pluginsUnavailable");
         serde_json::from_value::<Protocol9Error>(json).unwrap();
+    }
+
+    #[test]
+    fn plugin_data_requests_are_additive_and_never_show_a_secret() {
+        use crate::plugins::{PluginRetention, PluginSecret};
+        // `uninstallPlugin` without `keep` keeps its original form.
+        let old = r#"{"type":"uninstallPlugin","plugin":"acme.x"}"#;
+        let parsed: Request = serde_json::from_str(old).unwrap();
+        assert_eq!(
+            parsed,
+            Request::UninstallPlugin {
+                plugin: "acme.x".into(),
+                keep: PluginRetention::default()
+            }
+        );
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), old);
+        let keeping: Request = serde_json::from_str(
+            r#"{"type":"uninstallPlugin","plugin":"acme.x","keep":{"credentials":true}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            keeping,
+            Request::UninstallPlugin {
+                keep: PluginRetention {
+                    credentials: true,
+                    settings: false
+                },
+                ..
+            }
+        ));
+        let set = Request::SetPluginCredential {
+            plugin: "acme.x".into(),
+            key: "token".into(),
+            secret: PluginSecret::new("s3cret-value"),
+        };
+        assert_eq!(set.since_protocol(), 10);
+        set.validate().unwrap();
+        assert!(!format!("{set:?}").contains("s3cret-value"));
+        let empty = Request::SetPluginCredential {
+            plugin: "acme.x".into(),
+            key: "token".into(),
+            secret: PluginSecret::new(""),
+        };
+        assert!(empty.validate().is_err());
+        let too_many = Request::SetPluginSettings {
+            plugin: "acme.x".into(),
+            values: (0..=crate::plugins::MAX_SETTINGS_VALUES)
+                .map(|i| (format!("s{i}"), serde_json::Value::Null))
+                .collect(),
+        };
+        assert!(too_many.validate().is_err());
+        for request in [
+            Request::ListKnownPlugins,
+            Request::GetPluginSettings {
+                plugin: "acme.x".into(),
+            },
+            Request::ListPluginCredentials {
+                plugin: "acme.x".into(),
+            },
+        ] {
+            assert_eq!(request.since_protocol(), 10);
+        }
     }
 }
