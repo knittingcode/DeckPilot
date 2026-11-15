@@ -51,6 +51,7 @@ impl PluginActions {
         self.plugins.clear();
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.plugins.is_empty()
     }
