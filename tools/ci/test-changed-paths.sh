@@ -43,6 +43,8 @@ expect "dev_tools=false keystore=true packaging=false release_manifest=false" cr
 expect "dev_tools=false keystore=true packaging=true release_manifest=true" tools/ci/with-keyring.sh
 expect "dev_tools=false keystore=false packaging=true release_manifest=true" tools/ci/check-packages.sh
 expect "dev_tools=false keystore=false packaging=true release_manifest=true" .github/workflows/release.yml
+expect "dev_tools=false keystore=false packaging=false release_manifest=true" tools/release-pipeline/common.sh
+expect "dev_tools=false keystore=false packaging=false release_manifest=true" crates/deckpilot-update/src/lib.rs
 expect "dev_tools=true keystore=true packaging=true release_manifest=true" .github/workflows/ci.yml
 expect "dev_tools=false keystore=false packaging=true release_manifest=false" .github/workflows/compatibility.yml
 expect "dev_tools=true keystore=false packaging=false release_manifest=false" tools/dev/worktree-maintenance.sh

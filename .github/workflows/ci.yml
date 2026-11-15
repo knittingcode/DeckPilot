@@ -249,7 +249,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Release scripts pass shellcheck
-        run: shellcheck tools/ci/*.sh
+        run: shellcheck -x tools/ci/*.sh
       - name: Assemble and verify latest.json from fixture builds
         run: tools/ci/test-latest-json.sh "$RUNNER_TEMP/latest-json-test"
       # Pre-release handling of the Packaging workflow (no .rpm, MSI

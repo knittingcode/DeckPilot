@@ -8,7 +8,7 @@
   "description": "Sample plugin: greets someone, and shows the current temperature of a city from Open-Meteo.",
   "repository": {
     "type": "git",
-    "url": "https://github.com/knittingcode/DeckPilot",
+    "url": "https://github.com/knittingcode/deckpilot",
     "directory": "plugins/examples/hello-weather"
   },
   "license": "Apache-2.0",

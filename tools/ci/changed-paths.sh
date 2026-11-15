@@ -24,8 +24,9 @@ pattern() {
     packaging) echo '^apps/desktop/src-tauri/(tauri[^/]*\.json$|build\.rs$|Cargo\.toml$|capabilities/|icons/|app-icon\.svg$)|^apps/agent/(build\.rs|Cargo\.toml|Info\.plist)$|^packaging/|^tools/ci/|^\.github/workflows/|^Cargo\.(lock|toml)$|^apps/desktop/package\.json$' ;;
     # Real credential stores.
     keystore) echo '^crates/deckpilot-keystore/|^tools/ci/with-keyring\.sh$|^\.github/workflows/ci\.yml$' ;;
-    # Assembly of the release's latest.json.
-    release_manifest) echo '^tools/ci/|^\.github/workflows/(release|ci)\.yml$' ;;
+    # Assembly of the release's latest.json, including the pinned download
+    # prefix (common.sh) and the client checks it must satisfy.
+    release_manifest) echo '^tools/ci/|^tools/release-pipeline/common\.sh$|^crates/deckpilot-update/|^\.github/workflows/(release|ci)\.yml$' ;;
     # The worktree and build cache scripts of tools/dev and their tests.
     dev_tools) echo '^tools/dev/[^/]+\.sh$|^tools/dev/tests/|^\.github/workflows/ci\.yml$' ;;
   esac

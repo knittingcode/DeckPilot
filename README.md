@@ -13,9 +13,9 @@ Windows and Linux.
 Design your keys around what you want to happen: switch projects, open your tools,
 run workflows and time your work, all from a Stream Deck, without a cloud account.
 
-[**Download**](#download) &nbsp;&bull;&nbsp; [Documentation](docs/README.md) &nbsp;&bull;&nbsp; [Releases](https://github.com/knittingcode/DeckPilot/releases) &nbsp;&bull;&nbsp; [Report an issue](https://github.com/knittingcode/DeckPilot/issues/new/choose)
+[**Download**](#download) &nbsp;&bull;&nbsp; [Documentation](docs/README.md) &nbsp;&bull;&nbsp; [Releases](https://github.com/knittingcode/deckpilot/releases) &nbsp;&bull;&nbsp; [Report an issue](https://github.com/knittingcode/deckpilot/issues/new/choose)
 
-[![CI](https://github.com/knittingcode/DeckPilot/actions/workflows/ci.yml/badge.svg)](https://github.com/knittingcode/DeckPilot/actions/workflows/ci.yml)
+[![CI](https://github.com/knittingcode/deckpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/knittingcode/deckpilot/actions/workflows/ci.yml)
 
 Apache-2.0 &nbsp;·&nbsp; macOS · Windows · Linux &nbsp;·&nbsp; Pre-release
 
@@ -132,7 +132,7 @@ a password instead. Encrypted exports are the backup and move a configuration to
 
 No release has been published yet. The `v0.6.0-alpha.2` draft is verified but not published; the
 first public pre-release will be a later **0.6.0-alpha** tag and will appear on the
-[Releases page](https://github.com/knittingcode/DeckPilot/releases) with these installers:
+[Releases page](https://github.com/knittingcode/deckpilot/releases) with these installers:
 
 | Platform | Installer | Notes |
 | --- | --- | --- |
@@ -248,14 +248,14 @@ real configuration. `pnpm dev` runs the same session in the foreground. All comm
 Planned work is tracked in [docs/roadmap.md](docs/roadmap.md): drivers for more Stream Deck
 models, hardware testing on Windows and Linux, and Windows code signing. Cloud synchronization and
 telemetry are out of scope. A plugin marketplace is a design proposal
-([#191](https://github.com/knittingcode/DeckPilot/pull/191)) with experimental feasibility work; it
+([#191](https://github.com/knittingcode/deckpilot/pull/191)) with experimental feasibility work; it
 is not part of DeckPilot.
 
 ## Contributing
 
 Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the
 [Code of Conduct](CODE_OF_CONDUCT.md), and use the
-[issue templates](https://github.com/knittingcode/DeckPilot/issues/new/choose) for bugs and ideas.
+[issue templates](https://github.com/knittingcode/deckpilot/issues/new/choose) for bugs and ideas.
 
 ## License
 
