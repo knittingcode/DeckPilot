@@ -27,7 +27,8 @@ work="${WORK:-$(mktemp -d "${TMPDIR:-/tmp}/verify-published.XXXXXX")}/published"
 curl="${CURL:-curl}"
 sha256() { if command -v sha256sum > /dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 fetch() { "$curl" -fsSL --retry 3 --retry-delay 5 -o "$2" "$1"; }
-base="https://github.com/$repository/releases"
+# The pinned release URLs (common.sh), as installations download them.
+base="$RELEASES_URL"
 
 release=$(find_release "$tag")
 [ -n "$release" ] || fail "there is no release for $tag"
