@@ -86,7 +86,13 @@ jobs:
         run: |
           tools/ci/install-linux-deps.sh
           # WebKitWebDriver and a virtual display for the UI test.
-          timeout 600 sudo apt-get install -y webkit2gtk-driver xvfb
+          # Ubuntu 26.04 renamed webkit2gtk-driver to webkitgtk-webdriver.
+          timeout 600 sudo apt-get install -y webkitgtk-webdriver xvfb ||
+            timeout 600 sudo apt-get install -y webkit2gtk-driver xvfb
+          driver=$(command -v WebKitWebDriver || dpkg -L webkitgtk-webdriver webkit2gtk-driver 2>/dev/null | grep -m1 '/WebKitWebDriver$')
+          echo "WebKitWebDriver: $driver"
+          test -x "$driver"
+          echo "DECKPILOT_E2E_NATIVE_DRIVER=$driver" >> "$GITHUB_ENV"
       - name: Install Rust toolchain
         run: |
           rustup toolchain install
@@ -191,7 +197,12 @@ jobs:
             Write-Host "::warning::using the runner's msedgedriver"
           }
           & $driver --version
-          "DECKPILOT_E2E_NATIVE_DRIVER=$driver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # A wrapper that keeps msedgedriver's verbose log with the
+          # other artifacts.
+          $log = Join-Path $env:RUNNER_TEMP 'e2e\artifacts\msedgedriver.log'
+          $wrapper = Join-Path $dir 'msedgedriver-logged.cmd'
+          "@`"$driver`" --verbose `"--log-path=$log`" %*" | Out-File -FilePath $wrapper -Encoding ascii
+          "DECKPILOT_E2E_NATIVE_DRIVER=$wrapper" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Marketplace at the command layer
         run: cargo test --locked -p deckpilot-desktop --bin deckpilot-desktop marketplace_e2e -- --ignored --nocapture
