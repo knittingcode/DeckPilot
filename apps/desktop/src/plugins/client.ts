@@ -28,6 +28,105 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   }
 }
 
+/** What `uninstallPluginKeeping` keeps for a later install (default: nothing). */
+export interface PluginRetention {
+  settings?: boolean
+  credentials?: boolean
+}
+
+/** A plugin installed here at some point (`plugin_known`). */
+export interface KnownPlugin {
+  id: string
+  name: string
+  publisher: string
+  namespace: string
+  lastVersion: string
+  installed: boolean
+  firstSeenAt: number
+  lastSeenAt: number
+}
+
+/** One declared setting (`contributes.settings.fields`). */
+export interface PluginSettingField {
+  key: string
+  label: string
+  description?: string
+  /** The parameter kind, as in action parameters. */
+  kind: { type: string } & Record<string, unknown>
+  required: boolean
+  default?: boolean | number | string
+  portability: "portable" | "machineSpecific" | "sensitive"
+}
+
+export type PluginSettingValue = boolean | number | string
+
+export interface PluginSettings {
+  plugin: string
+  fields: PluginSettingField[]
+  /** What the user saved. */
+  values: Record<string, PluginSettingValue>
+  /** What the plugin sees: saved values, otherwise defaults. */
+  effective: Record<string, PluginSettingValue>
+  /** Required settings with neither a value nor a default. */
+  missing?: string[]
+}
+
+/** One credential slot; never the secret. */
+export interface PluginCredentialSlot {
+  key: string
+  label: string
+  description?: string
+  hosts: string[]
+  schemes: string[]
+  setupUrl?: string
+  set: boolean
+  updatedAt?: number
+  /** Whether its `credentials:<key>` permission is granted. */
+  granted: boolean
+}
+
+/** `listKnownPlugins`. */
+export function listKnownPlugins(): Promise<KnownPlugin[]> {
+  return call<KnownPlugin[]>("list_known_plugins")
+}
+
+/** `uninstallPlugin` with `keep`. */
+export function uninstallPluginKeeping(plugin: string, keep: PluginRetention): Promise<void> {
+  return call<null>("uninstall_plugin", { plugin, keep }).then(() => undefined)
+}
+
+export function getPluginSettings(plugin: string): Promise<PluginSettings> {
+  return call<PluginSettings>("get_plugin_settings", { plugin })
+}
+
+/** Merges `values` into the saved settings; `null` resets one to its default. */
+export function setPluginSettings(
+  plugin: string,
+  values: Record<string, PluginSettingValue | null>,
+): Promise<PluginSettings> {
+  return call<PluginSettings>("set_plugin_settings", { plugin, values })
+}
+
+export function listPluginCredentials(plugin: string): Promise<PluginCredentialSlot[]> {
+  return call<PluginCredentialSlot[]>("list_plugin_credentials", { plugin })
+}
+
+/** Sends a secret to the agent; the answer never contains it. */
+export function setPluginCredential(
+  plugin: string,
+  key: string,
+  secret: string,
+): Promise<PluginCredentialSlot[]> {
+  return call<PluginCredentialSlot[]>("set_plugin_credential", { plugin, key, secret })
+}
+
+export function deletePluginCredential(
+  plugin: string,
+  key: string,
+): Promise<PluginCredentialSlot[]> {
+  return call<PluginCredentialSlot[]>("delete_plugin_credential", { plugin, key })
+}
+
 export function createTauriPluginClient(): PluginClient {
   return {
     getRuntime: () => call<PluginRuntimeStatus>("get_plugin_runtime"),
