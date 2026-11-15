@@ -37,6 +37,17 @@ tokio.workspace = true
 
 [dev-dependencies]
 deckpilot-keystore.workspace = true
+# The marketplace end-to-end tests (tests/support/marketplace.rs): a local
+# registry signed with throwaway keys by the publishing tool, served over
+# HTTPS with a throwaway CA (the agent's test server), and plugins.db read
+# from outside.
+deckpilot-plugin-manifest.workspace = true
+deckpilot-plugin-registry = { workspace = true, features = ["publish"] }
+deckpilot-plugin-store.workspace = true
+hkdf.workspace = true
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+sha2.workspace = true
 # The work session's test entry point stands in for its key (decision D11:
 # the app itself has no way to operate a session).
 deckpilot-agent = { path = "../../agent", features = ["test-hooks"] }
