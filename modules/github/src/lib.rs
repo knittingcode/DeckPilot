@@ -12,7 +12,7 @@
 //! is never part of parameters, settings, outputs, messages or logs, and
 //! every result is checked for it before it is returned.
 //!
-//! **Network.** Requests go through the HTTP module's client and its
+//! **Network.** Requests go through the `deckpilot-net` client and its
 //! network policy: addresses are checked before connecting, redirects are
 //! checked hop by hop, the token is never sent to another origin and
 //! never over plain http (except to this computer). The API host may be on
@@ -48,7 +48,7 @@ pub const DEFAULT_API_URL: &str = "https://api.github.com";
 pub const DEFAULT_CREDENTIAL: &str = "github.token";
 
 /// Stable error codes of the module's actions. Network failures use the
-/// HTTP module's codes (`blocked-address`, `dns-failed`,
+/// transport's codes (`deckpilot_net::codes`: `blocked-address`, `dns-failed`,
 /// `connection-failed`, `tls-failed`, `insecure-credentials`, …).
 pub mod codes {
     /// The configured API URL is not a valid https address.
