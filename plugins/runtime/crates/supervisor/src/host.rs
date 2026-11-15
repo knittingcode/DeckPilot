@@ -107,6 +107,10 @@ pub struct HostConfig {
     pub limits: GuestLimits,
     /// Refuse a host whose `ready` reports no OS sandbox.
     pub require_sandbox: bool,
+    /// Refuse a host whose `ready` reports anything but
+    /// [`Enforcement::Full`] (a `partial` sandbox included). Checked on
+    /// every spawn, so a restarted host is held to it too. Off by default.
+    pub require_full_sandbox: bool,
     /// Spawn until `ready`.
     pub handshake_timeout: Duration,
     /// `load` until `loaded` (compilation included).
@@ -127,6 +131,7 @@ impl HostConfig {
             module,
             limits: GuestLimits::default(),
             require_sandbox: true,
+            require_full_sandbox: false,
             handshake_timeout: Duration::from_secs(10),
             load_timeout: Duration::from_secs(10),
             shutdown_grace: Duration::from_secs(5),
@@ -149,7 +154,9 @@ pub enum HostError {
     ModuleTooLarge,
     /// `ready` was missing, late, of another protocol version or malformed.
     Handshake(String),
-    /// The host reports no OS sandbox and the config requires one.
+    /// The host reports no OS sandbox and the config requires one, or a
+    /// sandbox weaker than full and the config requires full
+    /// (`require_full_sandbox`). The host was killed before `load`.
     SandboxMissing(SandboxReport),
     /// The host rejected the module (or died while loading it).
     LoadFailed {
@@ -302,7 +309,12 @@ impl PluginHost {
                 if protocol != PROTOCOL_VERSION {
                     return Err(self.fail_handshake(format!("protocol {protocol}")));
                 }
-                if config.require_sandbox && sandbox.enforcement == Enforcement::None {
+                let refused = match sandbox.enforcement {
+                    Enforcement::Full => false,
+                    Enforcement::Partial => config.require_full_sandbox,
+                    Enforcement::None => config.require_sandbox || config.require_full_sandbox,
+                };
+                if refused {
                     self.kill();
                     return Err(HostError::SandboxMissing(sandbox));
                 }

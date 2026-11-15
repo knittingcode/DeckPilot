@@ -4,9 +4,10 @@
 # (built from plugins/runtime, a separate workspace) and the sample plugin,
 # with a local registry signed by throwaway keys made in the test.
 #
-# Linux and macOS run the whole lifecycle. Windows checks the refusal path:
-# its host sandbox is not verified (no AppContainer), so plugins install
-# but cannot be enabled or run there.
+# Linux, macOS and Windows run the whole lifecycle; on Windows the
+# supervisor launches the host in an AppContainer. On every OS the agent
+# runs a plugin only in a host that reports a full sandbox, and the test
+# checks that a host reporting a partial one is refused.
 #
 # Not a required check. No secrets, read-only token, no environment.
 name: Plugins in the agent
@@ -95,8 +96,18 @@ jobs:
         run: cargo clippy -p deckpilot-agent --features plugins --all-targets --locked -- -D warnings
       # The test builds these itself when they are missing; building them
       # first keeps compile time out of the test's timeouts.
+      # Diagnostic only: the kernel and the Landlock ABI it provides
+      # (landlock_create_ruleset with LANDLOCK_CREATE_RULESET_VERSION). The
+      # host reports `full` only with ABI 9, or ABI 8 with the seccomp
+      # cover for ResolveUnix; below that `partial`, which the agent
+      # refuses, so this explains a Linux failure at a glance.
+      - name: Kernel and Landlock ABI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          uname -a
+          cat /sys/kernel/security/lsm || true
+          python3 -c 'import ctypes; libc = ctypes.CDLL(None, use_errno=True); v = libc.syscall(444, None, 0, 1); print("landlock ABI:", v if v >= 0 else "error %d" % ctypes.get_errno())'
       - name: Build the plugin host
-        if: runner.os != 'Windows'
         working-directory: plugins/runtime
         run: cargo build --locked -p deckpilot-plugin-host --bin deckpilot-plugin-host
       - name: Build the sample plugin and the SDK test guest

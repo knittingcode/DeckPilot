@@ -77,12 +77,19 @@ impl PluginSettings {
     }
 }
 
-/// Whether plugins may run here: only where the host's OS sandbox is
-/// verified (macOS, Linux). On Windows the sandbox does not deny file
-/// reads or network yet (no `AppContainer`), so enabling and running are
-/// refused; installing and inspecting still work.
+/// Whether plugins may run here: only where the host has an OS sandbox
+/// (macOS: Seatbelt; Linux: seccomp and Landlock; Windows: an `AppContainer`
+/// with a Job Object, launched by the supervisor). On every platform each
+/// started host must also report a **full** sandbox before it receives a
+/// plugin (`service::host_config`); a host reporting `partial` or `none`
+/// is stopped and the invocation fails. Elsewhere installing and
+/// inspecting work, enabling and running are refused.
 pub fn execution_supported() -> bool {
-    cfg!(any(target_os = "macos", target_os = "linux"))
+    cfg!(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "windows"
+    ))
 }
 
 /// `macos`, `linux` or `windows` (or the OS name elsewhere).
@@ -98,9 +105,9 @@ pub fn platform() -> &'static str {
 pub fn platform_problem() -> Option<String> {
     (!execution_supported()).then(|| {
         format!(
-            "plugins cannot run on {}: the plugin host's sandbox is not verified on this \
-             platform (Windows needs AppContainer isolation, which is not implemented); \
-             plugins can be installed and inspected, but not enabled or run",
+            "plugins cannot run on {}: the plugin host has no OS sandbox on this platform \
+             (plugins run only on macOS, Linux and Windows, in a full sandbox); plugins can be \
+             installed and inspected, but not enabled or run",
             platform()
         )
     })

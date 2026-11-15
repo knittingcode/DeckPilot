@@ -68,7 +68,8 @@ configuration app ──IPC protocol 10──▶ agent service task
 - **Execution.** Only in the host, through the supervisor: the active
   version's files are re-verified against their integrity record and the
   module re-validated before the host is spawned; the supervisor checks
-  the host's sandbox report, compares the module's action ids with the
+  the host's sandbox report (the agent requires `full`, see the platform
+  gate), compares the module's action ids with the
   manifest's, applies the action's `timeoutMs` (at most 10 min), restarts
   after crashes with backoff and disables the plugin after a crash loop.
 - **Capability executor** (`executor.rs`). `http.fetch`: the HTTP module's
@@ -79,9 +80,23 @@ configuration app ──IPC protocol 10──▶ agent service task
   list. `notify` becomes an agent notification titled with the plugin's
   name; `log` goes to the agent log. Storage and credential injection are
   refused (`unavailable`): neither exists in the agent yet.
-- **Platform gate.** Enabling and invoking are refused on platforms whose
-  host sandbox is not verified (`platformUnsupported`): only macOS and
-  Linux may run plugins. On Windows installing and inspecting work.
+- **Platform gate.** Enabling and invoking are refused on platforms
+  without a host sandbox (`platformUnsupported`): only macOS, Linux and
+  Windows may run plugins; elsewhere installing and inspecting work.
+- **Full sandbox only.** On every platform, every host the agent starts
+  (and every restart) must report `enforcement: full` in its `ready`
+  message: macOS Seatbelt; Linux seccomp with Landlock (every right up to
+  ABI 9, or ABI 8, where the one missing right, `ResolveUnix`, is covered
+  by seccomp denying `socket` and `connect`; see plugins/runtime/README.md);
+  Windows `windows-appcontainer-job` (the AppContainer and Job Object the
+  supervisor launches it in). A host reporting `partial` (Linux without
+  Landlock or with an ABI below 8; Windows `windows-job-lowil`, which does
+  not deny reading user files or the network) or `none` is killed before it receives the module
+  (`HostConfig::require_full_sandbox`, checked in the supervisor's
+  handshake so no restart can skip it). The invocation fails with
+  `hostFailed` and a message naming the mechanism and level; the
+  supervisor is dropped, so the refusal neither backs off nor counts
+  towards a crash loop, and the next invocation checks a fresh host.
 - **Actions.** Each manifest action is exposed as action type
   `<plugin id>.<action>` with `available` and `unavailableReason` (disabled,
   broken, quarantined, platform). Running one goes through
@@ -166,10 +181,12 @@ escalation, rollback, uninstall, no files or rows left, configuration
 database unchanged), corrupt, re-pinned, invalid-manifest and JavaScript
 packages, revoked and incompatible versions, a registry with a bad
 signature, a host crash, crashes in the middle of an install, the wrong
-plugins.db key and the Windows refusal. HTTP goes to canned responses
+plugins.db key, and a host stand-in reporting a partial sandbox
+(`deckpilot-test-plugin-host`, built only with `test-hooks`), which must be
+stopped before it receives the plugin. HTTP goes to canned responses
 (`DECKPILOT_TEST_PLUGIN_HTTP`, only with `test-hooks`, never in a release).
-`.github/workflows/plugins-agent.yml` runs it on Linux, macOS and Windows
-(not a required check).
+`.github/workflows/plugins-agent.yml` runs all of it on Linux, macOS and
+Windows (not a required check).
 
 ## Not done
 
@@ -181,6 +198,17 @@ plugins.db key and the Windows refusal. HTTP goes to canned responses
   work; their capabilities are refused.
 - A password change made by the app while the agent is locked makes
   plugins.db unreadable (no rekey protocol between app and agent).
-- Windows needs AppContainer before plugins may run there.
+- Windows execution is verified only on GitHub's `windows-latest` runner
+  (Windows Server 2025), through the CI workflow (run 43689909295, job
+  132738173666). Desktop Windows editions (10, 11), per-user and
+  `Program Files` installs, and machines with third-party security
+  software are untested; on any of them a host that cannot get its
+  AppContainer reports `partial` and is refused rather than run.
 - The sandbox is verified locally on macOS only for this integration; Linux
-  and Windows rely on the CI workflow.
+  and Windows rely on the CI workflow, run 43689909295: Linux job
+  132738173732 (GitHub's `ubuntu-latest`, image ubuntu-26.04, kernel
+  `7.0.0-1019-azure`, Landlock ABI 8), Windows job 132738173666 (Windows
+  Server 2025), macOS job 132738173797. A Linux kernel without Landlock,
+  or with an ABI below 8 (before Linux 7.0), makes the host report
+  `partial`, so plugins do not run there; that excludes most current LTS
+  kernels.

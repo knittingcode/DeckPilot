@@ -16,6 +16,13 @@ path = "src/lib.rs"
 name = "deckpilot-agent"
 path = "src/main.rs"
 
+# Test only: a plugin host stand-in that reports a partial sandbox
+# (`tests/plugins_e2e.rs`). Never built without `test-hooks`.
+[[bin]]
+name = "deckpilot-test-plugin-host"
+path = "src/bin/deckpilot-test-plugin-host.rs"
+required-features = ["plugins", "test-hooks"]
+
 [features]
 # Entry points of the work session for agent tests, until key gestures
 # drive them. Never part of a release build: the configuration app has no

@@ -67,6 +67,12 @@ unchanged byte for byte (tested in `crates/abi` and `crates/host/tests/lifecycle
   capability for plugins (#191), hence no need for cap-std/`openat2`.
 - The OS sandbox is applied by the host to itself (`sandbox_init` instead of
   `sandbox-exec`), plus Linux and Windows implementations.
+- The supervisor refuses a host whose `ready` reports `none`
+  (`HostConfig::require_sandbox`, on by default) and, with
+  `HostConfig::require_full_sandbox` (off by default; the agent sets it),
+  anything but `full`. The host is killed before `load` (`SandboxMissing`),
+  on every spawn including restarts (`crates/supervisor/tests/fake_host.rs`,
+  `full_sandbox_can_be_required`).
 
 ## OS sandbox
 
@@ -78,7 +84,7 @@ and its epoch-ticker thread are created, then stage 2 for all threads.
 | Platform | Mechanism | Denied (probe tests) |
 | --- | --- | --- |
 | macOS | `sandbox_init` with `(version 1)(deny default)`, `RLIMIT_CORE=0` | file read, write, directory listing, TCP connect, Unix socket connect, exec |
-| Linux | Landlock (best effort up to ABI 9: all file access, TCP, scopes) + seccomp-bpf allowlist with TSYNC (default `EPERM`; no `open*`, `socket`, `connect`, `execve`, `clone`, `ptrace`) | the same; Landlock alone is also tested (`EACCES`) |
+| Linux | Landlock (best effort up to ABI 9: all file access, TCP, scopes) + seccomp-bpf allowlist with TSYNC (default `EPERM`; no `open*`, `socket`, `connect`, `execve`, `clone`, `ptrace`). Reports `full` when Landlock enforces every requested right (kernel ABI 9, Linux 7.1+), or when the kernel's ABI (probed with `LANDLOCK_CREATE_RULESET_VERSION` before restricting) is exactly 8: the only missing right is V9's `ResolveUnix`, and the allowlist denies `socket`/`connect` (and `open*`/`exec*`) outright, so it is covered (note `landlock ABI 8: ResolveUnix unavailable, covered by seccomp (no socket/connect)`; a unit test fails if the allowlist ever gains one of those calls or V9 adds another right). No Landlock, an ABI below 8 or any other gap: `partial` | the same; Landlock alone is also tested (`EACCES`) |
 | Windows | **Launched by the supervisor** (`crates/supervisor/src/windows.rs`, `CreateProcessW` with `STARTUPINFOEXW`): a fresh AppContainer profile per host process with **no capabilities** (`PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`), a supervisor-held Job Object assigned at creation (`PROC_THREAD_ATTRIBUTE_JOB_LIST`: 256 MiB process memory, 1 active process, kill on close, die on unhandled exception, UI restrictions), child process creation restricted (`PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY`), only the two pipe handles inherited (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), no console (`DETACHED_PROCESS`), environment `SystemRoot` plus the container-redirected `LOCALAPPDATA`/`TEMP`/`TMP`. The host verifies token and job and reports `windows-appcontainer-job`, `full`. Started any other way: own Job Object + Low integrity token, `windows-job-lowil`, `partial` | AppContainer: file read, write and directory listing in `%TEMP%` and the user profile, TCP connect to loopback, exec; a system file stays readable (control). Fallback: exec and writes only. Verified on `windows-latest`, CI run 43645511194 |
 
 Windows design notes and trade-offs:
@@ -119,7 +125,7 @@ Windows design notes and trade-offs:
 | Claim | macOS 27.2 arm64 (local) | Linux aarch64 (Docker Desktop, kernel 7.0 linuxkit, local) | Linux x86_64, Windows |
 | --- | --- | --- | --- |
 | All tests pass (`cargo test --locked`) | verified | verified | Linux x86_64: CI run 43626042263. Windows (`windows-latest`, AppContainer launch and the Job Object/Low integrity fallback): CI run 43645511194 |
-| Host runs guests under its own OS sandbox (JIT, traps, epoch) | verified | verified | Windows in the AppContainer: verified, `crates/host/tests/process.rs` and `sdk_e2e.rs` run every host through it (CI run 43645511194; hosts report `windows-appcontainer-job`, `full`) |
+| Host runs guests under its own OS sandbox (JIT, traps, epoch) | verified | verified (Landlock ABI 8: `full` with the `ResolveUnix` note) | Windows in the AppContainer: verified, `crates/host/tests/process.rs` and `sdk_e2e.rs` run every host through it (CI run 43645511194; hosts report `windows-appcontainer-job`, `full`) |
 | Sandbox probes deny files, network, exec, on main and helper thread | verified | verified (seccomp `EPERM`; Landlock-only run `EACCES`) | Windows AppContainer: verified, `app_container_denies_user_files_network_and_exec` (files in `%TEMP%` and the profile, loopback TCP and exec denied on both threads; `System32` readable; pipes work), CI run 43645511194 |
 | clippy `-D warnings`, `fmt --check` | verified | verified | Windows: `clippy --all-targets -D warnings` and `fmt --check` on `windows-latest`, CI run 43645511194 |
 
@@ -136,6 +142,13 @@ Windows design notes and trade-offs:
   host still exits on stdin EOF only, which needs it to be responsive.
 - Signed, hardened-runtime macOS helper (`allow-jit`), notarization,
   Pulley; the Seatbelt interface is deprecated and undocumented.
+- Linux `full` on kernels with Landlock ABI 8 rests on seccomp for
+  pathname UNIX sockets (`ResolveUnix` arrives with ABI 9, Linux 7.1); it is
+  verified on Docker Desktop's 7.0 linuxkit kernel (aarch64, local) and on
+  GitHub's `ubuntu-latest` (image ubuntu-26.04, kernel `7.0.0-1019-azure`,
+  x86_64, ABI 8: plugin runtime CI run 43689909312, job 132738174558, host
+  reports `full` with the `ResolveUnix` note; agent end to end run
+  43689909295, job 132738173732). Kernels with ABI 9 have not been tried.
 - Linux seccomp allowlist on distributions other than the Debian-based
   `rust:1` image and CI's Ubuntu; other libc versions may need more
   syscalls (they then fail with `EPERM`, not silently succeed).
