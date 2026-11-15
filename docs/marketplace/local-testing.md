@@ -157,10 +157,18 @@ Settings › Extensions › Plugins.
 4. Under the permissions, **Revoke** the network permission, **Run** *Current
    temperature* again: it fails with `not-permitted` (denied by the
    permission broker). *Greet* still works. **Grant** allows it again.
-5. Switch the plugin off (disabled: actions unavailable), then restart the
+5. **In the editors.** Action Library › **New action**: *Hello Weather*
+   (plugin) lists *Greet* and *Current temperature*. Choose *Greet*: its
+   *Name* and *Style* parameters are editors; create it, then **Run** it.
+   Drag it onto a key in the Layout Designer and press the key; in
+   Workflows, the node palette lists it under *Hello Weather* (with
+   **+ Current temperature** to create one there). Switch the plugin off:
+   the picker shows both actions as unavailable with the reason, the saved
+   action and the workflow node stay and show *the plugin is disabled*.
+6. Switch the plugin off (disabled: actions unavailable), then restart the
    agent (Stop agent / Start agent, or Ctrl-C and rerun it). The plugin,
    its state and its grants are unchanged. Switch it on again.
-6. **Publish 1.1.0** (skip if you did in section 2), in the registry shell:
+7. **Publish 1.1.0** (skip if you did in section 2), in the registry shell:
 
    ```sh
    publish 1.1.0 '| .permissions += [{"kind": "notifications",
@@ -169,18 +177,18 @@ Settings › Extensions › Plugins.
 
    `verify-site` now reports seq 2 and 2 installable versions.
    **Updates** › **Check for updates** shows 1.1.0.
-7. **Update**: 1.1.0 asks for more, so the agent stages it and the consent
+8. **Update**: 1.1.0 asks for more, so the agent stages it and the consent
    dialog shows the added `notifications` permission. Check it and
    **Update** (`approvePluginUpdate` with exactly that key): the plugin
    runs 1.1.0.
-8. **Roll back to 1.0.0** (Installed): back on 1.0.0.
-9. **Uninstall** (confirm): gone from Installed, back to installable in
+9. **Roll back to 1.0.0** (Installed): back on 1.0.0.
+10. **Uninstall** (confirm): gone from Installed, back to installable in
    Discover.
-10. **Declined update**: install 1.0.0 again, **Updates** › **Update**,
+11. **Declined update**: install 1.0.0 again, **Updates** › **Update**,
     then **Decline update**: the plugin stays on 1.0.0 without the new
     permission. **Cancel** instead closes the dialog and leaves the update
     staged ("Waiting for consent", **Review and update** reopens it).
-11. **Install from package file…**: pick
+12. **Install from package file…**: pick
     `$REG/releases/acme.hello-weather--v1.0.0/acme.hello-weather-1.0.0.dpplugin`
     (accepted: its bytes are what the registry pins). It is installed with
     nothing granted; enabling it asks for consent. Any other package for
