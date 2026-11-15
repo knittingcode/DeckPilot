@@ -120,9 +120,129 @@ impl fmt::Display for PluginState {
     }
 }
 
+/// The phase of a built-in module's migration to its plugin
+/// (`module_migrations.phase`, `docs/marketplace/module-migration.md`
+/// §5.6).
+///
+/// ```text
+/// pending ─▶ installed ─▶ settings_copied ─▶ awaiting_consent ─▶ cut_over
+///    │         (any step may end in failed: retried at the next start up
+///    ▼          to MAX_MIGRATION_ATTEMPTS times, then only on Retry)
+/// not_eligible (re-evaluated at every start)
+/// ```
+///
+/// The store records phases; the migration engine decides them. Only
+/// `cut_over` routes the module's actions to the plugin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MigrationPhase {
+    /// Recorded, nothing done yet.
+    Pending,
+    /// The user's data does not allow it, or the plugin is tombstoned; the
+    /// built-in stays.
+    NotEligible,
+    /// The plugin is installed.
+    Installed,
+    /// The module's settings were copied to the plugin.
+    SettingsCopied,
+    /// A high-tier grant or a credential copy waits for the user.
+    AwaitingConsent,
+    /// The module's actions run in the plugin.
+    CutOver,
+    /// A step failed; the built-in stays.
+    Failed,
+}
+
+impl MigrationPhase {
+    pub const ALL: [Self; 7] = [
+        Self::Pending,
+        Self::NotEligible,
+        Self::Installed,
+        Self::SettingsCopied,
+        Self::AwaitingConsent,
+        Self::CutOver,
+        Self::Failed,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::NotEligible => "not_eligible",
+            Self::Installed => "installed",
+            Self::SettingsCopied => "settings_copied",
+            Self::AwaitingConsent => "awaiting_consent",
+            Self::CutOver => "cut_over",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|phase| phase.as_str() == text)
+    }
+
+    /// Whether the module's actions are routed to the plugin.
+    pub fn is_cut_over(self) -> bool {
+        self == Self::CutOver
+    }
+}
+
+impl fmt::Display for MigrationPhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// What the user explicitly did to a first-party plugin
+/// (`plugin_tombstones.decision`). Seeding and migration never reinstall
+/// or re-enable a tombstoned plugin; only the user clears a tombstone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TombstoneDecision {
+    Uninstalled,
+    Disabled,
+}
+
+impl TombstoneDecision {
+    pub const ALL: [Self; 2] = [Self::Uninstalled, Self::Disabled];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Uninstalled => "uninstalled",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|decision| decision.as_str() == text)
+    }
+}
+
+impl fmt::Display for TombstoneDecision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::PluginState::{self, *};
+    use super::{MigrationPhase, TombstoneDecision};
+
+    #[test]
+    fn migration_phases_and_tombstone_decisions_round_trip() {
+        for phase in MigrationPhase::ALL {
+            assert_eq!(MigrationPhase::parse(phase.as_str()), Some(phase));
+        }
+        for decision in TombstoneDecision::ALL {
+            assert_eq!(TombstoneDecision::parse(decision.as_str()), Some(decision));
+        }
+        assert_eq!(MigrationPhase::parse("done"), None);
+        assert_eq!(TombstoneDecision::parse("removed"), None);
+        assert!(MigrationPhase::CutOver.is_cut_over());
+        assert!(!MigrationPhase::AwaitingConsent.is_cut_over());
+    }
 
     #[test]
     fn names_round_trip() {
