@@ -74,7 +74,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Clippy (wasm guest crates)
-        run: cargo clippy --locked -p deckpilot-plugin-guest -p deckpilot-test-guest -p deckpilot-plugin-sdk -p deckpilot-sdk-test-guest -p hello-weather --target wasm32-unknown-unknown -- -D warnings
+        run: cargo clippy --locked -p deckpilot-plugin-guest -p deckpilot-test-guest -p deckpilot-plugin-sdk -p deckpilot-sdk-test-guest -p hello-weather -p hello-world -p developer-tools --target wasm32-unknown-unknown -- -D warnings
       - name: Test
         run: cargo test --locked --no-fail-fast -- --nocapture
       # AppContainer network isolation is enforced by the Windows Filtering
@@ -93,3 +93,47 @@ jobs:
         if: always()
         run: |
           cargo run --locked -q --bin deckpilot-sandbox-probe -- read_file "$PWD/Cargo.toml" exec /bin/sh || true
+
+  # The example plugins (plugins/examples/hello-world, developer-tools) are
+  # reproducible on one platform: two builds, each from an empty target
+  # directory, must give byte-identical modules. Builds on different
+  # operating systems are not byte-identical (a known finding); Ubuntu is
+  # the reference platform (docs/marketplace/sdk/building.md). The hashes
+  # are printed for comparison. No cache: both builds start from clean.
+  reproducible:
+    name: Reproducible example plugins (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup target add wasm32-unknown-unknown
+          rustc --version
+      - name: Build twice from clean and compare
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          set -euo pipefail
+          for run in a b; do
+            plugins/examples/build.sh --target-dir "$RUNNER_TEMP/target-$run" \
+              --out "$RUNNER_TEMP/out-$run" | tee "$RUNNER_TEMP/sha256-$run.txt"
+          done
+          echo "--- ${{ matrix.os }}: sha256 of the example modules"
+          cat "$RUNNER_TEMP/sha256-a.txt"
+          for module in hello_world developer_tools; do
+            cmp "$RUNNER_TEMP/out-a/$module.wasm" "$RUNNER_TEMP/out-b/$module.wasm" ||
+              { echo "::error::$module.wasm differs between two clean builds"; exit 1; }
+          done
+          diff "$RUNNER_TEMP/sha256-a.txt" "$RUNNER_TEMP/sha256-b.txt"
+          echo "identical: two clean builds gave the same modules"

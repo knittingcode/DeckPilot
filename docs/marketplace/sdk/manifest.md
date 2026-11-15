@@ -1,0 +1,159 @@
+# The manifest (`manifest.json`, manifest version 1)
+
+`manifest.json` sits at the root of the plugin's source directory and of
+its package. It is the only thing the agent reads to learn what a plugin
+is, asks for and offers: the agent never runs plugin code to discover
+metadata. The module must agree with it (the agent and the SDK check,
+[below](#the-module-must-agree)).
+
+Sources of truth, in order:
+
+1. The JSON Schema `crates/deckpilot-plugin-manifest/schema/plugin-manifest.schema.json`
+   (draft 2020-12; byte-identical copy in `plugins/schemas/`), bundled as
+   `deckpilot_plugin_manifest::SCHEMA_JSON`.
+2. The typed model and validation in `crates/deckpilot-plugin-manifest`:
+   `Manifest::from_json` (structure, unknown fields refused everywhere,
+   at most `MAX_MANIFEST_BYTES` = 256 KiB) and `Manifest::validate` (every
+   other schema constraint plus the cross-field rules below, all problems
+   reported at once with their JSON paths, `ValidationErrors`).
+3. The package reader (`deckpilot_plugin_package::verify_package`) and the
+   agent, which repeat these checks at install time and before every load.
+
+Validate while you write it: the examples' unit tests run the schema with
+`jsonschema` (`manifest_is_valid_against_the_schema`), and
+`deckpilot-registry package` runs the full `Manifest::validate` (see
+[building.md](building.md#package)).
+
+## Top-level fields
+
+| Field | Required | Rule |
+| --- | --- | --- |
+| `$schema` | no | Any string ≤ 256; the examples use `https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json` |
+| `manifestVersion` | yes | `1` (`MANIFEST_VERSION`) |
+| `id` | yes | `<publisher>.<name>` (`PluginId`): each part `[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*`, publisher 2-24, name 2-32 characters, 57 in all. Must start with `publisher.id` and a dot. A hyphen is always followed by a letter, so the lower camel case (`acme.developer-tools` → `plugins.acme.developerTools`) is unique |
+| `name` | yes | Display name, 1-48 characters |
+| `version` | yes | `X.Y.Z` with an optional `-alpha.N`, `-beta.N` or `-rc.N` (N ≥ 1); no build metadata, no leading zeros, ≤ 32 characters. Must equal `Plugin::new(_, version)` |
+| `publisher` | yes | `{ "id", "name", "url"? }`: `id` as above and not reserved (`RESERVED_PUBLISHERS`: `deckpilot`, `knittingcode`, `core`, `system`, `plugin`, `test`, the built-in module ids, …), `name` 1-64, `url` https ≤ 512 |
+| `description` | yes | 1-300 characters |
+| `homepage` | no | https URL ≤ 512 |
+| `repository` | no | `{ "type": "git", "url": "https://github.com/<owner>/<repo>", "directory"? }` (`directory` a relative path) |
+| `license` | yes | SPDX expression, 1-64 characters. The package must contain a `LICENSE` file |
+| `keywords` | no | ≤ 10 unique, each `[a-z0-9-]{2,24}` |
+| `categories` | no | ≤ 3 unique of `developer-tools`, `productivity`, `communication`, `monitoring`, `media`, `smart-home`, `other` |
+| `engines` | yes | See [Compatibility](#compatibility-engines-and-platforms) |
+| `runtime` | in practice yes | `{ "kind": "wasm", "abi": 1 }`. Optional in the schema only so #191 manifests still parse; a package without it is the old JavaScript contract and is refused (`PackageError::UnsupportedRuntime`, [artifact-contract.md](../artifact-contract.md)) |
+| `entry` | yes | Informational relative path of the source entry (`src/lib.rs`); the agent ignores it |
+| `platforms` | no | Non-empty unique list of `macos`, `windows`, `linux`; omitted means all |
+| `icons` | yes | `{ "128": "assets/…png" }` required; `32` and `256` optional. Paths `assets/…​.png` ≤ 128 characters. The agent shows `icons.128` only if it is a PNG of at most 256 KiB whose sha256 matches the install record (`MAX_ICON_BYTES`) |
+| `assets` | no | `keyIcons` (≤ 64 PNGs by `[a-z][a-z0-9-]{0,47}` name), `screenshots` (≤ 8 PNGs), `readme` (`"README.md"`), `changelog` (`"CHANGELOG.md"`). Everything named here is packaged |
+| `permissions` | yes | Array, ≤ 16; may be empty. See [permissions.md](permissions.md) |
+| `supports` | no | `{ "device": { "requires"?, "uses"? } }` with `keys`, `keyDisplays`, `dials`, `touchStrip`, `brightness`. Accepted, not used by the agent in this version |
+| `contributes` | yes | `actions`, `variables`, `settings`, `credentials`, `errorCodes`; all optional |
+
+## `contributes.actions[]`
+
+At most 64 actions (`MAX_ACTIONS`). Each:
+
+| Field | Required | Rule |
+| --- | --- | --- |
+| `id` | yes | `[a-z][a-z0-9]*(-[a-z0-9]+)*`, 1-48 characters, unique. Must equal `Action::new(id, _)`. The agent registers it as action type `<plugin id>.<id>` |
+| `name` | yes | 1-48 characters |
+| `description` | yes | 1-300 characters |
+| `category` | yes | 1-32 characters (the group in the editors' pickers) |
+| `parameters` | yes | ≤ 32 (`MAX_PARAMS`); see [actions.md](actions.md#parameters) |
+| `node` | no | Workflow node contract: `version` (≥ 1), `icon` (`[a-z0-9-]{1,64}`), `outputs` (≤ 32), `timeoutMs` (1,000-600,000, default 30,000: the invocation's wall-clock limit), `retrySafe`, `idempotent`, `effect` (`readOnly`, `opens`, `modifies`; a warning when `modifies` is `retrySafe`). `cancellable` is accepted; the agent treats every plugin action as cancellable. There is no `changesContext` |
+| `requiresProject`, `deprecated`, `replacedBy` | no | `replacedBy` names another action of this plugin and needs `deprecated: true` |
+| `state` | no | Button state refresh (`onEvents` or `every` with `intervalSeconds`; needs `effect: readOnly`). Accepted and validated; **ABI 1 has no state call**, so no button state is ever pulled from a plugin |
+| `device` | no | `{ "requires": [...] }`. Accepted, not used |
+
+### Outputs (`node.outputs[]`)
+
+`{ "key", "label", "kind"?, "always"?, "sensitive"? }`: `key` camelCase
+`[a-z][A-Za-z0-9]{0,31}`, `label` 1-48, `kind` one of `text` (default),
+`integer`, `boolean`, `path`, `url`, `projectKey`. **The agent keeps only
+declared outputs**: anything else an action returns in `Output::with` is
+dropped (`convert::outcome`, `PluginActionHandler::result`). In workflows
+every output value becomes text (`engine.rs` `text`); `invokePluginAction`
+returns them as JSON.
+
+## `contributes.variables[]`
+
+The plugin's own variables, published with `Context::publish_variable`
+([capabilities.md](capabilities.md#variables)). At most 64.
+
+| Field | Rule |
+| --- | --- |
+| `id` | Relative path `[a-z][A-Za-z0-9_]{0,31}` with up to two more `.`-separated segments, ≤ 100 characters, unique. Read in workflows as `{{ plugins.<publisherCamel>.<nameCamel>.<id> }}`, e.g. `plugins.acme.developerTools.openPrs` |
+| `name`, `description` | 1-48; ≤ 300 |
+| `valueType` | `{ "type": "string" \| "integer" \| "boolean" \| "json" }`; a published value of another type is refused |
+| `scope` | `machine`, `profile` or `project`. **Only `machine` can be published in this version**; the others are refused with `unavailable` |
+| `requires`, `sensitive`, `deprecated` | Optional; `requires` only `["project"]` |
+
+## `contributes.settings`
+
+`{ "portabilityVersion"?, "fields": [...] }`, at most 32 fields. Each field
+is a parameter (same `key`, `label`, `description`, `kind`, `required`,
+`default` as [action parameters](actions.md#parameters)) plus
+`portability` (`portable`, `machineSpecific` (default) or `sensitive`).
+The key `privateHosts` is reserved (`GENERATED_SETTING_KEY`, generated by the agent for `privateNetwork`). The
+user edits them with `setPluginSettings` (refused with `invalidData` unless
+every value fits its field); the plugin reads them with
+`Context::settings` ([capabilities.md](capabilities.md#settings)). There
+are no secret settings: secrets are credential slots.
+
+## `contributes.credentials[]`
+
+Credential slots, at most 8. A slot is a named place for one secret the
+user stores (`setPluginCredential`); the plugin only ever names it
+([capabilities.md](capabilities.md#credentials)).
+
+| Field | Rule |
+| --- | --- |
+| `key` | camelCase, unique; must be listed in a `credentials` permission's `refs`, and every ref must be a slot |
+| `label`, `description` | 1-48; ≤ 300 |
+| `hosts` | 1-8 exact hosts, each covered by the `network` permission's `hosts`. The secret goes to these origins (https) and nowhere else |
+| `schemes` | Non-empty subset of `bearer`, `basic`, `header`, `query` |
+| `headerName` | Required with `header`: `[A-Za-z0-9-]{1,64}` |
+| `queryName` | Required with `query`: `[A-Za-z0-9_.-]{1,64}` |
+| `setupUrl` | https URL where the user creates the secret |
+
+## `contributes.errorCodes`
+
+`{ "<code>": "<meaning, 1-200 characters>" }`, at most 64. Codes are
+`[a-z][a-z0-9]*(-[a-z0-9]+)*`, ≤ 64 characters, and must not redeclare a
+shared code (`SHARED_ERROR_CODES`). See
+[errors-and-versions.md](errors-and-versions.md#error-codes).
+
+## Compatibility: `engines` and `platforms`
+
+| Field | Rule | Checked |
+| --- | --- | --- |
+| `engines.deckpilot` | One comparator or a lower and an upper bound separated by one space: `>=`, `>`, `<=`, `<`, `=` (or none, meaning `=`) followed by `MAJOR.MINOR.PATCH` without leading zeros or pre-release, e.g. `">=0.5.0 <1.0.0"`; ≤ 64 characters; must be satisfiable (`VersionRange`). Matching uses semver precedence **including DeckPilot pre-releases**: `0.6.0-alpha.3` satisfies `>=0.5.0 <1.0.0`, and `0.8.0-beta.1` does not satisfy `>=0.8.0` | By the registry client before install (`incompatible`) and by the agent (`HostEnvironment.app_version` = the agent's version) |
+| `engines.pluginApi` | `^MAJOR.MINOR`: same major, at least this minor (`ApiRequirement`). The agent provides **1.0** (`PLUGIN_API` in `apps/agent/src/plugins/service.rs`), so `^1.0` is the only value that installs today | Same |
+| `engines.sdk` | Informational semver of the SDK used (`deckpilot_plugin_sdk::SDK_VERSION`, 0.1.0) | `testing::manifest_mismatches` only |
+| `platforms` | Omitted means macOS, Windows and Linux | Same; a mismatch is `Incompatibility::Platform` |
+
+## The module must agree
+
+The manifest and the module are written separately, and three checks keep
+them together:
+
+- **Action ids.** When the host loads the module it reports the SDK's
+  descriptor (`dp_describe`); the supervisor refuses a module whose action
+  ids differ from the manifest's (`HostConfig::expect_actions`). The
+  invocation fails with `hostFailed`.
+- **Parameters.** The agent validates every invocation against the
+  manifest's parameters before the host runs (`invalid-parameters`); the
+  SDK validates again against `Param` declarations. A parameter the
+  manifest declares but the code does not is refused by the SDK as
+  unknown.
+- **Unit test.** `deckpilot_plugin_sdk::testing::manifest_mismatches(&plugin(), &manifest)`
+  lists every difference in id, version, `engines.pluginApi`,
+  `engines.sdk`, action ids and order, and per parameter `required`, kind,
+  bounds, options and default. Both examples assert it is empty.
+
+## Example
+
+`plugins/examples/developer-tools/manifest.json` uses every section:
+three permissions, seven actions with outputs, two variables, three
+settings, one credential slot and seven error codes.
