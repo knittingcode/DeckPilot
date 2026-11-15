@@ -199,6 +199,16 @@ impl Agent {
             Ok(RuntimeOutcome::Action { action, result }) => {
                 self.report_action(action, &result);
             }
+            // A plugin's action: it runs on a thread of its own and is
+            // reported when it finished.
+            Ok(RuntimeOutcome::ActionRequested {
+                action,
+                overrides,
+                device,
+            }) => {
+                self.run_detached(action, Some(overrides), Some(device), None);
+                return;
+            }
             Ok(RuntimeOutcome::WorkflowRequested { workflow }) => {
                 if let Err(error) = self.start_execution(workflow, ExecutionTrigger::Device) {
                     warn!(%error, "cannot start the workflow");

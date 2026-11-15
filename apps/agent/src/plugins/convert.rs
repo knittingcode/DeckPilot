@@ -101,10 +101,24 @@ pub fn unavailable(record: &PluginRecord) -> Option<String> {
     })
 }
 
-pub fn summary(record: &PluginRecord) -> ipc::PluginSummary {
+/// Why the actions of a plugin cannot run on keys and in workflows: as
+/// [`unavailable`], and also while a declared permission is not granted
+/// (revoked after enabling). The plugin stays enabled meanwhile, and
+/// `invokePluginAction` still runs it (its capability calls are denied).
+pub fn unavailable_with(record: &PluginRecord, stored: &[StoredGrant]) -> Option<String> {
+    unavailable(record).or_else(|| {
+        let manifest = &record.active()?.manifest;
+        permissions(manifest, stored)
+            .into_iter()
+            .find(|p| p.status != ipc::PermissionStatus::Granted)
+            .map(|p| format!("the permission `{}` is not granted", p.key))
+    })
+}
+
+pub fn summary(record: &PluginRecord, stored: &[StoredGrant]) -> ipc::PluginSummary {
     let active = record.active();
     let manifest = active.map(|v| &v.manifest);
-    let reason = unavailable(record);
+    let reason = unavailable_with(record, stored);
     let actions = manifest
         .map(|m| {
             m.contributes
@@ -182,7 +196,7 @@ pub fn details(
     let manifest = active.map(|v| &v.manifest);
     let staged = record.staged().map(|v| &v.manifest);
     ipc::PluginDetails {
-        summary: summary(record),
+        summary: summary(record, stored),
         description: manifest.map(|m| m.description.clone()).unwrap_or_default(),
         license: manifest.map(|m| m.license.clone()).unwrap_or_default(),
         homepage: manifest.and_then(|m| m.homepage.clone()),
