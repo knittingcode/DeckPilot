@@ -65,6 +65,13 @@ impl Echo {
             node: crate::graph::NodeSpec::default(),
         })
     }
+
+    /// The same handler for the action type `id`.
+    pub(crate) fn with_id(id: &str) -> Self {
+        let mut echo = Self::new();
+        echo.0.id = ActionTypeId::new(id).unwrap();
+        echo
+    }
 }
 
 impl ActionHandler for Echo {

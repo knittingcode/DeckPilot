@@ -6,7 +6,7 @@ are random UUIDs. Textual identifiers are validated:
 | Identifier     | Format                                         | Example              |
 | -------------- | ---------------------------------------------- | -------------------- |
 | `ActionTypeId` | `<module id>.<name>`, lowercase dotted         | `projects.next`      |
-| `ModuleId`     | lowercase letter, then `a-z 0-9 -`             | `projects`           |
+| `ModuleId`     | lowercase letter, then `a-z 0-9 -`; a plugin's: `<publisher>.<name>` (exactly one `.`, 2-24 and 2-32 characters of kebab-case words) | `projects`, `acme.hello-weather` |
 | `ResourceKey`  | lowercase dotted                               | `shop.repository`    |
 | `ProjectKey`   | 1–32 ASCII letters, digits, `_`, `-`; unique case-insensitively per profile | `SHOP` |
 | `DeviceModelId`| free-form                                      | `elgato.streamdeck.mk2` |

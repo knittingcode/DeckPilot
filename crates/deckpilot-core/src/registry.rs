@@ -29,6 +29,18 @@ pub trait ActionHandler: Send + Sync {
         context: &ExecutionContext<'_>,
     ) -> ActionResult;
 
+    /// The handler hands every run to another process and blocks until it
+    /// answers or gives up (a plugin's sandboxed host), possibly for
+    /// minutes. Callers that must stay responsive (device input, IPC
+    /// requests on the agent's service task) run such actions on a thread
+    /// of their own: the [`Runtime`](crate::Runtime) reports a key bound
+    /// to one as [`RuntimeOutcome::ActionRequested`](crate::RuntimeOutcome)
+    /// instead of running it in place. Workflow nodes already run on
+    /// their own threads and call [`ActionHandler::execute`] there.
+    fn runs_detached(&self) -> bool {
+        false
+    }
+
     /// Checks normalized parameters against the profile the action belongs
     /// to, for example that a referenced project exists in that profile.
     fn check(&self, _parameters: &ActionParameters, _profile: &Profile) -> Vec<String> {
@@ -270,6 +282,13 @@ impl ActionRegistry {
                 .map(ButtonState::sanitized)
                 .map_err(StateError::sanitized),
         )
+    }
+
+    /// Whether `action_type` must not run on a thread that has to stay
+    /// responsive; see [`ActionHandler::runs_detached`].
+    pub fn runs_detached(&self, action_type: &ActionTypeId) -> bool {
+        self.handler(action_type)
+            .is_some_and(ActionHandler::runs_detached)
     }
 
     /// The module that provides `id`, if it was registered by a module.
