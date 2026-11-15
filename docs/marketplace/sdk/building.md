@@ -54,32 +54,21 @@ Hello World is about 190 KB, Developer Tools about 300 KB (the limit is
 
 ## Reproducible builds
 
-The same source, toolchain and lock file give **byte-identical modules on
-the same platform**, whatever the checkout path, user or target
-directory: the toolchain is pinned, dependencies are locked, symbols are
-stripped, paths are remapped and no environment flags leak in.
+The toolchain is pinned, dependencies are locked, symbols are stripped,
+paths are remapped and no environment flags leak in. What that gives,
+measured when the examples were added (toolchain 1.99.1):
 
-CI checks it: the `reproducible` job of
-`.github/workflows/plugin-runtime.yml` builds both examples twice, each
-time into a new empty target directory, on Ubuntu, macOS and Windows, and
-fails unless the sha256 of each module is the same both times. It prints
-the hashes.
+| Comparison | Result |
+| --- | --- |
+| Two builds on one machine, each into a new empty target directory (any directory) | **Byte-identical**, on Ubuntu, macOS and Windows. CI checks it on every change: the `reproducible` job of `.github/workflows/plugin-runtime.yml` fails unless both builds give the same sha256, and prints the hashes |
+| Two machines with the same OS (a local macOS arm64 machine and CI's `macos-latest`) | `hello_world.wasm` identical (`7eb0d27a…`); `developer_tools.wasm` **different** (`4a359883…` locally, `fd20cd5f…` in CI). Not analysed further; until it is, do not expect a rebuild elsewhere to match |
+| Different operating systems | **Different** for both modules (a known finding; Ubuntu `8fd98494…`/`4e251d0e…`, Windows `beb83830…`/`c39f1a08…`) |
 
-**Builds on different operating systems are not byte-identical** (a known
-finding; the cause, somewhere in the per-platform host toolchain, is not
-analysed here). **Ubuntu (`ubuntu-latest`) is the reference
-platform**: a published package's `plugin.wasm` should be the Ubuntu
-build, and a verifier should rebuild on Ubuntu. For example, when the
-examples were added, two clean builds on macOS arm64 (toolchain 1.99.1)
-gave, both times:
-
-```text
-7eb0d27a88844b71c2a728e745b5d5a7dd539fa67c084a44d20133e617a70728  hello_world.wasm
-4a359883daf8b4c0ebc0d822ec386d41888e2d2cbe3267c13d4ac87138cba381  developer_tools.wasm
-```
-
-Any change to an example, the SDK or the lock file changes them; the
-`reproducible` CI job prints the current hashes for each platform.
+**Ubuntu (`ubuntu-latest` in CI) is the reference platform**: a published
+package's `plugin.wasm` should be the module the `reproducible` job builds
+on Ubuntu, and a verifier should rebuild there. Any change to an example,
+the SDK or the lock file changes the hashes; the job prints the current
+ones.
 
 ## Package
 

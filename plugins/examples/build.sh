@@ -7,7 +7,7 @@
 # PACKAGE defaults to `hello-world developer-tools`. Modules are copied to
 # --out (default: plugins/runtime/target/examples) as <crate>.wasm.
 #
-# Reproducible on one platform: the toolchain is pinned
+# Reproducible on one machine: the toolchain is pinned
 # (rust-toolchain.toml), dependencies are locked (`--locked`, the runtime
 # workspace's Cargo.lock), the guest profile strips symbols, and the
 # checkout and Cargo home are remapped (--remap-path-prefix) so no
@@ -15,8 +15,9 @@
 # environment leak in (RUSTFLAGS and wrappers are cleared). Two builds from
 # clean target directories give byte-identical modules (CI: the
 # `reproducible` job of .github/workflows/plugin-runtime.yml). Builds on
-# different operating systems are not byte-identical; Ubuntu is the
-# reference platform (docs/marketplace/sdk/building.md).
+# different operating systems, and for developer-tools on two macOS
+# machines, were not byte-identical; Ubuntu is the reference platform
+# (docs/marketplace/sdk/building.md).
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

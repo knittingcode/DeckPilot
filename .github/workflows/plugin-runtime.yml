@@ -95,7 +95,7 @@ jobs:
           cargo run --locked -q --bin deckpilot-sandbox-probe -- read_file "$PWD/Cargo.toml" exec /bin/sh || true
 
   # The example plugins (plugins/examples/hello-world, developer-tools) are
-  # reproducible on one platform: two builds, each from an empty target
+  # reproducible on one machine: two builds, each from an empty target
   # directory, must give byte-identical modules. Builds on different
   # operating systems are not byte-identical (a known finding); Ubuntu is
   # the reference platform (docs/marketplace/sdk/building.md). The hashes
