@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
+use deckpilot_core::alias::LegacyRouting;
 use deckpilot_ipc::plugins::PluginEvent;
 use deckpilot_ipc::plugins::{
     self as ipc, PluginInstallSource, PluginOperation, PluginRuntimeStatus, PluginStage,
@@ -53,6 +54,7 @@ use super::data;
 use super::engine::CatalogPlugin;
 use super::executor::{DataAccess, Executor, OwnVariables, SharedData, Transport};
 use super::lane::{Done, Ended, Job, Lane, LaneEnd, LaneError};
+use super::migration::LegacySnapshot;
 use super::registry::{Registry, download_error};
 use super::variables::PublishedVariables;
 use super::worker::{EngineFailure, EngineReply, Events};
@@ -475,6 +477,22 @@ impl PluginService {
                     keys: ids.iter().map(|id| format!("{namespace}.{id}")).collect(),
                 });
         }
+    }
+
+    /// The first module migration pass after the store opened
+    /// (`migration.rs`): the plugins it installed, enabled or granted get
+    /// their grants in the broker and an event.
+    pub fn migrate(&mut self, snapshot: &LegacySnapshot) {
+        let touched = super::migration::start(&mut self.manager, &self.bundle, snapshot);
+        for id in touched {
+            self.sync_grants(&id);
+            self.changed(&id);
+        }
+    }
+
+    /// Where the legacy action types of migrated modules go now.
+    pub fn legacy_routing(&self) -> LegacyRouting {
+        super::migration::routing(&self.manager, &self.bundle)
     }
 
     /// The installed plugins and whether their actions can run, for the
