@@ -18,6 +18,7 @@ on:
     paths:
       - apps/agent/**
       - crates/deckpilot-ipc/**
+      - crates/deckpilot-net/**
       - crates/deckpilot-plugin-*/**
       - plugins/**
       - Cargo.toml
@@ -28,6 +29,7 @@ on:
     paths:
       - apps/agent/**
       - crates/deckpilot-ipc/**
+      - crates/deckpilot-net/**
       - crates/deckpilot-plugin-*/**
       - plugins/**
       - Cargo.toml

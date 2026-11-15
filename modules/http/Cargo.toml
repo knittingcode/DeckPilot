@@ -10,11 +10,10 @@ publish.workspace = true
 
 [dependencies]
 deckpilot-core.workspace = true
+deckpilot-net.workspace = true
+# The request type names reqwest's methods and status codes.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde_json.workspace = true
-tokio = { workspace = true, features = ["net"] }
-url.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

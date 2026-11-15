@@ -10,7 +10,7 @@ use deckpilot_core::{
     ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, Capability,
     CredentialId, ExecutionContext, Os, ParameterKind, ParameterSpec, ParameterValue, Profile,
 };
-use deckpilot_module_http::policy;
+use deckpilot_net::policy;
 use serde_json::Value;
 
 use crate::api::{self, Api, Failure, clean, fail};
