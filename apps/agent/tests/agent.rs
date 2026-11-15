@@ -7,7 +7,9 @@ use std::time::Duration;
 #[path = "support/http.rs"]
 mod http_support;
 
-use deckpilot_agent::{Agent, AgentError, AgentOptions, Clock, InstanceLock, LockError};
+use deckpilot_agent::{
+    Agent, AgentError, AgentHandle, AgentOptions, Clock, InstanceLock, LockError, TrayCommand,
+};
 use deckpilot_core::{
     ActionParameters, ActionRegistry, ActionStatus, CycleDirection, DeviceLayout, LayoutStatus,
     ModuleSettings, Os, Profile, ProfileId, Project, ProjectKey,
@@ -18,7 +20,7 @@ use deckpilot_ipc::framing::{read_message, write_message};
 use deckpilot_ipc::{
     AgentClient, AgentEvent, AgentPaths, AgentStatus, ClientError, ClientKind, ErrorCode,
     KeyMaterial, LockReason, PROTOCOL_VERSION, ProtectionMode, Request, Response, SecurityState,
-    ServerMessage, SharedStream,
+    ServerMessage, SharedStream, ShutdownReason,
 };
 use deckpilot_keystore::MemoryKeyStore;
 use deckpilot_modules::projects::{ProjectCatalog, actions};
@@ -174,6 +176,16 @@ fn start_agent_with(
     mock: MockBackend,
     extras: Extras,
 ) -> Result<Running, AgentError> {
+    start_agent_with_handle(paths, mock, extras).map(|(running, _)| running)
+}
+
+/// [`start_agent_with`], also returning the agent's handle (what the tray
+/// uses).
+fn start_agent_with_handle(
+    paths: AgentPaths,
+    mock: MockBackend,
+    extras: Extras,
+) -> Result<(Running, AgentHandle), AgentError> {
     let Extras {
         opened,
         keys,
@@ -206,11 +218,12 @@ fn start_agent_with(
         screen_lock: screen.map(|screen| -> std::sync::Arc<dyn ScreenLockMonitor> { screen }),
     };
     let agent = Agent::start(options, lock)?;
+    let handle = agent.handle();
     let (stop, stopped) = oneshot::channel::<()>();
     let task = tokio::spawn(agent.run(async move {
         let _ = stopped.await;
     }));
-    Ok((task, stop))
+    Ok(((task, stop), handle))
 }
 
 async fn setup() -> TestAgent {
@@ -751,7 +764,9 @@ async fn single_instance_shutdown_and_client_reconnect() {
     agent.watchdog.step("the subscriber's shutdown event");
     let mut saw_shutdown = false;
     while let Ok(Ok(event)) = tokio::time::timeout(TIMEOUT, subscriber.next_event()).await {
-        if event == AgentEvent::ShuttingDown {
+        if let AgentEvent::ShuttingDown { reason } = event {
+            // A client asked: the configuration app stays open.
+            assert_eq!(reason, Some(ShutdownReason::Requested));
             saw_shutdown = true;
             break;
         }
@@ -3555,4 +3570,83 @@ fn a_hanging_test_ends_the_test_binary_with_its_step() {
         }
         assert!(started.elapsed() < Duration::from_secs(20), "{mode}");
     }
+}
+
+/// The tray's "Quit DeckPilot" stops the agent and tells connected apps to
+/// close too; an update does not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn quitting_from_the_tray_closes_the_apps_and_an_update_does_not() {
+    let watchdog = watch();
+    let paths = temp_paths();
+    let (_, key) = seed(&paths);
+    let mock = MockBackend::new();
+    mock.plug(&models::stream_deck_mk2(), "TEST-QUIT");
+
+    // An update: the app stays and reconnects to the new agent.
+    watchdog.step("an update");
+    let ((task, _stop), _) =
+        start_agent_with_handle(paths.clone(), mock.clone(), Extras::default()).unwrap();
+    unlock_agent(&paths, &key).await;
+    let mut app = AgentClient::connect(&paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    within("subscribing", TIMEOUT, app.subscribe())
+        .await
+        .unwrap();
+    let mut client = AgentClient::connect(&paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    within(
+        "preparing for an update",
+        TIMEOUT,
+        client.request(Request::PrepareForUpdate),
+    )
+    .await
+    .unwrap();
+    drop(client);
+    within("the agent task", TIMEOUT, task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        shutdown_reason(&mut app).await,
+        Some(Some(ShutdownReason::Update))
+    );
+    drop(app);
+
+    // The tray's Quit.
+    watchdog.step("the tray's quit");
+    let ((task, _stop), handle) =
+        start_agent_with_handle(paths.clone(), mock.clone(), Extras::default()).unwrap();
+    unlock_agent(&paths, &key).await;
+    let mut app = AgentClient::connect(&paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    within("subscribing", TIMEOUT, app.subscribe())
+        .await
+        .unwrap();
+    handle.tray(TrayCommand::Quit);
+    within("the agent task", TIMEOUT, task)
+        .await
+        .unwrap()
+        .unwrap();
+    let reason = shutdown_reason(&mut app).await;
+    assert_eq!(reason, Some(Some(ShutdownReason::Quit)));
+    assert!(ShutdownReason::closes_apps(reason.flatten()));
+    drop(app);
+    // Stopped cleanly: the endpoint is gone and the lock is free.
+    assert!(!paths.token_file.exists());
+    watchdog.step("the lock after quitting");
+    drop(handle);
+    InstanceLock::acquire_waiting(&paths.lock_file, LOCK_WAIT).unwrap();
+}
+
+/// The reason of the next `shuttingDown` event; `None` if none arrives.
+async fn shutdown_reason(client: &mut AgentClient) -> Option<Option<ShutdownReason>> {
+    while let Ok(Ok(event)) = tokio::time::timeout(TIMEOUT, client.next_event()).await {
+        if let AgentEvent::ShuttingDown { reason } = event {
+            return Some(reason);
+        }
+    }
+    None
 }

@@ -79,7 +79,9 @@ closed and reopened at any time without interrupting devices.
 - **Project**: shows the active project (informational)
 - **Connected Devices**: devices and their connection state
 - **Refresh Devices**: rescans and redraws all keys
-- **About DeckPilot** and **Quit DeckPilot**
+- **About DeckPilot** and **Quit DeckPilot**: quits DeckPilot completely;
+  the agent stops, and on macOS open configuration apps close too (see
+  [Lifecycle](#lifecycle))
 
 "Check for Updates" is not offered because update distribution does not
 exist yet.
@@ -91,9 +93,51 @@ exist yet.
 | Agent starts                     | Takes an exclusive lock on `agent.lock`; a second instance exits (after waiting up to 5 s, see below) |
 | Configuration app starts         | Connects to the running agent, or starts it if it is not running |
 | Configuration app closes         | Agent keeps running                                              |
+| Quit from the tray               | Agent stops (`shuttingDown` with reason `quit`); on macOS open configuration apps close too |
 | Device unplugged                 | Device marked disconnected; agent keeps running                  |
 | Device plugged in again          | Reopened on the next scan, layout redrawn                        |
 | Quit (tray), `Shutdown` request, Ctrl+C, SIGTERM | Keys blanked, IPC closed, token removed, lock released |
+
+### Windows, the Dock and the three quits (macOS)
+
+The configuration app is a window onto the agent. Its process runs while
+one of its windows is open and ends when the last one closes (Tauri's
+default, kept on purpose): on macOS that takes its icon out of the Dock
+again, while the agent stays in the menu bar as an accessory app that never
+appears in the Dock. Neither process sets `LSUIElement`, and the app never
+keeps a hidden window alive or switches its activation policy.
+
+| How                                         | Windows        | App process          | Agent         |
+| ------------------------------------------- | -------------- | -------------------- | ------------- |
+| Close Window (⌘W, the close button)         | that one       | ends with the last   | keeps running |
+| Quit DeckPilot UI (⌘Q, the app menu on macOS) | all          | ends                 | keeps running |
+| Quit DeckPilot (tray)                       | all            | ends                 | stops         |
+
+- **Open DeckPilot** reaches a running app as `showWindow`, which brings its
+  main window to the front; only when no app is connected does the agent
+  start one, so there is never a second app. On macOS an app started for a
+  single prompt or module window creates its main window for it.
+- The tray's Quit reaches the apps as `shuttingDown` with `reason: "quit"`,
+  and on macOS the app then exits. Every other stop (`shutdown` from the
+  app's "restart agent", `prepareForUpdate`, a signal) gives another
+  reason, and the app stays open and reconnects. The field is optional:
+  agents before 0.6 send none, and apps that do not know it ignore it, so it
+  needs no new protocol; such an app stays open after a tray Quit, as
+  before.
+- On macOS the application menu's Quit reads "Quit DeckPilot UI", so it is
+  not mistaken for the tray's "Quit DeckPilot".
+
+**macOS only.** Closing the apps on the tray's Quit, creating the main
+window for `showWindow` in a single-window app, and the "Quit DeckPilot UI"
+label apply to macOS. On Windows and Linux the app behaves as before: it
+stays open after the tray's Quit and reconnects, an app without a main
+window ignores `showWindow`, and the menu is Tauri's default. The agent
+sends the `reason` on every platform.
+
+Possible follow-up: apply the same behaviour to Windows and Linux (closing
+the apps on the tray's Quit, the main window for single-window apps); the
+decisions live in `apps/desktop/src-tauri/src/lifecycle.rs` and only take
+the platform as a parameter.
 
 The lock is an OS file lock, so it is released automatically if the process
 crashes. A starting agent waits up to 5 seconds for the lock before it
