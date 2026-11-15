@@ -52,6 +52,7 @@ import type {
   PermissionChanges,
   PluginActionOutcome,
   PluginDetails,
+  PluginRetention,
   RuntimeAvailability,
 } from "./types"
 import { UpdatesView } from "./updates"
@@ -72,13 +73,16 @@ export interface MarketplaceActions {
   blocked: string | null
   /** Plugins can be enabled and run here (not on Windows). */
   canRun: boolean
+  /** The client, for the requests a dialog makes itself (settings, credentials). */
+  client: PluginClient
   openDetails: (id: string) => void
   install: (plugin: AvailablePlugin, version: AvailableVersion) => void
   installFile: () => void
   update: (candidate: UpdateCandidate) => void
   setEnabled: (item: PluginDetails, enabled: boolean) => void
   setGrant: (item: PluginDetails, key: string, granted: boolean) => void
-  uninstall: (item: PluginDetails) => void
+  /** Uninstalls; `keep` keeps settings and/or credentials for a reinstall. */
+  uninstall: (item: PluginDetails, keep?: PluginRetention) => void
   rollback: (item: PluginDetails) => void
   invoke: (
     item: PluginDetails,
@@ -86,6 +90,8 @@ export interface MarketplaceActions {
     params: Record<string, ActionParamValue>,
   ) => Promise<PluginActionOutcome>
   refresh: () => void
+  /** Reads everything again (without re-reading the registry). */
+  reload: () => void
 }
 
 async function loadAll(client: PluginClient, refresh = false): Promise<Load> {
@@ -321,6 +327,7 @@ export function PluginsSettings() {
     busy,
     blocked,
     canRun,
+    client,
     openDetails: (id) => {
       setSelected(id)
     },
@@ -397,9 +404,21 @@ export function PluginsSettings() {
         granted ? "Permission granted" : "Permission revoked",
       )
     },
-    uninstall: (item) => {
+    uninstall: (item, keep) => {
       const id = item.summary.id
-      runReported(id, () => client.uninstallPlugin(id), `${item.summary.name} uninstalled`)
+      const kept = [keep?.settings && "settings", keep?.credentials && "credentials"].filter(
+        Boolean,
+      )
+      runReported(
+        id,
+        () =>
+          keep?.settings || keep?.credentials
+            ? client.uninstallPlugin(id, keep)
+            : client.uninstallPlugin(id),
+        kept.length > 0
+          ? `${item.summary.name} uninstalled; its ${kept.join(" and ")} are kept for a reinstall`
+          : `${item.summary.name} uninstalled`,
+      )
     },
     rollback: (item) => {
       const id = item.summary.id
@@ -419,6 +438,9 @@ export function PluginsSettings() {
       void reload(true).finally(() => {
         setBusy(null)
       })
+    },
+    reload: () => {
+      void reload()
     },
   }
 

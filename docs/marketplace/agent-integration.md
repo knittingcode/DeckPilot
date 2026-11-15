@@ -413,6 +413,11 @@ empty (older answers parse unchanged):
   `data:image/png;base64,` URL, only if the installed file is a PNG of at
   most 256 KiB (`MAX_ICON_BYTES`) whose sha256 is the one the integrity
   record holds (`convert::icon`).
+- `PluginDetails.storage { usedBytes, keys, quotaBytes, maxKeys }`: what
+  the plugin's storage holds (`plugin_storage`) and the quota its current
+  grants give it, computed as the broker does for every write (256 KiB
+  and 1,000 keys unless a `storage` grant raises the bytes). Left out when
+  plugins.db cannot be read.
 - `PluginSummary.health { crashes, lastError?, lastErrorAt? }`: kept in
   memory per plugin since the agent started (`HealthLog` in
   `service.rs`), written on the lane thread when an invocation fails. A
@@ -449,8 +454,18 @@ The app reaches the data requests through the Tauri commands
 `list_known_plugins`, `get_plugin_settings`, `set_plugin_settings`,
 `list_plugin_credentials`, `set_plugin_credential`,
 `delete_plugin_credential` and `uninstall_plugin` (with `keep`), and the
-functions of the same names in `apps/desktop/src/plugins/client.ts`. No UI
-uses them yet.
+functions of the same names in `apps/desktop/src/plugins/client.ts`
+(`PluginClient.listKnownPlugins`, `getSettings`, `setSettings`,
+`listCredentials`, `setCredential`, `deleteCredential` and
+`uninstallPlugin(id, keep)`). The marketplace (builds with
+`VITE_DECKPILOT_PLUGINS=1`) uses them in Installed › Configure
+(`plugins/configure.tsx`: a form generated from the fields, the agent's
+`invalidData` problems under their fields, one row per credential slot),
+in the uninstall dialog (keep settings and/or credentials, nothing kept by
+default) and for names of uninstalled plugins (plugin details, and the
+editors' "not installed" reasons). A secret is typed into an uncontrolled
+password input, read once on submit, cleared at once and sent; it is never
+in React state, browser storage or a log, and nothing can show it again.
 
 ## Plugin data: storage, credentials, settings
 
@@ -650,8 +665,9 @@ Windows (not a required check).
   exist.
 - `privateNetwork` and wildcard hosts are still never granted, so a
   credential slot can only name exact hosts.
-- No UI for settings, credentials, retention or known plugins; no storage
-  usage in `PluginDetails`.
+- The app checks only what it cannot send (a whole number that is not
+  one, an empty or too long secret); every other rule is the agent's, and
+  its message is shown under the field it names.
 - The JavaScript SDK skeleton (`plugins/sdk-js`, declarations only, no
   runtime) still declares the design's synchronous `ctx.settings`; the
   ABI delivers settings through `settings.get`, which a JavaScript shim

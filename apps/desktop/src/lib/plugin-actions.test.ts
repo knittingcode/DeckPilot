@@ -146,6 +146,35 @@ describe("availability of an action type", () => {
       reason: "The plugin acme.hello-weather is not installed",
     })
   })
+
+  it("names an uninstalled plugin that plugin_known has, as the agent does", async () => {
+    vi.stubEnv("VITE_DECKPILOT_PLUGINS", "1")
+    const client = createFakePluginClient({ helloInstalled: true })
+    await client.uninstallPlugin(HELLO)
+    const known = await client.listKnownPlugins()
+    expect(known).toMatchObject([{ id: HELLO, name: "Hello Weather", installed: false }])
+    const modules = withPluginModules(
+      builtInModules(),
+      pluginModules(await client.listPlugins(), known),
+    )
+    const gone = modules.find((m) => m.id === HELLO)
+    // Nothing to place: no action types, not enabled.
+    expect(gone).toMatchObject({
+      enabled: false,
+      actionTypes: [],
+      plugin: { state: "notInstalled" },
+    })
+    expect(typeAvailability(modules, `${HELLO}.greet`)).toMatchObject({
+      available: false,
+      reason: "Hello Weather (acme.hello-weather): the plugin is not installed",
+    })
+    expect(withPluginTypes([ACTION_TYPES.log], modules)).toEqual([ACTION_TYPES.log])
+    // An installed plugin is never listed twice.
+    const again = createFakePluginClient({ helloInstalled: true })
+    expect(
+      pluginModules(await again.listPlugins(), await again.listKnownPlugins()).map((m) => m.id),
+    ).toEqual([HELLO])
+  })
 })
 
 describe("workflow action types", () => {

@@ -35,9 +35,12 @@ export function usePluginModules(agentKey: string): ModuleInfo[] {
     let generation = 0
     const load = (client: PluginClient) => {
       const current = ++generation
+      // The names of uninstalled plugins only improve messages.
+      const known = client.listKnownPlugins().catch(() => [])
       client.listPlugins().then(
-        (plugins) => {
-          if (active && current === generation) setModules(pluginModules(plugins))
+        async (plugins) => {
+          const names = await known
+          if (active && current === generation) setModules(pluginModules(plugins, names))
         },
         () => {
           if (active && current === generation) setModules(NONE)
