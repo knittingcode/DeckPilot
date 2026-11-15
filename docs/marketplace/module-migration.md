@@ -346,8 +346,11 @@ So a replacement plugin **must** declare:
 - the same parameter keys with compatible kinds and constraints (same
   choices; ranges at least as wide);
 - the same output keys, kinds and `sensitive` flags;
-- a node spec at least as permissive: the same `effects`, `retrySafe`,
-  `idempotent` and `cancellable`, and a timeout at least as long.
+- a node spec at least as permissive: the same `effects`, `retrySafe` and
+  `idempotent`, a timeout at least as long, and `cancellable` wherever the
+  built-in is. The agent makes every plugin action cancellable (it can
+  always stop the plugin), so a plugin may replace an action that cannot be
+  interrupted, such as `github.open`; never the other way.
 
 `deckpilot-modules/tests/contracts.rs` gains a test that loads each aliased
 plugin's manifest (from `plugins/first-party/<name>/manifest.json`) and
@@ -553,6 +556,18 @@ credential override stay `not_eligible` and keep the built-in until G2, G3
 or G5 lands, which demonstrates the eligibility path. GitHub pagination must
 fit 512 KiB per response. With `per_page` of at most 50 a search page is far
 below it, so G4 is not on the critical path.
+
+*As built (P8):* `plugins/first-party/github` (`deckpilot.github`, class
+`migration` in `bundled.json`) reproduces all six actions; no variables on
+either side. `contracts.rs` (`first_party`) checks the manifest against the
+built-in, and `apps/agent/tests/plugins_github.rs` runs every action through
+the agent and the host against the built-in on the same canned answers,
+with identical results. What differs, all on failure paths, limits or the
+editor (save-time checks, two messages, `retryAfterSeconds`, transport
+error codes, the `Date`-based time limit, the agent's rates for plugins),
+is listed in [`plugins/first-party/github/README.md`](../../plugins/first-party/github/README.md).
+Lists use pages of 50 (two for more than 50 pull requests, ten for the
+built-in's 500 checks).
 
 `notifications` follows as the first `default`-class bundled plugin. It is
 the one that proves seeding, tombstones and first launch.

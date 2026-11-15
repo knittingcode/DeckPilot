@@ -6,15 +6,18 @@ release build and shipped **inside the installers** as app components
 `knittingcode/deckpilot-plugins` by pinned commit for registry updates;
 that is a separate step, not part of this directory.
 
-Experimental, like all of the plugin marketplace. **No first-party plugin
-is bundled yet**: `bundled.json` is empty, and the published release
+Experimental, like all of the plugin marketplace. One plugin is bundled:
+`deckpilot.github` (class `migration`, [github/README.md](github/README.md)),
+which nothing routes to until the cut-over lists its aliases
+(`docs/marketplace/module-migration.md` §9, P9). The published release
 pipeline does not package plugins at all (see "Packaging" below).
 
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `bundled.json` | The plugins a release bundles: `{"path": "<dir>", "class": "default" \| "migration"}`. Empty for now |
+| `bundled.json` | The plugins a release bundles: `{"path": "<dir>", "class": "default" \| "migration"}` |
+| `github/` | `deckpilot.github`, class `migration`: the replacement of the built-in `github` module, checked against it by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_github.rs` |
 | `<name>/` | One plugin: `Cargo.toml` (a member of the `plugins/runtime` workspace), `src/`, `manifest.json` (id `deckpilot.<name>`), `LICENSE` and its icons in `assets/` |
 | `build.sh` | Builds the listed plugins to wasm (`wasm32-unknown-unknown`, `guest` profile, reproducible on one platform) and stages them with their pins |
 | `test-fixtures/` | **Test fixtures, never shipped**: `example-default` (`deckpilot.example-default`, class `default`, one action, one low-tier permission) and its own `bundled.json`, used only with `build.sh --test-fixtures` |

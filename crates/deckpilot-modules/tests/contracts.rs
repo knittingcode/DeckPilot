@@ -1270,3 +1270,346 @@ fn plugin_variables_have_a_root_of_their_own() {
         );
     }
 }
+
+/// First-party plugins that replace a built-in module
+/// (`docs/marketplace/module-migration.md` §5.3): each plugin's manifest
+/// (`plugins/first-party/<name>/manifest.json`), converted to action types
+/// the way the agent registers plugin actions, against the built-in's
+/// definitions while the built-in is still compiled in.
+mod first_party {
+    use deckpilot_core::alias::{self, ACTION_ALIASES, ActionAlias, ParamRule};
+    use deckpilot_core::graph::NodeSpec;
+    use deckpilot_plugin_manifest::Manifest;
+    use serde_json::Value;
+
+    use super::*;
+
+    /// The `github` aliases the cut-over (P9) adds to `ACTION_ALIASES`:
+    /// the per-action `credential` override is dropped when it names the
+    /// module's credential (the plugin uses its slot), and `github.open`
+    /// has none.
+    const GITHUB: &[ActionAlias] = &[
+        github_alias("github.current-user", "deckpilot.github.current-user", true),
+        github_alias("github.repository", "deckpilot.github.repository", true),
+        github_alias(
+            "github.pull-requests",
+            "deckpilot.github.pull-requests",
+            true,
+        ),
+        github_alias(
+            "github.review-requests",
+            "deckpilot.github.review-requests",
+            true,
+        ),
+        github_alias("github.checks", "deckpilot.github.checks", true),
+        github_alias("github.open", "deckpilot.github.open", false),
+    ];
+    const _: () = alias::assert_valid(GITHUB);
+
+    const fn github_alias(
+        legacy: &'static str,
+        target: &'static str,
+        credential: bool,
+    ) -> ActionAlias {
+        ActionAlias {
+            legacy,
+            target,
+            module: "github",
+            plugin: "deckpilot.github",
+            since: "0.6.0",
+            params: if credential {
+                &[ParamRule::DropIfDefault("credential")]
+            } else {
+                &[]
+            },
+        }
+    }
+
+    const GITHUB_MANIFEST: &str = include_str!("../../../plugins/first-party/github/manifest.json");
+
+    fn manifest(text: &str) -> Manifest {
+        let manifest = Manifest::from_json(text).expect("the manifest parses");
+        manifest
+            .validate_first_party()
+            .expect("the manifest is a valid first-party manifest");
+        manifest
+    }
+
+    fn snake_case(key: &str) -> String {
+        let mut out = String::with_capacity(key.len() + 4);
+        for c in key.chars() {
+            if c.is_ascii_uppercase() {
+                out.push('_');
+                out.push(c.to_ascii_lowercase());
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// A manifest parameter or setting as the core's spec, as the agent
+    /// converts it (`apps/agent/src/plugins/data.rs` `core_spec`): the
+    /// kind's camel-case constraints renamed, and none of them lost.
+    fn core_spec(mut json: Value) -> ParameterSpec {
+        json.as_object_mut().unwrap().remove("portability");
+        let key = json["key"].as_str().unwrap_or_default().to_owned();
+        if let Some(Value::Object(kind)) = json.get_mut("kind") {
+            *kind = std::mem::take(kind)
+                .into_iter()
+                .map(|(k, v)| (snake_case(&k), v))
+                .collect();
+        }
+        let spec: ParameterSpec = serde_json::from_value(json.clone())
+            .unwrap_or_else(|e| panic!("`{key}` does not convert: {e}"));
+        let back = serde_json::to_value(&spec.kind).unwrap();
+        for (name, value) in json["kind"].as_object().unwrap() {
+            assert!(
+                back.get(name).is_some() || *value == Value::Bool(false),
+                "`{key}`: the constraint `{name}` is lost"
+            );
+        }
+        spec
+    }
+
+    /// A manifest action as the agent registers it
+    /// (`apps/agent/src/plugins/engine.rs` `action_type`): every plugin
+    /// action is cancellable and never changes the run's project.
+    fn plugin_type(plugin: &str, action: &deckpilot_plugin_manifest::Action) -> ActionType {
+        let parameters = action
+            .parameters
+            .iter()
+            .map(|p| core_spec(serde_json::to_value(p).unwrap()))
+            .collect();
+        let mut node: NodeSpec = action.node.as_ref().map_or_else(NodeSpec::default, |n| {
+            serde_json::from_value(serde_json::to_value(n).unwrap()).expect("the node converts")
+        });
+        node.cancellable = true;
+        node.changes_context = false;
+        node.timeout_ms = action
+            .node
+            .as_ref()
+            .map_or(30_000, |n| u32::try_from(n.timeout_ms()).unwrap())
+            .clamp(1, MAX_TIMEOUT_MS);
+        ActionType {
+            id: ActionTypeId::new(format!("{plugin}.{}", action.id)).unwrap(),
+            name: action.name.clone(),
+            description: action.description.clone(),
+            category: action.category.clone(),
+            parameters,
+            requires_project: action.requires_project.unwrap_or(false),
+            deprecated: action.deprecated.unwrap_or(false),
+            node,
+        }
+    }
+
+    /// `builtin` as the plugin is expected to declare it: under the
+    /// plugin's id, without the parameters the alias translates, with
+    /// the differences a manifest must have. A parameter that is
+    /// required *and* has a default is optional with that default in a
+    /// manifest (only optional parameters have defaults there): the agent
+    /// fills the default in either way. Every plugin action is
+    /// cancellable (the agent can always stop it).
+    fn expected(alias: &ActionAlias, builtin: &ActionType) -> ActionType {
+        let mut expected = builtin.clone();
+        expected.id = alias.target_id();
+        expected.parameters.retain(|p| !alias.translates(&p.key));
+        for parameter in &mut expected.parameters {
+            if parameter.default.is_some() {
+                parameter.required = false;
+            }
+        }
+        expected.node.cancellable = true;
+        expected
+    }
+
+    fn builtin_types(module: &dyn FeatureModule) -> BTreeMap<String, ActionType> {
+        let config = safe_config(module.manifest());
+        module
+            .action_handlers(&config)
+            .iter()
+            .map(|h| (h.definition().id.to_string(), h.definition().clone()))
+            .collect()
+    }
+
+    /// `deckpilot.github` reproduces every action of the built-in
+    /// `github` module: §5.3's compatibility rules hold for every alias
+    /// (`alias::incompatibilities`, what the registry checks before it
+    /// routes a legacy type to the plugin), and beyond them the
+    /// definitions are identical but for the documented differences of
+    /// [`expected`]. No variables on either side. The settings mirror the
+    /// module's but for the two that stay with the built-in.
+    #[test]
+    fn the_github_plugin_honours_the_builtin_contract() {
+        let manifest = manifest(GITHUB_MANIFEST);
+        assert_eq!(manifest.id.as_str(), "deckpilot.github");
+        let module = github::GithubModule::new();
+        let builtin = builtin_types(&module);
+
+        // Every built-in action has its alias, and every plugin action is
+        // the target of one: nothing missing, nothing extra.
+        let legacy: BTreeSet<&str> = GITHUB.iter().map(|a| a.legacy).collect();
+        assert_eq!(
+            legacy,
+            builtin.keys().map(String::as_str).collect::<BTreeSet<_>>()
+        );
+        let plugin: BTreeMap<String, ActionType> = manifest
+            .contributes
+            .actions()
+            .iter()
+            .map(|a| {
+                let t = plugin_type(manifest.id.as_str(), a);
+                (t.id.to_string(), t)
+            })
+            .collect();
+        assert_eq!(
+            GITHUB.iter().map(|a| a.target).collect::<BTreeSet<_>>(),
+            plugin.keys().map(String::as_str).collect::<BTreeSet<_>>()
+        );
+
+        let mut problems = Vec::new();
+        for alias in GITHUB {
+            let old = &builtin[alias.legacy];
+            let new = &plugin[alias.target];
+            for problem in alias::incompatibilities(alias, old, new) {
+                problems.push(format!("{}: {problem}", alias.legacy));
+            }
+            // Only the `credential` override is translated, and only where
+            // the built-in has it.
+            for rule in alias.params {
+                let spec = old.parameters.iter().find(|p| p.key == rule.key());
+                assert!(
+                    matches!(
+                        spec,
+                        Some(ParameterSpec {
+                            kind: ParameterKind::Credential,
+                            ..
+                        })
+                    ),
+                    "{}: the rule for `{}` names no credential parameter",
+                    alias.legacy,
+                    rule.key()
+                );
+            }
+            if *new != expected(alias, old) {
+                problems.push(format!(
+                    "{}: the definitions differ beyond the documented differences\n  \
+                     built-in (as expected of the plugin): {}\n  plugin: {}",
+                    alias.legacy,
+                    serde_json::to_string(&expected(alias, old)).unwrap(),
+                    serde_json::to_string(new).unwrap()
+                ));
+            }
+        }
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+
+        // Variables: none in the built-in, so none in the plugin (§5.4: a
+        // moved variable would need an `ALIASES` entry).
+        assert_eq!(module.manifest().variables.len(), 0);
+        assert_eq!(manifest.contributes.variables().len(), 0);
+
+        github_settings(&module, &manifest);
+
+        // Once the cut-over lists the aliases, they are exactly these.
+        let shipped: Vec<&ActionAlias> = ACTION_ALIASES
+            .iter()
+            .filter(|a| a.module == "github")
+            .collect();
+        if !shipped.is_empty() {
+            for alias in GITHUB {
+                let found = shipped
+                    .iter()
+                    .find(|a| a.legacy == alias.legacy)
+                    .unwrap_or_else(|| panic!("{} has no alias", alias.legacy));
+                assert_eq!(
+                    (found.target, found.plugin, found.params),
+                    (alias.target, alias.plugin, alias.params),
+                    "{}",
+                    alias.legacy
+                );
+            }
+        }
+    }
+
+    /// The plugin's settings are the module's, key for key, with the same
+    /// kind, default and portability, except the credential (the plugin's
+    /// credential slot `token`, filled by the migration's credential
+    /// import) and the private-network switch (G3; a computer with it on
+    /// keeps the built-in, `not_eligible`).
+    fn github_settings(module: &github::GithubModule, manifest: &Manifest) {
+        let config = &module.manifest().config;
+        let scopes = &module.manifest().portability.settings;
+        let mut kept = Vec::new();
+        for setting in manifest.contributes.settings() {
+            let spec = core_spec(serde_json::to_value(setting).unwrap());
+            let old = config
+                .iter()
+                .find(|c| c.key == spec.key)
+                .unwrap_or_else(|| panic!("setting `{}` is not the module's", spec.key));
+            assert_eq!(spec.kind, old.kind, "{}", spec.key);
+            assert_eq!(spec.default, old.default, "{}", spec.key);
+            assert_eq!(spec.required, old.required, "{}", spec.key);
+            let portable = matches!(
+                setting.portability,
+                Some(deckpilot_plugin_manifest::Portability::Portable)
+            );
+            assert_eq!(
+                portable,
+                scopes[&spec.key] == SettingScope::Portable,
+                "{}",
+                spec.key
+            );
+            kept.push(spec.key);
+        }
+        let mut not_kept: Vec<&str> = config
+            .iter()
+            .map(|c| c.key.as_str())
+            .filter(|k| !kept.iter().any(|kept| kept == k))
+            .collect();
+        not_kept.sort_unstable();
+        assert_eq!(not_kept, [github::ALLOW_PRIVATE, github::CREDENTIAL]);
+        let slots: Vec<&str> = manifest
+            .contributes
+            .credentials()
+            .iter()
+            .map(|c| c.key.as_str())
+            .collect();
+        assert_eq!(slots, ["token"]);
+    }
+
+    /// The comparison finds what it claims to find.
+    #[test]
+    fn the_github_contract_check_finds_differences() {
+        let manifest = manifest(GITHUB_MANIFEST);
+        let module = github::GithubModule::new();
+        let builtin = builtin_types(&module);
+        let action = manifest
+            .contributes
+            .actions()
+            .iter()
+            .find(|a| a.id == "pull-requests")
+            .unwrap();
+        let alias = &GITHUB[2];
+        let old = &builtin[alias.legacy];
+        let mut new = plugin_type(manifest.id.as_str(), action);
+        assert_eq!(new, expected(alias, old));
+        new.parameters.retain(|p| p.key != "filter");
+        new.node.outputs[2].sensitive = false;
+        new.node.timeout_ms = 1_000;
+        assert_eq!(
+            alias::incompatibilities(alias, old, &new),
+            [
+                "parameter `filter` is missing",
+                "output `items` has another `sensitive` flag",
+                "the node's timeout is shorter",
+            ]
+        );
+        let mut relabeled = plugin_type(manifest.id.as_str(), action);
+        relabeled.node.outputs[0].label = "Count".into();
+        assert_eq!(
+            alias::incompatibilities(alias, old, &relabeled),
+            Vec::<String>::new()
+        );
+        assert_ne!(relabeled, expected(alias, old));
+    }
+}
