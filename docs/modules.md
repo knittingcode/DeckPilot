@@ -267,7 +267,11 @@ reports. Its tests show each part.
 
 - **Namespaces.** Every action type id is `<module id>.<name>`. Registering a
   module whose handler uses another namespace fails. The owner of any stored
-  action can therefore be found from the action alone.
+  action can therefore be found from the action alone: everything before the
+  last `.` (`ModuleId::owner_of`). Built-in module ids never contain a `.`,
+  so built-in action types have two segments; a plugin's module id is its
+  plugin id (`acme.hello-weather`), so its action types have three
+  (`acme.hello-weather.greet`, experimental, `docs/marketplace/`).
 - **Dispatch.** The engine executes actions through the `ActionRegistry`
   built from the enabled modules. There is no list of action types in the
   core.

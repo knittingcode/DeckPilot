@@ -4,10 +4,13 @@
 //! `plugins` feature (every release build) they are answered with
 //! "plugins not available", and `getPluginRuntime` says why. With it, and
 //! with plugins enabled (`--enable-plugins`), they go to a worker thread
-//! that owns the plugin store, the registry client, the permission broker
-//! and one supervisor per running plugin ([`PluginRuntime`]). Plugin code
-//! never runs in the agent: every invocation goes through the supervisor
-//! to a sandboxed `deckpilot-plugin-host` process.
+//! that owns the plugin store, the registry client and the permission
+//! broker, and one lane thread per running plugin with its supervisor
+//! ([`PluginRuntime`]). Installed plugins are also feature modules of the
+//! agent's module registry ([`PluginRuntime::modules`], `engine.rs`), so
+//! keys and workflows run their actions. Plugin code never runs in the
+//! agent: every invocation goes through the supervisor to a sandboxed
+//! `deckpilot-plugin-host` process.
 
 use std::path::PathBuf;
 
@@ -18,9 +21,13 @@ use tokio::sync::oneshot;
 #[cfg(feature = "plugins")]
 mod convert;
 #[cfg(feature = "plugins")]
+mod engine;
+#[cfg(feature = "plugins")]
 mod executor;
 #[cfg(feature = "plugins")]
 pub mod key;
+#[cfg(feature = "plugins")]
+mod lane;
 #[cfg(feature = "plugins")]
 mod registry;
 #[cfg(feature = "plugins")]
@@ -191,12 +198,16 @@ pub(crate) struct PluginRuntime {
     allow(clippy::unused_self, clippy::needless_pass_by_value)
 )]
 impl PluginRuntime {
-    /// Starts the worker when built with plugins and enabled.
+    /// Starts the worker when built with plugins and enabled. `changed` is
+    /// called (on the worker's thread) whenever the installed plugins or
+    /// their availability changed, so the agent registers
+    /// [`PluginRuntime::modules`] again.
     pub(crate) fn new(
         settings: PluginSettings,
         data_dir: &std::path::Path,
         events: &tokio::sync::broadcast::Sender<deckpilot_ipc::AgentEvent>,
         plugin_events: &tokio::sync::broadcast::Sender<deckpilot_ipc::plugins::PluginEvent>,
+        changed: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
         #[cfg(feature = "plugins")]
         {
@@ -208,15 +219,34 @@ impl PluginRuntime {
                         agent: events.clone(),
                         plugins: plugin_events.clone(),
                     },
+                    changed,
                 )
             });
             Self { settings, worker }
         }
         #[cfg(not(feature = "plugins"))]
         {
-            let _ = (data_dir, events, plugin_events);
+            let _ = (data_dir, events, plugin_events, changed);
             Self { settings }
         }
+    }
+
+    /// One feature module per installed plugin, for the agent's module
+    /// registry: enabled when its actions can run, otherwise disabled with
+    /// the reason. Empty without the `plugins` feature, with plugins off,
+    /// and while locked.
+    pub(crate) fn modules(&self) -> Vec<Box<dyn deckpilot_core::FeatureModule>> {
+        #[cfg(feature = "plugins")]
+        if let Some(worker) = &self.worker {
+            let invoker = worker.invoker();
+            return worker
+                .catalog()
+                .into_iter()
+                .filter_map(|plugin| engine::PluginModule::new(plugin, invoker.clone()))
+                .map(|module| Box::new(module) as Box<dyn deckpilot_core::FeatureModule>)
+                .collect();
+        }
+        Vec::new()
     }
 
     /// Answers a plugin request (here or on the worker).

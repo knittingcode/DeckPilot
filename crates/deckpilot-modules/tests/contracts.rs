@@ -1170,3 +1170,40 @@ fn the_checks_find_what_they_claim_to_find() {
         .collect();
     assert!(missed.is_empty(), "checks that found nothing: {missed:?}");
 }
+
+/// Module ids and action type namespaces (design
+/// `docs/marketplace/architecture.md` §2.3 items 1 and 2): built-in module
+/// ids never contain a `.` and every built-in action type has exactly two
+/// segments, so `ModuleId::owner_of` (everything before the last `.`)
+/// names the module it always did. Plugin ids have exactly one `.`, their
+/// action types three segments.
+#[test]
+fn builtin_action_types_have_two_segments_and_plugin_types_three() {
+    let launcher = Arc::new(RecordingLauncher::default());
+    let registry = builtin(Os::current());
+    for module in modules(&launcher) {
+        let manifest = module.manifest();
+        assert!(!manifest.id.is_plugin(), "{}", manifest.id);
+        assert!(!manifest.id.as_str().contains('.'), "{}", manifest.id);
+        assert!(registry.contains(&manifest.id), "{}", manifest.id);
+        let config = safe_config(manifest);
+        for handler in module.action_handlers(&config) {
+            let id = &handler.definition().id;
+            assert_eq!(id.as_str().split('.').count(), 2, "{id}");
+            assert!(!handler.runs_detached(), "{id}");
+            assert_eq!(
+                ModuleId::owner_of(id).as_ref(),
+                Some(&manifest.id),
+                "{id} must belong to {}",
+                manifest.id
+            );
+        }
+    }
+    let plugin = ModuleId::new("acme.hello-weather").unwrap();
+    assert!(plugin.is_plugin());
+    for action in ["greet", "current-temperature"] {
+        let id = ActionTypeId::new(format!("{plugin}.{action}")).unwrap();
+        assert_eq!(id.as_str().split('.').count(), 3, "{id}");
+        assert_eq!(ModuleId::owner_of(&id), Some(plugin.clone()));
+    }
+}

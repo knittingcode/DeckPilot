@@ -122,7 +122,38 @@ pub struct HostConfig {
     /// The manifest's action ids. When set, a module whose descriptor
     /// (`dp_describe`) lists other ids, or that has none, is refused.
     pub expected_actions: Option<BTreeSet<String>>,
+    /// After an invocation was aborted ([`AbortSignal`]), how long its
+    /// result may still arrive before the host is killed (design §3.7: the
+    /// agent waits 2 s, then treats the plugin as non-cooperative).
+    pub abort_grace: Duration,
 }
+
+/// Asks a running invocation to stop: the caller cancelled it or its
+/// deadline passed. Protocol 1 has no `abort` frame and an ABI 1 guest
+/// runs to completion, so an aborted invocation gets
+/// [`HostConfig::abort_grace`] to deliver its result; then the host is
+/// killed and the invocation fails with [`HostError::Aborted`]. The next
+/// invocation starts a fresh host. Cheap to clone; every clone is the same
+/// signal.
+#[derive(Debug, Clone, Default)]
+pub struct AbortSignal(Arc<std::sync::atomic::AtomicBool>);
+
+impl AbortSignal {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn abort(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn is_aborted(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// How often a running invocation looks at its [`AbortSignal`].
+const ABORT_POLL: Duration = Duration::from_millis(20);
 
 impl HostConfig {
     pub fn new(command: HostCommand, module: Arc<[u8]>) -> Self {
@@ -137,6 +168,7 @@ impl HostConfig {
             shutdown_grace: Duration::from_secs(5),
             reap_timeout: Duration::from_secs(2),
             expected_actions: None,
+            abort_grace: Duration::from_secs(2),
         }
     }
 
@@ -165,6 +197,12 @@ pub enum HostError {
     },
     /// The deadline passed; the host was killed.
     Timeout {
+        status: Option<ExitStatus>,
+    },
+    /// The invocation was aborted ([`AbortSignal`]) and gave no result
+    /// within [`HostConfig::abort_grace`]; the host was killed. Not a
+    /// crash: the restart policy does not count it.
+    Aborted {
         status: Option<ExitStatus>,
     },
     /// The host exited (trap, deadline, fuel, crash); `fatal` if it said why.
@@ -202,6 +240,7 @@ impl HostError {
         match self {
             Self::LoadFailed { status, .. }
             | Self::Timeout { status }
+            | Self::Aborted { status }
             | Self::Crashed { status, .. }
             | Self::Protocol { status, .. } => *status,
             _ => None,
@@ -234,6 +273,7 @@ pub struct PluginHost {
     descriptor: Option<PluginDescriptor>,
     next_invocation: u64,
     reap_timeout: Duration,
+    abort_grace: Duration,
     dead: bool,
 }
 
@@ -294,6 +334,7 @@ impl PluginHost {
             descriptor: None,
             next_invocation: 1,
             reap_timeout: config.reap_timeout,
+            abort_grace: config.abort_grace,
             dead: false,
         };
         host.handshake(config)?;
@@ -432,6 +473,20 @@ impl PluginHost {
         timeout: Duration,
         executor: &mut dyn CapabilityExecutor,
     ) -> Result<ActionOutcome, HostError> {
+        self.invoke_abortable(action, params, timeout, executor, None)
+    }
+
+    /// [`PluginHost::invoke`] that also stops when `abort` is raised: the
+    /// result may still arrive within [`HostConfig::abort_grace`]; after
+    /// that the host is killed ([`HostError::Aborted`]).
+    pub fn invoke_abortable(
+        &mut self,
+        action: &str,
+        params: &Params,
+        timeout: Duration,
+        executor: &mut dyn CapabilityExecutor,
+        abort: Option<&AbortSignal>,
+    ) -> Result<ActionOutcome, HostError> {
         if self.dead {
             return Err(HostError::NotRunning);
         }
@@ -450,8 +505,18 @@ impl PluginHost {
             return Err(self.after_send_failure(e));
         }
         let mut last_call = 0u64;
+        // When the invocation was aborted, the end of its grace period.
+        let mut abort_at: Option<Instant> = None;
         loop {
-            match self.recv(deadline) {
+            if abort_at.is_none() && abort.is_some_and(AbortSignal::is_aborted) {
+                abort_at = Some(Instant::now() + self.abort_grace);
+            }
+            let until = match (abort, abort_at) {
+                (_, Some(at)) => deadline.min(at),
+                (Some(_), None) => deadline.min(Instant::now() + ABORT_POLL),
+                (None, None) => deadline,
+            };
+            match self.recv(until) {
                 Recv::Msg(ToSupervisor::Call {
                     invocation_id,
                     call_id,
@@ -516,6 +581,20 @@ impl PluginHost {
                 }
                 Recv::Malformed(e) => return Err(self.protocol(e)),
                 Recv::Timeout => {
+                    let now = Instant::now();
+                    if let Some(at) = abort_at
+                        && now >= at
+                        && at <= deadline
+                    {
+                        self.kill();
+                        return Err(HostError::Aborted {
+                            status: self.child.try_wait().ok().flatten(),
+                        });
+                    }
+                    if now < deadline {
+                        // Only a look at the abort signal.
+                        continue;
+                    }
                     self.kill();
                     return Err(HostError::Timeout {
                         status: self.child.try_wait().ok().flatten(),

@@ -13,10 +13,12 @@ The executable artifact is an ABI 1 WebAssembly module
 ## Architecture
 
 ```text
-configuration app ──IPC protocol 10──▶ agent service task
-                                          │  plugin requests (never run here)
+configuration app ──IPC protocol 10──▶ agent service task ◀── keys, workflows
+                                          │  plugin requests and plugin
+                                          │  actions (never run here)
                                           ▼
-                                   plugin worker thread
+                                   plugin worker thread ──▶ one lane thread
+                                                             per plugin host
        ┌──────────────┬──────────────┬────┴─────────┬────────────────────┐
   PluginManager   LocalRegistry   package        Broker            Supervisor ×N
   (plugins.db,    (RegistryClient verification   (grants per call, (one per running
@@ -37,10 +39,11 @@ configuration app ──IPC protocol 10──▶ agent service task
   workspace, which the root workspace `exclude`s; the host and wasmtime
   are never dependencies of the agent.
 - **Worker.** Plugin requests go from the service task to one worker thread
-  (`worker.rs`), so verification, installs and invocations (which block on
-  the host) never stall devices or IPC. The worker owns the store while
+  (`worker.rs`), so verification and installs never stall devices or IPC;
+  invocations are prepared there and run on the plugin's lane thread
+  (`lane.rs`), which owns its supervisor. The worker owns the store while
   the configuration is unlocked: unlocking opens it, locking stops every
-  host and closes it.
+  lane and host and closes it.
 - **plugins.db key.** HKDF-SHA256 of the configuration database key, salt
   `deckpilot.plugin-store.v1`, info `deckpilot plugins.db sqlcipher key`
   (`plugins/key.rs`). No keychain item; the configuration key is never
@@ -99,9 +102,52 @@ configuration app ──IPC protocol 10──▶ agent service task
   towards a crash loop, and the next invocation checks a fresh host.
 - **Actions.** Each manifest action is exposed as action type
   `<plugin id>.<action>` with `available` and `unavailableReason` (disabled,
-  broken, quarantined, platform). Running one goes through
-  `invokePluginAction`. They are not yet registered in the workflow engine's
-  module registry: that needs the module id grammar change of design §2.3.
+  broken, quarantined, platform, or a declared permission that is not
+  granted, e.g. revoked after enabling).
+- **Actions in the engine** (design §2.3 items 1, 2, 7 and §3.7). A plugin
+  id is a module id (`ModuleId` accepts exactly one `.`; built-in ids never
+  have one) and `ModuleId::owner_of` takes everything before the **last**
+  `.`, so `acme.hello-weather.greet` belongs to `acme.hello-weather`. After
+  every change of the installed plugins (install, enable, disable, grant,
+  revoke, update, rollback, uninstall, quarantine, a crash loop, lock and
+  unlock) the worker publishes them and the agent registers one
+  `PluginModule` (`plugins/engine.rs`) per installed plugin: enabled when
+  its actions can run, otherwise disabled with the reason above, which keys,
+  `runAction` and workflows report. Its state comes from plugins.db, never
+  from the `modules` table, and it has no capabilities, settings, pages,
+  windows, variables or migrations. Each action is a `PluginActionHandler`:
+  parameters and the node contract convert one to one from the manifest
+  (`cancellable` always, never `changesContext`); outputs are the declared
+  ones, as text.
+  - *Never on the service task.* The handler `runs_detached`: a key bound
+    to it makes the runtime return `RuntimeOutcome::ActionRequested`, and
+    the agent runs `Runtime::detached_action` on a thread of its own (at
+    most 16 at once), then reports through `actionCompleted` and, for
+    `runAction`, answers the request when it finished. Workflow nodes call
+    the handler on their execution threads.
+  - *Dispatch.* The handler sends the invocation to the worker, which
+    checks state, verdict and grants and queues it on the plugin's **lane**
+    (`plugins/lane.rs`): one thread per host that owns its supervisor, with
+    a queue of 8 (more fail at once with `busy`). `invokePluginAction` uses
+    the same lanes, so a slow plugin blocks neither the worker nor other
+    plugins.
+  - *Cancel and deadline.* A cancelled run or one past its deadline raises
+    the invocation's `AbortSignal`. Protocol 1 has no `abort` frame and an
+    ABI 1 guest runs to completion, so the supervisor gives the host 2 s
+    (`HostConfig::abort_grace`) to answer, then kills it
+    (`HostError::Aborted`, not counted as a crash). The handler waits the
+    same 2 s (plus a margin), then fails the action as `cancelled`; a later
+    answer is discarded. A capability call that is already running (an HTTP
+    request, at most 15 s) finishes first.
+  - *Containment.* Every invocation on a lane runs in `catch_unwind` (the
+    broker's authorization and the executor run there); so do the
+    worker's message handling, the grant updates (`sync_grants`) and the
+    handler itself. A panic in the broker or executor disables the plugin;
+    a host crash fails the action (`plugin-host-failed`). Neither reaches
+    the service task.
+  - *Older clients.* `Response::for_protocol(< 10)` drops catalog entries
+    owned by a plugin module; plugin answers never reach such clients.
+    Instances in profiles stay and show as unavailable.
 
 ## IPC (protocol 10, capability `plugins`)
 
@@ -183,8 +229,16 @@ packages, revoked and incompatible versions, a registry with a bad
 signature, a host crash, crashes in the middle of an install, the wrong
 plugins.db key, and a host stand-in reporting a partial sandbox
 (`deckpilot-test-plugin-host`, built only with `test-hooks`), which must be
-stopped before it receives the plugin. HTTP goes to canned responses
-(`DECKPILOT_TEST_PLUGIN_HTTP`, only with `test-hooks`, never in a release).
+stopped before it receives the plugin. Plugin actions in the engine: the
+sample's actions as instances in a profile, unavailable while disabled, then
+run by `runAction`, by key presses on a simulated MK.2 and by a workflow
+node (results, outputs and the canned request checked), unavailable again
+after a revoke, a disable and an uninstall; a guest panic during a key's
+action (a failed action, the agent unaffected); and a workflow cancelled
+while its plugin node waits for a slow server (given up after the 2 s
+grace). HTTP goes to canned responses (`DECKPILOT_TEST_PLUGIN_HTTP`, only
+with `test-hooks`, never in a release; a route may answer late with
+`delayMs`).
 `.github/workflows/plugins-agent.yml` runs all of it on Linux, macOS and
 Windows (not a required check).
 
@@ -192,10 +246,14 @@ Windows (not a required check).
 
 - No network fetching of the registry; the registry trust state lives in a
   file, not in the encrypted database.
-- Plugin actions are not in the workflow engine or on keys yet (module id
-  grammar, design §2.3); `invokePluginAction` runs them.
-- No plugin storage, credential slots, variables, settings or background
-  work; their capabilities are refused.
+- No plugin storage, credential slots, variables (design §2.3 item 3),
+  settings or background work; their capabilities are refused.
+- The configuration app does not offer plugin actions in its action
+  editors yet; instances come from imported or hand-made profiles. Its own
+  module registry has only the built-in modules.
+- An abort does not interrupt a capability call that is already running.
+- `plugin_known` (design §2.3 item 4) does not exist: an uninstalled
+  plugin's actions are reported as "not available" without its name.
 - A password change made by the app while the agent is locked makes
   plugins.db unreadable (no rekey protocol between app and agent).
 - Windows execution is verified only on GitHub's `windows-latest` runner

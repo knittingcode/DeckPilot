@@ -11,6 +11,7 @@
 //! host process.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,6 +24,7 @@ use deckpilot_ipc::plugins::{
 };
 use deckpilot_ipc::{ErrorCode, IpcError, Request, Response};
 use deckpilot_plugin_abi::protocol::{Enforcement, SandboxReport};
+use deckpilot_plugin_abi::{ActionOutcome, Params};
 use deckpilot_plugin_broker::{
     AuditDecision, AuditRecord, AuditSink, Broker, RateLimits, SystemClock,
 };
@@ -39,15 +41,18 @@ use deckpilot_plugin_store::{
     StoreError, StoreKey, UpdateOutcome, VerdictSource,
 };
 use deckpilot_plugin_supervisor::{
-    HostCommand, HostConfig, HostError, RestartPolicy, Supervisor, SupervisorError,
+    AbortSignal, HostCommand, HostConfig, HostError, RestartPolicy, Supervisor, SupervisorError,
 };
 use semver::Version;
+use tokio::sync::oneshot;
 use tracing::{info, warn};
 
 use super::convert;
+use super::engine::CatalogPlugin;
 use super::executor::{Executor, Transport};
+use super::lane::{Done, Ended, Job, Lane, LaneEnd, LaneError};
 use super::registry::LocalRegistry;
-use super::worker::Events;
+use super::worker::{EngineFailure, EngineReply, Events};
 use super::{PluginSettings, platform, platform_problem};
 
 /// Who decides in the audit log.
@@ -257,7 +262,11 @@ pub(super) struct PluginService {
     /// Why there is no registry, or why it last failed to verify.
     registry_problem: Option<String>,
     broker: Broker,
-    supervisors: BTreeMap<String, Supervisor>,
+    /// One lane (thread and supervisor) per plugin whose host runs or ran.
+    lanes: BTreeMap<String, Lane>,
+    next_lane: u64,
+    /// Tells the worker that a lane ended by itself.
+    lane_ended: Ended,
     host: PathBuf,
     events: Events,
     transport: Transport,
@@ -267,9 +276,16 @@ impl std::fmt::Debug for PluginService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PluginService")
             .field("registry", &self.registry)
-            .field("running", &self.supervisors.keys().collect::<Vec<_>>())
+            .field("running", &self.lanes.keys().collect::<Vec<_>>())
             .finish_non_exhaustive()
     }
+}
+
+/// What an invocation needs once it is allowed to run.
+struct Prepared {
+    timeout: Duration,
+    outputs: BTreeSet<String>,
+    executor: Executor,
 }
 
 /// Why the plugin store could not be opened.
@@ -290,6 +306,7 @@ impl PluginService {
         data_dir: &Path,
         key: &StoreKey,
         events: Events,
+        lane_ended: Ended,
     ) -> Result<Self, StoreError> {
         let mut manager = PluginManager::open(data_dir, key, manager_options())?;
         let report = manager.recover()?;
@@ -324,7 +341,9 @@ impl PluginService {
                 Arc::new(SystemClock::default()),
                 RateLimits::default(),
             ),
-            supervisors: BTreeMap::new(),
+            lanes: BTreeMap::new(),
+            next_lane: 0,
+            lane_ended,
             host: host_program(settings),
             events,
             transport: Transport::from_env(),
@@ -341,10 +360,33 @@ impl PluginService {
 
     /// Stops every host.
     pub fn shutdown(&mut self) {
-        for (id, mut supervisor) in std::mem::take(&mut self.supervisors) {
-            let status = supervisor.shutdown();
-            info!(plugin = %id, ?status, "plugin host stopped");
+        for (_, lane) in std::mem::take(&mut self.lanes) {
+            lane.stop();
         }
+    }
+
+    /// The installed plugins and whether their actions can run, for the
+    /// agent's module registry. Unreadable records are left out.
+    pub fn catalog(&self) -> Vec<CatalogPlugin> {
+        let store = self.manager.store();
+        let Ok(records) = store.plugins() else {
+            return Vec::new();
+        };
+        records
+            .iter()
+            .filter_map(|record| {
+                let manifest = &record.active()?.manifest;
+                let grants = store.grants(&record.id).unwrap_or_default();
+                Some(CatalogPlugin {
+                    id: record.id.to_string(),
+                    name: manifest.name.clone(),
+                    version: manifest.version.to_string(),
+                    description: manifest.description.clone(),
+                    actions: manifest.contributes.actions().to_vec(),
+                    unavailable: convert::unavailable_with(record, &grants),
+                })
+            })
+            .collect()
     }
 
     pub fn status(&self) -> PluginRuntimeStatus {
@@ -581,7 +623,22 @@ impl PluginService {
 
     /// Gives the broker the plugin's effective grants (nothing unless it
     /// is enabled). Effective on its next capability call.
-    fn sync_grants(&self, id: &PluginId) {
+    ///
+    /// A panic in the broker is caught: the plugin gets no grants and is
+    /// disabled, and the request goes on.
+    fn sync_grants(&mut self, id: &PluginId) {
+        if catch_unwind(AssertUnwindSafe(|| self.apply_grants(id))).is_err() {
+            warn!(plugin = %id, "the permission broker panicked; the plugin is disabled");
+            if let Ok(broker_id) = deckpilot_plugin_broker::PluginId::new(id.as_str()) {
+                let _ = catch_unwind(AssertUnwindSafe(|| self.broker.remove_plugin(&broker_id)));
+            }
+            self.stop_host(id);
+            let _ = self.manager.disable(id);
+            self.changed(id);
+        }
+    }
+
+    fn apply_grants(&self, id: &PluginId) {
         let Ok(broker_id) = deckpilot_plugin_broker::PluginId::new(id.as_str()) else {
             return;
         };
@@ -611,10 +668,11 @@ impl PluginService {
         }
     }
 
+    /// Stops the plugin's lane: a running invocation is aborted, queued
+    /// ones are refused, the host is stopped.
     fn stop_host(&mut self, id: &PluginId) {
-        if let Some(mut supervisor) = self.supervisors.remove(id.as_str()) {
-            let status = supervisor.shutdown();
-            info!(plugin = %id, ?status, "plugin host stopped");
+        if let Some(lane) = self.lanes.remove(id.as_str()) {
+            lane.stop();
         }
     }
 
@@ -658,8 +716,14 @@ impl PluginService {
                     .store()
                     .plugins()
                     .map_err(|e| store_error(&e))?;
+                let store = self.manager.store();
                 Ok(Response::Plugins {
-                    plugins: plugins.iter().map(convert::summary).collect(),
+                    plugins: plugins
+                        .iter()
+                        .map(|record| {
+                            convert::summary(record, &store.grants(&record.id).unwrap_or_default())
+                        })
+                        .collect(),
                 })
             }
             Request::GetPlugin { plugin } => self.details(&plugin_id(&plugin)?),
@@ -694,11 +758,6 @@ impl PluginService {
             }
             Request::RollbackPlugin { plugin } => self.rollback(&plugin_id(&plugin)?),
             Request::UninstallPlugin { plugin } => self.uninstall(&plugin_id(&plugin)?),
-            Request::InvokePluginAction {
-                plugin,
-                action,
-                params,
-            } => self.invoke(&plugin_id(&plugin)?, &action, &params),
             other => Err(IpcError::new(
                 ErrorCode::InvalidRequest,
                 format!("`{}` is not a plugin request", other.name()),
@@ -897,9 +956,8 @@ impl PluginService {
             self.changed(id);
             result?;
         }
-        if let Some(supervisor) = self.supervisors.get_mut(id.as_str()) {
-            supervisor.reenable();
-        }
+        // A lane that tripped the crash-loop breaker is already gone, so the
+        // next invocation starts with a fresh supervisor (no crash history).
         self.sync_grants(id);
         self.progress(id.as_str(), PluginOperation::Enable, PluginStage::Finished);
         self.changed(id);
@@ -1094,11 +1152,12 @@ impl PluginService {
 
     // ---------------------------------------------------------- invocation
 
-    /// Loads the active version's module (re-verified) into a new
-    /// supervisor.
-    fn supervisor(&mut self, record: &PluginRecord) -> Result<&mut Supervisor, IpcError> {
+    /// The plugin's lane, started with a new supervisor for the active
+    /// version's module (re-verified against its integrity record) when
+    /// there is none.
+    fn lane(&mut self, record: &PluginRecord) -> Result<&Lane, IpcError> {
         let key = record.id.to_string();
-        if !self.supervisors.contains_key(&key) {
+        if !self.lanes.contains_key(&key) {
             let active = record
                 .active()
                 .ok_or_else(|| store_error(&StoreError::NotInstalled(record.id.clone())))?;
@@ -1142,20 +1201,27 @@ impl PluginService {
                 RestartPolicy::default(),
                 Arc::new(SystemClock::default()),
             );
-            self.supervisors.insert(key.clone(), supervisor);
+            self.next_lane += 1;
+            let lane = Lane::start(
+                key.clone(),
+                self.next_lane,
+                supervisor,
+                self.lane_ended.clone(),
+            );
+            self.lanes.insert(key.clone(), lane);
         }
-        Ok(self
-            .supervisors
-            .get_mut(&key)
-            .expect("the supervisor was just inserted"))
+        Ok(self.lanes.get(&key).expect("the lane was just inserted"))
     }
 
-    fn invoke(
+    /// Checks that `action` of `id` may run now and prepares it. With
+    /// `engine`, every declared permission must be granted too (the
+    /// catalog's rule for keys and workflows).
+    fn prepare(
         &mut self,
         id: &PluginId,
         action: &str,
-        params: &BTreeMap<String, serde_json::Value>,
-    ) -> Result<Response, IpcError> {
+        engine: bool,
+    ) -> Result<(PluginRecord, Prepared), IpcError> {
         platform_gate()?;
         let record = self.record(id)?;
         if record.state != PluginState::Enabled {
@@ -1167,6 +1233,16 @@ impl PluginService {
                     convert::unavailable(&record).unwrap_or_default()
                 ),
             ));
+        }
+        if engine {
+            let grants = self
+                .manager
+                .store()
+                .grants(id)
+                .map_err(|e| store_error(&e))?;
+            if let Some(why) = convert::unavailable_with(&record, &grants) {
+                return Err(error(ErrorCode::Failed, reason::NOT_ENABLED, why));
+            }
         }
         self.check_verdict(&record)?;
         let active = record
@@ -1185,53 +1261,212 @@ impl PluginService {
                     format!("{id} has no action `{action}`"),
                 )
             })?;
-        let params = convert::params(params).map_err(invalid)?;
         let node = declaration.node.clone().unwrap_or_default();
         let timeout = Duration::from_millis(node.timeout_ms()).min(MAX_INVOCATION);
-        let outputs: BTreeSet<String> = node
-            .outputs
-            .unwrap_or_default()
-            .into_iter()
-            .map(|o| o.key)
-            .collect();
+        let outputs = super::lane::declared_outputs(&declaration);
         let name = active.manifest.name.clone();
         self.sync_grants(id);
-        let mut executor = Executor::new(
+        let executor = Executor::new(
             self.broker.clone(),
             name,
             self.events.agent.clone(),
             self.transport.clone(),
         );
-        let supervisor = self.supervisor(&record)?;
-        match supervisor.invoke(action, &params, timeout, &mut executor) {
-            Ok(outcome) => Ok(Response::PluginActionResult {
-                outcome: convert::outcome(outcome, &outputs),
-            }),
+        Ok((
+            record,
+            Prepared {
+                timeout,
+                outputs,
+                executor,
+            },
+        ))
+    }
+
+    /// `invokePluginAction`: answered on the plugin's lane when the
+    /// action finished.
+    pub fn invoke(
+        &mut self,
+        plugin: &str,
+        action: &str,
+        params: &BTreeMap<String, serde_json::Value>,
+        reply: oneshot::Sender<Result<Response, IpcError>>,
+    ) {
+        let started = (|| {
+            let id = plugin_id(plugin)?;
+            let params = convert::params(params).map_err(invalid)?;
+            let (record, prepared) = self.prepare(&id, action, false)?;
+            Ok::<_, IpcError>((id, record, params, prepared))
+        })();
+        let (id, record, params, prepared) = match started {
+            Ok(started) => started,
             Err(e) => {
-                let disabled = matches!(e, SupervisorError::Disabled);
-                let weak_sandbox = matches!(e, SupervisorError::Host(HostError::SandboxMissing(_)));
-                warn!(plugin = %id, action, error = %e, "plugin invocation failed");
-                if weak_sandbox {
-                    // The supervisor killed the host before the module was
-                    // sent. Drop the supervisor too: the refusal is not a
-                    // crash, so it must not count towards a crash loop
-                    // or a restart backoff; the next invocation checks a
-                    // fresh host again.
-                    self.stop_host(id);
-                } else if disabled {
-                    // A crash loop: the plugin stays off until re-enabled.
-                    self.stop_host(id);
-                    let _ = self.manager.disable(id);
-                    self.sync_grants(id);
-                    self.changed(id);
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
+        let Prepared {
+            timeout,
+            outputs,
+            executor,
+        } = prepared;
+        let plugin = id.to_string();
+        let name = action.to_owned();
+        let done: Done = Box::new(move |result| {
+            let answer = match result {
+                Ok(outcome) => Ok(Response::PluginActionResult {
+                    outcome: convert::outcome(outcome, &outputs),
+                }),
+                Err(e) => {
+                    warn!(plugin, action = name, error = ?e, "plugin invocation failed");
+                    Err(lane_error(&e))
                 }
-                Err(error(
-                    ErrorCode::Failed,
-                    reason::HOST_FAILED,
-                    host_message(&e),
-                ))
+            };
+            let _ = reply.send(answer);
+        });
+        match self.lane(&record) {
+            Ok(lane) => lane.submit(Job {
+                action: action.to_owned(),
+                params,
+                timeout,
+                executor,
+                abort: AbortSignal::new(),
+                done,
+            }),
+            Err(e) => done(Err(LaneError::Refused(e))),
+        }
+    }
+
+    /// A plugin action from the workflow engine (a key, `runAction`, a
+    /// workflow node). The answer goes to `reply`; a caller that gave up
+    /// has dropped its end, and the answer is discarded.
+    pub fn invoke_for_engine(
+        &mut self,
+        plugin: &str,
+        action: &str,
+        params: Params,
+        abort: AbortSignal,
+        reply: std::sync::mpsc::SyncSender<EngineReply>,
+    ) {
+        let fail = |e: &IpcError| EngineFailure {
+            code: engine_code(e.reason.as_deref()).to_owned(),
+            message: e.message.clone(),
+        };
+        let prepared = plugin_id(plugin).and_then(|id| self.prepare(&id, action, true));
+        let (record, prepared) = match prepared {
+            Ok(prepared) => prepared,
+            Err(e) => {
+                let _ = reply.try_send(Err(fail(&e)));
+                return;
+            }
+        };
+        let Prepared {
+            timeout,
+            outputs,
+            executor,
+        } = prepared;
+        let id = record.id.to_string();
+        let name = action.to_owned();
+        let done: Done = Box::new(move |result| {
+            let answer = match result {
+                Ok(outcome) => Ok(filter_outputs(outcome, &outputs)),
+                Err(e) => {
+                    warn!(plugin = id, action = name, error = ?e, "plugin action failed");
+                    Err(fail(&lane_error(&e)))
+                }
+            };
+            let _ = reply.try_send(answer);
+        });
+        match self.lane(&record) {
+            Ok(lane) => lane.submit(Job {
+                action: action.to_owned(),
+                params,
+                timeout,
+                executor,
+                abort,
+                done,
+            }),
+            Err(e) => done(Err(LaneError::Refused(e))),
+        }
+    }
+
+    /// A lane ended by itself. A crash loop or a panic disables the
+    /// plugin until the user enables it again; a host with a weak sandbox
+    /// only drops the lane (not a crash: the next invocation checks a
+    /// fresh host).
+    pub fn lane_ended(&mut self, plugin: &str, lane: u64, why: LaneEnd) {
+        let Ok(id) = PluginId::parse(plugin) else {
+            return;
+        };
+        if self.lanes.get(plugin).is_some_and(|l| l.id() == lane) {
+            self.stop_host(&id);
+        }
+        match why {
+            LaneEnd::WeakSandbox => {}
+            LaneEnd::CrashLoop | LaneEnd::Panicked => {
+                warn!(plugin, ?why, "the plugin is disabled");
+                let _ = self.manager.disable(&id);
+                self.sync_grants(&id);
+                self.changed(&id);
             }
         }
+    }
+}
+
+/// Only the outputs the action declares leave the plugin.
+fn filter_outputs(outcome: ActionOutcome, declared: &BTreeSet<String>) -> ActionOutcome {
+    match outcome {
+        ActionOutcome::Ok { message, data } => ActionOutcome::Ok {
+            message,
+            data: data
+                .into_iter()
+                .filter(|(key, _)| declared.contains(key))
+                .collect(),
+        },
+        other => other,
+    }
+}
+
+/// The action result code for an engine invocation that failed with
+/// `reason`.
+fn engine_code(why: Option<&str>) -> &'static str {
+    match why {
+        Some(reason::HOST_FAILED) => "plugin-host-failed",
+        Some(reason::BUSY) => "plugin-busy",
+        Some(reason::REVOKED) => "plugin-revoked",
+        _ => "plugin-unavailable",
+    }
+}
+
+/// Why an invocation that reached the lane failed, for the user.
+fn lane_error(error: &LaneError) -> IpcError {
+    match error {
+        LaneError::Supervisor(e) => {
+            self::error(ErrorCode::Failed, reason::HOST_FAILED, host_message(e))
+        }
+        LaneError::Refused(e) => e.clone(),
+        LaneError::Busy => self::error(
+            ErrorCode::Failed,
+            reason::BUSY,
+            format!(
+                "the plugin is busy: {} actions are already waiting for it",
+                super::lane::QUEUE
+            ),
+        ),
+        LaneError::Stopped => self::error(
+            ErrorCode::Failed,
+            reason::NOT_ENABLED,
+            "the plugin was stopped (disabled, updated or removed) before the action finished",
+        ),
+        LaneError::Aborted => self::error(
+            ErrorCode::Failed,
+            reason::HOST_FAILED,
+            "the action was cancelled before it started",
+        ),
+        LaneError::Panicked => self::error(
+            ErrorCode::Failed,
+            reason::HOST_FAILED,
+            "the action failed inside DeckPilot; the plugin was disabled",
+        ),
     }
 }
 
@@ -1250,6 +1485,11 @@ fn host_message(error: &SupervisorError) -> String {
         },
         SupervisorError::Host(HostError::Timeout { .. }) => {
             "the action took longer than its time limit; the plugin host was stopped".to_owned()
+        }
+        SupervisorError::Host(HostError::Aborted { .. }) => {
+            "the action was cancelled and did not finish within 2 s; the plugin host was stopped \
+             (it starts again with the next action)"
+                .to_owned()
         }
         SupervisorError::Host(HostError::SandboxMissing(report)) => sandbox_refusal(report),
         SupervisorError::Host(HostError::Spawn(e)) => {

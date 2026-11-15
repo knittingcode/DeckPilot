@@ -18,9 +18,9 @@ use deckpilot_device::{
 use crate::gesture::{BoundGestures, Gesture, GestureTimings};
 use crate::stateful::StatefulBinding;
 use crate::{
-    ActionInstanceId, ActionRegistry, ActionResult, ActiveProjectContext, BindingTarget,
-    ControlBinding, CycleDirection, DeviceLayout, Engine, EngineError, FaceStyle, KeyFace,
-    LayoutId, MachineConfig, PageId, Profile, Project, ProjectId, Trigger, WorkflowId,
+    ActionInstanceId, ActionParameters, ActionRegistry, ActionResult, ActiveProjectContext,
+    BindingTarget, ControlBinding, CycleDirection, DeviceLayout, Engine, EngineError, FaceStyle,
+    KeyFace, LayoutId, MachineConfig, PageId, Profile, Project, ProjectId, Trigger, WorkflowId,
     WorkflowReport, render_label,
 };
 
@@ -64,6 +64,19 @@ pub enum RuntimeOutcome {
         action: ActionInstanceId,
         result: ActionResult,
     },
+    /// A control is bound to an action whose handler runs detached
+    /// ([`crate::ActionHandler::runs_detached`], e.g. a plugin's action).
+    /// The runtime does not run it in place: the caller runs
+    /// [`Runtime::detached_action`] on a thread of its own and reports the
+    /// result when it is there.
+    ActionRequested {
+        action: ActionInstanceId,
+        /// The binding's parameter overrides.
+        #[serde(default, skip_serializing_if = "ActionParameters::is_empty")]
+        overrides: ActionParameters,
+        /// The device whose control asked.
+        device: DeviceId,
+    },
     /// A control is bound to this workflow. Workflows can run for a long
     /// time, so the runtime does not run them itself: the caller starts
     /// the run, e.g. in the background (see [`Runtime::run_workflow`] for
@@ -79,6 +92,54 @@ pub enum RuntimeOutcome {
         binding: StatefulBinding,
         gesture: Gesture,
     },
+}
+
+/// One run of a detached action ([`Runtime::detached_action`]), to be
+/// executed on a thread of the caller's choice with
+/// [`DetachedAction::run`]. It works on copies taken when it was created,
+/// so the runtime may change meanwhile.
+#[derive(Debug)]
+pub struct DetachedAction {
+    engine: Arc<Engine>,
+    profile: Profile,
+    machine: MachineConfig,
+    projects: ActiveProjectContext,
+    action: ActionInstanceId,
+    overrides: Option<ActionParameters>,
+    invocation: crate::resolution::Invocation,
+}
+
+impl DetachedAction {
+    pub fn action(&self) -> ActionInstanceId {
+        self.action
+    }
+
+    /// The instance's name in the profile it was taken from.
+    pub fn name(&self) -> String {
+        self.profile
+            .action(self.action)
+            .map_or_else(|| self.action.to_string(), |a| a.name.clone())
+    }
+
+    /// Runs the action (blocking). It works on a copy of the project
+    /// context, so a result that asks to change the context is turned
+    /// into a failure rather than reported as applied.
+    pub fn run(mut self) -> Result<ActionResult, EngineError> {
+        let result = self.engine.run_action_with(
+            &self.profile,
+            &self.machine,
+            &mut self.projects,
+            self.action,
+            self.overrides.as_ref(),
+            &self.invocation,
+        )?;
+        if result.is_success() && !result.effects.is_empty() {
+            return Ok(ActionResult::failure(
+                "an action that runs detached cannot change the project context",
+            ));
+        }
+        Ok(result)
+    }
 }
 
 #[derive(Debug)]
@@ -328,6 +389,44 @@ impl Runtime {
         )
     }
 
+    /// Whether the active profile's `action` runs detached
+    /// ([`crate::ActionHandler::runs_detached`]): it must be run with
+    /// [`Runtime::detached_action`] on a thread of its own, not with
+    /// [`Runtime::run_action`].
+    pub fn runs_detached(&self, action: ActionInstanceId) -> bool {
+        self.profile()
+            .and_then(|profile| profile.action(action))
+            .is_some_and(|instance| self.engine.registry().runs_detached(&instance.action_type))
+    }
+
+    /// Everything needed to run `action` of the active profile on another
+    /// thread: the engine, and copies of the profile, the machine and the
+    /// project context as they are now. `overrides` and `device` are a
+    /// key binding's, as for a press.
+    pub fn detached_action(
+        &self,
+        action: ActionInstanceId,
+        overrides: Option<ActionParameters>,
+        device: Option<DeviceId>,
+    ) -> Result<DetachedAction, EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NoActiveProfile)?;
+        if session.profile.action(action).is_none() {
+            return Err(EngineError::UnknownAction(action));
+        }
+        Ok(DetachedAction {
+            engine: self.engine.clone(),
+            profile: session.profile.clone(),
+            machine: self.machine.clone(),
+            projects: session.projects.clone(),
+            action,
+            overrides: overrides.filter(|o| !o.is_empty()),
+            invocation: device.map_or_else(
+                crate::resolution::Invocation::default,
+                crate::resolution::Invocation::from_device,
+            ),
+        })
+    }
+
     pub fn run_workflow(&mut self, workflow: WorkflowId) -> Result<WorkflowReport, EngineError> {
         let session = self.session.as_mut().ok_or(EngineError::NoActiveProfile)?;
         self.engine.run_workflow(
@@ -548,6 +647,13 @@ impl Runtime {
     ) -> Result<RuntimeOutcome, EngineError> {
         match target {
             BindingTarget::Action { action, overrides } => {
+                if self.runs_detached(action) {
+                    return Ok(RuntimeOutcome::ActionRequested {
+                        action,
+                        overrides,
+                        device: device.clone(),
+                    });
+                }
                 // The key's device is part of the context its references
                 // are resolved in (`system.device.current.id`). The
                 // binding's overrides are resolved in the same pipeline.
@@ -860,6 +966,102 @@ mod tests {
         let outcome = runtime.handle_event(&press(2)).unwrap();
         assert!(matches!(outcome, RuntimeOutcome::Action { action, .. } if action == f.select_cms));
         assert_eq!(active_key(&runtime), "CMS");
+    }
+
+    /// `test.later`: [`crate::testing::Echo`], but it runs detached.
+    struct Later(crate::testing::Echo);
+
+    impl crate::ActionHandler for Later {
+        fn definition(&self) -> &crate::ActionType {
+            self.0.definition()
+        }
+
+        fn execute(
+            &self,
+            parameters: &ActionParameters,
+            context: &crate::ExecutionContext<'_>,
+        ) -> ActionResult {
+            self.0.execute(parameters, context)
+        }
+
+        fn runs_detached(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn detached_actions_are_requested_not_run_in_place() {
+        let mut registry = registry();
+        registry
+            .register(Box::new(Later(crate::testing::Echo::with_id("test.later"))))
+            .unwrap();
+        let later_type = crate::ActionTypeId::new("test.later").unwrap();
+        assert!(registry.runs_detached(&later_type));
+        assert!(!registry.runs_detached(&select_type()));
+        let mut f = fixture();
+        let later = registry
+            .create_instance(
+                "Later",
+                later_type,
+                &ActionParameters::new().with("message", ParameterValue::Text("later".into())),
+            )
+            .unwrap();
+        let later_id = later.id;
+        f.profile.actions.push(later);
+        let home = f.profile.layouts[0].home_page;
+        f.profile.layouts[0]
+            .page_mut(home)
+            .unwrap()
+            .bindings
+            .push(ControlBinding {
+                control: ControlId::Key { index: 3 },
+                trigger: Trigger::Press,
+                target: BindingTarget::action(later_id),
+                label: None,
+                appearance: None,
+            });
+        let mut runtime = Runtime::new(
+            Engine::new(registry),
+            ModelCatalog::builtin(),
+            MachineConfig::new(Os::current()),
+        );
+        runtime.set_profile(Some(f.profile), None);
+        runtime
+            .handle_event(&DeviceEvent::Connected { device: device() })
+            .unwrap();
+        assert!(runtime.runs_detached(later_id));
+        assert!(!runtime.runs_detached(f.next));
+
+        let outcome = runtime.handle_event(&press(3)).unwrap();
+        let RuntimeOutcome::ActionRequested {
+            action,
+            overrides,
+            device: from,
+        } = outcome
+        else {
+            panic!("expected a request, got {outcome:?}");
+        };
+        assert_eq!((action, from.clone()), (later_id, device()));
+        let run = runtime
+            .detached_action(action, Some(overrides), Some(from))
+            .unwrap();
+        assert_eq!(run.name(), "Later");
+        // Runs on another thread, from copies.
+        let result = std::thread::spawn(move || run.run())
+            .join()
+            .unwrap()
+            .unwrap();
+        assert!(result.is_success(), "{result:?}");
+        assert_eq!(result.message, "later");
+        assert!(matches!(
+            runtime.detached_action(ActionInstanceId::new(), None, None),
+            Err(EngineError::UnknownAction(_))
+        ));
+        // Other keys still run in place.
+        assert!(matches!(
+            runtime.handle_event(&press(0)).unwrap(),
+            RuntimeOutcome::Action { .. }
+        ));
     }
 
     #[test]
