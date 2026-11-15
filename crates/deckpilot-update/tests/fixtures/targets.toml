@@ -1,0 +1,406 @@
+# DeckPilot packaging matrix (docs/distribution/README.md, section 8).
+#
+# One [[target]] per installable artifact. PR B parses this file in a test so
+# that the enums here and in crates/deckpilot-distribution agree; PR D checks
+# the built release assets against the targets whose status is "shipping".
+# Capability verdicts and their sources: docs/distribution/capability-matrix.md.
+#
+# Enumerations:
+#   distribution_channel: github | homebrew | winget | apt | flathub |
+#                         mac_app_store | microsoft_store
+#   update_provider:      github_release | external_package_manager |
+#                         store_managed | none
+#   package_format:       app | msi | nsis | deb | rpm | appimage | flatpak |
+#                         mas_pkg | msix
+#   status:               shipping | stable_only | planned | feasibility
+#   verdict:              supported | adaptation | blocked | unverified
+
+schema = 1
+
+[provider_for_channel]
+github = "github_release"
+homebrew = "external_package_manager"
+winget = "external_package_manager"
+apt = "external_package_manager"
+flathub = "store_managed"
+mac_app_store = "store_managed"
+microsoft_store = "store_managed"
+
+[[target]]
+id = "github-macos-arm64"
+status = "shipping"
+os = "macos"
+arch = "aarch64"
+rust_target = "aarch64-apple-darwin"
+distribution_channel = "github"
+package_format = "app"
+assets = ["DeckPilot_{version}_aarch64.dmg", "DeckPilot_aarch64.app.tar.gz", "DeckPilot_aarch64.app.tar.gz.sig"]
+manifest_keys = ["darwin-aarch64", "darwin-aarch64-app"]
+update_provider = "github_release"
+signing = "developer_id_application"
+notarized = true
+sandbox = "hardened_runtime_no_entitlements"
+agent_install = "external_bin_contents_macos"
+autostart = "launch_agent"
+plugin_host_install = "not_bundled"
+data_dir = "~/Library/Application Support/io.github.knittingcode.deckpilot"
+credential_store = "login_keychain"
+
+[[target]]
+id = "github-macos-x64"
+status = "shipping"
+os = "macos"
+arch = "x86_64"
+rust_target = "x86_64-apple-darwin"
+distribution_channel = "github"
+package_format = "app"
+assets = ["DeckPilot_{version}_x64.dmg", "DeckPilot_x64.app.tar.gz", "DeckPilot_x64.app.tar.gz.sig"]
+manifest_keys = ["darwin-x86_64", "darwin-x86_64-app"]
+update_provider = "github_release"
+signing = "developer_id_application"
+notarized = true
+sandbox = "hardened_runtime_no_entitlements"
+agent_install = "external_bin_contents_macos"
+autostart = "launch_agent"
+plugin_host_install = "not_bundled"
+data_dir = "~/Library/Application Support/io.github.knittingcode.deckpilot"
+credential_store = "login_keychain"
+
+[[target]]
+id = "github-windows-msi"
+status = "shipping"
+os = "windows"
+arch = "x86_64"
+rust_target = "x86_64-pc-windows-msvc"
+distribution_channel = "github"
+package_format = "msi"
+assets = ["DeckPilot_{version}_x64_en-US.msi", "DeckPilot_{version}_x64_en-US.msi.sig"]
+manifest_keys = ["windows-x86_64", "windows-x86_64-msi"]
+update_provider = "github_release"
+signing = "none"
+notarized = false
+sandbox = "none"
+agent_install = "external_bin_next_to_app"
+autostart = "hkcu_run"
+plugin_host_install = "not_bundled"
+data_dir = "%APPDATA%\\io.github.knittingcode.deckpilot"
+credential_store = "credential_manager"
+
+[[target]]
+id = "github-windows-nsis"
+status = "shipping"
+os = "windows"
+arch = "x86_64"
+rust_target = "x86_64-pc-windows-msvc"
+distribution_channel = "github"
+package_format = "nsis"
+assets = ["DeckPilot_{version}_x64-setup.exe", "DeckPilot_{version}_x64-setup.exe.sig"]
+manifest_keys = ["windows-x86_64-nsis"]
+update_provider = "github_release"
+signing = "none"
+notarized = false
+sandbox = "none"
+agent_install = "external_bin_next_to_app"
+autostart = "hkcu_run"
+plugin_host_install = "not_bundled"
+data_dir = "%APPDATA%\\io.github.knittingcode.deckpilot"
+credential_store = "credential_manager"
+
+[[target]]
+id = "github-linux-deb"
+status = "shipping"
+os = "linux"
+arch = "x86_64"
+rust_target = "x86_64-unknown-linux-gnu"
+distribution_channel = "github"
+package_format = "deb"
+assets = ["DeckPilot_{version}_amd64.deb", "DeckPilot_{version}_amd64.deb.sig"]
+manifest_keys = ["linux-x86_64-deb"]
+update_provider = "github_release"
+signing = "none"
+notarized = false
+sandbox = "none"
+udev_rule = "installed"
+agent_install = "usr_bin"
+autostart = "xdg_autostart"
+plugin_host_install = "not_bundled"
+data_dir = "~/.local/share/io.github.knittingcode.deckpilot"
+credential_store = "secret_service"
+
+[[target]]
+id = "github-linux-appimage"
+status = "shipping"
+os = "linux"
+arch = "x86_64"
+rust_target = "x86_64-unknown-linux-gnu"
+distribution_channel = "github"
+package_format = "appimage"
+assets = ["DeckPilot_{version}_amd64.AppImage", "DeckPilot_{version}_amd64.AppImage.sig"]
+manifest_keys = ["linux-x86_64", "linux-x86_64-appimage"]
+update_provider = "github_release"
+signing = "none"
+notarized = false
+sandbox = "none"
+udev_rule = "manual"
+agent_install = "inside_appimage_run_with_agent_arg"
+autostart = "xdg_autostart_appimage"
+plugin_host_install = "not_bundled"
+data_dir = "~/.local/share/io.github.knittingcode.deckpilot"
+credential_store = "secret_service"
+
+[[target]]
+id = "github-linux-rpm"
+status = "stable_only"
+os = "linux"
+arch = "x86_64"
+rust_target = "x86_64-unknown-linux-gnu"
+distribution_channel = "github"
+package_format = "rpm"
+manifest_keys = ["linux-x86_64-rpm"]
+update_provider = "github_release"
+signing = "none"
+notarized = false
+sandbox = "none"
+udev_rule = "installed"
+agent_install = "usr_bin"
+autostart = "xdg_autostart"
+plugin_host_install = "not_bundled"
+data_dir = "~/.local/share/io.github.knittingcode.deckpilot"
+credential_store = "secret_service"
+
+[[target]]
+id = "homebrew-cask"
+status = "planned"
+os = "macos"
+arch = "universal_via_two_dmgs"
+distribution_channel = "github"
+reserved_channel = "homebrew"
+package_format = "app"
+reuses = ["github-macos-arm64", "github-macos-x64"]
+update_provider = "github_release"
+store_update = "cask auto_updates true"
+signing = "developer_id_application"
+notarized = true
+sandbox = "hardened_runtime_no_entitlements"
+agent_install = "external_bin_contents_macos"
+autostart = "launch_agent"
+plugin_host_install = "as_github"
+data_dir = "~/Library/Application Support/io.github.knittingcode.deckpilot"
+credential_store = "login_keychain"
+
+[[target]]
+id = "winget-msi"
+status = "planned"
+os = "windows"
+arch = "x86_64"
+distribution_channel = "github"
+reserved_channel = "winget"
+package_format = "msi"
+reuses = ["github-windows-msi"]
+update_provider = "github_release"
+store_update = "winget upgrade reruns the MSI"
+signing = "authenticode_advised"
+notarized = false
+sandbox = "none"
+agent_install = "external_bin_next_to_app"
+autostart = "hkcu_run"
+plugin_host_install = "as_github"
+data_dir = "%APPDATA%\\io.github.knittingcode.deckpilot"
+credential_store = "credential_manager"
+
+[[target]]
+id = "msstore-msi-listing"
+status = "planned"
+os = "windows"
+arch = "x86_64"
+distribution_channel = "github"
+package_format = "msi"
+reuses = ["github-windows-msi"]
+update_provider = "github_release"
+signing = "authenticode_trusted_root_required"
+notarized = false
+sandbox = "none"
+agent_install = "external_bin_next_to_app"
+autostart = "hkcu_run"
+plugin_host_install = "as_github"
+data_dir = "%APPDATA%\\io.github.knittingcode.deckpilot"
+credential_store = "credential_manager"
+
+[[target]]
+id = "apt-deb"
+status = "planned"
+os = "linux"
+arch = "x86_64"
+rust_target = "x86_64-unknown-linux-gnu"
+distribution_channel = "apt"
+package_format = "deb"
+assets = ["DeckPilot_{version}_amd64_apt.deb"]
+manifest_keys = []
+update_provider = "external_package_manager"
+update_command = "sudo apt update && sudo apt upgrade"
+updater_compiled = true
+updater_key = false
+signing = "apt_repository_gpg"
+notarized = false
+sandbox = "none"
+udev_rule = "installed"
+agent_install = "usr_bin"
+autostart = "xdg_autostart"
+plugin_host_install = "usr_bin_planned"
+data_dir = "~/.local/share/io.github.knittingcode.deckpilot"
+credential_store = "secret_service"
+
+[[target]]
+id = "flathub"
+status = "feasibility"
+os = "linux"
+arch = "x86_64"
+distribution_channel = "flathub"
+package_format = "flatpak"
+update_provider = "store_managed"
+updater_compiled = false
+updater_key = false
+signing = "flathub"
+notarized = false
+sandbox = "flatpak"
+finish_args = ["--device=all", "--share=network", "--socket=wayland", "--socket=fallback-x11", "--talk-name=org.kde.StatusNotifierWatcher", "--talk-name=org.freedesktop.secrets"]
+udev_rule = "host_manual"
+agent_install = "app_bin"
+autostart = "background_portal"
+plugin_host_install = "app_bin_nested_landlock_seccomp_unverified"
+data_dir = "~/.var/app/io.github.knittingcode.deckpilot/data/io.github.knittingcode.deckpilot"
+credential_store = "secret_service_via_dbus"
+
+[[target]]
+id = "mac-app-store"
+status = "feasibility"
+os = "macos"
+arch = "universal"
+distribution_channel = "mac_app_store"
+package_format = "mas_pkg"
+update_provider = "store_managed"
+updater_compiled = false
+updater_key = false
+signing = "apple_distribution_and_mac_installer_distribution"
+notarized = false
+sandbox = "app_sandbox"
+entitlements = ["com.apple.security.app-sandbox", "com.apple.security.device.usb", "com.apple.security.network.client", "keychain-access-groups"]
+agent_install = "login_item_app_bundle"
+autostart = "smappservice_login_item_opt_in"
+plugin_host_install = "not_shipped"
+data_dir = "~/Library/Containers/io.github.knittingcode.deckpilot/Data/Library/Application Support/io.github.knittingcode.deckpilot"
+credential_store = "keychain_access_group"
+
+[[target]]
+id = "microsoft-store-msix"
+status = "feasibility"
+os = "windows"
+arch = "x86_64"
+distribution_channel = "microsoft_store"
+package_format = "msix"
+update_provider = "store_managed"
+updater_compiled = false
+updater_key = false
+signing = "microsoft_store"
+notarized = false
+sandbox = "msix_full_trust"
+capabilities = ["runFullTrust"]
+agent_install = "in_package"
+autostart = "windows_startup_task"
+plugin_host_install = "in_package_appcontainer_child_unverified"
+data_dir = "per_package_redirected_appdata"
+credential_store = "credential_manager"
+
+# Capability verdicts per channel (summary of capability-matrix.md, section 1).
+[capabilities.github]
+sandbox = "supported"
+background_agent = "supported"
+autostart = "supported"
+usb_hid = "supported"
+tray = "supported"
+plugin_host_spawn = "adaptation"
+plugin_host_sandbox = "supported"
+jit = "adaptation"
+credential_store = "supported"
+filesystem = "supported"
+self_update = "supported"
+
+[capabilities.homebrew]
+sandbox = "supported"
+background_agent = "supported"
+autostart = "supported"
+usb_hid = "supported"
+tray = "supported"
+plugin_host_spawn = "adaptation"
+plugin_host_sandbox = "supported"
+jit = "adaptation"
+credential_store = "supported"
+filesystem = "supported"
+self_update = "supported"
+
+[capabilities.winget]
+sandbox = "supported"
+background_agent = "supported"
+autostart = "supported"
+usb_hid = "supported"
+tray = "supported"
+plugin_host_spawn = "adaptation"
+plugin_host_sandbox = "supported"
+jit = "supported"
+credential_store = "supported"
+filesystem = "supported"
+self_update = "supported"
+
+[capabilities.apt]
+sandbox = "supported"
+background_agent = "supported"
+autostart = "supported"
+usb_hid = "supported"
+tray = "supported"
+plugin_host_spawn = "adaptation"
+plugin_host_sandbox = "supported"
+jit = "supported"
+credential_store = "supported"
+filesystem = "supported"
+self_update = "blocked"
+
+[capabilities.flathub]
+sandbox = "adaptation"
+background_agent = "adaptation"
+autostart = "adaptation"
+usb_hid = "adaptation"
+tray = "adaptation"
+plugin_host_spawn = "adaptation"
+plugin_host_sandbox = "unverified"
+jit = "supported"
+credential_store = "adaptation"
+filesystem = "adaptation"
+self_update = "blocked"
+
+[capabilities.mac_app_store]
+sandbox = "adaptation"
+background_agent = "adaptation"
+autostart = "adaptation"
+usb_hid = "unverified"
+tray = "supported"
+plugin_host_spawn = "adaptation"
+plugin_host_sandbox = "blocked"
+jit = "unverified"
+downloaded_code = "blocked"
+credential_store = "adaptation"
+filesystem = "adaptation"
+self_update = "blocked"
+
+[capabilities.microsoft_store]
+sandbox = "supported"
+background_agent = "adaptation"
+autostart = "adaptation"
+usb_hid = "unverified"
+tray = "supported"
+plugin_host_spawn = "unverified"
+plugin_host_sandbox = "unverified"
+jit = "supported"
+downloaded_code = "unverified"
+credential_store = "unverified"
+filesystem = "adaptation"
+self_update = "blocked"

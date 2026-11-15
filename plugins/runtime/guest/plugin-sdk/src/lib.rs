@@ -45,8 +45,10 @@
 //! * **Results** ([`Output`], [`PluginError`]): `ok` with message and data,
 //!   `skipped`, or `failed` with a code. Codes are checked; a code outside
 //!   `[a-z][a-z0-9-]*` becomes [`codes::INVALID_RESULT`].
-//! * **Capabilities** ([`Context`]): HTTP to an exact origin, notifications,
-//!   per-plugin storage and log, all brokered. A denial is a
+//! * **Capabilities** ([`Context`]): HTTP to an exact origin
+//!   ([`Context::fetch`]), notifications ([`Context::notify`]), per-plugin
+//!   storage, settings, own variables ([`Context::publish_variable`]) and
+//!   log ([`Context::log`]), all brokered. A denial is a
 //!   [`CapabilityError`] that says what was denied and how to declare it;
 //!   `?` turns it into a [`PluginError`] with a shared code.
 //! * **Secrets** ([`SecretHandle`]): credential slots are handles. The
@@ -141,7 +143,7 @@ pub mod prelude {
     pub use crate::{
         Action, ActionOutcome, ActionResult, Args, AuthScheme, CapabilityError,
         CapabilityErrorKind, Context, HttpMethod, LogLevel, Output, Param, Plugin, PluginError,
-        Request, Response, SecretHandle, Settings, codes,
+        Request, Response, SecretHandle, Settings, StorageUsage, codes,
     };
 }
 

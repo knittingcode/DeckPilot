@@ -13,12 +13,15 @@
 //!   pipeline to check artifacts before publishing;
 //! * [`policy`]: update modes, check scheduling and when installing is
 //!   safe;
-//! * [`compatibility`]: whether a running agent fits the application.
+//! * [`compatibility`]: whether a running agent fits the application;
+//! * [`provider`]: which update provider a build's distribution channel
+//!   gets, and the cross-channel rules (not used by the apps yet).
 
 pub mod channel;
 pub mod compatibility;
 pub mod manifest;
 pub mod policy;
+pub mod provider;
 pub mod signature;
 
 // The constants below keep the repository's former spelling

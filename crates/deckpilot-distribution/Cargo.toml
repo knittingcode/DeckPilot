@@ -1,0 +1,18 @@
+[package]
+name = "deckpilot-distribution"
+description = "Build-time, read-only distribution metadata of a DeckPilot build (docs/distribution)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+# No dependencies on purpose: the record is a handful of compiled constants,
+# and tests/release_build.rs builds this crate alone in the release profile
+# to show that the development override is not in the binary.
+[dependencies]
+
+[lints]
+workspace = true
