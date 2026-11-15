@@ -1,20 +1,17 @@
-import { BadgeCheck, CircleAlert, FlaskConical, Puzzle, RefreshCw, WifiOff } from "lucide-react"
+import { CircleAlert, FlaskConical, Loader2, Puzzle, RefreshCw } from "lucide-react"
 import type { ReactNode } from "react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { cn } from "@/lib/utils"
 
-import { FIXTURE_LABEL } from "./fixtures"
+import { platformLabel } from "./model"
 import { grantsByTier, type Grant } from "./permissions"
-import { publisherName } from "./model"
-import type { RegistryPublisher, RegistryState, RegistryStatus } from "./types"
+import type { PluginOperation, PluginStage, RegistryStatus, RuntimeAvailability } from "./types"
 
 export function PluginIcon({ muted = false }: { muted?: boolean }) {
-  // Manifest icons are PNGs inside the package; until packages are fetched
-  // every plugin shows the generic icon.
+  // Manifest icons are PNGs inside the package; every plugin shows the
+  // generic icon for now.
   return (
     <div
       className={cn(
@@ -28,79 +25,74 @@ export function PluginIcon({ muted = false }: { muted?: boolean }) {
   )
 }
 
-export function PublisherLine({
-  publisher,
-  namespace,
-}: {
-  publisher: RegistryPublisher | null
-  namespace: string
-}) {
+export function PublisherLine({ publisher }: { publisher: string }) {
+  return <span className="text-xs text-muted-foreground">by {publisher}</span>
+}
+
+/** Shown above the marketplace in every state: what it is and what it is not. */
+export function ExperimentalNotice() {
   return (
-    <span className="inline-flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-      <span>
-        by {publisherName(publisher, namespace)}
-        {publisher && <span className="font-mono"> @{publisher.login}</span>}
-      </span>
-      {publisher?.verified ? (
-        <Badge variant="secondary">
-          <BadgeCheck aria-hidden /> Verified publisher
-        </Badge>
-      ) : (
-        <Badge variant="outline">Unverified publisher</Badge>
-      )}
-    </span>
+    <Alert role="note" aria-label="Experimental">
+      <FlaskConical />
+      <AlertTitle className="line-clamp-none">Experimental</AlertTitle>
+      <AlertDescription>
+        Plugins run out of process in a sandboxed host. The plugin runtime is experimental and not
+        ready for production use; only install plugins you trust.
+      </AlertDescription>
+    </Alert>
   )
 }
 
-const SIMULATED: { value: RegistryState; label: string }[] = [
-  { value: "fresh", label: "Up to date" },
-  { value: "offline", label: "Offline" },
-  { value: "stale", label: "Stale" },
-  { value: "verification-failed", label: "Verification failed" },
-  { value: "never-reached", label: "Never reached" },
-]
+const RUNTIME_TITLES: Record<Exclude<RuntimeAvailability["kind"], "ready">, string> = {
+  platformUnsupported: "Plugins cannot run on this platform",
+  notBuilt: "Plugins are not available: the agent was built without plugin support",
+  notEnabled: "Plugins are not available: they are not enabled in the agent",
+  unavailable: "Plugins are not available right now",
+  agentNotRunning: "Plugins are not available: the agent is not running",
+  agentTooOld: "Plugins are not available: the running agent is too old",
+}
 
-/** Shown on every screen that uses the fixture client. */
-export function FixtureNotice({
-  registry,
-  onSimulate,
+const RUNTIME_HINTS: Record<Exclude<RuntimeAvailability["kind"], "ready">, string> = {
+  platformUnsupported:
+    "Plugins can be installed and inspected here, but not enabled or run: the plugin sandbox is only verified on macOS and Linux.",
+  notBuilt: "Plugins need an agent built with the `plugins` cargo feature.",
+  notEnabled: "Start the agent with --enable-plugins (or DECKPILOT_ENABLE_PLUGINS=1).",
+  unavailable: "Unlock DeckPilot, or check the agent's log.",
+  agentNotRunning: "Start it in Settings › Background Agent.",
+  agentTooOld: "Restart it in Settings › Background Agent so that the agent of this release runs.",
+}
+
+/** Why plugins cannot (fully) be used; nothing when they can. */
+export function RuntimeNotice({
+  availability,
+  busy,
+  onRetry,
 }: {
-  registry?: RegistryState
-  onSimulate?: (state: RegistryState) => void
+  availability: RuntimeAvailability
+  busy: boolean
+  onRetry: () => void
 }) {
+  if (availability.kind === "ready") return null
+  const message = "status" in availability ? availability.status.reason : availability.message
+  const title =
+    availability.kind === "platformUnsupported"
+      ? `Plugins cannot run on ${platformLabel(availability.status.platform)}`
+      : RUNTIME_TITLES[availability.kind]
   return (
-    <Alert role="note" aria-label={FIXTURE_LABEL}>
-      <FlaskConical />
-      <AlertTitle className="line-clamp-none">{FIXTURE_LABEL}</AlertTitle>
+    <Alert
+      variant={availability.kind === "platformUnsupported" ? "default" : "destructive"}
+      aria-label="Plugin runtime"
+    >
+      <CircleAlert />
+      <AlertTitle className="line-clamp-none">{title}</AlertTitle>
       <AlertDescription className="grid gap-2">
-        <p>
-          The plugin marketplace is an experimental preview. Plugins, publishers and versions here
-          are made up; nothing is downloaded or installed and no plugin code runs. Permissions
-          describe what DeckPilot is designed to enforce; the plugin runtime and its sandbox are not
-          implemented and not ready for production use.
-        </p>
-        {onSimulate && registry && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs" id="plugins-simulate">
-              Simulated registry state
-            </span>
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              size="sm"
-              value={registry}
-              aria-labelledby="plugins-simulate"
-              className="flex-wrap"
-              onValueChange={(value) => {
-                if (value) onSimulate(value as RegistryState)
-              }}
-            >
-              {SIMULATED.map((item) => (
-                <ToggleGroupItem key={item.value} value={item.value} className="px-2 text-xs">
-                  {item.label}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
+        {message && <p>{message}</p>}
+        <p>{RUNTIME_HINTS[availability.kind]}</p>
+        {availability.kind !== "platformUnsupported" && (
+          <div>
+            <Button variant="outline" size="sm" disabled={busy} onClick={onRetry}>
+              <RefreshCw /> Check again
+            </Button>
           </div>
         )}
       </AlertDescription>
@@ -108,47 +100,96 @@ export function FixtureNotice({
   )
 }
 
-function formatTime(iso: string | undefined): string {
-  return iso ? new Date(iso).toLocaleString() : "never"
-}
-
-const REGISTRY_TITLES: Record<Exclude<RegistryState, "fresh">, string> = {
-  offline: "Offline: showing the last verified registry",
-  stale: "Registry stale",
-  "verification-failed": "Registry verification failed",
-  "never-reached": "Registry not reached yet",
-}
-
 export function RegistryNotice({
-  status,
+  registry,
+  error,
   busy,
   onRetry,
 }: {
-  status: RegistryStatus
+  registry: RegistryStatus | null
+  error?: { reason: string; message: string } | undefined
   busy: boolean
   onRetry: () => void
 }) {
-  if (status.state === "fresh") return null
-  const failed = status.state === "verification-failed"
+  let title: string
+  let text: string
+  if (!registry) {
+    title = "No plugin registry configured"
+    text = "Start the agent with --plugin-registry and --plugin-registry-roots."
+  } else if (error) {
+    title = "The registry could not be read"
+    text = error.message
+  } else if (registry.freshness === "neverVerified") {
+    title = "Registry not verified yet"
+    text = "Nothing can be installed until the registry has been verified."
+  } else if (registry.freshness === "stale") {
+    title = "Registry stale"
+    text = "Installed plugins keep running. Installing and updating are paused."
+  } else {
+    return null
+  }
   return (
-    <Alert variant={failed ? "destructive" : "default"}>
-      {status.state === "offline" ? <WifiOff /> : <CircleAlert />}
-      <AlertTitle>{REGISTRY_TITLES[status.state]}</AlertTitle>
+    <Alert variant={error ? "destructive" : "default"} aria-label="Registry">
+      <CircleAlert />
+      <AlertTitle className="line-clamp-none">{title}</AlertTitle>
       <AlertDescription className="grid gap-2">
-        {status.message && <p>{status.message}</p>}
-        <p>
-          Installed plugins keep running.{" "}
-          {status.state === "never-reached"
-            ? "Nothing can be browsed until the registry is reached."
-            : `Last verified: ${formatTime(status.verifiedAt)}. Installing and updating are paused.`}
-        </p>
+        <p>{text}</p>
+        {registry && <p className="font-mono text-xs break-all select-text">{registry.source}</p>}
         <div>
           <Button variant="outline" size="sm" disabled={busy} onClick={onRetry}>
-            <RefreshCw /> Try again
+            <RefreshCw /> Check the registry
           </Button>
         </div>
       </AlertDescription>
     </Alert>
+  )
+}
+
+const OPERATION_LABELS: Record<PluginOperation, string> = {
+  install: "Installing",
+  enable: "Enabling",
+  disable: "Disabling",
+  grant: "Granting",
+  revoke: "Revoking",
+  update: "Updating",
+  rollback: "Rolling back",
+  uninstall: "Uninstalling",
+  recover: "Recovering",
+}
+
+const STAGE_LABELS: Record<PluginStage, string> = {
+  started: "started",
+  fetching: "reading the package",
+  verifying: "verifying signatures and pins",
+  installing: "unpacking and committing",
+  finished: "done",
+  failed: "failed",
+}
+
+export interface Progress {
+  plugin: string
+  operation: PluginOperation
+  stage: PluginStage
+  message?: string | undefined
+}
+
+/** Operations in flight, from the agent's progress events. */
+export function ProgressList({ progress }: { progress: Progress[] }) {
+  return (
+    <div role="status" aria-live="polite" aria-label="Plugin operations" className="grid gap-1">
+      {progress.map((p) => (
+        <p key={p.plugin} className="flex items-center gap-2 text-sm text-muted-foreground">
+          {p.stage !== "finished" && p.stage !== "failed" && (
+            <Loader2 className="size-4 animate-spin" aria-hidden />
+          )}
+          <span>
+            {OPERATION_LABELS[p.operation]} <span className="font-mono text-xs">{p.plugin}</span>:{" "}
+            {STAGE_LABELS[p.stage]}
+            {p.message ? ` (${p.message})` : ""}
+          </span>
+        </p>
+      ))}
+    </div>
   )
 }
 
@@ -169,10 +210,9 @@ export function PermissionList({
   return (
     <div className="grid gap-4" aria-label={label} role="group">
       {grantsByTier(grants).map((group) => (
-        <section key={group.tier} className="grid gap-2" aria-labelledby={`tier-${group.tier}`}>
+        <section key={group.tier} className="grid gap-2" aria-label={group.label}>
           <div>
             <h4
-              id={`tier-${group.tier}`}
               className={cn(
                 "text-xs font-medium uppercase",
                 group.tier === "high" ? "text-destructive" : "text-muted-foreground",
@@ -187,11 +227,16 @@ export function PermissionList({
               <li key={grant.key} className="flex items-start gap-3 rounded-lg border p-3">
                 <div className="grid min-w-0 flex-1 gap-0.5 text-sm">
                   <span className="font-medium break-words">{grant.title}</span>
-                  <span className="text-xs text-muted-foreground">{grant.detail}</span>
-                  <span className="text-xs">
-                    <span className="text-muted-foreground">Publisher's reason: </span>
-                    {grant.justification}
-                  </span>
+                  <span className="font-mono text-xs text-muted-foreground">{grant.key}</span>
+                  {grant.detail && (
+                    <span className="text-xs text-muted-foreground">{grant.detail}</span>
+                  )}
+                  {grant.justification && (
+                    <span className="text-xs">
+                      <span className="text-muted-foreground">Publisher's reason: </span>
+                      {grant.justification}
+                    </span>
+                  )}
                 </div>
                 {renderControl?.(grant)}
               </li>

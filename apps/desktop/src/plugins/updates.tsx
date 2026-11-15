@@ -5,24 +5,24 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 
 import type { MarketplaceActions } from "./marketplace"
-import { compareGrants } from "./permissions"
-import type { MarketplaceSnapshot } from "./types"
+import type { UpdateCandidate } from "./model"
 
-/** Newer versions of installed plugins; new permissions are always asked for. */
+/**
+ * Newer versions of installed plugins. The agent compares permissions: an
+ * update that asks for more is staged and applied only after consent.
+ */
 export function UpdatesView({
-  snapshot,
+  updates,
   actions,
 }: {
-  snapshot: MarketplaceSnapshot
+  updates: UpdateCandidate[]
   actions: MarketplaceActions
 }) {
-  const checked = snapshot.registry.checkedAt
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">
-          Last checked: {checked ? new Date(checked).toLocaleString() : "never"}. Updates that ask
-          for new permissions are never applied without your consent.
+          Updates that ask for new permissions are never applied without your consent.
         </p>
         <Button
           variant="outline"
@@ -34,42 +34,42 @@ export function UpdatesView({
         </Button>
       </div>
       {actions.blocked && <p className="text-sm text-muted-foreground">{actions.blocked}</p>}
-      {snapshot.updates.length === 0 ? (
+      {updates.length === 0 ? (
         <EmptyState title="All plugins are up to date" />
       ) : (
         <ul className="grid gap-3" aria-label="Available updates">
-          {snapshot.updates.map((update) => {
-            const item = snapshot.installed.find((p) => p.id === update.id)
-            if (!item) return null
-            const added = compareGrants(item.grants, update.permissions).added
+          {updates.map((update) => {
+            const { summary } = update.plugin
+            const to = update.kind === "staged" ? update.pending.version : update.version
+            const more =
+              update.kind === "staged"
+                ? update.pending.changes.added.length + update.pending.changes.broadened.length
+                : 0
             return (
               <li
-                key={update.id}
+                key={summary.id}
                 className="flex flex-wrap items-center gap-3 rounded-xl border bg-card p-4"
-                aria-label={`${item.name} ${update.from} to ${update.to}`}
+                aria-label={`${summary.name} ${summary.version} to ${to}`}
               >
                 <div className="grid min-w-0 flex-1 gap-1">
-                  <span className="font-medium">{item.name}</span>
+                  <span className="font-medium">{summary.name}</span>
                   <span className="text-xs text-muted-foreground">
-                    {update.from} → {update.to} · published{" "}
-                    {new Date(update.publishedAt).toLocaleDateString()}
+                    {summary.version} → {to}
                   </span>
                 </div>
-                {added.length > 0 ? (
+                {update.kind === "staged" && (
                   <Badge variant="outline">
-                    {added.length} new permission{added.length === 1 ? "" : "s"}
+                    Waiting for consent: {more} permission{more === 1 ? "" : "s"}
                   </Badge>
-                ) : (
-                  <Badge variant="secondary">No new permissions</Badge>
                 )}
                 <Button
                   size="sm"
                   disabled={actions.busy !== null || actions.blocked !== null}
                   onClick={() => {
-                    actions.update(item, update)
+                    actions.update(update)
                   }}
                 >
-                  {added.length > 0 ? "Review and update" : "Update"}
+                  {update.kind === "staged" ? "Review and update" : "Update"}
                 </Button>
               </li>
             )

@@ -1,36 +1,14 @@
 // Types of the experimental plugin marketplace.
 //
-// The registry and manifest shapes are hand-written from the design schemas
-// (docs/marketplace/schemas/plugin-manifest.schema.json and
-// registry-plugin.schema.json / registry-index.schema.json, #191). Field
-// names follow those documents exactly, including their snake_case. The
-// view types further down describe what the planned agent requests
-// (`listPlugins`, `getPluginDetail`, … protocol 10, architecture §12.6)
-// would return; none of them exists in the agent yet.
+// The agent is the source of truth: the shapes below mirror IPC protocol 10
+// (`crates/deckpilot-ipc/src/plugins.rs`, serialized in camelCase) as the
+// Tauri commands in `src-tauri/src/commands/plugins.rs` return them. The
+// manifest permission shapes (plugin-manifest.schema.json) are what a
+// registry version lists for consent before it is installed.
 
-// ---- Manifest (plugin-manifest.schema.json) ----
-
-export type PluginPlatform = "macos" | "windows" | "linux"
-
-export type PluginCategory =
-  | "developer-tools"
-  | "productivity"
-  | "communication"
-  | "monitoring"
-  | "media"
-  | "smart-home"
-  | "other"
+// ---- Manifest permissions (plugin-manifest.schema.json) ----
 
 export type HttpMethod = "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE"
-
-/** `engines` of a manifest and of every registry version. */
-export interface PluginEngines {
-  /** One or two comparators, e.g. ">=0.8.0 <1.0.0". */
-  deckpilot: string
-  /** Plugin API level, e.g. "^1.0". */
-  pluginApi: string
-  sdk?: string
-}
 
 export interface NetworkPermission {
   kind: "network"
@@ -89,7 +67,7 @@ export interface DevicePermission {
 }
 
 /** `$defs/permission` of the manifest schema. */
-export type PluginPermission =
+export type ManifestPermission =
   | NetworkPermission
   | CredentialsPermission
   | NotificationsPermission
@@ -100,171 +78,213 @@ export type PluginPermission =
   | BackgroundPermission
   | DevicePermission
 
-export type PermissionKind = PluginPermission["kind"]
+export type PermissionKind = ManifestPermission["kind"]
 
-// ---- Registry (registry-index / registry-plugin schemas) ----
+// ---- Agent shapes (protocol 10) ----
 
-export interface RegistryPublisher {
-  namespace: string
-  github_id: number
-  login: string
-  display_name?: string
-  verified: boolean
+export type RegistryFreshness = "neverVerified" | "fresh" | "stale"
+
+export interface RegistryStatus {
+  /** Where documents come from (a local directory for now). */
+  source: string
+  freshness: RegistryFreshness
+  seq?: number
 }
 
-export interface RegistryIndexEntry {
-  id: string
-  publisher: string
+/** `getPluginRuntime`: whether plugins can be used, and why not. */
+export interface PluginRuntimeStatus {
+  /** Built, enabled and unlocked: plugin requests are answered. */
+  available: boolean
+  /** The agent was built with the `plugins` feature. */
+  built: boolean
+  /** The agent was started with `--enable-plugins`. */
+  enabled: boolean
+  /** The host sandbox is verified here (macOS, Linux): plugins may run. */
+  executionSupported: boolean
+  platform: string
+  reason?: string
+  registry?: RegistryStatus
+}
+
+export type PluginState =
+  | "installing"
+  | "disabled"
+  | "enabled"
+  | "updating"
+  | "rollingBack"
+  | "uninstalling"
+  | "broken"
+  | "quarantined"
+
+export type PluginOrigin =
+  { type: "registry"; registry: string } | { type: "sideload" } | { type: "dev" }
+
+export type PermissionTier = "low" | "medium" | "high"
+
+export type PermissionStatus = "granted" | "revoked" | "notGranted"
+
+/** One declared permission, normalized to a grant by the agent. */
+export interface GrantInfo {
+  /** The grant key consents name: `network:api.example.com`, `notifications`, … */
+  key: string
+  kind: string
+  tier: PermissionTier
+  status: PermissionStatus
+  scope: unknown
+  justification?: string
+}
+
+export interface PluginActionInfo {
+  action: string
+  /** `<plugin id>.<action>`. */
+  actionType: string
   name: string
-  summary: string
-  categories?: PluginCategory[]
-  latest: { stable?: string; prerelease?: string }
-  deprecated?: { at: string; reason: string; replacement?: string }
-  detail: { path: string; sha256: string; length: number }
+  description?: string
+  available: boolean
+  unavailableReason?: string
 }
 
-export interface RegistryRevocation {
+export interface PluginSummary {
   id: string
-  versions: "*" | string[]
-  action: "yank" | "disable"
-  reason: string
-  advisory?: string
-  at: string
-}
-
-/** `$defs/version` of registry-plugin.schema.json. */
-export interface RegistryPluginVersion {
+  name: string
+  publisher: string
   version: string
-  published_at: string
-  engines: PluginEngines
-  /** Omitted means all platforms. */
-  platforms?: PluginPlatform[]
-  permissions: PluginPermission[]
-  manifest_sha256: string
-  source: {
-    repository: string
-    tag: string
-    commit: string
-    path?: string
-    archive?: string
-  }
-  package: { url: string; sha256: string; size: number }
-  builder: string
-  attestation?: string
-  yanked?: { at: string; reason: string }
+  state: PluginState
+  stateReason?: string
+  origin: PluginOrigin
+  previousVersion?: string
+  stagedVersion?: string
+  actions: PluginActionInfo[]
 }
 
-/** registry-plugin.schema.json: `plugins/<id>/<sha256>.json`. */
-export interface RegistryPlugin {
-  _type: "deckpilot-registry-plugin"
-  spec_version: 1
-  id: string
-  publisher: string
-  name: string
+export interface PermissionChanges {
+  added: GrantInfo[]
+  broadened: GrantInfo[]
+  /** Grant keys the update no longer declares. */
+  removed: string[]
+  escalation: boolean
+}
+
+export interface PendingPluginUpdate {
+  version: string
+  changes: PermissionChanges
+}
+
+export interface PluginAuditEntry {
+  /** Seconds since the Unix epoch. */
+  at: number
+  version?: string
+  op: string
+  target?: string
+  decision: string
+  reason?: string
+}
+
+/** `getPlugin` and the answer to every plugin change. */
+export interface PluginDetails {
+  summary: PluginSummary
   description: string
   license: string
   homepage?: string
-  source_repository?: string
-  versions: RegistryPluginVersion[]
+  permissions: GrantInfo[]
+  pendingUpdate?: PendingPluginUpdate
+  /** The active version's manifest.json. */
+  manifest: unknown
+  audit: PluginAuditEntry[]
 }
 
-// ---- What the planned agent requests return ----
-
-/** This DeckPilot, as the agent reports it. */
-export interface PluginEnvironment {
-  appVersion: string
-  platform: PluginPlatform
-  /** Plugin API level this build provides, e.g. "1.0". */
-  pluginApi: string
-  /** False where no OS sandbox layer is proven (architecture §16.9). */
-  pluginsSupported: boolean
+export interface AvailableVersion {
+  version: string
+  /** Manifest form, shown for consent. */
+  permissions: ManifestPermission[]
+  /** Yanked or revoked: why it cannot be installed. */
+  withdrawn?: string
+  /** Why this DeckPilot cannot run it; absent when it can. */
+  incompatible?: string[]
 }
 
-/**
- * Trust state of the local registry copy (architecture §9.3, §14).
- *
- * - `fresh`: the signed timestamp is valid; browsing, installs and updates work.
- * - `offline`: the last check failed for lack of network; cached data is shown.
- * - `stale`: the timestamp expired; nothing can be installed or updated.
- * - `verification-failed`: signatures or hashes did not verify; nothing from
- *   that fetch is used.
- * - `never-reached`: no verified copy exists on this machine.
- */
-export type RegistryState = "fresh" | "offline" | "stale" | "verification-failed" | "never-reached"
-
-export interface RegistryStatus {
-  state: RegistryState
-  /** ISO time of the last attempt to reach the registry. */
-  checkedAt?: string
-  /** ISO time of the last verified timestamp. */
-  verifiedAt?: string
-  /** Why the last check failed, in plain words. */
-  message?: string
-}
-
-export interface CatalogEntry {
-  entry: RegistryIndexEntry
-  publisher: RegistryPublisher | null
-}
-
-/** One normalized grant (architecture §5.4) as stored with its consent. */
-export interface StoredGrant {
-  key: string
-  /** The permission entry the grant came from, for display and comparison. */
-  permission: PluginPermission
-  /** False once the user revoked it. */
-  enabled: boolean
-  grantedAt: string
-  grantedForVersion: string
-  source: "install" | "update" | "user"
-}
-
-/** Problems of an installed plugin, with what the user can do about them. */
-export type InstalledProblem =
-  | { kind: "broken"; code: string; message: string; hint: string }
-  | { kind: "revoked"; reason: string; advisory?: string }
-  | { kind: "yanked"; reason: string }
-  | { kind: "deprecated"; reason: string; replacement?: string }
-  | { kind: "incompatible"; reason: string }
-
-export interface InstalledPlugin {
+export interface AvailablePlugin {
   id: string
   name: string
+  summary: string
   publisher: string
-  version: string
-  /** `dev`: an unpacked development folder (architecture §15.4). */
-  source: "registry" | "dev"
-  enabled: boolean
-  /** Permissions in the installed version's manifest. */
-  permissions: PluginPermission[]
-  grants: StoredGrant[]
-  installedAt: string
-  /** The version kept for rollback, if any. */
-  previousVersion?: string
-  problems: InstalledProblem[]
+  latest?: string
+  /** Newest first. */
+  versions: AvailableVersion[]
+  /** The installed (active) version. */
+  installed?: string
 }
 
-/** A newer version the agent would offer, with that version's permissions. */
-export interface PluginUpdate {
-  id: string
-  from: string
-  to: string
-  publishedAt: string
-  permissions: PluginPermission[]
+export interface AvailablePlugins {
+  registry: RegistryStatus
+  plugins: AvailablePlugin[]
 }
+
+export type PluginInstallSource =
+  { type: "registry"; plugin: string; version?: string } | { type: "file"; path: string }
+
+export type PluginUpdateOutcome =
+  | { type: "applied"; version: string; changes: PermissionChanges }
+  | { type: "awaitingConsent"; version: string; changes: PermissionChanges }
+
+export interface PluginUpdateResult {
+  plugin: string
+  outcome: PluginUpdateOutcome
+}
+
+export type ActionParamValue = boolean | number | string | string[]
+
+export type PluginActionOutcome =
+  | { status: "ok"; message?: string; data?: Record<string, unknown> }
+  | { status: "skipped"; message?: string }
+  | { status: "failed"; code: string; message?: string; retryable: boolean }
+
+export type PluginOperation =
+  | "install"
+  | "enable"
+  | "disable"
+  | "grant"
+  | "revoke"
+  | "update"
+  | "rollback"
+  | "uninstall"
+  | "recover"
+
+export type PluginStage =
+  "started" | "fetching" | "verifying" | "installing" | "finished" | "failed"
+
+/** A `pluginEvent` forwarded by the app (`plugin-event`). */
+export type PluginEvent =
+  | {
+      type: "progress"
+      /** The plugin id, or the package path while a file install has not read it. */
+      plugin: string
+      operation: PluginOperation
+      stage: PluginStage
+      message?: string
+    }
+  | { type: "changed"; plugin: string; state?: PluginState }
+
+// ---- What the screens show ----
+
+/** Whether the marketplace can be used, from `getPluginRuntime` or its refusal. */
+export type RuntimeAvailability =
+  | { kind: "ready"; status: PluginRuntimeStatus }
+  /** Installs and inspection work; enabling and running do not (Windows). */
+  | { kind: "platformUnsupported"; status: PluginRuntimeStatus }
+  | { kind: "notBuilt"; status: PluginRuntimeStatus }
+  | { kind: "notEnabled"; status: PluginRuntimeStatus }
+  /** Built and enabled but not answering (e.g. the configuration is locked). */
+  | { kind: "unavailable"; status: PluginRuntimeStatus }
+  | { kind: "agentNotRunning"; message: string }
+  | { kind: "agentTooOld"; message: string }
 
 export interface MarketplaceSnapshot {
-  environment: PluginEnvironment
-  registry: RegistryStatus
-  catalog: CatalogEntry[]
-  installed: InstalledPlugin[]
-  updates: PluginUpdate[]
-}
-
-export interface PluginDetail {
-  plugin: RegistryPlugin
-  entry: RegistryIndexEntry
-  publisher: RegistryPublisher | null
-  /** Revocations of the newest verified index that name this plugin. */
-  revocations: RegistryRevocation[]
+  runtime: PluginRuntimeStatus
+  /** The registry's verified state; `null` when none is configured. */
+  registry: RegistryStatus | null
+  /** Why the registry index could not be listed, if it could not. */
+  registryError?: { reason: string; message: string }
+  available: AvailablePlugin[]
+  installed: PluginDetails[]
 }

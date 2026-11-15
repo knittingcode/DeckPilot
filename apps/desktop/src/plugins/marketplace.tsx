@@ -1,30 +1,53 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { Loading } from "@/components/page"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useAppContext } from "@/lib/app-context"
 
 import { pluginErrorText, usePluginClientOverride, type PluginClient } from "./api"
-import { FixtureNotice, Notice, RegistryNotice } from "./components"
-import { PluginDetails } from "./details"
+import { createTauriPluginClient } from "./client"
+import {
+  ExperimentalNotice,
+  Notice,
+  ProgressList,
+  RegistryNotice,
+  RuntimeNotice,
+  type Progress,
+} from "./components"
+import { PluginDetailsView } from "./details"
 import { DiscoverView } from "./discover"
-import { createFixtureClient, type FixtureClient } from "./fixtures"
 import { InstalledView } from "./installed"
-import { installBlock } from "./model"
-import { compareGrants, grantsOf } from "./permissions"
+import {
+  availabilityOf,
+  availabilityOfError,
+  installBlock,
+  loadSnapshot,
+  updateCandidates,
+  type UpdateCandidate,
+} from "./model"
+import { grantOfInfo, grantsOf } from "./permissions"
 import { PermissionReviewDialog, type ReviewRequest } from "./review-dialog"
-import type { MarketplaceSnapshot } from "./types"
+import type {
+  ActionParamValue,
+  AvailablePlugin,
+  AvailableVersion,
+  MarketplaceSnapshot,
+  PermissionChanges,
+  PluginActionOutcome,
+  PluginDetails,
+  RuntimeAvailability,
+} from "./types"
 import { UpdatesView } from "./updates"
-import type { OfferedVersion } from "./compat"
-import type { InstalledPlugin, PluginDetail, PluginUpdate } from "./types"
 
 type Tab = "discover" | "installed" | "updates"
 
 type Load =
   | { status: "loading" }
+  | { status: "unavailable"; availability: RuntimeAvailability }
   | { status: "error"; message: string; hint?: string }
-  | { status: "ready"; snapshot: MarketplaceSnapshot }
+  | { status: "ready"; availability: RuntimeAvailability; snapshot: MarketplaceSnapshot }
 
 /** What the screens can ask the marketplace to do. */
 export interface MarketplaceActions {
@@ -32,90 +55,145 @@ export interface MarketplaceActions {
   busy: string | null
   /** Why installs and updates are not possible right now. */
   blocked: string | null
+  /** Plugins can be enabled and run here (not on Windows). */
+  canRun: boolean
   openDetails: (id: string) => void
-  install: (detail: PluginDetail, offered: OfferedVersion) => void
-  update: (item: InstalledPlugin, update: PluginUpdate) => void
-  setEnabled: (item: InstalledPlugin, enabled: boolean) => void
-  setGrant: (item: InstalledPlugin, key: string, enabled: boolean) => void
-  uninstall: (item: InstalledPlugin, deleteCredentials: boolean) => void
-  rollback: (item: InstalledPlugin) => void
+  install: (plugin: AvailablePlugin, version: AvailableVersion) => void
+  installFile: () => void
+  update: (candidate: UpdateCandidate) => void
+  setEnabled: (item: PluginDetails, enabled: boolean) => void
+  setGrant: (item: PluginDetails, key: string, granted: boolean) => void
+  uninstall: (item: PluginDetails) => void
+  rollback: (item: PluginDetails) => void
+  invoke: (
+    item: PluginDetails,
+    action: string,
+    params: Record<string, ActionParamValue>,
+  ) => Promise<PluginActionOutcome>
   refresh: () => void
 }
 
-function isFixtureClient(client: PluginClient): client is FixtureClient {
-  return client.source === "fixtures" && "simulate" in client
+async function loadAll(client: PluginClient, refresh = false): Promise<Load> {
+  let runtime
+  try {
+    runtime = await client.getRuntime()
+  } catch (error) {
+    const availability = availabilityOfError(error)
+    return availability
+      ? { status: "unavailable", availability }
+      : { status: "error", ...pluginErrorText(error) }
+  }
+  const availability = availabilityOf(runtime)
+  if (!runtime.available) return { status: "unavailable", availability }
+  try {
+    return { status: "ready", availability, snapshot: await loadSnapshot(client, runtime, refresh) }
+  } catch (error) {
+    return { status: "error", ...pluginErrorText(error) }
+  }
+}
+
+function updateItems(changes: PermissionChanges): ReviewRequest["items"] {
+  return [
+    ...changes.added.map((info) => ({ grant: grantOfInfo(info), state: "new" as const })),
+    ...changes.broadened.map((info) => ({
+      grant: grantOfInfo(info),
+      state: "broadened" as const,
+    })),
+  ]
 }
 
 /**
  * Settings › Extensions › Plugins: the experimental marketplace. Only
  * reachable in builds with VITE_DECKPILOT_PLUGINS=1 (see the settings
- * registry); it runs on development fixtures until the agent implements
- * the plugin requests.
+ * registry). Everything comes from the agent; the page says why when the
+ * agent cannot answer plugin requests.
  */
 export function PluginsSettings() {
   const override = usePluginClientOverride()
-  const [client] = useState<PluginClient>(() => override ?? createFixtureClient())
+  const [client] = useState<PluginClient>(() => override ?? createTauriPluginClient())
+  const { agent } = useAppContext()
   const [load, setLoad] = useState<Load>({ status: "loading" })
-  const [generation, setGeneration] = useState(0)
   const [tab, setTab] = useState<Tab>("discover")
   const [selected, setSelected] = useState<string | null>(null)
   const [review, setReview] = useState<ReviewRequest | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [progress, setProgress] = useState<Map<string, Progress>>(new Map())
   const returnFocus = useRef<HTMLElement | null>(null)
+  const generation = useRef(0)
 
+  /** Reads everything again; the page keeps showing the old data meanwhile. */
+  const reload = useCallback(
+    (refresh = false) => {
+      const current = ++generation.current
+      return loadAll(client, refresh).then((next) => {
+        if (current === generation.current) setLoad(next)
+      })
+    },
+    [client],
+  )
+
+  // The agent started, stopped or was replaced: ask again.
+  const agentKey = agent
+    ? `${String(agent.running)}:${agent.status?.version ?? ""}:${String(agent.protocol)}`
+    : "unknown"
   useEffect(() => {
-    let cancelled = false
-    client.listPlugins().then(
-      (snapshot) => {
-        if (!cancelled) setLoad({ status: "ready", snapshot })
-      },
-      (error: unknown) => {
-        if (!cancelled) setLoad({ status: "error", ...pluginErrorText(error) })
-      },
-    )
-    return () => {
-      cancelled = true
-    }
-  }, [client, generation])
+    void reload()
+  }, [reload, agentKey])
 
-  const fixtures = client.source === "fixtures"
-  const simulate = isFixtureClient(client)
-    ? (state: Parameters<FixtureClient["simulate"]>[0]) => {
-        client.simulate(state)
-        setGeneration((g) => g + 1)
-      }
-    : undefined
-  const notice = (
-    <FixtureNotice
-      registry={load.status === "ready" ? load.snapshot.registry.state : undefined}
-      onSimulate={simulate}
-    />
+  useEffect(
+    () =>
+      client.subscribe((event) => {
+        if (event.type === "progress") {
+          setProgress((previous) => {
+            const next = new Map(previous)
+            if (event.stage === "finished" || event.stage === "failed") next.delete(event.plugin)
+            else next.set(event.plugin, event)
+            return next
+          })
+        } else {
+          void reload()
+        }
+      }),
+    [client, reload],
+  )
+
+  const retry = () => {
+    setLoad({ status: "loading" })
+    void reload()
+  }
+
+  const header = (
+    <>
+      <ExperimentalNotice />
+      {progress.size > 0 && <ProgressList progress={[...progress.values()]} />}
+    </>
   )
 
   if (load.status === "loading") {
     return (
       <>
-        {fixtures && notice}
+        {header}
         <Loading />
+      </>
+    )
+  }
+  if (load.status === "unavailable") {
+    return (
+      <>
+        {header}
+        <RuntimeNotice availability={load.availability} busy={false} onRetry={retry} />
       </>
     )
   }
   if (load.status === "error") {
     return (
       <>
-        {fixtures && notice}
+        {header}
         <Notice tone="destructive" title="Plugins could not be loaded">
           <p>{load.message}</p>
           {load.hint && <p>{load.hint}</p>}
           <div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setLoad({ status: "loading" })
-                setGeneration((g) => g + 1)
-              }}
-            >
+            <Button variant="outline" size="sm" onClick={retry}>
               Try again
             </Button>
           </div>
@@ -124,27 +202,24 @@ export function PluginsSettings() {
     )
   }
 
-  const snapshot = load.snapshot
+  const { snapshot, availability } = load
   const blocked = installBlock(snapshot)
+  const canRun = snapshot.runtime.executionSupported
+  const updates = updateCandidates(snapshot)
 
-  /** Runs one request; the new snapshot replaces the old one. */
-  const run = (id: string, request: () => Promise<MarketplaceSnapshot>, success: string) => {
+  /** Runs one request, then reads everything again. Rejections propagate. */
+  const run = async (id: string, request: () => Promise<unknown>, success: string) => {
     setBusy(id)
-    return request()
-      .then((next) => {
-        setLoad({ status: "ready", snapshot: next })
-        toast.success(success)
-      })
-      .finally(() => {
-        setBusy(null)
-      })
+    try {
+      await request()
+      toast.success(success)
+    } finally {
+      await reload()
+      setBusy(null)
+    }
   }
   /** Like `run`, but reports failures as a toast instead of to a dialog. */
-  const runReported = (
-    id: string,
-    request: () => Promise<MarketplaceSnapshot>,
-    success: string,
-  ) => {
+  const runReported = (id: string, request: () => Promise<unknown>, success: string) => {
     run(id, request, success).catch((error: unknown) => {
       const { message, hint } = pluginErrorText(error)
       toast.error(message, hint ? { description: hint } : undefined)
@@ -157,121 +232,145 @@ export function PluginsSettings() {
     setReview(request)
   }
 
+  const reviewUpdate = (item: PluginDetails, version: string, changes: PermissionChanges) => {
+    const id = item.summary.id
+    openReview({
+      mode: "update",
+      pluginId: id,
+      name: item.summary.name,
+      publisher: item.summary.publisher,
+      version,
+      items: updateItems(changes),
+      removed: changes.removed,
+      confirm: (consent) =>
+        run(
+          id,
+          () => client.approveUpdate(id, consent),
+          `${item.summary.name} updated to ${version}`,
+        ),
+      decline: () =>
+        run(id, () => client.declineUpdate(id), `Update of ${item.summary.name} declined`),
+    })
+  }
+
   const actions: MarketplaceActions = {
     busy,
     blocked,
+    canRun,
     openDetails: (id) => {
       setSelected(id)
     },
-    install: (detail, offered) => {
+    install: (plugin, version) => {
       openReview({
         mode: "install",
-        pluginId: detail.plugin.id,
-        name: detail.plugin.name,
-        namespace: detail.plugin.publisher,
-        publisher: detail.publisher,
-        version: offered.version.version,
-        items: grantsOf(offered.version.permissions).map((grant) => ({ grant, state: "new" })),
+        pluginId: plugin.id,
+        name: plugin.name,
+        publisher: plugin.publisher,
+        version: version.version,
+        items: grantsOf(version.permissions).map((grant) => ({ grant, state: "new" })),
         confirm: (consent) =>
           run(
-            detail.plugin.id,
+            plugin.id,
             () =>
-              client.installPlugin({
-                id: detail.plugin.id,
-                version: offered.version.version,
+              client.installPlugin(
+                { type: "registry", plugin: plugin.id, version: version.version },
                 consent,
-              }),
-            `${detail.plugin.name} installed`,
+              ),
+            `${plugin.name} installed`,
           ),
       })
     },
-    update: (item, candidate) => {
-      const change = compareGrants(item.grants, candidate.permissions)
-      const apply = (consent: string[]) =>
-        run(
-          item.id,
-          () => client.approvePluginUpdate({ id: item.id, version: candidate.to, consent }),
-          `${item.name} updated to ${candidate.to}`,
-        )
-      if (change.added.length === 0) {
-        // Narrowing or unchanged permissions are applied without asking (§13.2).
-        runReported(
-          item.id,
-          () => client.approvePluginUpdate({ id: item.id, version: candidate.to, consent: [] }),
-          `${item.name} updated to ${candidate.to}`,
-        )
+    installFile: () => {
+      client.pickPackage().then(
+        (path) => {
+          if (!path) return
+          // The package's permissions are known once the agent verified
+          // it: nothing is granted now; enabling asks for consent.
+          runReported(
+            "package",
+            () => client.installPlugin({ type: "file", path }, []),
+            "Plugin installed from the package file; enable it to review its permissions",
+          )
+        },
+        (error: unknown) => {
+          const { message, hint } = pluginErrorText(error)
+          toast.error(message, hint ? { description: hint } : undefined)
+        },
+      )
+    },
+    update: (candidate) => {
+      const item = candidate.plugin
+      const id = item.summary.id
+      if (candidate.kind === "staged") {
+        reviewUpdate(item, candidate.pending.version, candidate.pending.changes)
         return
       }
-      const entry = snapshot.catalog.find((c) => c.entry.id === item.id)
-      openReview({
-        mode: "update",
-        pluginId: item.id,
-        name: item.name,
-        namespace: item.publisher,
-        publisher: entry?.publisher ?? null,
-        version: candidate.to,
-        items: [
-          ...change.added.map((grant) => ({ grant, state: "new" as const })),
-          ...change.kept.map(({ grant, stored }) => ({
-            grant,
-            state: stored.enabled ? ("granted" as const) : ("revoked" as const),
-          })),
-        ],
-        removed: change.removed.map(
-          (g) => grantsOf([g.permission]).find((x) => x.key === g.key)?.title ?? g.key,
-        ),
-        confirm: apply,
-      })
+      setBusy(id)
+      client
+        .updatePlugin(id, candidate.version, [])
+        .then(async (result) => {
+          if (result.outcome.type === "applied") {
+            toast.success(`${item.summary.name} updated to ${result.outcome.version}`)
+          } else {
+            // Staged until the user decides (approve or decline).
+            reviewUpdate(item, result.outcome.version, result.outcome.changes)
+          }
+          await reload()
+        })
+        .catch((error: unknown) => {
+          const { message, hint } = pluginErrorText(error)
+          toast.error(message, hint ? { description: hint } : undefined)
+        })
+        .finally(() => {
+          setBusy(null)
+        })
     },
     setEnabled: (item, enabled) => {
+      const id = item.summary.id
       if (!enabled) {
-        runReported(item.id, () => client.setPluginEnabled(item.id, false), `${item.name} disabled`)
+        runReported(id, () => client.disablePlugin(id), `${item.summary.name} disabled`)
         return
       }
-      const stored = new Map(item.grants.map((g) => [g.key, g]))
-      const entry = snapshot.catalog.find((c) => c.entry.id === item.id)
       openReview({
         mode: "enable",
-        pluginId: item.id,
-        name: item.name,
-        namespace: item.publisher,
-        publisher: entry?.publisher ?? null,
-        version: item.version,
-        items: grantsOf(item.permissions).map((grant) => {
-          const g = stored.get(grant.key)
-          return { grant, state: !g ? "new" : g.enabled ? "granted" : "revoked" }
-        }),
+        pluginId: id,
+        name: item.summary.name,
+        publisher: item.summary.publisher,
+        version: item.summary.version,
+        items: item.permissions.map((info) => ({
+          grant: grantOfInfo(info),
+          state: info.status === "granted" ? "granted" : "new",
+        })),
         confirm: (consent) =>
-          run(
-            item.id,
-            () => client.setPluginEnabled(item.id, true, consent),
-            `${item.name} enabled`,
-          ),
+          run(id, () => client.enablePlugin(id, consent), `${item.summary.name} enabled`),
       })
     },
-    setGrant: (item, key, enabled) => {
+    setGrant: (item, key, granted) => {
+      const id = item.summary.id
       runReported(
-        item.id,
-        () => client.setPluginGrant(item.id, key, enabled),
-        enabled ? "Permission allowed again" : "Permission revoked",
+        id,
+        () => (granted ? client.grantPermissions(id, [key]) : client.revokePermission(id, key)),
+        granted ? "Permission granted" : "Permission revoked",
       )
     },
-    uninstall: (item, deleteCredentials) => {
-      runReported(
-        item.id,
-        () => client.uninstallPlugin(item.id, deleteCredentials),
-        `${item.name} uninstalled`,
-      )
+    uninstall: (item) => {
+      const id = item.summary.id
+      runReported(id, () => client.uninstallPlugin(id), `${item.summary.name} uninstalled`)
     },
     rollback: (item) => {
+      const id = item.summary.id
       runReported(
-        item.id,
-        () => client.rollbackPlugin(item.id),
-        `${item.name} rolled back to ${item.previousVersion ?? "the previous version"}`,
+        id,
+        () => client.rollbackPlugin(id),
+        `${item.summary.name} rolled back to ${item.summary.previousVersion ?? "the previous version"}`,
       )
     },
+    invoke: (item, action, params) => client.invokeAction(item.summary.id, action, params),
     refresh: () => {
-      runReported("registry", () => client.refreshRegistry(), "Checked the registry")
+      setBusy("registry")
+      void reload(true).finally(() => {
+        setBusy(null)
+      })
     },
   }
 
@@ -280,16 +379,24 @@ export function PluginsSettings() {
     returnFocus.current?.focus()
   }
 
+  const selectedPlugin = selected ? snapshot.available.find((p) => p.id === selected) : undefined
+
   return (
     <>
-      {fixtures && notice}
-      <RegistryNotice status={snapshot.registry} busy={busy !== null} onRetry={actions.refresh} />
-      {selected ? (
-        <PluginDetails
-          key={selected}
-          client={client}
-          id={selected}
+      {header}
+      <RuntimeNotice availability={availability} busy={busy !== null} onRetry={retry} />
+      <RegistryNotice
+        registry={snapshot.registry}
+        error={snapshot.registryError}
+        busy={busy !== null}
+        onRetry={actions.refresh}
+      />
+      {selectedPlugin ? (
+        <PluginDetailsView
+          key={selectedPlugin.id}
+          plugin={selectedPlugin}
           snapshot={snapshot}
+          updates={updates}
           actions={actions}
           onBack={() => {
             setSelected(null)
@@ -305,14 +412,15 @@ export function PluginsSettings() {
           <TabsList aria-label="Plugin marketplace">
             <TabsTrigger value="discover">Discover</TabsTrigger>
             <TabsTrigger value="installed">Installed {snapshot.installed.length}</TabsTrigger>
-            <TabsTrigger value="updates">Updates {snapshot.updates.length}</TabsTrigger>
+            <TabsTrigger value="updates">Updates {updates.length}</TabsTrigger>
           </TabsList>
           <TabsContent value="discover" className="grid gap-4 pt-2">
-            <DiscoverView snapshot={snapshot} actions={actions} />
+            <DiscoverView snapshot={snapshot} updates={updates} actions={actions} />
           </TabsContent>
           <TabsContent value="installed" className="grid gap-4 pt-2">
             <InstalledView
               snapshot={snapshot}
+              updates={updates}
               actions={actions}
               onBrowse={() => {
                 setTab("discover")
@@ -320,13 +428,11 @@ export function PluginsSettings() {
             />
           </TabsContent>
           <TabsContent value="updates" className="grid gap-4 pt-2">
-            <UpdatesView snapshot={snapshot} actions={actions} />
+            <UpdatesView updates={updates} actions={actions} />
           </TabsContent>
         </Tabs>
       )}
-      {review && (
-        <PermissionReviewDialog request={review} fixtures={fixtures} onClose={closeReview} />
-      )}
+      {review && <PermissionReviewDialog request={review} onClose={closeReview} />}
     </>
   )
 }

@@ -146,9 +146,12 @@ Reasons: `pluginsUnavailable`, `platformUnsupported`, `locked`,
 cargo build -p deckpilot-agent --features plugins
 (cd plugins/runtime && cargo build --locked -p deckpilot-plugin-host --bin deckpilot-plugin-host)
 target/debug/deckpilot-agent --headless --enable-plugins \
-  --plugin-host plugins/runtime/target/debug/deckpilot-plugin-host \
+  --plugin-host "$PWD/plugins/runtime/target/debug/deckpilot-plugin-host" \
   --plugin-registry <registry dir> --plugin-registry-roots <roots.json>
 ```
+
+The host path must be absolute. A full manual test with a local registry
+and the app: [local-testing.md](local-testing.md).
 
 ## Tests
 
