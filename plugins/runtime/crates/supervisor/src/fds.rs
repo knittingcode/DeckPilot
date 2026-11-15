@@ -78,7 +78,7 @@ fn mark_close_on_exec_from(first: libc::c_int) {
     }
 }
 
-/// Windows: `Command` only passes handles that are explicitly inheritable
-/// and listed for the child (stdio); nothing else to do.
+/// Other platforms: nothing to do (Windows does not use `Command`; see
+/// `windows.rs`).
 #[cfg(not(unix))]
 pub(crate) fn inherit_only_stdio(_command: &mut Command) {}
