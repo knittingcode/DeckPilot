@@ -6,6 +6,11 @@
 > the owner's authorization. This tool has been used only with throwaway
 > keys in tests.
 
+Registry metadata and plugin packages are published and signed only from
+the registry repository, never with or alongside a DeckPilot application
+release, and with keys and environments of their own: see the distribution
+contract, [`docs/marketplace/distribution.md`](../../docs/marketplace/distribution.md).
+
 `deckpilot-registry` is the offline half of sections 9 to 11 of the plugin
 marketplace design (`docs/marketplace/architecture.md`, pull request #191):
 it writes the static registry site that `RegistryClient` in this crate
