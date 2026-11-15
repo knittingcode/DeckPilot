@@ -12,6 +12,7 @@ mod commands;
 mod dev_server;
 mod error;
 mod modules;
+mod plugin_actions;
 mod state;
 #[cfg(test)]
 mod tests;

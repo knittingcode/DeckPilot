@@ -131,6 +131,7 @@ pub fn summary(record: &PluginRecord, stored: &[StoredGrant]) -> ipc::PluginSumm
                     description: Some(action.description.clone()).filter(|d| !d.is_empty()),
                     available: reason.is_none(),
                     unavailable_reason: reason.clone(),
+                    definition: super::engine::action_type(&m.id.to_string(), action).ok(),
                 })
                 .collect()
         })

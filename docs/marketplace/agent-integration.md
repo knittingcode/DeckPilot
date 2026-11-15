@@ -149,6 +149,40 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
     owned by a plugin module; plugin answers never reach such clients.
     Instances in profiles stay and show as unavailable.
 
+## Plugin actions in the configuration app
+
+Only in app builds with `VITE_DECKPILOT_PLUGINS=1`; every other build asks
+the agent nothing and behaves as before.
+
+- **Source of truth.** Each `PluginActionInfo` in `listPlugins` (and in
+  every `PluginDetails`) carries `definition`: the `ActionType` exactly as
+  the engine registers it (`engine::action_type`: the manifest's parameters
+  and node contract), available or not. The field is additive and optional
+  (agents before it, or an action that does not convert, leave it out).
+- **Backend.** `src-tauri/src/plugin_actions.rs` records every answer of
+  `list_plugins` (replace; a refusal clears it), of the commands that
+  return a plugin's details (upsert) and of `uninstall_plugin` (remove).
+  `AppState::actions()` adds the recorded types to the built-in registry:
+  available ones as definition-only handlers (with no capabilities; they
+  never run in the app), the others as unavailable with the reason worded
+  as the engine words it (`Hello Weather (acme.hello-weather): the plugin
+  is disabled`). Entries outside their plugin's namespace are ignored. So
+  `create_action`, `update_action`, `save_workflow`, graph validation and
+  layouts validate plugin actions as the agent will run them, and refuse
+  new ones that cannot run. Until the frontend asks, nothing is recorded.
+- **Frontend.** `plugins/use-plugin-modules.ts` lists the installed plugins
+  when the agent starts or changes and on every `changed` plugin event;
+  `lib/plugin-actions.ts` turns each into a module of the editors (id = the
+  plugin id, action types = the definitions, per-type unavailable reasons),
+  kept apart from the built-in modules (`AppContext.pluginModules`,
+  `useActionModules`). The Action Library's type picker and the workflow
+  node palette list them under the plugin's name, with the manifest
+  parameters as editors; unavailable actions show the reason and cannot be
+  chosen, placed or created. Instances of a disabled plugin keep their
+  name and parameters and show the reason; those of an uninstalled plugin
+  say that the plugin is not installed. None is ever dropped. The owner of
+  a type is everything before its **last** `.`, as `ModuleId::owner_of`.
+
 ## IPC (protocol 10, capability `plugins`)
 
 Types: `crates/deckpilot-ipc/src/plugins.rs`. Every request below has
@@ -160,7 +194,7 @@ older clients ignore.
 | Request (`type`) | Fields | Answer |
 | --- | --- | --- |
 | `getPluginRuntime` | — | `pluginRuntime { status }`: `available`, `built`, `enabled`, `executionSupported`, `platform`, `reason`, `registry { source, freshness, seq }` (answered even when plugins are off) |
-| `listPlugins` | — | `plugins { plugins: [PluginSummary] }` |
+| `listPlugins` | — | `plugins { plugins: [PluginSummary] }` (each action with its `definition`) |
 | `getPlugin` | `plugin` | `plugin { plugin: PluginDetails }` |
 | `listAvailablePlugins` | `refresh` | `availablePlugins { registry, plugins: [AvailablePlugin] }` (versions newest first, permissions, `withdrawn`, `incompatible`) |
 | `installPlugin` | `source: {type: "registry", plugin, version?} \| {type: "file", path}`, `consent: [key]` | `plugin` (state `disabled`) |
@@ -248,9 +282,10 @@ Windows (not a required check).
   file, not in the encrypted database.
 - No plugin storage, credential slots, variables (design §2.3 item 3),
   settings or background work; their capabilities are refused.
-- The configuration app does not offer plugin actions in its action
-  editors yet; instances come from imported or hand-made profiles. Its own
-  module registry has only the built-in modules.
+- The layout editor's gesture editor and the step-workflow editor use the
+  backend's action type list as before; plugin types appear there only
+  after the app has read the installed plugins (see
+  [the editors](#plugin-actions-in-the-configuration-app)).
 - An abort does not interrupt a capability call that is already running.
 - `plugin_known` (design §2.3 item 4) does not exist: an uninstalled
   plugin's actions are reported as "not available" without its name.

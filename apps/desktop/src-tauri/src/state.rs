@@ -15,6 +15,7 @@ use deckpilot_storage::{
 };
 
 use crate::error::{CommandError, CommandResult};
+use crate::plugin_actions::PluginActions;
 
 /// Setting with the app version for which the user last authenticated.
 /// With the "after updates" policy, authentication is asked for once after
@@ -47,6 +48,9 @@ pub struct AppState {
     /// Feature modules with their stored state. Action parameters are
     /// validated against the enabled modules; actions run in the agent.
     modules: Mutex<ModuleRegistry>,
+    /// Action types of installed plugins, as the agent last reported them;
+    /// empty unless the frontend asks for plugins (experimental builds).
+    plugin_actions: Mutex<PluginActions>,
     pub catalog: ModelCatalog,
     pub paths: AgentPaths,
     pub vault: Vault,
@@ -106,6 +110,7 @@ impl AppState {
         Ok(Self {
             session: Mutex::new(None),
             modules: Mutex::new(deckpilot_modules::builtin(Os::current())),
+            plugin_actions: Mutex::new(PluginActions::default()),
             catalog: ModelCatalog::builtin(),
             vault: Vault::new(&paths.database),
             paths,
@@ -247,9 +252,19 @@ impl AppState {
         self.modules.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The action types of the enabled modules.
+    /// The action types of the enabled modules, and those of installed
+    /// plugins the agent reported (none unless plugins were asked for).
     pub fn actions(&self) -> ActionRegistry {
-        self.modules().action_registry()
+        let mut registry = self.modules().action_registry();
+        self.plugin_actions().extend(&mut registry);
+        registry
+    }
+
+    /// The installed plugins' action types, as the agent last reported them.
+    pub fn plugin_actions(&self) -> MutexGuard<'_, PluginActions> {
+        self.plugin_actions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Fails unless the module is enabled. Used by commands that belong to a

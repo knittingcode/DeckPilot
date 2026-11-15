@@ -147,9 +147,14 @@ async fn plugin_request(state: &AppState, request: Request) -> PluginResult<Resp
     Ok(client.request(request).await?)
 }
 
+/// Every answer with one plugin's details also updates the action types
+/// the editors validate against ([`crate::plugin_actions`]).
 async fn plugin_details(state: &AppState, request: Request) -> PluginResult<PluginDetails> {
     match plugin_request(state, request).await? {
-        Response::Plugin { plugin } => Ok(*plugin),
+        Response::Plugin { plugin } => {
+            state.plugin_actions().upsert(&plugin.summary);
+            Ok(*plugin)
+        }
         other => Err(PluginError::unexpected(&other)),
     }
 }
@@ -187,12 +192,21 @@ pub async fn get_plugin_runtime(state: State<'_, AppState>) -> PluginResult<Plug
     }
 }
 
+/// The installed plugins. The answer is also what the editors validate
+/// plugin actions against ([`crate::plugin_actions`]); when the agent
+/// cannot answer, no plugin action type is known until it can.
 #[tauri::command]
 pub async fn list_plugins(state: State<'_, AppState>) -> PluginResult<Vec<PluginSummary>> {
-    match plugin_request(&state, Request::ListPlugins).await? {
-        Response::Plugins { plugins } => Ok(plugins),
-        other => Err(PluginError::unexpected(&other)),
+    let answer = match plugin_request(&state, Request::ListPlugins).await {
+        Ok(Response::Plugins { plugins }) => Ok(plugins),
+        Ok(other) => Err(PluginError::unexpected(&other)),
+        Err(error) => Err(error),
+    };
+    match &answer {
+        Ok(plugins) => state.plugin_actions().replace(plugins),
+        Err(_) => state.plugin_actions().clear(),
     }
+    answer
 }
 
 #[tauri::command]
@@ -322,8 +336,18 @@ pub async fn rollback_plugin(
 
 #[tauri::command]
 pub async fn uninstall_plugin(state: State<'_, AppState>, plugin: String) -> PluginResult<()> {
-    match plugin_request(&state, Request::UninstallPlugin { plugin }).await? {
-        Response::Ok => Ok(()),
+    match plugin_request(
+        &state,
+        Request::UninstallPlugin {
+            plugin: plugin.clone(),
+        },
+    )
+    .await?
+    {
+        Response::Ok => {
+            state.plugin_actions().remove(&plugin);
+            Ok(())
+        }
         other => Err(PluginError::unexpected(&other)),
     }
 }
@@ -391,8 +415,9 @@ pub struct PluginEvents {
 }
 
 /// Starts forwarding the agent's `pluginEvent` messages to the windows as
-/// [`crate::agent::PLUGIN_EVENT`]. Only the plugin screen asks for it, so
-/// an app that never shows it never subscribes. Idempotent.
+/// [`crate::agent::PLUGIN_EVENT`]. Only builds with plugins ask for it
+/// (the plugin screen, and the editors to follow the installed plugins),
+/// so other builds never subscribe. Idempotent.
 #[tauri::command]
 pub fn watch_plugin_events<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>) {
     let Some(events) = app.try_state::<PluginEvents>() else {

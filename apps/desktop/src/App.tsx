@@ -33,6 +33,7 @@ import { ExecutionStore } from "@/lib/executions"
 import { TitlebarStore } from "@/lib/titlebar"
 import type { AgentConnection, ModuleInfo, UpdateState } from "@/lib/types"
 import { MODULE_VIEWS, isModulePageAvailable, moduleStatusItems } from "@/modules"
+import { usePluginModules } from "@/plugins/use-plugin-modules"
 import { SettingsView } from "@/settings/settings-view"
 import { findSettingsPage } from "@/settings/registry"
 
@@ -84,6 +85,12 @@ function Studio() {
   const [editing, setEditing] = useState<string | null>(storedEditingProfile)
   const [modules, setModules] = useState<ModuleInfo[] | null>(null)
   const { state } = useAsync(() => api.listProfiles(), String(revision))
+  // Installed plugins for the action editors; always empty (and never
+  // asked for) in builds without VITE_DECKPILOT_PLUGINS=1.
+  const agentKey = agent
+    ? `${String(agent.running)}:${agent.status?.version ?? ""}:${String(agent.protocol)}`
+    : "unknown"
+  const pluginModules = usePluginModules(agentKey)
 
   // Which locations exist depends on the enabled modules.
   const exists = useMemo(
@@ -196,8 +203,20 @@ function Studio() {
       },
       modules,
       setModules,
+      ...(pluginModules.length > 0 ? { pluginModules } : {}),
     }
-  }, [state, modules, editing, setEditingProfileId, refresh, revision, agent, updates, navigation])
+  }, [
+    state,
+    modules,
+    pluginModules,
+    editing,
+    setEditingProfileId,
+    refresh,
+    revision,
+    agent,
+    updates,
+    navigation,
+  ])
 
   if (!context) {
     return (

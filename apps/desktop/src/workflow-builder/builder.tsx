@@ -675,7 +675,8 @@ function Builder({
   const onDrop = (event: React.DragEvent) => {
     const key = event.dataTransfer.getData(DRAG_TYPE)
     const entry = groups.flatMap((g) => g.entries).find((e) => e.key === key)
-    if (!entry) return
+    // Unavailable entries (plugin actions that cannot run) are never placed.
+    if (!entry || entry.unavailable) return
     event.preventDefault()
     addEntry(entry, flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }))
   }

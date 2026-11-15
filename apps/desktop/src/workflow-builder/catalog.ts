@@ -5,6 +5,7 @@
  * the profile's actions of those types; the editor knows no module.
  */
 import { creatableTypes } from "@/lib/modules"
+import { pluginTypeUnavailable } from "@/lib/plugin-actions"
 import type { ActionInstance, ActionType, GraphNodeKind, ModuleInfo } from "@/lib/types"
 
 import { DEFAULT_POLICY, type NodeType } from "./graph"
@@ -18,6 +19,8 @@ export interface CatalogEntry {
   /** Name for the node id. */
   name: string
   kind: GraphNodeKind
+  /** Why the entry cannot be placed now (a plugin action); absent when it can. */
+  unavailable?: string
 }
 
 export interface CatalogGroup {
@@ -26,6 +29,8 @@ export interface CatalogGroup {
   entries: CatalogEntry[]
   /** Action types of the group that can get a new action (module groups). */
   types: ActionType[]
+  /** Plugin action types that cannot get a new action now, with the reason. */
+  unavailableTypes?: { type: ActionType; reason: string }[]
 }
 
 export const FLOW_TITLE: Record<NodeType, string> = {
@@ -94,22 +99,38 @@ export function actionEntry(action: ActionInstance, type: ActionType | undefined
   }
 }
 
-/** One group per enabled module that provides action types. */
+/**
+ * One group per enabled module that provides action types, and one per
+ * installed plugin (builds with plugins only): its actions that cannot run
+ * now are listed with the reason and cannot be placed.
+ */
 export function moduleGroups(modules: ModuleInfo[], actions: ActionInstance[]): CatalogGroup[] {
   return modules
-    .filter((module) => module.enabled && module.actionTypes.length > 0)
+    .filter((module) => (module.enabled || module.plugin) && module.actionTypes.length > 0)
     .map((module) => {
       const types = new Map(module.actionTypes.map((t) => [t.id, t]))
-      return {
+      const group: CatalogGroup = {
         id: module.id,
         title: module.name,
         entries: actions
           .filter((a) => types.has(a.actionType))
-          .map((a) => actionEntry(a, types.get(a.actionType))),
+          .map((a) => {
+            const entry = actionEntry(a, types.get(a.actionType))
+            const unavailable = pluginTypeUnavailable(module, a.actionType)
+            return unavailable ? { ...entry, unavailable } : entry
+          }),
         // Saved actions of deprecated types stay listed above; new nodes
         // are made from the types that replace them.
-        types: creatableTypes(module.actionTypes),
+        types: creatableTypes(module.actionTypes).filter(
+          (t) => !pluginTypeUnavailable(module, t.id),
+        ),
       }
+      if (!module.plugin) return group
+      const unavailableTypes = creatableTypes(module.actionTypes).flatMap((type) => {
+        const reason = pluginTypeUnavailable(module, type.id)
+        return reason ? [{ type, reason }] : []
+      })
+      return unavailableTypes.length > 0 ? { ...group, unavailableTypes } : group
     })
 }
 
@@ -132,9 +153,21 @@ export function searchCatalog(groups: CatalogGroup[], query: string): CatalogGro
         types: group.types.filter(
           (t) => groupMatches || matches(t.name, q) || matches(t.description, q),
         ),
+        ...(group.unavailableTypes
+          ? {
+              unavailableTypes: group.unavailableTypes.filter(
+                ({ type: t }) => groupMatches || matches(t.name, q) || matches(t.description, q),
+              ),
+            }
+          : {}),
       }
     })
-    .filter((group) => group.entries.length > 0 || group.types.length > 0)
+    .filter(
+      (group) =>
+        group.entries.length > 0 ||
+        group.types.length > 0 ||
+        (group.unavailableTypes?.length ?? 0) > 0,
+    )
 }
 
 /** Drag-and-drop payload type for catalog entries. */
