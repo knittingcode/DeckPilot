@@ -85,11 +85,13 @@ configuration app ──IPC protocol 10──▶ agent service task
   Windows may run plugins; elsewhere installing and inspecting work.
 - **Full sandbox only.** On every platform, every host the agent starts
   (and every restart) must report `enforcement: full` in its `ready`
-  message: macOS Seatbelt, Linux seccomp with Landlock, Windows
-  `windows-appcontainer-job` (the AppContainer and Job Object the
+  message: macOS Seatbelt; Linux seccomp with Landlock (every right up to
+  ABI 9, or ABI 8, where the one missing right, `ResolveUnix`, is covered
+  by seccomp denying `socket` and `connect`; see plugins/runtime/README.md);
+  Windows `windows-appcontainer-job` (the AppContainer and Job Object the
   supervisor launches it in). A host reporting `partial` (Linux without
-  Landlock; Windows `windows-job-lowil`, which does not deny reading user
-  files or the network) or `none` is killed before it receives the module
+  Landlock or with an ABI below 8; Windows `windows-job-lowil`, which does
+  not deny reading user files or the network) or `none` is killed before it receives the module
   (`HostConfig::require_full_sandbox`, checked in the supervisor's
   handshake so no restart can skip it). The invocation fails with
   `hostFailed` and a message naming the mechanism and level; the
@@ -203,5 +205,7 @@ Windows (not a required check).
   cannot get its AppContainer reports `partial` and is refused rather than
   run.
 - The sandbox is verified locally on macOS only for this integration; Linux
-  and Windows rely on the CI workflow. A Linux kernel without Landlock
-  makes the host report `partial`, so plugins do not run there.
+  and Windows rely on the CI workflow (Linux: GitHub's `ubuntu-latest`,
+  kernel 7.0, Landlock ABI 8). A Linux kernel without Landlock, or with an
+  ABI below 8 (before Linux 7.0), makes the host report `partial`, so
+  plugins do not run there; that excludes most current LTS kernels.

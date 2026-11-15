@@ -98,8 +98,9 @@ jobs:
       # first keeps compile time out of the test's timeouts.
       # Diagnostic only: the kernel and the Landlock ABI it provides
       # (landlock_create_ruleset with LANDLOCK_CREATE_RULESET_VERSION). The
-      # host asks for every right up to its newest ABI and reports
-      # `partial` when the kernel has fewer; the agent then refuses it.
+      # host reports `full` only with ABI 9, or ABI 8 with the seccomp
+      # cover for ResolveUnix; below that `partial`, which the agent
+      # refuses, so this explains a Linux failure at a glance.
       - name: Kernel and Landlock ABI (Linux)
         if: runner.os == 'Linux'
         run: |

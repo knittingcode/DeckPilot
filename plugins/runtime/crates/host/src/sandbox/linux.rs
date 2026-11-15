@@ -5,6 +5,15 @@
 //! the epoch ticker thread started afterwards inherits them. The seccomp
 //! filter is installed by [`finish`] with `SECCOMP_FILTER_FLAG_TSYNC`, so it
 //! covers every thread, and allows no thread or process creation at all.
+//!
+//! Enforcement is `full` when Landlock enforces every right this code asks
+//! for (ABI 9), or when the kernel provides exactly Landlock ABI 8 and the
+//! seccomp allowlist has no socket, connect, open or exec call
+//! ([`seccomp_covers_resolve_unix`]): ABI 9 adds only
+//! `AccessFs::ResolveUnix` (connecting to pathname UNIX sockets), which
+//! needs `socket` and `connect`, and seccomp denies both outright. Anything
+//! else (no Landlock, an ABI below 8, any other missing right) is
+//! `partial`.
 
 use std::collections::BTreeMap;
 
@@ -21,13 +30,32 @@ use seccompiler::{
 use super::SandboxError;
 
 /// The newest Landlock ABI this code asks for; older kernels get what they
-/// support (best effort) and the report says `partial`.
+/// support (best effort).
 const LANDLOCK_ABI: ABI = ABI::V9;
+
+/// The oldest kernel Landlock ABI that still counts as `full`, given
+/// [`seccomp_covers_resolve_unix`]: it lacks only V9's `ResolveUnix`.
+const LANDLOCK_ABI_COVERED_BY_SECCOMP: i64 = 8;
+
+/// `LANDLOCK_CREATE_RULESET_VERSION`: `landlock_create_ruleset` returns the
+/// kernel's ABI version instead of creating a ruleset.
+const LANDLOCK_CREATE_RULESET_VERSION: libc::c_uint = 1;
+
+/// How much of the requested Landlock ruleset the kernel enforces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Landlock {
+    /// Every requested right (ABI 9 or newer).
+    Full,
+    /// Kernel ABI 8: everything but `ResolveUnix`.
+    MissingResolveUnix,
+    /// Anything less.
+    Partial,
+}
 
 #[derive(Debug)]
 pub struct Pending {
     notes: Vec<String>,
-    landlock_full: bool,
+    landlock: Landlock,
 }
 
 fn os_err(what: &str) -> SandboxError {
@@ -54,6 +82,10 @@ pub fn begin() -> Result<Pending, SandboxError> {
     }
     notes.push("no_new_privs, dumpable=0, RLIMIT_CORE=0".into());
 
+    // The kernel's ABI, probed before restricting (a negative value: no
+    // Landlock).
+    let kernel_abi = landlock_abi();
+
     // Handle every access right the kernel knows and add no rule: all file
     // system access, TCP bind/connect and scoped IPC are denied.
     let status = Ruleset::default()
@@ -64,16 +96,92 @@ pub fn begin() -> Result<Pending, SandboxError> {
         .and_then(|r| r.create())
         .and_then(|r| r.restrict_self())
         .map_err(|e| SandboxError(format!("landlock: {e}")))?;
-    let landlock_full = status.ruleset == RulesetStatus::FullyEnforced;
     notes.push(format!("landlock: {:?}", status.ruleset));
-    if status.ruleset == RulesetStatus::NotEnforced {
-        notes.push("landlock unavailable: seccomp alone denies open/socket/exec".into());
+    let not_enforced = status.ruleset == RulesetStatus::NotEnforced;
+    let landlock = classify(status.ruleset, kernel_abi);
+    match landlock {
+        Landlock::Full => {}
+        Landlock::MissingResolveUnix => notes.push(
+            "landlock ABI 8: ResolveUnix unavailable, covered by seccomp (no socket/connect)"
+                .into(),
+        ),
+        Landlock::Partial if not_enforced => {
+            notes.push("landlock unavailable: seccomp alone denies open/socket/exec".into());
+        }
+        Landlock::Partial => notes.push(format!("landlock ABI {kernel_abi}: rights missing")),
     }
-    Ok(Pending {
-        notes,
-        landlock_full,
-    })
+    Ok(Pending { notes, landlock })
 }
+
+/// The kernel's Landlock ABI version, or a negative errno-style value when
+/// Landlock is unavailable.
+fn landlock_abi() -> i64 {
+    // SAFETY: with a null attribute pointer, size 0 and the VERSION flag the
+    // syscall only returns the ABI version (or an error); nothing is read.
+    let v = unsafe {
+        libc::syscall(
+            libc::SYS_landlock_create_ruleset,
+            std::ptr::null::<libc::c_void>(),
+            0usize,
+            LANDLOCK_CREATE_RULESET_VERSION,
+        )
+    };
+    if v < 0 {
+        -i64::from(std::io::Error::last_os_error().raw_os_error().unwrap_or(1))
+    } else {
+        v
+    }
+}
+
+/// `full` needs every requested right, or kernel ABI 8 (only `ResolveUnix`
+/// missing) with a seccomp allowlist that denies what `ResolveUnix` would.
+fn classify(ruleset: RulesetStatus, kernel_abi: i64) -> Landlock {
+    match ruleset {
+        RulesetStatus::FullyEnforced => Landlock::Full,
+        RulesetStatus::PartiallyEnforced
+            if kernel_abi == LANDLOCK_ABI_COVERED_BY_SECCOMP && seccomp_covers_resolve_unix() =>
+        {
+            Landlock::MissingResolveUnix
+        }
+        _ => Landlock::Partial,
+    }
+}
+
+/// Syscalls the seccomp filter must never allow while the `ResolveUnix`
+/// exception applies: creating or connecting a socket, opening a path,
+/// executing a program.
+fn denied_for_resolve_unix() -> Vec<i64> {
+    let mut v = vec![
+        libc::SYS_socket,
+        libc::SYS_socketpair,
+        libc::SYS_connect,
+        libc::SYS_sendto,
+        libc::SYS_sendmsg,
+        libc::SYS_openat,
+        libc::SYS_openat2,
+        libc::SYS_open_by_handle_at,
+        libc::SYS_execve,
+        libc::SYS_execveat,
+    ];
+    // `open` exists only on x86_64 (aarch64 has `openat` alone).
+    #[cfg(target_arch = "x86_64")]
+    v.push(libc::SYS_open);
+    v.sort_unstable();
+    v
+}
+
+/// Whether the seccomp filter (unconditional and conditional rules) allows
+/// none of [`denied_for_resolve_unix`].
+fn seccomp_covers_resolve_unix() -> bool {
+    let denied = denied_for_resolve_unix();
+    allowed_syscalls()
+        .into_iter()
+        .chain(CONDITIONAL_SYSCALLS)
+        .all(|s| !denied.contains(&s))
+}
+
+/// Allowed only with an argument condition (see [`filter`]).
+const CONDITIONAL_SYSCALLS: [i64; 1] = [libc::SYS_tgkill];
 
 fn allowed_syscalls() -> Vec<i64> {
     let mut v = vec![
@@ -131,7 +239,7 @@ fn filter() -> Result<BpfProgram, SandboxError> {
     let own = SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, pid)
         .and_then(|c| SeccompRule::new(vec![c]))
         .map_err(|e| SandboxError(format!("seccomp rule: {e}")))?;
-    rules.insert(libc::SYS_tgkill, vec![own]);
+    rules.insert(CONDITIONAL_SYSCALLS[0], vec![own]);
     SeccompFilter::new(
         rules,
         SeccompAction::Errno(libc::EPERM as u32),
@@ -156,11 +264,52 @@ pub fn finish(pending: Pending) -> Result<SandboxReport, SandboxError> {
     notes.push("seccomp allowlist (TSYNC), default EPERM".into());
     Ok(SandboxReport {
         mechanism: "linux-landlock-seccomp".into(),
-        enforcement: if pending.landlock_full {
-            Enforcement::Full
-        } else {
-            Enforcement::Partial
+        enforcement: match pending.landlock {
+            Landlock::Full | Landlock::MissingResolveUnix => Enforcement::Full,
+            Landlock::Partial => Enforcement::Partial,
         },
         notes,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_allowlist_has_no_socket_connect_open_or_exec() {
+        let allowed: Vec<i64> = allowed_syscalls()
+            .into_iter()
+            .chain(CONDITIONAL_SYSCALLS)
+            .collect();
+        for s in denied_for_resolve_unix() {
+            assert!(!allowed.contains(&s), "syscall {s} is allowed");
+        }
+        assert!(seccomp_covers_resolve_unix());
+    }
+
+    #[test]
+    fn abi_9_adds_only_resolve_unix() {
+        // The exception is sound only while V9's sole addition over V8 is
+        // `ResolveUnix`.
+        assert_eq!(
+            AccessFs::from_all(ABI::V9) & !AccessFs::from_all(ABI::V8),
+            AccessFs::ResolveUnix
+        );
+        assert_eq!(AccessNet::from_all(ABI::V9), AccessNet::from_all(ABI::V8));
+        assert_eq!(Scope::from_all(ABI::V9), Scope::from_all(ABI::V8));
+        assert_eq!(LANDLOCK_ABI, ABI::V9);
+    }
+
+    #[test]
+    fn only_abi_8_with_seccomp_counts_as_full() {
+        use RulesetStatus::{FullyEnforced, NotEnforced, PartiallyEnforced};
+        assert_eq!(classify(FullyEnforced, 9), Landlock::Full);
+        assert_eq!(classify(PartiallyEnforced, 8), Landlock::MissingResolveUnix);
+        for abi in [-38, 1, 4, 6, 7, 9, 10] {
+            assert_eq!(classify(PartiallyEnforced, abi), Landlock::Partial, "{abi}");
+        }
+        assert_eq!(classify(NotEnforced, -38), Landlock::Partial);
+        assert_eq!(classify(NotEnforced, 8), Landlock::Partial);
+    }
 }
