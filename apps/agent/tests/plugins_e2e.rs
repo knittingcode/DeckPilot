@@ -2470,6 +2470,7 @@ async fn a_revoke_during_an_action_denies_its_next_call() {
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+        let sent_at = Instant::now();
         agent
             .request(Request::RevokePluginPermission {
                 plugin: CRASHY.into(),
@@ -2477,15 +2478,19 @@ async fn a_revoke_during_an_action_denies_its_next_call() {
             })
             .await
             .unwrap();
-        Instant::now()
+        Instant::now().duration_since(sent_at)
     };
-    let (outcome, revoked_at) = tokio::join!(run, revoke);
+    let (outcome, revoke_took) = tokio::join!(run, revoke);
     let outcome = outcome.unwrap();
     let PluginActionOutcome::Ok { data, .. } = &outcome else {
         panic!("{outcome:?}")
     };
-    // The revoke landed while the first request was still waiting.
-    assert!(revoked_at.elapsed() < Duration::from_millis(TWO_FETCHES_MS));
+    // The revoke landed while the first request was still waiting (it
+    // was seen going out, and is answered TWO_FETCHES_MS later).
+    assert!(
+        revoke_took < Duration::from_millis(TWO_FETCHES_MS),
+        "the revoke took {revoke_took:?}"
+    );
     assert_eq!(data["first"], json!(200), "{outcome:?}");
     assert_eq!(data["second"], json!("not-permitted"), "{outcome:?}");
     let requests = fetched(&env.http);
