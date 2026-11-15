@@ -1,0 +1,24 @@
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: production-release
+    steps:
+      - name: Stage the plugin host as a bundled component
+        run: |
+          cargo build --locked --release --manifest-path plugins/runtime/Cargo.toml -p deckpilot-plugin-host
+          cp plugins/runtime/target/release/deckpilot-plugin-host \
+            apps/desktop/src-tauri/binaries/deckpilot-plugin-host-x86_64-unknown-linux-gnu
+      - uses: tauri-apps/tauri-action@0123456789abcdef0123456789abcdef01234567
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        with:
+          projectPath: apps/desktop
+          args: --config src-tauri/tauri.release.conf.json
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" SHA256SUMS release-meta.json latest.json --clobber

@@ -1,0 +1,12 @@
+# expect: runs a registry publishing or signing command
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    environment: registry-publish
+    steps:
+      - run: deckpilot-registry sign-index --key "$RUNNER_TEMP/index.key" --password-env KEY_PASSWORD

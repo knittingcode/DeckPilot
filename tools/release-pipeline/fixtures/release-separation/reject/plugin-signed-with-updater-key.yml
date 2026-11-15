@@ -1,0 +1,14 @@
+# expect: signs a plugin package
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    environment: production-release
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+    steps:
+      - run: pnpm tauri signer sign dist/com.example.clock-1.2.0.dpplugin
