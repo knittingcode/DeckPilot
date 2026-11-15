@@ -75,7 +75,10 @@ for file in "$linux"/*/* "$windows"/*/*; do cp "$file" "$release/"; done
 ls "$release" > "$work/assets.txt"
 printf 'Release notes of the test.\n\n' > "$work/notes.md"
 
-export REPOSITORY=knittingcode/DeckPilot VERSION="$version" NOTES_FILE="$work/notes.md" \
+# The repository's current name (lowercase), as GitHub reports it: the
+# manifest must still use the pinned DeckPilot prefix that installed clients
+# require (tools/release-pipeline/common.sh), never this name.
+export REPOSITORY=knittingcode/deckpilot GITHUB_REPOSITORY=knittingcode/deckpilot VERSION="$version" NOTES_FILE="$work/notes.md" \
   PUB_DATE=2026-01-01T00:00:00Z ASSETS_FILE="$work/assets.txt"
 
 # assemble <tag> <fragments dir> <output>
@@ -97,10 +100,12 @@ same "$(manifest_value '.platforms | keys | join(" ")')" \
   "every target key once"
 same "$(manifest_value '.platforms["darwin-x86_64"].url')" \
   "https://github.com/knittingcode/DeckPilot/releases/download/v$version/DeckPilot_x64.app.tar.gz|" \
-  "macOS URL uses the uploaded asset name"
+  "macOS URL uses the uploaded asset name and the pinned prefix"
 same "$(manifest_value '.platforms["windows-x86_64"].url')" \
   "https://github.com/knittingcode/DeckPilot/releases/download/v$version/DeckPilot_${version}_x64_en-US.msi|" \
   "Windows default is the MSI"
+same "$(manifest_value '[.platforms[].url | select(startswith("https://github.com/knittingcode/DeckPilot/releases/download/v'"$version"'/") | not)] | length')" \
+  "0|" "every URL has the client-compatible prefix, not the repository's current spelling"
 same "$(manifest_value '.notes, .version, .pub_date')" \
   "Release notes of the test.|$version|2026-01-01T00:00:00Z|" "version, notes and date"
 # The same verification as the release workflow's verify job.

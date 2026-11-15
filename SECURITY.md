@@ -21,7 +21,7 @@ are no backports. Draft releases are not supported versions.
 Please report vulnerabilities **privately** through GitHub's private
 vulnerability reporting: open the repository's **Security** tab and choose
 **Report a vulnerability**
-(<https://github.com/knittingcode/DeckPilot/security/advisories/new>).
+(<https://github.com/knittingcode/deckpilot/security/advisories/new>).
 
 Do not open a public issue, pull request or discussion for a suspected
 vulnerability, and do not include exploit details in public places.
