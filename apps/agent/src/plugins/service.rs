@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -37,8 +37,8 @@ use deckpilot_plugin_package::{
 };
 use deckpilot_plugin_registry::{InstallError, InstalledVerdict, Refresh, RegistryError};
 use deckpilot_plugin_store::{
-    Consent, GrantKey, InstallSource, ManagerOptions, PluginManager, PluginRecord, PluginState,
-    StoreError, StoreKey, UpdateOutcome, VerdictSource,
+    Consent, GrantKey, InstallSource, ManagerOptions, PluginData, PluginManager, PluginRecord,
+    PluginState, Retention, StoreError, StoreKey, UpdateOutcome, VerdictSource,
 };
 use deckpilot_plugin_supervisor::{
     AbortSignal, HostCommand, HostConfig, HostError, RestartPolicy, Supervisor, SupervisorError,
@@ -48,8 +48,9 @@ use tokio::sync::oneshot;
 use tracing::{info, warn};
 
 use super::convert;
+use super::data;
 use super::engine::CatalogPlugin;
-use super::executor::{Executor, Transport};
+use super::executor::{DataAccess, Executor, SharedData, Transport};
 use super::lane::{Done, Ended, Job, Lane, LaneEnd, LaneError};
 use super::registry::LocalRegistry;
 use super::worker::{EngineFailure, EngineReply, Events};
@@ -57,6 +58,9 @@ use super::{PluginSettings, platform, platform_problem};
 
 /// Who decides in the audit log.
 const DECIDED_BY: &str = "user";
+/// The shared code of an invocation whose parameters do not match the
+/// action's declaration (refused by the agent, before the host).
+const INVALID_PARAMETERS: &str = "invalid-parameters";
 /// The plugin API level this agent provides (`deckpilot-plugin-sdk` 1.0).
 const PLUGIN_API: ApiLevel = ApiLevel::new(1, 0);
 /// Longest any invocation may take, whatever the manifest says.
@@ -117,6 +121,7 @@ fn store_error(error: &StoreError) -> IpcError {
         E::Revoked { .. } => self::error(ErrorCode::Failed, reason::REVOKED, message),
         E::Integrity { .. } => self::error(ErrorCode::Failed, reason::BROKEN, message),
         E::Package(package) => package_error(package),
+        E::InvalidData(_) => self::error(ErrorCode::InvalidRequest, reason::INVALID_DATA, message),
         E::IllegalTransition { .. }
         | E::OperationInProgress { .. }
         | E::NoPreviousVersion(_)
@@ -270,6 +275,9 @@ pub(super) struct PluginService {
     host: PathBuf,
     events: Events,
     transport: Transport,
+    /// The capability executors' connection to plugins.db (storage,
+    /// secrets, settings); emptied when the service shuts down.
+    data: SharedData,
 }
 
 impl std::fmt::Debug for PluginService {
@@ -286,6 +294,8 @@ struct Prepared {
     timeout: Duration,
     outputs: BTreeSet<String>,
     executor: Executor,
+    /// The action's parameter schema, for validating the parameters.
+    definition: deckpilot_core::ActionType,
 }
 
 /// Why the plugin store could not be opened.
@@ -310,6 +320,11 @@ impl PluginService {
     ) -> Result<Self, StoreError> {
         let mut manager = PluginManager::open(data_dir, key, manager_options())?;
         let report = manager.recover()?;
+        let data = PluginData::open(
+            &manager.layout().database(),
+            key,
+            deckpilot_plugin_store::DEFAULT_BUSY_TIMEOUT,
+        )?;
         if !report.is_clean() {
             info!(?report, "plugin store recovered an interrupted operation");
             let _ = events.plugins.send(PluginEvent::Progress {
@@ -347,6 +362,7 @@ impl PluginService {
             host: host_program(settings),
             events,
             transport: Transport::from_env(),
+            data: Arc::new(Mutex::new(Some(data))),
         };
         if service.registry.is_some() {
             let _ = service.refresh();
@@ -363,6 +379,11 @@ impl PluginService {
         for (_, lane) in std::mem::take(&mut self.lanes) {
             lane.stop();
         }
+        // Closes the executors' connection, so nothing keeps plugins.db
+        // open after a lock (or a rekey).
+        if let Ok(mut data) = self.data.lock() {
+            *data = None;
+        }
     }
 
     /// The installed plugins and whether their actions can run, for the
@@ -372,6 +393,22 @@ impl PluginService {
         let Ok(records) = store.plugins() else {
             return Vec::new();
         };
+        // Plugins that were installed once and are not now (design §2.3
+        // item 4): their actions stay known, unavailable, with the
+        // plugin's name.
+        let gone = store
+            .known()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|known| !records.iter().any(|r| r.id == known.id))
+            .map(|known| CatalogPlugin {
+                id: known.id.to_string(),
+                name: known.display_name,
+                version: known.last_version,
+                description: String::new(),
+                actions: known.actions,
+                unavailable: Some("the plugin is not installed".to_owned()),
+            });
         records
             .iter()
             .filter_map(|record| {
@@ -386,6 +423,7 @@ impl PluginService {
                     unavailable: convert::unavailable_with(record, &grants),
                 })
             })
+            .chain(gone)
             .collect()
     }
 
@@ -757,7 +795,72 @@ impl PluginService {
                 self.details(&id)
             }
             Request::RollbackPlugin { plugin } => self.rollback(&plugin_id(&plugin)?),
-            Request::UninstallPlugin { plugin } => self.uninstall(&plugin_id(&plugin)?),
+            Request::UninstallPlugin { plugin, keep } => self.uninstall(
+                &plugin_id(&plugin)?,
+                Retention {
+                    settings: keep.settings,
+                    credentials: keep.credentials,
+                },
+            ),
+            other => self.handle_data(other),
+        }
+    }
+
+    /// Requests about a plugin's data: known plugins, settings,
+    /// credentials.
+    fn handle_data(&mut self, request: Request) -> Result<Response, IpcError> {
+        match request {
+            Request::ListKnownPlugins => {
+                let store = self.manager.store();
+                let installed = store.plugins().map_err(|e| store_error(&e))?;
+                Ok(Response::KnownPlugins {
+                    plugins: store
+                        .known()
+                        .map_err(|e| store_error(&e))?
+                        .iter()
+                        .map(|k| data::known(k, installed.iter().any(|r| r.id == k.id)))
+                        .collect(),
+                })
+            }
+            Request::GetPluginSettings { plugin } => self.settings(&plugin_id(&plugin)?),
+            Request::SetPluginSettings { plugin, values } => {
+                let id = plugin_id(&plugin)?;
+                let manifest = self.active_manifest(&id)?;
+                let saved = self
+                    .manager
+                    .store()
+                    .settings(&id)
+                    .map_err(|e| store_error(&e))?;
+                let merged = data::merge_settings(&manifest, &saved, &values)
+                    .map_err(|e| error(ErrorCode::InvalidRequest, reason::INVALID_DATA, e))?;
+                self.manager
+                    .set_settings(&id, &merged)
+                    .map_err(|e| store_error(&e))?;
+                info!(plugin = %id, "plugin settings saved");
+                self.settings(&id)
+            }
+            Request::ListPluginCredentials { plugin } => self.credentials(&plugin_id(&plugin)?),
+            Request::SetPluginCredential {
+                plugin,
+                key,
+                secret,
+            } => {
+                let id = plugin_id(&plugin)?;
+                self.manager
+                    .set_credential(&id, &key, secret.expose())
+                    .map_err(|e| store_error(&e))?;
+                // The slot only; never the secret.
+                info!(plugin = %id, credential = %key, "plugin credential stored");
+                self.credentials(&id)
+            }
+            Request::DeletePluginCredential { plugin, key } => {
+                let id = plugin_id(&plugin)?;
+                self.manager
+                    .delete_credential(&id, &key)
+                    .map_err(|e| store_error(&e))?;
+                info!(plugin = %id, credential = %key, "plugin credential deleted");
+                self.credentials(&id)
+            }
             other => Err(IpcError::new(
                 ErrorCode::InvalidRequest,
                 format!("`{}` is not a plugin request", other.name()),
@@ -1106,7 +1209,34 @@ impl PluginService {
         self.details(id)
     }
 
-    fn uninstall(&mut self, id: &PluginId) -> Result<Response, IpcError> {
+    fn settings(&self, id: &PluginId) -> Result<Response, IpcError> {
+        let manifest = self.active_manifest(id)?;
+        let saved = self
+            .manager
+            .store()
+            .settings(id)
+            .map_err(|e| store_error(&e))?;
+        Ok(Response::PluginSettings {
+            settings: Box::new(data::settings(&manifest, saved)),
+        })
+    }
+
+    fn credentials(&self, id: &PluginId) -> Result<Response, IpcError> {
+        let manifest = self.active_manifest(id)?;
+        let store = self.manager.store();
+        let stored = store.credentials(id).map_err(|e| store_error(&e))?;
+        let grants = store.grants(id).map_err(|e| store_error(&e))?;
+        Ok(Response::PluginCredentials {
+            plugin: id.to_string(),
+            credentials: data::credential_slots(&manifest, &stored, &grants),
+        })
+    }
+
+    /// Uninstall (design §5.6): the host stops, the broker forgets the
+    /// plugin, then the store deletes files, records, grants and storage,
+    /// and settings and credentials unless `keep` names them;
+    /// `plugin_known` and the audit stay.
+    fn uninstall(&mut self, id: &PluginId, keep: Retention) -> Result<Response, IpcError> {
         self.progress(
             id.as_str(),
             PluginOperation::Uninstall,
@@ -1116,8 +1246,10 @@ impl PluginService {
         if let Ok(broker_id) = deckpilot_plugin_broker::PluginId::new(id.as_str()) {
             self.broker.remove_plugin(&broker_id);
         }
-        self.manager.uninstall(id).map_err(|e| store_error(&e))?;
-        info!(plugin = %id, "plugin uninstalled");
+        self.manager
+            .uninstall_keeping(id, keep)
+            .map_err(|e| store_error(&e))?;
+        info!(plugin = %id, ?keep, "plugin uninstalled");
         self.progress(
             id.as_str(),
             PluginOperation::Uninstall,
@@ -1265,19 +1397,32 @@ impl PluginService {
         let timeout = Duration::from_millis(node.timeout_ms()).min(MAX_INVOCATION);
         let outputs = super::lane::declared_outputs(&declaration);
         let name = active.manifest.name.clone();
+        let definition = super::engine::action_type(id.as_str(), &declaration).map_err(|e| {
+            error(
+                ErrorCode::Failed,
+                reason::BROKEN,
+                format!("the action `{action}` of {id} cannot be offered: {e}"),
+            )
+        })?;
+        let access = DataAccess {
+            data: self.data.clone(),
+            manifest: Arc::new(active.manifest.clone()),
+        };
         self.sync_grants(id);
         let executor = Executor::new(
             self.broker.clone(),
             name,
             self.events.agent.clone(),
             self.transport.clone(),
-        );
+        )
+        .with_data(access);
         Ok((
             record,
             Prepared {
                 timeout,
                 outputs,
                 executor,
+                definition,
             },
         ))
     }
@@ -1308,7 +1453,22 @@ impl PluginService {
             timeout,
             outputs,
             executor,
+            definition,
         } = prepared;
+        // Checked against the manifest before the host sees anything.
+        let params = match data::normalize_params(&definition, &params) {
+            Ok(params) => params,
+            Err(problem) => {
+                let _ = reply.send(Ok(Response::PluginActionResult {
+                    outcome: ipc::PluginActionOutcome::Failed {
+                        code: INVALID_PARAMETERS.to_owned(),
+                        message: Some(problem),
+                        retryable: false,
+                    },
+                }));
+                return;
+            }
+        };
         let plugin = id.to_string();
         let name = action.to_owned();
         let done: Done = Box::new(move |result| {
@@ -1339,6 +1499,10 @@ impl PluginService {
     /// A plugin action from the workflow engine (a key, `runAction`, a
     /// workflow node). The answer goes to `reply`; a caller that gave up
     /// has dropped its end, and the answer is discarded.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the worker hands its message's parameters over; they are validated into new ones"
+    )]
     pub fn invoke_for_engine(
         &mut self,
         plugin: &str,
@@ -1363,7 +1527,18 @@ impl PluginService {
             timeout,
             outputs,
             executor,
+            definition,
         } = prepared;
+        let params = match data::normalize_params(&definition, &params) {
+            Ok(params) => params,
+            Err(message) => {
+                let _ = reply.try_send(Err(EngineFailure {
+                    code: INVALID_PARAMETERS.to_owned(),
+                    message,
+                }));
+                return;
+            }
+        };
         let id = record.id.to_string();
         let name = action.to_owned();
         let done: Done = Box::new(move |result| {

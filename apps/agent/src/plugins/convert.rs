@@ -328,7 +328,7 @@ fn origin_of(host: &str) -> Option<String> {
 
 /// What the broker may allow, from the effective grants of an enabled
 /// plugin (granted ∩ declared). Kinds the broker does not decide
-/// (profile, variables, storage quota, open URL, background, device) are
+/// (profile, variables, open URL, background, device) are
 /// not passed; their capabilities do not exist in ABI 1 or are refused by
 /// the executor.
 pub fn approved(effective: &[(GrantKey, GrantScope)]) -> (ApprovedPermissions, Vec<String>) {
@@ -344,6 +344,12 @@ pub fn approved(effective: &[(GrantKey, GrantScope)]) -> (ApprovedPermissions, V
                 None => skipped.push(key.to_string()),
             },
             (PermissionKind::Notifications, _) => out.push(ApprovedPermission::Notifications {}),
+            // The larger quota; without it the default applies.
+            (PermissionKind::Storage, GrantScope::Storage { quota_kb }) => {
+                out.push(ApprovedPermission::Storage {
+                    quota_kb: *quota_kb,
+                });
+            }
             (PermissionKind::Credentials, GrantScope::Credential { hosts, schemes }) => {
                 let origins: Option<BTreeSet<String>> =
                     hosts.iter().map(|h| origin_of(h)).collect();

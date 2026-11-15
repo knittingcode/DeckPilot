@@ -937,7 +937,13 @@ impl Agent {
             | Request::DeclinePluginUpdate { .. }
             | Request::RollbackPlugin { .. }
             | Request::UninstallPlugin { .. }
-            | Request::InvokePluginAction { .. } => {
+            | Request::InvokePluginAction { .. }
+            | Request::ListKnownPlugins
+            | Request::GetPluginSettings { .. }
+            | Request::SetPluginSettings { .. }
+            | Request::ListPluginCredentials { .. }
+            | Request::SetPluginCredential { .. }
+            | Request::DeletePluginCredential { .. } => {
                 unreachable!("plugin requests are handled by handle_command")
             }
             Request::Unlock { .. }

@@ -21,6 +21,8 @@ use tokio::sync::oneshot;
 #[cfg(feature = "plugins")]
 mod convert;
 #[cfg(feature = "plugins")]
+mod data;
+#[cfg(feature = "plugins")]
 mod engine;
 #[cfg(feature = "plugins")]
 mod executor;
@@ -139,6 +141,12 @@ pub(crate) fn is_plugin_request(request: &Request) -> bool {
             | Request::RollbackPlugin { .. }
             | Request::UninstallPlugin { .. }
             | Request::InvokePluginAction { .. }
+            | Request::ListKnownPlugins
+            | Request::GetPluginSettings { .. }
+            | Request::SetPluginSettings { .. }
+            | Request::ListPluginCredentials { .. }
+            | Request::SetPluginCredential { .. }
+            | Request::DeletePluginCredential { .. }
     )
 }
 
