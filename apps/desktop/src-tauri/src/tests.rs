@@ -3346,3 +3346,168 @@ fn plugin_commands_refuse_unless_the_agent_answers_plugin_requests() {
     h.ok("stop_agent", json!({}));
     wait_for(&h, |s| s["running"] == false);
 }
+
+/// A `listPlugins` answer with the sample plugin, its `greet` action
+/// available or not, with the definition the agent's engine registers.
+fn hello_weather(available: bool) -> deckpilot_ipc::plugins::PluginSummary {
+    serde_json::from_value(json!({
+        "id": "acme.hello-weather",
+        "name": "Hello Weather",
+        "publisher": "acme",
+        "version": "1.0.0",
+        "state": if available { "enabled" } else { "disabled" },
+        "origin": { "type": "sideload" },
+        "actions": [{
+            "action": "greet",
+            "actionType": "acme.hello-weather.greet",
+            "name": "Greet",
+            "available": available,
+            "unavailableReason": if available { Value::Null } else { json!("the plugin is disabled") },
+            "definition": {
+                "id": "acme.hello-weather.greet",
+                "name": "Greet",
+                "description": "Says hello.",
+                "category": "Fun",
+                "parameters": [
+                    { "key": "name", "label": "Name", "kind": { "type": "text" }, "required": true }
+                ],
+                "requiresProject": false,
+                "node": { "cancellable": true }
+            }
+        }]
+    }))
+    .unwrap()
+}
+
+/// Plugin actions in the editors: what the agent reported is validated as
+/// the agent will run it; instances of a disabled or uninstalled plugin
+/// stay in the profile and are reported as unavailable.
+#[allow(clippy::too_many_lines)] // One plugin's life, followed through.
+#[test]
+fn plugin_actions_are_validated_against_what_the_agent_reported() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    let greet = |name: &str| {
+        h.call(
+            "create_action",
+            json!({
+                "profileId": profile_id,
+                "action": {
+                    "name": name,
+                    "actionType": "acme.hello-weather.greet",
+                    "parameters": { "name": { "type": "text", "value": "Ada" } }
+                }
+            }),
+        )
+    };
+    let types = |h: &Harness| -> Vec<String> {
+        h.ok("list_action_types", json!({}))
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    // Nothing reported (plugins off): an unknown type, as before.
+    let before = types(&h);
+    assert!(!before.iter().any(|t| t.starts_with("acme.")));
+    let refused = greet("Greet").unwrap_err();
+    assert!(
+        refused
+            .as_str()
+            .unwrap()
+            .contains("acme.hello-weather.greet"),
+        "{refused}"
+    );
+
+    // Enabled: offered, validated (required parameters included) and saved.
+    let state = h.window.state::<AppState>();
+    state.plugin_actions().replace(&[hello_weather(true)]);
+    let after = types(&h);
+    assert_eq!(after.len(), before.len() + 1);
+    assert!(after.contains(&"acme.hello-weather.greet".to_owned()));
+    let missing = h
+        .call(
+            "create_action",
+            json!({
+                "profileId": profile_id,
+                "action": { "name": "Greet", "actionType": "acme.hello-weather.greet", "parameters": {} }
+            }),
+        )
+        .unwrap_err();
+    assert!(missing.as_str().unwrap().contains("name"), "{missing}");
+    let action = greet("Greet").unwrap();
+    let workflow = json!({
+        "id": deckpilot_core::WorkflowId::new(), "name": "Hello", "steps": [],
+        "graph": { "version": 1,
+            "nodes": [
+                {"id": "start", "type": "trigger"},
+                {"id": "greet", "type": "action", "action": action["id"]}
+            ],
+            "edges": [{"from": "start", "to": "greet"}] }
+    });
+    h.ok(
+        "save_workflow",
+        json!({ "profileId": profile_id, "workflow": workflow }),
+    );
+    let issues = h.ok(
+        "validate_workflow_graph",
+        json!({ "profileId": profile_id, "workflow": workflow }),
+    );
+    assert!(
+        issues
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["severity"] != "error"),
+        "{issues}"
+    );
+
+    // Disabled: no new actions, the reason everywhere, the saved ones kept.
+    state.plugin_actions().upsert(&hello_weather(false));
+    assert_eq!(types(&h), before);
+    let refused = greet("Again").unwrap_err();
+    assert!(
+        refused
+            .as_str()
+            .unwrap()
+            .contains("Hello Weather (acme.hello-weather): the plugin is disabled"),
+        "{refused}"
+    );
+    let issues = h.ok(
+        "validate_workflow_graph",
+        json!({ "profileId": profile_id, "workflow": workflow }),
+    );
+    assert!(
+        issues
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["severity"] == "error"
+                && i["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("the plugin is disabled")),
+        "{issues}"
+    );
+    let view = h.ok("get_profile", json!({ "profileId": profile_id }));
+    assert_eq!(view["profile"]["actions"][0]["id"], action["id"]);
+    assert_eq!(
+        view["profile"]["workflows"][0]["graph"]["nodes"][1]["action"],
+        action["id"]
+    );
+
+    // Uninstalled, or plugins cannot be asked for (no agent here): the
+    // types are unknown again, the instances stay.
+    state.plugin_actions().upsert(&hello_weather(true));
+    assert_eq!(
+        plugin_refusal(&h, "list_plugins", json!({})).0,
+        "agentNotRunning"
+    );
+    assert!(state.plugin_actions().is_empty());
+    assert_eq!(types(&h), before);
+    let view = h.ok("get_profile", json!({ "profileId": profile_id }));
+    assert_eq!(view["profile"]["actions"].as_array().unwrap().len(), 1);
+    assert_eq!(view["profile"]["workflows"].as_array().unwrap().len(), 1);
+}
