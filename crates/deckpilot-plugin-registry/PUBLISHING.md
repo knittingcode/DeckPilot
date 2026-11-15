@@ -147,11 +147,15 @@ two root keys with threshold 1). At minimum:
 
 ## Intended GitHub Actions flow (separate registry repository)
 
-**Not set up; requires owner authorization to create the repository and
-keys.** The design is section 11; the workflow sketch is
-`experiments/marketplace-spikes/trust/publish-workflow.yml.example`. The
-tool is built in each job from a pinned DeckPilot commit with `cargo
-build -p deckpilot-plugin-registry --features publish --locked`.
+The design is section 11. The real workflows live in the registry
+repository,
+[`knittingcode/deckpilot-plugins`](https://github.com/knittingcode/deckpilot-plugins/tree/main/.github/workflows)
+(`validate.yml`, `publish.yml`, `refresh-timestamp.yml`); they replace
+the spike's `publish-workflow.yml.example` sketch, and where they differ
+from the plan below, they are authoritative. Its environments and keys
+wait on the owner's approval of the trust configuration. The tool is
+built in each job from a pinned DeckPilot commit with `cargo build -p
+deckpilot-plugin-registry --features publish --locked`.
 
 ### `validate.yml`: untrusted pull requests, no secrets
 
