@@ -420,6 +420,45 @@ impl Drop for Harness {
     }
 }
 
+/// A real agent with a simulated device on its own runtime.
+fn start_agent(paths: &AgentPaths) -> tokio::runtime::Runtime {
+    use deckpilot_agent::{Agent, AgentOptions, InstanceLock};
+    use deckpilot_device::{mock::MockBackend, models};
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let mock = MockBackend::new();
+    mock.plug(&models::stream_deck_mk2(), "TEST-0001");
+    let options = AgentOptions {
+        paths: paths.clone(),
+        backend: Box::new(mock.clone()),
+        mock: Some(mock),
+        rescan_interval: Duration::from_millis(50),
+        autostart: None,
+        open_desktop: None,
+        open_window: None,
+        key_store: None,
+        auto_lock_check: Duration::from_millis(50),
+        cancel_grace: Duration::from_secs(10),
+        clock: deckpilot_agent::system_clock(),
+        screen_lock: None,
+        notifier: None,
+    };
+    paths.create_dirs().unwrap();
+    let lock = InstanceLock::acquire(&paths.lock_file).unwrap();
+    runtime.block_on(async {
+        let agent = Agent::start(options, lock).unwrap();
+        tokio::spawn(agent.run(std::future::pending()));
+    });
+    runtime
+}
+
+fn agent_running(paths: &AgentPaths) -> bool {
+    tauri::async_runtime::block_on(crate::agent::connection(paths)).is_ok_and(|c| c.running)
+}
+
 #[test]
 fn a_correctly_signed_update_is_downloaded_and_verified() {
     let h = Harness::new();
@@ -679,8 +718,8 @@ mod install {
     use crate::updates::replace;
     use std::path::{Path, PathBuf};
 
-    use deckpilot_agent::{Agent, AgentOptions, InstanceLock};
-    use deckpilot_device::{mock::MockBackend, models};
+    use deckpilot_agent::InstanceLock;
+    use deckpilot_update::intent::UpdateIntent;
 
     /// The installed app with `content` in the app and the agent: an app
     /// bundle on macOS, an `AppImage` file on Linux.
@@ -758,43 +797,6 @@ mod install {
         h.download_ok();
     }
 
-    /// A real agent with a simulated device on its own runtime.
-    fn start_agent(paths: &AgentPaths) -> tokio::runtime::Runtime {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .unwrap();
-        let mock = MockBackend::new();
-        mock.plug(&models::stream_deck_mk2(), "TEST-0001");
-        let options = AgentOptions {
-            paths: paths.clone(),
-            backend: Box::new(mock.clone()),
-            mock: Some(mock),
-            rescan_interval: Duration::from_millis(50),
-            autostart: None,
-            open_desktop: None,
-            open_window: None,
-            key_store: None,
-            auto_lock_check: Duration::from_millis(50),
-            cancel_grace: Duration::from_secs(10),
-            clock: deckpilot_agent::system_clock(),
-            screen_lock: None,
-            notifier: None,
-        };
-        paths.create_dirs().unwrap();
-        let lock = InstanceLock::acquire(&paths.lock_file).unwrap();
-        runtime.block_on(async {
-            let agent = Agent::start(options, lock).unwrap();
-            tokio::spawn(agent.run(std::future::pending()));
-        });
-        runtime
-    }
-
-    fn agent_running(paths: &AgentPaths) -> bool {
-        tauri::async_runtime::block_on(crate::agent::connection(paths)).is_ok_and(|c| c.running)
-    }
-
     #[test]
     fn an_update_stops_the_agent_and_replaces_app_and_agent_together() {
         let mut h = Harness::new();
@@ -810,6 +812,20 @@ mod install {
         // running executable is never overwritten); the restart that
         // follows in the app starts the new one.
         assert!(!agent_running(&h.paths));
+        // It is gone, not only disconnected: its instance lock is free,
+        // so the new agent can start and the two never run together.
+        assert!(InstanceLock::is_free(&h.paths.lock_file).unwrap());
+        // The intent stays for the next start, which completes the update.
+        let intent = UpdateIntent::read(&h.paths.data_dir).unwrap().unwrap();
+        assert_eq!(intent.from_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(intent.to_version, VERSION);
+        assert_eq!(
+            intent.distribution_channel,
+            deckpilot_distribution::current()
+                .distribution_channel()
+                .name()
+        );
+        assert!(intent.agent_was_running);
         assert_eq!(
             installed(&executable),
             ("version 2".to_owned(), "version 2".to_owned())
@@ -861,5 +877,185 @@ mod install {
         assert!(h.has_package());
         assert_eq!(h.shown_error().as_deref(), Some(&error[..]));
         assert!(h.log().contains(&error));
+        // Handled here, so nothing is left for the next start.
+        assert!(UpdateIntent::read(&h.paths.data_dir).unwrap().is_none());
+    }
+
+    #[test]
+    fn nothing_is_installed_while_an_agent_holds_the_instance_lock() {
+        let mut h = Harness::new();
+        let executable = install_app(&h, "version 1");
+        let package = package(&h, "version 2");
+        downloaded(&mut h, executable.clone(), &package);
+        // An agent that is starting (or hung while stopping): it holds the
+        // lock but has no endpoint.
+        h.paths.create_dirs().unwrap();
+        let lock = InstanceLock::acquire(&h.paths.lock_file).unwrap();
+        assert!(!agent_running(&h.paths));
+
+        let error = tauri::async_runtime::block_on(replace(h.handle()))
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("still holds its instance lock")
+                && error.contains("nothing was installed"),
+            "{error}"
+        );
+        assert_eq!(
+            installed(&executable),
+            ("version 1".to_owned(), "version 1".to_owned())
+        );
+        assert_eq!(h.phase(), Phase::Ready);
+        assert!(h.has_package());
+        assert!(UpdateIntent::read(&h.paths.data_dir).unwrap().is_none());
+        drop(lock);
+    }
+}
+
+/// Start-up recovery from `update-intent.json` (docs/distribution/README.md,
+/// section 7.2) on every platform: the intent as an interrupted update
+/// leaves it, then what the next start of the app does.
+mod recovery {
+    use super::*;
+    use crate::updates::recover_with;
+    use deckpilot_update::intent::{self, Recovery, Rollback, UpdateIntent};
+
+    const APP: &str = env!("CARGO_PKG_VERSION");
+
+    fn record(h: &Harness, from: &str, to: &str) {
+        UpdateIntent {
+            format: intent::FORMAT,
+            from_version: from.into(),
+            to_version: to.into(),
+            distribution_channel: "github".into(),
+            schema_version: Some(deckpilot_storage::SqliteStore::supported_schema_version()),
+            created_at: 1,
+            agent_was_running: true,
+        }
+        .write(&h.paths.data_dir)
+        .unwrap();
+    }
+
+    fn recover(h: &Harness, start: impl FnOnce() -> Result<(), String>) -> Option<Recovery> {
+        tauri::async_runtime::block_on(recover_with(
+            h.handle(),
+            &h.paths,
+            start,
+            Duration::from_secs(5),
+        ))
+    }
+
+    fn intent_kept(h: &Harness) -> bool {
+        UpdateIntent::read(&h.paths.data_dir).unwrap().is_some()
+    }
+
+    #[test]
+    fn without_an_intent_nothing_happens() {
+        let h = Harness::new();
+        assert_eq!(recover(&h, || panic!("no agent is started")), None);
+        assert_eq!(h.shown_error(), None);
+    }
+
+    #[test]
+    fn an_update_interrupted_before_installing_restarts_the_previous_agent() {
+        let h = Harness::new();
+        // The previous run stopped the agent for the update to 99.0.0 and
+        // died before installing: this app is still the previous version.
+        record(&h, APP, VERSION);
+        assert!(!agent_running(&h.paths));
+        let mut agent = None;
+
+        let recovery = recover(&h, || {
+            // On a thread of its own: the agent's runtime cannot be
+            // entered from the app's.
+            let paths = h.paths.clone();
+            agent = Some(
+                std::thread::spawn(move || start_agent(&paths))
+                    .join()
+                    .unwrap(),
+            );
+            Ok(())
+        });
+
+        assert_eq!(
+            recovery,
+            Some(Recovery::NotInstalled {
+                agent_running: true
+            })
+        );
+        assert!(agent.is_some() && agent_running(&h.paths));
+        assert!(!intent_kept(&h));
+        let shown = h.shown_error().unwrap();
+        assert!(
+            shown.contains(&format!(
+                "version {APP} is still installed and its agent runs again"
+            )),
+            "{shown}"
+        );
+        assert!(h.log().contains(&shown), "{}", h.log());
+        assert_eq!(h.phase(), Phase::Idle);
+    }
+
+    #[test]
+    fn an_installed_update_whose_agent_runs_is_completed() {
+        let h = Harness::new();
+        // This app is the new version; its agent is running.
+        record(&h, "0.0.1", APP);
+        let _agent = start_agent(&h.paths);
+
+        let recovery = recover(&h, || panic!("the agent runs already"));
+
+        assert_eq!(recovery, Some(Recovery::Completed));
+        assert!(!intent_kept(&h));
+        assert_eq!(h.shown_error(), None);
+        assert!(
+            h.log()
+                .contains(&format!("update from 0.0.1 to {APP} completed")),
+            "{}",
+            h.log()
+        );
+    }
+
+    #[test]
+    fn an_installed_update_whose_agent_does_not_start_is_reported_and_kept() {
+        let h = Harness::new();
+        record(&h, "0.0.1", APP);
+
+        let recovery = recover(&h, || Err("no agent executable".into()));
+
+        // The intent recorded the schema this build uses: going back is
+        // safe, and the message says so.
+        assert_eq!(
+            recovery,
+            Some(Recovery::AgentNotRunning {
+                rollback: Rollback::Safe
+            })
+        );
+        assert!(intent_kept(&h));
+        let shown = h.shown_error().unwrap();
+        assert!(
+            shown.contains("its agent is not running")
+                && shown.contains("reinstalling version 0.0.1 is safe"),
+            "{shown}"
+        );
+        assert!(
+            h.log()
+                .contains("cannot start the agent: no agent executable")
+        );
+    }
+
+    #[test]
+    fn a_damaged_intent_is_logged_and_removed() {
+        let h = Harness::new();
+        std::fs::create_dir_all(&h.paths.data_dir).unwrap();
+        std::fs::write(intent::path(&h.paths.data_dir), b"{").unwrap();
+        assert_eq!(recover(&h, || panic!("nothing to recover")), None);
+        assert!(!intent::path(&h.paths.data_dir).exists());
+        assert!(
+            h.log().contains("the update intent is not valid"),
+            "{}",
+            h.log()
+        );
     }
 }

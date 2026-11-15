@@ -684,6 +684,30 @@ mod development {
 #[cfg(debug_assertions)]
 pub use development::VARIABLE as DEVELOPMENT_OVERRIDE_VARIABLE;
 
+/// The agent executable a debug build starts instead of the one in its own
+/// bundle: the value of `DECKPILOT_AGENT_BIN`, for development and the
+/// desktop end-to-end tests, which run debug builds.
+///
+/// Release builds always return `None`: the code that reads the variable,
+/// and its name, are not compiled into them (`tests/release_build.rs`). A
+/// release build starts only the agent next to its own executable, so no
+/// variable can make it start another program as "the agent"
+/// (docs/distribution/README.md, section 7.1, step 8; audit finding G6).
+pub fn agent_executable_override() -> Option<std::ffi::OsString> {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var_os(AGENT_EXECUTABLE_OVERRIDE_VARIABLE).filter(|value| !value.is_empty())
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
+}
+
+/// The variable read by [`agent_executable_override`] in debug builds.
+#[cfg(debug_assertions)]
+pub const AGENT_EXECUTABLE_OVERRIDE_VARIABLE: &str = "DECKPILOT_AGENT_BIN";
+
 #[cfg(test)]
 mod tests {
     use super::*;

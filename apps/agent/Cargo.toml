@@ -60,6 +60,9 @@ auto-launch.workspace = true
 chrono.workspace = true
 deckpilot-core.workspace = true
 deckpilot-device = { workspace = true, features = ["mock"] }
+# The build's distribution record: reported in `getStatus` and selecting
+# the autostart strategy.
+deckpilot-distribution.workspace = true
 deckpilot-hid.workspace = true
 deckpilot-ipc.workspace = true
 deckpilot-modules.workspace = true

@@ -16,10 +16,23 @@
 //! application bundle. The sequence is:
 //!
 //! 1. download and verify the update;
-//! 2. ask the agent to finish its current request, release the devices and
-//!    exit (`prepareForUpdate`);
-//! 3. install; on failure, start the previous agent again and report;
-//! 4. restart the application, which starts the new agent.
+//! 2. refuse while workflows run in the agent;
+//! 3. record the intent (`update-intent.json` in the data directory,
+//!    `deckpilot_update::intent`);
+//! 4. ask the agent to finish its current request, release the devices and
+//!    exit (`prepareForUpdate`), and wait until its endpoint is closed
+//!    **and** its instance lock is free, so the old and the new agent never
+//!    run at the same time;
+//! 5. install; on failure, start the previous agent again, remove the
+//!    intent and report;
+//! 6. restart the application, which starts the new agent;
+//! 7. at the next start, [`recover`] reads the intent: the new version runs
+//!    with its agent (the intent is removed), the previous version is still
+//!    installed (its agent is started again), or the new agent does not run
+//!    (reported, with what is safe about going back).
+//!
+//! docs/distribution/README.md, section 7, has the full lifecycle and
+//! docs/updates.md when rolling back is safe.
 
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -31,6 +44,7 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 use deckpilot_ipc::{AgentPaths, Request, Response};
 use deckpilot_storage::ConfigStore;
 use deckpilot_update::channel::{Channel, ListedRelease, newest_release};
+use deckpilot_update::intent::{self, Observation, Recovery, UpdateIntent};
 use deckpilot_update::policy::{InstallContext, InstallDecision, UpdatePreferences, decide};
 
 use crate::error::{CommandError, CommandResult};
@@ -666,27 +680,56 @@ pub(crate) async fn replace<R: Runtime>(app: &AppHandle<R>) -> CommandResult<()>
     begin(app, Phase::Installing)?;
     log(app, &format!("installing update {}", update.version));
     let agent_was_running = matches!(current, Ok(c) if c.running);
-    if agent_was_running {
-        if let Err(error) = crate::agent::stop_any_version(&paths, Request::PrepareForUpdate).await
-        {
-            return Err(fail(
-                app,
-                Phase::Ready,
-                format!(
-                    "update installation failed: the agent could not be asked to stop \
-                     ({error}); nothing was installed and the agent keeps running. Try again"
-                ),
-            ));
-        }
-        if !crate::agent::wait_until_stopped(&paths, Duration::from_secs(15)).await {
-            return Err(fail(
-                app,
-                Phase::Ready,
-                "update installation failed: the agent did not stop within 15 seconds; \
-                 nothing was installed. Try again, or quit the agent from its menu first"
-                    .to_owned(),
-            ));
-        }
+    // Recorded before anything is stopped, so that the next start can tell
+    // what happened even if this process does not survive.
+    let intent = UpdateIntent {
+        format: intent::FORMAT,
+        from_version: env!("CARGO_PKG_VERSION").to_owned(),
+        to_version: update.version.clone(),
+        distribution_channel: deckpilot_distribution::current()
+            .distribution_channel()
+            .name()
+            .to_owned(),
+        schema_version: schema_version(app),
+        created_at: now(),
+        agent_was_running,
+    };
+    if let Err(error) = intent.write(&paths.data_dir) {
+        return Err(fail(
+            app,
+            Phase::Ready,
+            format!(
+                "update installation failed: the update could not be recorded in the data \
+                 directory ({error}); nothing was installed and the agent keeps running. Check \
+                 that the disk has free space and try again"
+            ),
+        ));
+    }
+    if agent_was_running
+        && let Err(error) = crate::agent::stop_any_version(&paths, Request::PrepareForUpdate).await
+    {
+        let _ = UpdateIntent::remove(&paths.data_dir);
+        return Err(fail(
+            app,
+            Phase::Ready,
+            format!(
+                "update installation failed: the agent could not be asked to stop \
+                 ({error}); nothing was installed and the agent keeps running. Try again"
+            ),
+        ));
+    }
+    // Also without a running agent: one that is starting holds the lock
+    // before it accepts connections, and would run the old executable.
+    if let Err(reason) = crate::agent::wait_until_released(&paths, STOP_TIMEOUT).await {
+        let _ = UpdateIntent::remove(&paths.data_dir);
+        return Err(fail(
+            app,
+            Phase::Ready,
+            format!(
+                "update installation failed: {reason}; nothing was installed. Try again, or \
+                 quit the agent from its menu first"
+            ),
+        ));
     }
     if let Err(error) = update.install(bytes) {
         let mut message = describe(Stage::Install, &error);
@@ -710,9 +753,102 @@ pub(crate) async fn replace<R: Runtime>(app: &AppHandle<R>) -> CommandResult<()>
                 }
             }
         }
+        // Handled here: nothing is left for the next start to recover.
+        let _ = UpdateIntent::remove(&paths.data_dir);
         return Err(fail(app, phase, message));
     }
     Ok(())
+}
+
+/// How long the agent has to stop (endpoint closed, lock released) before
+/// an installation is abandoned.
+const STOP_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long recovery waits for the agent at start-up.
+const RECOVERY_AGENT_WAIT: Duration = Duration::from_secs(15);
+/// How long recovery gives an agent the app has just started before it
+/// starts one itself.
+const AGENT_STARTING: Duration = Duration::from_secs(5);
+
+/// The configuration database's schema version, while it is open here.
+fn schema_version<R: Runtime>(app: &AppHandle<R>) -> Option<u32> {
+    let state = app.state::<AppState>();
+    let store = state.store().ok()?;
+    store.schema_version().ok()
+}
+
+/// At start-up: finishes or reports an update that a previous run of the
+/// application recorded (`update-intent.json`) and did not complete
+/// (docs/distribution/README.md, section 7, step 11). Without an intent it
+/// does nothing.
+pub async fn recover<R: Runtime>(app: &AppHandle<R>, start_agent: bool) {
+    let paths = app.state::<AppState>().paths.clone();
+    let start = || {
+        if start_agent {
+            crate::agent::start_agent()
+        } else {
+            Err("the agent is managed by a development session".to_owned())
+        }
+    };
+    recover_with(app, &paths, start, RECOVERY_AGENT_WAIT).await;
+}
+
+/// [`recover`] with the agent start and the time to wait for the agent
+/// given, for tests.
+pub(crate) async fn recover_with<R: Runtime>(
+    app: &AppHandle<R>,
+    paths: &AgentPaths,
+    start_agent: impl FnOnce() -> Result<(), String>,
+    wait: Duration,
+) -> Option<Recovery> {
+    let intent = match UpdateIntent::read(&paths.data_dir) {
+        Ok(Some(intent)) => intent,
+        Ok(None) => return None,
+        Err(error) => {
+            log(app, &format!("{error}; it is removed"));
+            let _ = UpdateIntent::remove(&paths.data_dir);
+            return None;
+        }
+    };
+    // The previous or the new agent must run. The app has just started it
+    // if none ran: give it a moment, then start it here.
+    let mut connection = crate::agent::wait_until_running(paths, wait.min(AGENT_STARTING)).await;
+    if !connection.running {
+        if let Err(error) = start_agent() {
+            log(
+                app,
+                &format!("update recovery: cannot start the agent: {error}"),
+            );
+        }
+        connection = crate::agent::wait_until_running(paths, wait).await;
+    }
+    let agent_version = Some(&connection)
+        .filter(|c| c.running)
+        .and_then(|c| c.status.as_ref())
+        .map(|status| status.version.clone());
+    let observation = Observation {
+        app_version: env!("CARGO_PKG_VERSION"),
+        agent_version: agent_version.as_deref(),
+        supported_schema: deckpilot_storage::SqliteStore::supported_schema_version(),
+        current_schema: schema_version(app),
+    };
+    let recovery = intent::assess(&intent, &observation);
+    let message = intent::describe(&intent, &recovery);
+    log(app, &message);
+    if !recovery.keeps_intent()
+        && let Err(error) = UpdateIntent::remove(&paths.data_dir)
+    {
+        log(
+            app,
+            &format!("the update intent could not be removed: {error}"),
+        );
+    }
+    match recovery {
+        Recovery::Completed | Recovery::Superseded => {}
+        Recovery::NotInstalled { .. } | Recovery::AgentNotRunning { .. } => {
+            set_phase(app, Phase::Idle, Some(message));
+        }
+    }
+    Some(recovery)
 }
 
 // Tauri passes the app handle and state to commands by value.

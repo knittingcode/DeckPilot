@@ -114,17 +114,45 @@ executables. The configuration app coordinates the installation:
    status): automatic installation tries again later, and installing by hand
    says why it waits, so an update never ends a workflow silently. Agents
    before protocol 6 cannot report running workflows;
-3. send `prepareForUpdate` to the agent. The agent finishes the request it is
+3. record the update in `update-intent.json` in the data directory (never
+   in an installation directory): the version being replaced and the one
+   being installed, the distribution channel, the configuration database's
+   schema version (when the configuration is open) and the time. If it
+   cannot be written, nothing is stopped or installed;
+4. send `prepareForUpdate` to the agent. The agent finishes the request it is
    processing, blanks and
    releases the devices and exits. An agent from an older release that does
-   not know this request is stopped with `shutdown` over protocol 1;
-4. install. If installing fails, the previous version stays installed, the
-   previous agent is started again and the error is shown;
-5. restart the application, which starts the new agent.
+   not know this request is stopped with `shutdown` over protocol 1. The
+   run loop ends with that request, so no workflow can start after it;
+5. wait, for at most 15 seconds, until the agent's endpoint is closed **and**
+   its instance lock (`agent.lock`) is free. The endpoint closes before the
+   agent has finished, so the app takes the lock and releases it again at
+   once to prove the agent is gone. This is checked even when no agent was
+   connected, because an agent that is just starting holds the lock before
+   it accepts connections. If either does not happen, nothing is installed
+   and the intent is removed;
+6. install. If installing fails, the previous version stays installed, the
+   previous agent is started again, the intent is removed and the error is
+   shown;
+7. restart the application, which starts the new agent;
+8. at the next start, the app reads the intent and compares it with what it
+   finds (see [Recovery after an interrupted update](#recovery-after-an-interrupted-update)).
 
-A running executable is never overwritten. After any restart the app compares
-its version with the agent's (`AgentCompatibility`) and offers to restart a
-mismatching agent, so mismatched versions are not left running side by side.
+A running executable is never overwritten, and the old and the new agent
+never run at the same time: the new one starts only after the lock was
+free, and the lock lets only one agent run per data directory. After any
+restart the app compares its version, and its distribution channel, with
+the agent's (`AgentCompatibility`, see [compatibility.md](compatibility.md))
+and offers to restart a mismatching agent, so mismatched agents are not left
+running side by side. Restarting the agent from the app waits for the lock
+the same way.
+
+Release builds start only the agent next to their own executable. The
+development variable `DECKPILOT_AGENT_BIN`, which names another agent, is
+read by debug builds only; release builds do not contain it
+(`crates/deckpilot-distribution/tests/release_build.rs` builds a release
+binary and checks both that the name is absent and that setting it changes
+nothing).
 
 Only one check, download or installation runs at a time; a second attempt
 is refused while one is in progress. A failed installation is reported as a
@@ -167,6 +195,59 @@ file holds versions, URLs, paths and error texts only, never keys or
 configuration; it is kept below about 256 KiB (`updates.log.1` holds the
 previous part).
 
+## Recovery after an interrupted update
+
+`update-intent.json` survives anything that ends the application during an
+update: a crash, a power loss, or the Windows installer, which takes over
+and exits the app. At the next start the app waits for its agent (it starts
+it if none runs) and decides:
+
+| What the app finds | Meaning | What happens |
+| --- | --- | --- |
+| It is the new version, and the new agent runs | The update completed | The intent is removed; `updates.log` records "update from X to Y completed" |
+| It is still the previous version | The installation did not happen or was rolled back by the installer | The previous agent is started again (if it is not running); the message says the update did not complete and can be installed again; the intent is removed |
+| It is the new version, but no agent of that version runs | The new agent failed to start | The message says so, where its log is, and what is safe about going back (below); the intent is kept, so the next start checks again |
+| Neither version | DeckPilot was installed again by other means | The intent is removed |
+
+An intent that cannot be read is logged and removed. Nothing here installs
+or downgrades anything by itself.
+
+## When rolling back is safe
+
+Database migrations run forward only, and an older DeckPilot refuses a newer
+database schema before writing anything
+([data-model.md](data-model.md#compatibility-between-versions)). So the
+database decides whether going back to the previous version is safe:
+
+- **Up to a failed migration it is safe.** Until the new agent has upgraded
+  the database, it has the previous schema. A migration that fails is
+  rolled back as a whole (one transaction), so the database keeps the
+  previous schema then as well. Reinstalling the previous version works
+  with the data as it is.
+- **After a successful migration it is not**, without a restore: the
+  previous version refuses the upgraded database. Going back means
+  restoring the verified encrypted backup made just before the migration,
+  `backups/deckpilot-schema<old schema>-<time>.db` in the data directory,
+  in place of `deckpilot.db` (with the agent stopped), and then reinstalling
+  the previous version. Every change made after the upgrade is lost. The
+  backup is encrypted with the same key, so the same password or system
+  key opens it. Staying on the new version and waiting for a fix is always
+  possible.
+- When the new version uses the same schema as the previous one, going
+  back is safe at any point.
+
+The message after a failed start of the new agent says which of these
+applies, from the schema recorded in the intent, the schema the new version
+uses and, when the configuration is open, the database's current schema.
+Where the current schema cannot be read (the configuration is locked) it
+says that going back is safe only if the new agent never opened the
+configuration. DeckPilot never rolls back by itself, never installs an
+older version, and has no restore command yet: restoring a pre-migration
+backup is manual (audit finding G7 in
+[distribution/audit.md](distribution/audit.md); a guarded restore command is
+a follow-up). The plugin database (`plugins.db`) migrates the same way,
+forward only with its own backup.
+
 ## First launch after an update
 
 Every start of the configuration app is recorded (`app_launches`). With the
@@ -195,7 +276,10 @@ never installs an older version than the running one.
 | Update flow of the app against a loopback server with throwaway keys: a correctly signed update is downloaded; tampered, truncated, empty, foreign-key, malformed-signature and older-release-as-newer packages are rejected and discarded | `updates_tests.rs` in the desktop crate (real Tauri updater) | automated |
 | Interrupted download (connection closed early, stalled connection, server error): fails within the read timeout, nothing partial is kept, the update stays offered and the next attempt starts over and succeeds | `updates_tests.rs` | automated |
 | Failed check (captive portal, server error, stalled connection) leaves the updater usable | `updates_tests.rs` | automated |
-| Installation into a throwaway installed copy (macOS app bundle, Linux AppImage): a running agent is stopped first, app and agent are replaced together; a signed but uninstallable package leaves the previous version untouched, the update ready to retry and says how to recover the agent | `updates_tests.rs` | automated on macOS and Linux; Windows installs through the system installer and is not run in tests |
+| Installation into a throwaway installed copy (macOS app bundle, Linux AppImage): a running agent is stopped first and its instance lock is free before anything is replaced, app and agent are replaced together, the intent is recorded; a signed but uninstallable package leaves the previous version untouched, the update ready to retry, no intent, and says how to recover the agent; an agent that holds the lock without an endpoint blocks the installation | `updates_tests.rs` | automated on macOS and Linux; Windows installs through the system installer and is not run in tests |
+| Update intent and start-up recovery: atomic writing, a damaged intent, completion, an update interrupted before installing (the previous agent is started again), a new agent that does not start (reported and kept), and when rolling back is called safe | `deckpilot-update` `intent` tests; `updates_tests.rs` (`recovery`, on every platform) | automated |
+| The lock probe: a held lock is seen, a free one is released again at once | `deckpilot-ipc` `instance` tests | automated |
+| `DECKPILOT_AGENT_BIN` absent from and ignored by a release build, honoured by a debug build | `crates/deckpilot-distribution/tests/release_build.rs` | automated |
 | Update between two published releases | needs two public releases | not verified |
 
 - Update discovery, manifest validation, signature verification, policy

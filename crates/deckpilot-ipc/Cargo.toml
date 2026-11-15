@@ -11,6 +11,9 @@ publish.workspace = true
 [dependencies]
 deckpilot-core.workspace = true
 deckpilot-device.workspace = true
+# The build's distribution record, which `getStatus` reports (no
+# dependencies of its own).
+deckpilot-distribution.workspace = true
 dirs.workspace = true
 getrandom.workspace = true
 interprocess.workspace = true
