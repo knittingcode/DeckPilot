@@ -1,0 +1,51 @@
+{
+  "$schema": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
+  "id": "acme.hello-world",
+  "name": "Hello World",
+  "version": "0.1.0",
+  "publisher": { "id": "acme", "name": "Acme Tools", "url": "https://acme.example" },
+  "description": "The smallest DeckPilot plugin: one action that greets someone by name. Asks for no permissions.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/knittingcode/deckpilot",
+    "directory": "plugins/examples/hello-world"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["sample", "hello"],
+  "categories": ["other"],
+  "engines": { "deckpilot": ">=0.5.0 <1.0.0", "pluginApi": "^1.0", "sdk": "0.1.0" },
+  "runtime": { "kind": "wasm", "abi": 1 },
+  "entry": "src/lib.rs",
+  "icons": { "128": "assets/icon-128.png" },
+  "assets": { "readme": "README.md" },
+  "permissions": [],
+  "contributes": {
+    "actions": [
+      {
+        "id": "greet",
+        "name": "Greet",
+        "description": "Says hello to someone by name. Runs entirely inside the plugin.",
+        "category": "Hello World",
+        "parameters": [
+          {
+            "key": "name",
+            "label": "Name",
+            "description": "Who to greet.",
+            "required": true,
+            "kind": { "type": "text", "maxLength": 64 }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "hand",
+          "outputs": [{ "key": "greeting", "label": "Greeting", "kind": "text", "always": true }],
+          "timeoutMs": 5000,
+          "retrySafe": true,
+          "idempotent": true,
+          "effect": "readOnly"
+        }
+      }
+    ]
+  }
+}

@@ -2,9 +2,10 @@
 
 use std::fmt;
 
+pub use deckpilot_plugin_abi::capability::StorageUsage;
 use deckpilot_plugin_abi::capability::{
-    AuthScheme, Header, HttpAuth, HttpFetch, HttpResponse, Log, LogLevel, Notify, StorageKey,
-    StorageSet,
+    AuthScheme, CredentialRef, Header, HttpAuth, HttpFetch, HttpResponse, Log, LogLevel, NoArgs,
+    Notify, StorageKey, StoragePrefix, StorageSet, VariableClear, VariablePublish,
 };
 use deckpilot_plugin_abi::limits::MAX_HOST_CALLS_PER_INVOCATION;
 use deckpilot_plugin_abi::{CallError, CallErrorCode, CallResult, CapabilityRequest, HttpMethod};
@@ -96,8 +97,23 @@ impl<'a> Context<'a> {
         }
     }
 
-    /// Writes one line to the plugin log (always granted, rate limited).
-    /// Best effort: a dropped line is not an error for the action.
+    /// Writes one line to the plugin log (op `log`): always granted to an
+    /// enabled plugin, 50 lines per second, at most [`MAX_LOG_LEN`] bytes
+    /// (longer lines are cut). Best effort: a dropped or throttled line is
+    /// not an error for the action. The agent writes it to its own log,
+    /// attributed to the plugin; never log secrets or personal data.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::{CapabilityRequest, LogLevel};
+    ///
+    /// let mut host = MockHost::allow_all();
+    /// let mut ctx = host.context();
+    /// ctx.log(LogLevel::Info, "checking the build");
+    /// ctx.warn("rate limit almost reached"); // also: debug, info, error
+    /// assert!(matches!(&host.requests()[0],
+    ///     CapabilityRequest::Log(l) if l.message == "checking the build"));
+    /// ```
     pub fn log(&mut self, level: LogLevel, message: impl AsRef<str>) {
         let message = cut(message.as_ref(), MAX_LOG_LEN);
         let _ = self.call(
@@ -125,9 +141,41 @@ impl<'a> Context<'a> {
         self.log(LogLevel::Error, message);
     }
 
-    /// Performs an HTTP request through the agent. Needs a `network`
-    /// permission for the request's exact https origin and method. A
-    /// non-2xx status is a [`Response`], not an error.
+    /// Performs an HTTP request through the agent (op `http.fetch`).
+    ///
+    /// Needs a `network` permission for the request's exact https host and
+    /// method; redirects are re-checked hop by hop (at most 5) and never
+    /// carry a credential to another origin. Every resolved address must be
+    /// public. Limits: URL 8 KiB, 32 headers of at most 4 KiB, request
+    /// body 32 KiB, response body 512 KiB, 15 s for all hops, 60 requests
+    /// per minute. The response keeps only the headers `content-type`,
+    /// `content-length`, `cache-control`, `etag`, `last-modified`,
+    /// `retry-after` and `date`. A non-2xx status is a [`Response`], not an
+    /// error.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::prelude::*;
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::{CallErrorCode, CallResult, CapabilityRequest};
+    ///
+    /// let mut host = MockHost::new(|req| match req {
+    ///     CapabilityRequest::HttpFetch(f) if f.url.starts_with("https://api.example.com/") => {
+    ///         CallResult::Ok(serde_json::json!({"status": 200, "body": "{\"n\": 3}"}))
+    ///     }
+    ///     _ => CallResult::error(CallErrorCode::NotPermitted, "origin not granted"),
+    /// });
+    /// let mut ctx = host.context();
+    /// let r = ctx
+    ///     .fetch(Request::get("https://api.example.com/count").header("Accept", "application/json"))
+    ///     .unwrap();
+    /// assert!(r.is_success());
+    /// let v: serde_json::Value = r.json().unwrap();
+    /// assert_eq!(v["n"], 3);
+    ///
+    /// let denied = ctx.http_get("https://evil.example.net/").unwrap_err();
+    /// assert!(denied.is_denied());
+    /// assert_eq!(denied.target(), Some("https://evil.example.net"));
+    /// ```
     pub fn fetch(&mut self, request: Request) -> Result<Response, CapabilityError> {
         let target = origin_of(&request.url);
         let req = CapabilityRequest::HttpFetch(HttpFetch {
@@ -158,8 +206,19 @@ impl<'a> Context<'a> {
         self.fetch(Request::get(url))
     }
 
-    /// Shows a desktop notification (needs the `notifications` permission;
-    /// the agent prefixes the plugin's name).
+    /// Shows a notification (op `notify`). Needs the `notifications`
+    /// permission; the agent titles it with the plugin's name. Title at
+    /// most 64, body at most 300 characters; 5 per minute.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    ///
+    /// let mut host = MockHost::deny_all(); // `notifications` not granted
+    /// let mut ctx = host.context();
+    /// let e = ctx.notify("Build failed", "main is red").unwrap_err();
+    /// assert!(e.is_denied());
+    /// assert!(e.to_string().contains("`notifications` permission"));
+    /// ```
     pub fn notify(
         &mut self,
         title: impl Into<String>,
@@ -175,8 +234,25 @@ impl<'a> Context<'a> {
         .map(drop)
     }
 
-    /// Reads a value from the plugin's own storage (always granted).
-    /// `None` when the key is not set.
+    /// Reads a value from the plugin's own storage (op `storage.get`,
+    /// always granted to an enabled plugin). `None` when the key is not
+    /// set. Storage is per plugin and per computer, kept in the agent's
+    /// encrypted plugin database, never exported, and deleted on uninstall.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::{CallResult, CapabilityRequest};
+    ///
+    /// let mut host = MockHost::new(|req| match req {
+    ///     CapabilityRequest::StorageGet(k) if k.key == "last" => {
+    ///         CallResult::Ok(serde_json::json!({"repo": "acme/app", "prs": 4}))
+    ///     }
+    ///     _ => CallResult::Ok(serde_json::Value::Null), // not set
+    /// });
+    /// let mut ctx = host.context();
+    /// assert_eq!(ctx.storage_get("last").unwrap().unwrap()["prs"], 4);
+    /// assert_eq!(ctx.storage_get("other").unwrap(), None);
+    /// ```
     pub fn storage_get(
         &mut self,
         key: impl Into<String>,
@@ -188,6 +264,55 @@ impl<'a> Context<'a> {
         Ok((!v.is_null()).then_some(v))
     }
 
+    /// [`Context::storage_get`], deserialized as `T`. A stored value of
+    /// another shape is [`CapabilityErrorKind::MalformedReply`].
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::CallResult;
+    ///
+    /// #[derive(serde::Deserialize)]
+    /// struct Last {
+    ///     prs: u32,
+    /// }
+    ///
+    /// let mut host = MockHost::new(|_| CallResult::Ok(serde_json::json!({"prs": 4})));
+    /// let mut ctx = host.context();
+    /// let last: Option<Last> = ctx.storage_get_as("last").unwrap();
+    /// assert_eq!(last.unwrap().prs, 4);
+    /// ```
+    pub fn storage_get_as<T: DeserializeOwned>(
+        &mut self,
+        key: impl Into<String>,
+    ) -> Result<Option<T>, CapabilityError> {
+        match self.storage_get(key)? {
+            None => Ok(None),
+            Some(v) => serde_json::from_value(v)
+                .map(Some)
+                .map_err(|_| malformed("storage.get", "a value of the expected type")),
+        }
+    }
+
+    /// Stores `value` as JSON under `key` (op `storage.set`, always
+    /// granted to an enabled plugin). Key 1-128 characters without control
+    /// characters, value at most 64 KiB of JSON. The plugin's storage holds
+    /// at most 1,000 keys and 256 KiB (key plus JSON value, UTF-8), or the
+    /// approved `storage` permission's `quotaKb`; a write that would grow it
+    /// past the quota fails with [`CapabilityErrorKind::Failed`] and a
+    /// detail starting `storage-quota` (a write that does not grow it is
+    /// allowed even above the quota). 100 storage calls per second.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::CapabilityRequest;
+    ///
+    /// let mut host = MockHost::allow_all();
+    /// let mut ctx = host.context();
+    /// ctx.storage_set("last", serde_json::json!({"prs": 4})).unwrap();
+    /// ctx.storage_delete("stale").unwrap();
+    /// assert!(matches!(&host.requests()[0],
+    ///     CapabilityRequest::StorageSet(s) if s.key == "last" && s.value["prs"] == 4));
+    /// ```
     pub fn storage_set(
         &mut self,
         key: impl Into<String>,
@@ -209,12 +334,245 @@ impl<'a> Context<'a> {
         .map(drop)
     }
 
+    /// Removes `key` (op `storage.delete`); removing a key that is not set
+    /// is not an error.
     pub fn storage_delete(&mut self, key: impl Into<String>) -> Result<(), CapabilityError> {
         self.call(
             "storage.delete",
             &CapabilityRequest::StorageDelete(StorageKey { key: key.into() }),
         )
         .map(drop)
+    }
+
+    /// Publishes the value of one of the plugin's own variables, declared
+    /// in `contributes.variables` of manifest.json (op `variables.publish`,
+    /// always granted to an enabled plugin, 10 per second, at most 16 KiB).
+    /// `id` is relative (`temperature`); workflows read it as
+    /// `{{ plugins.<publisher>.<name>.temperature }}`. The agent refuses an
+    /// undeclared id ([`CapabilityErrorKind::NotPermitted`]), a value of
+    /// another type than the declared `valueType`
+    /// ([`CapabilityErrorKind::BadRequest`]) and a variable whose scope is
+    /// not `machine` ([`CapabilityErrorKind::Unavailable`]). A `null`
+    /// value clears it. Values are kept in memory only: not across
+    /// restarts of the agent, and cleared when the plugin is disabled,
+    /// updated or removed.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::CapabilityRequest;
+    ///
+    /// let mut host = MockHost::allow_all();
+    /// let mut ctx = host.context();
+    /// ctx.publish_variable("openPrs", 4).unwrap();
+    /// ctx.publish_variable("buildStatus", "success").unwrap();
+    /// ctx.clear_variable("buildStatus").unwrap();
+    /// ctx.clear_variables().unwrap();
+    /// assert!(matches!(&host.requests()[0],
+    ///     CapabilityRequest::VariablesPublish(v) if v.id == "openPrs" && v.value == 4));
+    /// ```
+    pub fn publish_variable(
+        &mut self,
+        id: impl Into<String>,
+        value: impl Serialize,
+    ) -> Result<(), CapabilityError> {
+        let value = serde_json::to_value(value).map_err(|_| CapabilityError {
+            op: "variables.publish",
+            kind: CapabilityErrorKind::BadRequest,
+            detail: "the value does not serialize to JSON".into(),
+            target: None,
+        })?;
+        self.call(
+            "variables.publish",
+            &CapabilityRequest::VariablesPublish(VariablePublish {
+                id: id.into(),
+                value,
+            }),
+        )
+        .map(drop)
+    }
+
+    /// Clears one published variable (it then has no value).
+    pub fn clear_variable(&mut self, id: impl Into<String>) -> Result<(), CapabilityError> {
+        self.call(
+            "variables.clear",
+            &CapabilityRequest::VariablesClear(VariableClear {
+                id: Some(id.into()),
+            }),
+        )
+        .map(drop)
+    }
+
+    /// Clears every variable the plugin published.
+    pub fn clear_variables(&mut self) -> Result<(), CapabilityError> {
+        self.call(
+            "variables.clear",
+            &CapabilityRequest::VariablesClear(VariableClear { id: None }),
+        )
+        .map(drop)
+    }
+
+    /// The plugin's own storage keys (those starting with `prefix`, if
+    /// given), sorted (op `storage.keys`).
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::{CallResult, CapabilityRequest};
+    ///
+    /// let mut host = MockHost::new(|req| match req {
+    ///     CapabilityRequest::StorageKeys(_) => {
+    ///         CallResult::Ok(serde_json::json!(["repo.a", "repo.b"]))
+    ///     }
+    ///     _ => CallResult::Ok(serde_json::Value::Null),
+    /// });
+    /// let mut ctx = host.context();
+    /// assert_eq!(ctx.storage_keys(Some("repo.")).unwrap(), ["repo.a", "repo.b"]);
+    /// ```
+    pub fn storage_keys(&mut self, prefix: Option<&str>) -> Result<Vec<String>, CapabilityError> {
+        let v = self.call(
+            "storage.keys",
+            &CapabilityRequest::StorageKeys(StoragePrefix {
+                prefix: prefix.map(str::to_owned),
+            }),
+        )?;
+        serde_json::from_value(v).map_err(|_| malformed("storage.keys", "a list of keys"))
+    }
+
+    /// How much of its quota the plugin's storage uses (op
+    /// `storage.usage`). A write beyond the quota fails with
+    /// [`CapabilityErrorKind::Failed`] and a detail that starts with
+    /// `storage-quota`.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::CallResult;
+    ///
+    /// let mut host = MockHost::new(|_| CallResult::Ok(serde_json::json!({
+    ///     "usedBytes": 120, "keys": 3, "quotaBytes": 262144, "maxKeys": 1000
+    /// })));
+    /// let mut ctx = host.context();
+    /// let u = ctx.storage_usage().unwrap();
+    /// assert!(u.used_bytes < u.quota_bytes && u.keys < u.max_keys);
+    /// ```
+    pub fn storage_usage(&mut self) -> Result<StorageUsage, CapabilityError> {
+        let v = self.call("storage.usage", &CapabilityRequest::StorageUsage(NoArgs {}))?;
+        serde_json::from_value(v).map_err(|_| malformed("storage.usage", "a storage usage"))
+    }
+
+    /// Whether the user stored a secret for `handle`'s slot (op
+    /// `credentials.has`). Never returns the secret; needs the slot's
+    /// `credentials` grant. Use it to send a request without credentials,
+    /// or to fail with [`codes::CREDENTIAL_MISSING`], when there is none:
+    /// a fetch that names a slot without a secret fails with
+    /// [`CapabilityErrorKind::Unavailable`] ("no secret is stored").
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::prelude::*;
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::{CallResult, CapabilityRequest};
+    ///
+    /// let mut host = MockHost::new(|req| match req {
+    ///     CapabilityRequest::CredentialHas(_) => CallResult::Ok(serde_json::json!(true)),
+    ///     _ => CallResult::Ok(serde_json::json!({"status": 200})),
+    /// });
+    /// let token = SecretHandle::slot("githubToken").unwrap();
+    /// let mut ctx = host.context();
+    /// let mut request = Request::get("https://api.github.com/user");
+    /// if ctx.has_credential(&token).unwrap() {
+    ///     request = request.bearer(&token); // the agent injects the secret
+    /// }
+    /// ctx.fetch(request).unwrap();
+    /// let CapabilityRequest::HttpFetch(sent) = &host.requests()[1] else {
+    ///     panic!()
+    /// };
+    /// assert_eq!(sent.auth.as_ref().unwrap().credential, "githubToken");
+    /// ```
+    pub fn has_credential(&mut self, handle: &SecretHandle) -> Result<bool, CapabilityError> {
+        let v = self.call(
+            "credentials.has",
+            &CapabilityRequest::CredentialHas(CredentialRef {
+                credential: handle.key.clone(),
+            }),
+        )?;
+        v.as_bool()
+            .ok_or_else(|| malformed("credentials.has", "true or false"))
+    }
+
+    /// The plugin's settings (`contributes.settings` in the manifest), as
+    /// the user saved them, with the declared defaults filled in (op
+    /// `settings.get`, always granted to an enabled plugin). A saved value
+    /// that no longer fits its field is replaced by the default; a setting
+    /// with neither is absent. Read them in every invocation: there is no
+    /// change notification in ABI 1.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::CallResult;
+    ///
+    /// let mut host = MockHost::new(|_| CallResult::Ok(serde_json::json!({
+    ///     "defaultRepo": "acme/app", "notifyOnChange": false
+    /// })));
+    /// let mut ctx = host.context();
+    /// let settings = ctx.settings().unwrap();
+    /// assert_eq!(settings.text("defaultRepo"), Some("acme/app"));
+    /// assert_eq!(settings.boolean("notifyOnChange"), Some(false));
+    /// assert_eq!(settings.text("defaultBranch"), None);
+    /// ```
+    pub fn settings(&mut self) -> Result<Settings, CapabilityError> {
+        let v = self.call("settings.get", &CapabilityRequest::SettingsGet(NoArgs {}))?;
+        match v {
+            Value::Object(map) => Ok(Settings(map)),
+            _ => Err(malformed("settings.get", "an object of settings")),
+        }
+    }
+}
+
+fn malformed(op: &'static str, expected: &str) -> CapabilityError {
+    CapabilityError {
+        op,
+        kind: CapabilityErrorKind::MalformedReply,
+        detail: format!("the reply is not {expected}"),
+        target: None,
+    }
+}
+
+/// The plugin's settings, by key ([`Context::settings`]). A setting the
+/// user did not set and that has no default is absent.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Settings(serde_json::Map<String, Value>);
+
+impl Settings {
+    /// The setting `key` as `T` (`String`, `i64`, `bool`, ...); `None`
+    /// when absent or of another type.
+    pub fn get<T: DeserializeOwned>(&self, key: &str) -> Option<T> {
+        self.0
+            .get(key)
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+
+    pub fn text(&self, key: &str) -> Option<&str> {
+        self.0.get(key).and_then(Value::as_str)
+    }
+
+    pub fn integer(&self, key: &str) -> Option<i64> {
+        self.0.get(key).and_then(Value::as_i64)
+    }
+
+    pub fn boolean(&self, key: &str) -> Option<bool> {
+        self.0.get(key).and_then(Value::as_bool)
+    }
+
+    pub fn contains(&self, key: &str) -> bool {
+        self.0.contains_key(key)
+    }
+
+    /// Every setting, as JSON.
+    pub fn as_map(&self) -> &serde_json::Map<String, Value> {
+        &self.0
+    }
+
+    /// Every setting as one JSON object text.
+    pub fn to_json(&self) -> String {
+        Value::Object(self.0.clone()).to_string()
     }
 }
 
@@ -315,6 +673,32 @@ impl Request {
 
     pub fn post(url: impl Into<String>) -> Self {
         Self::new(HttpMethod::Post, url)
+    }
+
+    pub fn put(url: impl Into<String>) -> Self {
+        Self::new(HttpMethod::Put, url)
+    }
+
+    pub fn patch(url: impl Into<String>) -> Self {
+        Self::new(HttpMethod::Patch, url)
+    }
+
+    pub fn delete(url: impl Into<String>) -> Self {
+        Self::new(HttpMethod::Delete, url)
+    }
+
+    pub fn head(url: impl Into<String>) -> Self {
+        Self::new(HttpMethod::Head, url)
+    }
+
+    /// The request's method.
+    pub fn method(&self) -> HttpMethod {
+        self.method
+    }
+
+    /// The request's URL.
+    pub fn url(&self) -> &str {
+        &self.url
     }
 
     /// Adds a header. Credentials, cookies and framing headers are refused
@@ -489,6 +873,21 @@ impl fmt::Display for CapabilityError {
                         "Declare the `notifications` permission in manifest.json; it applies \
                          once the user approves it",
                     ),
+                    "credentials.has" => f.write_str(
+                        "Declare the slot in `contributes.credentials` and in a `credentials` \
+                         permission in manifest.json; it applies once the user approves it",
+                    ),
+                    "variables.publish" | "variables.clear" => f.write_str(
+                        "Declare the variable in `contributes.variables` in manifest.json; \
+                         publishing is allowed only while the plugin is enabled",
+                    ),
+                    "log" | "settings.get" | "storage.get" | "storage.set" | "storage.delete"
+                    | "storage.keys" | "storage.usage" => f.write_str(
+                        "It is always allowed while the plugin is enabled and has its \
+                         grants; the plugin is disabled or being removed, or the agent \
+                         refused its grant set (for example a credential slot whose host \
+                         lost its network grant; see the agent log)",
+                    ),
                     _ => f.write_str("It is not grantable to plugins in API 1"),
                 }
             }
@@ -580,11 +979,123 @@ mod tests {
     }
 
     #[test]
+    fn denials_of_always_on_ops_say_the_plugin_is_not_enabled() {
+        let denied = |op| {
+            CapabilityError::from_call(
+                op,
+                CallError {
+                    code: CallErrorCode::NotPermitted,
+                    message: "plugin has no grants".into(),
+                },
+            )
+            .to_string()
+        };
+        for op in ["storage.set", "settings.get", "log"] {
+            assert!(denied(op).contains("while the plugin is enabled"), "{op}");
+        }
+        assert!(denied("variables.publish").contains("contributes.variables"));
+        assert!(denied("process.spawn").contains("not grantable"));
+    }
+
+    #[test]
+    fn requests_have_every_method_and_typed_storage_reads() {
+        use crate::testing::MockHost;
+        for (r, m) in [
+            (Request::put("https://a.example.com/"), HttpMethod::Put),
+            (Request::patch("https://a.example.com/"), HttpMethod::Patch),
+            (
+                Request::delete("https://a.example.com/"),
+                HttpMethod::Delete,
+            ),
+            (Request::head("https://a.example.com/"), HttpMethod::Head),
+        ] {
+            assert_eq!(r.method(), m);
+            assert_eq!(r.url(), "https://a.example.com/");
+        }
+        let mut host = MockHost::new(|_| CallResult::Ok(serde_json::json!("text")));
+        let mut ctx = host.context();
+        assert_eq!(
+            ctx.storage_get_as::<u32>("n").unwrap_err().kind(),
+            CapabilityErrorKind::MalformedReply
+        );
+        assert_eq!(
+            ctx.storage_get_as::<String>("n").unwrap().as_deref(),
+            Some("text")
+        );
+    }
+
+    #[test]
     fn log_lines_are_cut_at_character_boundaries() {
         let s = "é".repeat(MAX_LOG_LEN);
         let c = cut(&s, MAX_LOG_LEN);
         assert!(c.len() <= MAX_LOG_LEN);
         assert!(c.chars().all(|ch| ch == 'é'));
+    }
+
+    #[test]
+    fn storage_credential_and_settings_wrappers_are_typed() {
+        use crate::testing::MockHost;
+        let mut host = MockHost::new(|req| match req {
+            CapabilityRequest::StorageKeys(p) => {
+                assert_eq!(p.prefix.as_deref(), Some("a."));
+                CallResult::Ok(serde_json::json!(["a.1", "a.2"]))
+            }
+            CapabilityRequest::StorageUsage(_) => CallResult::Ok(serde_json::json!({
+                "usedBytes": 12, "keys": 2, "quotaBytes": 262_144, "maxKeys": 1000
+            })),
+            CapabilityRequest::CredentialHas(c) if c.credential == "token" => {
+                CallResult::Ok(Value::Bool(true))
+            }
+            CapabilityRequest::CredentialHas(_) => {
+                CallResult::error(CallErrorCode::NotPermitted, "credential not granted")
+            }
+            CapabilityRequest::SettingsGet(_) => CallResult::Ok(serde_json::json!({
+                "city": "berlin", "count": 3, "metric": true
+            })),
+            _ => CallResult::Ok(Value::Null),
+        });
+        let mut ctx = Context::new(&mut host);
+        assert_eq!(ctx.storage_keys(Some("a.")).unwrap(), ["a.1", "a.2"]);
+        let usage = ctx.storage_usage().unwrap();
+        assert_eq!((usage.used_bytes, usage.keys), (12, 2));
+        let token = SecretHandle::slot("token").unwrap();
+        assert!(ctx.has_credential(&token).unwrap());
+        let other = ctx
+            .has_credential(&SecretHandle::slot("other").unwrap())
+            .unwrap_err();
+        assert!(other.is_denied());
+        assert!(
+            other.to_string().contains("contributes.credentials"),
+            "{other}"
+        );
+        let settings = ctx.settings().unwrap();
+        assert_eq!(settings.text("city"), Some("berlin"));
+        assert_eq!(settings.integer("count"), Some(3));
+        assert_eq!(settings.boolean("metric"), Some(true));
+        assert_eq!(settings.get::<String>("count"), None);
+        assert!(!settings.contains("missing"));
+        assert_eq!(ctx.calls(), 5);
+    }
+
+    #[test]
+    fn malformed_replies_are_reported() {
+        use crate::testing::MockHost;
+        let mut host = MockHost::new(|_| CallResult::Ok(serde_json::json!("nonsense")));
+        let mut ctx = Context::new(&mut host);
+        assert_eq!(
+            ctx.settings().unwrap_err().kind(),
+            CapabilityErrorKind::MalformedReply
+        );
+        assert_eq!(
+            ctx.storage_keys(None).unwrap_err().kind(),
+            CapabilityErrorKind::MalformedReply
+        );
+        assert_eq!(
+            ctx.has_credential(&SecretHandle::slot("token").unwrap())
+                .unwrap_err()
+                .kind(),
+            CapabilityErrorKind::MalformedReply
+        );
     }
 
     #[test]

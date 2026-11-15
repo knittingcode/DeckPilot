@@ -56,6 +56,7 @@
 //! crash interrupted (see the `recover` module). Crashes are simulated in
 //! tests through [`Failpoints`].
 
+mod data;
 mod db;
 mod error;
 mod failpoint;
@@ -66,6 +67,11 @@ mod recover;
 mod state;
 mod store;
 
+pub use data::{
+    CredentialStatus, KnownPlugin, MAX_SECRET_BYTES, MAX_STORAGE_KEY_CHARS,
+    MAX_STORAGE_VALUE_BYTES, PluginData, Retention, Secret, StorageError, StorageQuota,
+    StorageUsage,
+};
 pub use db::{
     CONFIG_DATABASE_FILE, DEFAULT_BUSY_TIMEOUT, Database, MIGRATIONS, StoreKey,
     supported_schema_version,

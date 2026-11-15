@@ -515,9 +515,13 @@ pub enum Request {
     RollbackPlugin {
         plugin: String,
     },
-    /// Removes the plugin, its files and its records. Since protocol 10.
+    /// Removes the plugin, its files and its records, its storage and, unless
+    /// `keep` says otherwise, its settings and credentials. Since protocol
+    /// 10 (`keep` is optional and omitted when nothing is kept).
     UninstallPlugin {
         plugin: String,
+        #[serde(default, skip_serializing_if = "plugins::PluginRetention::is_default")]
+        keep: plugins::PluginRetention,
     },
     /// Runs one action of an enabled plugin in its sandboxed host. Since
     /// protocol 10.
@@ -526,6 +530,38 @@ pub enum Request {
         action: String,
         #[serde(default)]
         params: BTreeMap<String, serde_json::Value>,
+    },
+    /// Every plugin installed here at some point, installed now or not.
+    /// Since protocol 10.
+    ListKnownPlugins,
+    /// A plugin's settings: fields, saved and effective values. Since
+    /// protocol 10.
+    GetPluginSettings {
+        plugin: String,
+    },
+    /// Saves settings values (merged into the saved ones; `null` resets a
+    /// setting to its default) after validating them against the
+    /// manifest. Since protocol 10.
+    SetPluginSettings {
+        plugin: String,
+        values: BTreeMap<String, serde_json::Value>,
+    },
+    /// A plugin's credential slots and whether each has a secret (never
+    /// the secrets). Since protocol 10.
+    ListPluginCredentials {
+        plugin: String,
+    },
+    /// Stores the secret of one credential slot. The answer never carries
+    /// it. Since protocol 10.
+    SetPluginCredential {
+        plugin: String,
+        key: String,
+        secret: plugins::PluginSecret,
+    },
+    /// Deletes the secret of one credential slot. Since protocol 10.
+    DeletePluginCredential {
+        plugin: String,
+        key: String,
     },
 }
 
@@ -564,7 +600,26 @@ impl Request {
             | Self::DisablePlugin { plugin }
             | Self::DeclinePluginUpdate { plugin }
             | Self::RollbackPlugin { plugin }
-            | Self::UninstallPlugin { plugin } => plugins::check_text("plugin", plugin),
+            | Self::UninstallPlugin { plugin, .. }
+            | Self::GetPluginSettings { plugin }
+            | Self::ListPluginCredentials { plugin } => plugins::check_text("plugin", plugin),
+            Self::SetPluginSettings { plugin, values } => {
+                plugins::check_text("plugin", plugin)?;
+                plugins::check_settings(values)
+            }
+            Self::SetPluginCredential {
+                plugin,
+                key,
+                secret,
+            } => {
+                plugins::check_text("plugin", plugin)?;
+                plugins::check_text("credential", key)?;
+                plugins::check_secret(secret)
+            }
+            Self::DeletePluginCredential { plugin, key } => {
+                plugins::check_text("plugin", plugin)?;
+                plugins::check_text("credential", key)
+            }
             Self::InstallPlugin { source, consent } => {
                 source.check()?;
                 plugins::check_consent(consent)
@@ -792,6 +847,22 @@ pub enum Response {
     PluginActionResult {
         outcome: plugins::PluginActionOutcome,
     },
+    /// Answer to `listKnownPlugins`. Since protocol 10.
+    KnownPlugins {
+        plugins: Vec<plugins::KnownPlugin>,
+    },
+    /// Answer to `getPluginSettings` and `setPluginSettings`. Since
+    /// protocol 10.
+    PluginSettings {
+        settings: Box<plugins::PluginSettings>,
+    },
+    /// Answer to `listPluginCredentials`, `setPluginCredential` and
+    /// `deletePluginCredential`: the slots, never a secret. Since protocol
+    /// 10.
+    PluginCredentials {
+        plugin: String,
+        credentials: Vec<plugins::PluginCredentialSlot>,
+    },
     Ok,
 }
 
@@ -851,6 +922,28 @@ impl Response {
         match self {
             Self::Variables { entries } => Self::Variables {
                 entries: entries.into_iter().filter(|e| !plugin_owned(e)).collect(),
+            },
+            // A plugin variable (`plugins.<publisher>.<name>.…`) is not a
+            // reference for such a client, exactly as before protocol 10.
+            Self::ReferencePreviews { previews } => Self::ReferencePreviews {
+                previews: previews
+                    .into_iter()
+                    .map(|preview| {
+                        if is_plugin_reference(&preview.reference) {
+                            ReferencePreview {
+                                status: ReferenceStatus::Invalid {
+                                    message: deckpilot_core::variables::ExpressionError::Invalid(
+                                        preview.reference.clone(),
+                                    )
+                                    .to_string(),
+                                },
+                                ..preview
+                            }
+                        } else {
+                            preview
+                        }
+                    })
+                    .collect(),
             },
             other => other,
         }
@@ -1005,7 +1098,13 @@ impl Request {
             | Self::DeclinePluginUpdate { .. }
             | Self::RollbackPlugin { .. }
             | Self::UninstallPlugin { .. }
-            | Self::InvokePluginAction { .. } => 10,
+            | Self::InvokePluginAction { .. }
+            | Self::ListKnownPlugins
+            | Self::GetPluginSettings { .. }
+            | Self::SetPluginSettings { .. }
+            | Self::ListPluginCredentials { .. }
+            | Self::SetPluginCredential { .. }
+            | Self::DeletePluginCredential { .. } => 10,
             Self::RunWorkflow { .. } | Self::PrepareForUpdate => 2,
             Self::GetStatus
             | Self::ListDevices
@@ -1060,6 +1159,33 @@ impl AgentEvent {
             | Self::ShuttingDown => 1,
         }
     }
+
+    /// The event as a client speaking `protocol` receives it, or `None`
+    /// when it must not receive it at all: events newer than its protocol,
+    /// and before protocol 10 the plugin variables
+    /// (`plugins.<publisher>.<name>.…`) among changed keys.
+    #[must_use]
+    pub fn for_protocol(self, protocol: u32) -> Option<Self> {
+        if self.since_protocol() > protocol {
+            return None;
+        }
+        match self {
+            Self::SharedVariablesChanged { keys } if protocol < 10 => {
+                let keys: Vec<String> = keys
+                    .into_iter()
+                    .filter(|key| !is_plugin_reference(key))
+                    .collect();
+                (!keys.is_empty()).then_some(Self::SharedVariablesChanged { keys })
+            }
+            other => Some(other),
+        }
+    }
+}
+
+/// Whether `reference` names a plugin's variable (protocol 10).
+fn is_plugin_reference(reference: &str) -> bool {
+    deckpilot_core::variables::VariableId::new(reference.trim())
+        .is_ok_and(|id| id.plugin_owner().is_some())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1452,6 +1578,62 @@ mod tests {
     }
 
     #[test]
+    fn clients_before_protocol_10_see_no_plugin_variables() {
+        use deckpilot_core::variables::{ReferencePreview, ReferenceStatus};
+        let preview = |reference: &str, status: ReferenceStatus| ReferencePreview {
+            reference: reference.into(),
+            status,
+        };
+        let unavailable = ReferenceStatus::Unavailable {
+            owner: "acme.hello-weather".into(),
+        };
+        let previews = Response::ReferencePreviews {
+            previews: vec![
+                preview("plugins.acme.helloWeather.temperature", unavailable.clone()),
+                preview("projects.current.key", unavailable.clone()),
+            ],
+        };
+        assert_eq!(previews.clone().for_protocol(10), previews);
+        let Response::ReferencePreviews { previews: old } = previews.for_protocol(9) else {
+            panic!("previews")
+        };
+        // A plugin variable is not a reference, as before protocol 10;
+        // a built-in one keeps its status.
+        assert!(
+            matches!(&old[0].status, ReferenceStatus::Invalid { message }
+                if message.contains("is not a reference")),
+            "{old:?}"
+        );
+        assert_eq!(old[1].status, unavailable);
+
+        let changed = AgentEvent::SharedVariablesChanged {
+            keys: vec![
+                "plugins.acme.helloWeather.temperature".into(),
+                "shared.team.name".into(),
+            ],
+        };
+        assert_eq!(changed.clone().for_protocol(10), Some(changed.clone()));
+        assert_eq!(
+            changed.for_protocol(9),
+            Some(AgentEvent::SharedVariablesChanged {
+                keys: vec!["shared.team.name".into()]
+            })
+        );
+        let only_plugins = AgentEvent::SharedVariablesChanged {
+            keys: vec!["plugins.acme.helloWeather.temperature".into()],
+        };
+        assert_eq!(only_plugins.for_protocol(9), None);
+        assert_eq!(
+            AgentEvent::ShowWindow.for_protocol(9),
+            Some(AgentEvent::ShowWindow)
+        );
+        assert_eq!(
+            AgentEvent::SharedVariablesChanged { keys: vec![] }.for_protocol(6),
+            None
+        );
+    }
+
+    #[test]
     fn the_variable_registry_needs_protocol_9() {
         use deckpilot_core::variables::{
             CatalogEntry, Deprecation, ReferenceAvailability, ReferencePreview, ReferenceStatus,
@@ -1767,5 +1949,67 @@ mod tests {
         let json = serde_json::to_value(&new).unwrap();
         assert_eq!(json["reason"], "pluginsUnavailable");
         serde_json::from_value::<Protocol9Error>(json).unwrap();
+    }
+
+    #[test]
+    fn plugin_data_requests_are_additive_and_never_show_a_secret() {
+        use crate::plugins::{PluginRetention, PluginSecret};
+        // `uninstallPlugin` without `keep` keeps its original form.
+        let old = r#"{"type":"uninstallPlugin","plugin":"acme.x"}"#;
+        let parsed: Request = serde_json::from_str(old).unwrap();
+        assert_eq!(
+            parsed,
+            Request::UninstallPlugin {
+                plugin: "acme.x".into(),
+                keep: PluginRetention::default()
+            }
+        );
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), old);
+        let keeping: Request = serde_json::from_str(
+            r#"{"type":"uninstallPlugin","plugin":"acme.x","keep":{"credentials":true}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            keeping,
+            Request::UninstallPlugin {
+                keep: PluginRetention {
+                    credentials: true,
+                    settings: false
+                },
+                ..
+            }
+        ));
+        let set = Request::SetPluginCredential {
+            plugin: "acme.x".into(),
+            key: "token".into(),
+            secret: PluginSecret::new("s3cret-value"),
+        };
+        assert_eq!(set.since_protocol(), 10);
+        set.validate().unwrap();
+        assert!(!format!("{set:?}").contains("s3cret-value"));
+        let empty = Request::SetPluginCredential {
+            plugin: "acme.x".into(),
+            key: "token".into(),
+            secret: PluginSecret::new(""),
+        };
+        assert!(empty.validate().is_err());
+        let too_many = Request::SetPluginSettings {
+            plugin: "acme.x".into(),
+            values: (0..=crate::plugins::MAX_SETTINGS_VALUES)
+                .map(|i| (format!("s{i}"), serde_json::Value::Null))
+                .collect(),
+        };
+        assert!(too_many.validate().is_err());
+        for request in [
+            Request::ListKnownPlugins,
+            Request::GetPluginSettings {
+                plugin: "acme.x".into(),
+            },
+            Request::ListPluginCredentials {
+                plugin: "acme.x".into(),
+            },
+        ] {
+            assert_eq!(request.since_protocol(), 10);
+        }
     }
 }

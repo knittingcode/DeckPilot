@@ -21,6 +21,8 @@ use tokio::sync::oneshot;
 #[cfg(feature = "plugins")]
 mod convert;
 #[cfg(feature = "plugins")]
+mod data;
+#[cfg(feature = "plugins")]
 mod engine;
 #[cfg(feature = "plugins")]
 mod executor;
@@ -34,6 +36,8 @@ mod lane;
 mod registry;
 #[cfg(feature = "plugins")]
 mod service;
+#[cfg(feature = "plugins")]
+mod variables;
 #[cfg(feature = "plugins")]
 mod worker;
 
@@ -157,6 +161,12 @@ pub(crate) fn is_plugin_request(request: &Request) -> bool {
             | Request::RollbackPlugin { .. }
             | Request::UninstallPlugin { .. }
             | Request::InvokePluginAction { .. }
+            | Request::ListKnownPlugins
+            | Request::GetPluginSettings { .. }
+            | Request::SetPluginSettings { .. }
+            | Request::ListPluginCredentials { .. }
+            | Request::SetPluginCredential { .. }
+            | Request::DeletePluginCredential { .. }
     )
 }
 
@@ -260,7 +270,9 @@ impl PluginRuntime {
             return worker
                 .catalog()
                 .into_iter()
-                .filter_map(|plugin| engine::PluginModule::new(plugin, invoker.clone()))
+                .filter_map(|plugin| {
+                    engine::PluginModule::new(plugin, invoker.clone(), worker.values())
+                })
                 .map(|module| Box::new(module) as Box<dyn deckpilot_core::FeatureModule>)
                 .collect();
         }

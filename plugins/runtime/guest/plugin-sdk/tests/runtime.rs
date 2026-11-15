@@ -143,3 +143,36 @@ fn versions_are_exposed() {
     assert_eq!(deckpilot_plugin_sdk::API_LEVEL.to_string(), "1.0");
     assert_eq!(deckpilot_plugin_sdk::SDK_VERSION, env!("CARGO_PKG_VERSION"));
 }
+
+#[test]
+fn manifest_mismatches_name_every_difference() {
+    use deckpilot_plugin_sdk::testing::manifest_mismatches;
+    let p = Plugin::new("acme.check", "1.0.0").action(
+        Action::new("a", ok)
+            .param(Param::text("notes"))
+            .param(Param::integer("n").min(1.0).max(5.0).default(2))
+            .param(Param::number("x")),
+    );
+    let manifest = json!({
+        "id": "acme.check", "version": "1.0.1",
+        "engines": {"pluginApi": "^1.0", "sdk": "9.9.9"},
+        "contributes": {"actions": [{"id": "a", "parameters": [
+            {"key": "notes", "required": false, "kind": {"type": "lines"}},
+            {"key": "n", "required": false, "kind": {"type": "integer", "min": 1, "max": 6},
+             "default": {"type": "integer", "value": 2}},
+            {"key": "x", "required": false, "kind": {"type": "text"}}
+        ]}, {"id": "b", "parameters": []}]}
+    });
+    let found = manifest_mismatches(&p, &manifest);
+    let joined = found.join("\n");
+    assert_eq!(found.len(), 5, "{joined}");
+    for needle in [
+        "version is \"1.0.1\" in the manifest, \"1.0.0\" in the plugin",
+        "engines.sdk is \"9.9.9\"",
+        "action ids is [\"a\",\"b\"]",
+        "a.n: kind.max is 6 in the manifest, 5 in the plugin",
+        "a.x: kind.type is \"text\" in the manifest, \"number (no manifest kind in version 1)\"",
+    ] {
+        assert!(joined.contains(needle), "{needle}\n{joined}");
+    }
+}

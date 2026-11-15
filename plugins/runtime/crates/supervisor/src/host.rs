@@ -31,6 +31,51 @@ use crate::process::{HostProcess, HostStdin};
 /// notifications, log). Called on the supervisor's thread.
 pub trait CapabilityExecutor {
     fn execute(&mut self, plugin: &PluginId, allowed: &Allowed) -> CallResult;
+
+    /// [`CapabilityExecutor::execute`] for a call of an invocation that can
+    /// be stopped: an executor whose work takes time (an HTTP request)
+    /// watches `interrupt` and returns at once when it is raised (the
+    /// invocation was aborted or its deadline passed), dropping whatever
+    /// the work would still have produced. The default ignores it.
+    fn execute_interruptible(
+        &mut self,
+        plugin: &PluginId,
+        allowed: &Allowed,
+        interrupt: &CallInterrupt,
+    ) -> CallResult {
+        let _ = interrupt;
+        self.execute(plugin, allowed)
+    }
+}
+
+/// Why a running capability call should stop: its invocation's
+/// [`AbortSignal`] was raised, or the invocation's deadline passed.
+#[derive(Debug, Clone)]
+pub struct CallInterrupt {
+    abort: Option<AbortSignal>,
+    deadline: Instant,
+}
+
+impl CallInterrupt {
+    pub fn new(abort: Option<AbortSignal>, deadline: Instant) -> Self {
+        Self { abort, deadline }
+    }
+
+    /// Whether the call should stop now.
+    pub fn is_raised(&self) -> bool {
+        self.is_aborted() || Instant::now() >= self.deadline
+    }
+
+    /// Whether the invocation was aborted (cancelled), as opposed to past
+    /// its deadline.
+    pub fn is_aborted(&self) -> bool {
+        self.abort.as_ref().is_some_and(AbortSignal::is_aborted)
+    }
+
+    /// The invocation's deadline.
+    pub fn deadline(&self) -> Instant {
+        self.deadline
+    }
 }
 
 /// The program to run as the host and its arguments.
@@ -133,8 +178,12 @@ pub struct HostConfig {
 /// runs to completion, so an aborted invocation gets
 /// [`HostConfig::abort_grace`] to deliver its result; then the host is
 /// killed and the invocation fails with [`HostError::Aborted`]. The next
-/// invocation starts a fresh host. Cheap to clone; every clone is the same
-/// signal.
+/// invocation starts a fresh host. A capability call that is running when
+/// the signal is raised is interrupted
+/// ([`CapabilityExecutor::execute_interruptible`]; its late result is
+/// dropped), and every later call of the invocation is refused without
+/// reaching the broker or the executor. Cheap to clone; every clone is the
+/// same signal.
 #[derive(Debug, Clone, Default)]
 pub struct AbortSignal(Arc<std::sync::atomic::AtomicBool>);
 
@@ -511,6 +560,14 @@ impl PluginHost {
             if abort_at.is_none() && abort.is_some_and(AbortSignal::is_aborted) {
                 abort_at = Some(Instant::now() + self.abort_grace);
             }
+            // Past the deadline (a capability call may have used it up):
+            // nothing that is still queued is looked at.
+            if Instant::now() >= deadline {
+                self.kill();
+                return Err(HostError::Timeout {
+                    status: self.child.try_wait().ok().flatten(),
+                });
+            }
             let until = match (abort, abort_at) {
                 (_, Some(at)) => deadline.min(at),
                 (Some(_), None) => deadline.min(Instant::now() + ABORT_POLL),
@@ -531,14 +588,41 @@ impl PluginHost {
                     if call_id > u64::from(MAX_HOST_CALLS_PER_INVOCATION) {
                         return Err(self.protocol("too many capability calls".into()));
                     }
-                    // Identity is the session bound to this process.
-                    let result = match self.session.authorize(&request) {
-                        Decision::Allow(allowed) => {
-                            let r = executor.execute(self.session.plugin(), &allowed);
-                            bound_reply(r)
-                        }
-                        Decision::Deny(reason) => {
-                            CallResult::error(reason.call_error_code(), reason.to_string())
+                    let interrupt = CallInterrupt::new(abort.cloned(), deadline);
+                    // An aborted invocation gets no more capabilities: no
+                    // request, publish or notification after the abort.
+                    let result = if interrupt.is_aborted() {
+                        CallResult::error(
+                            CallErrorCode::Unavailable,
+                            "the action was cancelled; no further capability calls are carried out",
+                        )
+                    } else {
+                        // Identity is the session bound to this process;
+                        // grants are read now, so a permission revoked
+                        // while the invocation runs denies this call.
+                        match self.session.authorize(&request) {
+                            Decision::Allow(allowed) => {
+                                let r = executor.execute_interruptible(
+                                    self.session.plugin(),
+                                    &allowed,
+                                    &interrupt,
+                                );
+                                // What a call returns after the abort (or
+                                // the deadline) is dropped, never given to
+                                // the guest.
+                                if interrupt.is_raised() {
+                                    CallResult::error(
+                                        CallErrorCode::Unavailable,
+                                        "the action was cancelled or ran out of time; the call \
+                                         was stopped",
+                                    )
+                                } else {
+                                    bound_reply(r)
+                                }
+                            }
+                            Decision::Deny(reason) => {
+                                CallResult::error(reason.call_error_code(), reason.to_string())
+                            }
                         }
                     };
                     let reply = ToHost::Reply {

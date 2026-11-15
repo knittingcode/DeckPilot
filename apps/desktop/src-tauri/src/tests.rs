@@ -3303,6 +3303,28 @@ fn plugin_commands_refuse_unless_the_agent_answers_plugin_requests() {
         ("rollback_plugin", json!({ "plugin": "example.hello" })),
         ("uninstall_plugin", json!({ "plugin": "example.hello" })),
         (
+            "uninstall_plugin",
+            json!({ "plugin": "example.hello", "keep": { "credentials": true } }),
+        ),
+        ("list_known_plugins", json!({})),
+        ("get_plugin_settings", json!({ "plugin": "example.hello" })),
+        (
+            "set_plugin_settings",
+            json!({ "plugin": "example.hello", "values": { "city": "berlin" } }),
+        ),
+        (
+            "list_plugin_credentials",
+            json!({ "plugin": "example.hello" }),
+        ),
+        (
+            "set_plugin_credential",
+            json!({ "plugin": "example.hello", "key": "token", "secret": "s3cret" }),
+        ),
+        (
+            "delete_plugin_credential",
+            json!({ "plugin": "example.hello", "key": "token" }),
+        ),
+        (
             "invoke_plugin_action",
             json!({ "plugin": "example.hello", "action": "greet", "params": { "name": "x" } }),
         ),

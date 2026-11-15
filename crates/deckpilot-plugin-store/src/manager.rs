@@ -22,6 +22,7 @@ use deckpilot_plugin_registry::{InstalledVerdict, RegistryClient, TrustStore};
 use rusqlite::Connection;
 use semver::Version;
 
+use crate::data::{self, Retention};
 use crate::db::{DEFAULT_BUSY_TIMEOUT, StoreKey};
 use crate::error::{Result, StoreError};
 use crate::failpoint::{Failpoint, Failpoints, NoFailpoints, Operation};
@@ -31,8 +32,8 @@ use crate::grants::{
 use crate::layout::Layout;
 use crate::state::PluginState;
 use crate::store::{
-    self, Audit, AuditRetention, InstallSource, Payload, PendingVersion, PluginRecord, PluginStore,
-    VersionRecord, VersionRole,
+    self, Audit, AuditRetention, InstallSource, JournalEntry, Payload, PendingVersion,
+    PluginRecord, PluginStore, VersionRecord, VersionRole,
 };
 
 /// Clean-up the store cannot do itself.
@@ -749,10 +750,20 @@ impl PluginManager {
 
     // -------------------------------------------------------------- uninstall
 
-    /// Removes the plugin: its directories, its records and grants, and (by
-    /// the hook) its secrets. Once started it only goes forward; recovery
-    /// finishes it after a crash or an error. The audit log is kept.
+    /// Removes the plugin: its directories, its records and grants, its
+    /// storage, settings and credentials, and (by the hook) its external
+    /// secrets. Once started it only goes forward; recovery finishes it
+    /// after a crash or an error. The audit log and `plugin_known` are
+    /// kept.
     pub fn uninstall(&mut self, id: &PluginId) -> Result<()> {
+        self.uninstall_keeping(id, Retention::default())
+    }
+
+    /// [`PluginManager::uninstall`], keeping the settings and/or the
+    /// credentials `keep` names for a later install of the same plugin
+    /// (storage is always deleted). The choice is journaled, so recovery
+    /// honours it.
+    pub fn uninstall_keeping(&mut self, id: &PluginId, keep: Retention) -> Result<()> {
         self.tx(|tx, ctx| {
             ensure_idle(tx, id)?;
             let plugin =
@@ -770,6 +781,7 @@ impl PluginManager {
                 id,
                 &Payload::Uninstall {
                     prior_state: plugin.state,
+                    keep,
                 },
                 ctx.now,
             )
@@ -791,13 +803,22 @@ impl PluginManager {
         crash(self, Failpoint::FilesTrashed)?;
         self.tx(|tx, ctx| store::set_journal_step(tx, id, "files_removed", ctx.now))?;
         crash(self, Failpoint::StepRecorded)?;
-        self.options
-            .hooks
-            .delete_secrets(id)
-            .map_err(|message| StoreError::Hook {
-                id: id.clone(),
-                message,
-            })?;
+        let keep = match store::journal_for(self.store.connection(), id)? {
+            Some(JournalEntry {
+                payload: Payload::Uninstall { keep, .. },
+                ..
+            }) => keep,
+            _ => Retention::default(),
+        };
+        if !keep.credentials {
+            self.options
+                .hooks
+                .delete_secrets(id)
+                .map_err(|message| StoreError::Hook {
+                    id: id.clone(),
+                    message,
+                })?;
+        }
         crash(self, Failpoint::SecretsDeleted)?;
         if recovering {
             self.crash(Operation::Recover, Failpoint::RecoveryFilesResolved)?;
@@ -810,6 +831,7 @@ impl PluginManager {
                         plugin.state
                     )));
                 }
+                data::delete_plugin_data(tx, id, keep)?;
                 store::delete_plugin(tx, id)?;
             }
             store::delete_journal(tx, id)?;
@@ -817,6 +839,82 @@ impl PluginManager {
         })?;
         crash(self, Failpoint::Committed)?;
         self.clean_up()
+    }
+
+    // ------------------------------------------------- credentials, settings
+
+    /// Stores the secret of credential slot `key` (declared in the active
+    /// version's `contributes.credentials`), replacing an earlier one. The
+    /// audit records the slot, never the secret.
+    pub fn set_credential(&mut self, id: &PluginId, key: &str, secret: &str) -> Result<()> {
+        if secret.is_empty() || secret.len() > data::MAX_SECRET_BYTES {
+            return Err(StoreError::InvalidData(format!(
+                "a secret is 1 to {} bytes",
+                data::MAX_SECRET_BYTES
+            )));
+        }
+        if secret.chars().any(|c| c == '\r' || c == '\n' || c == '\0') {
+            return Err(StoreError::InvalidData(
+                "a secret cannot contain line breaks or NUL characters".into(),
+            ));
+        }
+        self.tx(|tx, ctx| {
+            let plugin =
+                store::load_plugin(tx, id)?.ok_or_else(|| StoreError::NotInstalled(id.clone()))?;
+            declared_slot(&plugin, key)?;
+            data::set_credential(tx, id, key, secret, ctx.now)?;
+            let target = GrantKey::new(deckpilot_plugin_manifest::PermissionKind::Credentials, key);
+            ctx.audit(
+                tx,
+                id,
+                event(None, "credential.set", Some(&target), "ok", None),
+            )
+        })
+    }
+
+    /// Deletes the secret of credential slot `key`; whether there was one.
+    pub fn delete_credential(&mut self, id: &PluginId, key: &str) -> Result<bool> {
+        self.tx(|tx, ctx| {
+            if store::load_plugin(tx, id)?.is_none() {
+                return Err(StoreError::NotInstalled(id.clone()));
+            }
+            let deleted = data::delete_credential(tx, id, key)?;
+            let target = GrantKey::new(deckpilot_plugin_manifest::PermissionKind::Credentials, key);
+            ctx.audit(
+                tx,
+                id,
+                event(None, "credential.delete", Some(&target), "ok", None),
+            )?;
+            Ok(deleted)
+        })
+    }
+
+    /// Replaces the plugin's saved settings values. The caller has
+    /// validated them against the manifest (`contributes.settings`); every
+    /// key must be a declared setting.
+    pub fn set_settings(
+        &mut self,
+        id: &PluginId,
+        values: &std::collections::BTreeMap<String, serde_json::Value>,
+    ) -> Result<()> {
+        self.tx(|tx, ctx| {
+            let plugin =
+                store::load_plugin(tx, id)?.ok_or_else(|| StoreError::NotInstalled(id.clone()))?;
+            let manifest = &plugin
+                .active()
+                .ok_or_else(|| StoreError::NotInstalled(id.clone()))?
+                .manifest;
+            if let Some(key) = values
+                .keys()
+                .find(|k| !manifest.contributes.settings().iter().any(|s| &s.key == *k))
+            {
+                return Err(StoreError::InvalidData(format!(
+                    "{id} has no setting `{key}`"
+                )));
+            }
+            data::set_settings(tx, id, values, ctx.now)?;
+            ctx.audit(tx, id, event(None, "settings.set", None, "ok", None))
+        })
     }
 
     // ------------------------------------------------------------- revocation
@@ -942,6 +1040,25 @@ fn unknown(id: &PluginId, key: &GrantKey) -> StoreError {
     StoreError::UnknownGrant {
         id: id.clone(),
         key: key.clone(),
+    }
+}
+
+/// `key` must be a credential slot of the active version.
+fn declared_slot(plugin: &PluginRecord, key: &str) -> Result<()> {
+    let declared = plugin.active().is_some_and(|v| {
+        v.manifest
+            .contributes
+            .credentials()
+            .iter()
+            .any(|c| c.key == key)
+    });
+    if declared {
+        Ok(())
+    } else {
+        Err(StoreError::InvalidData(format!(
+            "{} has no credential slot `{key}`",
+            plugin.id
+        )))
     }
 }
 

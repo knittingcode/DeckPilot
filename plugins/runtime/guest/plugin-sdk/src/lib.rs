@@ -45,13 +45,23 @@
 //! * **Results** ([`Output`], [`PluginError`]): `ok` with message and data,
 //!   `skipped`, or `failed` with a code. Codes are checked; a code outside
 //!   `[a-z][a-z0-9-]*` becomes [`codes::INVALID_RESULT`].
-//! * **Capabilities** ([`Context`]): HTTP to an exact origin, notifications,
-//!   per-plugin storage and log, all brokered. A denial is a
+//! * **Capabilities** ([`Context`]): HTTP to an exact origin
+//!   ([`Context::fetch`]), notifications ([`Context::notify`]), per-plugin
+//!   storage, settings, own variables ([`Context::publish_variable`]) and
+//!   log ([`Context::log`]), all brokered. A denial is a
 //!   [`CapabilityError`] that says what was denied and how to declare it;
 //!   `?` turns it into a [`PluginError`] with a shared code.
 //! * **Secrets** ([`SecretHandle`]): credential slots are handles. The
 //!   secret is injected by the agent into requests to the slot's origins
-//!   and never enters plugin memory.
+//!   and never enters plugin memory; [`Context::has_credential`] only says
+//!   whether the user stored one.
+//! * **Storage** ([`Context::storage_get`] and friends): the plugin's own
+//!   key-value store in the agent's encrypted plugin database, 256 KiB and
+//!   1,000 keys by default (a `storage` permission raises the bytes to its
+//!   `quotaKb`), keys at most 128 characters, values at most 64 KiB of
+//!   JSON ([`Context::storage_usage`]).
+//! * **Settings** ([`Context::settings`]): the values of the manifest's
+//!   `contributes.settings`, validated by the agent, defaults filled in.
 //! * **Lifecycle** ([`Plugin::on_init`], [`Plugin::on_shutdown`]): init runs
 //!   once when the host loads the module (or before the first invocation on
 //!   a host without `dp_init`); a failing init refuses the load.
@@ -87,6 +97,7 @@ pub mod testing;
 pub use args::{Args, FromArg};
 pub use context::{
     CapabilityError, CapabilityErrorKind, Context, MAX_LOG_LEN, Request, Response, SecretHandle,
+    Settings, StorageUsage,
 };
 pub use definition::{Action, DefinitionError, Handler, Param, Plugin};
 pub use output::{ActionResult, IntoValue, Output, PluginError, codes};
@@ -132,7 +143,7 @@ pub mod prelude {
     pub use crate::{
         Action, ActionOutcome, ActionResult, Args, AuthScheme, CapabilityError,
         CapabilityErrorKind, Context, HttpMethod, LogLevel, Output, Param, Plugin, PluginError,
-        Request, Response, SecretHandle, codes,
+        Request, Response, SecretHandle, Settings, StorageUsage, codes,
     };
 }
 

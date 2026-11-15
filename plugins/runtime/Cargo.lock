@@ -427,6 +427,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "developer-tools"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "deckpilot-plugin-sdk",
+ "jsonschema",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -718,6 +729,15 @@ dependencies = [
  "deckpilot-plugin-sdk",
  "jsonschema",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "hello-world"
+version = "0.1.0"
+dependencies = [
+ "deckpilot-plugin-sdk",
+ "jsonschema",
  "serde_json",
 ]
 

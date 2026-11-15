@@ -106,8 +106,9 @@ return Err(PluginError::new("weather-service-error", "HTTP 503").retryable());
 
 A code is either a shared code (`deckpilot_plugin_sdk::codes`, for example
 `invalid-parameters`, `not-permitted`, `throttled`) or one of your own,
-declared in `contributes.errorCodes`. An undeclared or malformed code
-becomes `invalid-result`. Do not panic: a panic aborts the module, the host
+declared in `contributes.errorCodes`. A malformed code
+becomes `invalid-result` (an undeclared one is not refused at run time in
+this version; declare it anyway). Do not panic: a panic aborts the module, the host
 process exits and the supervisor restarts it with backoff (1, 2, 4 … 60 s;
 five crashes in ten minutes disable the plugin).
 

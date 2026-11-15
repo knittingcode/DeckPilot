@@ -28,6 +28,7 @@ use super::PluginSettings;
 use super::engine::CatalogPlugin;
 use super::lane::LaneEnd;
 use super::service::{PluginService, closed_status, open_problem, store_unavailable};
+use super::variables::PublishedVariables;
 
 /// How long stopping waits for the worker (hosts get a grace period each).
 const STOP_WAIT: Duration = Duration::from_secs(10);
@@ -109,6 +110,7 @@ pub(super) struct PluginWorker {
     tx: mpsc::Sender<Message>,
     thread: Option<JoinHandle<()>>,
     catalog: Arc<Mutex<Vec<CatalogPlugin>>>,
+    values: PublishedVariables,
 }
 
 struct State {
@@ -124,6 +126,8 @@ struct State {
     /// The installed plugins as last published, and whom to tell.
     published: Arc<Mutex<Vec<CatalogPlugin>>>,
     notify: Notify,
+    /// The plugins' published variable values, shared with their modules.
+    values: PublishedVariables,
 }
 
 impl State {
@@ -146,6 +150,7 @@ impl State {
             key,
             self.events.clone(),
             ended,
+            self.values.clone(),
         ) {
             Ok(service) => {
                 info!("plugin store opened");
@@ -284,7 +289,9 @@ impl PluginWorker {
     ) -> Self {
         let (tx, rx) = mpsc::channel::<Message>();
         let catalog = Arc::new(Mutex::new(Vec::new()));
+        let values = PublishedVariables::default();
         let mut state = State {
+            values: values.clone(),
             settings,
             data_dir: data_dir.to_path_buf(),
             events,
@@ -322,7 +329,14 @@ impl PluginWorker {
             tx,
             thread,
             catalog,
+            values,
         }
+    }
+
+    /// The plugins' published variable values (for their modules'
+    /// variable sources).
+    pub fn values(&self) -> PublishedVariables {
+        self.values.clone()
     }
 
     pub fn request(&self, request: Request, reply: oneshot::Sender<Result<Response, IpcError>>) {

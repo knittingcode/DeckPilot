@@ -26,10 +26,12 @@ cargo fmt --check
 | `crates/host` (`deckpilot-plugin-host`) | The host process. Sandboxes itself, receives the module bytes over stdin (opens no file), runs one wasmtime Store with no WASI, epoch deadline, fuel, `StoreLimits` (memory, tables, instances), bounded wasm stack, and exits non-zero after any trap. Also `deckpilot-sandbox-probe` (test only, not shipped) |
 | `crates/supervisor` (`deckpilot-plugin-supervisor`) | Agent side. Spawns the host with an empty environment, fixed working directory and only stdin/stdout; handshake with sandbox check; per-invocation wall-clock timeout and kill; an abort signal (2 s grace, then kill; not counted as a crash); relays capability requests to the broker session and an executor; restart backoff 1, 2, 4 … 60 s and a crash-loop breaker (5 in 10 min); shutdown with grace period and kill |
 | `guest/sdk` (`deckpilot-plugin-guest`) | Raw guest ABI bindings for `wasm32-unknown-unknown`: `export_plugin!`, `Context::call`. Plugin authors use `deckpilot-plugin-sdk` instead |
-| `guest/plugin-sdk` (`deckpilot-plugin-sdk`, own semver, 0.1.0) | The Rust plugin SDK (plugin API 1.0 on ABI 1): `Plugin`/`Action`/`Param` builders and `plugin!`; typed parameters (`text`, `integer`, `number`, `boolean`, `choice`, `secret` handle) checked before the handler; `Output`/`PluginError` with shared codes; brokered `Context` (HTTP to an exact origin, credentials as handles, notifications, storage, log) with explanatory `CapabilityError`s; init/shutdown hooks; `testing::MockHost` for native tests. No `unsafe` in plugin code |
+| `guest/plugin-sdk` (`deckpilot-plugin-sdk`, own semver, 0.1.0) | The Rust plugin SDK (plugin API 1.0 on ABI 1): `Plugin`/`Action`/`Param` builders and `plugin!`; typed parameters (`text`, `integer`, `number`, `boolean`, `choice`, `secret` handle) checked before the handler; `Output`/`PluginError` with shared codes; brokered `Context` (HTTP to an exact origin, credentials as handles and `has_credential`, notifications, storage with `storage_keys`/`storage_usage`, `settings`, log) with explanatory `CapabilityError`s; init/shutdown hooks; `testing::MockHost` for native tests. No `unsafe` in plugin code |
 | `guest/test-guest` | Test guest: normal actions and deliberate attacks on the raw ABI |
-| `guest/sdk-test-guest` | Test guest built with the SDK: lifecycle, secret handles, numbers, panic, spin, slow host calls |
+| `guest/sdk-test-guest` | Test guest built with the SDK: lifecycle, secret handles, numbers, panic, spin, slow host calls, and storage, credential and settings actions for the agent's end-to-end test |
 | `../examples/hello-weather` | The sample plugin (see its README): a pure action and a brokered HTTPS action, `manifest.json` valid against the #191 schema (copy in `plugins/schemas/`) |
+| `../examples/hello-world` | The smallest example plugin: one pure action, no permissions |
+| `../examples/developer-tools` | An example plugin using every brokered capability: utilities, GitHub checks over HTTPS with a credential handle, settings, storage, variables, notifications. Built reproducibly by `plugins/examples/build.sh`; SDK documentation in `docs/marketplace/sdk/` |
 
 The wasm guests and the sample are built from source by
 `crates/test-fixtures/build.rs` in one locked cargo invocation with the
@@ -56,6 +58,33 @@ unchanged byte for byte (tested in `crates/abi` and `crates/host/tests/lifecycle
   never a secret); the broker allows it only for a granted `credential`
   slot, its origins and schemes, and never across a redirect to another
   origin. `HttpResponse` documents the executor's reply shape.
+- `variables.publish {id, value}` and `variables.clear {id?}`: the
+  plugin's own variables (design §2.3 item 3), by relative id (1-3
+  segments, so no other owner can be named), values at most 16 KiB. Always
+  allowed for a plugin with grants, rate limited (`RateLimits::variables`,
+  10/s); the agent checks the id and type against the manifest. SDK:
+  `Context::publish_variable`, `clear_variable`, `clear_variables`. A host
+  or agent that predates them refuses the op.
+- Capability operations `storage.keys` (`{prefix?}`, a sorted list),
+  `storage.usage` (`{}`, `StorageUsage`: bytes and keys used, quota),
+  `credentials.has` (`{credential}`, `true` or `false`, never the secret;
+  only for a granted slot) and `settings.get` (`{}`, the plugin's
+  validated settings, defaults filled). The broker passes the storage
+  quota with every `storage.set` and `storage.usage` decision: 256 KiB
+  and 1,000 keys by default (`DEFAULT_STORAGE_QUOTA_BYTES`,
+  `MAX_STORAGE_KEYS`), up to 10 MiB with an approved `storage` permission
+  (`ApprovedPermission::Storage { quotaKb }`, 257-10,240). Storage and
+  settings are always allowed while the plugin has grants (it is
+  enabled), never otherwise.
+
+The supervisor (no protocol change) hands every capability call a
+`CallInterrupt` (`CapabilityExecutor::execute_interruptible`, default: the
+old `execute`): when the invocation's `AbortSignal` is raised or its
+deadline passes, an executor stops the running call at once and its late
+result is replaced by `unavailable`; an aborted invocation's later calls
+are refused without reaching the broker or the executor, and past the
+deadline no queued frame is read (`crates/supervisor/tests/fake_host.rs`,
+`running_calls_stop_on_abort_and_deadline`).
 
 ## Fixes relative to the spike
 
