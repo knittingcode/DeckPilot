@@ -2443,10 +2443,18 @@ async fn plugin_data_is_isolated_bounded_revocable_and_secret() {
 
     // The user stores one per plugin; no answer carries it back.
     let answer = agent.set_secret(DATA, "token", SECRET).await.unwrap();
-    assert!(!format!("{answer:?}").contains(SECRET), "{answer:?}");
+    // Never printed: an assertion message is a log too.
+    assert!(
+        !format!("{answer:?}").contains(SECRET),
+        "the answer carries the secret"
+    );
     agent.set_secret(TWIN, "token", TWIN_SECRET).await.unwrap();
     let refused = agent.set_secret(DATA, "password", SECRET).await;
-    assert_eq!(reason_of(&refused), reason::INVALID_DATA);
+    assert!(
+        matches!(&refused, Err(ClientError::Agent(e))
+            if e.reason.as_deref() == Some(reason::INVALID_DATA)),
+        "a secret for an undeclared slot was not refused as invalid data"
+    );
     assert!(agent.credentials(DATA).await[0].set);
     assert_eq!(
         agent
