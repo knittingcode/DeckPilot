@@ -589,6 +589,16 @@ impl Fixture {
         });
     }
 
+    /// Waits until the agent has read the configuration again. The app
+    /// tells it after each save without waiting (`notify_reload`), so a
+    /// request right after a save can reach the agent first (seen in CI:
+    /// `start_workflow` right after `save_workflow` failed with "workflow
+    /// does not exist in this profile"). A user is never that fast.
+    pub fn reloaded(&self) {
+        self.agent(Request::ReloadConfiguration)
+            .expect("the agent reloads its configuration");
+    }
+
     /// Whether the agent has the configuration open.
     pub fn agent_unlocked(&self) -> bool {
         matches!(
@@ -1159,6 +1169,7 @@ pub fn run(d: &mut dyn Driver, fx: &mut Fixture) {
         "save_layout",
         json!({"profileId": fx.profile, "layout": layout}),
     );
+    fx.reloaded();
     report.step(
         8,
         "Assign the action to a key",
@@ -1204,6 +1215,7 @@ pub fn run(d: &mut dyn Driver, fx: &mut Fixture) {
         "save_workflow",
         json!({"profileId": fx.profile, "workflow": flow}),
     );
+    fx.reloaded();
     let started = d.ok(
         "start_workflow",
         json!({"profileId": fx.profile, "workflowId": flow["id"]}),
