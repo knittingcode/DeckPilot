@@ -1,4 +1,4 @@
-import { ChevronDown, Play, RefreshCw, RotateCcw, Trash2 } from "lucide-react"
+import { ChevronDown, Play, RefreshCw, RotateCcw, Settings2, Trash2 } from "lucide-react"
 import { useState } from "react"
 
 import { EmptyState } from "@/components/page"
@@ -15,17 +15,33 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 
-import { pluginErrorText } from "./api"
+import { pluginErrorText, type PluginErrorText } from "./api"
 import { Notice, PermissionList, PluginIcon, PublisherLine } from "./components"
 import type { MarketplaceActions } from "./marketplace"
-import { STATE_LABELS, type UpdateCandidate } from "./model"
+import {
+  STATE_LABELS,
+  declaredConfiguration,
+  formatTime,
+  manifestCompatibility,
+  platformLabel,
+  platformsText,
+  type UpdateCandidate,
+} from "./model"
 import { grantOfInfo } from "./permissions"
 import type {
   ActionParamValue,
+  AvailablePlugin,
   MarketplaceSnapshot,
   PluginActionInfo,
   PluginActionOutcome,
@@ -54,34 +70,142 @@ export function InstalledView({
   }
   const byId = new Map(updates.map((u) => [u.plugin.summary.id, u]))
   return (
-    <ul className="grid gap-3" aria-label="Installed plugins">
-      {[...snapshot.installed]
-        .sort((a, b) => a.summary.name.localeCompare(b.summary.name))
-        .map((item) => (
-          <InstalledItem
-            key={item.summary.id}
-            item={item}
-            listed={snapshot.available.some((p) => p.id === item.summary.id)}
-            update={byId.get(item.summary.id)}
-            actions={actions}
-          />
-        ))}
-    </ul>
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">
+          Plugins run only while enabled, and only with the permissions you granted.
+        </p>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={actions.busy !== null}
+          onClick={actions.refresh}
+        >
+          <RefreshCw /> Refresh
+        </Button>
+      </div>
+      <ul className="grid gap-3" aria-label="Installed plugins">
+        {[...snapshot.installed]
+          .sort((a, b) => a.summary.name.localeCompare(b.summary.name))
+          .map((item) => (
+            <InstalledItem
+              key={item.summary.id}
+              item={item}
+              listed={snapshot.available.find((p) => p.id === item.summary.id)}
+              platform={snapshot.runtime.platform}
+              runtimeReason={snapshot.runtime.reason}
+              update={byId.get(item.summary.id)}
+              actions={actions}
+            />
+          ))}
+      </ul>
+    </>
+  )
+}
+
+/** Failures of the plugin's host since the agent started. */
+function HealthNotice({ item }: { item: PluginDetails }) {
+  const health = item.summary.health
+  if (!health || (health.crashes === 0 && !health.lastError)) return null
+  const title =
+    health.crashes > 0
+      ? `The plugin host stopped ${String(health.crashes)} time${health.crashes === 1 ? "" : "s"} since the agent started`
+      : "The last action of this plugin failed"
+  return (
+    <div className="mt-3" role="group" aria-label={`Health of ${item.summary.name}`}>
+      <Notice tone={health.crashes > 0 ? "destructive" : "default"} title={title}>
+        {health.lastError && (
+          <p className="select-text">
+            Last error
+            {health.lastErrorAt !== undefined ? ` (${formatTime(health.lastErrorAt)})` : ""}:{" "}
+            {health.lastError}
+          </p>
+        )}
+      </Notice>
+    </div>
+  )
+}
+
+/**
+ * The plugin's settings and credentials. The agent has no requests for
+ * them yet, so this shows what the plugin declares and says so; the
+ * forms come with the agent's settings support.
+ */
+function ConfigureDialog({ item, onClose }: { item: PluginDetails; onClose: () => void }) {
+  const { settings, credentials } = declaredConfiguration(item.manifest)
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+    >
+      <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Configure {item.summary.name}</DialogTitle>
+          <DialogDescription>
+            The running agent cannot store plugin settings or credentials yet, so they cannot be
+            changed here. This is what version {item.summary.version} declares.
+          </DialogDescription>
+        </DialogHeader>
+        {settings.length > 0 && (
+          <section className="grid gap-1" aria-label="Declared settings">
+            <h4 className="text-xs font-medium text-muted-foreground uppercase">Settings</h4>
+            <ul className="grid gap-1 text-sm">
+              {settings.map((f) => (
+                <li key={f.key}>
+                  <span className="font-medium">{f.label}</span>{" "}
+                  <span className="font-mono text-xs text-muted-foreground">{f.key}</span>
+                  {f.description && (
+                    <span className="block text-xs text-muted-foreground">{f.description}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+        {credentials.length > 0 && (
+          <section className="grid gap-1" aria-label="Declared credentials">
+            <h4 className="text-xs font-medium text-muted-foreground uppercase">Credentials</h4>
+            <ul className="grid gap-1 text-sm">
+              {credentials.map((f) => (
+                <li key={f.key}>
+                  <span className="font-medium">{f.label}</span>{" "}
+                  <span className="font-mono text-xs text-muted-foreground">{f.key}</span>
+                  {f.description && (
+                    <span className="block text-xs text-muted-foreground">{f.description}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
 
 function InstalledItem({
   item,
   listed,
+  platform,
+  runtimeReason,
   update,
   actions,
 }: {
   item: PluginDetails
-  listed: boolean
+  /** The registry's entry of the plugin, when the registry lists it. */
+  listed: AvailablePlugin | undefined
+  platform: string
+  runtimeReason: string | undefined
   update: UpdateCandidate | undefined
   actions: MarketplaceActions
 }) {
   const [expanded, setExpanded] = useState(false)
+  const [configuring, setConfiguring] = useState(false)
+  const declared = declaredConfiguration(item.manifest)
+  const configurable = declared.settings.length > 0 || declared.credentials.length > 0
+  const compatibility = manifestCompatibility(item.manifest)
   const { summary } = item
   const id = `installed-${summary.id}`
   const enabled = summary.state === "enabled"
@@ -100,7 +224,7 @@ function InstalledItem({
       aria-labelledby={`${id}-name`}
     >
       <div className="flex items-start gap-3">
-        <PluginIcon muted={!enabled} />
+        <PluginIcon muted={!enabled} src={item.icon} />
         <div className="grid min-w-0 flex-1 gap-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span id={`${id}-name`} className="font-medium">
@@ -114,7 +238,14 @@ function InstalledItem({
             </Badge>
             {updateVersion && <Badge>Update {updateVersion} available</Badge>}
           </div>
-          <PublisherLine publisher={summary.publisher} />
+          <PublisherLine publisher={summary.publisher} info={listed?.publisherInfo} />
+          <span className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+            {compatibility.deckpilot && <span>DeckPilot {compatibility.deckpilot}</span>}
+            <span>{platformsText(compatibility.platforms)}</span>
+            {listed?.latest && listed.latest !== summary.version && (
+              <span>Latest in the registry: {listed.latest}</span>
+            )}
+          </span>
           {notGranted > 0 && (
             <p className="text-xs text-muted-foreground">
               {notGranted} permission{notGranted === 1 ? "" : "s"} not granted; calls that need
@@ -149,6 +280,17 @@ function InstalledItem({
           </Notice>
         </div>
       )}
+
+      {!actions.canRun && (
+        <div className="mt-3">
+          <Notice title={`Cannot run on ${platformLabel(platform)}`}>
+            {runtimeReason && <p>{runtimeReason}</p>}
+            <p>It can be inspected, updated and uninstalled, but not enabled here.</p>
+          </Notice>
+        </div>
+      )}
+
+      <HealthNotice item={item} />
 
       {update?.kind === "staged" && (
         <div className="mt-3">
@@ -202,6 +344,17 @@ function InstalledItem({
             }}
           >
             Details
+          </Button>
+        )}
+        {configurable && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setConfiguring(true)
+            }}
+          >
+            <Settings2 /> Configure
           </Button>
         )}
         <Button
@@ -263,6 +416,14 @@ function InstalledItem({
           />
           <ActionList item={item} actions={actions} />
         </div>
+      )}
+      {configuring && (
+        <ConfigureDialog
+          item={item}
+          onClose={() => {
+            setConfiguring(false)
+          }}
+        />
       )}
     </li>
   )
@@ -336,7 +497,7 @@ function ActionRow({
   )
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<
-    { outcome: PluginActionOutcome } | { error: { message: string; hint?: string } } | null
+    { outcome: PluginActionOutcome } | { error: PluginErrorText } | null
   >(null)
 
   const run = () => {
@@ -408,7 +569,7 @@ function ActionRow({
         <div role="status" aria-label={`Result of ${action.name}`} className="text-xs">
           {"error" in result ? (
             <p className="text-destructive">
-              {result.error.message}
+              {result.error.title}: {result.error.message}
               {result.error.hint ? ` ${result.error.hint}` : ""}
             </p>
           ) : result.outcome.status === "ok" ? (

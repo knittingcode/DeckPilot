@@ -162,7 +162,7 @@ describe("plugin errors", () => {
     ],
     [
       "platformUnsupported",
-      "Plugins can be installed and inspected here, but only run on macOS and Linux.",
+      "Plugins can be installed and inspected here, but only run where the plugin sandbox is verified: macOS, Linux and Windows.",
     ],
     [
       "invalidPackage",

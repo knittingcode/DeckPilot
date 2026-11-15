@@ -109,7 +109,7 @@ export interface PluginRuntimeStatus {
   built: boolean
   /** The agent was started with `--enable-plugins`. */
   enabled: boolean
-  /** The host sandbox is verified here (macOS, Linux): plugins may run. */
+  /** The host sandbox is verified here (macOS, Linux, Windows): plugins may run. */
   executionSupported: boolean
   platform: string
   reason?: string
@@ -171,6 +171,18 @@ export interface PluginSummary {
   previousVersion?: string
   stagedVersion?: string
   actions: PluginActionInfo[]
+  /** Host failures the agent saw since it started; absent when none. */
+  health?: PluginHealth
+}
+
+/** `PluginHealth`: what the agent saw of the plugin's host since it started. */
+export interface PluginHealth {
+  /** Times the host stopped during an invocation (crash or time limit). */
+  crashes: number
+  /** The newest failure, as the invocation reported it. */
+  lastError?: string
+  /** Seconds since the Unix epoch. */
+  lastErrorAt?: number
 }
 
 export interface PermissionChanges {
@@ -207,6 +219,11 @@ export interface PluginDetails {
   /** The active version's manifest.json. */
   manifest: unknown
   audit: PluginAuditEntry[]
+  /**
+   * The active version's 128 px icon (`data:image/png;base64,…`), checked
+   * by the agent against the installed files' integrity record.
+   */
+  icon?: string
 }
 
 export interface AvailableVersion {
@@ -217,6 +234,22 @@ export interface AvailableVersion {
   withdrawn?: string
   /** Why this DeckPilot cannot run it; absent when it can. */
   incompatible?: string[]
+  /** The DeckPilot versions it needs, e.g. `>=0.5.0 <1.0.0`. */
+  deckpilot?: string
+  /** `macos`, `windows`, `linux`; absent or empty means every platform. */
+  platforms?: string[]
+  /** When the registry published it, in seconds since the Unix epoch. */
+  publishedAt?: number
+}
+
+/** The publisher of a registry plugin, as the registry index lists it. */
+export interface PublisherInfo {
+  namespace: string
+  displayName?: string
+  /** GitHub login. */
+  login: string
+  /** The registry verified who the publisher is. */
+  verified: boolean
 }
 
 export interface AvailablePlugin {
@@ -229,6 +262,16 @@ export interface AvailablePlugin {
   versions: AvailableVersion[]
   /** The installed (active) version. */
   installed?: string
+  /** The registry's description, longer than `summary`. */
+  description?: string
+  categories?: string[]
+  publisherInfo?: PublisherInfo
+  license?: string
+  homepage?: string
+  /** `owner/repository` on GitHub. */
+  sourceRepository?: string
+  /** Why the registry deprecated the plugin. */
+  deprecated?: string
 }
 
 export interface AvailablePlugins {

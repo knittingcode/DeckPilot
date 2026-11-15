@@ -167,8 +167,16 @@ export const STATE_LABELS: Record<PluginState, string> = {
 /** Entries whose name, id, summary or publisher contain every word. */
 export function matchesQuery(item: AvailablePlugin, query: string): boolean {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
-  const text = [item.name, item.id, item.summary, item.publisher].join(" ").toLowerCase()
+  const text = [item.name, item.id, item.summary, item.publisher, item.publisherInfo?.displayName]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
   return words.every((word) => text.includes(word))
+}
+
+/** Entries in `category`; `null` is every category. */
+export function inCategory(item: AvailablePlugin, category: string | null): boolean {
+  return category === null || (item.categories ?? []).includes(category)
 }
 
 export const PLATFORM_LABELS: Record<string, string> = {
@@ -179,4 +187,95 @@ export const PLATFORM_LABELS: Record<string, string> = {
 
 export function platformLabel(platform: string): string {
   return PLATFORM_LABELS[platform] ?? platform
+}
+
+/** Platforms of a version in words; none listed means every platform. */
+export function platformsText(platforms: string[] | undefined): string {
+  if (!platforms || platforms.length === 0) return "macOS, Windows and Linux"
+  const labels = platforms.map(platformLabel)
+  if (labels.length === 1) return `${labels[0] ?? ""} only`
+  return `${labels.slice(0, -1).join(", ")} and ${labels.at(-1) ?? ""}`
+}
+
+/** Every category the registry's plugins name, sorted. */
+export function categoriesOf(plugins: AvailablePlugin[]): string[] {
+  return [...new Set(plugins.flatMap((p) => p.categories ?? []))].sort((a, b) => a.localeCompare(b))
+}
+
+/** A category id (`developer-tools`) in words (`Developer tools`). */
+export function categoryLabel(category: string): string {
+  const text = category.replace(/[-_]+/g, " ")
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+/** A date of the agent (seconds since the epoch) for people. */
+export function formatDate(seconds: number): string {
+  return new Date(seconds * 1000).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  })
+}
+
+/** A time of the agent (seconds since the epoch) for people. */
+export function formatTime(seconds: number): string {
+  return new Date(seconds * 1000).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  })
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined
+}
+
+/** What an installed version's manifest says it needs (`engines`, `platforms`). */
+export function manifestCompatibility(manifest: unknown): {
+  deckpilot?: string
+  platforms?: string[]
+} {
+  const m = record(manifest)
+  const deckpilot = record(m?.engines)?.deckpilot
+  const platforms = Array.isArray(m?.platforms)
+    ? m.platforms.filter((p): p is string => typeof p === "string")
+    : undefined
+  return {
+    ...(typeof deckpilot === "string" ? { deckpilot } : {}),
+    ...(platforms ? { platforms } : {}),
+  }
+}
+
+/** A setting or credential slot an installed version declares. */
+export interface DeclaredField {
+  key: string
+  label: string
+  description?: string
+}
+
+/** The settings and credential slots of a manifest (`contributes`). */
+export function declaredConfiguration(manifest: unknown): {
+  settings: DeclaredField[]
+  credentials: DeclaredField[]
+} {
+  const contributes = record(record(manifest)?.contributes)
+  const fields = (list: unknown): DeclaredField[] =>
+    Array.isArray(list)
+      ? list.flatMap((item): DeclaredField[] => {
+          const r = record(item)
+          if (typeof r?.key !== "string") return []
+          return [
+            {
+              key: r.key,
+              label: typeof r.label === "string" ? r.label : r.key,
+              ...(typeof r.description === "string" ? { description: r.description } : {}),
+            },
+          ]
+        })
+      : []
+  return {
+    settings: fields(record(contributes?.settings)?.fields),
+    credentials: fields(contributes?.credentials),
+  }
 }

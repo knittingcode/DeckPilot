@@ -173,6 +173,7 @@ mod tests {
                 unavailable_reason: (!available).then(|| "the plugin is disabled".into()),
                 definition: Some(definition(&action_type)),
             }],
+            health: None,
         }
     }
 
