@@ -18,7 +18,8 @@ use deckpilot_device::{
 };
 use deckpilot_ipc::{
     AgentEvent, AgentPaths, AgentStatus, DeviceInfo, ErrorCode, IpcError, LockReason,
-    PROTOCOL_VERSION, ProfileInfo, ProtectionMode, Request, Response, SecurityState, token,
+    PROTOCOL_VERSION, ProfileInfo, ProtectionMode, Request, Response, SecurityState,
+    ShutdownReason, token,
 };
 use deckpilot_keystore::KeyStore;
 use deckpilot_storage::policy::AutoLock;
@@ -391,7 +392,7 @@ impl std::fmt::Debug for Agent {
 
 enum Flow {
     Continue,
-    Stop,
+    Stop(ShutdownReason),
 }
 
 impl Agent {
@@ -559,7 +560,7 @@ impl Agent {
                 tokio::time::Instant::from_std,
             );
             let flow = tokio::select! {
-                () = &mut shutdown => Flow::Stop,
+                () = &mut shutdown => Flow::Stop(ShutdownReason::Signal),
                 Some(command) = self.commands.recv() => self.handle_command(command),
                 Some(signal) = self.signals.recv() => {
                     self.handle_signal(signal);
@@ -591,22 +592,23 @@ impl Agent {
                     Flow::Continue
                 }
             };
-            if matches!(flow, Flow::Stop) {
-                break;
+            if let Flow::Stop(reason) = flow {
+                self.stop(reason).await;
+                return Ok(());
             }
             self.observe_lifecycle();
         }
-        self.stop().await;
-        Ok(())
     }
 
-    async fn stop(mut self) {
-        info!("agent shutting down");
+    async fn stop(mut self, reason: ShutdownReason) {
+        info!(?reason, "agent shutting down");
         self.plugins.stop();
         self.work_session_shutdown();
         self.states.reset();
         self.interrupt_executions();
-        let _ = self.handle.events.send(AgentEvent::ShuttingDown);
+        let _ = self.handle.events.send(AgentEvent::ShuttingDown {
+            reason: Some(reason),
+        });
         let _ = self.shutdown_tx.send(true);
         // Every device thread blanks its keys at the same time; together
         // they may take at most CLOSE_TIMEOUT.
@@ -731,14 +733,19 @@ impl Agent {
                 Flow::Continue
             }
             Command::Request { request, reply } => {
-                let stop = matches!(request, Request::Shutdown | Request::PrepareForUpdate);
+                let stop = match request {
+                    Request::Shutdown => Some(ShutdownReason::Requested),
+                    Request::PrepareForUpdate => Some(ShutdownReason::Update),
+                    _ => None,
+                };
                 if matches!(request, Request::PrepareForUpdate) {
                     info!("stopping so that an update can be installed");
                 }
                 let _ = reply.send(self.handle_request(request));
-                if stop { Flow::Stop } else { Flow::Continue }
+                stop.map_or(Flow::Continue, Flow::Stop)
             }
-            Command::Tray(TrayCommand::Quit) => Flow::Stop,
+            // "Quit DeckPilot": the agent and every open configuration app.
+            Command::Tray(TrayCommand::Quit) => Flow::Stop(ShutdownReason::Quit),
             Command::Tray(TrayCommand::OpenWindow) => {
                 let opened = if self.security == SecurityState::Locked {
                     self.request_window(UNLOCK_WINDOW)

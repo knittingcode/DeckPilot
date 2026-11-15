@@ -11,6 +11,7 @@ mod agent;
 mod commands;
 mod dev_server;
 mod error;
+mod lifecycle;
 #[cfg(test)]
 mod marketplace_e2e;
 mod modules;
@@ -24,7 +25,7 @@ mod windows;
 
 use std::time::Duration;
 
-use tauri::{Manager, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, Runtime, WebviewWindowBuilder};
 
 /// `--window <id>`: show only that window (e.g. the unlock prompt requested
 /// by the agent while no app is open) and exit when it closes.
@@ -41,7 +42,7 @@ fn requested_window() -> Option<String> {
 /// The main window is created hidden; it is shown once the configuration is
 /// unlocked. If the frontend never asks (it failed to load), it is shown
 /// anyway so the user is not left without a window.
-fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
+pub(crate) fn create_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let mut config = app
         .config()
         .app
@@ -56,8 +57,10 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
         config.url = url;
         config.visible = true;
     }
-    windows::for_webdriver(WebviewWindowBuilder::from_config(app.handle(), &config)?).build()?;
-    let handle = app.handle().clone();
+    // Also used by the agent's "Open DeckPilot" in a single-window app
+    // (macOS), so that path goes through `for_webdriver` too.
+    windows::for_webdriver(WebviewWindowBuilder::from_config(app, &config)?).build()?;
+    let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(15)).await;
         let prompts = handle.state::<windows::WindowRegistry>().open_labels();
@@ -93,6 +96,11 @@ fn main() {
             }
         });
     }
+    // ⌘Q ends this app only; the menu says so ("Quit DeckPilot UI").
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.menu(lifecycle::menu);
+    }
     // Store builds leave the updater out (feature `self-update`).
     #[cfg(feature = "self-update")]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
@@ -108,7 +116,7 @@ fn main() {
             let state = state::AppState::open(paths.clone())?;
             app.manage(state);
             match window_only.clone() {
-                None => create_main_window(app)?,
+                None => create_main_window(app.handle())?,
                 Some(id) => {
                     // A prompt or module window on its own. Module windows
                     // need the configuration: use the key of an unlocked
