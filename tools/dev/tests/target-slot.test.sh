@@ -89,19 +89,22 @@ chmod +x "$work/job.sh"
 # Three at once, two slots, no waiting: two run in distinct slots, one is
 # turned away.
 pids=""
-for i in 1 2 3; do ts run -- "$work/job.sh" "$work/run3.$i" 2> /dev/null & pids="$pids $!"; done
+for i in 1 2 3; do ts run -- "$work/job.sh" "$work/run3.$i" 2> "$work/err3.$i" & pids="$pids $!"; done
 codes=""
 for p in $pids; do c=0; wait "$p" || c=$?; codes="$codes $c"; done
 check "of 3 concurrent runs with 2 slots, 2 succeed and 1 exits 3" \
   test "$(echo "$codes" | tr ' ' '\n' | sort | tr '\n' ' ')" = " 0 0 3 "
+[ "$(echo "$codes" | tr " " "\n" | sort | tr "\n" " ")" = " 0 0 3 " ] || { echo "     exit codes:$codes"; cat "$work"/err3.*; }
 check "the two runs used different slots" test "$(cat "$work"/run3.* | sort -u | wc -l | tr -d ' ')" = 2
 
 # Six at once with --wait: all succeed, never two in the same slot.
 pids=""
-for i in 1 2 3 4 5 6; do ts run --wait 60 -- "$work/job.sh" "$work/run6.$i" 2> /dev/null & pids="$pids $!"; done
+codes=""
+for i in 1 2 3 4 5 6; do ts run --wait 60 -- "$work/job.sh" "$work/run6.$i" 2> "$work/err6.$i" & pids="$pids $!"; done
 bad=0
-for p in $pids; do c=0; wait "$p" || c=$?; [ "$c" = 0 ] || bad=$((bad + 1)); done
+for p in $pids; do c=0; wait "$p" || c=$?; codes="$codes $c"; [ "$c" = 0 ] || bad=$((bad + 1)); done
 check "6 concurrent runs with --wait all succeed, one per slot at a time" test "$bad" = 0
+[ "$bad" = 0 ] || { echo "     exit codes:$codes"; cat "$work"/err6.*; }
 check "run releases its slot" test ! -e "$work/pool/slot-1.lock" -a ! -e "$work/pool/slot-2.lock"
 status=0; ts run -- sh -c 'exit 7' || status=$?
 check "run passes the command's exit status" test "$status" = 7

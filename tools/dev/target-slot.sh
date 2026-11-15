@@ -69,25 +69,36 @@ age_of() {
   echo $(( $(date +%s) - mtime ))
 }
 
+# Writes the owner file of <lock> for <pid> atomically (rename), so that a
+# reader never sees it empty or half written and takes the lock for stale.
+write_owner() { # <lock> <pid>
+  printf '%s %s\n' "$2" "$(start_of "$2")" > "$1/owner.$$"
+  mv -f "$1/owner.$$" "$1/owner"
+}
+
 # Whether the lock of slot <n> has an owner that is still running. A lock
-# without an owner file is being created (or its creator died right after
-# mkdir): it counts as held for 30 seconds.
+# without a complete owner file is being created (or its creator died right
+# after mkdir): it counts as held for 30 seconds. Sets lock_seen to whether
+# the lock existed.
 lock_held() { # <n>
   lock="$pool/slot-$1.lock"
+  lock_seen=0
   [ -d "$lock" ] || return 1
-  if [ ! -f "$lock/owner" ]; then
+  lock_seen=1
+  opid=""; ostart=""
+  [ ! -f "$lock/owner" ] || read -r opid ostart < "$lock/owner" || true
+  if [ -z "$opid" ] || [ -z "$ostart" ]; then
     [ "$(age_of "$lock")" -lt 30 ]
     return
   fi
-  read -r opid ostart < "$lock/owner" || return 1
-  [ -n "$opid" ] && [ "$(start_of "$opid")" = "$ostart" ]
+  [ "$(start_of "$opid")" = "$ostart" ]
 }
 
 # Tries to take slot <n> for <owner pid>; takes over a stale lock.
 try_slot() { # <n> <owner>
   lock="$pool/slot-$1.lock"
   if mkdir "$lock" 2> /dev/null; then
-    printf '%s %s\n' "$2" "$(start_of "$2")" > "$lock/owner"
+    write_owner "$lock" "$2"
     return 0
   fi
   lock_held "$1" && return 1
@@ -101,13 +112,15 @@ try_slot() { # <n> <owner>
     return 1
   fi
   taken=1
-  if ! lock_held "$1"; then
+  # Only a lock that is there and stale is removed: one that its owner
+  # released meanwhile may already be another process's new lock.
+  if ! lock_held "$1" && [ "$lock_seen" = 1 ]; then
     rm -rf "$lock"
     echo "target-slot: took over the stale lock of slot-$1" >&2
-    if mkdir "$lock" 2> /dev/null; then
-      printf '%s %s\n' "$2" "$(start_of "$2")" > "$lock/owner"
-      taken=0
-    fi
+  fi
+  if mkdir "$lock" 2> /dev/null; then
+    write_owner "$lock" "$2"
+    taken=0
   fi
   rmdir "$reclaim"
   return "$taken"
