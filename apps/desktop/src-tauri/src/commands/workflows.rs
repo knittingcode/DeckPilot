@@ -3,7 +3,8 @@ use tauri::State;
 use deckpilot_core::graph::{Conversion, GraphIssue, from_steps};
 use deckpilot_core::{ProfileId, Workflow, WorkflowId};
 
-use super::modify_profile;
+use super::reload::Saved;
+use super::{modify_profile, modify_profile_and_reload};
 use crate::error::{CommandError, CommandResult};
 use crate::state::{AppState, load_profile};
 
@@ -32,17 +33,18 @@ pub fn convert_workflow(
     Ok(from_steps(&workflow, &profile))
 }
 
-/// Creates or replaces a workflow after validating it.
+/// Creates or replaces a workflow after validating it. Returns once the
+/// agent has read it, so it can be started right away.
 #[tauri::command]
-pub fn save_workflow(
+pub async fn save_workflow(
     state: State<'_, AppState>,
     profile_id: ProfileId,
     workflow: Workflow,
-) -> CommandResult<Workflow> {
+) -> CommandResult<Saved<Workflow>> {
     let mut workflow = workflow;
     super::trim_in_place(&mut workflow.name);
     super::trim_in_place(&mut workflow.description);
-    modify_profile(&state, profile_id, |profile| {
+    modify_profile_and_reload(&state, profile_id, |profile| {
         let issues = workflow.validate(profile, &state.actions());
         if !issues.is_empty() {
             return Err(CommandError::Invalid(issues.join("\n")));
@@ -53,6 +55,7 @@ pub fn save_workflow(
         }
         Ok(workflow)
     })
+    .await
 }
 
 #[tauri::command]
