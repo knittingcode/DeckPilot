@@ -193,8 +193,11 @@ fn only_https_urls_of_a_granted_origin_are_opened() {
     );
     // No audit record carries a path, query or a refused URL's text.
     let all = format!("{:?}", f.audit.records());
-    for secret in ["passwd", "alert", "evil.net/", "share", "openRepo"] {
-        assert!(!all.contains(secret), "{secret}: {all}");
+    for fragment in ["passwd", "alert", "evil.net/", "share", "openRepo"] {
+        assert!(
+            !all.contains(fragment),
+            "an audit record holds `{fragment}`"
+        );
     }
 }
 
