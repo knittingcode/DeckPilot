@@ -356,7 +356,7 @@ tag; that push starts the release workflow.
      **unsigned** — never claimed otherwise. Windows installers stay
      unsigned until Authenticode credentials are provisioned;
    - attests build provenance for every artifact
-     (`gh attestation verify <file> --repo knittingcode/DeckPilot`);
+     (`gh attestation verify <file> --repo knittingcode/deckpilot`);
    - downloads the draft, verifies the manifest and every signature with
      `deckpilot-dev verify-release` — including that each signature names
      the announced version, which installations require
@@ -365,8 +365,10 @@ tag; that push starts the release workflow.
      entry for every platform and package type (macOS app on both
      architectures, Linux AppImage, `.deb` and, for stable releases,
      `.rpm`, Windows MSI and NSIS), attaches `SHA256SUMS` and checks that
-     every required asset is in the draft
-     (`tools/release-pipeline/check-assets.sh --final`).
+     every required asset is in the draft and nothing else is: no plugin
+     package, no registry metadata, no asset outside the application's
+     allowlist (`tools/release-pipeline/check-assets.sh --final`;
+     [marketplace/distribution.md](marketplace/distribution.md)).
 4. **Stage B** (automatic): the *Publication gate* job checks again that
    the `production-release` environment is protected and that the release
    is authorized (see below: under tag authority, that the tag ruleset
@@ -374,11 +376,13 @@ tag; that push starts the release workflow.
    then checks the draft again
    (`tools/release-pipeline/publish.sh`) — exactly one release for the tag,
    the tag still points to the built commit, every required asset and
-   nothing of the other channel, `SHA256SUMS` covers exactly the assets and
+   nothing of the other channel or outside the application's allowlist,
+   `SHA256SUMS` covers exactly the assets and
    matches each of them, `release-meta.json` names this tag, version,
    channel, manifest and commit, every updater signature verifies, the
    manifest announces this version with an update for every platform and
-   package type and points only to assets of this tag, the notes are not
+   package type and points only to assets of this tag, each platform to
+   its own application updater package, the notes are not
    empty — and only then publishes it in **one** update (the repository
    has immutable releases enabled, so nothing of a published release can
    be changed afterwards; every asset is uploaded while it is a draft):
@@ -472,11 +476,11 @@ Equivalent API calls for the reviewer model (an admin token; review before
 running; for tag authority, leave out the two `reviewers` fields):
 
 ```sh
-gh api -X PUT repos/knittingcode/DeckPilot/environments/production-release \
+gh api -X PUT repos/knittingcode/deckpilot/environments/production-release \
   -F 'reviewers[][type]=User' -F "reviewers[][id]=$(gh api users/<maintainer> --jq .id)" \
   -F 'deployment_branch_policy[protected_branches]=false' \
   -F 'deployment_branch_policy[custom_branch_policies]=true'
-gh api -X POST repos/knittingcode/DeckPilot/environments/production-release/deployment-branch-policies \
+gh api -X POST repos/knittingcode/deckpilot/environments/production-release/deployment-branch-policies \
   -f name='v*' -f type=tag
 ```
 
@@ -554,7 +558,7 @@ In this order, each step verified before the next:
    *Repository admin* role as its only bypass actor (bypass mode
    *always*). Keep *Restrict updates*, *Restrict deletions* and *Block
    force pushes*. (Done 2026-11-14.)
-2. Run `REPOSITORY=knittingcode/DeckPilot tools/release-pipeline/check-tag-authority.sh admin-role`
+2. Run `REPOSITORY=knittingcode/deckpilot tools/release-pipeline/check-tag-authority.sh admin-role`
    with the owner's token. It must pass. (Passed 2026-11-14.) Do not test
    the restriction by pushing a trial tag: if it were accepted, the ruleset
    would keep it forever and start a release run.
@@ -599,9 +603,9 @@ published without a stop.
 3. **Verify the protection**:
 
    ```sh
-   gh api repos/knittingcode/DeckPilot/environments/production-release \
+   gh api repos/knittingcode/deckpilot/environments/production-release \
      --jq '{reviewers: [.protection_rules[] | select(.type == "required_reviewers") | .reviewers[].reviewer.login], branch_policy: .deployment_branch_policy}'
-   gh api repos/knittingcode/DeckPilot/environments/production-release/deployment-branch-policies --jq '.branch_policies[] | "\(.type) \(.name)"'
+   gh api repos/knittingcode/deckpilot/environments/production-release/deployment-branch-policies --jq '.branch_policies[] | "\(.type) \(.name)"'
    ```
 
    It must list at least one reviewer and only the tag rule `v*`.
@@ -660,7 +664,7 @@ cargo run -p deckpilot-dev -- prepare-release 0.6.0-alpha.3   # branch, commit, 
 gh pr checks --watch <pr-number>                                # the owner merges the PR
 git fetch origin
 sha=$(git rev-parse origin/main)                                # the merge commit
-gh api "repos/knittingcode/DeckPilot/commits/$sha/check-runs" \
+gh api "repos/knittingcode/deckpilot/commits/$sha/check-runs" \
   --jq '.check_runs[] | "\(.name): \(.status) \(.conclusion)"'  # required checks passed?
 git tag -s v0.6.0-alpha.3 "$sha" -m "DeckPilot 0.6.0-alpha.3"
 git push origin v0.6.0-alpha.3                                  # the authorization; starts stage A
@@ -710,10 +714,10 @@ only (the repository-level copies have been deleted); the release's
 `prepare` job and the *Apple signing check* verify them on a release tag.
 Releases are authorized by tag authority; the *Release authorization* job
 of the *Signing check* workflow verified the setup on `main` at `9f8a84a`
-([run 43609631711](https://github.com/knittingcode/DeckPilot/actions/runs/43609631711)).
+([run 43609631711](https://github.com/knittingcode/deckpilot/actions/runs/43609631711)).
 
 Stage A ran end to end for `v0.6.0-alpha.2` (`13cabe6`,
-[run 43597399166](https://github.com/knittingcode/DeckPilot/actions/runs/43597399166)):
+[run 43597399166](https://github.com/knittingcode/deckpilot/actions/runs/43597399166)):
 macOS arm64 and x86_64 Developer ID signed (team `PUB9L83UMZ`) with the
 hardened runtime, notarized, stapled and accepted by Gatekeeper; the
 updater signatures, `SHA256SUMS`, `release-meta.json` and `prerelease.json`

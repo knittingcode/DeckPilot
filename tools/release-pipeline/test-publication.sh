@@ -4,7 +4,9 @@
 # draft creation and tag reuse, the signing record (failed signing and
 # notarization), required assets and channel isolation, the publication
 # gate, publication as pre-release or (latest) stable, everything that
-# must keep a draft unpublished, idempotent re-runs and recovery.
+# must keep a draft unpublished, idempotent re-runs and recovery, and the
+# release separation: nothing but application assets, never a plugin
+# package or registry metadata, in the release or its manifest.
 #
 #   tools/release-pipeline/test-publication.sh [<work dir>]
 #
@@ -30,7 +32,9 @@ bad() {
 unset GITHUB_OUTPUT GITHUB_REPOSITORY GH_TOKEN GITHUB_TOKEN
 export GH="$here/gh-stub.sh" CURL="$here/curl-stub.sh" REPOSITORY=example/DeckPilot
 export VERIFY_RELEASE=true
-base="https://github.com/$REPOSITORY/releases"
+# The release URLs installations use: the pinned prefix of common.sh, not
+# the REPOSITORY above (which only addresses the API).
+base="https://github.com/knittingcode/DeckPilot/releases"
 sha_a=$(printf 'a%.0s' {1..40})
 sha_b=$(printf 'b%.0s' {1..40})
 sha256() { if command -v sha256sum > /dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
@@ -116,9 +120,10 @@ draft() {
   [ "$PRERELEASE" = true ] || names+=("DeckPilot-${v}-1.x86_64.rpm" "DeckPilot-${v}-1.x86_64.rpm.sig")
   local name
   for name in "${names[@]}"; do printf 'content of %s\n' "$name" > "$assets/$name"; done
-  jq -n --arg v "$v" --arg base "$base/download/$tag/" --argjson rpm "$([ "$PRERELEASE" = true ] && echo false || echo true)" '
-    def update(name): {signature: "s", url: ($base + name)};
-    {version: $v, notes: "n", platforms: ({
+  # The manifest as the workflow assembles it (tools/ci/assemble-latest-json.sh).
+  jq -n --arg v "$v" --argjson rpm "$([ "$PRERELEASE" = true ] && echo false || echo true)" '
+    def update(name): {signature: "s", asset: name};
+    {platforms: ({
       "darwin-aarch64": update("DeckPilot_aarch64.app.tar.gz"),
       "darwin-aarch64-app": update("DeckPilot_aarch64.app.tar.gz"),
       "darwin-x86_64": update("DeckPilot_x64.app.tar.gz"),
@@ -130,11 +135,15 @@ draft() {
       "windows-x86_64-msi": update("DeckPilot_" + $v + "_x64_en-US.msi"),
       "windows-x86_64-nsis": update("DeckPilot_" + $v + "_x64-setup.exe")}
       + if $rpm then {"linux-x86_64-rpm": update("DeckPilot-" + $v + "-1.x86_64.rpm")} else {} end)}' \
-    > "$assets/$MANIFEST"
+    > "$work/fragment.json"
+  rm -rf "$work/fragments" && mkdir -p "$work/fragments" && mv "$work/fragment.json" "$work/fragments/"
+  (cd "$assets" && ls -1) > "$work/draft-assets.txt"
+  TAG="$tag" NOTES_FILE="$work/notes.md" ASSETS_FILE="$work/draft-assets.txt" \
+    "$here/../ci/assemble-latest-json.sh" "$work/fragments" "$assets/$MANIFEST" > /dev/null
   signing "$work/signing"
   TAG="$tag" NOTES_FILE="$work/notes.md" MACOS_SIGNING=true \
     "$here/release-meta.sh" "$work/signing" "$assets/release-meta.json" "$work/body.md" > /dev/null
-  "$GH" api -X PATCH "repos/$REPOSITORY/releases/$id" -f tag_name="$tag" -F body=@"$work/body.md" > /dev/null
+  "$GH" api -X PATCH "repos/${REPOSITORY:-$GITHUB_REPOSITORY}/releases/$id" -f tag_name="$tag" -F body=@"$work/body.md" > /dev/null
   (cd "$assets" && sha256 -- * > "$work/SHA256SUMS" && mv "$work/SHA256SUMS" SHA256SUMS)
   echo "$id"
 }
@@ -214,6 +223,25 @@ assets_of "$id"
 run assets.log "$here/check-assets.sh" "$work/assets.txt" --final && ok "a pre-release needs no .rpm" || bad "pre-release: $(cat "$work/assets.log")"
 { cat "$work/assets.txt"; echo latest.json; } > "$work/a.txt"
 expect_failure "a pre-release with latest.json" "contains latest.json" "$here/check-assets.sh" "$work/a.txt"
+
+echo "== release separation: application assets only (docs/marketplace/distribution.md)"
+# with_asset <name>: the complete pre-release's asset list plus <name>.
+with_asset() { { cat "$work/assets.txt"; echo "$1"; } > "$work/a.txt"; }
+for name in com.example.clock-1.2.0.dpplugin com.example.clock-1.2.0.dpplugin.sig; do
+  with_asset "$name"
+  expect_failure "a plugin package as an asset ($name)" "$name, a plugin package" "$here/check-assets.sh" "$work/a.txt" --final
+done
+for name in roots.json timestamp.json timestamp.json.minisig index-12.json keys-1.json.minisig keyset.json registry-site.tar.gz site-v1.zip; do
+  with_asset "$name"
+  expect_failure "registry metadata as an asset ($name)" "$name, plugin registry metadata" "$here/check-assets.sh" "$work/a.txt" --final
+done
+for name in deckpilot-plugin-host deckpilot-plugin-host-x86_64-unknown-linux-gnu notes.txt DeckPilot_0.6.0-beta.1_amd64.rpm DeckPilot-0.6.0-beta.1-1.x86_64.rpm; do
+  with_asset "$name"
+  expect_failure "an asset outside the application allowlist ($name)" "not application assets: $name" "$here/check-assets.sh" "$work/a.txt" --final
+done
+grep -v -x -E 'release-meta.json|SHA256SUMS' "$work/assets.txt" > "$work/a.txt"
+run assets.log "$here/check-assets.sh" "$work/a.txt" && ok "before --final, a release without release-meta.json and SHA256SUMS is still complete" \
+  || bad "not final: $(cat "$work/assets.log")"
 
 echo "== environment gate (before any secret) and publication gate"
 envfile="$STUB_DIR/environments/production-release.json"
@@ -354,7 +382,25 @@ expect_draft "a changed asset" "does not match SHA256SUMS" v0.6.0-rc.1
 fresh
 id=$(draft v0.6.0-rc.1)
 echo extra > "$STUB_DIR/assets/$id/unexpected.bin"
+expect_draft "an asset outside SHA256SUMS and the allowlist" "not application assets: unexpected.bin" v0.6.0-rc.1
+fresh
+id=$(draft v0.6.0-rc.1)
+grep -v -F "DeckPilot_0.6.0-rc.1_amd64.deb.sig" "$STUB_DIR/assets/$id/SHA256SUMS" > "$work/S"
+mv "$work/S" "$STUB_DIR/assets/$id/SHA256SUMS"
 expect_draft "an asset outside SHA256SUMS" "does not cover exactly the assets" v0.6.0-rc.1
+# resum: SHA256SUMS covering the draft's assets again, as stage A writes it.
+resum() { (cd "$STUB_DIR/assets/$id" && rm SHA256SUMS && sha256 -- * > ../S && mv ../S SHA256SUMS); }
+fresh
+id=$(draft v0.6.0-rc.1)
+echo plugin > "$STUB_DIR/assets/$id/com.example.clock-1.2.0.dpplugin"
+resum
+expect_draft "a plugin package covered by SHA256SUMS" "com.example.clock-1.2.0.dpplugin, a plugin package" v0.6.0-rc.1
+fresh
+id=$(draft v0.6.0-rc.1)
+echo '{}' > "$STUB_DIR/assets/$id/timestamp.json"
+echo sig > "$STUB_DIR/assets/$id/timestamp.json.minisig"
+resum
+expect_draft "registry metadata covered by SHA256SUMS" "plugin registry metadata" v0.6.0-rc.1
 fresh
 id=$(draft v0.6.0-rc.1)
 rm "$STUB_DIR/assets/$id/DeckPilot_0.6.0-rc.1_x64.dmg"
@@ -381,6 +427,46 @@ fresh
 id=$(draft v0.6.0-rc.1)
 change_manifest '.platforms["darwin-x86_64"].url |= sub("x64.app.tar.gz$"; "x64.zip")'
 expect_draft "a manifest URL of a missing asset" "not to an asset of v0.6.0-rc.1" v0.6.0-rc.1
+# Release separation: an update is always the platform's own application
+# package (docs/marketplace/distribution.md).
+fresh
+id=$(draft v0.6.0-rc.1)
+change_manifest '.platforms["windows-x86_64"].url |= sub("[^/]*$"; "com.example.clock-1.2.0.dpplugin")'
+expect_draft "a manifest URL of a plugin package" "com.example.clock-1.2.0.dpplugin, a plugin package" v0.6.0-rc.1
+fresh
+id=$(draft v0.6.0-rc.1)
+change_manifest '.platforms["linux-x86_64"].url = "https://knittingcode.github.io/deckpilot-plugins/v1/timestamp.json"'
+expect_draft "a manifest URL of registry metadata" "timestamp.json, plugin registry metadata" v0.6.0-rc.1
+for spec in darwin-aarch64:SHA256SUMS darwin-x86_64-app:release-meta.json linux-x86_64-deb:DeckPilot_0.6.0-rc.1_amd64.deb.sig \
+  windows-x86_64-nsis:DeckPilot_0.6.0-rc.1_x64_en-US.msi linux-x86_64-appimage:DeckPilot_0.6.0-rc.1_x64.dmg; do
+  fresh
+  id=$(draft v0.6.0-rc.1)
+  change_manifest ".platforms[\"${spec%%:*}\"].url |= sub(\"[^/]*\$\"; \"${spec#*:}\")"
+  expect_draft "a manifest pointing ${spec%%:*} to ${spec#*:}" "not to the application's updater package" v0.6.0-rc.1
+done
+# The per-platform check compares with the pinned DOWNLOAD_PREFIX
+# (common.sh) byte for byte: the right package under the repository's
+# renamed spelling is still not the update installed clients accept.
+fresh
+id=$(draft v0.6.0-rc.1)
+jq -r '.platforms[].url' "$STUB_DIR/assets/$id/prerelease.json" | grep -v -q -F "https://github.com/knittingcode/DeckPilot/releases/download/v0.6.0-rc.1/" \
+  && bad "the draft's manifest is not under the pinned prefix" || ok "every update of the draft is under the pinned DeckPilot prefix"
+change_manifest '.platforms["linux-x86_64-deb"].url |= sub("knittingcode/DeckPilot"; "knittingcode/deckpilot")'
+expect_draft "the right package under the renamed repository's spelling" "not to an asset of v0.6.0-rc.1" v0.6.0-rc.1
+fresh
+id=$(draft v0.6.0-rc.1)
+change_manifest '.platforms["linux-aarch64"] = .platforms["linux-x86_64"]'
+expect_draft "a manifest with an update for an unknown platform" "linux-aarch64, which is not an application platform" v0.6.0-rc.1
+# A plugin host is an application component: inside the installers, never
+# an asset of its own. Such a release publishes as any other.
+fresh
+id=$(draft v0.6.0-rc.1)
+for name in DeckPilot_0.6.0-rc.1_amd64.deb DeckPilot_0.6.0-rc.1_amd64.AppImage DeckPilot_0.6.0-rc.1_x64-setup.exe; do
+  printf 'installer with /usr/lib/DeckPilot/deckpilot-plugin-host\n' > "$STUB_DIR/assets/$id/$name"
+done
+resum
+run publish.log publish v0.6.0-rc.1 && ok "installers that bundle the plugin host are published" \
+  || bad "plugin host inside the installers: $(cat "$work/publish.log")"
 fresh
 id=$(draft v0.6.0-rc.1)
 change_manifest '.version = "0.6.0-rc.0"'
@@ -434,6 +520,48 @@ run discard.log "$here/discard-draft.sh" v0.6.0-rc.3 && [ -z "$(release v0.6.0-r
 draft v0.6.0-rc.3 > /dev/null && ok "and built again" || bad "rebuilding the draft"
 expect_failure "a published release is never discarded" "is published" "$here/discard-draft.sh" v0.6.0-rc.2
 [ "$(release v0.6.0-rc.2 | jq -r .draft)" = false ] && ok "the published release is untouched" || bad "published release changed"
+
+echo "== the renamed repository (knittingcode/deckpilot)"
+# GitHub now reports the repository as knittingcode/deckpilot. Installed
+# builds accept only manifest URLs under deckpilot_update::DOWNLOAD_PREFIX
+# (case-sensitive), so the pipeline pins that prefix (common.sh).
+client_prefix=$(sed -n 's/^pub const DOWNLOAD_PREFIX: &str = "\(.*\)";$/\1/p' "$here/../../crates/deckpilot-update/src/lib.rs")
+# shellcheck disable=SC2016
+pipeline_prefix=$(bash -c 'source "$1"; printf %s "$DOWNLOAD_PREFIX"' _ "$here/common.sh")
+[ -n "$client_prefix" ] && [ "$pipeline_prefix" = "$client_prefix" ] && [ "$pipeline_prefix" = "$base/download/" ] \
+  && ok "the pipeline's pinned prefix is the client's DOWNLOAD_PREFIX" \
+  || bad "pinned prefix '$pipeline_prefix', client '$client_prefix'"
+saved_repository="$REPOSITORY"
+unset REPOSITORY
+export GITHUB_REPOSITORY=knittingcode/deckpilot
+fresh
+env_for 0.6.0-alpha.4
+id=$(draft v0.6.0-alpha.4)
+manifest="$STUB_DIR/assets/$id/prerelease.json"
+[ "$(jq -r --arg p "$base/download/v0.6.0-alpha.4/" '[.platforms[].url | select(startswith($p) | not)] | length' "$manifest")" = 0 ] \
+  && ok "with GITHUB_REPOSITORY=knittingcode/deckpilot the manifest uses the pinned DeckPilot prefix" \
+  || bad "manifest URLs: $(jq -r '.platforms[].url' "$manifest" | sort -u | tr '\n' ' ')"
+! grep -q -F "knittingcode/deckpilot" "$manifest" && ok "and never the repository's current spelling" || bad "lowercase URL in the manifest"
+if run publish.log publish v0.6.0-alpha.4; then
+  ok "publish.sh accepts it and publishes"
+  grep -q -F -- "-X PATCH repos/knittingcode/deckpilot/releases/$id" "$STUB_DIR/calls.log" \
+    && ok "the API is addressed by GITHUB_REPOSITORY" || bad "API calls: $(grep PATCH "$STUB_DIR/calls.log")"
+  grep -q -F "curl $base/download/v0.6.0-alpha.4/prerelease.json" "$STUB_DIR/calls.log" \
+    && ok "the published manifest is verified at the pinned URL" || bad "manifest URL not verified"
+else
+  bad "publication under the renamed repository: $(cat "$work/publish.log")"
+fi
+# What an unpinned pipeline would have produced: URLs from GITHUB_REPOSITORY.
+env_for 0.6.0-alpha.5
+id=$(draft v0.6.0-alpha.5)
+assets="$STUB_DIR/assets/$id"
+sed 's|https://github.com/knittingcode/DeckPilot/releases/download/|https://github.com/knittingcode/deckpilot/releases/download/|g' \
+  "$assets/prerelease.json" > "$work/lower.json" && mv "$work/lower.json" "$assets/prerelease.json"
+(cd "$assets" && rm SHA256SUMS && sha256 -- * > "$work/SHA256SUMS" && mv "$work/SHA256SUMS" SHA256SUMS)
+expect_draft "manifest URLs in the repository's new spelling (installed clients reject them)" \
+  "points to https://github.com/knittingcode/deckpilot/releases/download/v0.6.0-alpha.5/" v0.6.0-alpha.5
+unset GITHUB_REPOSITORY
+export REPOSITORY="$saved_repository"
 
 echo
 echo "$passed passed, $failures failed (work dir: $work)"

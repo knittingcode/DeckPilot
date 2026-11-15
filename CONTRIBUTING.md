@@ -10,7 +10,7 @@ see [SECURITY.md](SECURITY.md).
 
 ## Reporting bugs and proposing features
 
-Use the [issue forms](https://github.com/knittingcode/DeckPilot/issues/new/choose):
+Use the [issue forms](https://github.com/knittingcode/deckpilot/issues/new/choose):
 **Bug report** for something that does not work as documented, **Feature
 request** for an idea or a change in behavior. Include the DeckPilot version
 or commit, the operating system and, for device problems, the Stream Deck

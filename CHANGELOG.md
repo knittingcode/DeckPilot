@@ -175,6 +175,10 @@ CHANGELOG.md.
 - Built-in actions: time limits longer than the engine allows are capped,
   switching the active project is marked as changing things, failures carry
   error codes, and every action icon exists in the app.
+- Updates keep reaching installed versions now that the repository is
+  named `knittingcode/deckpilot`: releases still announce their downloads
+  under the address earlier versions accept, and the app accepts the
+  repository's name in any case.
 
 ## [0.5.0] - Not released (draft prereleases 0.5.0-1 and 0.5.0-2 only)
 

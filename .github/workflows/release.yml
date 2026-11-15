@@ -580,7 +580,9 @@ jobs:
           printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' \
             > "$RUNNER_TEMP/assets.txt"
-          REPOSITORY="$GITHUB_REPOSITORY" NOTES_FILE="$RUNNER_TEMP/notes.md" \
+          # The package URLs use the pinned, client-compatible prefix of
+          # tools/release-pipeline/common.sh, not $GITHUB_REPOSITORY.
+          NOTES_FILE="$RUNNER_TEMP/notes.md" \
             ASSETS_FILE="$RUNNER_TEMP/assets.txt" \
             tools/ci/assemble-latest-json.sh "$RUNNER_TEMP/updater-fragments" "$RUNNER_TEMP/$MANIFEST"
           gh release upload "$TAG" "$RUNNER_TEMP/$MANIFEST" --repo "$GITHUB_REPOSITORY" --clobber

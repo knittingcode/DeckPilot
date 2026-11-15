@@ -51,7 +51,7 @@ use super::convert;
 use super::engine::CatalogPlugin;
 use super::executor::{Executor, OwnVariables, Transport};
 use super::lane::{Done, Ended, Job, Lane, LaneEnd, LaneError};
-use super::registry::LocalRegistry;
+use super::registry::{Registry, download_error};
 use super::variables::PublishedVariables;
 use super::worker::{EngineFailure, EngineReply, Events};
 use super::{PluginSettings, platform, platform_problem};
@@ -65,6 +65,9 @@ const MAX_INVOCATION: Duration = Duration::from_secs(600);
 /// Where the registry's verified state is kept (outside `plugins/`,
 /// whose unknown entries the store's recovery sweeps away).
 const REGISTRY_STATE_DIR: &str = "plugin-registry";
+/// Without trusted root keys no registry is used (none is built in).
+const NOT_CONFIGURED: &str = "no plugin registry is configured: no trusted root keys \
+     (--plugin-registry-roots); nothing is fetched or trusted without them";
 
 /// Broker decisions go to the agent's log (operation, origin and
 /// decision; never values).
@@ -259,7 +262,7 @@ fn manager_options() -> ManagerOptions {
 
 pub(super) struct PluginService {
     manager: PluginManager,
-    registry: Option<LocalRegistry>,
+    registry: Option<Registry>,
     /// Why there is no registry, or why it last failed to verify.
     registry_problem: Option<String>,
     broker: Broker,
@@ -323,19 +326,12 @@ impl PluginService {
                 message: Some(format!("{report:?}")),
             });
         }
-        let (registry, registry_problem) = match (&settings.registry, &settings.registry_roots) {
-            (Some(dir), Some(roots)) => {
-                match LocalRegistry::open(dir, roots, &data_dir.join(REGISTRY_STATE_DIR)) {
-                    Ok(registry) => (Some(registry), None),
-                    Err(problem) => (None, Some(problem)),
-                }
-            }
-            (Some(_), None) => (
-                None,
-                Some("the plugin registry has no root keys (--plugin-registry-roots)".to_owned()),
-            ),
-            _ => (None, Some("no plugin registry is configured".to_owned())),
-        };
+        let (registry, registry_problem) =
+            match Registry::from_settings(settings, &data_dir.join(REGISTRY_STATE_DIR)) {
+                Ok(Some(registry)) => (Some(registry), None),
+                Ok(None) => (None, Some(NOT_CONFIGURED.to_owned())),
+                Err(problem) => (None, Some(problem)),
+            };
         let mut service = Self {
             manager,
             registry,
@@ -427,7 +423,7 @@ impl PluginService {
                 (Some(platform), Some(registry)) => Some(format!("{registry}; {platform}")),
                 (platform, registry) => registry.or(platform),
             },
-            registry: self.registry.as_ref().map(LocalRegistry::status),
+            registry: self.registry.as_ref().map(Registry::status),
         }
     }
 
@@ -487,14 +483,14 @@ impl PluginService {
         })
     }
 
-    fn registry(&self) -> Result<&LocalRegistry, IpcError> {
+    fn registry(&self) -> Result<&Registry, IpcError> {
         self.registry.as_ref().ok_or_else(|| {
             error(
                 ErrorCode::Failed,
                 reason::REGISTRY,
                 self.registry_problem
                     .clone()
-                    .unwrap_or_else(|| "no plugin registry is configured".into()),
+                    .unwrap_or_else(|| NOT_CONFIGURED.into()),
             )
         })
     }
@@ -508,6 +504,10 @@ impl PluginService {
         match registry.refresh() {
             Ok(refresh) => {
                 self.registry_problem = None;
+                // A new index may revoke an installed version.
+                if matches!(refresh, Refresh::Updated { .. }) {
+                    self.apply_verdicts();
+                }
                 Ok(refresh)
             }
             Err(e) => {
@@ -577,12 +577,27 @@ impl PluginService {
             })
     }
 
-    /// Registry pins for `id` `version` and the package bytes they cover.
+    /// Registry pins for `id` `version` and the package bytes they cover
+    /// (downloaded; nothing is written before they verified).
     fn fetch(
         &self,
         id: &PluginId,
         version: &Version,
     ) -> Result<(ExpectedPackage, Vec<u8>), IpcError> {
+        let target = self.pins(id, version)?;
+        let bytes = self
+            .registry()?
+            .package(&target.url, &target.expected.package)
+            .map_err(|e| download_error(&e))?;
+        Ok((target.expected, bytes))
+    }
+
+    /// What the registry pins for `id` `version`, without the package.
+    fn pins(
+        &self,
+        id: &PluginId,
+        version: &Version,
+    ) -> Result<deckpilot_plugin_registry::InstallTarget, IpcError> {
         let registry = self.registry()?;
         // Revocations first: a revoked plugin may no longer be listed at
         // all, and must be refused as revoked, not as unknown.
@@ -623,10 +638,7 @@ impl PluginService {
                 Utc::now(),
             )
             .map_err(|e| install_error(&e))?;
-        let bytes = registry
-            .package(&target.url)
-            .map_err(|m| error(ErrorCode::Failed, reason::REGISTRY, m))?;
-        Ok((target.expected, bytes))
+        Ok(target)
     }
 
     fn install_source(&self) -> InstallSource {
@@ -945,7 +957,7 @@ impl PluginService {
                     }));
                 }
                 self.refresh()?;
-                let (expected, _) = self.fetch(&manifest.id, &manifest.version)?;
+                let expected = self.pins(&manifest.id, &manifest.version)?.expected;
                 (manifest.id, bytes, expected)
             }
         };

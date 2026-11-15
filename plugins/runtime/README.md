@@ -2,7 +2,8 @@
 
 Foundation of the plugin runtime from `docs/marketplace/architecture.md`
 (§3 runtime, §3.8 host protocol, §5 broker, §16 limitations), built on the
-spike in `experiments/marketplace-spikes/runtime/`.
+retired runtime spike (its measurements, findings and the test-by-test
+mapping to this workspace are in `docs/marketplace/spike-findings.md`).
 
 A standalone Cargo workspace with its own `Cargo.lock`. It is **not** a
 member of the repository's root workspace: the app, agent and release builds

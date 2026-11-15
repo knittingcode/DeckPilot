@@ -4,10 +4,26 @@
 # Environment:
 #   REPOSITORY  owner/name (default $GITHUB_REPOSITORY)
 #   GH          the GitHub CLI (default gh); the tests inject gh-stub.sh
+#
+# REPOSITORY only addresses the repository (API calls, gh --repo). The
+# URLs that installations check are pinned below instead.
 
 TAG_PATTERN='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.[1-9][0-9]*)?$'
 repository="${REPOSITORY:-${GITHUB_REPOSITORY:-}}"
 gh="${GH:-gh}"
+
+# The download prefix of every package URL in an update manifest, and the
+# public release URLs verified after publication. Pinned, never derived from
+# REPOSITORY or $GITHUB_REPOSITORY: the repository is now named
+# knittingcode/deckpilot, but installed builds (v0.6.0-alpha.3 and older)
+# compare every manifest URL case-sensitively with exactly this prefix
+# (deckpilot_update::DOWNLOAD_PREFIX) and would reject an update whose
+# URLs carry the new spelling. GitHub serves both spellings. Must equal
+# deckpilot_update::DOWNLOAD_PREFIX byte for byte (tested by
+# crates/deckpilot-update/tests/pipeline_prefix.rs and test-publication.sh).
+DOWNLOAD_PREFIX="https://github.com/knittingcode/DeckPilot/releases/download/"
+# shellcheck disable=SC2034 # used by the scripts that source this file
+RELEASES_URL="${DOWNLOAD_PREFIX%/download/}"
 
 fail() {
   echo "::error::$*" >&2
@@ -37,4 +53,39 @@ published_versions() {
   "$gh" api --paginate "repos/$repository/releases?per_page=100" \
     --jq '.[] | select(.draft | not) | .tag_name' \
     | grep -E "$TAG_PATTERN" | sed 's/^v//' || true
+}
+
+# Release separation (docs/marketplace/distribution.md): an application
+# release carries the application only. Plugin packages and the plugin
+# registry's metadata have their own repository, lifecycle and keys.
+
+# updater_asset <platform key> <version>: the one release asset the update
+# manifest may name for <platform key> (the names of
+# tools/ci/updater-fragment.sh); fails for a key that is not an
+# application platform.
+updater_asset() {
+  local v="$2"
+  case "$1" in
+    darwin-aarch64 | darwin-aarch64-app) echo "DeckPilot_aarch64.app.tar.gz" ;;
+    darwin-x86_64 | darwin-x86_64-app) echo "DeckPilot_x64.app.tar.gz" ;;
+    linux-x86_64 | linux-x86_64-appimage) echo "DeckPilot_${v}_amd64.AppImage" ;;
+    linux-x86_64-deb) echo "DeckPilot_${v}_amd64.deb" ;;
+    linux-x86_64-rpm) echo "DeckPilot-${v}-1.x86_64.rpm" ;;
+    windows-x86_64 | windows-x86_64-msi) echo "DeckPilot_${v}_x64_en-US.msi" ;;
+    windows-x86_64-nsis) echo "DeckPilot_${v}_x64-setup.exe" ;;
+    *) return 1 ;;
+  esac
+}
+
+# foreign_asset_kind <name>: "a plugin package" or "plugin registry
+# metadata" for a file of the plugin registry's repository, nothing
+# otherwise. It only names the reason: check-assets.sh refuses every asset
+# outside the application allowlist anyway.
+foreign_asset_kind() {
+  case "$1" in
+    *.dpplugin | *.dpplugin.*) echo "a plugin package" ;;
+    *.minisig | roots.json | timestamp.json | keys-*.json | keyset*.json | index-*.json | registry* | site-v1*)
+      echo "plugin registry metadata"
+      ;;
+  esac
 }

@@ -9,7 +9,7 @@
 ## Checklist
 
 - [ ] One topic; the title follows Conventional Commits (`fix(agent): …`)
-- [ ] `make check` passes (all checks: [docs/development.md](https://github.com/knittingcode/DeckPilot/blob/main/docs/development.md#checks))
+- [ ] `make check` passes (all checks: [docs/development.md](https://github.com/knittingcode/deckpilot/blob/main/docs/development.md#checks))
 - [ ] Documentation in `docs/` updated where behavior changes
 - [ ] No secrets, credentials or personal data in code, tests, logs or screenshots
 - [ ] Security-relevant changes (encryption, keys, IPC, updates, release workflows) are called out above

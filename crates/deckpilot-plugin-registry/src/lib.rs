@@ -5,7 +5,7 @@
 //! depends on it, and plugins stay disabled. It implements sections 9, 10,
 //! 12.3 (steps 1 and 2), 13.5 and 14 of the plugin marketplace design
 //! (`docs/marketplace/architecture.md`, proposed in pull request #191),
-//! promoting the trust spike of `experiments/marketplace-spikes/trust`.
+//! promoting the retired trust spike (`docs/marketplace/spike-findings.md`).
 //!
 //! There is no network code. The client takes document bytes (directly,
 //! or through a [`RegistrySource`] the agent's fetcher implements) and a

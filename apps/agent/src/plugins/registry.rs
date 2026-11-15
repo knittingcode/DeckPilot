@@ -1,22 +1,55 @@
-//! The registry the agent installs from: for now a local directory laid
-//! out as the publishing tool writes it (`site/v1/` for the signed
-//! documents, `releases/` for the packages), read through a
-//! [`RegistrySource`]. Everything is verified by `RegistryClient`
-//! against root keys given separately (they stand for the roots a release
-//! build will embed). No network code.
+//! The registry the agent installs from, read through a
+//! [`RegistrySource`] and verified by `RegistryClient` against root keys
+//! given separately (`--plugin-registry-roots`; they stand for the roots a
+//! release build will embed, which do not exist yet):
+//!
+//! - a local directory laid out as the publishing tool writes it
+//!   (`site/v1/` for the signed documents, `releases/` for the packages),
+//!   `--plugin-registry <dir>`;
+//! - or a registry served over HTTPS (`fetch.rs`),
+//!   `--plugin-registry-url <https URL of site/>`, with packages from the
+//!   pinned release URL or `--plugin-registry-releases-url`.
+//!
+//! No root key is embedded (production root keys are an owner decision,
+//! design U-10, not yet taken): without `--plugin-registry-roots` nothing
+//! is fetched and the registry reports "not configured". With roots and no
+//! other registry named, the official site [`DEFAULT_REGISTRY_URL`] is
+//! used.
+//!
+//! The verified state (trust state and index cache) is kept in
+//! `<data dir>/plugin-registry/` by the crate's `FileTrustStore`, and the
+//! verified detail documents in `details/` below it, so browsing and the
+//! freshness report work offline. Details are content-addressed (the
+//! verified index pins their sha256), so a cached one is re-checked
+//! against the index each time it is read and never trusted by itself.
 
 use std::path::{Component, Path, PathBuf};
 
 use chrono::Utc;
-use deckpilot_ipc::plugins::{RegistryFreshness, RegistryStatus};
-use deckpilot_plugin_manifest::PluginId;
+use deckpilot_ipc::plugins::{RegistryFreshness, RegistryStaleReason, RegistryStatus, reason};
+use deckpilot_ipc::{ErrorCode, IpcError};
+use deckpilot_plugin_manifest::{PackageDigest, PluginId};
+use deckpilot_plugin_package::sha256;
 use deckpilot_plugin_registry::{
-    DOWNLOAD_PREFIX, FetchError, FileTrustStore, Freshness, MAX_DETAIL_BYTES, PluginDetail, Policy,
-    Refresh, RegistryClient, RegistryError, RegistrySource, Role,
+    DOWNLOAD_PREFIX, FetchError, FileRef, FileTrustStore, Freshness, MAX_DETAIL_BYTES,
+    PluginDetail, Policy, Refresh, RegistryClient, RegistryError, RegistrySource, Role,
+    StaleReason, write_atomic,
 };
+use tracing::warn;
+
+use super::PluginSettings;
+use super::fetch::{DownloadError, HttpsConfig, HttpsSource, TlsRoots};
+
+/// The official registry site (GitHub Pages of `knittingcode/deckpilot-plugins`,
+/// documents under `v1/`). Used only when trusted root keys are configured
+/// (`--plugin-registry-roots`) and no other registry is named: production
+/// root keys are not approved yet, so none is embedded.
+pub const DEFAULT_REGISTRY_URL: &str = "https://knittingcode.github.io/deckpilot-plugins/";
 
 /// Largest package read (the package limit).
 const MAX_PACKAGE_READ: u64 = deckpilot_plugin_manifest::MAX_PACKAGE_BYTES;
+/// Verified detail documents, below the state directory.
+const DETAILS_DIR: &str = "details";
 
 /// Reads registry documents from a directory, refusing any path that
 /// could leave it.
@@ -58,42 +91,151 @@ impl RegistrySource for DirectorySource {
     }
 }
 
-/// The configured registry and its verified state.
-pub(super) struct LocalRegistry {
-    /// Shown to the user and recorded as the install source.
-    pub name: String,
-    source: DirectorySource,
-    releases: PathBuf,
-    client: RegistryClient<FileTrustStore>,
+/// Where documents and packages come from.
+#[derive(Debug)]
+enum Source {
+    Directory {
+        site: DirectorySource,
+        releases: PathBuf,
+    },
+    Https(Box<HttpsSource>),
 }
 
-impl std::fmt::Debug for LocalRegistry {
+impl Source {
+    fn documents(&self) -> &dyn RegistrySource {
+        match self {
+            Self::Directory { site, .. } => site,
+            Self::Https(https) => https.as_ref(),
+        }
+    }
+}
+
+/// The test CA (feature `test-hooks` only, never in a release): the PEM
+/// file named by `DECKPILOT_TEST_REGISTRY_CA` becomes the **only** root
+/// the registry client trusts.
+#[cfg(feature = "test-hooks")]
+pub const TEST_CA_ENV: &str = "DECKPILOT_TEST_REGISTRY_CA";
+
+fn tls_roots() -> Result<TlsRoots, String> {
+    #[cfg(feature = "test-hooks")]
+    if let Some(path) = std::env::var_os(TEST_CA_ENV) {
+        let pem = std::fs::read_to_string(&path)
+            .map_err(|e| format!("{TEST_CA_ENV} {}: {e}", Path::new(&path).display()))?;
+        return Ok(TlsRoots::Only(vec![pem]));
+    }
+    Ok(TlsRoots::System)
+}
+
+/// Why a package could not be obtained, as an IPC error: unreachable or
+/// refused is a registry problem, wrong bytes an invalid package.
+pub(super) fn download_error(error: &DownloadError) -> IpcError {
+    match error {
+        DownloadError::Unavailable(m) | DownloadError::Refused(m) => {
+            IpcError::new(ErrorCode::Failed, m.clone()).with_reason(reason::REGISTRY)
+        }
+        DownloadError::Corrupt(m) => {
+            IpcError::new(ErrorCode::Failed, m.clone()).with_reason(reason::INVALID_PACKAGE)
+        }
+    }
+}
+
+/// The configured registry and its verified state.
+pub(super) struct Registry {
+    /// Shown to the user and recorded as the install source.
+    pub name: String,
+    source: Source,
+    client: RegistryClient<FileTrustStore>,
+    details: PathBuf,
+    /// Why the last refresh could not reach the registry (`None`: it did,
+    /// or there was no refresh yet).
+    offline: Option<String>,
+}
+
+impl std::fmt::Debug for Registry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LocalRegistry")
+        f.debug_struct("Registry")
             .field("name", &self.name)
             .finish_non_exhaustive()
     }
 }
 
-impl LocalRegistry {
+fn open_client(roots: &Path, state_dir: &Path) -> Result<RegistryClient<FileTrustStore>, String> {
+    let roots: Role = std::fs::read(roots)
+        .map_err(|e| format!("the registry root keys {}: {e}", roots.display()))
+        .and_then(|bytes| {
+            serde_json::from_slice(&bytes)
+                .map_err(|e| format!("the registry root keys are malformed: {e}"))
+        })?;
+    RegistryClient::open(roots, FileTrustStore::new(state_dir), Policy::default())
+        .map_err(|e| format!("the registry state cannot be read: {e}"))
+}
+
+impl Registry {
+    /// The registry `settings` configure, with its verified state in
+    /// `state_dir`: `Ok(None)` when none is configured.
+    ///
+    /// Trusted root keys are required: no key is embedded and none is ever
+    /// taken from the network. Without them nothing is fetched (`Ok(None)`
+    /// when no registry is named either). With roots and neither a
+    /// directory nor a URL, the official site [`DEFAULT_REGISTRY_URL`] is
+    /// used.
+    pub fn from_settings(
+        settings: &PluginSettings,
+        state_dir: &Path,
+    ) -> Result<Option<Self>, String> {
+        let Some(roots) = settings.registry_roots.as_deref() else {
+            return if settings.registry.is_some() || settings.registry_url.is_some() {
+                Err(
+                    "the plugin registry has no trusted root keys (--plugin-registry-roots); \
+                     nothing is fetched or trusted without them"
+                        .to_owned(),
+                )
+            } else {
+                Ok(None)
+            };
+        };
+        match (&settings.registry, &settings.registry_url) {
+            (Some(_), Some(_)) => Err("both a local plugin registry (--plugin-registry) and a \
+                 registry URL (--plugin-registry-url) are configured; give one"
+                .to_owned()),
+            (Some(dir), None) => Self::open(dir, roots, state_dir).map(Some),
+            (None, url) => {
+                let config = HttpsConfig::new(
+                    url.as_deref().unwrap_or(DEFAULT_REGISTRY_URL),
+                    settings.registry_releases_url.as_deref(),
+                    tls_roots()?,
+                )?;
+                Self::open_https(config, roots, state_dir).map(Some)
+            }
+        }
+    }
+
     /// Opens the registry in `dir` with the root role in `roots`, keeping
     /// the verified state in `state_dir`.
     pub fn open(dir: &Path, roots: &Path, state_dir: &Path) -> Result<Self, String> {
-        let roots: Role = std::fs::read(roots)
-            .map_err(|e| format!("the registry root keys {}: {e}", roots.display()))
-            .and_then(|bytes| {
-                serde_json::from_slice(&bytes)
-                    .map_err(|e| format!("the registry root keys are malformed: {e}"))
-            })?;
-        let client = RegistryClient::open(roots, FileTrustStore::new(state_dir), Policy::default())
-            .map_err(|e| format!("the registry state cannot be read: {e}"))?;
         Ok(Self {
             name: format!("local:{}", dir.display()),
-            source: DirectorySource {
-                root: dir.join("site").join("v1"),
+            source: Source::Directory {
+                site: DirectorySource {
+                    root: dir.join("site").join("v1"),
+                },
+                releases: dir.join("releases"),
             },
-            releases: dir.join("releases"),
-            client,
+            client: open_client(roots, state_dir)?,
+            details: state_dir.join(DETAILS_DIR),
+            offline: None,
+        })
+    }
+
+    /// Opens the registry served at `config.site`.
+    pub fn open_https(config: HttpsConfig, roots: &Path, state_dir: &Path) -> Result<Self, String> {
+        let source = HttpsSource::new(config)?;
+        Ok(Self {
+            name: source.name(),
+            source: Source::Https(Box::new(source)),
+            client: open_client(roots, state_dir)?,
+            details: state_dir.join(DETAILS_DIR),
+            offline: None,
         })
     }
 
@@ -102,32 +244,117 @@ impl LocalRegistry {
     }
 
     /// Re-reads the registry and verifies it (key sets, timestamp, index).
+    /// Unreachable: the verified state is used as it is
+    /// ([`Refresh::Offline`]). A refused document changes nothing stored.
     pub fn refresh(&mut self) -> Result<Refresh, RegistryError> {
-        self.client.refresh(&self.source, Utc::now())
+        if let Source::Https(https) = &self.source {
+            let _ = https.take_unavailable();
+        }
+        let result = self.client.refresh(self.source.documents(), Utc::now());
+        self.offline = match (&result, &self.source) {
+            (Ok(Refresh::Offline(_)), Source::Https(https)) => Some(
+                https
+                    .take_unavailable()
+                    .unwrap_or_else(|| "the registry could not be reached".to_owned()),
+            ),
+            (Ok(Refresh::Offline(_)), Source::Directory { .. }) => {
+                Some("the registry directory could not be read".to_owned())
+            }
+            _ => None,
+        };
+        if let Ok(Refresh::Updated { .. }) = result {
+            self.prune_details();
+        }
+        result
     }
 
     pub fn status(&self) -> RegistryStatus {
+        let freshness = self.client.freshness(Utc::now());
         RegistryStatus {
             source: self.name.clone(),
-            freshness: match self.client.freshness(Utc::now()) {
+            freshness: match freshness {
                 Freshness::NeverVerified => RegistryFreshness::NeverVerified,
                 Freshness::Fresh => RegistryFreshness::Fresh,
                 Freshness::Stale(_) => RegistryFreshness::Stale,
             },
             seq: self.client.index().map(|index| index.seq),
+            stale_reason: match freshness {
+                Freshness::Stale(StaleReason::TimestampExpired) => {
+                    Some(RegistryStaleReason::Expired)
+                }
+                Freshness::Stale(StaleReason::IndexExpired) => {
+                    Some(RegistryStaleReason::IndexExpired)
+                }
+                Freshness::Stale(StaleReason::IndexUnavailable) => {
+                    Some(RegistryStaleReason::IndexUnavailable)
+                }
+                _ => None,
+            },
+            expires: self
+                .client
+                .state()
+                .timestamp
+                .as_ref()
+                .map(|t| t.expires.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            offline: self.offline.clone(),
         }
     }
 
-    /// The detail document of `id`, as pinned by the verified index.
+    fn cache_path(&self, reference: &FileRef) -> PathBuf {
+        self.details.join(format!("{}.json", reference.sha256))
+    }
+
+    /// The cached detail, only if it is exactly what `reference` pins.
+    fn cached_detail(&self, reference: &FileRef) -> Option<Vec<u8>> {
+        let bytes = std::fs::read(self.cache_path(reference)).ok()?;
+        (u64::try_from(bytes.len()).ok() == Some(reference.length)
+            && sha256(&bytes) == reference.sha256)
+            .then_some(bytes)
+    }
+
+    /// Removes cached details the verified index no longer pins.
+    fn prune_details(&self) {
+        let Some(index) = self.client.index() else {
+            return;
+        };
+        let keep: std::collections::BTreeSet<String> = index
+            .plugins
+            .iter()
+            .map(|p| format!("{}.json", p.detail.sha256))
+            .collect();
+        let Ok(entries) = std::fs::read_dir(&self.details) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if !keep.contains(&entry.file_name().to_string_lossy().into_owned()) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    /// The detail document of `id`, as pinned by the verified index: from
+    /// the cache, or fetched (and cached once it matches the pin).
     pub fn detail_bytes(&self, id: &PluginId) -> Result<Vec<u8>, String> {
         let reference = self
             .client
             .detail_ref(id)
             .ok_or_else(|| format!("{id} is not in the registry"))?;
+        if let Some(bytes) = self.cached_detail(reference) {
+            return Ok(bytes);
+        }
         let limit = usize::try_from(MAX_DETAIL_BYTES).unwrap_or(usize::MAX);
-        self.source
+        let bytes = self
+            .source
+            .documents()
             .fetch(&reference.path, limit)
-            .map_err(|e| format!("the registry detail of {id}: {e}"))
+            .map_err(|e| format!("the registry detail of {id}: {e}"))?;
+        if u64::try_from(bytes.len()).ok() == Some(reference.length)
+            && sha256(&bytes) == reference.sha256
+            && let Err(e) = write_atomic(&self.cache_path(reference), &bytes)
+        {
+            warn!(plugin = %id, error = %e, "the registry detail could not be cached");
+        }
+        Ok(bytes)
     }
 
     /// The verified detail of `id`.
@@ -138,15 +365,26 @@ impl LocalRegistry {
             .map_err(|e| e.to_string())
     }
 
-    /// The package at `url` (a pinned release asset URL), from `releases/`.
-    pub fn package(&self, url: &str) -> Result<Vec<u8>, String> {
-        let relative = url
-            .strip_prefix(DOWNLOAD_PREFIX)
-            .ok_or_else(|| format!("{url} is not a release asset of this registry"))?;
-        let path = below(&self.releases, relative)
-            .ok_or_else(|| format!("{url} is not a release asset of this registry"))?;
-        read_capped(&path, MAX_PACKAGE_READ)
-            .map_err(|e| format!("the package {relative} could not be read: {e}"))
+    /// The package at `url` (a pinned release asset URL): from `releases/`
+    /// or downloaded, and only returned if it is `digest`'s size and
+    /// sha256 (`verify_package` checks again, with everything else).
+    pub fn package(&self, url: &str, digest: &PackageDigest) -> Result<Vec<u8>, DownloadError> {
+        let bytes = match &self.source {
+            Source::Https(https) => return https.package(url, digest),
+            Source::Directory { releases, .. } => {
+                let not_ours = || {
+                    DownloadError::Refused(format!("{url} is not a release asset of this registry"))
+                };
+                let relative = url.strip_prefix(DOWNLOAD_PREFIX).ok_or_else(not_ours)?;
+                let path = below(releases, relative).ok_or_else(not_ours)?;
+                read_capped(&path, MAX_PACKAGE_READ).map_err(|e| {
+                    DownloadError::Unavailable(format!(
+                        "the package {relative} could not be read: {e}"
+                    ))
+                })?
+            }
+        };
+        Ok(bytes)
     }
 }
 
@@ -172,5 +410,42 @@ mod tests {
         ] {
             assert_eq!(below(root, bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn a_registry_needs_exactly_one_source_and_roots() {
+        let dir = std::env::temp_dir();
+        let none = PluginSettings::default();
+        assert!(Registry::from_settings(&none, &dir).unwrap().is_none());
+        let both = PluginSettings {
+            registry: Some(dir.clone()),
+            registry_url: Some("https://registry.example/".into()),
+            registry_roots: Some(dir.join("roots.json")),
+            ..PluginSettings::default()
+        };
+        assert!(
+            Registry::from_settings(&both, &dir)
+                .unwrap_err()
+                .contains("give one")
+        );
+        let no_roots = PluginSettings {
+            registry_url: Some("https://registry.example/".into()),
+            ..PluginSettings::default()
+        };
+        assert!(
+            Registry::from_settings(&no_roots, &dir)
+                .unwrap_err()
+                .contains("--plugin-registry-roots")
+        );
+        let plain_http = PluginSettings {
+            registry_url: Some("http://registry.example/".into()),
+            registry_roots: Some(dir.join("roots.json")),
+            ..PluginSettings::default()
+        };
+        assert!(
+            Registry::from_settings(&plain_http, &dir)
+                .unwrap_err()
+                .contains("https")
+        );
     }
 }

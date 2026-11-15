@@ -1,0 +1,12 @@
+# expect: mixes registry or plugin publishing with the application's signing secrets or the environment production-release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: production-release
+    steps:
+      - run: deckpilot-registry build-index --source-commit "$GITHUB_SHA"
