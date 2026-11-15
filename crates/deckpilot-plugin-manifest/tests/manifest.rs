@@ -1187,7 +1187,10 @@ fn with_publisher(publisher: &str) -> Manifest {
 fn only_the_first_party_rules_accept_the_deckpilot_publisher() {
     let first_party = with_publisher("deckpilot");
     let refused = first_party.validate().unwrap_err();
-    assert!(refused.has("publisher.id", IssueCode::Reserved), "{refused}");
+    assert!(
+        refused.has("publisher.id", IssueCode::Reserved),
+        "{refused}"
+    );
     first_party.validate_first_party().unwrap();
 
     // Every other reserved publisher stays reserved, and a third-party

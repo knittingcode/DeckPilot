@@ -10,7 +10,12 @@ const FIXTURE: &str = "../../plugins/first-party/test-fixtures/example-default";
 const ID: &str = "deckpilot.example-default";
 
 fn fixture_file(name: &str) -> Vec<u8> {
-    std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE).join(name)).unwrap()
+    std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(FIXTURE)
+            .join(name),
+    )
+    .unwrap()
 }
 
 fn id() -> PluginId {
@@ -62,7 +67,12 @@ fn pins_round_trip_and_name_every_file() {
     assert_eq!(pin.class, BundleClass::Default);
     assert_eq!(
         pin.files.keys().map(String::as_str).collect::<Vec<_>>(),
-        ["LICENSE", "assets/icon-128.png", "manifest.json", "plugin.wasm"]
+        [
+            "LICENSE",
+            "assets/icon-128.png",
+            "manifest.json",
+            "plugin.wasm"
+        ]
     );
     assert!(pins.pinned(&id(), &Version::new(0, 1, 1)).is_none());
     let json: serde_json::Value = serde_json::from_slice(&text).unwrap();
@@ -74,6 +84,8 @@ fn pins_round_trip_and_name_every_file() {
     );
 }
 
+type Edit<'a> = &'a dyn Fn(&mut serde_json::Value);
+
 #[test]
 fn bad_pins_are_refused() {
     let dir = tempfile::tempdir().unwrap();
@@ -84,7 +96,7 @@ fn bad_pins_are_refused() {
         edit(&mut value);
         Pins::parse(&serde_json::to_vec(&value).unwrap())
     };
-    let cases: [(&str, &dyn Fn(&mut serde_json::Value)); 7] = [
+    let cases: [(&str, Edit<'_>); 7] = [
         ("version 2", &|v| v["pinsVersion"] = 2.into()),
         ("third party", &|v| {
             v["plugins"][0]["id"] = "acme.example-default".into();
@@ -107,7 +119,9 @@ fn bad_pins_are_refused() {
             let digest = v["plugins"][0]["files"]["LICENSE"].clone();
             v["plugins"][0]["files"]["plugin.wasm.minisig"] = digest;
         }),
-        ("unknown field", &|v| v["plugins"][0]["signature"] = "x".into()),
+        ("unknown field", &|v| {
+            v["plugins"][0]["signature"] = "x".into();
+        }),
     ];
     for (name, edit) in cases {
         assert!(
@@ -276,6 +290,9 @@ fn resources_are_found_next_to_an_installed_agent() {
     assert_eq!(locate(&exe), Some(resources.join(BUNDLED_DIR)));
     if cfg!(target_os = "macos") {
         // A development build outside an application bundle has none.
-        assert!(resource_dirs(Path::new("/tmp/target/debug/deckpilot-agent")).is_empty());
+        assert_eq!(
+            resource_dirs(Path::new("/tmp/target/debug/deckpilot-agent")),
+            Vec::<PathBuf>::new()
+        );
     }
 }

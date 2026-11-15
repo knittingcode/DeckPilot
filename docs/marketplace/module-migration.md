@@ -235,6 +235,21 @@ The pins file is deliberately not called `index.json` and the directory is
 not `index/`, so no registry pattern can match it by accident. The accept
 fixture pins this.
 
+**As built (P5).** `plugins/first-party/build.sh` writes the layout and the
+pins; `crates/deckpilot-plugin-bundled` holds the pins format, the pins
+compiled into the agent (`DECKPILOT_BUNDLED_PINS` at build time) and the
+verification; `apps/agent/src/plugins/bundled.rs` seeds. Two refinements
+of the above: a bundled plugin also carries the icons its manifest names
+(`assets/<name>.png`, pinned like every other file), because the manifest
+contract requires `icons.128`; and `check-release-separation.py` gained a
+rule (stricter, nothing relaxed) that refuses any step staging a
+`.dpplugin` into the bundle (`src-tauri/` or `bundled/`). Packaging the
+host and `bundled/` is opt-in: `DECKPILOT_RELEASE_PLUGINS=1` with
+`tauri.plugins.conf.json` on top of `tauri.release.conf.json`. The
+published release workflow stays unchanged, so no release contains plugins
+until the owner enables the marketplace. See
+[`plugins/first-party/README.md`](../../plugins/first-party/README.md).
+
 ## 5. Compatibility and migration
 
 ### 5.1 Identity

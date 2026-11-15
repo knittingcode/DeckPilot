@@ -295,14 +295,17 @@ mod tests {
             let (app, exe) = test_app(dir.path());
             ad_hoc_sign(&app);
             let seal = check(&exe);
-            assert_eq!(seal, Seal::AdHoc { bundle: app.clone() });
+            assert_eq!(
+                seal,
+                Seal::AdHoc {
+                    bundle: app.clone()
+                }
+            );
             assert!(decide(&seal, false).is_err());
             decide(&seal, true).unwrap();
 
             std::fs::write(
-                app.join(
-                    "Contents/Resources/bundled/deckpilot.example-default/manifest.json",
-                ),
+                app.join("Contents/Resources/bundled/deckpilot.example-default/manifest.json"),
                 "{\"tampered\":true}\n",
             )
             .unwrap();

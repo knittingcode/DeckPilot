@@ -28,7 +28,9 @@ fn main() {
                 .unwrap_or_else(|e| panic!("{ENV}={}: not JSON: {e}", path.display()));
             assert!(
                 value.get("pinsVersion") == Some(&serde_json::Value::from(1))
-                    && value.get("plugins").is_some_and(serde_json::Value::is_array),
+                    && value
+                        .get("plugins")
+                        .is_some_and(serde_json::Value::is_array),
                 "{ENV}={}: not a pins file (pinsVersion 1 with a plugins list)",
                 path.display()
             );
@@ -36,8 +38,8 @@ fn main() {
         }
         None => EMPTY.as_bytes().to_vec(),
     };
-    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"))
-        .join("pins.json");
+    let out =
+        PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR")).join("pins.json");
     if std::fs::read(&out).ok().as_deref() != Some(bytes.as_slice()) {
         std::fs::write(&out, &bytes).expect("OUT_DIR is writable");
     }

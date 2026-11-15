@@ -1,0 +1,19 @@
+# expect: publishes plugin packages or registry metadata
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # A plugin package shipped inside the installer as a resource: a
+      # bundled plugin is unpacked files trusted by the agent's pins, never
+      # an independently distributed package.
+      - uses: tauri-apps/tauri-action@0123456789abcdef0123456789abcdef01234567
+        with:
+          projectPath: apps/desktop
+          args: >-
+            --config src-tauri/tauri.release.conf.json
+            --config '{"bundle":{"resources":{"../../../target/plugins/deckpilot.notifications-1.0.0.dpplugin":"bundled/deckpilot.notifications-1.0.0.dpplugin"}}}'

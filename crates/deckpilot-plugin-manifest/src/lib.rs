@@ -47,8 +47,7 @@ pub use compat::{
 pub use error::{Issue, IssueCode, ManifestError, ValidationErrors};
 pub use identity::{
     FIRST_PARTY_PUBLISHER, IdError, MAX_PLUGIN_NAME_LEN, MAX_PUBLISHER_LEN, PluginId,
-    RESERVED_PUBLISHERS,
-    is_publisher_id, lower_camel,
+    RESERVED_PUBLISHERS, is_publisher_id, lower_camel,
 };
 pub use integrity::{
     DigestError, IntegrityError, MAX_PACKAGE_BYTES, MAX_PACKAGE_ENTRIES, PackageDigest,
@@ -178,7 +177,9 @@ impl Manifest {
     pub fn validate_first_party(&self) -> Result<(), ValidationErrors> {
         let mut errors = validate::check(self).errors;
         if self.publisher.id == FIRST_PARTY_PUBLISHER {
-            errors.retain(|issue| !(issue.path == "publisher.id" && issue.code == IssueCode::Reserved));
+            errors.retain(|issue| {
+                !(issue.path == "publisher.id" && issue.code == IssueCode::Reserved)
+            });
         } else {
             errors.push(Issue {
                 path: "publisher.id".into(),

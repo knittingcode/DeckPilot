@@ -239,7 +239,12 @@ fn install(manager: &mut PluginManager, bundle: &Bundle, pin: &Pin) -> Seeded {
     }
 }
 
-fn refresh(manager: &mut PluginManager, bundle: &Bundle, pin: &Pin, record: &PluginRecord) -> Seeded {
+fn refresh(
+    manager: &mut PluginManager,
+    bundle: &Bundle,
+    pin: &Pin,
+    record: &PluginRecord,
+) -> Seeded {
     if record.source != InstallSource::Bundled {
         return Seeded::Skipped(format!(
             "installed from {}; the bundled copy never replaces it",

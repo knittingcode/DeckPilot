@@ -22,7 +22,12 @@ fn id() -> PluginId {
 }
 
 fn fixture(name: &str) -> Vec<u8> {
-    std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE).join(name)).unwrap()
+    std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(FIXTURE)
+            .join(name),
+    )
+    .unwrap()
 }
 
 /// A temporary data directory and application resources.
@@ -76,7 +81,11 @@ impl Env {
         )
         .unwrap();
         std::fs::write(dir.join("LICENSE"), fixture("LICENSE")).unwrap();
-        std::fs::write(dir.join("assets/icon-128.png"), fixture("assets/icon-128.png")).unwrap();
+        std::fs::write(
+            dir.join("assets/icon-128.png"),
+            fixture("assets/icon-128.png"),
+        )
+        .unwrap();
         let pins = Pins::compute(
             &self.bundled(),
             &[(id(), Version::parse(version).unwrap(), class)],
@@ -189,10 +198,16 @@ fn tampered_files_are_refused_at_seeding() {
     let bundle = env.default_bundle();
     std::fs::write(env.bundled().join(ID).join("plugin.js"), "x").unwrap();
     let mut manager = env.open();
-    assert!(matches!(only(seed(&mut manager, &bundle)), Seeded::Failed(_)));
+    assert!(matches!(
+        only(seed(&mut manager, &bundle)),
+        Seeded::Failed(_)
+    ));
     std::fs::remove_file(env.bundled().join(ID).join("plugin.js")).unwrap();
     std::fs::remove_file(env.bundled().join(ID).join("LICENSE")).unwrap();
-    assert!(matches!(only(seed(&mut manager, &bundle)), Seeded::Failed(_)));
+    assert!(matches!(
+        only(seed(&mut manager, &bundle)),
+        Seeded::Failed(_)
+    ));
     assert!(record(&manager).is_none());
 }
 
@@ -224,7 +239,10 @@ fn a_tampered_installed_copy_is_refused_at_load_and_marked_broken() {
             PluginState::Broken
         );
         // And seeding at the next start reports it, without repairing it.
-        assert!(matches!(only(seed(&mut manager, &bundle)), Seeded::Broken(_)));
+        assert!(matches!(
+            only(seed(&mut manager, &bundle)),
+            Seeded::Broken(_)
+        ));
     }
 
     // The bytes handed to the host are checked too.
@@ -288,7 +306,10 @@ fn a_user_disable_sticks_across_restarts() {
     // A newer app with a newer bundled version does not touch it either.
     let newer = env.bundle("0.2.0", &notifications(), BundleClass::Default);
     let mut manager = env.open();
-    assert!(matches!(only(seed(&mut manager, &newer)), Seeded::Skipped(_)));
+    assert!(matches!(
+        only(seed(&mut manager, &newer)),
+        Seeded::Skipped(_)
+    ));
     let record = record(&manager).unwrap();
     assert_eq!(record.state, PluginState::Disabled);
     assert_eq!(record.active().unwrap().version, Version::new(0, 1, 0));
@@ -301,7 +322,9 @@ fn a_user_uninstall_sticks_across_restarts() {
     {
         let mut manager = env.open();
         seed(&mut manager, &bundle);
-        manager.uninstall_by_user(&id(), Retention::default()).unwrap();
+        manager
+            .uninstall_by_user(&id(), Retention::default())
+            .unwrap();
     }
     for _ in 0..2 {
         let mut manager = env.open();
@@ -341,10 +364,7 @@ fn no_permission_beyond_the_low_tier_is_granted() {
     assert_eq!(record.state, PluginState::Disabled);
     let grants = manager.store().grants(&id()).unwrap();
     assert_eq!(
-        grants
-            .iter()
-            .map(|g| g.key.to_string())
-            .collect::<Vec<_>>(),
+        grants.iter().map(|g| g.key.to_string()).collect::<Vec<_>>(),
         ["notifications"]
     );
     assert!(grants.iter().all(|g| g.source == GrantSource::Derived));
@@ -378,7 +398,10 @@ fn migration_class_plugins_are_not_seeded() {
     let env = Env::new();
     let bundle = env.bundle("0.1.0", &notifications(), BundleClass::Migration);
     let mut manager = env.open();
-    assert!(matches!(only(seed(&mut manager, &bundle)), Seeded::Skipped(_)));
+    assert!(matches!(
+        only(seed(&mut manager, &bundle)),
+        Seeded::Skipped(_)
+    ));
     assert!(record(&manager).is_none());
 }
 
@@ -414,7 +437,10 @@ fn updates_go_forward_only_and_only_for_bundled_copies() {
     // An older app never downgrades it.
     let older = env.bundle("0.1.0", &notifications(), BundleClass::Default);
     let outcome = only(seed(&mut manager, &older));
-    assert!(matches!(&outcome, Seeded::Skipped(why) if why.contains("newer")), "{outcome:?}");
+    assert!(
+        matches!(&outcome, Seeded::Skipped(why) if why.contains("newer")),
+        "{outcome:?}"
+    );
 
     // New medium-tier permissions in a bundled update wait for the user.
     let escalating = env.bundle("0.3.0", &with_network(), BundleClass::Default);

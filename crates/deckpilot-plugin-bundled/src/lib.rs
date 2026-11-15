@@ -2,8 +2,9 @@
 //! bundle (`docs/marketplace/module-migration.md` §4).
 //!
 //! A bundled plugin is an app component, not a package: unpacked files
-//! `bundled/<id>/manifest.json`, `plugin.wasm` and `LICENSE` in the
-//! installer's resources, next to `bundled/pins.json`, never a `.dpplugin`.
+//! `bundled/<id>/manifest.json`, `plugin.wasm`, `LICENSE` and the icons the
+//! manifest names (`assets/<name>.png`) in the installer's resources, next
+//! to `bundled/pins.json`, never a `.dpplugin`.
 //! The release build writes the pins (`plugins/first-party/build.sh`): id,
 //! version, class, and the size and sha256 of every file.
 //!
@@ -62,13 +63,15 @@ pub fn is_allowed_file(path: &str) -> bool {
     if FILES.contains(&path) {
         return true;
     }
-    path.strip_prefix("assets/").is_some_and(|name| {
-        name.len() > 4
-            && name.ends_with(".png")
-            && name[..name.len() - 4]
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-    })
+    // Lowercase only: `.PNG` is not allowed.
+    path.strip_prefix("assets/")
+        .and_then(|name| name.strip_suffix(".png"))
+        .is_some_and(|stem| {
+            !stem.is_empty()
+                && stem
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        })
 }
 /// The publisher of every bundled plugin.
 pub const FIRST_PARTY_PUBLISHER: &str = deckpilot_plugin_manifest::FIRST_PARTY_PUBLISHER;
@@ -209,7 +212,10 @@ impl Pins {
                 return Err(BundleError::Pins(format!("{} is pinned twice", pin.id)));
             }
             if let Some(missing) = FILES.iter().find(|f| !pin.files.contains_key(**f)) {
-                return Err(BundleError::Pins(format!("{} does not pin {missing}", pin.id)));
+                return Err(BundleError::Pins(format!(
+                    "{} does not pin {missing}",
+                    pin.id
+                )));
             }
             if let Some(other) = pin.files.keys().find(|f| !is_allowed_file(f)) {
                 return Err(BundleError::Pins(format!(

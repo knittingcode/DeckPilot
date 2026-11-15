@@ -161,10 +161,12 @@ pub fn verify_bundled_files(
     limits: &Limits,
 ) -> Result<VerifiedPackage, PackageError> {
     for (path, pin) in &expected.files {
-        let bytes = files.get(path).ok_or_else(|| PackageError::InstalledMismatch {
-            path: path.clone(),
-            problem: "is missing".into(),
-        })?;
+        let bytes = files
+            .get(path)
+            .ok_or_else(|| PackageError::InstalledMismatch {
+                path: path.clone(),
+                problem: "is missing".into(),
+            })?;
         let size = len(bytes);
         if size != pin.size {
             return Err(PackageError::InstalledMismatch {
@@ -180,7 +182,10 @@ pub fn verify_bundled_files(
             });
         }
     }
-    if let Some(extra) = files.keys().find(|path| !expected.files.contains_key(*path)) {
+    if let Some(extra) = files
+        .keys()
+        .find(|path| !expected.files.contains_key(*path))
+    {
         return Err(PackageError::InstalledMismatch {
             path: extra.clone(),
             problem: "is not pinned".into(),

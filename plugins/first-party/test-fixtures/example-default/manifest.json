@@ -4,7 +4,11 @@
   "id": "deckpilot.example-default",
   "name": "Bundled Example",
   "version": "0.1.0",
-  "publisher": { "id": "deckpilot", "name": "DeckPilot", "url": "https://github.com/knittingcode/deckpilot" },
+  "publisher": {
+    "id": "deckpilot",
+    "name": "DeckPilot",
+    "url": "https://github.com/knittingcode/deckpilot"
+  },
   "description": "TEST FIXTURE, never shipped: the default-class bundled plugin the bundling, pinning and seeding tests use. One action that greets someone by name.",
   "repository": {
     "type": "git",

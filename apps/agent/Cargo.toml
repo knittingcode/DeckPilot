@@ -112,6 +112,7 @@ deckpilot-agent = { path = ".", features = ["test-hooks"] }
 # plugins_e2e: a local signed registry made with the publishing tool and
 # throwaway keys, packages, and reading plugins.db from outside.
 base64.workspace = true
+deckpilot-plugin-bundled.workspace = true
 deckpilot-plugin-manifest.workspace = true
 deckpilot-plugin-package.workspace = true
 deckpilot-plugin-registry = { workspace = true, features = ["publish"] }
@@ -137,6 +138,13 @@ workspace = true
 # sample plugin (built from plugins/runtime by the test).
 [[test]]
 name = "plugins_e2e"
+required-features = ["plugins"]
+
+# Bundled first-party plugins: the test fixture built, staged as an
+# installed application ships it, seeded offline and run through a real
+# agent process and the real plugin host.
+[[test]]
+name = "plugins_bundled"
 required-features = ["plugins"]
 
 # The registry over HTTPS (a local TLS server, a throwaway CA) through a

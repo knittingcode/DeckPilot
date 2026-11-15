@@ -1050,7 +1050,9 @@ fn bundled_files_verify_against_their_pins_with_the_first_party_rules() {
     // Installed and checked again like any package.
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("installed");
-    verified.unpack(&dir.path().join("staging"), &target).unwrap();
+    verified
+        .unpack(&dir.path().join("staging"), &target)
+        .unwrap();
     verify_installed(&target, verified.integrity()).unwrap();
 }
 
@@ -1067,18 +1069,30 @@ fn bundled_files_that_differ_from_their_pins_are_refused_before_parsing() {
         let bytes = tampered.get_mut(path).unwrap();
         let last = bytes.len() - 1;
         bytes[last] ^= 0x01;
-        mismatch(verify_bundled_files(tampered, &expected, &Limits::default()), path);
+        mismatch(
+            verify_bundled_files(tampered, &expected, &Limits::default()),
+            path,
+        );
     }
     // Longer, missing, or an extra file.
     let mut longer = files.clone();
     longer.get_mut("LICENSE").unwrap().push(b'\n');
-    mismatch(verify_bundled_files(longer, &expected, &Limits::default()), "LICENSE");
+    mismatch(
+        verify_bundled_files(longer, &expected, &Limits::default()),
+        "LICENSE",
+    );
     let mut missing = files.clone();
     missing.remove("plugin.wasm");
-    mismatch(verify_bundled_files(missing, &expected, &Limits::default()), "plugin.wasm");
+    mismatch(
+        verify_bundled_files(missing, &expected, &Limits::default()),
+        "plugin.wasm",
+    );
     let mut extra = files.clone();
     extra.insert("plugin.js".into(), b"x".to_vec());
-    mismatch(verify_bundled_files(extra, &expected, &Limits::default()), "plugin.js");
+    mismatch(
+        verify_bundled_files(extra, &expected, &Limits::default()),
+        "plugin.js",
+    );
 }
 
 #[test]
@@ -1086,10 +1100,16 @@ fn bundled_files_must_be_the_pinned_first_party_plugin() {
     // A third-party manifest pinned as a bundled plugin.
     let (files, expected) = bundled("acme.github-prs");
     let result = verify_bundled_files(files, &expected, &Limits::default());
-    assert!(matches!(result, Err(PackageError::Manifest(_))), "{result:?}");
+    assert!(
+        matches!(result, Err(PackageError::Manifest(_))),
+        "{result:?}"
+    );
     // The right files under another pinned id or version.
     let (files, mut expected) = bundled("deckpilot.github-prs");
     expected.version = semver::Version::new(1, 0, 1);
     let result = verify_bundled_files(files, &expected, &Limits::default());
-    assert!(matches!(result, Err(PackageError::WrongPlugin { .. })), "{result:?}");
+    assert!(
+        matches!(result, Err(PackageError::WrongPlugin { .. })),
+        "{result:?}"
+    );
 }

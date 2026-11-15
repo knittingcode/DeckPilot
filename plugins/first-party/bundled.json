@@ -1,0 +1,4 @@
+{
+  "$comment": "The first-party plugins the application bundles (plugins/first-party/README.md). None yet: built-in modules move here one by one (docs/marketplace/module-migration.md §9).",
+  "plugins": []
+}

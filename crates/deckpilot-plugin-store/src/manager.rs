@@ -1459,10 +1459,10 @@ fn apply_grant_changes(
 #[cfg(all(test, feature = "sqlcipher"))]
 mod tests {
     //! First-party plugins, tombstones and the module migration journal.
-    //! The manifest validator still reserves the `deckpilot` publisher, so
-    //! no package of a first-party id can be built yet; these tests set up
-    //! the plugin rows directly, through the store helpers the lifecycle
-    //! uses.
+    //! These tests set up the plugin rows directly, through the store
+    //! helpers the lifecycle uses. (A first-party package is only ever a
+    //! bundled one, `deckpilot_plugin_package::verify_bundled_files`; the
+    //! lifecycle tests in `tests/lifecycle.rs` install one.)
 
     use std::sync::atomic::{AtomicI64, Ordering};
 
