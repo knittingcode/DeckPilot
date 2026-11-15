@@ -3533,3 +3533,84 @@ fn plugin_actions_are_validated_against_what_the_agent_reported() {
     assert_eq!(view["profile"]["actions"].as_array().unwrap().len(), 1);
     assert_eq!(view["profile"]["workflows"].as_array().unwrap().len(), 1);
 }
+
+/// A save returns once the agent has read it: a workflow can be started
+/// and a layout is in use right after the save, with no wait in between.
+/// (Before, the app only notified the agent, and `start_workflow` straight
+/// after `save_workflow` could fail with "workflow does not exist in this
+/// profile".)
+#[test]
+fn a_save_is_in_the_agent_when_it_returns() {
+    let h = Harness::new();
+    let profile = h.ok(
+        "create_profile",
+        json!({ "name": "Work", "description": "" }),
+    );
+    let profile_id = profile["id"].as_str().unwrap().to_owned();
+    let log = h.ok(
+        "create_action",
+        json!({
+            "profileId": profile_id,
+            "action": {
+                "name": "Log",
+                "actionType": "general.log",
+                "parameters": { "message": { "type": "text", "value": "hello" } }
+            }
+        }),
+    );
+    let layout = h.ok(
+        "create_layout",
+        json!({ "profileId": profile_id, "modelId": "elgato.streamdeck.mk2", "name": "Desk", "generate": false }),
+    );
+
+    // Without an agent the save succeeds, and says that nothing read it.
+    let saved = h.ok(
+        "save_layout",
+        json!({ "profileId": profile_id, "layout": layout }),
+    );
+    assert_eq!(saved["agentReload"], json!({ "state": "notRunning" }));
+    assert_eq!(saved["id"], layout["id"]);
+
+    let (_runtime, _mock) = start_agent(&h.paths);
+    h.unlock();
+    wait_for(&h, |s| {
+        s["running"] == true
+            && s["status"]["activeProfile"]["name"] == "Work"
+            && s["status"]["devices"][0]["layout"]["name"] == "Desk"
+    });
+
+    for round in 0..20 {
+        let workflow = h.ok(
+            "save_workflow",
+            json!({ "profileId": profile_id, "workflow": {
+                "id": deckpilot_core::WorkflowId::new(), "name": format!("Flow {round}"),
+                "steps": [],
+                "graph": { "version": 1,
+                    "nodes": [
+                        {"id": "start", "type": "trigger"},
+                        {"id": "log", "type": "action", "action": log["id"]}
+                    ],
+                    "edges": [{"from": "start", "to": "log"}] }
+            } }),
+        );
+        assert_eq!(workflow["agentReload"], json!({ "state": "applied" }));
+        assert_eq!(workflow["name"], format!("Flow {round}"));
+        h.ok(
+            "start_workflow",
+            json!({ "profileId": profile_id, "workflowId": workflow["id"] }),
+        );
+
+        let mut renamed = layout.clone();
+        renamed["name"] = json!(format!("Desk {round}"));
+        let saved = h.ok(
+            "save_layout",
+            json!({ "profileId": profile_id, "layout": renamed }),
+        );
+        assert_eq!(saved["agentReload"], json!({ "state": "applied" }));
+        let status = h.ok("agent_status", json!({}));
+        assert_eq!(
+            status["status"]["devices"][0]["layout"]["name"],
+            format!("Desk {round}")
+        );
+    }
+}

@@ -8,6 +8,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { LayoutEditor } from "@/layout-editor/editor"
 import type { ActionType, DeviceLayout, DeviceModel, ProfileView } from "@/lib/types"
 import { api, resetApi } from "@/test/api-mock"
+import { savedByAgent } from "@/test/fixtures"
 
 vi.mock("@/lib/api", async () => (await import("@/test/api-mock")).apiModule)
 vi.mock("sonner", async () => (await import("@/test/toast")).sonnerModule)
@@ -182,7 +183,7 @@ beforeEach(() => {
   api.listIcons.mockResolvedValue([])
   api.listActionTypes.mockResolvedValue([logType])
   api.getGestureDefaults.mockResolvedValue({ doubleClickMs: 350, longPressMs: 800 })
-  api.saveLayout.mockImplementation((_, saved) => Promise.resolve(saved))
+  api.saveLayout.mockImplementation((_, saved) => Promise.resolve(savedByAgent(saved)))
 })
 afterEach(cleanup)
 

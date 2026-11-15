@@ -538,6 +538,13 @@ const KNOWN_OPS: &[&str] = &[
     "storage.get",
     "storage.set",
     "storage.delete",
+    "storage.keys",
+    "storage.usage",
+    "credentials.has",
+    "settings.get",
+    "variables.publish",
+    "variables.clear",
+    "url.open",
 ];
 
 fn abi_error(msg: &str) -> wasmtime::Error {

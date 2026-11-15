@@ -16,7 +16,14 @@ import type { DeviceLayout, DeviceModel, ModuleInfo } from "@/lib/types"
 import { WorkflowsPage } from "@/pages/workflows"
 import { api, resetApi } from "@/test/api-mock"
 import { installDomStubs } from "@/test/dom"
-import { ACTION_TYPES, action, builtInModules, profileView, stepWorkflow } from "@/test/fixtures"
+import {
+  ACTION_TYPES,
+  action,
+  builtInModules,
+  profileView,
+  savedByAgent,
+  stepWorkflow,
+} from "@/test/fixtures"
 import { HELLO, createFakePluginClient } from "@/test/plugins"
 import { renderWithApp } from "@/test/render"
 import { resetToasts } from "@/test/toast"
@@ -40,7 +47,7 @@ beforeEach(() => {
   // The backend's list as it is before the app read the plugins.
   api.listActionTypes.mockResolvedValue([ACTION_TYPES.openUrl])
   api.getGestureDefaults.mockResolvedValue({ doubleClickMs: 350, longPressMs: 800 })
-  api.saveLayout.mockImplementation((_, saved) => Promise.resolve(saved))
+  api.saveLayout.mockImplementation((_, saved) => Promise.resolve(savedByAgent(saved)))
 })
 afterEach(() => {
   cleanup()

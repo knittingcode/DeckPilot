@@ -450,6 +450,66 @@ fn sdk_features_through_the_real_host() {
 }
 
 #[test]
+fn urls_are_opened_only_on_granted_origins_through_the_real_host() {
+    let f = fixture(r#"[{"kind":"openUrl","origin":"https://github.com"}]"#);
+    let mut h = spawn(&config(SDK_TEST_GUEST), &f);
+    let mut ex = StubExecutor::default();
+    let open = |h: &mut PluginHost, ex: &mut StubExecutor, url: &str| {
+        let o = h
+            .invoke("open-url", &params(json!({"url": url})), T, ex)
+            .unwrap();
+        data(&o).clone()
+    };
+    let ok = open(
+        &mut h,
+        &mut ex,
+        "https://github.com/acme/app/pull/7?tab=files",
+    );
+    assert_eq!(ok["opened"], ParamValue::Integer(1), "{ok:?}");
+    let Some(Allowed::OpenUrl { url, origin }) = ex.executed.last() else {
+        panic!("{:?}", ex.executed)
+    };
+    assert_eq!(url.as_str(), "https://github.com/acme/app/pull/7?tab=files");
+    assert_eq!(origin.host(), "github.com");
+    for url in [
+        "https://gitlab.com/acme/app",
+        "file:///etc/passwd",
+        "x-github-client://openRepo",
+        "https://127.0.0.1/",
+        "https://github.com@evil.example.net/",
+    ] {
+        f.clock.advance(Duration::from_secs(3));
+        let refused = open(&mut h, &mut ex, url);
+        assert_eq!(refused["error"], text("NotPermitted"), "{url}: {refused:?}");
+        assert_eq!(refused["opened"], ParamValue::Integer(0));
+    }
+    // 1 per 2 s: the second of two opens in a row is throttled.
+    f.clock.advance(Duration::from_secs(3));
+    let o = h
+        .invoke(
+            "open-url",
+            &params(json!({"url": "https://github.com/", "times": 2})),
+            T,
+            &mut ex,
+        )
+        .unwrap();
+    assert_eq!(data(&o)["opened"], ParamValue::Integer(1));
+    assert_eq!(data(&o)["error"], text("Throttled"));
+    let opened = ex
+        .executed
+        .iter()
+        .filter(|a| matches!(a, Allowed::OpenUrl { .. }))
+        .count();
+    assert_eq!(opened, 2);
+    // Audited by origin only.
+    let audit = format!("{:?}", f.audit.records());
+    assert!(
+        !audit.contains("pull") && !audit.contains("passwd"),
+        "{audit}"
+    );
+}
+
+#[test]
 fn secret_handles_are_injected_only_where_granted() {
     let f = fixture(
         r#"[{"kind":"network","origin":"https://api.example.com","methods":["GET"]},

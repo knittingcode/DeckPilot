@@ -371,9 +371,10 @@ fn origin_of(host: &str) -> Option<String> {
 
 /// What the broker may allow, from the effective grants of an enabled
 /// plugin (granted ∩ declared). Kinds the broker does not decide
-/// (profile, variables, open URL, background, device) are
-/// not passed; their capabilities do not exist in ABI 1 or are refused by
-/// the executor.
+/// (profile, variables, background, device) are not passed; their
+/// capabilities do not exist in ABI 1 or are refused by the executor. An
+/// `openUrl` grant is passed per exact host, like `network`; a wildcard
+/// host is not (the broker opens exact origins only).
 pub fn approved(effective: &[(GrantKey, GrantScope)]) -> (ApprovedPermissions, Vec<String>) {
     let mut out = Vec::new();
     let mut skipped = Vec::new();
@@ -387,6 +388,10 @@ pub fn approved(effective: &[(GrantKey, GrantScope)]) -> (ApprovedPermissions, V
                 None => skipped.push(key.to_string()),
             },
             (PermissionKind::Notifications, _) => out.push(ApprovedPermission::Notifications {}),
+            (PermissionKind::OpenUrl, GrantScope::OpenUrl) => match origin_of(&key.key) {
+                Some(origin) => out.push(ApprovedPermission::OpenUrl { origin }),
+                None => skipped.push(key.to_string()),
+            },
             // The larger quota; without it the default applies.
             (PermissionKind::Storage, GrantScope::Storage { quota_kb }) => {
                 out.push(ApprovedPermission::Storage {
@@ -478,6 +483,14 @@ mod tests {
                 GrantKey::new(PermissionKind::Notifications, ""),
                 GrantScope::Notifications,
             ),
+            (
+                GrantKey::new(PermissionKind::OpenUrl, "github.com"),
+                GrantScope::OpenUrl,
+            ),
+            (
+                GrantKey::new(PermissionKind::OpenUrl, "*.github.com"),
+                GrantScope::OpenUrl,
+            ),
         ]);
         assert_eq!(
             approved.0,
@@ -487,11 +500,18 @@ mod tests {
                     methods: [HttpMethod::Get].into(),
                 },
                 ApprovedPermission::Notifications {},
+                ApprovedPermission::OpenUrl {
+                    origin: "https://github.com".into(),
+                },
             ]
         );
         assert_eq!(
             skipped,
-            ["network:*.example.com", "network:private-network"]
+            [
+                "network:*.example.com",
+                "network:private-network",
+                "openUrl:*.github.com"
+            ]
         );
     }
 }

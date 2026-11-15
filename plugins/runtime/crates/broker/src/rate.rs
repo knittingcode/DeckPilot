@@ -82,6 +82,11 @@ pub struct RateLimits {
     pub storage: Rate,
     /// Publishing or clearing own variables (10/s).
     pub variables: Rate,
+    /// Opening a URL in the browser (design §5.2: 1 per 2 s).
+    pub open_url: Rate,
+    /// Opening URLs over a longer window (20 per 10 minutes, refilled
+    /// continuously): a plugin cannot keep opening tabs at the short rate.
+    pub open_url_window: Rate,
 }
 
 impl Default for RateLimits {
@@ -93,6 +98,8 @@ impl Default for RateLimits {
             log: Rate::new(50, Duration::from_secs(1)),
             storage: Rate::new(100, Duration::from_secs(1)),
             variables: Rate::new(10, Duration::from_secs(1)),
+            open_url: Rate::new(1, Duration::from_secs(2)),
+            open_url_window: Rate::new(20, Duration::from_secs(600)),
         }
     }
 }

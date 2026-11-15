@@ -37,6 +37,7 @@ fn notify() -> CapabilityRequest {
     CapabilityRequest::Notify(Notify {
         title: "t".into(),
         body: "b".into(),
+        severity: None,
     })
 }
 
@@ -77,5 +78,42 @@ fn network_grant_does_not_imply_a_credential() {
         s.authorize(&get("https://api.example.com/", Some(auth)))
             .denial(),
         Some(DenyReason::CredentialNotGranted)
+    );
+}
+
+#[test]
+fn a_severity_changes_nothing_but_the_severity() {
+    use deckpilot_plugin_abi::capability::NotifySeverity;
+    let with = |severity| {
+        CapabilityRequest::Notify(Notify {
+            title: "t".into(),
+            body: "b".into(),
+            severity,
+        })
+    };
+    // Still needs the grant.
+    let s = session("[]");
+    assert_eq!(
+        s.authorize(&with(Some(NotifySeverity::Error))).denial(),
+        Some(DenyReason::NotGranted)
+    );
+    let s = session(r#"[{"kind":"notifications"}]"#);
+    for (asked, shown) in [
+        (None, NotifySeverity::Info),
+        (Some(NotifySeverity::Success), NotifySeverity::Success),
+        (Some(NotifySeverity::Warning), NotifySeverity::Warning),
+        (Some(NotifySeverity::Error), NotifySeverity::Error),
+    ] {
+        let d = s.authorize(&with(asked));
+        let Decision::Allow(Allowed::Notify { severity, .. }) = d else {
+            panic!("{d:?}")
+        };
+        assert_eq!(severity, shown);
+    }
+    // And shares the rate of 5 per minute, whatever the severity.
+    assert!(s.authorize(&with(Some(NotifySeverity::Error))).is_allowed());
+    assert_eq!(
+        s.authorize(&with(Some(NotifySeverity::Error))).denial(),
+        Some(DenyReason::RateLimited)
     );
 }

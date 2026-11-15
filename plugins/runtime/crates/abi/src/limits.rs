@@ -44,6 +44,8 @@ pub const MAX_CODE_LEN: usize = 64;
 
 /// URL in `http.fetch`.
 pub const MAX_URL_LEN: usize = 8 << 10;
+/// URL in `url.open` (like the built-in `system.open-url`).
+pub const MAX_OPEN_URL_LEN: usize = 2 << 10;
 /// Headers in one `http.fetch`.
 pub const MAX_HEADERS: usize = 32;
 /// One header name or value.

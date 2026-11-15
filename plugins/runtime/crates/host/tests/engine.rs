@@ -492,6 +492,27 @@ fn malformed_requests_get_errors_and_never_reach_the_handler() {
             r#"{"op":"log","args":{"level":"loud","message":"m"}}"#,
             CallErrorCode::BadRequest,
         ),
+        // Known operations with bad arguments are malformed, not unknown.
+        (
+            r#"{"op":"url.open","args":{"url":"https://a.example.com/","app":"x"}}"#,
+            CallErrorCode::BadRequest,
+        ),
+        (
+            r#"{"op":"url.open","args":{"url":""}}"#,
+            CallErrorCode::BadRequest,
+        ),
+        (
+            r#"{"op":"notify","args":{"title":"t","body":"b","severity":"critical"}}"#,
+            CallErrorCode::BadRequest,
+        ),
+        (
+            r#"{"op":"settings.get","args":{"plugin":"other.plugin"}}"#,
+            CallErrorCode::BadRequest,
+        ),
+        (
+            r#"{"op":"url.launch","args":{"url":"file:///etc/passwd"}}"#,
+            CallErrorCode::UnsupportedOp,
+        ),
     ] {
         let o = p
             .invoke(1, "raw_request", &params(json!({"json": json})))
