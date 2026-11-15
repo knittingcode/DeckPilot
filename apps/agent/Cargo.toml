@@ -36,6 +36,7 @@ test-hooks = []
 # in the separate, sandboxed `deckpilot-plugin-host` (plugins/runtime),
 # never in the agent.
 plugins = [
+    "dep:base64",
     "dep:deckpilot-plugin-abi",
     "dep:deckpilot-plugin-broker",
     "dep:deckpilot-plugin-manifest",
@@ -75,6 +76,8 @@ tracing-appender.workspace = true
 tracing-subscriber.workspace = true
 tray-icon.workspace = true
 # Feature `plugins` only.
+# Installed plugin icons as data URLs (`PluginDetails.icon`).
+base64 = { workspace = true, optional = true }
 deckpilot-plugin-abi = { workspace = true, optional = true }
 deckpilot-plugin-broker = { workspace = true, optional = true }
 deckpilot-plugin-manifest = { workspace = true, optional = true }

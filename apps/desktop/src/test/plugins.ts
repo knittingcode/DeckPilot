@@ -17,6 +17,7 @@ import type {
   PermissionChanges,
   PluginDetails,
   PluginEvent,
+  PluginHealth,
   PluginInstallSource,
   PluginRuntimeStatus,
   PluginSummary,
@@ -36,17 +37,42 @@ const network = (hosts: string[], extra: Partial<NetworkPermission> = {}): Netwo
 
 const NOTIFY: ManifestPermission = { kind: "notifications", justification: "Says when it is done." }
 
+/** A 1×1 PNG, as the agent sends an installed plugin's icon. */
+export const ICON =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+
 export function availablePlugins(): AvailablePlugin[] {
   return [
     {
       id: HELLO,
       name: "Hello Weather",
       summary: "Greets someone and shows the temperature.",
+      description: "Greets someone by name and shows the current temperature of a city.",
       publisher: "acme",
+      publisherInfo: {
+        namespace: "acme",
+        displayName: "Acme Tools",
+        login: "acme",
+        verified: true,
+      },
+      categories: ["weather", "fun"],
+      license: "Apache-2.0",
+      homepage: "https://acme.example/plugins",
+      sourceRepository: "acme/plugins",
       latest: "1.1.0",
       versions: [
-        { version: "1.1.0", permissions: [network(["api.open-meteo.com"]), NOTIFY] },
-        { version: "1.0.0", permissions: [network(["api.open-meteo.com"])] },
+        {
+          version: "1.1.0",
+          permissions: [network(["api.open-meteo.com"]), NOTIFY],
+          deckpilot: ">=0.5.0 <1.0.0",
+          publishedAt: 1_767_225_600,
+        },
+        {
+          version: "1.0.0",
+          permissions: [network(["api.open-meteo.com"])],
+          deckpilot: ">=0.5.0 <1.0.0",
+          publishedAt: 1_764_547_200,
+        },
       ],
     },
     {
@@ -54,10 +80,14 @@ export function availablePlugins(): AvailablePlugin[] {
       name: "Home Lights",
       summary: "Switches lights.",
       publisher: "knit",
+      publisherInfo: { namespace: "knit", login: "knit", verified: false },
+      categories: ["home"],
       latest: "0.3.0",
       versions: [
         {
           version: "0.3.0",
+          deckpilot: ">=0.6.0",
+          platforms: ["macos", "linux"],
           permissions: [
             network(["api.lifx.com"], { privateNetwork: true, justification: "Talks to bulbs." }),
             { kind: "credentials", refs: ["token"], justification: "Signs in." },
@@ -155,6 +185,12 @@ export interface FakeOptions {
   available?: AvailablePlugin[]
   /** Installs `acme.hello-weather` 1.0.0, enabled with its grant. */
   helloInstalled?: boolean
+  /** The state `acme.hello-weather` is installed in (default `enabled`). */
+  helloState?: PluginSummary["state"]
+  /** Its `stateReason`. */
+  helloStateReason?: string
+  /** Its health as the agent reports it. */
+  helloHealth?: PluginHealth
 }
 
 interface Installed {
@@ -162,6 +198,8 @@ interface Installed {
   version: string
   previousVersion?: string
   state: PluginSummary["state"]
+  stateReason?: string
+  health?: PluginHealth
   origin: PluginSummary["origin"]
   /** Grant key → status. */
   grants: Map<string, GrantInfo["status"]>
@@ -186,7 +224,9 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
     installed.set(HELLO, {
       id: HELLO,
       version: "1.0.0",
-      state: "enabled",
+      state: options.helloState ?? "enabled",
+      ...(options.helloStateReason ? { stateReason: options.helloStateReason } : {}),
+      ...(options.helloHealth ? { health: options.helloHealth } : {}),
       origin: { type: "registry", registry: "/tmp/registry" },
       grants: new Map([["network:api.open-meteo.com", "granted"]]),
     })
@@ -219,6 +259,8 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
       publisher: plugin?.publisher ?? "",
       version: p.version,
       state: p.state,
+      ...(p.stateReason ? { stateReason: p.stateReason } : {}),
+      ...(p.health ? { health: p.health } : {}),
       origin: p.origin,
       ...(p.previousVersion ? { previousVersion: p.previousVersion } : {}),
       ...(p.pending ? { stagedVersion: p.pending.version } : {}),
@@ -249,6 +291,7 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
     permissions: info(p),
     ...(p.pending ? { pendingUpdate: p.pending } : {}),
     manifest: {
+      engines: { deckpilot: ">=0.5.0 <1.0.0", pluginApi: "^1.0" },
       contributes: {
         actions: [
           {
@@ -256,9 +299,29 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
             parameters: [{ key: "name", label: "Name", kind: { type: "text" } }],
           },
         ],
+        settings: {
+          fields: [
+            {
+              key: "units",
+              label: "Units",
+              description: "Celsius or Fahrenheit.",
+              kind: { type: "choice", options: ["celsius", "fahrenheit"] },
+              required: false,
+            },
+          ],
+        },
+        credentials: [
+          {
+            key: "apiKey",
+            label: "API key",
+            hosts: ["api.open-meteo.com"],
+            schemes: ["bearer"],
+          },
+        ],
       },
     },
     audit: [],
+    ...(p.id === HELLO ? { icon: ICON } : {}),
   })
   const changesTo = (p: Installed, to: string): PermissionChanges => {
     const before = new Set(declared(p).map((g) => g.key))

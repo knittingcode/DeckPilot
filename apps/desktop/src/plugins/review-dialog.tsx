@@ -14,9 +14,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
-import { pluginErrorText } from "./api"
+import { pluginErrorText, type PluginErrorText } from "./api"
 import { PermissionList, PublisherLine } from "./components"
 import type { Grant } from "./permissions"
+import type { PublisherInfo } from "./types"
 
 /**
  * - `new`: needs the user's consent now.
@@ -30,6 +31,8 @@ export interface ReviewRequest {
   pluginId: string
   name: string
   publisher: string
+  /** The registry's record of the publisher, for registry installs. */
+  publisherInfo?: PublisherInfo | undefined
   version: string
   items: { grant: Grant; state: ReviewState }[]
   /** Grant keys an update drops; shown so the change is complete. */
@@ -60,7 +63,7 @@ export function PermissionReviewDialog({
 }) {
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<{ message: string; hint?: string } | null>(null)
+  const [error, setError] = useState<PluginErrorText | null>(null)
   const required = request.items.filter((i) => i.state !== "granted").map((i) => i.grant.key)
   const missing = required.filter((key) => !checked.has(key)).length
   const states = new Map(request.items.map((i) => [i.grant.key, i.state]))
@@ -113,7 +116,7 @@ export function PermissionReviewDialog({
           <DialogDescription>{intro}</DialogDescription>
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-xs">{request.pluginId}</span>
-            <PublisherLine publisher={request.publisher} />
+            <PublisherLine publisher={request.publisher} info={request.publisherInfo} />
           </div>
         </DialogHeader>
         <p className="flex items-start gap-2 text-xs text-muted-foreground">
@@ -172,8 +175,11 @@ export function PermissionReviewDialog({
         )}
         {error && (
           <Alert variant="destructive">
-            <AlertTitle className="line-clamp-none">{error.message}</AlertTitle>
-            {error.hint && <AlertDescription>{error.hint}</AlertDescription>}
+            <AlertTitle className="line-clamp-none">{error.title}</AlertTitle>
+            <AlertDescription className="grid gap-1">
+              <p>{error.message}</p>
+              {error.hint && <p>{error.hint}</p>}
+            </AlertDescription>
           </Alert>
         )}
         <DialogFooter className="items-center gap-2 sm:justify-between">
