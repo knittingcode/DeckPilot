@@ -378,6 +378,22 @@ pub struct PluginDetails {
     /// matches its integrity record. Absent from agents before the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// What the plugin's storage holds and may hold. Absent from agents
+    /// before the field, and when plugins.db cannot be read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<PluginStorageUsage>,
+}
+
+/// A plugin's storage (`storage.*`): what it holds and its quota, the
+/// default or the one its `storage` grant raises it to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginStorageUsage {
+    /// Bytes of keys and JSON values, as UTF-8.
+    pub used_bytes: u64,
+    pub keys: u64,
+    pub quota_bytes: u64,
+    pub max_keys: u64,
 }
 
 /// One version a registry offers.
@@ -790,6 +806,20 @@ mod tests {
         let keep: PluginRetention = serde_json::from_str("{}").unwrap();
         assert!(keep.is_default());
         assert_eq!(serde_json::to_string(&keep).unwrap(), "{}");
+    }
+
+    #[test]
+    fn storage_usage_is_additive() {
+        let usage = PluginStorageUsage {
+            used_bytes: 12,
+            keys: 1,
+            quota_bytes: 262_144,
+            max_keys: 1_000,
+        };
+        assert_eq!(
+            serde_json::to_value(usage).unwrap(),
+            serde_json::json!({"usedBytes": 12, "keys": 1, "quotaBytes": 262_144, "maxKeys": 1_000})
+        );
     }
 
     #[test]
