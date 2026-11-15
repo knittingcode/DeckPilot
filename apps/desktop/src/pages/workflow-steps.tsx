@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/select"
 import { useExecutions } from "@/hooks/use-executions"
 import { api, errorMessage } from "@/lib/api"
+import { toastSaved } from "@/lib/agent-reload"
 import { toastFailure } from "@/lib/failure"
 import { useSnapshot } from "@/hooks/use-status"
 import { EXECUTION_STATE_LABEL, ExecutionStore } from "@/lib/executions"
@@ -164,7 +165,7 @@ export function StepEditor({
     if (local.length > 0) return
     try {
       const saved = await api.saveWorkflow(profileId, workflow)
-      toast.success("Workflow saved")
+      toastSaved("Workflow saved", saved.agentReload)
       onChanged(saved.id)
     } catch (e) {
       setErrors(errorMessage(e).split("\n"))

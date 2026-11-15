@@ -41,6 +41,7 @@ import { useStatusItem } from "@/hooks/use-status"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { IS_MAC } from "@/hooks/use-navigation"
 import { api, errorMessage } from "@/lib/api"
+import { toastSaved } from "@/lib/agent-reload"
 import { initialValue } from "@/lib/parameters"
 import type {
   ActionType,
@@ -385,7 +386,7 @@ function Builder({
     api
       .saveWorkflow(profileId, workflow)
       .then((saved) => {
-        toast.success("Workflow saved")
+        toastSaved("Workflow saved", saved.agentReload)
         onSaved(saved.id)
       })
       .catch((e: unknown) =>

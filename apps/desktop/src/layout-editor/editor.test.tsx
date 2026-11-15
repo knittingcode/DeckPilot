@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest"
 
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { toast } from "sonner"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { LayoutEditor } from "./editor"
@@ -112,7 +113,9 @@ const control = (name: string) => screen.getByRole("button", { name })
 const describes = (name: string) => control(name).getAttribute("title")
 
 beforeEach(() => {
-  saveLayout.mockResolvedValue(undefined)
+  saveLayout.mockImplementation((_profile: string, saved: DeviceLayout) =>
+    Promise.resolve({ ...saved, agentReload: { state: "applied" } }),
+  )
 })
 afterEach(cleanup)
 
@@ -321,5 +324,24 @@ describe("LayoutEditor", () => {
     await user.click(screen.getByRole("button", { name: /Save/ }))
     const [, saved] = saveLayout.mock.calls[0] as [string, DeviceLayout]
     expect(saved.pages[0]?.bindings).toHaveLength(1)
+    await vi.waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Layout saved")
+    })
+  })
+
+  it("says when the agent did not apply the saved layout", async () => {
+    saveLayout.mockImplementation((_profile: string, saved: DeviceLayout) =>
+      Promise.resolve({ ...saved, agentReload: { state: "timedOut" } }),
+    )
+    const user = renderEditor()
+    await user.click(control("Key 1"))
+    await user.keyboard("{Delete}")
+    await user.click(screen.getByRole("button", { name: /Save/ }))
+    await vi.waitFor(() => {
+      expect(toast.warning).toHaveBeenCalledWith("Layout saved", {
+        description: expect.stringContaining("did not confirm") as unknown,
+      })
+    })
+    expect(toast.success).not.toHaveBeenCalled()
   })
 })
