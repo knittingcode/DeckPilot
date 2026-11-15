@@ -1,0 +1,41 @@
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: production-release
+    steps:
+      # First-party plugins as app components: unpacked files under
+      # bundled/ and the pins the agent is compiled with, shipped as a
+      # Tauri resource inside the installer. No package, no signature.
+      - name: Build and stage the bundled first-party plugins
+        run: plugins/first-party/build.sh --out target/bundle
+      - name: Build the agent with the bundled pins
+        env:
+          DECKPILOT_BUNDLED_PINS: target/bundle/bundled/pins.json
+        run: |
+          cargo build --release --locked -p deckpilot-agent --features plugins
+          cp target/release/deckpilot-agent \
+            apps/desktop/src-tauri/binaries/deckpilot-agent-x86_64-unknown-linux-gnu
+      - name: Stage the plugin host as a bundled component
+        run: |
+          cargo build --locked --release --manifest-path plugins/runtime/Cargo.toml -p deckpilot-plugin-host
+          cp plugins/runtime/target/release/deckpilot-plugin-host \
+            apps/desktop/src-tauri/binaries/deckpilot-plugin-host-x86_64-unknown-linux-gnu
+      - name: Check the bundled plugins
+        run: tools/release-pipeline/check-bundled-plugins.sh target/bundle/bundled target/release/deckpilot-agent
+      - uses: tauri-apps/tauri-action@0123456789abcdef0123456789abcdef01234567
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        with:
+          projectPath: apps/desktop
+          args: >-
+            --config src-tauri/tauri.release.conf.json
+            --config src-tauri/tauri.plugins.conf.json
+            --config '{"bundle":{"resources":{"../../../target/bundle/bundled/":"bundled/"}}}'
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" SHA256SUMS release-meta.json latest.json --clobber
