@@ -4,6 +4,10 @@
 //! module (projects, utilities, ...) declares what it contributes in a
 //! [`ModuleManifest`] and provides the [`ActionHandler`]s for its action
 //! types. Modules are registered explicitly; there is no dynamic loading.
+//! The agent also registers one module per installed plugin (its id is the
+//! plugin id, `<publisher>.<name>`); its handlers hand every run to the
+//! plugin's sandboxed host process, so no plugin code is loaded into
+//! DeckPilot.
 //!
 //! Each module owns a namespace: every action type it provides must have an
 //! identifier of the form `<module id>.<name>`. That makes the owner of any
@@ -41,7 +45,27 @@ use crate::{
 #[serde(try_from = "String", into = "String")]
 pub struct ModuleId(String);
 
+/// Length limits of a plugin id's halves, `<publisher>.<name>`
+/// (`docs/marketplace/architecture.md` §2.3).
+const PLUGIN_PUBLISHER_LEN: std::ops::RangeInclusive<usize> = 2..=24;
+const PLUGIN_NAME_LEN: std::ops::RangeInclusive<usize> = 2..=32;
+
+/// `^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$`: lowercase words of letters and
+/// digits joined by single `-`, each starting with a letter.
+fn is_plugin_segment(segment: &str) -> bool {
+    segment.split('-').all(|word| {
+        word.starts_with(|c: char| c.is_ascii_lowercase())
+            && word
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    })
+}
+
 impl ModuleId {
+    /// A built-in module id, `[a-z][a-z0-9-]{0,63}` (never a `.`), or a
+    /// plugin id: exactly one `.` between a publisher of 2-24 and a name
+    /// of 2-32 characters, both `^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$`
+    /// (`acme.hello-weather`).
     pub fn new(id: impl Into<String>) -> Result<Self, IdentifierError> {
         let id = id.into();
         let error = |reason| IdentifierError {
@@ -51,6 +75,26 @@ impl ModuleId {
         };
         if id.is_empty() || id.len() > 64 {
             return Err(error("must be between 1 and 64 characters"));
+        }
+        if let Some((publisher, name)) = id.split_once('.') {
+            if name.contains('.') {
+                return Err(error("a plugin id has exactly one `.`"));
+            }
+            if !PLUGIN_PUBLISHER_LEN.contains(&publisher.len())
+                || !PLUGIN_NAME_LEN.contains(&name.len())
+            {
+                return Err(error(
+                    "a plugin id is `<publisher>.<name>`, with a publisher of 2 to 24 and a \
+                     name of 2 to 32 characters",
+                ));
+            }
+            if !is_plugin_segment(publisher) || !is_plugin_segment(name) {
+                return Err(error(
+                    "a plugin id's publisher and name are lowercase words of ASCII letters and \
+                     digits, joined by single `-`, each starting with a letter",
+                ));
+            }
+            return Ok(Self(id));
         }
         if !id.starts_with(|c: char| c.is_ascii_lowercase()) {
             return Err(error("must start with a lowercase ASCII letter"));
@@ -70,9 +114,18 @@ impl ModuleId {
         &self.0
     }
 
-    /// The module that owns an action type, derived from its namespace.
+    /// Whether this is a plugin's id (`<publisher>.<name>`). Built-in
+    /// module ids never contain a `.`.
+    pub fn is_plugin(&self) -> bool {
+        self.0.contains('.')
+    }
+
+    /// The module that owns an action type, derived from its namespace:
+    /// everything before the **last** `.`. Built-in action types have two
+    /// segments (`projects.next` → `projects`), plugin action types three
+    /// (`acme.hello-weather.greet` → `acme.hello-weather`).
     pub fn owner_of(action_type: &ActionTypeId) -> Option<Self> {
-        let (namespace, _) = action_type.as_str().split_once('.')?;
+        let (namespace, _) = action_type.as_str().rsplit_once('.')?;
         Self::new(namespace).ok()
     }
 }
@@ -302,6 +355,14 @@ pub trait FeatureModule: Send + Sync {
     fn variable_source(&self) -> Option<Arc<dyn VariableSource>> {
         None
     }
+
+    /// Why the module's actions cannot run while it is disabled, when the
+    /// module knows better than "disabled" (a plugin: broken, quarantined,
+    /// a permission not granted…). `None`: "the <name> module is
+    /// disabled".
+    fn unavailable_reason(&self) -> Option<String> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -501,6 +562,8 @@ impl ModuleRegistry {
             let manifest = entry.module.manifest();
             let reason = if entry.enabled {
                 None
+            } else if let Some(reason) = entry.module.unavailable_reason() {
+                Some(reason)
             } else if manifest.supports(self.os) {
                 Some(format!("the {} module is disabled", manifest.name))
             } else {
@@ -790,7 +853,10 @@ impl ModuleRegistry {
             if !entry.enabled {
                 registry.mark_unavailable(
                     entry.action_types.iter().map(|t| t.id.clone()),
-                    format!("the {} module is disabled", manifest.name),
+                    entry
+                        .module
+                        .unavailable_reason()
+                        .unwrap_or_else(|| format!("the {} module is disabled", manifest.name)),
                 );
                 continue;
             }
@@ -855,6 +921,144 @@ mod tests {
         assert_eq!(
             ModuleId::owner_of(&ActionTypeId::new("plain").unwrap()),
             None
+        );
+    }
+
+    #[test]
+    fn plugin_ids_have_exactly_one_dot() {
+        for valid in [
+            "acme.hello-weather",
+            "ab.cd",
+            "acme2.weather-go2",
+            "a-b.c-d",
+            // 24 + 1 + 32 characters.
+            "abcdefghijklmnopqrstuvwx.abcdefghijklmnopqrstuvwxyzabcdef",
+        ] {
+            let id = ModuleId::new(valid).unwrap_or_else(|e| panic!("{valid}: {e}"));
+            assert!(id.is_plugin(), "{valid}");
+        }
+        for invalid in [
+            "a.weather",                              // publisher too short
+            "acme.w",                                 // name too short
+            "abcdefghijklmnopqrstuvwxy.weather",      // publisher too long
+            "acme.abcdefghijklmnopqrstuvwxyzabcdefg", // name too long
+            "acme.hello.weather",                     // two dots
+            "acme..weather",
+            ".acme",
+            "acme.",
+            "Acme.weather",
+            "acme.hello_weather",
+            "acme.hello--weather",
+            "acme.-weather",
+            "acme.weather-",
+            "acme.2weather",
+            "acme.hello-2x", // a word starts with a digit
+            "1acme.weather",
+        ] {
+            assert!(ModuleId::new(invalid).is_err(), "{invalid} was accepted");
+        }
+        assert!(!id("projects").is_plugin());
+        assert!(!id("work-session").is_plugin());
+    }
+
+    #[test]
+    fn the_owner_is_everything_before_the_last_dot() {
+        let owner = |t: &str| ModuleId::owner_of(&ActionTypeId::new(t).unwrap());
+        assert_eq!(owner("projects.next"), Some(id("projects")));
+        assert_eq!(owner("work-session.toggle"), Some(id("work-session")));
+        assert_eq!(
+            owner("acme.hello-weather.greet"),
+            Some(id("acme.hello-weather"))
+        );
+        assert_eq!(
+            owner("acme.hello-weather.current-temperature"),
+            Some(id("acme.hello-weather"))
+        );
+        // Unknown or legacy ids: owned by nothing that can register, or by
+        // a plugin id nobody installed. Either way unavailable.
+        assert_eq!(owner("a.b.c"), None);
+        assert_eq!(owner("deckpilot.core.log"), Some(id("deckpilot.core")));
+        assert_eq!(owner("x.y.z.w"), None);
+    }
+
+    /// A module standing for a plugin: id `acme.weather`, action types
+    /// `acme.weather.<name>`.
+    struct PluginLike {
+        manifest: ModuleManifest,
+        reason: Option<String>,
+    }
+
+    impl PluginLike {
+        fn new(enabled: bool, reason: Option<&str>) -> Self {
+            Self {
+                manifest: ModuleManifest {
+                    id: id("acme.weather"),
+                    version: "1.0.0".into(),
+                    name: "Weather".into(),
+                    description: String::new(),
+                    platforms: Vec::new(),
+                    pages: Vec::new(),
+                    capabilities: Vec::new(),
+                    config: Vec::new(),
+                    dependencies: Vec::new(),
+                    enabled_by_default: enabled,
+                    portability: Portability::default(),
+                    migrations: Vec::new(),
+                    windows: Vec::new(),
+                    variables: Vec::new(),
+                },
+                reason: reason.map(str::to_owned),
+            }
+        }
+    }
+
+    impl FeatureModule for PluginLike {
+        fn manifest(&self) -> &ModuleManifest {
+            &self.manifest
+        }
+
+        fn action_handlers(&self, _config: &ActionParameters) -> Vec<Box<dyn ActionHandler>> {
+            vec![Box::new(crate::testing::Echo::with_id("acme.weather.now"))]
+        }
+
+        fn unavailable_reason(&self) -> Option<String> {
+            self.reason.clone()
+        }
+    }
+
+    #[test]
+    fn plugin_modules_register_in_their_namespace_and_explain_why_not() {
+        let now = ActionTypeId::new("acme.weather.now").unwrap();
+        let mut registry = registry();
+        registry
+            .register(Box::new(PluginLike::new(true, None)))
+            .unwrap();
+        assert_eq!(registry.availability(&now), Availability::Available);
+        assert!(registry.action_registry().definition(&now).is_some());
+        assert!(registry.unregister(&id("acme.weather")));
+        assert_eq!(registry.availability(&now), Availability::Unknown);
+
+        registry
+            .register(Box::new(PluginLike::new(
+                false,
+                Some("the Weather plugin is quarantined"),
+            )))
+            .unwrap();
+        assert!(matches!(
+            registry.availability(&now),
+            Availability::ModuleDisabled { .. }
+        ));
+        let actions = registry.action_registry();
+        assert_eq!(
+            actions.unavailable_reason(&now),
+            Some("the Weather plugin is quarantined")
+        );
+        // Other modules keep the generic reason.
+        registry.set_enabled(&id("test-extra"), false).unwrap();
+        let actions = registry.action_registry();
+        assert_eq!(
+            actions.unavailable_reason(&ActionTypeId::new("test-extra.noop").unwrap()),
+            Some("the Extra module is disabled")
         );
     }
 

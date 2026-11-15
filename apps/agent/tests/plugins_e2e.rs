@@ -49,6 +49,8 @@ const FUTURE: &str = "acme.future-weather";
 const REVOKED: &str = "acme.revoked-weather";
 const NETWORK: &str = "network:api.open-meteo.com";
 const STARTUP: Duration = Duration::from_secs(30);
+/// How long the canned server takes to answer for Tokyo.
+const SLOW_MS: u64 = 6_000;
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -434,7 +436,16 @@ fn canned_http(dir: &Path) -> PathBuf {
                 "status": 302,
                 "headers": [["location", "https://collector.example.net/steal"]]
             },
-            {"url": "https://collector.example.net/", "status": 200, "body": "{}"}
+            {"url": "https://collector.example.net/", "status": 200, "body": "{}"},
+            // Tokyo answers late (a slow server), to cancel an action
+            // while it waits.
+            {
+                "url": "https://api.open-meteo.com/v1/forecast?latitude=35.68",
+                "status": 200,
+                "headers": [["content-type", "application/json"]],
+                "body": forecast.to_string(),
+                "delayMs": SLOW_MS
+            }
         ]))
         .unwrap(),
     )
@@ -458,6 +469,8 @@ struct Env {
     paths: AgentPaths,
     key: DatabaseKey,
     http: PathBuf,
+    /// The agent runs with a simulated Stream Deck MK.2.
+    mock_device: bool,
 }
 
 impl Env {
@@ -477,7 +490,21 @@ impl Env {
             paths,
             key,
             http,
+            mock_device: false,
         }
+    }
+
+    /// With `profile` active and a simulated MK.2 to press keys on.
+    fn with_profile(name: &str, profile: &deckpilot_core::Profile) -> Self {
+        let env = Self {
+            mock_device: true,
+            ..Self::new(name)
+        };
+        let store = support::open_store(&env.paths, &env.key);
+        deckpilot_storage::ConfigStore::save_profile(&store, profile).unwrap();
+        deckpilot_storage::ConfigStore::set_active_profile(&store, Some(profile.id)).unwrap();
+        drop(store);
+        env
     }
 
     fn plugins_dir(&self) -> PathBuf {
@@ -510,6 +537,11 @@ impl Env {
         let mut command = Command::new(env!("CARGO_BIN_EXE_deckpilot-agent"));
         command
             .args(["--headless", "--no-usb", "--log-level", "debug"])
+            .args(if self.mock_device {
+                &["--mock-devices", "mk2"][..]
+            } else {
+                &[]
+            })
             .env("DECKPILOT_DATA_DIR", &self.paths.data_dir)
             .env("DECKPILOT_TEST_PLUGIN_HTTP", &self.http)
             .env_remove("DECKPILOT_ENABLE_PLUGINS")
@@ -1578,6 +1610,460 @@ async fn a_host_without_a_full_sandbox_is_refused() {
         assert!(message.contains("did not run"), "{message}");
     }
     assert!(fetched(&env.http).is_empty(), "nothing went out");
+    assert_eq!(
+        agent.details(HELLO).await.summary.state,
+        PluginState::Enabled
+    );
+    agent.stop().await;
+}
+
+// ------------------------------------------------- plugin actions in the engine
+
+const WEATHER_TYPE: &str = "acme.hello-weather.current-temperature";
+const GREET_TYPE: &str = "acme.hello-weather.greet";
+
+/// Adds an instance of the plugin action type `action_type` to `profile`.
+/// The type is unknown until the plugin is installed, so the instance is
+/// written as stored data, the way an imported profile would bring it.
+fn plugin_action(
+    profile: &mut deckpilot_core::Profile,
+    name: &str,
+    action_type: &str,
+    parameters: &[(&str, deckpilot_core::ParameterValue)],
+) -> deckpilot_core::ActionInstanceId {
+    let mut values = deckpilot_core::ActionParameters::new();
+    for (key, value) in parameters {
+        values = values.with(*key, value.clone());
+    }
+    let instance = deckpilot_core::ActionInstance {
+        id: deckpilot_core::ActionInstanceId::new(),
+        name: name.into(),
+        action_type: deckpilot_core::ActionTypeId::new(action_type).unwrap(),
+        parameters: values,
+        description: String::new(),
+        icon: None,
+        label: None,
+    };
+    let id = instance.id;
+    profile.actions.push(instance);
+    id
+}
+
+/// An MK.2 layout whose keys 0, 1, … run `actions` on a press.
+fn bind_keys(profile: &mut deckpilot_core::Profile, actions: &[deckpilot_core::ActionInstanceId]) {
+    let mut layout =
+        deckpilot_core::DeviceLayout::new("Main", deckpilot_device::models::stream_deck_mk2().id);
+    layout.pages[0].bindings = actions
+        .iter()
+        .zip(0u16..)
+        .map(|(action, index)| {
+            deckpilot_core::ControlBinding::new(
+                deckpilot_device::ControlId::Key { index },
+                deckpilot_core::Trigger::Press,
+                deckpilot_core::BindingTarget::action(*action),
+            )
+        })
+        .collect();
+    profile.layouts.push(layout);
+}
+
+/// A workflow `start → <node>` running `action`.
+fn action_workflow(
+    profile: &mut deckpilot_core::Profile,
+    name: &str,
+    node: &str,
+    action: deckpilot_core::ActionInstanceId,
+) -> deckpilot_core::WorkflowId {
+    let workflow = support::graph_workflow(
+        name,
+        support::graph(
+            &json!([
+                {"id": "start", "type": "trigger"},
+                {"id": node, "type": "action", "action": action},
+            ]),
+            &json!([{"from": "start", "to": node}]),
+        ),
+    );
+    let id = workflow.id;
+    profile.workflows.push(workflow);
+    id
+}
+
+impl Agent {
+    async fn run_action(
+        &self,
+        action: deckpilot_core::ActionInstanceId,
+    ) -> deckpilot_core::ActionResult {
+        match self.request(Request::RunAction { action }).await.unwrap() {
+            Response::ActionResult { result } => result,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    async fn events(&self) -> AgentClient {
+        let mut client = self.client().await;
+        client.subscribe().await.unwrap();
+        client
+    }
+
+    /// The simulated MK.2, once it is connected.
+    async fn mock_device(&self) -> deckpilot_device::DeviceId {
+        let deadline = Instant::now() + STARTUP;
+        loop {
+            let Response::Status { status } = self.request(Request::GetStatus).await.unwrap()
+            else {
+                panic!("status")
+            };
+            if let Some(device) = status.devices.iter().find(|d| {
+                d.source == "mock" && d.state == deckpilot_device::ConnectionState::Connected
+            }) {
+                return device.id.clone();
+            }
+            assert!(Instant::now() < deadline, "the MK.2 did not connect");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Presses and releases key `index`; returns the name and status of
+    /// the action it ran, from `actionCompleted`.
+    async fn press(
+        &self,
+        device: &deckpilot_device::DeviceId,
+        index: u16,
+    ) -> (String, deckpilot_core::ActionStatus) {
+        let mut events = self.events().await;
+        for input in [
+            deckpilot_device::ControlInput::Press,
+            deckpilot_device::ControlInput::Release,
+        ] {
+            self.request(Request::SimulateInput {
+                device: device.clone(),
+                control: deckpilot_device::ControlId::Key { index },
+                input,
+            })
+            .await
+            .unwrap();
+        }
+        completed(&mut events).await
+    }
+
+    async fn run_workflow(
+        &self,
+        workflow: deckpilot_core::WorkflowId,
+    ) -> deckpilot_core::ExecutionId {
+        match self
+            .request(Request::StartWorkflow { workflow })
+            .await
+            .unwrap()
+        {
+            Response::ExecutionStarted { execution } => execution.id,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    async fn finished(
+        &self,
+        execution: deckpilot_core::ExecutionId,
+    ) -> deckpilot_core::ExecutionRecord {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let Response::Execution { execution: record } = self
+                .request(Request::GetExecution { execution })
+                .await
+                .unwrap()
+            else {
+                panic!("execution")
+            };
+            if record.summary.state != deckpilot_core::ExecutionState::Running {
+                return *record;
+            }
+            assert!(Instant::now() < deadline, "still running: {record:#?}");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+}
+
+/// The next `actionCompleted` event: the action's name and status.
+async fn completed(events: &mut AgentClient) -> (String, deckpilot_core::ActionStatus) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let event = tokio::time::timeout_at(deadline, events.next_event())
+            .await
+            .expect("an action completed in time")
+            .unwrap();
+        if let deckpilot_ipc::AgentEvent::ActionCompleted { name, status, .. } = event {
+            return (name, status);
+        }
+    }
+}
+
+/// The installed → enabled → granted → bound → pressed path: the sample's
+/// actions are action types of the engine, run from `runAction`, from keys
+/// and from workflow nodes, each in the sandboxed host; and they report
+/// why not when they cannot run.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // one path, step by step
+async fn plugin_actions_run_from_keys_run_action_and_workflows() {
+    use deckpilot_core::{ActionStatus, ExecutionState, ParameterValue};
+    let registry = shared_registry();
+    let mut profile = deckpilot_core::Profile::new("Plugin keys");
+    let weather = plugin_action(
+        &mut profile,
+        "Berlin weather",
+        WEATHER_TYPE,
+        &[("city", ParameterValue::Choice("berlin".into()))],
+    );
+    let greet = plugin_action(
+        &mut profile,
+        "Greet Ada",
+        GREET_TYPE,
+        &[("name", ParameterValue::Text("Ada".into()))],
+    );
+    bind_keys(&mut profile, &[weather, greet]);
+    let flow = action_workflow(&mut profile, "Weather flow", "temp", weather);
+    let env = Env::with_profile("plugins-e2e-engine", &profile);
+    let agent = Agent::started(&env, registry).await;
+
+    // Installed but disabled: the type is known, and says why it cannot run.
+    agent.install(HELLO, Some("1.0.0")).await.unwrap();
+    let refused = agent.run_action(weather).await;
+    assert_eq!(refused.status, ActionStatus::Failed, "{refused:?}");
+    assert!(refused.message.contains("disabled"), "{refused:?}");
+    assert!(refused.message.contains("Hello Weather"), "{refused:?}");
+    assert!(fetched(&env.http).is_empty(), "nothing went out");
+
+    // Enabled with its permission: `runAction` runs it in the host and
+    // answers with the structured result; the canned HTTP saw one request.
+    agent.enable(HELLO, &[NETWORK]).await.unwrap();
+    let result = agent.run_action(weather).await;
+    assert_eq!(result.status, ActionStatus::Succeeded, "{result:?}");
+    assert_eq!(result.data["temperature"], "21.5");
+    assert_eq!(result.data["unit"], "°C");
+    assert_eq!(result.data["city"], "Berlin");
+    assert_eq!(result.data["observedAt"], "2026-11-14T12:00");
+    let requests = fetched(&env.http);
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert!(
+        requests[0].starts_with("https://api.open-meteo.com/v1/forecast?latitude=52.52"),
+        "{requests:?}"
+    );
+    let greeting = agent.run_action(greet).await;
+    assert_eq!(greeting.status, ActionStatus::Succeeded, "{greeting:?}");
+    assert_eq!(greeting.message, "Hello, Ada.");
+    assert_eq!(greeting.data["greeting"], "Hello, Ada.");
+
+    // Keys: a press runs the bound action off the service task and
+    // reports it through `actionCompleted`.
+    let device = agent.mock_device().await;
+    assert_eq!(
+        agent.press(&device, 1).await,
+        ("Greet Ada".to_owned(), ActionStatus::Succeeded)
+    );
+    assert_eq!(
+        agent.press(&device, 0).await,
+        ("Berlin weather".to_owned(), ActionStatus::Succeeded)
+    );
+    assert_eq!(fetched(&env.http).len(), 2);
+
+    // A workflow node runs it on the run's thread, with its outputs.
+    let run = agent.run_workflow(flow).await;
+    let record = agent.finished(run).await;
+    assert_eq!(
+        record.summary.state,
+        ExecutionState::Succeeded,
+        "{record:#?}"
+    );
+    let node = record
+        .nodes
+        .iter()
+        .find(|n| n.node.as_str() == "temp")
+        .expect("the plugin node ran");
+    assert_eq!(node.output["temperature"], "21.5", "{node:#?}");
+    assert_eq!(fetched(&env.http).len(), 3);
+
+    // A revoked permission makes the actions unavailable for keys and
+    // workflows (the plugin stays enabled), with the reason.
+    agent
+        .request(Request::RevokePluginPermission {
+            plugin: HELLO.into(),
+            permission: NETWORK.into(),
+        })
+        .await
+        .unwrap();
+    let plugin = agent.details(HELLO).await;
+    assert_eq!(plugin.summary.state, PluginState::Enabled);
+    for action in &plugin.summary.actions {
+        assert!(!action.available, "{action:?}");
+        let why = action.unavailable_reason.as_deref().unwrap_or_default();
+        assert!(
+            why.contains(NETWORK) && why.contains("not granted"),
+            "{why}"
+        );
+    }
+    let refused = agent.run_action(weather).await;
+    assert_eq!(refused.status, ActionStatus::Failed, "{refused:?}");
+    assert!(refused.message.contains("not granted"), "{refused:?}");
+    assert_eq!(
+        agent.press(&device, 1).await,
+        ("Greet Ada".to_owned(), ActionStatus::Failed)
+    );
+    assert_eq!(fetched(&env.http).len(), 3, "nothing went out");
+    agent
+        .request(Request::GrantPluginPermissions {
+            plugin: HELLO.into(),
+            permissions: vec![NETWORK.into()],
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        agent.run_action(greet).await.status,
+        ActionStatus::Succeeded
+    );
+
+    // Disabled: unavailable again, and nothing runs.
+    agent
+        .request(Request::DisablePlugin {
+            plugin: HELLO.into(),
+        })
+        .await
+        .unwrap();
+    let refused = agent.run_action(greet).await;
+    assert_eq!(refused.status, ActionStatus::Failed, "{refused:?}");
+    assert!(refused.message.contains("disabled"), "{refused:?}");
+    assert_eq!(
+        agent.press(&device, 0).await,
+        ("Berlin weather".to_owned(), ActionStatus::Failed)
+    );
+
+    // Uninstalled: the instances stay in the profile and are reported as
+    // unavailable.
+    agent
+        .request(Request::UninstallPlugin {
+            plugin: HELLO.into(),
+        })
+        .await
+        .unwrap();
+    let refused = agent.run_action(weather).await;
+    assert_eq!(refused.status, ActionStatus::Failed, "{refused:?}");
+    assert!(refused.message.contains("not available"), "{refused:?}");
+    // A workflow with such a node is refused before it starts.
+    let refused = agent
+        .request(Request::StartWorkflow { workflow: flow })
+        .await;
+    assert!(
+        message_of(&refused).contains("not available"),
+        "{refused:?}"
+    );
+    assert_eq!(fetched(&env.http).len(), 3);
+    agent.stop().await;
+}
+
+/// A host that crashes in the middle of a key's action fails that action,
+/// not the agent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_crash_in_an_engine_action_is_a_failed_action() {
+    use deckpilot_core::ActionStatus;
+    let registry = shared_registry();
+    let mut profile = deckpilot_core::Profile::new("Crashy keys");
+    let panic = plugin_action(&mut profile, "Panic", "acme.sdk-test.panic", &[]);
+    let inits = plugin_action(&mut profile, "Inits", "acme.sdk-test.inits", &[]);
+    bind_keys(&mut profile, &[panic, inits]);
+    let env = Env::with_profile("plugins-e2e-engine-crash", &profile);
+    let agent = Agent::started(&env, registry).await;
+    agent.install(CRASHY, None).await.unwrap();
+    agent.enable(CRASHY, &[NETWORK]).await.unwrap();
+    let first = agent.run_action(inits).await;
+    assert_eq!(first.status, ActionStatus::Succeeded, "{first:?}");
+
+    // The guest panics while the key's action runs: the host traps and
+    // exits, the action fails, the agent goes on.
+    let device = agent.mock_device().await;
+    assert_eq!(
+        agent.press(&device, 0).await,
+        ("Panic".to_owned(), ActionStatus::Failed)
+    );
+    let Response::Status { status } = agent.request(Request::GetStatus).await.unwrap() else {
+        panic!("status")
+    };
+    assert!(status.pid > 0);
+    let crashed = agent.run_action(panic).await;
+    assert_eq!(crashed.status, ActionStatus::Failed, "{crashed:?}");
+    assert_eq!(
+        crashed.code.as_deref(),
+        Some("plugin-host-failed"),
+        "{crashed:?}"
+    );
+    // After the restart backoff a new host serves the next press.
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    assert_eq!(
+        agent.press(&device, 1).await,
+        ("Inits".to_owned(), ActionStatus::Succeeded)
+    );
+    // Two crashes are no crash loop: the plugin stays enabled.
+    assert_eq!(
+        agent.details(CRASHY).await.summary.state,
+        PluginState::Enabled
+    );
+    agent.stop().await;
+}
+
+/// Cancelling a workflow while its plugin node waits (here for a slow
+/// server) aborts the invocation: the node gives up after the 2 s grace
+/// and the run ends as cancelled; the late result is discarded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_plugin_node_is_given_up_after_its_grace() {
+    use deckpilot_core::{ActionStatus, ExecutionState, ParameterValue};
+    let registry = shared_registry();
+    let mut profile = deckpilot_core::Profile::new("Slow weather");
+    let tokyo = plugin_action(
+        &mut profile,
+        "Tokyo weather",
+        WEATHER_TYPE,
+        &[("city", ParameterValue::Choice("tokyo".into()))],
+    );
+    let greet = plugin_action(
+        &mut profile,
+        "Greet Ada",
+        GREET_TYPE,
+        &[("name", ParameterValue::Text("Ada".into()))],
+    );
+    let flow = action_workflow(&mut profile, "Tokyo flow", "temp", tokyo);
+    let env = Env::with_profile("plugins-e2e-engine-cancel", &profile);
+    let agent = Agent::started(&env, registry).await;
+    agent.install(HELLO, Some("1.0.0")).await.unwrap();
+    agent.enable(HELLO, &[NETWORK]).await.unwrap();
+
+    let run = agent.run_workflow(flow).await;
+    // Wait until the request is out (the canned server holds it).
+    let deadline = Instant::now() + STARTUP;
+    while !fetched(&env.http)
+        .iter()
+        .any(|u| u.contains("latitude=35.68"))
+    {
+        assert!(Instant::now() < deadline, "the request did not go out");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let cancelled_at = Instant::now();
+    agent
+        .request(Request::CancelExecution { execution: run })
+        .await
+        .unwrap();
+    let record = agent.finished(run).await;
+    let took = cancelled_at.elapsed();
+    assert_eq!(
+        record.summary.state,
+        ExecutionState::Cancelled,
+        "{record:#?}"
+    );
+    // Given up after the grace, well before the server answered (and
+    // before the engine's own 10 s limit for actions that do not stop).
+    assert!(
+        took < Duration::from_millis(SLOW_MS - 1_000),
+        "the cancel took {took:?}"
+    );
+    // The plugin is fine: the next action runs once the slow one is over.
+    let after = agent.run_action(greet).await;
+    assert_eq!(after.status, ActionStatus::Succeeded, "{after:?}");
     assert_eq!(
         agent.details(HELLO).await.summary.state,
         PluginState::Enabled

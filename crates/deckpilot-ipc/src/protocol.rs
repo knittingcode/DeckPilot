@@ -802,6 +802,9 @@ impl Response {
     /// variable registry (before protocol 9).
     #[must_use]
     pub fn for_protocol(mut self, protocol: u32) -> Self {
+        if protocol < 10 {
+            self = self.without_plugins();
+        }
         if protocol < 9 {
             self = self.without_registry();
         }
@@ -825,6 +828,32 @@ impl Response {
             _ => {}
         }
         self
+    }
+
+    /// Nothing a client before protocol 10 cannot explain: catalog entries
+    /// owned by a plugin module (`<publisher>.<name>`) are removed, so an
+    /// older app never offers what belongs to a plugin (design §2.3 item
+    /// 7). Plugin answers never reach such a client: their requests have
+    /// `since_protocol` 10. Instances already in profiles are untouched and
+    /// show as unavailable there.
+    fn without_plugins(self) -> Self {
+        let plugin_owned = |entry: &CatalogEntry| {
+            entry
+                .module
+                .as_ref()
+                .is_some_and(deckpilot_core::ModuleId::is_plugin)
+                || entry
+                    .owner
+                    .as_ref()
+                    .and_then(deckpilot_core::variables::VariableOwner::module)
+                    .is_some_and(deckpilot_core::ModuleId::is_plugin)
+        };
+        match self {
+            Self::Variables { entries } => Self::Variables {
+                entries: entries.into_iter().filter(|e| !plugin_owned(e)).collect(),
+            },
+            other => other,
+        }
     }
 
     /// Catalogs without module roots and registry metadata, previews with
@@ -1375,6 +1404,51 @@ mod tests {
             serde_json::to_value(Capability::WorkSession).unwrap(),
             "workSession"
         );
+    }
+
+    #[test]
+    fn clients_before_protocol_10_see_nothing_of_plugins() {
+        use deckpilot_core::variables::{
+            CatalogEntry, ReferenceAvailability, VariableGroup, VariableOwner, VariableRef,
+            VariableType,
+        };
+        let entry = |module: &str| {
+            let module = deckpilot_core::ModuleId::new(module).unwrap();
+            CatalogEntry {
+                reference: VariableRef::parse("projects.current.key").unwrap(),
+                label: "A value".into(),
+                description: String::new(),
+                group: VariableGroup::Module,
+                value_type: VariableType::String,
+                scope: None,
+                module: Some(module.clone()),
+                sensitive: false,
+                dynamic: false,
+                availability: ReferenceAvailability::Available,
+                owner: Some(VariableOwner::Module { module }),
+                read_only: true,
+                deprecated: None,
+                declared_scope: None,
+            }
+        };
+        let builtin = entry("projects");
+        let plugin = entry("acme.hello-weather");
+        let owned_only = CatalogEntry {
+            module: None,
+            ..plugin.clone()
+        };
+        let response = Response::Variables {
+            entries: vec![builtin.clone(), plugin, owned_only],
+        };
+        assert_eq!(response.clone().for_protocol(10), response);
+        assert_eq!(
+            response.for_protocol(9),
+            Response::Variables {
+                entries: vec![builtin]
+            }
+        );
+        // Answers without plugin data pass unchanged.
+        assert_eq!(Response::Ok.for_protocol(9), Response::Ok);
     }
 
     #[test]

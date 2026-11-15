@@ -89,6 +89,8 @@ pub mod reason {
     pub const HOST_FAILED: &str = "hostFailed";
     /// The installed files no longer match their record.
     pub const BROKEN: &str = "broken";
+    /// Too many invocations of the plugin are already waiting for its host.
+    pub const BUSY: &str = "busy";
 }
 
 /// Whether plugins can be used, and why not.

@@ -52,6 +52,11 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_BRIGHTNESS: u8 = 60;
 /// How long stopping waits for the IPC server to close its connections.
 const SERVER_STOP: Duration = Duration::from_secs(2);
+/// Detached actions (plugin actions from keys and `runAction`) that may run
+/// at the same time; more are refused at once. Each plugin also queues at
+/// most a few invocations for its host.
+const MAX_DETACHED: usize = 16;
+
 /// Rendered key images kept for reuse (about 15 KB each at 72 x 72).
 const FRAME_CACHE: usize = 256;
 
@@ -144,6 +149,17 @@ pub(crate) enum Command {
     Execution(executions::ExecutionUpdate),
     /// A module's answer for a key's live state.
     ButtonState(states::StateUpdate),
+    /// The installed plugins or their availability changed: their modules
+    /// are registered again.
+    PluginsChanged,
+    /// A detached action (a plugin's, from a key or `runAction`) finished
+    /// on its own thread.
+    DetachedFinished {
+        action: ActionInstanceId,
+        name: String,
+        result: Result<ActionResult, deckpilot_core::EngineError>,
+        reply: Option<oneshot::Sender<Result<Response, IpcError>>>,
+    },
     /// A work session operation from a test (the keys call the service
     /// directly). `press: None` is a press now, in the current state.
     #[cfg(feature = "test-hooks")]
@@ -354,6 +370,9 @@ pub struct Agent {
     /// Plugins (experimental; answered only with the `plugins` feature
     /// and `--enable-plugins`).
     plugins: crate::plugins::PluginRuntime,
+    /// Detached actions (plugin actions from keys and `runAction`) running
+    /// on their own threads.
+    detached: Arc<AtomicUsize>,
     handle: AgentHandle,
     commands: mpsc::UnboundedReceiver<Command>,
     signals_tx: mpsc::UnboundedSender<DeviceSignal>,
@@ -468,6 +487,7 @@ impl Agent {
             work,
             session_faces: work_session_faces::WorkSessionFaces::default(),
             plugins: crate::plugins::PluginRuntime::default(),
+            detached: Arc::default(),
             handle,
             commands,
             signals_tx,
@@ -487,11 +507,15 @@ impl Agent {
     #[must_use]
     pub fn with_plugins(mut self, settings: crate::plugins::PluginSettings) -> Self {
         self.plugins.stop();
+        let commands = self.handle.commands.clone();
         self.plugins = crate::plugins::PluginRuntime::new(
             settings,
             &self.options.paths.data_dir,
             &self.handle.events,
             &self.handle.plugin_events,
+            Arc::new(move || {
+                let _ = commands.send(Command::PluginsChanged);
+            }),
         );
         if let Some(key) = &self.key {
             self.plugins.opened(key);
@@ -634,6 +658,28 @@ impl Agent {
             }
             Command::ButtonState(update) => {
                 self.handle_button_state(update);
+                Flow::Continue
+            }
+            Command::PluginsChanged => {
+                self.plugins_changed();
+                Flow::Continue
+            }
+            Command::DetachedFinished {
+                action,
+                name,
+                result,
+                reply,
+            } => {
+                self.detached_finished(action, &name, result, reply);
+                Flow::Continue
+            }
+            Command::Request {
+                request: Request::RunAction { action },
+                reply,
+            } if self.security == SecurityState::Unlocked && self.runtime.runs_detached(action) => {
+                // Answered when the action finished on its own thread.
+                self.last_activity = self.now_seconds();
+                self.run_detached(action, None, None, Some(reply));
                 Flow::Continue
             }
             #[cfg(feature = "test-hooks")]
@@ -1105,6 +1151,7 @@ impl Agent {
         // Module states may have changed in the configuration app.
         let before = self.modules.variables().clone();
         self.modules = load_modules(store)?;
+        register_plugin_modules(&mut self.modules, &self.plugins);
         self.update_variable_permissions();
         self.publish_module_variables(&before);
         self.reload_variables()?;
@@ -1190,6 +1237,106 @@ impl Agent {
             self.render(&device, false);
         }
         self.refresh_states();
+    }
+
+    /// The installed plugins changed: the configuration is reloaded so the
+    /// engine registers, drops or re-describes their action types.
+    fn plugins_changed(&mut self) {
+        if self.store.is_none() {
+            return;
+        }
+        if let Err(error) = self.reload_configuration() {
+            warn!(%error, "the configuration could not be reloaded after a plugin change");
+        }
+    }
+
+    /// Runs a detached action (a plugin's) on a thread of its own and
+    /// reports it when it finished: never on the service task, which keeps
+    /// serving devices and IPC meanwhile.
+    fn run_detached(
+        &mut self,
+        action: ActionInstanceId,
+        overrides: Option<deckpilot_core::ActionParameters>,
+        device: Option<DeviceId>,
+        reply: Option<oneshot::Sender<Result<Response, IpcError>>>,
+    ) {
+        let run = match self.runtime.detached_action(action, overrides, device) {
+            Ok(run) => run,
+            Err(error) => {
+                warn!(%error, "the action could not start");
+                if let Some(reply) = reply {
+                    let _ = reply.send(Err(engine_error(&error)));
+                }
+                return;
+            }
+        };
+        let name = run.name();
+        let running = self.detached.clone();
+        if running.fetch_add(1, Ordering::SeqCst) >= MAX_DETACHED {
+            running.fetch_sub(1, Ordering::SeqCst);
+            let result = Ok(ActionResult::error(
+                "busy",
+                format!("{MAX_DETACHED} actions of plugins are already running; try again later"),
+            ));
+            self.detached_finished(action, &name, result, reply);
+            return;
+        }
+        let commands = self.handle.commands.clone();
+        let spawned = std::thread::Builder::new()
+            .name("detached action".into())
+            .spawn({
+                let running = running.clone();
+                let name = name.clone();
+                move || {
+                    let result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.run()))
+                            .unwrap_or_else(|_| {
+                                Ok(ActionResult::error(
+                                    "plugin-host-failed",
+                                    "the action failed inside DeckPilot",
+                                ))
+                            });
+                    running.fetch_sub(1, Ordering::SeqCst);
+                    let _ = commands.send(Command::DetachedFinished {
+                        action,
+                        name,
+                        result,
+                        reply,
+                    });
+                }
+            });
+        if let Err(error) = spawned {
+            running.fetch_sub(1, Ordering::SeqCst);
+            warn!(%error, "no thread for the action");
+        }
+    }
+
+    fn detached_finished(
+        &mut self,
+        action: ActionInstanceId,
+        name: &str,
+        result: Result<ActionResult, EngineError>,
+        reply: Option<oneshot::Sender<Result<Response, IpcError>>>,
+    ) {
+        let answer = match result {
+            Ok(result) => {
+                info!(action = %name, status = ?result.status, "action executed");
+                let _ = self.handle.events.send(AgentEvent::ActionCompleted {
+                    action,
+                    name: name.to_owned(),
+                    status: result.status,
+                });
+                Ok(Response::ActionResult { result })
+            }
+            Err(error) => {
+                warn!(%error, "the action could not run");
+                Err(engine_error(&error))
+            }
+        };
+        if let Some(reply) = reply {
+            let _ = reply.send(answer);
+        }
+        self.after_change();
     }
 
     fn report_action(&self, action: ActionInstanceId, result: &ActionResult) {
@@ -1486,6 +1633,18 @@ fn load_modules(store: &SqliteStore) -> Result<ModuleRegistry, StorageError> {
         warn!(%problem, "stored module state was not applied");
     }
     Ok(modules)
+}
+
+/// Registers one module per installed plugin, after the built-in ones (a
+/// plugin id has a `.`, so it never collides with a built-in id). Their
+/// state comes from the plugin store, never from the `modules` table.
+fn register_plugin_modules(modules: &mut ModuleRegistry, plugins: &crate::plugins::PluginRuntime) {
+    for module in plugins.modules() {
+        let id = module.manifest().id.clone();
+        if let Err(error) = modules.register(module) {
+            warn!(plugin = %id, %error, "a plugin's actions cannot be registered");
+        }
+    }
 }
 
 fn load_active(

@@ -304,6 +304,9 @@ pub(super) mod test_transport {
         headers: Vec<(String, String)>,
         #[serde(default)]
         body: String,
+        /// Answers only after this long (a slow server).
+        #[serde(default, rename = "delayMs")]
+        delay_ms: u64,
     }
 
     #[derive(Debug)]
@@ -338,6 +341,7 @@ pub(super) mod test_transport {
                 .iter()
                 .find(|r| url.starts_with(&r.url))
                 .ok_or_else(|| format!("no canned response for {url}"))?;
+            std::thread::sleep(std::time::Duration::from_millis(route.delay_ms));
             Ok(Exchange {
                 status: route.status,
                 headers: route.headers.clone(),
