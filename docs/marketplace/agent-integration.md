@@ -81,8 +81,8 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
   15 s, 512 KiB, redirects never followed by the client: each one goes back
   to `Session::authorize_redirect`. Response headers are filtered to a safe
   list. `notify` becomes an agent notification titled with the plugin's
-  name; `log` goes to the agent log. Storage and credential injection are
-  refused (`unavailable`): neither exists in the agent yet.
+  name; `log` goes to the agent log. Storage, credential injection and
+  settings: see [Plugin data](#plugin-data-storage-credentials-settings).
 - **Platform gate.** Enabling and invoking are refused on platforms
   without a host sandbox (`platformUnsupported`): only macOS, Linux and
   Windows may run plugins; elsewhere installing and inspecting work.
@@ -206,9 +206,15 @@ older clients ignore.
 | `approvePluginUpdate` | `plugin`, `consent: [key]` (every escalated key) | `pluginUpdate` |
 | `declinePluginUpdate` | `plugin` | `plugin` |
 | `rollbackPlugin` | `plugin` | `plugin` |
-| `uninstallPlugin` | `plugin` | `ok` |
-| `invokePluginAction` | `plugin`, `action`, `params: {name: bool \| number \| text \| list}` | `pluginActionResult { outcome: {status: "ok", message?, data} \| {status: "skipped"} \| {status: "failed", code, message?, retryable} }` |
+| `uninstallPlugin` | `plugin`, `keep?: {settings?, credentials?}` | `ok` (see [retention](#uninstall-retention)) |
+| `invokePluginAction` | `plugin`, `action`, `params: {name: bool \| number \| text \| list}` | `pluginActionResult { outcome: {status: "ok", message?, data} \| {status: "skipped"} \| {status: "failed", code, message?, retryable} }` (parameters that do not match the manifest: `failed`, `invalid-parameters`, before the host runs) |
 | `subscribePluginEvents` | — | `ok`; then `pluginEvent` messages on this connection |
+| `listKnownPlugins` | — | `knownPlugins { plugins: [{id, name, publisher, namespace, lastVersion, installed, firstSeenAt, lastSeenAt}] }` |
+| `getPluginSettings` | `plugin` | `pluginSettings { settings: {plugin, fields, values, effective, missing?} }` |
+| `setPluginSettings` | `plugin`, `values: {key: value \| null}` (merged; `null` resets to the default) | `pluginSettings` (refused with `invalidData` unless every value fits its field) |
+| `listPluginCredentials` | `plugin` | `pluginCredentials { plugin, credentials: [{key, label, description?, hosts, schemes, setupUrl?, set, updatedAt?, granted}] }` |
+| `setPluginCredential` | `plugin`, `key`, `secret` (1 B to 16 KiB, no line break or NUL) | `pluginCredentials` (never the secret) |
+| `deletePluginCredential` | `plugin`, `key` | `pluginCredentials` |
 
 Permission keys are grant keys: `network:<host>`, `notifications`,
 `credentials:<ref>`, `variables:<entry>`, `storage`, `profile`,
@@ -233,7 +239,84 @@ Reasons: `pluginsUnavailable`, `platformUnsupported`, `locked`,
 `storeUnavailable`, `notInstalled`, `alreadyInstalled`, `unknownPlugin`,
 `consentRequired`, `unknownPermission`, `registryUnavailable`, `revoked`,
 `incompatible`, `invalidPackage`, `unsupportedRuntime`, `invalidState`,
-`notEnabled`, `hostFailed`, `broken`.
+`notEnabled`, `hostFailed`, `broken`, `invalidData`.
+
+The app reaches the data requests through the Tauri commands
+`list_known_plugins`, `get_plugin_settings`, `set_plugin_settings`,
+`list_plugin_credentials`, `set_plugin_credential`,
+`delete_plugin_credential` and `uninstall_plugin` (with `keep`), and the
+functions of the same names in `apps/desktop/src/plugins/client.ts`. No UI
+uses them yet.
+
+## Plugin data: storage, credentials, settings
+
+All of it lives in plugins.db (schema 2), keyed by plugin id. The id is
+always the agent's (the plugin whose host the supervisor spawned, through
+the broker session); no capability request names a plugin, so a plugin
+cannot reach another's rows. The executor reads and writes through a
+second connection (`PluginData`), closed when the configuration locks.
+
+| | Storage | Credentials | Settings |
+| --- | --- | --- | --- |
+| Table | `plugin_storage` (deleted with the plugin, foreign key) | `plugin_credentials(plugin_id, key, secret, updated_at)` | `plugin_settings(plugin_id, values_json)` |
+| Declared in the manifest | nothing (always on, design §5.2); `storage` permission (`quotaKb` 257-10,240) for more | `contributes.credentials[]` slot + `credentials` permission `refs` | `contributes.settings.fields` |
+| Guest ABI | `storage.get`, `storage.set`, `storage.delete`, `storage.keys`, `storage.usage` | `http.fetch` with `auth: {credential, scheme}`, `credentials.has` (true or false) | `settings.get` (object, defaults filled) |
+| Set by the user | — | `setPluginCredential` | `setPluginSettings` |
+| Limits | 256 KiB and 1,000 keys by default; key 1-128 characters, no control characters; value ≤ 64 KiB of JSON; bytes = key + JSON value, UTF-8 | ≤ 16 KiB, only declared slots | only declared keys; types, ranges, choices and lengths as for action parameters |
+| Revocation | revoking `storage` returns the quota to 256 KiB on the next write (reading and shrinking still work); disable or uninstall denies everything | revoking `credentials:<key>` denies the next `http.fetch` with that slot and `credentials.has` | no permission; disable or uninstall denies `settings.get` |
+
+- **Quota.** The broker puts the quota into every `storage.set` decision
+  (`Allowed::StorageSet { quota }`), read from the current grants, and the
+  executor checks it in the write transaction: a write that would grow
+  the storage past the quota or add a key past 1,000 fails with
+  `failed` and a message starting `storage-quota` (the design's error
+  name); a write that does not grow it is allowed even above the quota.
+- **Credentials are handles** (design §5.5). The guest names a slot; the
+  broker allows the slot only for its own hosts (exact `https` origins,
+  each also a network grant), its declared schemes, and never across a
+  redirect to another origin. The executor then reads the secret and hands
+  it to the HTTP module's client as `Auth::{Bearer, Basic, Header, Query}`
+  (header and query names from the slot's `headerName` / `queryName`),
+  for that request only; the client sends credentials over https only. No
+  secret stored: `unavailable`, "no secret is stored". Every form of the
+  secret (as is, form-encoded, base64) is replaced by `[redacted]` in the
+  response headers and body and in error messages before anything reaches
+  the guest. The secret is never logged (the IPC request's `Debug` shows
+  `PluginSecret(<redacted>)`, the audit records `credentials:<key>`), never
+  exported, and plugins never see SQLCipher keys or keychain items (there
+  is no capability for them).
+- **Settings** are stored as the user saved them (never the defaults, so
+  a default changed by an update applies). `settings.get` and
+  `getPluginSettings.effective` give each saved value that still fits its
+  field, otherwise the default; a required setting with neither is listed
+  in `missing` and absent for the plugin (actions still run). Fields map to
+  the core's `ParameterSpec` like action parameters, so validation is the
+  core's `ActionType::normalize`.
+- **Parameters.** Every invocation (`invokePluginAction`, keys,
+  `runAction`, workflow nodes) is checked against the action's manifest
+  schema in the agent before it reaches the lane: unknown parameters,
+  wrong types, values out of range, choices not offered, too long texts and
+  missing required parameters fail with `invalid-parameters` and a message
+  that lists every problem and names the action type; defaults are filled
+  in. The manifest's camel-case kind constraints (`maxLength`, `maxItems`,
+  …) are renamed to the core's snake case first (they were silently
+  dropped before), and a constraint the core does not know refuses the
+  action.
+- **`plugin_known`** (design §2.3 item 4): every version written (install,
+  update, staged update) records id, namespace, publisher, name, version
+  and the actions; the table only grows. After an uninstall the agent
+  registers a disabled module from it, so instances of its actions fail
+  with `Hello Weather (acme.hello-weather): the plugin is not installed`.
+
+### Uninstall retention
+
+Default (design §5.6): uninstall deletes the plugin's files, records,
+grants, **storage, settings and credentials**; its audit and its
+`plugin_known` row stay. `keep: {settings: true}` and/or
+`keep: {credentials: true}` keep those for a later install of the same
+plugin id (storage is never kept). The choice is journaled with the
+uninstall, so recovery after a crash honours it. The design's "after
+asking" for credentials is the app's job (the default is to delete).
 
 ## Running it
 
@@ -270,9 +353,20 @@ node (results, outputs and the canned request checked), unavailable again
 after a revoke, a disable and an uninstall; a guest panic during a key's
 action (a failed action, the agent unaffected); and a workflow cancelled
 while its plugin node waits for a slow server (given up after the 2 s
-grace). HTTP goes to canned responses (`DECKPILOT_TEST_PLUGIN_HTTP`, only
-with `test-hooks`, never in a release; a route may answer late with
-`delayMs`).
+grace). Plugin data (`plugin_data_is_isolated_bounded_revocable_and_secret`,
+the SDK test guest as two plugins, one with a 512 KiB storage grant):
+storage isolation between them, the default and the granted quota, a
+revoked `storage` grant on the very next write, credential slots without
+and with a secret (one per plugin), injection as bearer, header and query
+only to the slot's host (checked on the wire), refusals for another host,
+an undeclared scheme or slot and a redirect off the origin, the echoed
+secret redacted before the guest sees it, a revoked slot on the very next
+call, settings with defaults and validation, uninstall with and without
+`keep`, `plugin_known` after it, and no secret in the agent's log or as
+clear text in any file of `plugins/`. HTTP goes to canned responses
+(`DECKPILOT_TEST_PLUGIN_HTTP`, only with `test-hooks`, never in a release;
+a route may answer late with `delayMs`; the log records what would go on
+the wire, injected credentials included).
 `.github/workflows/plugins-agent.yml` runs all of it on Linux, macOS and
 Windows (not a required check).
 
@@ -280,15 +374,31 @@ Windows (not a required check).
 
 - No network fetching of the registry; the registry trust state lives in a
   file, not in the encrypted database.
-- No plugin storage, credential slots, variables (design §2.3 item 3),
-  settings or background work; their capabilities are refused.
+- No variables (design §2.3 item 3) or background work; their
+  capabilities are refused.
+- Plugin settings live in plugins.db, not in the configuration database's
+  `modules` table as the design has it (§12.4), so they are not exported
+  with the configuration (design §2.3 item 9, by portability); a
+  `settingsChanged` notification to a running plugin (design §3.8) does
+  not exist (the plugin reads `settings.get` when it runs). No settings
+  of kind `project` are offered by any UI.
+- No secret-typed settings: secrets are credential slots
+  (`contributes.credentials`), set with `setPluginCredential`. Request
+  signing, OAuth and other uses beyond injection (design U-3) do not
+  exist.
+- `privateNetwork` and wildcard hosts are still never granted, so a
+  credential slot can only name exact hosts.
+- No UI for settings, credentials, retention or known plugins; no storage
+  usage in `PluginDetails`.
+- The JavaScript SDK skeleton (`plugins/sdk-js`, declarations only, no
+  runtime) still declares the design's synchronous `ctx.settings`; the
+  ABI delivers settings through `settings.get`, which a JavaScript shim
+  would call at the start of an invocation.
 - The layout editor's gesture editor and the step-workflow editor use the
   backend's action type list as before; plugin types appear there only
   after the app has read the installed plugins (see
   [the editors](#plugin-actions-in-the-configuration-app)).
 - An abort does not interrupt a capability call that is already running.
-- `plugin_known` (design §2.3 item 4) does not exist: an uninstalled
-  plugin's actions are reported as "not available" without its name.
 - A password change made by the app while the agent is locked makes
   plugins.db unreadable (no rekey protocol between app and agent).
 - Windows execution is verified only on GitHub's `windows-latest` runner
