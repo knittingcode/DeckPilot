@@ -7,7 +7,7 @@ use deckpilot_plugin_package::PackageError;
 
 use crate::failpoint::{Failpoint, Operation};
 use crate::grants::GrantKey;
-use crate::state::PluginState;
+use crate::state::{PluginState, TombstoneDecision};
 
 pub type Result<T, E = StoreError> = std::result::Result<T, E>;
 
@@ -41,6 +41,18 @@ pub enum StoreError {
 
     #[error("plugin {0} is not installed")]
     NotInstalled(PluginId),
+    /// A first-party (`deckpilot.*`) id from a source other than the
+    /// application bundle or a registry, or a bundled plugin that is not
+    /// first-party.
+    #[error("plugin {id} cannot be installed from source {origin}")]
+    SourceNotAllowed { id: PluginId, origin: &'static str },
+    /// The user uninstalled or disabled this first-party plugin; only the
+    /// user can undo that (`PluginManager::clear_tombstone`).
+    #[error("plugin {id} was {decision} by the user and stays so until the user changes it")]
+    Tombstoned {
+        id: PluginId,
+        decision: TombstoneDecision,
+    },
     #[error("plugin {id} is already installed (version {version})")]
     AlreadyInstalled { id: PluginId, version: String },
     #[error("plugin {id} cannot go from {from} to {to}")]

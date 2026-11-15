@@ -30,10 +30,10 @@ use crate::grants::{
     Consent, GrantKey, GrantSet, GrantSource, GrantStatus, PermissionDiff, StoredGrant,
 };
 use crate::layout::Layout;
-use crate::state::PluginState;
+use crate::state::{PluginState, TombstoneDecision};
 use crate::store::{
-    self, Audit, AuditRetention, InstallSource, JournalEntry, Payload, PendingVersion,
-    PluginRecord, PluginStore, VersionRecord, VersionRole,
+    self, Audit, AuditRetention, InstallSource, JournalEntry, MigrationStep, ModuleMigration,
+    Payload, PendingVersion, PluginRecord, PluginStore, VersionRecord, VersionRole,
 };
 
 /// Clean-up the store cannot do itself.
@@ -225,6 +225,7 @@ impl PluginManager {
         consent: &Consent,
     ) -> Result<PluginRecord> {
         let id = package.manifest().id.clone();
+        store::check_source(&id, source)?;
         let declared = GrantSet::from_manifest(package.manifest());
         check_consent(&id, &declared, consent)?;
         let pending = pending_version(package)?;
@@ -244,6 +245,7 @@ impl PluginManager {
                         .unwrap_or_default(),
                 });
             }
+            store::ensure_not_tombstoned(tx, &id)?;
             store::insert_plugin(tx, &id, PluginState::Installing, source, ctx.now)?;
             store::insert_journal(tx, &id, &payload, ctx.now)
         })?;
@@ -327,6 +329,7 @@ impl PluginManager {
                 to: PluginState::Enabled,
             });
         }
+        store::ensure_not_tombstoned(self.store.connection(), id)?;
         let active = active_of(&plugin)?;
         let missing = crate::grants::missing_grants(&self.store.grants(id)?, &active.grants());
         if !missing.is_empty() {
@@ -339,15 +342,35 @@ impl PluginManager {
         let version = active.version.to_string();
         self.tx(|tx, ctx| {
             ensure_idle(tx, id)?;
+            store::ensure_not_tombstoned(tx, id)?;
             store::transition(tx, id, plugin.state, PluginState::Enabled, None, ctx.now)?;
             ctx.audit(tx, id, event(Some(&version), "enable", None, "ok", None))
         })
     }
 
-    /// `Enabled → Disabled`.
+    /// `Enabled → Disabled`, for the agent's own reasons (a crash loop, a
+    /// broker failure). Writes no tombstone: a user's choice goes through
+    /// [`disable_by_user`](Self::disable_by_user).
     pub fn disable(&mut self, id: &PluginId) -> Result<()> {
+        self.disable_as(id, false)
+    }
+
+    /// `Enabled → Disabled` because the user asked. A first-party plugin
+    /// also gets a `disabled` tombstone in the same transaction, so seeding
+    /// and migration never enable it again; [`enable`](Self::enable) is
+    /// refused until the user clears it
+    /// ([`clear_tombstone`](Self::clear_tombstone)).
+    pub fn disable_by_user(&mut self, id: &PluginId) -> Result<()> {
+        self.disable_as(id, true)
+    }
+
+    fn disable_as(&mut self, id: &PluginId, by_user: bool) -> Result<()> {
         let plugin = self.plugin(id)?;
-        if plugin.state != PluginState::Enabled {
+        let tombstone = by_user && store::is_first_party(id);
+        // A first-party plugin seeded disabled (waiting for consent) can
+        // still be turned down for good.
+        let already = tombstone && plugin.state == PluginState::Disabled;
+        if plugin.state != PluginState::Enabled && !already {
             return Err(StoreError::IllegalTransition {
                 id: id.clone(),
                 from: plugin.state,
@@ -357,13 +380,59 @@ impl PluginManager {
         let version = plugin.active().map(|v| v.version.to_string());
         self.tx(|tx, ctx| {
             ensure_idle(tx, id)?;
-            store::transition(tx, id, plugin.state, PluginState::Disabled, None, ctx.now)?;
-            ctx.audit(
-                tx,
-                id,
-                event(version.as_deref(), "disable", None, "ok", None),
-            )
+            if !already {
+                store::transition(tx, id, plugin.state, PluginState::Disabled, None, ctx.now)?;
+                ctx.audit(
+                    tx,
+                    id,
+                    event(version.as_deref(), "disable", None, "ok", None),
+                )?;
+            }
+            if tombstone {
+                store::set_tombstone(tx, id, TombstoneDecision::Disabled, ctx.now)?;
+                ctx.audit(
+                    tx,
+                    id,
+                    event(version.as_deref(), "tombstone", None, "disabled", None),
+                )?;
+            }
+            Ok(())
         })
+    }
+
+    // ------------------------------------------------------------- tombstones
+
+    /// The user's undo of an uninstall or disable of a first-party plugin
+    /// (installing or enabling it again in Settings › Plugins): removes its
+    /// tombstone, so [`install`](Self::install) and
+    /// [`enable`](Self::enable) work again. Never called by seeding or
+    /// migration. Returns whether there was one.
+    pub fn clear_tombstone(&mut self, id: &PluginId) -> Result<bool> {
+        self.tx(|tx, ctx| {
+            let removed = store::delete_tombstone(tx, id)?;
+            if removed {
+                ctx.audit(tx, id, event(None, "tombstone", None, "cleared", None))?;
+            }
+            Ok(removed)
+        })
+    }
+
+    // ------------------------------------------------------ module migrations
+
+    /// Records a step of a built-in module's migration to its first-party
+    /// plugin (`module_migrations`), idempotently: recording the phase the
+    /// module is already in, with the same details, changes nothing. A
+    /// `Failed` step counts an attempt
+    /// ([`ModuleMigration::retries_automatically`]); a cut-over resets the
+    /// count.
+    pub fn record_migration(&mut self, step: &MigrationStep) -> Result<ModuleMigration> {
+        self.tx(|tx, ctx| store::record_migration(tx, step, ctx.now))
+    }
+
+    /// The user's Retry of a migration: back to `Pending` with no failed
+    /// attempts. `None` when the module has no record.
+    pub fn retry_migration(&mut self, module_id: &str) -> Result<Option<ModuleMigration>> {
+        self.tx(|tx, ctx| store::retry_migration(tx, module_id, ctx.now))
     }
 
     /// Checks the active version's files against their integrity record;
@@ -499,6 +568,7 @@ impl PluginManager {
         source: &InstallSource,
     ) -> Result<UpdateOutcome> {
         let id = package.manifest().id.clone();
+        store::check_source(&id, source)?;
         let pending = pending_version(package)?;
         self.tx(|tx, ctx| {
             ensure_idle(tx, &id)?;
@@ -764,10 +834,39 @@ impl PluginManager {
     /// (storage is always deleted). The choice is journaled, so recovery
     /// honours it.
     pub fn uninstall_keeping(&mut self, id: &PluginId, keep: Retention) -> Result<()> {
+        self.uninstall_as(id, keep, false)
+    }
+
+    /// [`PluginManager::uninstall_keeping`] because the user asked. A
+    /// first-party plugin also gets an `uninstalled` tombstone, written with
+    /// the start of the uninstall (which then only goes forward), so seeding
+    /// and migration never install it again; [`install`](Self::install) is
+    /// refused until the user clears it
+    /// ([`clear_tombstone`](Self::clear_tombstone)).
+    pub fn uninstall_by_user(&mut self, id: &PluginId, keep: Retention) -> Result<()> {
+        self.uninstall_as(id, keep, true)
+    }
+
+    fn uninstall_as(&mut self, id: &PluginId, keep: Retention, by_user: bool) -> Result<()> {
+        let tombstone = by_user && store::is_first_party(id);
         self.tx(|tx, ctx| {
             ensure_idle(tx, id)?;
             let plugin =
                 store::load_plugin(tx, id)?.ok_or_else(|| StoreError::NotInstalled(id.clone()))?;
+            if tombstone {
+                store::set_tombstone(tx, id, TombstoneDecision::Uninstalled, ctx.now)?;
+                ctx.audit(
+                    tx,
+                    id,
+                    event(
+                        plugin.active().map(|v| v.version.to_string()).as_deref(),
+                        "tombstone",
+                        None,
+                        "uninstalled",
+                        None,
+                    ),
+                )?;
+            }
             store::transition(
                 tx,
                 id,
@@ -1323,4 +1422,495 @@ fn apply_grant_changes(
         )?;
     }
     Ok(())
+}
+
+#[cfg(all(test, feature = "sqlcipher"))]
+mod tests {
+    //! First-party plugins, tombstones and the module migration journal.
+    //! The manifest validator still reserves the `deckpilot` publisher, so
+    //! no package of a first-party id can be built yet; these tests set up
+    //! the plugin rows directly, through the store helpers the lifecycle
+    //! uses.
+
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    use super::*;
+    use crate::state::MigrationPhase;
+    use crate::store::{MAX_MIGRATION_ATTEMPTS, Tombstone};
+
+    const NOTIFICATIONS: &str = "deckpilot.notifications";
+
+    fn id(text: &str) -> PluginId {
+        PluginId::parse(text).unwrap()
+    }
+
+    fn registry() -> InstallSource {
+        InstallSource::Registry {
+            registry: "https://registry.example".into(),
+        }
+    }
+
+    struct Env {
+        dir: tempfile::TempDir,
+        now: Arc<AtomicI64>,
+    }
+
+    impl Env {
+        fn new() -> Self {
+            Self {
+                dir: tempfile::tempdir().unwrap(),
+                now: Arc::new(AtomicI64::new(1_000)),
+            }
+        }
+
+        /// A manager whose clock advances one second per reading.
+        fn open(&self) -> PluginManager {
+            let now = self.now.clone();
+            PluginManager::open(
+                self.dir.path(),
+                &StoreKey::from_bytes([0x33; 32]),
+                ManagerOptions {
+                    clock: Arc::new(move || now.fetch_add(1, Ordering::SeqCst)),
+                    ..ManagerOptions::default()
+                },
+            )
+            .unwrap()
+        }
+    }
+
+    fn insert(
+        manager: &mut PluginManager,
+        plugin: &str,
+        state: PluginState,
+        source: &InstallSource,
+    ) -> Result<()> {
+        let plugin = id(plugin);
+        manager.tx(|tx, ctx| store::insert_plugin(tx, &plugin, state, source, ctx.now))
+    }
+
+    fn state(manager: &PluginManager, plugin: &str) -> PluginState {
+        manager.store().plugin(&id(plugin)).unwrap().unwrap().state
+    }
+
+    // ------------------------------------------------------- install source
+
+    #[test]
+    fn first_party_ids_come_only_from_the_bundle_or_a_registry() {
+        let env = Env::new();
+        let mut manager = env.open();
+        for source in [InstallSource::Sideload, InstallSource::Dev] {
+            let result = insert(
+                &mut manager,
+                "deckpilot.github",
+                PluginState::Disabled,
+                &source,
+            );
+            assert!(
+                matches!(
+                    &result,
+                    Err(StoreError::SourceNotAllowed { id, origin })
+                        if id.as_str() == "deckpilot.github" && *origin == source.as_str()
+                ),
+                "{result:?}"
+            );
+        }
+        let result = insert(
+            &mut manager,
+            "acme.github",
+            PluginState::Disabled,
+            &InstallSource::Bundled,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(StoreError::SourceNotAllowed {
+                    origin: "bundled",
+                    ..
+                })
+            ),
+            "{result:?}"
+        );
+        assert_eq!(manager.store().plugins().unwrap(), Vec::new());
+
+        insert(
+            &mut manager,
+            NOTIFICATIONS,
+            PluginState::Disabled,
+            &InstallSource::Bundled,
+        )
+        .unwrap();
+        insert(
+            &mut manager,
+            "deckpilot.github",
+            PluginState::Disabled,
+            &registry(),
+        )
+        .unwrap();
+        insert(
+            &mut manager,
+            "acme.tool",
+            PluginState::Disabled,
+            &InstallSource::Dev,
+        )
+        .unwrap();
+        let record = manager.store().plugin(&id(NOTIFICATIONS)).unwrap().unwrap();
+        assert_eq!(record.source, InstallSource::Bundled);
+
+        // An update cannot move a first-party plugin to another source.
+        let notifications = id(NOTIFICATIONS);
+        let result =
+            manager.tx(|tx, _| store::set_source(tx, &notifications, &InstallSource::Sideload));
+        assert!(matches!(result, Err(StoreError::SourceNotAllowed { .. })));
+        manager
+            .tx(|tx, _| store::set_source(tx, &notifications, &registry()))
+            .unwrap();
+        let tool = id("acme.tool");
+        let result = manager.tx(|tx, _| store::set_source(tx, &tool, &InstallSource::Bundled));
+        assert!(matches!(result, Err(StoreError::SourceNotAllowed { .. })));
+    }
+
+    #[test]
+    fn install_source_rules() {
+        let first_party = id("deckpilot.github");
+        let third_party = id("acme.github");
+        assert!(store::is_first_party(&first_party));
+        assert!(!store::is_first_party(&third_party));
+        assert!(!store::is_first_party(&id("deckpilots.github")));
+        for (source, first, third) in [
+            (registry(), true, true),
+            (InstallSource::Bundled, true, false),
+            (InstallSource::Sideload, false, true),
+            (InstallSource::Dev, false, true),
+        ] {
+            assert_eq!(source.allows(&first_party), first, "{source:?}");
+            assert_eq!(source.allows(&third_party), third, "{source:?}");
+        }
+    }
+
+    // ----------------------------------------------------------- tombstones
+
+    #[test]
+    fn a_user_disable_of_a_first_party_plugin_sticks() {
+        let env = Env::new();
+        let notifications = id(NOTIFICATIONS);
+        {
+            let mut manager = env.open();
+            insert(
+                &mut manager,
+                NOTIFICATIONS,
+                PluginState::Enabled,
+                &InstallSource::Bundled,
+            )
+            .unwrap();
+            manager.disable_by_user(&notifications).unwrap();
+            assert_eq!(state(&manager, NOTIFICATIONS), PluginState::Disabled);
+        }
+        // Persisted: a later start still sees it and cannot enable it.
+        let mut manager = env.open();
+        let tombstone = manager.store().tombstone(&notifications).unwrap().unwrap();
+        assert_eq!(tombstone.decision, TombstoneDecision::Disabled);
+        let result = manager.enable(&notifications);
+        assert!(
+            matches!(
+                result,
+                Err(StoreError::Tombstoned {
+                    decision: TombstoneDecision::Disabled,
+                    ..
+                })
+            ),
+            "{result:?}"
+        );
+        assert_eq!(state(&manager, NOTIFICATIONS), PluginState::Disabled);
+        let ops: Vec<_> = manager
+            .store()
+            .audit(&notifications)
+            .unwrap()
+            .into_iter()
+            .map(|a| (a.op, a.decision))
+            .collect();
+        assert!(ops.contains(&("tombstone".into(), "disabled".into())));
+
+        // Only the user's explicit undo clears it; enabling then gets past
+        // the tombstone (and fails here only because the row has no files).
+        assert!(manager.clear_tombstone(&notifications).unwrap());
+        assert!(!manager.clear_tombstone(&notifications).unwrap());
+        assert!(manager.store().tombstone(&notifications).unwrap().is_none());
+        assert!(!matches!(
+            manager.enable(&notifications),
+            Err(StoreError::Tombstoned { .. })
+        ));
+    }
+
+    #[test]
+    fn a_user_can_turn_down_a_first_party_plugin_seeded_disabled() {
+        let env = Env::new();
+        let mut manager = env.open();
+        insert(
+            &mut manager,
+            NOTIFICATIONS,
+            PluginState::Disabled,
+            &InstallSource::Bundled,
+        )
+        .unwrap();
+        manager.disable_by_user(&id(NOTIFICATIONS)).unwrap();
+        assert_eq!(
+            manager
+                .store()
+                .tombstone(&id(NOTIFICATIONS))
+                .unwrap()
+                .map(|t| t.decision),
+            Some(TombstoneDecision::Disabled)
+        );
+        // A third-party plugin has no tombstone and keeps the old rule.
+        insert(
+            &mut manager,
+            "acme.tool",
+            PluginState::Disabled,
+            &registry(),
+        )
+        .unwrap();
+        assert!(matches!(
+            manager.disable_by_user(&id("acme.tool")),
+            Err(StoreError::IllegalTransition { .. })
+        ));
+    }
+
+    #[test]
+    fn the_agents_own_disable_writes_no_tombstone() {
+        let env = Env::new();
+        let mut manager = env.open();
+        insert(
+            &mut manager,
+            NOTIFICATIONS,
+            PluginState::Enabled,
+            &InstallSource::Bundled,
+        )
+        .unwrap();
+        manager.disable(&id(NOTIFICATIONS)).unwrap();
+        assert_eq!(manager.store().tombstones().unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn a_user_uninstall_of_a_first_party_plugin_is_never_undone_automatically() {
+        let env = Env::new();
+        let notifications = id(NOTIFICATIONS);
+        {
+            let mut manager = env.open();
+            insert(
+                &mut manager,
+                NOTIFICATIONS,
+                PluginState::Enabled,
+                &InstallSource::Bundled,
+            )
+            .unwrap();
+            manager.disable_by_user(&notifications).unwrap();
+            insert(&mut manager, "acme.tool", PluginState::Enabled, &registry()).unwrap();
+            manager
+                .uninstall_by_user(&notifications, Retention::default())
+                .unwrap();
+            manager
+                .uninstall_by_user(&id("acme.tool"), Retention::default())
+                .unwrap();
+            assert_eq!(manager.store().plugins().unwrap(), Vec::new());
+        }
+        let manager = env.open();
+        // The uninstall replaced the disable; the third-party plugin left
+        // nothing behind.
+        let tombstones = manager.store().tombstones().unwrap();
+        assert_eq!(tombstones.len(), 1);
+        let Tombstone {
+            plugin_id,
+            decision,
+            ..
+        } = &tombstones[0];
+        assert_eq!(plugin_id, &notifications);
+        assert_eq!(*decision, TombstoneDecision::Uninstalled);
+        // What `install` checks before it writes anything.
+        let result = store::ensure_not_tombstoned(manager.store().connection(), &notifications);
+        assert!(
+            matches!(
+                result,
+                Err(StoreError::Tombstoned {
+                    decision: TombstoneDecision::Uninstalled,
+                    ..
+                })
+            ),
+            "{result:?}"
+        );
+        assert!(
+            store::ensure_not_tombstoned(manager.store().connection(), &id("acme.tool")).is_ok()
+        );
+    }
+
+    #[test]
+    fn only_first_party_plugins_have_tombstones() {
+        let env = Env::new();
+        let mut manager = env.open();
+        let tool = id("acme.tool");
+        let result = manager
+            .tx(|tx, ctx| store::set_tombstone(tx, &tool, TombstoneDecision::Disabled, ctx.now));
+        assert!(matches!(result, Err(StoreError::InvalidData(_))));
+    }
+
+    // ----------------------------------------------------- module migrations
+
+    fn step(phase: MigrationPhase) -> MigrationStep {
+        MigrationStep {
+            module_id: "github".into(),
+            plugin_id: id("deckpilot.github"),
+            phase,
+            reason: None,
+            source_digest: None,
+            app_version: "0.9.0".into(),
+        }
+    }
+
+    const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn recording_a_migration_step_is_idempotent() {
+        let env = Env::new();
+        let mut manager = env.open();
+        let first = manager
+            .record_migration(&step(MigrationPhase::Pending))
+            .unwrap();
+        assert_eq!(first.attempts, 0);
+        let again = manager
+            .record_migration(&step(MigrationPhase::Pending))
+            .unwrap();
+        assert_eq!(again, first, "a rerun changed the record");
+
+        let installed = manager
+            .record_migration(&step(MigrationPhase::Installed))
+            .unwrap();
+        assert!(installed.updated_at > first.updated_at);
+        let copied = manager
+            .record_migration(&MigrationStep {
+                source_digest: Some(DIGEST.into()),
+                ..step(MigrationPhase::SettingsCopied)
+            })
+            .unwrap();
+        assert_eq!(copied.source_digest.as_deref(), Some(DIGEST));
+        // Later steps keep the digest without restating it.
+        let cut = manager
+            .record_migration(&step(MigrationPhase::CutOver))
+            .unwrap();
+        assert_eq!(cut.source_digest.as_deref(), Some(DIGEST));
+        assert!(cut.phase.is_cut_over());
+        assert_eq!(
+            manager
+                .record_migration(&step(MigrationPhase::CutOver))
+                .unwrap(),
+            cut
+        );
+        assert_eq!(
+            manager.store().module_migration("github").unwrap(),
+            Some(cut)
+        );
+        assert_eq!(manager.store().module_migrations().unwrap().len(), 1);
+        assert!(
+            manager
+                .store()
+                .module_migration("gitlab")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn failures_count_attempts_until_the_user_retries() {
+        let env = Env::new();
+        {
+            let mut manager = env.open();
+            manager
+                .record_migration(&step(MigrationPhase::Installed))
+                .unwrap();
+            for attempt in 1..=MAX_MIGRATION_ATTEMPTS {
+                let failed = manager
+                    .record_migration(&MigrationStep {
+                        reason: Some("the settings copy failed".into()),
+                        ..step(MigrationPhase::Failed)
+                    })
+                    .unwrap();
+                assert_eq!(failed.attempts, attempt);
+                assert_eq!(
+                    failed.retries_automatically(),
+                    attempt < MAX_MIGRATION_ATTEMPTS
+                );
+            }
+        }
+        // Persisted across starts.
+        let mut manager = env.open();
+        let stored = manager.store().module_migration("github").unwrap().unwrap();
+        assert_eq!(stored.phase, MigrationPhase::Failed);
+        assert_eq!(stored.attempts, MAX_MIGRATION_ATTEMPTS);
+        assert_eq!(stored.reason.as_deref(), Some("the settings copy failed"));
+        assert!(!stored.retries_automatically());
+
+        let retried = manager.retry_migration("github").unwrap().unwrap();
+        assert_eq!(retried.phase, MigrationPhase::Pending);
+        assert_eq!(retried.attempts, 0);
+        assert_eq!(retried.reason, None);
+        assert!(manager.retry_migration("jira").unwrap().is_none());
+
+        // A failure after progress keeps counting; a cut-over resets it.
+        manager
+            .record_migration(&step(MigrationPhase::Failed))
+            .unwrap();
+        let cut = manager
+            .record_migration(&step(MigrationPhase::CutOver))
+            .unwrap();
+        assert_eq!(cut.attempts, 0);
+    }
+
+    #[test]
+    fn migration_steps_are_checked() {
+        let env = Env::new();
+        let mut manager = env.open();
+        manager
+            .record_migration(&step(MigrationPhase::Pending))
+            .unwrap();
+        let bad = [
+            MigrationStep {
+                plugin_id: id("deckpilot.other"),
+                ..step(MigrationPhase::Installed)
+            },
+            MigrationStep {
+                module_id: "gitlab".into(),
+                plugin_id: id("acme.gitlab"),
+                ..step(MigrationPhase::Pending)
+            },
+            MigrationStep {
+                module_id: "Git Hub".into(),
+                ..step(MigrationPhase::Pending)
+            },
+            MigrationStep {
+                reason: Some("two\nlines".into()),
+                ..step(MigrationPhase::Failed)
+            },
+            MigrationStep {
+                reason: Some("x".repeat(store::MAX_MIGRATION_REASON_CHARS + 1)),
+                ..step(MigrationPhase::Failed)
+            },
+            MigrationStep {
+                source_digest: Some("not-a-digest".into()),
+                ..step(MigrationPhase::SettingsCopied)
+            },
+            MigrationStep {
+                app_version: String::new(),
+                ..step(MigrationPhase::Installed)
+            },
+        ];
+        for step in bad {
+            let result = manager.record_migration(&step);
+            assert!(
+                matches!(result, Err(StoreError::InvalidData(_))),
+                "{step:?}"
+            );
+        }
+        let stored = manager.store().module_migration("github").unwrap().unwrap();
+        assert_eq!(stored.phase, MigrationPhase::Pending);
+        assert_eq!(stored.attempts, 0);
+        assert_eq!(manager.store().module_migrations().unwrap().len(), 1);
+    }
 }
