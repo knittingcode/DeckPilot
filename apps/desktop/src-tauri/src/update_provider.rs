@@ -325,7 +325,12 @@ pub fn command_error(error: UpdateError) -> crate::error::CommandError {
         UpdateError::NotConfigured(provider::NotConfigured::NoUpdaterKey) => {
             "updates are not configured in this build".to_owned()
         }
-        other => other.to_string(),
+        // Today's wording too, with the reason (a build run from `target/`
+        // on Linux or Windows has no package format).
+        UpdateError::NotConfigured(reason) => {
+            format!("updates are not configured in this build: {reason}")
+        }
+        other @ UpdateError::Unsupported { .. } => other.to_string(),
     })
 }
 
