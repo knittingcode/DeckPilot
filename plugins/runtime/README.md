@@ -85,7 +85,7 @@ and its epoch-ticker thread are created, then stage 2 for all threads.
 | --- | --- | --- |
 | macOS | `sandbox_init` with `(version 1)(deny default)`, `RLIMIT_CORE=0` | file read, write, directory listing, TCP connect, Unix socket connect, exec |
 | Linux | Landlock (best effort up to ABI 9: all file access, TCP, scopes) + seccomp-bpf allowlist with TSYNC (default `EPERM`; no `open*`, `socket`, `connect`, `execve`, `clone`, `ptrace`). Reports `full` when Landlock enforces every requested right (kernel ABI 9, Linux 7.1+), or when the kernel's ABI (probed with `LANDLOCK_CREATE_RULESET_VERSION` before restricting) is exactly 8: the only missing right is V9's `ResolveUnix`, and the allowlist denies `socket`/`connect` (and `open*`/`exec*`) outright, so it is covered (note `landlock ABI 8: ResolveUnix unavailable, covered by seccomp (no socket/connect)`; a unit test fails if the allowlist ever gains one of those calls or V9 adds another right). No Landlock, an ABI below 8 or any other gap: `partial` | the same; Landlock alone is also tested (`EACCES`) |
-| Windows | **Launched by the supervisor** (`crates/supervisor/src/windows.rs`, `CreateProcessW` with `STARTUPINFOEXW`): a fresh AppContainer profile per host process with **no capabilities** (`PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`), a supervisor-held Job Object assigned at creation (`PROC_THREAD_ATTRIBUTE_JOB_LIST`: 256 MiB process memory, 1 active process, kill on close, die on unhandled exception, UI restrictions), child process creation restricted (`PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY`), only the two pipe handles inherited (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), no console (`DETACHED_PROCESS`), environment `SystemRoot` plus the container-redirected `LOCALAPPDATA`/`TEMP`/`TMP`. The host verifies token and job and reports `windows-appcontainer-job`, `full`. Started any other way: own Job Object + Low integrity token, `windows-job-lowil`, `partial` | AppContainer: file read, write and directory listing in `%TEMP%` and the user profile, TCP connect to loopback, exec; a system file stays readable (control). Fallback: exec and writes only. Verified on `windows-latest`, CI run 43645511194 |
+| Windows | **Launched by the supervisor** (`crates/supervisor/src/windows.rs`, `CreateProcessW` with `STARTUPINFOEXW`): a fresh AppContainer profile per host process with **no capabilities** (`PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`), a supervisor-held Job Object assigned at creation (`PROC_THREAD_ATTRIBUTE_JOB_LIST`: 256 MiB process memory, 1 active process, kill on close, die on unhandled exception, UI restrictions), child process creation restricted (`PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY`), only the two pipe handles inherited (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), no console (`DETACHED_PROCESS`), environment `SystemRoot` plus the container-redirected `LOCALAPPDATA`/`TEMP`/`TMP`. The host verifies token and job and reports `windows-appcontainer-job`, `full`. Started any other way: own Job Object + Low integrity token, `windows-job-lowil`, `partial` | AppContainer: file read, write and directory listing in `%TEMP%` and the user profile, TCP connect to loopback and to the internet, exec; a system file stays readable (control). Job limits, handle list, UI restrictions and kill on close: see "Sandbox claims proven in CI". Fallback: exec and writes only. Verified on `windows-latest`, CI runs 43645511194 and 43698232584 |
 
 Windows design notes and trade-offs:
 
@@ -111,7 +111,8 @@ Windows design notes and trade-offs:
   `std::process::Command` started by another agent thread in that window
   would inherit them too (only delaying end-of-file; no access to the host).
 - Because the supervisor holds the job, the host dies when the agent does
-  (kill on job close) on Windows.
+  (kill on job close) on Windows, even a host that never reads its stdin
+  (`crates/host/tests/parent_death.rs`).
 - No console: the host is created with `DETACHED_PROCESS`. With a console
   (even `CREATE_NO_WINDOW`) Windows starts a `conhost.exe` for the new
   process, which the child process policy refuses, and the host died with
@@ -129,6 +130,37 @@ Windows design notes and trade-offs:
 | Sandbox probes deny files, network, exec, on main and helper thread | verified | verified (seccomp `EPERM`; Landlock-only run `EACCES`) | Windows AppContainer: verified, `app_container_denies_user_files_network_and_exec` (files in `%TEMP%` and the profile, loopback TCP and exec denied on both threads; `System32` readable; pipes work), CI run 43645511194 |
 | clippy `-D warnings`, `fmt --check` | verified | verified | Windows: `clippy --all-targets -D warnings` and `fmt --check` on `windows-latest`, CI run 43645511194 |
 
+### Sandbox claims proven in CI
+
+CI run 43698232584 (head `cb8d079`): `ubuntu-latest` job 132763398640,
+`macos-latest` job 132763398725, `windows-latest` job 132763398723. Every
+check has a control outside the sandbox that must succeed, so a denial is
+the sandbox's doing; none is skipped.
+
+| Claim | Test | Result |
+| --- | --- | --- |
+| Internet egress denied (not only loopback) | `sandbox.rs` `internet_egress_is_denied`: TCP to `1.1.1.1:443` and `8.8.8.8:443` on both threads. The control connects from outside the sandbox, or the test fails ("no internet access"), so a runner without outbound network cannot pass it | All three OSes. Windows AppContainer: `WSAEACCES` (10013); Linux seccomp and macOS Seatbelt: `EPERM` |
+| Only the two pipe handles are inherited (Windows) | `sandbox.rs` `only_the_pipe_handles_are_inherited`: the test creates an inheritable event and an inheritable file handle and passes their values; the probe calls `SetEvent`/`WriteFile` on them. The decisive check is the parent's: its event stays unsignaled and its file empty. Control: a `std::process::Command` child (no handle list) inherits both and signals and writes through the same values | Proven. In the AppContainer strict handle checking is on (`strict_handles=0x3`), so using a value that names no handle there may end the probe with `STATUS_INVALID_HANDLE` (0xC0000008) before it reports; the test accepts that outcome or a reported denial, never a success |
+| Process memory limit (256 MiB) applies to native allocations | `sandbox.rs` `process_memory_limit_stops_native_allocations`: inside, 192 MiB succeed and 320 MiB fail (`OutOfMemory`) on both threads; started directly, 320 MiB succeed | Proven (Windows) |
+| One active process (job limit), on its own | `process.rs` `host_runs_alone_in_the_supervisors_job`: a second (suspended) process assigned to the host's job from outside is refused with `ERROR_NOT_ENOUGH_QUOTA` (1816); control: a fresh job without limits accepts it. This does not go through the child process policy | Proven (Windows) |
+| Child process policy, on its own | `sandbox.rs` `supervisor_job_and_child_policy_apply`: `GetProcessMitigationPolicy` reports `NoChildProcessCreation` (control: not set when started directly); a raw `CreateProcessW` (nothing inherited, no console) inside fails with `ERROR_CHILD_PROCESS_BLOCKED` (367), the policy's error, not the job limit's 1816 | Proven (Windows). The older `exec` probe goes through `std::process::Command`, which fails earlier, opening `NUL` for the child's stdin; the raw probe reaches `CreateProcessW` |
+| Which job applies | Host report notes: `job (supervisor): ...` when the supervisor's job was verified, `job (own, supervisor job not verified: ...)` when the host had to add its own. `process.rs` (`host_starts_sandboxed_and_serves_invocations`, `host_runs_alone_in_the_supervisors_job`) and every new AppContainer probe test require the former. From the outside, `IsProcessInJob` with the supervisor's job handle (`HostProcess::job`) is true and the job has 1 active and 1 total process; from the inside, the innermost job has exactly the supervisor's limit flags (0x2508), memory limit, all eight UI restrictions (0xff) and 1 total process | Proven (Windows) |
+| UI restrictions | `sandbox.rs` `clipboard_atoms_and_desktops_are_out_of_reach`: inside, clipboard read and write fail (`OpenClipboard`: access denied) and the clipboard is unchanged when checked from outside; a global atom the test added is not found; an atom added inside is not visible outside (the job has its own atom table); `CreateDesktopW` is denied. Controls: started directly, the probe reads and replaces the clipboard, finds the atom and creates a desktop | Proven (Windows). The denials are those of the container (AppContainer and job together); the test does not tell the two layers apart |
+| Host dies with its agent | `parent_death.rs`: a helper "agent" starts a host through the supervisor and is killed outright; the host must be gone within 5 s. Windows: the sandbox probe in `sleep` mode (never reads stdin, so only kill on job close can end it) and the real host. macOS and Linux: the real, idle host (stdin end-of-file) | Proven on all three OSes, gone within microseconds of the kill being reaped |
+| No extra inherited descriptors (macOS, Linux) | `process.rs` `spawned_host_gets_no_environment_and_no_extra_descriptors` (existing) | Proven |
+
+Not provable this way, and why:
+
+- macOS and Linux have no kill-on-close: a host that is not reading
+  its stdin (stuck in native code) outlives the agent until it next reads.
+  `parent_death.rs` therefore tests the idle host only there; the sleeping
+  probe is used on Windows alone, because elsewhere it would survive.
+- The job's UI restrictions cannot be told apart from the AppContainer's
+  own UI isolation for the same process without launching the host
+  differently (a weakened launch path), which this change does not add.
+- Memory limit, handle list, job and UI checks are Windows-only claims;
+  macOS and Linux do not make them (see below).
+
 **NOT VERIFIED / not implemented:**
 
 - Windows AppContainer isolation is verified only on GitHub's
@@ -136,10 +168,9 @@ Windows design notes and trade-offs:
   desktop Windows edition, no per-user or `Program Files` install, and no
   machine with a third-party firewall has been tried. Loopback/network
   denial relies on the Windows Filtering Platform AppContainer rules; the
-  CI job prints the firewall state next to the probe results. The
-  supervisor-held job (host dies with the agent) is not tested on its
-  own. On macOS and Linux the
-  host still exits on stdin EOF only, which needs it to be responsive.
+  CI job prints the firewall state next to the probe results. On macOS and
+  Linux the host still exits on stdin EOF only, which needs it to be
+  responsive (tested for an idle host, see above).
 - Signed, hardened-runtime macOS helper (`allow-jit`), notarization,
   Pulley; the Seatbelt interface is deprecated and undocumented.
 - Linux `full` on kernels with Landlock ABI 8 rests on seccomp for

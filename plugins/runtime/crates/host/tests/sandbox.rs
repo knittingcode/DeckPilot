@@ -501,11 +501,12 @@ mod windows_launch {
                 }
                 "create_process" => {
                     assert!(!r.ok, "process created in the AppContainer: {r:?}");
-                    // Refused by the child process policy, which is checked
-                    // before the job's process limit (that one would say
-                    // ERROR_NOT_ENOUGH_QUOTA, 1816; it is shown on its own
-                    // in process.rs, host_runs_alone_in_the_supervisors_job).
-                    assert!(!r.detail.contains("1816"), "{r:?}");
+                    // Refused by the child process policy:
+                    // ERROR_CHILD_PROCESS_BLOCKED (367). It is checked before
+                    // the job's process limit, which would say
+                    // ERROR_NOT_ENOUGH_QUOTA (1816) and is shown on its own
+                    // in process.rs, host_runs_alone_in_the_supervisors_job.
+                    assert!(r.detail.contains("(os error 367)"), "{r:?}");
                     eprintln!("create_process in the AppContainer: {}", r.detail);
                 }
                 _ => unreachable!(),
