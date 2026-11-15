@@ -176,6 +176,15 @@ fn sandbox_denies_files_network_and_exec() {
 /// AppContainer without capabilities inside the supervisor's Job Object.
 #[cfg(windows)]
 fn run_like_the_host(probes: &[(&str, String)]) -> (Value, Vec<Probed>) {
+    let (report, results, _) = run_like_the_host_status(probes);
+    (report, results)
+}
+
+/// As [`run_like_the_host`], plus the probe's exit status.
+#[cfg(windows)]
+fn run_like_the_host_status(
+    probes: &[(&str, String)],
+) -> (Value, Vec<Probed>, std::process::ExitStatus) {
     use std::io::Read;
     let mut c = deckpilot_plugin_supervisor::HostCommand::new(PROBE);
     for (k, t) in probes {
@@ -206,7 +215,7 @@ fn run_like_the_host(probes: &[(&str, String)]) -> (Value, Vec<Probed>) {
             detail: l["detail"].as_str().unwrap().to_owned(),
         })
         .collect();
-    (report["sandbox"].clone(), results)
+    (report["sandbox"].clone(), results, status)
 }
 
 #[cfg(windows)]
@@ -384,7 +393,7 @@ mod windows_launch {
     };
     use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, WaitForSingleObject};
 
-    use super::{exec_target, run, run_like_the_host};
+    use super::{exec_target, run, run_like_the_host, run_like_the_host_status};
 
     /// A name no other run uses.
     fn unique(what: &str) -> String {
@@ -431,14 +440,15 @@ mod windows_launch {
     /// Inside the AppContainer the probe is in the supervisor's job (as
     /// reported, and the innermost job has exactly the supervisor's limits
     /// and UI restrictions with the probe as its only process), the child
-    /// process policy is set, and process creation fails.
+    /// process policy is set, and `CreateProcessW` itself is refused (not
+    /// merely `std::process::Command`'s opening of `NUL`).
     #[test]
     fn supervisor_job_and_child_policy_apply() {
         let exec = exec_target().to_owned();
         let probes = vec![
             ("job_info", "-".to_owned()),
             ("child_policy", "-".to_owned()),
-            ("exec", exec.clone()),
+            ("create_process", exec.clone()),
         ];
         // Control: started directly the probe has no child process policy
         // and can create processes.
@@ -489,7 +499,15 @@ mod windows_launch {
                     // NoChildProcessCreation.
                     assert_eq!(hex(&field(&r.detail, "flags")) & 1, 1, "{r:?}");
                 }
-                "exec" => assert!(!r.ok, "process created in the AppContainer: {r:?}"),
+                "create_process" => {
+                    assert!(!r.ok, "process created in the AppContainer: {r:?}");
+                    // Refused by the child process policy, which is checked
+                    // before the job's process limit (that one would say
+                    // ERROR_NOT_ENOUGH_QUOTA, 1816; it is shown on its own
+                    // in process.rs, host_runs_alone_in_the_supervisors_job).
+                    assert!(!r.detail.contains("1816"), "{r:?}");
+                    eprintln!("create_process in the AppContainer: {}", r.detail);
+                }
                 _ => unreachable!(),
             }
         }
@@ -570,11 +588,25 @@ mod windows_launch {
         file.set_len(0).unwrap();
         assert_eq!(signaled(), WAIT_TIMEOUT);
 
-        let (report, results) = run_like_the_host(&probes);
-        assert_supervisor_job(&report);
-        assert_eq!(results.len(), 4, "{results:?}");
-        for r in &results {
-            assert!(!r.ok, "inherited handle usable in the AppContainer: {r:?}");
+        // One probe per run: using a value that names no handle in the
+        // AppContainer process may end it with STATUS_INVALID_HANDLE
+        // (strict handle checking) before it reports, which is the OS
+        // saying the same thing. Either way the decisive check is ours:
+        // our event stays unsignaled and our file empty.
+        const STATUS_INVALID_HANDLE: u32 = 0xC000_0008;
+        for probe in &probes {
+            let (report, results, status) = run_like_the_host_status(std::slice::from_ref(probe));
+            assert_supervisor_job(&report);
+            for r in &results {
+                assert!(!r.ok, "inherited handle usable in the AppContainer: {r:?}");
+            }
+            if results.len() != 2 {
+                assert_eq!(
+                    status.code().map(|c| c as u32),
+                    Some(STATUS_INVALID_HANDLE),
+                    "{probe:?}: {results:?} {status:?}"
+                );
+            }
         }
         assert_eq!(signaled(), WAIT_TIMEOUT, "the host signaled our event");
         assert_eq!(

@@ -10,7 +10,8 @@
 //! (seconds, without reading stdin). Windows only: `signal_event` and
 //! `write_handle` (a raw handle value the parent created, in decimal),
 //! `job_info` (the limits of the job the process is in), `child_policy`
-//! (the child process mitigation policy), `clipboard_read`,
+//! (the child process and strict handle mitigation policies),
+//! `create_process` (raw `CreateProcessW`, nothing inherited), `clipboard_read`,
 //! `clipboard_write` (text), `atom_find`, `atom_add` (global atom name) and
 //! `create_desktop` (name).
 //! Each probe runs on the main thread and on the helper thread. Output: one
@@ -60,6 +61,8 @@ fn probe(kind: &str, target: &str) -> (bool, String) {
         "job_info" => win::job_info(),
         #[cfg(windows)]
         "child_policy" => win::child_policy(),
+        #[cfg(windows)]
+        "create_process" => win::create_process(target),
         #[cfg(windows)]
         "clipboard_read" => win::clipboard_read(),
         #[cfg(windows)]
@@ -174,6 +177,7 @@ mod win {
     use std::io;
     use std::ptr::{null, null_mut};
 
+    use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::Foundation::{GetHandleInformation, GlobalFree, HANDLE};
     use windows_sys::Win32::Storage::FileSystem::WriteFile;
     use windows_sys::Win32::System::DataExchange::{GlobalAddAtomW, GlobalFindAtomW};
@@ -187,7 +191,9 @@ mod win {
         GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock,
     };
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, GetProcessMitigationPolicy, ProcessChildProcessPolicy, SetEvent,
+        CreateProcessW, DETACHED_PROCESS, GetCurrentProcess, GetExitCodeProcess,
+        GetProcessMitigationPolicy, PROCESS_INFORMATION, ProcessChildProcessPolicy,
+        ProcessStrictHandleCheckPolicy, STARTUPINFOW, SetEvent, WaitForSingleObject,
     };
 
     /// `CF_UNICODETEXT`.
@@ -337,7 +343,61 @@ mod win {
         {
             return Err(os_error("GetProcessMitigationPolicy"));
         }
-        Ok(format!("flags={flags:#x}"))
+        let mut strict = 0u32;
+        // SAFETY: the policy structure is a single DWORD.
+        let strict_ok = unsafe {
+            GetProcessMitigationPolicy(
+                GetCurrentProcess(),
+                ProcessStrictHandleCheckPolicy,
+                &mut strict as *mut u32 as *mut c_void,
+                std::mem::size_of::<u32>(),
+            )
+        } != 0;
+        Ok(format!(
+            "flags={flags:#x} strict_handles={}",
+            if strict_ok {
+                format!("{strict:#x}")
+            } else {
+                "unknown".into()
+            }
+        ))
+    }
+
+    /// `CreateProcessW` itself (no standard handles, nothing inherited, no
+    /// console), so a denial is CreateProcess's and not, as with
+    /// `std::process::Command`, a failure to open `NUL` for the child's
+    /// stdin first.
+    pub fn create_process(program: &str) -> io::Result<String> {
+        let app = wide(program);
+        let mut cmd = wide(&format!("\"{program}\""));
+        // SAFETY: zeroed structures with `cb` set; NUL-terminated strings,
+        // a mutable command line; the returned handles are closed.
+        unsafe {
+            let mut si: STARTUPINFOW = std::mem::zeroed();
+            si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+            let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
+            if CreateProcessW(
+                app.as_ptr(),
+                cmd.as_mut_ptr(),
+                null(),
+                null(),
+                0,
+                DETACHED_PROCESS,
+                null(),
+                null(),
+                &si,
+                &mut pi,
+            ) == 0
+            {
+                return Err(os_error("CreateProcessW"));
+            }
+            WaitForSingleObject(pi.hProcess, 10_000);
+            let mut code = 0u32;
+            GetExitCodeProcess(pi.hProcess, &mut code);
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            Ok(format!("created, exit {code}"))
+        }
     }
 
     /// A user32 export, loaded on first use of a UI probe.
