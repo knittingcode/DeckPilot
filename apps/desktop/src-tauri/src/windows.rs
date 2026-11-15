@@ -311,6 +311,38 @@ const FALLBACK_WORK_AREA: Rect = Rect {
     height: 800.0,
 };
 
+/// Debug builds on Windows driven by `WebDriver` (`tauri-driver` sets
+/// `TAURI_WEBVIEW_AUTOMATION=true`): msedgedriver hands `WebView2` its
+/// debugging port and profile through `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`
+/// and `WEBVIEW2_USER_DATA_FOLDER`, but the values the app passes to
+/// `WebView2` take precedence, so the webview would never be reachable
+/// (`DevToolsActivePort file doesn't exist`). Every window gets the same
+/// values (`WebView2` refuses webviews of one profile with different
+/// arguments). Release builds and normal starts are unchanged.
+/// `docs/marketplace/e2e.md`.
+pub fn for_webdriver<R: Runtime, M: Manager<R>>(
+    builder: WebviewWindowBuilder<'_, R, M>,
+) -> WebviewWindowBuilder<'_, R, M> {
+    #[cfg(all(windows, debug_assertions))]
+    {
+        let mut builder = builder;
+        if std::env::var_os("TAURI_WEBVIEW_AUTOMATION").is_some_and(|v| v == "true") {
+            if let Ok(args) = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") {
+                // wry's defaults first, then the driver's.
+                builder = builder.additional_browser_args(&format!(
+                    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection {args}"
+                ));
+            }
+            if let Some(folder) = std::env::var_os("WEBVIEW2_USER_DATA_FOLDER") {
+                builder = builder.data_directory(folder.into());
+            }
+        }
+        builder
+    }
+    #[cfg(not(all(windows, debug_assertions)))]
+    builder
+}
+
 /// Opens the window `spec`, or focuses it if it is open already.
 pub fn open<R: Runtime>(app: &AppHandle<R>, spec: &WindowSpec) -> Result<(), WindowError> {
     let label = label_for(&spec.id);
@@ -327,7 +359,7 @@ pub fn open<R: Runtime>(app: &AppHandle<R>, spec: &WindowSpec) -> Result<(), Win
     let page = format!("index.html?window={}", spec.id);
     let url = crate::dev_server::fallback_url(app.config(), &page)
         .unwrap_or_else(|| WebviewUrl::App(page.into()));
-    let mut builder = WebviewWindowBuilder::new(app, &label, url)
+    let mut builder = for_webdriver(WebviewWindowBuilder::new(app, &label, url))
         .title(&spec.title)
         .inner_size(size.0, size.1)
         .position(x, y)

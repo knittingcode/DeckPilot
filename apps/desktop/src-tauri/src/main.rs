@@ -55,7 +55,7 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
         config.url = url;
         config.visible = true;
     }
-    WebviewWindowBuilder::from_config(app.handle(), &config)?.build()?;
+    windows::for_webdriver(WebviewWindowBuilder::from_config(app.handle(), &config)?).build()?;
     let handle = app.handle().clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(15)).await;

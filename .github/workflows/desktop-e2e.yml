@@ -218,6 +218,7 @@ jobs:
         shell: pwsh
         run: |
           $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9333"
+          $env:TAURI_WEBVIEW_AUTOMATION = "true"
           $env:DECKPILOT_DATA_DIR = Join-Path $env:RUNNER_TEMP 'webview2-diagnostic'
           $env:DECKPILOT_NO_AGENT_AUTOSTART = "1"
           $app = Start-Process -FilePath $env:DECKPILOT_E2E_APP -PassThru
