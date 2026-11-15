@@ -62,6 +62,7 @@ pub fn show_target(unlocked: bool, has_main: bool) -> ShowTarget {
 
 /// The macOS application menu's Quit item. It ends only this app, so it
 /// does not share the tray's "Quit DeckPilot", which stops the agent.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const QUIT_UI: &str = "Quit DeckPilot UI";
 
 /// An entry of the macOS application menu, in order.
