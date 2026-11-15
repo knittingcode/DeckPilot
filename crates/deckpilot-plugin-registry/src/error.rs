@@ -19,6 +19,13 @@ pub enum FetchError {
     /// state and reports [`crate::Refresh::Offline`].
     #[error("unavailable: {0}")]
     Unavailable(String),
+    /// An answer the source refuses to pass on: a redirect to another
+    /// origin or away from https, a document over its size limit, an
+    /// unexpected status. Unlike [`FetchError::Unavailable`] this is not
+    /// treated as offline: the refresh fails with this error (and, like
+    /// every refused document, changes nothing stored).
+    #[error("refused: {0}")]
+    Refused(String),
 }
 
 /// Why a registry document was refused. A refused document never changes
