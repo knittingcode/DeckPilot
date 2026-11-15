@@ -89,19 +89,22 @@ chmod +x "$work/job.sh"
 # Three at once, two slots, no waiting: two run in distinct slots, one is
 # turned away.
 pids=""
-for i in 1 2 3; do ts run -- "$work/job.sh" "$work/run3.$i" 2> /dev/null & pids="$pids $!"; done
+for i in 1 2 3; do ts run -- "$work/job.sh" "$work/run3.$i" 2> "$work/err3.$i" & pids="$pids $!"; done
 codes=""
 for p in $pids; do c=0; wait "$p" || c=$?; codes="$codes $c"; done
 check "of 3 concurrent runs with 2 slots, 2 succeed and 1 exits 3" \
   test "$(echo "$codes" | tr ' ' '\n' | sort | tr '\n' ' ')" = " 0 0 3 "
+[ "$(echo "$codes" | tr " " "\n" | sort | tr "\n" " ")" = " 0 0 3 " ] || { echo "     exit codes:$codes"; cat "$work"/err3.*; }
 check "the two runs used different slots" test "$(cat "$work"/run3.* | sort -u | wc -l | tr -d ' ')" = 2
 
 # Six at once with --wait: all succeed, never two in the same slot.
 pids=""
-for i in 1 2 3 4 5 6; do ts run --wait 60 -- "$work/job.sh" "$work/run6.$i" 2> /dev/null & pids="$pids $!"; done
+codes=""
+for i in 1 2 3 4 5 6; do ts run --wait 60 -- "$work/job.sh" "$work/run6.$i" 2> "$work/err6.$i" & pids="$pids $!"; done
 bad=0
-for p in $pids; do c=0; wait "$p" || c=$?; [ "$c" = 0 ] || bad=$((bad + 1)); done
+for p in $pids; do c=0; wait "$p" || c=$?; codes="$codes $c"; [ "$c" = 0 ] || bad=$((bad + 1)); done
 check "6 concurrent runs with --wait all succeed, one per slot at a time" test "$bad" = 0
+[ "$bad" = 0 ] || { echo "     exit codes:$codes"; cat "$work"/err6.*; }
 check "run releases its slot" test ! -e "$work/pool/slot-1.lock" -a ! -e "$work/pool/slot-2.lock"
 status=0; ts run -- sh -c 'exit 7' || status=$?
 check "run passes the command's exit status" test "$status" = 7
@@ -155,6 +158,63 @@ if [ "${TARGET_SLOT_SKIP_CARGO:-0}" != 1 ] && command -v cargo > /dev/null 2>&1;
   else
     ok "builds in different slots never wait for a target dir lock"
   fi
+
+  # --- two worktrees, one slot ---------------------------------------------------
+  # Cargo hashes a path package by its path relative to the workspace root
+  # and judges its output fresh by mtime, so without a scrub a worktree that
+  # gets a slot another one built in after its last edit runs that other
+  # worktree's code. Two copies of a workspace: a member with a build script
+  # (rerun-if-changed) and an excluded path crate, like plugins/runtime.
+  # One is a git repository, one is not.
+  mkws() { # <dir> <tag>
+    mkdir -p "$1/core/src" "$1/app/src" "$1/extra/helper/src"
+    printf '[workspace]\nmembers = ["core", "app"]\nexclude = ["extra"]\nresolver = "2"\n' > "$1/Cargo.toml"
+    printf '[package]\nname = "probe-core"\nversion = "0.1.0"\nedition = "2021"\n' > "$1/core/Cargo.toml"
+    cat > "$1/core/build.rs" << 'EOF'
+fn main() {
+    println!("cargo:rerun-if-changed=who.txt");
+    let who = std::fs::read_to_string("who.txt").unwrap();
+    std::fs::write(std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("who.txt"), who).unwrap();
+}
+EOF
+    echo 'pub fn who() -> &'"'"'static str { include_str!(concat!(env!("OUT_DIR"), "/who.txt")).trim_ascii() }' > "$1/core/src/lib.rs"
+    printf '[package]\nname = "probe-helper"\nversion = "0.1.0"\nedition = "2021"\n' > "$1/extra/helper/Cargo.toml"
+    printf '[package]\nname = "probe-app"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nprobe-core = { path = "../core" }\nprobe-helper = { path = "../extra/helper" }\n' > "$1/app/Cargo.toml"
+    echo 'fn main() { println!("{}/{}", probe_core::who(), probe_helper::who()); }' > "$1/app/src/main.rs"
+    settag "$1" "$2"
+  }
+  settag() { # <dir> <tag>: the code that a build of <dir> must run
+    echo "$2" > "$1/core/who.txt"
+    echo 'pub fn who() -> &'"'"'static str { "'"$2"'" }' > "$1/extra/helper/src/lib.rs"
+  }
+  wt_run() { # <dir> <log>: prints what the build of <dir> ran
+    (cd "$1" && DECKPILOT_TARGET_POOL="$work/wt-pool" DECKPILOT_TARGET_SLOTS=1 \
+      "$BASH" "$script" run -- cargo run --offline -q -p probe-app 2> "$2") || echo "build failed"
+  }
+  mkws "$work/wt-a" A1
+  (cd "$work/wt-a" && git init -q .)
+  mkws "$work/wt-b" B1
+  got=$(wt_run "$work/wt-a" "$work/wt.1.log")
+  check "worktree A runs its code ($got)" test "$got" = A1/A1
+  got=$(wt_run "$work/wt-b" "$work/wt.2.log")
+  check "worktree B, next in the same slot, runs its own code ($got)" test "$got" = B1/B1
+  # A third-party crate in the slot (stand-in): kept across worktrees.
+  fake="$work/wt-pool/slot-1/debug"
+  mkdir -p "$fake/.fingerprint/thirdparty-0123456789abcdef"
+  : > "$fake/deps/libthirdparty-0123456789abcdef.rlib"
+  sleep 1
+  settag "$work/wt-a" A2
+  got=$(wt_run "$work/wt-a" "$work/wt.3.log")
+  check "worktree A after an edit runs its code ($got)" test "$got" = A2/A2
+  got=$(wt_run "$work/wt-b" "$work/wt.4.log")
+  check "worktree B after A's newer build runs its own code ($got)" test "$got" = B1/B1
+  check "the scrub keeps dependencies that are not the worktree's own" \
+    test -d "$fake/.fingerprint/thirdparty-0123456789abcdef" -a -f "$fake/deps/libthirdparty-0123456789abcdef.rlib"
+  got=$(wt_run "$work/wt-b" "$work/wt.5.log")
+  check "worktree B again in its slot runs its code ($got)" test "$got" = B1/B1
+  check "the same worktree again in its slot rebuilds nothing" \
+    test -z "$(grep -E 'Compiling|scrub|removing' "$work/wt.5.log" || true)"
+  check "a slot changing worktree reports the scrub" grep -q "last used by another worktree" "$work/wt.4.log"
 else
   echo "skip cargo build overlap (cargo not installed or TARGET_SLOT_SKIP_CARGO=1)"
 fi
