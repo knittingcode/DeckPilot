@@ -354,7 +354,12 @@ impl PluginService {
             enabled: true,
             execution_supported: super::execution_supported(),
             platform: platform().to_owned(),
-            reason: platform_problem().or_else(|| self.registry_problem.clone()),
+            // Both, when both apply: a platform that cannot run plugins
+            // must not hide that the registry was refused.
+            reason: match (platform_problem(), self.registry_problem.clone()) {
+                (Some(platform), Some(registry)) => Some(format!("{registry}; {platform}")),
+                (platform, registry) => registry.or(platform),
+            },
             registry: self.registry.as_ref().map(LocalRegistry::status),
         }
     }
