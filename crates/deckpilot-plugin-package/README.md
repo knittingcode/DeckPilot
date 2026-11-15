@@ -6,7 +6,8 @@ crate depends on it, and plugins stay disabled; nothing a user sees changes.
 The plugin package format (`.dpplugin`) of the plugin marketplace design
 (`docs/marketplace/architecture.md`, proposed in pull request #191),
 sections 8, 9.3 step 5, 12.3 steps 4 to 8 and 12.5. It promotes the
-package half of `experiments/marketplace-spikes/trust` (spike 4).
+package half of the retired trust spike (spike 4; its measurements are in
+[`docs/marketplace/spike-findings.md`](../../docs/marketplace/spike-findings.md)).
 
 ## API
 
@@ -83,7 +84,8 @@ only writer of the plugin directories (section 12.2).
 
 ## Tests
 
-`cargo test -p deckpilot-plugin-package`: 26 tests. Determinism and header
+`cargo test -p deckpilot-plugin-package`: 26 tests in `tests/package.rs`
+(and 3 in `tests/spike_ports.rs`). Determinism and header
 properties; a full build, verify, unpack and load check; every single-bit
 change at every byte offset (two bits per byte) rejected against the pins,
 and with the flipped bytes re-pinned never accepted with different

@@ -1,0 +1,12 @@
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: cargo test -p deckpilot-plugin-registry --features publish --locked
+      - run: cargo run --locked -p deckpilot-plugin-registry --features publish -- verify-site --roots fixtures/roots.json
+      - run: deckpilot-registry help

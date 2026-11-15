@@ -206,6 +206,7 @@ they report as skipped:
 | Package check (Linux .deb), Package check (Windows installers), in the Packaging workflow | files that affect bundling: `apps/desktop/src-tauri/` `tauri*.json`, `build.rs`, `Cargo.toml`, `capabilities/`, `icons/`, `app-icon.svg`; `apps/agent/` `build.rs`, `Cargo.toml`, `Info.plist`; `packaging/`, `tools/ci/`, `.github/workflows/`, `Cargo.lock`, `Cargo.toml`, `apps/desktop/package.json` |
 | Credential store (3 platforms) | `crates/deckpilot-keystore/`, `tools/ci/with-keyring.sh`, `.github/workflows/ci.yml` |
 | Release manifest assembly | `tools/ci/`, `.github/workflows/release.yml`, `.github/workflows/ci.yml` |
+| Dev tooling scripts (Linux, macOS) | `tools/dev/*.sh`, `tools/dev/tests/`, `.github/workflows/ci.yml` |
 | Compatibility (own workflow) | its path filter in `compatibility.yml` |
 
 The "Changed paths" job decides this with `tools/ci/changed-paths.sh` from
@@ -297,6 +298,135 @@ A branch that another open pull request uses as its base is deleted only
 after that pull request has been retargeted to `main` and `main` has been
 merged into it. Branches of pull requests closed without merging are kept
 until their owner decides.
+
+### After merges: worktrees
+
+Parallel agents (and the maintainer) work in git worktrees: agents under
+`.claude/worktrees/agent-*`, others as sibling checkouts such as
+`../DeckPilot-preview`. Each one builds its own `target/`, so finished
+worktrees fill the disk quickly. `tools/dev/worktree-maintenance.sh` finds
+the ones that can go and removes only those. After a round of merges:
+
+1. `tools/dev/worktree-maintenance.sh audit --fetch-pr-heads` lists every
+   worktree with its class (read-only; the fetch only updates
+   `refs/remotes/origin/pr/*`, so commits of squash-merged pull requests
+   count as preserved). `report` sums it up, `disk-usage` shows the sizes.
+2. `tools/dev/worktree-maintenance.sh prune --dry-run`, then `prune`:
+   drops the metadata of worktrees whose directory is already gone.
+3. `tools/dev/worktree-maintenance.sh cleanup` (a dry run by default) shows
+   what would be removed. Only when no agent is running:
+   `cleanup --apply`, optionally with `--artifacts`.
+
+The classes:
+
+| Class | Meaning | cleanup |
+| ----- | ------- | ------- |
+| ACTIVE | Locked (Claude Code locks an agent's worktree while the agent runs, and the lock stays after it finishes), or a process other than a macOS indexer (`com.apple.*`, `mds`, `mdworker`) has a file or its working directory inside | never touched |
+| REQUIRED | Uncommitted changes, untracked files that are not ignored, commits on no remote ref that are not patches already in `main` (`git cherry`), an open pull request (`gh`), another worktree inside it, or the main checkout | kept; with `--artifacts`, build directories go if it is inactive |
+| UNCERTAIN | Something could not be determined: `gh` unavailable (pull request state unknown), a lock whose recorded process is gone, a git error, a missing directory | kept |
+| SAFE | None of the above | removed with `git worktree remove` (never `--force`) |
+
+Rules the tool keeps:
+
+- `cleanup --apply` refuses to run (exit 3) while any worktree is ACTIVE,
+  because agents may be running. `--allow-active-elsewhere` lets it proceed,
+  but even then ACTIVE worktrees are never touched.
+- Each worktree is re-checked (lock, processes, git state, pull requests)
+  right before it is removed; `git worktree remove` itself refuses a dirty
+  or locked tree.
+- Locked worktrees are never unlocked on a guess. A finished agent's lock is
+  lifted only with `--unlock-finished <name>`, given per worktree, and only
+  right before removal (the lock is restored if removal fails).
+- `--artifacts` deletes only `target`, `node_modules` and
+  `apps/desktop/dist` directories that git ignores and that hold no tracked
+  file, only in worktrees that are not locked and have no process, and never
+  in the main checkout.
+- Branches are never deleted (see the cycle above for that). Every deletion
+  is logged with path, branch, HEAD and size to
+  `~/.cache/deckpilot/worktree-maintenance.log` (`--log` to change), and a
+  second run is a no-op.
+
+There is no daemon or scheduled cleanup: run it by hand when no agents are
+active. The tests (`tools/dev/tests/worktree-maintenance.test.sh`) build a
+throwaway repository with one worktree per case; CI runs them on Linux and
+macOS.
+
+## Worktrees and build caches
+
+Cargo puts build output in `<workspace>/target`. This repository has two
+workspaces (the root and `plugins/runtime`), so every worktree gets two
+target directories, 1–18 GB together, and a debug build of the main checkout
+reaches 55 GB, of which `target/debug/incremental` alone can take 5 GB or
+more. With a dozen worktrees that is the whole disk. The options:
+
+- **One shared `CARGO_TARGET_DIR`** for all worktrees: the least disk, but
+  cargo takes an exclusive lock on the target directory for the whole build
+  ("Blocking waiting for file lock on build directory"), so parallel agents
+  wait for each other, and differing features or flags between worktrees
+  rebuild crates back and forth. Not recommended for parallel agents.
+- **A bounded pool of target directories**, one per concurrent build:
+  `tools/dev/target-slot.sh` (below). Disk use is bounded by the number of
+  slots instead of the number of worktrees, builds in different slots run
+  at the same time, and dependencies are reused when a worktree gets a slot
+  another one built in. Recommended.
+- **sccache** (not installed here): caches compiled crates across
+  directories, so a fresh target directory fills faster. It does not share
+  incremental state, cannot cache everything (proc-macro and build-script
+  heavy crates, linking), and adds a daemon of its own. Optional on top of
+  the pool; not needed for it.
+- **`CARGO_INCREMENTAL=0`** for agent and CI-like runs: no
+  `target/debug/incremental`, at the cost of slower rebuilds while editing.
+  CI already runs without it (`rust-cache` sets it).
+- **`CARGO_PROFILE_DEV_DEBUG=line-tables-only`** (and `..._TEST_DEBUG`):
+  smaller artifacts with file and line numbers kept in backtraces; CI uses
+  it.
+- **`cargo clean`** (or `cleanup --artifacts`) once a worktree is done.
+
+`tools/dev/target-slot.sh` hands out slots under
+`~/.cache/deckpilot/target-pool/slot-1` … `slot-N`
+(`DECKPILOT_TARGET_SLOTS`, default 3; `DECKPILOT_TARGET_POOL`). A slot is
+held by one process at a time with a `mkdir` lock (macOS has no `flock`)
+that records the owner's PID and start time; a lock whose owner is gone, or
+whose PID now belongs to another process, is taken over. A worktree gets
+the slot it used last when that one is free, so its incremental state is
+reused.
+
+```sh
+# One command in a slot, released when it ends (waits up to 10 min):
+tools/dev/target-slot.sh run --wait 600 -- cargo test --workspace --locked
+
+# Or for the current shell:
+eval "$(tools/dev/target-slot.sh env --owner $$)"
+cargo clippy --workspace --all-targets --locked -- -D warnings
+tools/dev/target-slot.sh release --owner $$
+
+tools/dev/target-slot.sh status   # holders and sizes
+```
+
+Two builds in different slots do not block each other, while two builds
+sharing a target directory do: `tools/dev/tests/target-slot.test.sh`
+builds a tiny crate whose build script sleeps 4 seconds, twice at once. In
+one target directory the second build waits for the first (about 9–10 s in
+total); in two slots both finish in about 4–5 s. The test also runs 2–6
+concurrent acquisitions against 2 slots and checks that no slot is ever
+held twice. Note that cargo's package cache in `~/.cargo` has a lock of its
+own, held only briefly while dependencies are resolved or downloaded.
+
+Slots are opt-in and meant for agents' checks (`cargo check`, `clippy`,
+`test`). Commands that expect `./target` keep the default: `make up` and
+the hardware test (they start `target/debug/deckpilot-agent`),
+`deckpilot-dev package`, and `tools/compat/matrix.sh`. Slots live outside
+the repository; build output never goes into git.
+
+Recommended settings for agents:
+
+- `export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_PROFILE_TEST_DEBUG=line-tables-only`
+- Run cargo through `tools/dev/target-slot.sh run --wait 600 -- …` (both
+  workspaces may use the same slot; `plugins/runtime` builds land next to
+  the root's).
+- After merges, `worktree-maintenance.sh cleanup` as described in
+  [After merges: worktrees](#after-merges-worktrees), with `--artifacts`
+  for the inactive worktrees that must stay.
 
 ## Adding an action type
 

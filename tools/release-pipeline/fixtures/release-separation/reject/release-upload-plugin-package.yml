@@ -1,0 +1,14 @@
+# expect: publishes plugin packages or registry metadata
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Attach the bundled plugins
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" dist/com.example.clock-1.2.0.dpplugin --clobber

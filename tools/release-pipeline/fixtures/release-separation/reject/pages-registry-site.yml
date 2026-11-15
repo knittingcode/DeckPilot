@@ -1,0 +1,14 @@
+# expect: publishes plugin packages or registry metadata
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-pages-artifact@0123456789abcdef0123456789abcdef01234567
+        with:
+          path: site/v1
+      - uses: actions/deploy-pages@0123456789abcdef0123456789abcdef01234567
