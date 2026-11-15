@@ -37,6 +37,19 @@ led to it; where the code differs, the code and the tests win.
 - [Compatibility](compatibility.md): protocol negotiation and the tested
   matrix of app and agent versions.
 
+## Plugin marketplace (experimental)
+
+- [Plugins in the agent](marketplace/agent-integration.md): the experimental
+  plugin backend, its IPC and how it is tested.
+- [Plugin artifact contract](marketplace/artifact-contract.md): ABI 1 wasm
+  modules and the package.
+- [Testing the marketplace locally](marketplace/local-testing.md): a local
+  registry, the app and the agent.
+- [Moving built-in modules to plugins](marketplace/module-migration.md): the
+  core boundary, bundled default plugins, action id compatibility and the
+  migration. *Design record, proposed.* Its evidence is the
+  [module classification matrix](marketplace/module-matrix.md).
+
 ## Contributing and development
 
 - [Development](development.md): toolchain, the live development session,
