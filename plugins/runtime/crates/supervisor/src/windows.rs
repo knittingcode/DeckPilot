@@ -631,6 +631,11 @@ impl Process {
         self.pid
     }
 
+    pub(crate) fn job(&self) -> std::os::windows::io::BorrowedHandle<'_> {
+        use std::os::windows::io::AsHandle;
+        self.job.as_handle()
+    }
+
     /// Terminates every process in the job.
     pub(crate) fn kill(&mut self) -> io::Result<()> {
         if self.status.is_some() {

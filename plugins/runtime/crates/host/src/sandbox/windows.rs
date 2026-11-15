@@ -8,7 +8,10 @@
 //!   on close and the process memory limit. If the job cannot be verified
 //!   the host assigns itself to its own (nested) job as below. Reported as
 //!   `windows-appcontainer-job`, `full`: the user's files (read and write),
-//!   the network and process creation are denied by the OS.
+//!   the network and process creation are denied by the OS. Which job
+//!   applies is in the notes: `job (supervisor): ...` when the supervisor's
+//!   job was verified, `job (own, supervisor job not verified: ...)` when
+//!   the host had to add its own (the tests require the former).
 //! * **Started any other way** (no AppContainer): a Job Object the host
 //!   assigns itself to and a Low integrity token, as before. This denies
 //!   process creation and writes to Medium-integrity objects (the user's

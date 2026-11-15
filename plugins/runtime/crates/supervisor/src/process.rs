@@ -54,6 +54,14 @@ impl HostProcess {
         self.child.id()
     }
 
+    /// The Job Object the supervisor created for this host and holds (kill
+    /// on close). Borrowed for inspection (`IsProcessInJob`,
+    /// `QueryInformationJobObject`); closing it is the supervisor's job.
+    #[cfg(windows)]
+    pub fn job(&self) -> std::os::windows::io::BorrowedHandle<'_> {
+        self.child.job()
+    }
+
     pub fn kill(&mut self) -> io::Result<()> {
         self.child.kill()
     }
