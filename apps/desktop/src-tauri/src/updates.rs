@@ -33,22 +33,47 @@
 //!
 //! docs/distribution/README.md, section 7, has the full lifecycle and
 //! docs/updates.md when rolling back is safe.
+//!
+//! All of this is the `GithubRelease` provider (docs/distribution/README.md,
+//! section 4.1), which only a GitHub build of a known package format with a
+//! compiled key gets ([`crate::update_provider`]). Package-manager and store
+//! builds never reach the Tauri updater (R1): the commands answer through
+//! their provider, which reports who updates the installation and refuses
+//! to download or install (R2). Builds without the `self-update` feature
+//! do not contain the updater at all.
+//!
+//! Before anything is downloaded, a check also refuses an update whose
+//! manifest names any artifact outside this repository's GitHub release
+//! downloads (`Manifest::validate_artifacts`), including the URL the updater
+//! actually requests as it parsed it, and an update that is not the exact
+//! `{os}-{arch}-{format}` entry of the installed format (R3, R4): a `.deb`
+//! never updates to an AppImage, an MSI never to NSIS. The minisign
+//! verification of the package is unchanged.
 
+// The Tauri updater parts are left out without `self-update`; what they
+// share with the rest then has no user.
+#![cfg_attr(not(feature = "self-update"), allow(dead_code, unused_imports))]
+
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+#[cfg(feature = "self-update")]
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 use deckpilot_ipc::{AgentPaths, Request, Response};
 use deckpilot_storage::ConfigStore;
 use deckpilot_update::channel::{Channel, ListedRelease, newest_release};
 use deckpilot_update::intent::{self, Observation, Recovery, UpdateIntent};
+use deckpilot_update::manifest::{Manifest, ManifestError, PlatformArtifact};
 use deckpilot_update::policy::{InstallContext, InstallDecision, UpdatePreferences, decide};
+use deckpilot_update::provider::{AvailableVersion, ProviderStatus};
 
 use crate::error::{CommandError, CommandResult};
 use crate::state::AppState;
+use crate::update_provider::{self, ActiveProvider, ProviderInfo};
 
 /// Base64 minisign public key of the release signing key, set at build time.
 pub const PUBLIC_KEY: Option<&str> = option_env!("DECKPILOT_UPDATER_PUBKEY");
@@ -104,6 +129,12 @@ fn configured() -> bool {
     PUBLIC_KEY.is_some_and(|key| !key.trim().is_empty())
 }
 
+/// Whether this build can verify and install updates itself: the updater
+/// is compiled in and so is its key. An input of the provider selection.
+pub(crate) fn self_update_compiled() -> bool {
+    cfg!(feature = "self-update") && configured()
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Phase {
@@ -123,6 +154,24 @@ pub struct UpdateInfo {
     date: Option<String>,
 }
 
+impl UpdateInfo {
+    pub(crate) fn into_available(self) -> AvailableVersion {
+        AvailableVersion {
+            version: self.version,
+            notes: self.notes,
+            date: self.date,
+        }
+    }
+
+    fn from_available(available: AvailableVersion) -> Self {
+        Self {
+            version: available.version,
+            notes: available.notes,
+            date: available.date,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
@@ -134,16 +183,24 @@ pub struct Progress {
 struct Inner {
     phase: Phase,
     available: Option<UpdateInfo>,
+    #[cfg(feature = "self-update")]
     update: Option<Update>,
     bytes: Option<Vec<u8>>,
     progress: Option<Progress>,
     error: Option<String>,
 }
 
-/// Shared updater state.
-#[derive(Default)]
+/// Shared updater state, with the provider chosen when it is created.
 pub struct UpdateManager {
     inner: Mutex<Inner>,
+    provider: ActiveProvider,
+}
+
+impl Default for UpdateManager {
+    /// The provider of the running build (`ActiveProvider::current`).
+    fn default() -> Self {
+        Self::with_provider(ActiveProvider::current())
+    }
 }
 
 impl std::fmt::Debug for UpdateManager {
@@ -164,9 +221,23 @@ pub struct UpdateState {
     available: Option<UpdateInfo>,
     progress: Option<Progress>,
     error: Option<String>,
+    /// Who updates this installation and what the app may do about it
+    /// (`distributionChannel`, `updateProvider`, `releaseChannel`,
+    /// `supportsAutomaticUpdates`, …). Additive: the fields above keep
+    /// their meaning.
+    #[serde(flatten)]
+    distribution: ProviderInfo,
 }
 
 impl UpdateManager {
+    /// Tests choose the distribution they need.
+    pub(crate) fn with_provider(provider: ActiveProvider) -> Self {
+        Self {
+            inner: Mutex::default(),
+            provider,
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner
             .lock()
@@ -192,14 +263,43 @@ fn save_preferences(state: &AppState, preferences: &UpdatePreferences) -> Comman
     Ok(())
 }
 
-fn snapshot<R: Runtime>(app: &AppHandle<R>) -> UpdateState {
+/// The provider chosen for `app`'s build.
+pub(crate) fn active_provider<R: Runtime>(app: &AppHandle<R>) -> ActiveProvider {
+    app.state::<UpdateManager>().provider
+}
+
+/// The update found by the last check.
+pub(crate) fn available<R: Runtime>(app: &AppHandle<R>) -> Option<UpdateInfo> {
+    app.state::<UpdateManager>().lock().available.clone()
+}
+
+/// The GitHub provider's status, from the phase.
+pub(crate) fn provider_status<R: Runtime>(app: &AppHandle<R>) -> ProviderStatus {
+    let manager = app.state::<UpdateManager>();
+    let inner = manager.lock();
+    let available = || inner.available.clone().map(UpdateInfo::into_available);
+    match inner.phase {
+        Phase::Idle => available().map_or(ProviderStatus::Idle, ProviderStatus::Available),
+        Phase::Checking => ProviderStatus::Checking,
+        Phase::Downloading => ProviderStatus::Downloading {
+            downloaded: inner.progress.map_or(0, |p| p.downloaded),
+            total: inner.progress.and_then(|p| p.total),
+        },
+        Phase::Ready => available().map_or(ProviderStatus::Idle, ProviderStatus::Ready),
+        Phase::Installing => ProviderStatus::Installing,
+    }
+}
+
+pub(crate) fn snapshot<R: Runtime>(app: &AppHandle<R>) -> UpdateState {
     let state = app.state::<AppState>();
     let manager = app.state::<UpdateManager>();
     let inner = manager.lock();
     let preferences = preferences(&state);
     UpdateState {
         current_version: env!("CARGO_PKG_VERSION"),
-        configured: configured(),
+        // As before for GitHub builds; false for every build that does not
+        // update itself.
+        configured: manager.provider.may_self_update(),
         target: deckpilot_update::manifest::current_target(),
         endpoint: endpoint(preferences.channel),
         preferences,
@@ -207,6 +307,7 @@ fn snapshot<R: Runtime>(app: &AppHandle<R>) -> UpdateState {
         available: inner.available.clone(),
         progress: inner.progress,
         error: inner.error.clone(),
+        distribution: manager.provider.info(),
     }
 }
 
@@ -281,16 +382,99 @@ pub(crate) struct Source {
     /// The executable whose installation is replaced; the running one by
     /// default.
     pub executable: Option<std::path::PathBuf>,
+    /// The exact manifest key of the installed format
+    /// (`{os}-{arch}-{format}`): the only entry the updater may use (R3,
+    /// R4), never the plain `{os}-{arch}` fallback.
+    pub target: String,
+    /// Which artifact URLs a manifest may name.
+    pub artifacts: ArtifactPolicy,
+}
+
+/// Which artifact URLs an update manifest may name (audit G10). Checked on
+/// every artifact of a manifest before anything is downloaded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ArtifactPolicy {
+    /// Release builds: release downloads of this repository only,
+    /// [`Manifest::validate_artifacts`] (pinned to
+    /// [`deckpilot_update::DOWNLOAD_PREFIX`], owner and repository in any
+    /// case).
+    GithubRelease,
+    /// The loopback update test build and the tests: URLs under this
+    /// `http://127.0.0.1:<port>/` prefix stand for release downloads, and
+    /// the same rule checks the rest of the URL and the signature.
+    Loopback(String),
+}
+
+impl ArtifactPolicy {
+    /// The policy of a build: loopback only with the compiled loopback
+    /// test endpoint.
+    fn of_build() -> Self {
+        test_endpoint().map_or(Self::GithubRelease, |endpoint| {
+            Self::Loopback(loopback_origin(endpoint))
+        })
+    }
+
+    /// Every artifact of `manifest`.
+    pub(crate) fn validate(&self, manifest: &Manifest) -> Result<(), ManifestError> {
+        manifest
+            .platforms
+            .values()
+            .try_for_each(|artifact| self.validate_artifact(artifact))
+    }
+
+    pub(crate) fn validate_artifact(
+        &self,
+        artifact: &PlatformArtifact,
+    ) -> Result<(), ManifestError> {
+        let url = match self {
+            Self::GithubRelease => artifact.url.clone(),
+            Self::Loopback(prefix) => artifact.url.strip_prefix(prefix.as_str()).map_or_else(
+                || artifact.url.clone(),
+                |rest| format!("{}{rest}", deckpilot_update::DOWNLOAD_PREFIX),
+            ),
+        };
+        let single = Manifest {
+            version: String::new(),
+            notes: None,
+            pub_date: None,
+            platforms: BTreeMap::from([(
+                String::new(),
+                PlatformArtifact {
+                    signature: artifact.signature.clone(),
+                    url,
+                },
+            )]),
+        };
+        single.validate_artifacts().map_err(|error| match error {
+            ManifestError::UntrustedUrl(_) => ManifestError::UntrustedUrl(artifact.url.clone()),
+            other => other,
+        })
+    }
+}
+
+/// `http://127.0.0.1:<port>/` of a loopback test endpoint.
+fn loopback_origin(endpoint: &str) -> String {
+    let rest = endpoint
+        .strip_prefix("http://127.0.0.1:")
+        .unwrap_or_default();
+    let port = rest.split('/').next().unwrap_or_default();
+    format!("http://127.0.0.1:{port}/")
 }
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl Source {
-    fn release(channel: Channel) -> CommandResult<Self> {
-        let key = PUBLIC_KEY.filter(|_| configured()).ok_or_else(|| {
-            CommandError::Invalid("updates are not configured in this build".into())
-        })?;
+    /// The release source of a build whose provider is `active`.
+    fn release(channel: Channel, active: &ActiveProvider) -> CommandResult<Self> {
+        let not_configured =
+            || CommandError::Invalid("updates are not configured in this build".into());
+        let key = PUBLIC_KEY
+            .filter(|_| configured())
+            .ok_or_else(not_configured)?;
+        // R1 and R3: only a GitHub build of a known format has a key to
+        // update from.
+        let target = active.manifest_key().ok_or_else(not_configured)?;
         let endpoint = match (test_endpoint(), channel) {
             (None, Channel::Prerelease) => Endpoint::Releases {
                 list: deckpilot_update::RELEASES_API.to_owned(),
@@ -305,6 +489,8 @@ impl Source {
             connect_timeout: CONNECT_TIMEOUT,
             read_timeout: READ_TIMEOUT,
             executable: None,
+            target,
+            artifacts: ArtifactPolicy::of_build(),
         })
     }
 
@@ -324,6 +510,7 @@ impl Source {
             .map(|tag| tag.manifest_url_at(downloads)))
     }
 
+    #[cfg(feature = "self-update")]
     fn updater<R: Runtime>(
         &self,
         app: &AppHandle<R>,
@@ -336,6 +523,9 @@ impl Source {
             .updater_builder()
             .pubkey(self.key.clone())
             .endpoints(vec![endpoint])?
+            // Exactly the installed format's entry (R3, R4). The release
+            // manifests always have it; the endpoints have no `{{target}}`.
+            .target(self.target.clone())
             // Never a pre-release on the stable channel, never an older
             // version: whatever a manifest announces.
             .version_comparator(move |current, remote| channel.accepts(&current, &remote.version))
@@ -345,13 +535,80 @@ impl Source {
         }
         builder.build()
     }
+
+    /// Refuses an update before anything is downloaded unless it is the
+    /// installed format's entry (R4) and every artifact URL of its manifest
+    /// passes the policy (G10). The URL the updater will request is checked
+    /// as well, as it parsed it: parsing resolves `%2e%2e` segments, which
+    /// could otherwise lead out of the release downloads.
+    #[cfg(feature = "self-update")]
+    fn verify(&self, update: &Update) -> Result<(), CheckError> {
+        if update.target != self.target {
+            return Err(CheckError::OtherFormat {
+                expected: self.target.clone(),
+                offered: update.target.clone(),
+            });
+        }
+        let manifest: Manifest = serde_json::from_value(update.raw_json.clone())
+            .map_err(|e| CheckError::Manifest(ManifestError::Json(e.to_string())))?;
+        self.artifacts
+            .validate(&manifest)
+            .and_then(|()| {
+                self.artifacts.validate_artifact(&PlatformArtifact {
+                    signature: update.signature.clone(),
+                    url: update.download_url.to_string(),
+                })
+            })
+            .map_err(CheckError::Manifest)
+    }
 }
 
-/// Why a check failed: the updater, or reading the release list.
+/// Why a check failed: the updater, reading the release list, or a manifest
+/// this build refuses.
 #[derive(Debug)]
 pub(crate) enum CheckError {
+    #[cfg(feature = "self-update")]
     Updater(tauri_plugin_updater::Error),
     Releases(String),
+    Manifest(ManifestError),
+    OtherFormat {
+        expected: String,
+        offered: String,
+    },
+}
+
+impl CheckError {
+    /// The message for a refused manifest; nothing was downloaded.
+    fn refused(&self) -> Option<String> {
+        let (summary, detail) = match self {
+            Self::Manifest(error @ ManifestError::UntrustedUrl(_)) => (
+                "the update description names a download outside DeckPilot's releases on \
+                 GitHub, so it was refused; nothing was downloaded. Do not install DeckPilot \
+                 from another source; report the problem if it persists",
+                error.to_string(),
+            ),
+            Self::Manifest(error @ ManifestError::InvalidSignature) => (
+                "the update description has a missing or malformed signature, so it was \
+                 refused; nothing was downloaded. Try again later and report the problem if it \
+                 persists",
+                error.to_string(),
+            ),
+            Self::Manifest(error) => (
+                "the update server did not return a valid update description; nothing was \
+                 downloaded. Try again later",
+                error.to_string(),
+            ),
+            Self::OtherFormat { expected, offered } => (
+                "the update is not a package of the format DeckPilot was installed as; nothing \
+                 was downloaded. Install the update from the releases page",
+                format!("the update is `{offered}`, this installation `{expected}`"),
+            ),
+            #[cfg(feature = "self-update")]
+            Self::Updater(_) => return None,
+            Self::Releases(_) => return None,
+        };
+        Some(format!("update check failed: {summary} ({detail})"))
+    }
 }
 
 /// GitHub's release list (prerelease channel). Read like the updater reads
@@ -403,6 +660,7 @@ impl Stage {
     }
 }
 
+#[cfg(feature = "self-update")]
 fn is_signature_error(error: &tauri_plugin_updater::Error) -> bool {
     use tauri_plugin_updater::Error as E;
     matches!(
@@ -418,6 +676,7 @@ fn is_signature_error(error: &tauri_plugin_updater::Error) -> bool {
 /// A message for an updater error that says what happened, what state the
 /// installation is in and what to do. The updater's own text follows as
 /// the detail; it holds URLs, versions and paths, never key material.
+#[cfg(feature = "self-update")]
 pub(crate) fn describe(stage: Stage, error: &tauri_plugin_updater::Error) -> String {
     use tauri_plugin_updater::Error as E;
     let summary = match error {
@@ -519,12 +778,15 @@ fn fail<R: Runtime>(app: &AppHandle<R>, phase: Phase, message: String) -> Comman
     CommandError::Invalid(message)
 }
 
-async fn check<R: Runtime>(app: &AppHandle<R>) -> CommandResult<Option<UpdateInfo>> {
+/// A check of the GitHub provider, from the build's release source.
+#[cfg(feature = "self-update")]
+pub(crate) async fn check<R: Runtime>(app: &AppHandle<R>) -> CommandResult<Option<UpdateInfo>> {
     let channel = preferences(&app.state::<AppState>()).channel;
-    let source = Source::release(channel)?;
+    let source = Source::release(channel, &active_provider(app))?;
     check_from(app, &source).await
 }
 
+#[cfg(feature = "self-update")]
 pub(crate) async fn check_from<R: Runtime>(
     app: &AppHandle<R>,
     source: &Source,
@@ -537,7 +799,11 @@ pub(crate) async fn check_from<R: Runtime>(
         let updater = source
             .updater(app, &manifest)
             .map_err(CheckError::Updater)?;
-        updater.check().await.map_err(CheckError::Updater)
+        let found = updater.check().await.map_err(CheckError::Updater)?;
+        if let Some(update) = &found {
+            source.verify(update)?;
+        }
+        Ok(found)
     }
     .await;
     let state = app.state::<AppState>();
@@ -579,6 +845,18 @@ pub(crate) async fn check_from<R: Runtime>(
         Err(CheckError::Updater(error)) => {
             Err(fail(app, Phase::Idle, describe(Stage::Check, &error)))
         }
+        Err(error @ (CheckError::Manifest(_) | CheckError::OtherFormat { .. })) => {
+            // Nothing from this manifest is kept.
+            {
+                let manager = app.state::<UpdateManager>();
+                let mut inner = manager.lock();
+                inner.available = None;
+                inner.update = None;
+                inner.bytes = None;
+                inner.progress = None;
+            }
+            Err(fail(app, Phase::Idle, error.refused().unwrap_or_default()))
+        }
         Err(CheckError::Releases(detail)) => Err(fail(
             app,
             Phase::Idle,
@@ -591,6 +869,7 @@ pub(crate) async fn check_from<R: Runtime>(
     }
 }
 
+#[cfg(feature = "self-update")]
 pub(crate) async fn download<R: Runtime>(app: &AppHandle<R>) -> CommandResult<()> {
     let update = app
         .state::<UpdateManager>()
@@ -644,7 +923,8 @@ pub(crate) async fn download<R: Runtime>(app: &AppHandle<R>) -> CommandResult<()
 }
 
 /// Stops the agent, installs, and restarts the application.
-async fn install<R: Runtime>(app: &AppHandle<R>) -> CommandResult<()> {
+#[cfg(feature = "self-update")]
+pub(crate) async fn install<R: Runtime>(app: &AppHandle<R>) -> CommandResult<()> {
     replace(app).await?;
     log(app, "update installed; restarting the application");
     app.restart();
@@ -657,6 +937,7 @@ async fn install<R: Runtime>(app: &AppHandle<R>) -> CommandResult<()> {
 ///
 /// On Windows the installer takes over, and this process exits instead of
 /// returning.
+#[cfg(feature = "self-update")]
 pub(crate) async fn replace<R: Runtime>(app: &AppHandle<R>) -> CommandResult<()> {
     let (update, bytes) = {
         let manager = app.state::<UpdateManager>();
@@ -858,19 +1139,33 @@ pub fn update_state<R: Runtime>(app: AppHandle<R>) -> UpdateState {
     snapshot(&app)
 }
 
+/// Checks through the build's provider: the Tauri updater for GitHub
+/// builds, nothing at all for package-manager and store builds.
 #[tauri::command]
 pub async fn check_for_updates<R: Runtime>(app: AppHandle<R>) -> CommandResult<Option<UpdateInfo>> {
-    check(&app).await
+    update_provider::for_app(&app)
+        .check()
+        .await
+        .map(|found| found.map(UpdateInfo::from_available))
+        .map_err(update_provider::command_error)
 }
 
+/// Downloads through the build's provider; only GitHub builds can (R2).
 #[tauri::command]
 pub async fn download_update<R: Runtime>(app: AppHandle<R>) -> CommandResult<()> {
-    download(&app).await
+    update_provider::for_app(&app)
+        .prepare(&|_, _| {})
+        .await
+        .map_err(update_provider::command_error)
 }
 
+/// Installs through the build's provider; only GitHub builds can (R2).
 #[tauri::command]
 pub async fn install_update<R: Runtime>(app: AppHandle<R>) -> CommandResult<()> {
-    install(&app).await
+    update_provider::for_app(&app)
+        .install()
+        .await
+        .map_err(update_provider::command_error)
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -896,7 +1191,10 @@ pub fn set_update_preferences<R: Runtime>(
             ));
         }
         inner.available = None;
-        inner.update = None;
+        #[cfg(feature = "self-update")]
+        {
+            inner.update = None;
+        }
         inner.bytes = None;
         inner.progress = None;
         inner.phase = Phase::Idle;
@@ -917,9 +1215,18 @@ async fn agent_activity(paths: &AgentPaths) -> (Option<u64>, bool) {
     }
 }
 
-/// Periodically checks for updates and applies the configured mode.
+/// Without the updater no build updates itself, so there is no background
+/// task.
+#[cfg(not(feature = "self-update"))]
+#[allow(clippy::needless_pass_by_value)]
+pub fn spawn_background<R: Runtime>(_app: AppHandle<R>) {}
+
+/// Periodically checks for updates and applies the configured mode. Only a
+/// build that updates itself has this task; package-manager and store
+/// builds never check in the background.
+#[cfg(feature = "self-update")]
 pub fn spawn_background<R: Runtime>(app: AppHandle<R>) {
-    if !configured() {
+    if !update_provider::for_app(&app).supports_automatic_updates() {
         return;
     }
     tauri::async_runtime::spawn(async move {
@@ -1003,10 +1310,135 @@ mod endpoint_tests {
                 deckpilot_update::RELEASES_API
             );
             assert_eq!(timing(), (STARTUP_DELAY, TICK));
+            assert_eq!(ArtifactPolicy::of_build(), ArtifactPolicy::GithubRelease);
+        }
+        assert_eq!(
+            loopback_origin("http://127.0.0.1:8765/latest.json"),
+            "http://127.0.0.1:8765/"
+        );
+        assert_eq!(
+            loopback_origin("http://127.0.0.1:8765"),
+            "http://127.0.0.1:8765/"
+        );
+    }
+
+    /// The published `v0.6.0-alpha.3` manifest (`prerelease.json`, audit
+    /// section 5): every key and asset name as released. The new client
+    /// check accepts it, and every installed format finds its exact entry.
+    #[test]
+    fn the_published_manifest_shape_passes_the_client_check() {
+        use deckpilot_update::provider::{
+            Architecture, Distribution, DistributionChannel, PackageFormat as F, Platform,
+        };
+        const SIGNATURE: &str =
+            include_str!("../../../../crates/deckpilot-update/tests/fixtures/artifact.bin.sig");
+        let tag = "v0.6.0-alpha.3";
+        let entries = [
+            ("darwin-aarch64", "DeckPilot_aarch64.app.tar.gz"),
+            ("darwin-aarch64-app", "DeckPilot_aarch64.app.tar.gz"),
+            ("darwin-x86_64", "DeckPilot_x64.app.tar.gz"),
+            ("darwin-x86_64-app", "DeckPilot_x64.app.tar.gz"),
+            ("windows-x86_64", "DeckPilot_0.6.0-alpha.3_x64_en-US.msi"),
+            (
+                "windows-x86_64-msi",
+                "DeckPilot_0.6.0-alpha.3_x64_en-US.msi",
+            ),
+            (
+                "windows-x86_64-nsis",
+                "DeckPilot_0.6.0-alpha.3_x64-setup.exe",
+            ),
+            ("linux-x86_64", "DeckPilot_0.6.0-alpha.3_amd64.AppImage"),
+            (
+                "linux-x86_64-appimage",
+                "DeckPilot_0.6.0-alpha.3_amd64.AppImage",
+            ),
+            ("linux-x86_64-deb", "DeckPilot_0.6.0-alpha.3_amd64.deb"),
+        ];
+        let manifest = Manifest {
+            version: "0.6.0-alpha.3".into(),
+            notes: None,
+            pub_date: None,
+            platforms: entries
+                .iter()
+                .map(|(key, asset)| {
+                    (
+                        (*key).to_owned(),
+                        PlatformArtifact {
+                            signature: SIGNATURE.trim().to_owned(),
+                            url: format!("{}{tag}/{asset}", deckpilot_update::DOWNLOAD_PREFIX),
+                        },
+                    )
+                })
+                .collect(),
+        };
+        let policy = ArtifactPolicy::GithubRelease;
+        assert_eq!(policy.validate(&manifest), Ok(()));
+        // As the updater parses each URL before downloading it.
+        for artifact in manifest.platforms.values() {
+            let parsed = artifact.url.parse::<reqwest::Url>().unwrap().to_string();
+            assert_eq!(parsed, artifact.url);
+            assert_eq!(
+                policy.validate_artifact(&PlatformArtifact {
+                    signature: artifact.signature.clone(),
+                    url: parsed,
+                }),
+                Ok(())
+            );
+        }
+        for (platform, architecture, format) in [
+            (Platform::Macos, Architecture::Aarch64, F::App),
+            (Platform::Macos, Architecture::X86_64, F::App),
+            (Platform::Windows, Architecture::X86_64, F::Msi),
+            (Platform::Windows, Architecture::X86_64, F::Nsis),
+            (Platform::Linux, Architecture::X86_64, F::AppImage),
+            (Platform::Linux, Architecture::X86_64, F::Deb),
+        ] {
+            let distribution = Distribution::new(
+                DistributionChannel::Github,
+                None,
+                "0.6.0-alpha.3",
+                platform,
+                architecture,
+            )
+            .unwrap();
+            let key = ActiveProvider::select(distribution, Some(format), true)
+                .manifest_key()
+                .unwrap();
+            assert!(manifest.platforms.contains_key(&key), "{key}");
+        }
+    }
+
+    #[test]
+    fn loopback_urls_stand_for_release_downloads_only_under_their_prefix() {
+        const SIGNATURE: &str =
+            include_str!("../../../../crates/deckpilot-update/tests/fixtures/artifact.bin.sig");
+        let policy = ArtifactPolicy::Loopback("http://127.0.0.1:8765/".into());
+        let artifact = |url: &str| PlatformArtifact {
+            signature: SIGNATURE.trim().to_owned(),
+            url: url.to_owned(),
+        };
+        assert_eq!(
+            policy.validate_artifact(&artifact("http://127.0.0.1:8765/DeckPilot.app.tar.gz")),
+            Ok(())
+        );
+        for bad in [
+            "http://127.0.0.1:87650/DeckPilot.app.tar.gz",
+            "http://127.0.0.1:8766/DeckPilot.app.tar.gz",
+            "http://localhost:8765/DeckPilot.app.tar.gz",
+            "http://127.0.0.1:8765/../x",
+            "http://127.0.0.1:8765/a?b",
+            "http://127.0.0.1:8765/",
+            "https://evil.example/DeckPilot.app.tar.gz",
+        ] {
+            assert_eq!(
+                policy.validate_artifact(&artifact(bad)),
+                Err(ManifestError::UntrustedUrl(bad.to_owned())),
+                "{bad}"
+            );
         }
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "self-update"))]
 #[path = "updates_tests.rs"]
 mod flow_tests;

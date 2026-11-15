@@ -384,13 +384,18 @@ describe("Variables page with the unified registry", () => {
       modules: [{ id: "projects", name: "Projects" } as never],
     })
     await screen.findByRole("table", { name: "Variables" })
-    expect(rows()).toEqual([
-      "projects.current.key",
-      "system.platform",
-      "vault.token",
-      "workSession.state",
-      "shared.paths.root",
-    ])
+    // The table first shows the shared variables; the registry's rows come
+    // from a second request (`listVariables`) that starts once the table is
+    // shown and can finish later, e.g. on a busy computer.
+    await waitFor(() => {
+      expect(rows()).toEqual([
+        "projects.current.key",
+        "system.platform",
+        "vault.token",
+        "workSession.state",
+        "shared.paths.root",
+      ])
+    })
     const key = within(table()).getByRole("row", { name: "projects.current.key" })
     expect(key).toHaveTextContent("Projects module")
     expect(key).toHaveTextContent("Read-only")

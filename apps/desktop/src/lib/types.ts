@@ -917,6 +917,16 @@ export type AgentCapability =
   | "workSession"
   | "variableRegistry"
 
+/** What became of the agent's reload after a save (`commands/reload.rs`). */
+export type AgentReload =
+  | { state: "applied" }
+  | { state: "notRunning" }
+  | { state: "timedOut" }
+  | { state: "failed"; message: string }
+
+/** A saved value, returned once the agent has read it (or could not). */
+export type Saved<T> = T & { agentReload: AgentReload }
+
 export interface AgentConnection {
   running: boolean
   status: AgentStatus | null

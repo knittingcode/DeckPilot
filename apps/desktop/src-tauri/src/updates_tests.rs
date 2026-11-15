@@ -26,7 +26,10 @@ use deckpilot_presence::Unavailable;
 
 use deckpilot_update::channel::Channel;
 
-use super::{Endpoint, Phase, Source, UPDATE_LOG, UpdateManager, check_from, download, may_start};
+use super::{
+    ArtifactPolicy, Endpoint, Phase, Source, UPDATE_LOG, UpdateManager, check_from, download,
+    may_start,
+};
 use crate::state::AppState;
 
 /// The announced version: newer than any real one.
@@ -285,9 +288,23 @@ fn manifest_of(server: &Server, signature: &str, version: &str) -> Vec<u8> {
             target.clone(): platform,
             format!("{target}-app"): platform,
             format!("{target}-appimage"): platform,
+            format!("{target}-msi"): platform,
         }
     }))
     .unwrap()
+}
+
+/// The exact manifest key of the format these tests install as: the
+/// `.app` (macOS), the `AppImage` (Linux), the MSI (Windows).
+fn installed_format_key() -> String {
+    let format = if cfg!(target_os = "macos") {
+        "app"
+    } else if cfg!(target_os = "linux") {
+        "appimage"
+    } else {
+        "msi"
+    };
+    format!("{}-{format}", deckpilot_update::manifest::current_target())
 }
 
 struct Harness {
@@ -300,6 +317,11 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        Self::with_provider(UpdateManager::default())
+    }
+
+    /// A harness whose app has the provider of `manager`.
+    fn with_provider(manager: UpdateManager) -> Self {
         let dir = std::env::temp_dir().join(format!(
             "deckpilot-update-test-{}",
             deckpilot_core::ProfileId::new()
@@ -318,7 +340,7 @@ impl Harness {
         let app = mock_builder()
             .plugin(tauri_plugin_updater::Builder::new().build())
             .manage(AppState::with_presence(paths.clone(), Arc::new(Unavailable)).unwrap())
-            .manage(UpdateManager::default())
+            .manage(manager)
             .build(context)
             .unwrap();
         let server = Server::start();
@@ -330,6 +352,8 @@ impl Harness {
             connect_timeout: CONNECT_TIMEOUT,
             read_timeout: READ_TIMEOUT,
             executable: Some(dir.join("DeckPilot.app/Contents/MacOS/deckpilot-desktop")),
+            target: installed_format_key(),
+            artifacts: ArtifactPolicy::Loopback(server.url("")),
         };
         Self {
             app,
@@ -616,9 +640,15 @@ fn corrupted_or_foreign_updates_are_rejected() {
 fn a_malformed_signature_is_rejected() {
     let h = Harness::new();
     h.offer(b"package", &STANDARD.encode("not a minisign signature"));
-    h.check().unwrap();
-    let error = h.download().unwrap_err();
-    h.assert_failed_cleanly(&error, "failed signature verification");
+    // Refused by the manifest check, before anything is downloaded.
+    let error = h.check().unwrap_err();
+    h.assert_failed_cleanly(&error, "missing or malformed signature");
+    assert!(
+        !h.server.seen().contains("GET /package"),
+        "{}",
+        h.server.seen()
+    );
+    assert!(h.handle().state::<UpdateManager>().lock().update.is_none());
 }
 
 #[test]
@@ -1057,5 +1087,341 @@ mod recovery {
             "{}",
             h.log()
         );
+    }
+}
+
+/// A manifest of `VERSION` with exactly these entries, all signed with
+/// `signature`.
+fn manifest_with(signature: &str, entries: &[(String, String)]) -> Vec<u8> {
+    let platforms: serde_json::Map<String, serde_json::Value> = entries
+        .iter()
+        .map(|(key, url)| (key.clone(), json!({ "url": url, "signature": signature })))
+        .collect();
+    serde_json::to_vec(&json!({
+        "version": VERSION,
+        "notes": "Test update",
+        "pub_date": "2026-11-12T00:00:00Z",
+        "platforms": platforms,
+    }))
+    .unwrap()
+}
+
+/// The check failed before anything was downloaded and kept nothing.
+fn assert_refused_before_download(
+    h: &Harness,
+    result: Result<Option<String>, String>,
+    expected: &str,
+) {
+    let error = result.expect_err("the update must be refused");
+    h.assert_failed_cleanly(&error, expected);
+    assert!(h.handle().state::<UpdateManager>().lock().update.is_none());
+    assert!(
+        h.handle()
+            .state::<UpdateManager>()
+            .lock()
+            .available
+            .is_none()
+    );
+    assert!(
+        !h.server.seen().contains("GET /package"),
+        "the package was requested:\n{}",
+        h.server.seen()
+    );
+}
+
+/// A release URL of this repository that resolves, once parsed, to another
+/// repository's downloads: `%2e%2e` is `..` to the URL parser.
+const ESCAPING_URL: &str = "https://github.com/knittingcode/DeckPilot/releases/download/\
+                            %2e%2e/%2e%2e/%2e%2e/%2e%2e/attacker/deckpilot/releases/download/v1/x";
+
+#[test]
+fn artifacts_on_another_host_are_refused_before_download() {
+    let h = Harness::new();
+    let package = b"DeckPilot update package".to_vec();
+    let signature = sign(&h.keys, &package, VERSION);
+    h.server.reply("package", Reply::Ok(package));
+    let key = installed_format_key();
+    let target = deckpilot_update::manifest::current_target();
+    let cases = [
+        // The entry this installation would download.
+        vec![(key.clone(), "https://evil.example/package".to_owned())],
+        // Any other entry of the manifest.
+        vec![
+            (key.clone(), h.server.url("package")),
+            (
+                format!("{target}-deb"),
+                "https://evil.example/package".to_owned(),
+            ),
+        ],
+        // Another port of the loopback host.
+        vec![(key.clone(), "http://127.0.0.1:1/package".to_owned())],
+        // Out of the downloads with `..`.
+        vec![(key.clone(), h.server.url("v1/../../package"))],
+    ];
+    for entries in cases {
+        h.server.reply(
+            "latest.json",
+            Reply::Ok(manifest_with(&signature, &entries)),
+        );
+        assert_refused_before_download(&h, h.check(), "outside DeckPilot's releases on GitHub");
+    }
+    // The same manifest with trusted URLs is accepted.
+    h.server.reply(
+        "latest.json",
+        Reply::Ok(manifest_with(&signature, &[(key, h.server.url("package"))])),
+    );
+    assert_eq!(h.check(), Ok(Some(VERSION.to_owned())));
+    h.download_ok();
+}
+
+#[test]
+fn release_builds_accept_only_this_repositorys_release_downloads() {
+    let mut h = Harness::new();
+    // The policy of release builds; the manifest still comes from the
+    // loopback server, the package is never downloaded.
+    h.source.artifacts = ArtifactPolicy::GithubRelease;
+    let package = b"DeckPilot update package".to_vec();
+    let signature = sign(&h.keys, &package, VERSION);
+    h.server.reply("package", Reply::Ok(package));
+    // The escaping URL passes as a string; only as the updater parses it
+    // does it leave the release downloads.
+    assert_eq!(
+        ArtifactPolicy::GithubRelease.validate_artifact(
+            &deckpilot_update::manifest::PlatformArtifact {
+                signature: signature.clone(),
+                url: ESCAPING_URL.to_owned(),
+            }
+        ),
+        Ok(())
+    );
+    let key = installed_format_key();
+    for url in [
+        h.server.url("package"),
+        "https://example.com/DeckPilot.app.tar.gz".to_owned(),
+        "https://github.com/someone/DeckPilot/releases/download/v99.0.0/a.tar.gz".to_owned(),
+        "https://github.com/knittingcode/deckpilot-plugins/releases/download/v99.0.0/a".to_owned(),
+        "http://github.com/knittingcode/DeckPilot/releases/download/v99.0.0/a.tar.gz".to_owned(),
+        ESCAPING_URL.to_owned(),
+    ] {
+        h.server.reply(
+            "latest.json",
+            Reply::Ok(manifest_with(&signature, &[(key.clone(), url.clone())])),
+        );
+        assert_refused_before_download(&h, h.check(), "outside DeckPilot's releases on GitHub");
+    }
+    // The pinned prefix, and the repository's name in any case (#227).
+    for url in [
+        format!(
+            "{}v99.0.0/DeckPilot.app.tar.gz",
+            deckpilot_update::DOWNLOAD_PREFIX
+        ),
+        "https://github.com/knittingcode/deckpilot/releases/download/v99.0.0/a.tar.gz".to_owned(),
+    ] {
+        h.server.reply(
+            "latest.json",
+            Reply::Ok(manifest_with(&signature, &[(key.clone(), url)])),
+        );
+        assert_eq!(h.check(), Ok(Some(VERSION.to_owned())));
+    }
+}
+
+#[test]
+fn an_update_keeps_the_installed_format() {
+    let mut h = Harness::new();
+    let package = b"DeckPilot update package".to_vec();
+    let signature = sign(&h.keys, &package, VERSION);
+    h.server.reply("package", Reply::Ok(package));
+    // Installed as a `.deb`; the manifest offers every other format, and
+    // the plain `{os}-{arch}` entry (the AppImage on Linux).
+    let target = deckpilot_update::manifest::current_target();
+    h.source.target = format!("{target}-deb");
+    let others: Vec<_> = ["", "-app", "-appimage", "-rpm", "-msi", "-nsis"]
+        .iter()
+        .map(|suffix| (format!("{target}{suffix}"), h.server.url("package")))
+        .collect();
+    h.server
+        .reply("latest.json", Reply::Ok(manifest_with(&signature, &others)));
+    assert_refused_before_download(&h, h.check(), "no update for this platform");
+    // With its own entry it updates.
+    let mut entries = others;
+    entries.push((format!("{target}-deb"), h.server.url("package")));
+    h.server.reply(
+        "latest.json",
+        Reply::Ok(manifest_with(&signature, &entries)),
+    );
+    assert_eq!(h.check(), Ok(Some(VERSION.to_owned())));
+}
+
+mod providers {
+    use super::*;
+    use crate::update_provider::{ActiveProvider, GithubReleaseProvider};
+    use crate::updates::{check_for_updates, download_update, install_update, snapshot};
+    use deckpilot_update::provider::{
+        Architecture, Distribution, DistributionChannel, PackageFormat, Platform, ProviderKind,
+        ReleaseChannel, UpdateProvider,
+    };
+
+    fn record(channel: DistributionChannel) -> Distribution {
+        Distribution::new(
+            channel,
+            None,
+            env!("CARGO_PKG_VERSION"),
+            Platform::CURRENT,
+            Architecture::CURRENT,
+        )
+        .unwrap()
+    }
+
+    /// A GitHub build of this platform, installed as the tests' format,
+    /// with a key.
+    fn github() -> ActiveProvider {
+        ActiveProvider::select(record(DistributionChannel::Github), Some(format()), true)
+    }
+
+    fn format() -> PackageFormat {
+        if cfg!(target_os = "macos") {
+            PackageFormat::App
+        } else if cfg!(target_os = "linux") {
+            PackageFormat::AppImage
+        } else {
+            PackageFormat::Msi
+        }
+    }
+
+    fn state(h: &Harness) -> serde_json::Value {
+        serde_json::to_value(snapshot(h.handle())).unwrap()
+    }
+
+    fn block<T>(future: impl std::future::Future<Output = T>) -> T {
+        tauri::async_runtime::block_on(future)
+    }
+
+    #[test]
+    fn a_github_build_updates_through_its_provider_as_before() {
+        let h = Harness::with_provider(UpdateManager::with_provider(github()));
+        let package = b"DeckPilot update package".repeat(100);
+        h.offer(&package, &sign(&h.keys, &package, VERSION));
+        assert_eq!(
+            crate::update_provider::for_app(h.handle()).kind(),
+            ProviderKind::GithubRelease
+        );
+        assert_eq!(
+            github().manifest_key(),
+            Some(installed_format_key()),
+            "the key the tests install from is the build's"
+        );
+        let provider = GithubReleaseProvider {
+            app: h.handle(),
+            source: Some(h.source.clone()),
+        };
+        assert!(provider.supports_automatic_updates());
+        let found = block(provider.check()).unwrap().unwrap();
+        assert_eq!(found.version, VERSION);
+        assert_eq!(provider.available_version(), Some(found));
+        block(provider.prepare(&|_, _| {})).unwrap();
+        assert_eq!(h.phase(), Phase::Ready);
+        assert!(h.has_package());
+
+        let state = state(&h);
+        // The existing fields, as before.
+        assert_eq!(state["configured"], true);
+        assert_eq!(state["currentVersion"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(state["phase"], "ready");
+        assert_eq!(state["available"]["version"], VERSION);
+        for field in ["target", "endpoint", "preferences", "progress", "error"] {
+            assert!(state.get(field).is_some(), "{field}");
+        }
+        // The new ones.
+        assert_eq!(state["distributionChannel"], "github");
+        assert_eq!(state["updateProvider"], "github_release");
+        assert_eq!(
+            state["releaseChannel"],
+            ReleaseChannel::for_version(env!("CARGO_PKG_VERSION"))
+                .unwrap()
+                .name()
+        );
+        assert_eq!(state["supportsAutomaticUpdates"], true);
+        assert_eq!(state["managedBy"], serde_json::Value::Null);
+        assert_eq!(state["capabilities"]["selfUpdate"], true);
+    }
+
+    #[test]
+    fn package_manager_and_store_builds_refuse_to_self_update() {
+        use DistributionChannel as C;
+        let channels: &[C] = if cfg!(target_os = "macos") {
+            &[C::Homebrew, C::MacAppStore]
+        } else if cfg!(target_os = "linux") {
+            &[C::Apt, C::Flathub]
+        } else {
+            &[C::Winget, C::MicrosoftStore]
+        };
+        for &channel in channels {
+            // Even with a key compiled in and a valid update reachable.
+            let active = ActiveProvider::select(record(channel), None, true);
+            let h = Harness::with_provider(UpdateManager::with_provider(active));
+            let package = b"DeckPilot update package".to_vec();
+            h.offer(&package, &sign(&h.keys, &package, VERSION));
+
+            // A check does nothing at all: no request is made.
+            assert!(
+                block(check_for_updates(h.handle().clone()))
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(h.server.seen(), "", "{channel}");
+            assert!(!crate::update_provider::for_app(h.handle()).supports_automatic_updates());
+
+            // Asked to download or install, even with an update found by
+            // the GitHub code path in its state, it refuses (R2).
+            block(check_from(h.handle(), &h.source)).unwrap();
+            for error in [
+                block(download_update(h.handle().clone())).unwrap_err(),
+                block(install_update(h.handle().clone())).unwrap_err(),
+            ] {
+                let message = error.to_string();
+                assert!(message.contains("is not available"), "{channel}: {message}");
+            }
+            assert!(!h.has_package());
+            assert!(
+                !h.server.seen().contains("GET /package"),
+                "{channel}: {}",
+                h.server.seen()
+            );
+
+            let state = state(&h);
+            assert_eq!(state["configured"], false);
+            assert_eq!(state["distributionChannel"], channel.name());
+            assert_eq!(state["managedBy"], channel.name());
+            assert_eq!(state["supportsAutomaticUpdates"], false);
+            assert_eq!(state["capabilities"]["selfUpdate"], false);
+            assert_eq!(state["capabilities"]["channelChoice"], false);
+            assert_eq!(
+                state["updateInstruction"].as_str(),
+                deckpilot_update::provider::update_instruction(channel)
+            );
+            let provider = state["updateProvider"].as_str().unwrap();
+            assert!(
+                provider == "external_package_manager" || provider == "store_managed",
+                "{provider}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_build_without_updates_says_so_as_before() {
+        // No key: today's message, and no request.
+        let active =
+            ActiveProvider::select(record(DistributionChannel::Github), Some(format()), false);
+        let h = Harness::with_provider(UpdateManager::with_provider(active));
+        let error = block(check_for_updates(h.handle().clone())).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "updates are not configured in this build"
+        );
+        assert!(block(download_update(h.handle().clone())).is_err());
+        assert_eq!(h.server.seen(), "");
+        let state = state(&h);
+        assert_eq!(state["configured"], false);
+        assert_eq!(state["updateProvider"], "none");
     }
 }

@@ -8,7 +8,7 @@ import type { Conversion } from "@/lib/types"
 import { WorkflowsPage } from "@/pages/workflows"
 import { api, resetApi } from "@/test/api-mock"
 import { installDomStubs } from "@/test/dom"
-import { ACTION_TYPES, action, profileView, stepWorkflow } from "@/test/fixtures"
+import { ACTION_TYPES, action, profileView, savedByAgent, stepWorkflow } from "@/test/fixtures"
 import { renderWithApp } from "@/test/render"
 import { resetToasts, toast } from "@/test/toast"
 import type { BuilderProps } from "@/workflow-builder/builder"
@@ -53,7 +53,7 @@ async function renderWorkflows(workflows = [morning]) {
 
 describe("Workflows page", () => {
   it("edits a step workflow: adds a step, validates and saves", async () => {
-    api.saveWorkflow.mockResolvedValue(morning)
+    api.saveWorkflow.mockResolvedValue(savedByAgent(morning))
     const { user, context } = await renderWorkflows()
     expect(screen.getByText(/This workflow runs its steps in order/)).toBeInTheDocument()
 
