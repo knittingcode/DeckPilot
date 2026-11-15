@@ -6,7 +6,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{DOWNLOAD_PREFIX, REPOSITORY};
+use crate::REPOSITORY;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlatformArtifact {
@@ -115,8 +115,9 @@ pub fn parse_version(value: &str) -> Result<Version, ManifestError> {
 /// resolves them (the repository was renamed from `knittingcode/DeckPilot`
 /// to `knittingcode/deckpilot`; both name the same repository). This widens
 /// nothing beyond that one repository. Builds up to 0.6.0-alpha.3 compared
-/// the whole [`DOWNLOAD_PREFIX`] case-sensitively, so the release pipeline
-/// still writes exactly that prefix (`tools/release-pipeline/common.sh`).
+/// the whole [`crate::DOWNLOAD_PREFIX`] case-sensitively, so the release
+/// pipeline still writes exactly that prefix
+/// (`tools/release-pipeline/common.sh`).
 fn release_download_path(url: &str) -> Option<&str> {
     let (want_owner, want_repo) = REPOSITORY.split_once('/')?;
     let rest = url.strip_prefix("https://github.com/")?;
@@ -149,6 +150,7 @@ pub fn current_target() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DOWNLOAD_PREFIX;
 
     const SIGNATURE: &str = include_str!("../tests/fixtures/artifact.bin.sig");
 
