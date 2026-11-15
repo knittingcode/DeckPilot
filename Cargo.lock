@@ -1134,6 +1134,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "deckpilot-distribution"
+version = "0.6.0-alpha.3"
+
+[[package]]
 name = "deckpilot-hid"
 version = "0.6.0-alpha.3"
 dependencies = [
@@ -1468,12 +1472,14 @@ name = "deckpilot-update"
 version = "0.6.0-alpha.3"
 dependencies = [
  "base64 0.23.1",
+ "deckpilot-distribution",
  "minisign",
  "minisign-verify",
  "semver",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "toml 1.2.1+spec-1.1.0",
 ]
 
 [[package]]
