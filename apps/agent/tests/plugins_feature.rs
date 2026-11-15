@@ -7,8 +7,8 @@ use std::path::Path;
 use std::process::Command;
 
 /// The agent's normal and build dependencies (no dev-dependencies), one
-/// package name per line.
-fn dependencies(features: &[&str]) -> Vec<String> {
+/// package name per line; `direct` keeps only its own dependencies.
+fn dependencies(features: &[&str], direct: bool) -> Vec<String> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     let mut command = Command::new(option_env!("CARGO").unwrap_or("cargo"));
     command
@@ -24,6 +24,9 @@ fn dependencies(features: &[&str]) -> Vec<String> {
             "--format",
             "{p}",
         ]);
+    if direct {
+        command.args(["--depth", "1"]);
+    }
     for feature in features {
         command.args(["--features", feature]);
     }
@@ -42,7 +45,7 @@ fn dependencies(features: &[&str]) -> Vec<String> {
 
 #[test]
 fn default_features_pull_no_plugin_crates() {
-    let default = dependencies(&[]);
+    let default = dependencies(&[], false);
     assert!(
         default.iter().any(|p| p == "deckpilot-agent"),
         "{default:?}"
@@ -55,12 +58,14 @@ fn default_features_pull_no_plugin_crates() {
         plugin.is_empty(),
         "the default agent build depends on plugin crates: {plugin:?}"
     );
+    // Only the agent's own dependency: on Linux the keyring's Secret
+    // Service client already pulls in an `hkdf` of its own.
     assert!(
-        !default.iter().any(|p| p == "hkdf"),
+        !dependencies(&[], true).iter().any(|p| p == "hkdf"),
         "`hkdf` is only for the plugins feature"
     );
 
-    let with_plugins = dependencies(&["plugins"]);
+    let with_plugins = dependencies(&["plugins"], false);
     for expected in [
         "deckpilot-plugin-store",
         "deckpilot-plugin-registry",
