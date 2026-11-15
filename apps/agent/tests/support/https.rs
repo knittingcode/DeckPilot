@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::{Read as _, Write as _};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
@@ -116,10 +117,10 @@ fn head(status: u16, length: Option<usize>, extra: &[(&str, &str)]) -> Vec<u8> {
         status_text(status)
     );
     if let Some(length) = length {
-        text.push_str(&format!("Content-Length: {length}\r\n"));
+        let _ = write!(text, "Content-Length: {length}\r\n");
     }
     for (name, value) in extra {
-        text.push_str(&format!("{name}: {value}\r\n"));
+        let _ = write!(text, "{name}: {value}\r\n");
     }
     text.push_str("\r\n");
     text.into_bytes()

@@ -557,7 +557,7 @@ fn an_untrusted_certificate_is_unreachable() {
     );
     let why = source.take_unavailable().unwrap();
     assert!(why.contains("timestamp") || why.contains("keys"), "{why}");
-    assert!(server.log().is_empty());
+    assert_eq!(server.log(), Vec::<String>::new());
 }
 
 #[test]
@@ -732,7 +732,7 @@ fn github_asset_hosts_only_for_the_pinned_url() {
         TlsRoots::System,
     )
     .unwrap();
-    assert!(mirrored.package_redirect_hosts.is_empty());
+    assert_eq!(mirrored.package_redirect_hosts, Vec::<String>::new());
     assert!(
         HttpsConfig::new(
             "https://registry.example/",

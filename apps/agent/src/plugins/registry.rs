@@ -98,14 +98,14 @@ enum Source {
         site: DirectorySource,
         releases: PathBuf,
     },
-    Https(HttpsSource),
+    Https(Box<HttpsSource>),
 }
 
 impl Source {
     fn documents(&self) -> &dyn RegistrySource {
         match self {
             Self::Directory { site, .. } => site,
-            Self::Https(https) => https,
+            Self::Https(https) => https.as_ref(),
         }
     }
 }
@@ -232,7 +232,7 @@ impl Registry {
         let source = HttpsSource::new(config)?;
         Ok(Self {
             name: source.name(),
-            source: Source::Https(source),
+            source: Source::Https(Box::new(source)),
             client: open_client(roots, state_dir)?,
             details: state_dir.join(DETAILS_DIR),
             offline: None,
