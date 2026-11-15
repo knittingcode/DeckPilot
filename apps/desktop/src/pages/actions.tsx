@@ -19,9 +19,9 @@ import {
 import { useEditingProfile } from "@/hooks/use-profile"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { actionReferences, isDirect, referenceTarget } from "@/lib/action-references"
-import { useAppContext } from "@/lib/app-context"
+import { useActionModules, useAppContext } from "@/lib/app-context"
 import { requestFocus } from "@/lib/focus"
-import { moduleOf } from "@/lib/modules"
+import { typeAvailability } from "@/lib/plugin-actions"
 import { ActionIcon } from "@/components/action-icon"
 import type { ActionInstance, ActionReference, ActionType, ProfileView } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -61,7 +61,9 @@ function Library({
   profileId: string
   reload: () => void
 }) {
-  const { profiles, agent, refresh, modules, navigate, openSettings } = useAppContext()
+  const { profiles, agent, refresh, navigate, openSettings } = useAppContext()
+  // Built-in modules and, in builds with plugins, the installed plugins.
+  const modules = useActionModules()
   const [query, setQuery] = useState("")
   const [category, setCategory] = useState("all")
   const [selected, setSelected] = useState<string | null>(view.profile.actions[0]?.id ?? null)
@@ -94,7 +96,7 @@ function Library({
   // Types of disabled modules are known too, so their actions keep a name.
   const types: ActionType[] = useMemo(() => modules.flatMap((m) => m.actionTypes), [modules])
   const typeOf = (id: string) => types.find((t) => t.id === id)
-  const isAvailable = (id: string) => Boolean(moduleOf(modules, id)?.enabled)
+  const availability = (id: string) => typeAvailability(modules, id)
   const categories = [
     ...new Set(view.profile.actions.map((a) => typeOf(a.actionType)?.category ?? "Other")),
   ].sort()
@@ -198,8 +200,11 @@ function Library({
                         {typeOf(action.actionType)?.name ?? action.actionType}
                       </span>
                     </span>
-                    {!isAvailable(action.actionType) && (
-                      <Badge variant="outline" title="Its module is disabled">
+                    {!availability(action.actionType).available && (
+                      <Badge
+                        variant="outline"
+                        title={availability(action.actionType).reason ?? "Its module is disabled"}
+                      >
                         Unavailable
                       </Badge>
                     )}

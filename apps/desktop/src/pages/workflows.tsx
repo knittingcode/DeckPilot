@@ -1,5 +1,5 @@
 import { ListOrdered, Plus, Workflow as WorkflowIcon } from "lucide-react"
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { ErrorNotice, Loading, Page } from "@/components/page"
@@ -17,7 +17,8 @@ import { useAsync } from "@/hooks/use-async"
 import { useEditingProfile } from "@/hooks/use-profile"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { api, errorMessage } from "@/lib/api"
-import { useAppContext } from "@/lib/app-context"
+import { useActionModules, useAppContext } from "@/lib/app-context"
+import { withPluginTypes } from "@/lib/plugin-actions"
 import { useFocusTarget } from "@/lib/focus"
 import type { ActionType, Conversion, ProfileView, Workflow } from "@/lib/types"
 import { type WorkflowSelection, shownWorkflow } from "@/lib/workflow-model"
@@ -92,7 +93,7 @@ function WorkflowSwitcher({
 
 function WorkflowsView({
   view,
-  types,
+  types: listed,
   profileId,
   reload,
 }: {
@@ -101,7 +102,11 @@ function WorkflowsView({
   profileId: string
   reload: () => unknown
 }) {
-  const { refresh, modules } = useAppContext()
+  const { refresh } = useAppContext()
+  // Built-in modules and, in builds with plugins, the installed plugins,
+  // whose types are the ones available now.
+  const modules = useActionModules()
+  const types = useMemo(() => withPluginTypes(listed, modules), [listed, modules])
   const workflows = view.profile.workflows
   // Opened from another page (e.g. the references of an action): that workflow.
   const focus = useFocusTarget("workflow")

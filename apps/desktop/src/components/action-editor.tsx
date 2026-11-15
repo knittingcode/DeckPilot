@@ -21,7 +21,8 @@ import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { api } from "@/lib/api"
 import { failureMessage, toastFailure } from "@/lib/failure"
-import { creatableTypes, moduleOf } from "@/lib/modules"
+import { creatableTypes } from "@/lib/modules"
+import { pluginTypeUnavailable, typeAvailability } from "@/lib/plugin-actions"
 import { buildParameters, initialValue, missingRequired } from "@/lib/parameters"
 import type {
   ActionInstance,
@@ -86,20 +87,24 @@ export function ActionEditor({
   onChangeType?: () => void
   onOpenReference?: (reference: ActionReference) => void
 }) {
-  const usable = modules.filter(
-    (m) => m.enabled && m.supported && creatableTypes(m.actionTypes).length > 0,
-  )
+  // Types a new action can have: not deprecated, and (plugin actions)
+  // available now.
+  const offered = (m: ModuleInfo | undefined) =>
+    creatableTypes(m?.actionTypes ?? []).filter((t) => !m || !pluginTypeUnavailable(m, t.id))
+  const usable = modules.filter((m) => m.enabled && m.supported && offered(m).length > 0)
   const chosenType = action?.actionType ?? initialType
-  const owner = chosenType ? moduleOf(modules, chosenType) : undefined
-  const unavailable = Boolean(action) && !owner?.enabled
+  const availability = chosenType ? typeAvailability(modules, chosenType) : undefined
+  const owner = availability?.owner
+  // A plugin action that cannot run now cannot be saved, new or not.
+  const unavailable = (Boolean(action) || Boolean(availability?.reason)) && !availability?.available
   const [moduleId, setModuleId] = useState(owner?.id ?? (usable.length === 1 ? usable[0]?.id : ""))
   const module = modules.find((m) => m.id === moduleId)
   // Every type, so a saved action of a deprecated type still finds its own.
   const types: ActionType[] = module?.actionTypes ?? []
   // A module with a single action type needs no second choice.
   const onlyType = (m: ModuleInfo | undefined) => {
-    const offered = creatableTypes(m?.actionTypes ?? [])
-    return offered.length === 1 ? (offered[0]?.id ?? "") : ""
+    const types = offered(m)
+    return types.length === 1 ? (types[0]?.id ?? "") : ""
   }
   const [typeId, setTypeId] = useState(chosenType ?? onlyType(module))
   const type = types.find((t) => t.id === typeId)
@@ -169,9 +174,13 @@ export function ActionEditor({
           <Ban />
           <AlertTitle>Unavailable</AlertTitle>
           <AlertDescription>
-            {owner
-              ? `The ${owner.name} module is disabled. Enable it in Settings to edit or run this action; it is kept until then.`
-              : `No installed module provides “${action?.actionType ?? ""}”. The action is kept but cannot run.`}
+            {availability?.reason
+              ? action
+                ? `${availability.reason}. The action is kept; it can be edited and run again once the plugin can run (Settings › Plugins).`
+                : `${availability.reason}. Choose another action type.`
+              : owner
+                ? `The ${owner.name} module is disabled. Enable it in Settings to edit or run this action; it is kept until then.`
+                : `No installed module provides “${action?.actionType ?? ""}”. The action is kept but cannot run.`}
           </AlertDescription>
         </Alert>
       )}
@@ -238,7 +247,7 @@ export function ActionEditor({
                 <SelectValue placeholder={module ? "Choose a type" : "Choose a module first"} />
               </SelectTrigger>
               <SelectContent>
-                {creatableTypes(types).map((t) => (
+                {offered(module).map((t) => (
                   <SelectItem key={t.id} value={t.id}>
                     {t.name}
                   </SelectItem>

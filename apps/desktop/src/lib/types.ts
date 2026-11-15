@@ -714,6 +714,23 @@ export interface ModuleInfo {
   actionTypes: ActionType[]
   /** Read-only variables the module declares, in its own namespace. */
   variables?: VariableDeclaration[]
+  /**
+   * Set only on a module that stands for an installed plugin
+   * (experimental builds with `VITE_DECKPILOT_PLUGINS=1`; see
+   * `lib/plugin-actions.ts`). Never sent by the backend's `list_modules`.
+   */
+  plugin?: PluginModuleState
+}
+
+/** What the agent reports about the plugin behind a plugin module. */
+export interface PluginModuleState {
+  /** The plugin's lifecycle state (`enabled`, `disabled`, `broken`, …). */
+  state: string
+  /**
+   * Why an action type cannot be placed or run now, by action type id.
+   * Types without an entry are available.
+   */
+  unavailable: Record<string, string>
 }
 
 export interface MigrationNote {

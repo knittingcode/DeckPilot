@@ -6,6 +6,8 @@
 // manifest permission shapes (plugin-manifest.schema.json) are what a
 // registry version lists for consent before it is installed.
 
+import type { ActionType } from "@/lib/types"
+
 // ---- Manifest permissions (plugin-manifest.schema.json) ----
 
 export type HttpMethod = "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE"
@@ -142,6 +144,12 @@ export interface PluginActionInfo {
   description?: string
   available: boolean
   unavailableReason?: string
+  /**
+   * The action type exactly as the agent's engine registers it (the
+   * manifest's parameters and node contract), whether or not it is
+   * available now. Absent when the action cannot be offered at all.
+   */
+  definition?: ActionType
 }
 
 export interface PluginSummary {

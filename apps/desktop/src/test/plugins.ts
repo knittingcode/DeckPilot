@@ -5,6 +5,7 @@
 
 import { type Mock, vi } from "vitest"
 
+import type { ActionType } from "@/lib/types"
 import { PluginError, type PluginClient } from "@/plugins/api"
 import { grantsOf } from "@/plugins/permissions"
 import type {
@@ -86,6 +87,53 @@ export function availablePlugins(): AvailablePlugin[] {
   ]
 }
 
+/**
+ * The definitions the agent's engine registers for a plugin's two actions
+ * (`PluginActionInfo.definition`), shaped like the hello-weather sample.
+ */
+export function pluginDefinitions(id: string): { greet: ActionType; temperature: ActionType } {
+  return {
+    greet: {
+      id: `${id}.greet`,
+      name: "Greet",
+      description: "Says hello to someone.",
+      category: "Fun",
+      parameters: [
+        { key: "name", label: "Name", kind: { type: "text", multiline: false }, required: true },
+        {
+          key: "style",
+          label: "Style",
+          kind: { type: "choice", options: ["plain", "excited"] },
+          required: false,
+          default: { type: "choice", value: "plain" },
+        },
+      ],
+      requiresProject: false,
+      node: {
+        version: 1,
+        icon: null,
+        effect: "readOnly",
+        retrySafe: true,
+        idempotent: true,
+        cancellable: true,
+        changesContext: false,
+        timeoutMs: 5000,
+        outputs: [{ key: "greeting", label: "Greeting", kind: "text", always: true }],
+      },
+    },
+    temperature: {
+      id: `${id}.temperature`,
+      name: "Current temperature",
+      description: "Shows the temperature of a city.",
+      category: "Weather",
+      parameters: [
+        { key: "city", label: "City", kind: { type: "text", multiline: false }, required: true },
+      ],
+      requiresProject: false,
+    },
+  }
+}
+
 export function readyRuntime(extra: Partial<PluginRuntimeStatus> = {}): PluginRuntimeStatus {
   return {
     available: true,
@@ -162,6 +210,9 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
   const get = (id: string) => installed.get(id) ?? refuse("notInstalled", `${id} is not installed`)
   const summary = (p: Installed): PluginSummary => {
     const plugin = available.find((a) => a.id === p.id)
+    const definitions = pluginDefinitions(p.id)
+    const runnable = p.state === "enabled"
+    const reason = runnable ? {} : { unavailableReason: `the plugin is ${p.state}` }
     return {
       id: p.id,
       name: plugin?.name ?? p.id,
@@ -176,14 +227,17 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
           action: "greet",
           actionType: `${p.id}.greet`,
           name: "Greet",
-          available: p.state === "enabled",
-          ...(p.state === "enabled" ? {} : { unavailableReason: "the plugin is disabled" }),
+          available: runnable,
+          ...reason,
+          definition: definitions.greet,
         },
         {
           action: "temperature",
           actionType: `${p.id}.temperature`,
           name: "Current temperature",
-          available: p.state === "enabled",
+          available: runnable,
+          ...reason,
+          definition: definitions.temperature,
         },
       ],
     }

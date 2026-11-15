@@ -63,33 +63,55 @@ export function CatalogPanel({
             <h3 className="px-2 pb-1 text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase">
               {group.title}
             </h3>
-            {group.entries.map((entry) => (
-              <button
-                key={entry.key}
-                type="button"
-                role="listitem"
-                draggable
-                onDragStart={(event) => {
-                  event.dataTransfer.setData(DRAG_TYPE, entry.key)
-                  event.dataTransfer.effectAllowed = "copy"
-                }}
-                onClick={() => {
-                  onAdd(entry)
-                }}
-                className="flex cursor-grab items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none active:cursor-grabbing"
-                title={`${entry.title} — drag onto the canvas or click to add`}
-              >
-                <span className="flex size-6 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground">
-                  <EntryIcon entry={entry} />
-                </span>
-                <span className="grid min-w-0">
-                  <span className="truncate text-sm">{entry.title}</span>
-                  <span className="truncate text-xs text-muted-foreground">
-                    {entry.description}
+            {group.entries.map((entry) =>
+              entry.unavailable ? (
+                // A plugin action that cannot run now: shown, not placed.
+                <button
+                  key={entry.key}
+                  type="button"
+                  role="listitem"
+                  disabled
+                  className="flex cursor-not-allowed items-center gap-2 rounded-md px-2 py-1.5 text-left opacity-60"
+                  title={`${entry.title} — unavailable: ${entry.unavailable}`}
+                >
+                  <span className="flex size-6 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground">
+                    <EntryIcon entry={entry} />
                   </span>
-                </span>
-              </button>
-            ))}
+                  <span className="grid min-w-0">
+                    <span className="truncate text-sm">{entry.title}</span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      Unavailable: {entry.unavailable}
+                    </span>
+                  </span>
+                </button>
+              ) : (
+                <button
+                  key={entry.key}
+                  type="button"
+                  role="listitem"
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData(DRAG_TYPE, entry.key)
+                    event.dataTransfer.effectAllowed = "copy"
+                  }}
+                  onClick={() => {
+                    onAdd(entry)
+                  }}
+                  className="flex cursor-grab items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none active:cursor-grabbing"
+                  title={`${entry.title} — drag onto the canvas or click to add`}
+                >
+                  <span className="flex size-6 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground">
+                    <EntryIcon entry={entry} />
+                  </span>
+                  <span className="grid min-w-0">
+                    <span className="truncate text-sm">{entry.title}</span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {entry.description}
+                    </span>
+                  </span>
+                </button>
+              ),
+            )}
             {group.types.length > 0 && (
               <div className="mt-0.5 flex flex-wrap gap-1 px-2">
                 {group.types.map((type) => (
@@ -107,6 +129,29 @@ export function CatalogPanel({
                     {type.name}
                   </Button>
                 ))}
+              </div>
+            )}
+            {group.unavailableTypes && group.unavailableTypes.length > 0 && (
+              <div className="mt-0.5 grid gap-0.5 px-2">
+                <div className="flex flex-wrap gap-1">
+                  {group.unavailableTypes.map(({ type, reason }) => (
+                    <Button
+                      key={type.id}
+                      variant="ghost"
+                      size="sm"
+                      disabled
+                      className="h-6 px-1.5 text-xs text-muted-foreground"
+                      title={`Unavailable: ${reason}`}
+                    >
+                      <Plus className="size-3" />
+                      {type.name}
+                    </Button>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Unavailable:{" "}
+                  {[...new Set(group.unavailableTypes.map((u) => u.reason))].join("; ")}
+                </p>
               </div>
             )}
           </section>

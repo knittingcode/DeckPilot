@@ -1,9 +1,10 @@
-import { createContext, useContext } from "react"
+import { createContext, useContext, useMemo } from "react"
 
 import type { ModulePageId } from "@/modules"
 
 import type { SettingsPageId } from "./navigation"
 
+import { withPluginModules } from "./plugin-actions"
 import type { AgentConnection, ModuleInfo, ProfilesView, UpdateState } from "./types"
 
 export interface AppContextValue {
@@ -35,6 +36,12 @@ export interface AppContextValue {
   /** Registered feature modules and their state. */
   modules: ModuleInfo[]
   setModules: (modules: ModuleInfo[]) => void
+  /**
+   * One module per installed plugin, as the agent lists them; only in
+   * builds with `VITE_DECKPILOT_PLUGINS=1` (see `lib/plugin-actions.ts`).
+   * Kept apart from `modules`: plugins have no settings, pages or switch.
+   */
+  pluginModules?: ModuleInfo[]
 }
 
 /** Pages of the core application. */
@@ -49,4 +56,14 @@ export function useAppContext(): AppContextValue {
   const value = useContext(AppContext)
   if (!value) throw new Error("useAppContext must be used inside AppContext")
   return value
+}
+
+/**
+ * The modules that provide action types to the action and workflow
+ * editors: the built-in ones, then (in builds with plugins) the installed
+ * plugins. Exactly `modules` when there are no plugin modules.
+ */
+export function useActionModules(): ModuleInfo[] {
+  const { modules, pluginModules } = useAppContext()
+  return useMemo(() => withPluginModules(modules, pluginModules ?? []), [modules, pluginModules])
 }
