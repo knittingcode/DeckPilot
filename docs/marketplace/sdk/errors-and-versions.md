@@ -27,7 +27,7 @@ and must not redeclare them in `errorCodes`.
 | `not-permitted` | `NOT_PERMITTED` | SDK, from a broker denial (`CapabilityErrorKind::NotPermitted` via `?`) | A capability the user did not grant |
 | `invalid-parameters` | `INVALID_PARAMETERS` | Agent (manifest check) and SDK (`Param` check) | Input the parameters' kinds cannot express (a blank name) |
 | `credential-missing` | `CREDENTIAL_MISSING` | | A required credential slot without a secret (`has_credential` is false) |
-| `request-failed` | `REQUEST_FAILED` | SDK, from `Failed`, `Unavailable`, `BadRequest`, `MalformedReply` | |
+| `request-failed` | `REQUEST_FAILED` | SDK, from `Failed`, `Unavailable`, `BadRequest`, `MalformedReply` without a network kind | |
 | `throttled` | `THROTTLED` | SDK, from `Throttled` (retryable) | A remote rate limit |
 | `storage-quota` | `STORAGE_QUOTA` | (the storage error's detail starts with it) | |
 | `timeout` | `TIMEOUT` | | A remote timeout |
@@ -35,7 +35,8 @@ and must not redeclare them in `errorCodes`.
 | `plugin-error` | `PLUGIN_ERROR` | SDK: invalid definition, init failure, an undeclared parameter read | Bugs |
 | `plugin-unavailable` | `PLUGIN_UNAVAILABLE` | Agent (keys, workflows): the plugin cannot run | |
 | `invalid-result` | `INVALID_RESULT` | SDK: a result that breaks ABI 1 bounds or has a malformed code | |
-| `invalid-url`, `host-not-allowed`, `no-active-project`, `reference-missing`, `reference-type`, `reference-denied`, `blocked-address`, `dns-failed`, `connection-failed`, `tls-failed`, `too-many-redirects`, `insecure-redirect`, `insecure-credentials`, `sensitive-header` | `INVALID_URL`, `HOST_NOT_ALLOWED`; the rest only in `SHARED` | Reserved by the design; ABI 1 reports these situations as `not-permitted` or `request-failed` with a detail | Where they fit |
+| `blocked-address`, `dns-failed`, `connection-failed`, `tls-failed`, `too-many-redirects`, `insecure-redirect` | only in `SHARED`; `NetworkErrorKind::code` | SDK, from a failed `http.fetch`'s network kind ([capabilities.md](capabilities.md#errors)); `timed-out` (not shared) likewise | Network failures, as the built-in modules report them |
+| `invalid-url`, `host-not-allowed`, `no-active-project`, `reference-missing`, `reference-type`, `reference-denied`, `insecure-credentials`, `sensitive-header` | `INVALID_URL`, `HOST_NOT_ALLOWED`; the rest only in `SHARED` | Reserved by the design; ABI 1 reports these situations as `not-permitted` or `request-failed` with a detail | Where they fit |
 
 The agent adds codes of its own for keys, `runAction` and workflow nodes
 (`apps/agent/src/plugins/engine.rs`, `service.rs` `engine_code`):
@@ -78,7 +79,7 @@ SDK turns into `invalid-result`).
 
 | Number | Where | Today | Compatibility |
 | --- | --- | --- | --- |
-| Guest ABI | `deckpilot_plugin_sdk::ABI_VERSION`, `dp_abi_version()`, manifest `runtime.abi` | **1** | The host loads only ABI 1 modules; the SDK asserts it at compile time. Additions to ABI 1 are optional exports and new capability ops; a module that does not use them is unchanged, and an op an older host or agent does not know is refused with an error, never misread |
+| Guest ABI | `deckpilot_plugin_sdk::ABI_VERSION`, `dp_abi_version()`, manifest `runtime.abi` | **1** | The host loads only ABI 1 modules; the SDK asserts it at compile time. Additions to ABI 1 are optional exports and new capability ops; a module that does not use them is unchanged, and an op an older host or agent does not know is refused with an error, never misread. A field added to what the host **sends** (the network kind of a failed fetch) reaches only modules that report reading it from the optional export `dp_features`; modules without it get the replies they were built for |
 | Plugin API level | `deckpilot_plugin_sdk::API_LEVEL` (`ApiLevel { major: 1, minor: 0 }`), manifest `engines.pluginApi`, agent `PLUGIN_API` | **1.0** | `^MAJOR.MINOR`: same major, at least this minor. Declare `"^1.0"` |
 | DeckPilot | manifest `engines.deckpilot` | `>=0.5.0 <1.0.0` in the examples | A `VersionRange` matched against the agent's version, pre-releases included ([manifest.md](manifest.md#compatibility-engines-and-platforms)); an incompatible version is not offered for install (`incompatible`) |
 | SDK crate | `deckpilot_plugin_sdk::SDK_VERSION`, manifest `engines.sdk` (informational) | **0.1.0** | Own semver; while 0.x, a minor bump may break the Rust API. Not published: depend on it by path inside `plugins/runtime` |

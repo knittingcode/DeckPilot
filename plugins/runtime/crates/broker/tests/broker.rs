@@ -340,6 +340,46 @@ fn redirects_are_rechecked() {
     );
 }
 
+/// The denials a built-in module's transport names too carry that name
+/// (the kind) for the guest; every other denial carries none.
+#[test]
+fn refused_redirects_name_their_network_kind() {
+    use deckpilot_plugin_abi::NetworkErrorKind;
+    let f = fixture(API_GET);
+    let s = f.broker.session(f.plugin.clone());
+    let Decision::Allow(Allowed::Fetch(first)) = s.authorize(&get("https://api.example.com/a"))
+    else {
+        panic!()
+    };
+    let denied = |loc: &str, hop| s.authorize_redirect(&first, loc, hop).denial().unwrap();
+    for loc in [
+        "http://api.example.com/b",
+        "HTTP://evil.net/",
+        "http://10.0.0.1/",
+    ] {
+        let reason = denied(loc, 1);
+        assert_eq!(reason, DenyReason::InsecureRedirect, "{loc}");
+        assert_eq!(
+            reason.network_kind(),
+            Some(NetworkErrorKind::InsecureRedirect)
+        );
+        // Nothing of the target in what the guest is told.
+        assert_eq!(reason.to_string(), "redirect from https to http");
+    }
+    let too_many = denied("/b", MAX_REDIRECTS + 1);
+    assert_eq!(
+        too_many.network_kind(),
+        Some(NetworkErrorKind::TooManyRedirects)
+    );
+    for loc in [
+        "https://evil.net/",
+        "https://127.0.0.1/",
+        "file:///etc/passwd",
+    ] {
+        assert_eq!(denied(loc, 1).network_kind(), None, "{loc}");
+    }
+}
+
 #[test]
 fn rate_limits_apply_per_plugin_and_class() {
     let limits = RateLimits {

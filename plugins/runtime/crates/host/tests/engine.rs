@@ -586,3 +586,70 @@ fn time_in_the_host_does_not_count_against_the_deadline() {
     let o = p.invoke(2, "log_n", &params(json!({"n": 4}))).unwrap();
     assert_eq!(data(&o)["ok"], ParamValue::Integer(4));
 }
+
+/// Answers every capability call with one network failure.
+struct FailsWith(CallResult);
+
+impl HostCallHandler for FailsWith {
+    fn call(
+        &mut self,
+        _inv: u64,
+        _call: u64,
+        _request: CapabilityRequest,
+    ) -> Result<CallResult, ChannelError> {
+        Ok(self.0.clone())
+    }
+}
+
+/// A failed fetch's network kind reaches only guests that report reading
+/// it (`dp_features`); a guest without the export gets the reply in the
+/// shape it was built for, which refuses unknown fields.
+#[test]
+fn network_kinds_reach_only_guests_that_read_them() {
+    use deckpilot_plugin_abi::NetworkErrorKind;
+    use deckpilot_plugin_abi::guest::features;
+    use deckpilot_plugin_test_fixtures::SDK_TEST_GUEST;
+
+    let failure = CallResult::error_with_kind(
+        CallErrorCode::Failed,
+        "api.example.com could not be resolved",
+        Some(NetworkErrorKind::DnsFailed),
+    );
+    let engine = PluginEngine::new().unwrap();
+    let load = |bytes: &[u8]| {
+        engine
+            .load(
+                bytes,
+                &GuestLimits::default(),
+                Box::new(FailsWith(failure.clone())),
+            )
+            .unwrap()
+    };
+
+    // The raw test guest has no `dp_features`: no kind, byte for byte the
+    // reply it always got.
+    let mut old = load(TEST_GUEST);
+    assert_eq!(old.features(), 0);
+    let fetch = r#"{"op":"http.fetch","args":{"method":"GET","url":"https://api.example.com/"}}"#;
+    let o = old
+        .invoke(1, "raw_request", &params(json!({"json": fetch})))
+        .unwrap();
+    assert_eq!(
+        data(&o)["reply"],
+        ParamValue::String(
+            r#"{"error":{"code":"failed","message":"api.example.com could not be resolved"}}"#
+                .into()
+        )
+    );
+
+    // A guest built with the SDK reads it, and `?` reports the built-in
+    // modules' code.
+    let mut sdk = load(SDK_TEST_GUEST);
+    assert_eq!(sdk.features(), features::NETWORK_ERROR_KIND);
+    let url = params(json!({"url": "https://api.example.com/"}));
+    let o = sdk.invoke(1, "headers", &url).unwrap();
+    assert_eq!(data(&o)["network"], ParamValue::String("dns-failed".into()));
+    assert_eq!(data(&o)["error"], ParamValue::String("Failed".into()));
+    let o = sdk.invoke(2, "get", &url).unwrap();
+    assert_eq!(failed_code(&o), "dns-failed");
+}

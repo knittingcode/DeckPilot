@@ -36,6 +36,14 @@
 //!   handler through the core launcher (`launch::plan(OpenTarget::Url)`,
 //!   no shell), at most [`MAX_OPENS_PER_INVOCATION`] times per invocation.
 //!   Only the origin is logged, never the path or query.
+//! * Network failures: the transport's code for what went wrong (DNS,
+//!   connection, TLS, time limit, a blocked address) travels to the guest
+//!   as the error's network kind
+//!   ([`NetworkErrorKind`](deckpilot_plugin_abi::NetworkErrorKind)), the
+//!   same codes the built-in modules report; a redirect the broker refused
+//!   as too many or from https to http, likewise. The kind is a closed
+//!   name, never text of the request; the host passes it on only to
+//!   guests that read it.
 //! * Response headers: only the ABI's allowlist
 //!   ([`RESPONSE_HEADERS`](deckpilot_plugin_abi::capability::RESPONSE_HEADERS):
 //!   caching, pagination and rate-limit headers, never `set-cookie` or an
@@ -51,7 +59,7 @@ use deckpilot_plugin_abi::capability::{
     AuthScheme, Header, HttpResponse, LogLevel, NotifySeverity, StorageUsage, is_response_header,
 };
 use deckpilot_plugin_abi::limits::{MAX_HEADER_LEN, MAX_HEADERS};
-use deckpilot_plugin_abi::{CallErrorCode, CallResult, HttpMethod};
+use deckpilot_plugin_abi::{CallErrorCode, CallResult, HttpMethod, NetworkErrorKind};
 use deckpilot_plugin_broker::{
     Allowed, AllowedFetch, Broker, Decision, PluginId, StorageQuota as GrantedQuota,
 };
@@ -171,7 +179,7 @@ impl Transport {
         fetch: &AllowedFetch,
         auth: Option<&Auth>,
         interrupt: Option<&CallInterrupt>,
-    ) -> Result<Exchange, String> {
+    ) -> Result<Exchange, SendFailure> {
         match self {
             Self::Network => network_send(fetch, auth, interrupt),
             #[cfg(feature = "test-hooks")]
@@ -251,6 +259,40 @@ const INTERRUPT_POLL: std::time::Duration = std::time::Duration::from_millis(10)
 /// for the guest anyway).
 const INTERRUPTED: &str = "the action was cancelled or ran out of time; the request was stopped";
 
+/// Why one hop got no answer: the message for the plugin and, for a
+/// network failure, its kind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SendFailure {
+    pub message: String,
+    pub kind: Option<NetworkErrorKind>,
+}
+
+impl SendFailure {
+    fn other(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            kind: None,
+        }
+    }
+
+    /// From the transport's `(code, message)`. A blocked address is
+    /// named by the granted origin only, never by the address it resolved
+    /// to (the transport's message names it and the app's settings, which
+    /// do not apply to plugins).
+    fn from_transport((code, message): (&str, String), fetch: &AllowedFetch) -> Self {
+        let kind = NetworkErrorKind::from_code(code);
+        let message = match kind {
+            Some(NetworkErrorKind::BlockedAddress) => format!(
+                "{} resolves to an address on this computer or a private network, which \
+                 plugins never reach",
+                fetch.origin
+            ),
+            _ => message,
+        };
+        Self { message, kind }
+    }
+}
+
 fn method(method: HttpMethod) -> reqwest::Method {
     match method {
         HttpMethod::Get => reqwest::Method::GET,
@@ -284,7 +326,7 @@ fn network_send(
     fetch: &AllowedFetch,
     auth: Option<&Auth>,
     interrupt: Option<&CallInterrupt>,
-) -> Result<Exchange, String> {
+) -> Result<Exchange, SendFailure> {
     use deckpilot_net::client;
     use deckpilot_net::policy::NetworkPolicy;
     let request = client::Request {
@@ -341,11 +383,13 @@ fn network_send(
         response
     });
     if token.is_cancelled() {
-        return Err(INTERRUPTED.to_owned());
+        return Err(SendFailure::other(INTERRUPTED));
     }
-    let response = response.map_err(|(_, message)| message)?;
+    let response = response.map_err(|failure| SendFailure::from_transport(failure, fetch))?;
     if response.truncated {
-        return Err(format!("the response is larger than {MAX_BODY} bytes"));
+        return Err(SendFailure::other(format!(
+            "the response is larger than {MAX_BODY} bytes"
+        )));
     }
     Ok(Exchange {
         status: response.status,
@@ -630,8 +674,12 @@ impl Executor {
             });
             let exchange = match self.transport.send(&current, auth.as_ref(), interrupt) {
                 Ok(exchange) => redacted(exchange, &forms),
-                Err(message) => {
-                    return CallResult::error(CallErrorCode::Failed, redact(&message, &forms));
+                Err(failure) => {
+                    return CallResult::error_with_kind(
+                        CallErrorCode::Failed,
+                        redact(&failure.message, &forms),
+                        failure.kind,
+                    );
                 }
             };
             let location = (300..400)
@@ -651,9 +699,10 @@ impl Executor {
             match session.authorize_redirect(&current, &location, hop) {
                 Decision::Allow(Allowed::Fetch(next)) => current = next,
                 Decision::Deny(reason) => {
-                    return CallResult::error(
+                    return CallResult::error_with_kind(
                         reason.call_error_code(),
                         format!("a redirect was refused by the permission broker ({reason})"),
+                        reason.network_kind(),
                     );
                 }
                 Decision::Allow(_) => {
@@ -881,6 +930,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn network_failures_keep_the_transport_code_as_their_kind() {
+        use deckpilot_net::codes;
+        let fetch = AllowedFetch {
+            url: url::Url::parse("https://api.example.com/x?token=s3cret").unwrap(),
+            origin: deckpilot_plugin_broker::Origin::parse_grant("https://api.example.com")
+                .unwrap(),
+            method: HttpMethod::Get,
+            headers: Vec::new(),
+            body: None,
+            auth: None,
+        };
+        let failure = |code: &'static str, message: &str| {
+            SendFailure::from_transport((code, message.to_owned()), &fetch)
+        };
+        for (code, kind) in [
+            (codes::DNS_FAILED, NetworkErrorKind::DnsFailed),
+            (codes::CONNECTION_FAILED, NetworkErrorKind::ConnectionFailed),
+            (codes::TLS_FAILED, NetworkErrorKind::TlsFailed),
+            ("timed-out", NetworkErrorKind::TimedOut),
+            (
+                codes::TOO_MANY_REDIRECTS,
+                NetworkErrorKind::TooManyRedirects,
+            ),
+            (codes::INSECURE_REDIRECT, NetworkErrorKind::InsecureRedirect),
+            (codes::BLOCKED_ADDRESS, NetworkErrorKind::BlockedAddress),
+        ] {
+            assert_eq!(failure(code, "m").kind, Some(kind), "{code}");
+        }
+        for code in [codes::REQUEST_FAILED, codes::INVALID_URL, "cancelled"] {
+            let f = failure(code, "the message");
+            assert_eq!(f.kind, None, "{code}");
+            assert_eq!(f.message, "the message");
+        }
+        // A blocked address is named by the granted origin, never by the
+        // address it resolved to, nor by the app's HTTP settings.
+        let blocked = failure(
+            codes::BLOCKED_ADDRESS,
+            "api.example.com is on this computer or a private network (10.0.0.7); allow it in \
+             Settings › HTTP",
+        );
+        assert!(!blocked.message.contains("10.0.0.7"), "{blocked:?}");
+        assert!(!blocked.message.contains("Settings"), "{blocked:?}");
+        assert!(blocked.message.starts_with("https://api.example.com "));
+    }
+
+    #[test]
     fn every_form_of_a_secret_is_redacted() {
         assert_eq!(base64(b"user:pass"), "dXNlcjpwYXNz");
         assert_eq!(base64(b"ab"), "YWI=");
@@ -1089,6 +1184,11 @@ pub(super) mod test_transport {
         /// Answers only after this long (a slow server).
         #[serde(default, rename = "delayMs")]
         delay_ms: u64,
+        /// Fails instead of answering, with this transport code
+        /// (`dns-failed`, `connection-failed`, `tls-failed`, ...), as the
+        /// network client would.
+        #[serde(default)]
+        fail: Option<String>,
     }
 
     #[derive(Debug)]
@@ -1116,8 +1216,8 @@ pub(super) mod test_transport {
             fetch: &AllowedFetch,
             auth: Option<&super::Auth>,
             interrupt: Option<&CallInterrupt>,
-        ) -> Result<Exchange, String> {
-            use super::Auth;
+        ) -> Result<Exchange, super::SendFailure> {
+            use super::{Auth, SendFailure};
             let mut target = fetch.url.clone();
             if let Some(Auth::Query(name, secret)) = auth {
                 target.query_pairs_mut().append_pair(name, secret.expose());
@@ -1140,16 +1240,35 @@ pub(super) mod test_transport {
                 .routes
                 .iter()
                 .find(|r| url.starts_with(&r.url))
-                .ok_or_else(|| format!("no canned response for {url}"))?;
+                .ok_or_else(|| SendFailure::other(format!("no canned response for {url}")))?;
             // A slow server, which an interrupt stops waiting for (like
             // the network client dropping its connection).
             let answer_at =
                 std::time::Instant::now() + std::time::Duration::from_millis(route.delay_ms);
             while std::time::Instant::now() < answer_at {
                 if interrupt.is_some_and(CallInterrupt::is_raised) {
-                    return Err(super::INTERRUPTED.to_owned());
+                    return Err(SendFailure::other(super::INTERRUPTED));
                 }
                 std::thread::sleep(super::INTERRUPT_POLL);
+            }
+            if let Some(code) = &route.fail {
+                // The message the client would give, with the address a
+                // blocked host resolved to.
+                let message = match code.as_str() {
+                    "dns-failed" => format!("{} could not be resolved: canned", fetch.origin),
+                    "blocked-address" => format!(
+                        "{} is on this computer or a private network (10.1.2.3); allow it in \
+                         Settings › HTTP",
+                        fetch.origin
+                    ),
+                    other => format!("{other} (canned)"),
+                };
+                let code: &'static str = deckpilot_plugin_abi::NetworkErrorKind::from_code(code)
+                    .map_or(
+                        "request-failed",
+                        deckpilot_plugin_abi::NetworkErrorKind::code,
+                    );
+                return Err(SendFailure::from_transport((code, message), fetch));
             }
             Ok(Exchange {
                 status: route.status,

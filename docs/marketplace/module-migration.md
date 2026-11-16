@@ -372,7 +372,12 @@ jira). The rules:
   note names the action.
 
 The translation runs on the parameters *after* overrides and mappings are
-applied, so it covers instances, bindings and workflow nodes alike.
+applied, so it covers instances, bindings and workflow nodes alike. While
+the plugin serves the legacy type, a value it cannot be given is also
+refused when an instance, a step or a node is **saved**
+(`ActionHandler::validate` of the `AliasHandler`, reported by
+`ActionRegistry::normalize` as `invalid parameters`, the error of any
+built-in's invalid parameter), whatever the plugin's capabilities.
 
 ### 5.4 Variables
 

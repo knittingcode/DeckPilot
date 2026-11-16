@@ -28,7 +28,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex, RwLock};
 
 use deckpilot_plugin_abi::capability::{Header, HttpAuth, LogLevel, NotifySeverity};
-use deckpilot_plugin_abi::{CallErrorCode, CapabilityRequest, HttpMethod};
+use deckpilot_plugin_abi::{CallErrorCode, CapabilityRequest, HttpMethod, NetworkErrorKind};
 use serde_json::Value;
 use url::Url;
 
@@ -93,6 +93,9 @@ pub enum DenyReason {
     TooLarge,
     RateLimited,
     TooManyRedirects,
+    /// A redirect from https to plain http (refused like every http URL,
+    /// named apart so the plugin can tell it as the built-in modules do).
+    InsecureRedirect,
     /// The credential slot is not granted (or was revoked).
     CredentialNotGranted,
     /// The credential slot may not be sent to this origin (including a
@@ -111,6 +114,18 @@ impl DenyReason {
             _ => CallErrorCode::NotPermitted,
         }
     }
+
+    /// The network kind the guest sees with the denial
+    /// ([`CallError::kind`](deckpilot_plugin_abi::CallError::kind)): a
+    /// redirect refused for what the built-in modules' transport refuses
+    /// it for too. Only the kind; where the redirect led is never named.
+    pub fn network_kind(self) -> Option<NetworkErrorKind> {
+        match self {
+            Self::TooManyRedirects => Some(NetworkErrorKind::TooManyRedirects),
+            Self::InsecureRedirect => Some(NetworkErrorKind::InsecureRedirect),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for DenyReason {
@@ -125,6 +140,7 @@ impl fmt::Display for DenyReason {
             Self::TooLarge => f.write_str("request exceeds a size limit"),
             Self::RateLimited => f.write_str("rate limited"),
             Self::TooManyRedirects => f.write_str("too many redirects"),
+            Self::InsecureRedirect => f.write_str("redirect from https to http"),
             Self::CredentialNotGranted => f.write_str("credential not granted"),
             Self::CredentialOriginNotAllowed => {
                 f.write_str("credential may not be sent to this origin")
@@ -627,6 +643,11 @@ impl Session {
                 None,
             );
         };
+        // Every fetch is https; a redirect to http is refused below in any
+        // case, but named as what it is.
+        if joined.scheme() == "http" {
+            return (Decision::Deny(DenyReason::InsecureRedirect), None);
+        }
         // Re-run the full request check on the absolute URL: a redirect to
         // http:, to an IP literal, to userinfo or to an origin that is not
         // granted is denied exactly like a direct request.

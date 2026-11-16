@@ -18,8 +18,9 @@
 //! | `dp_describe` | `() -> i64` | `ptr << 32 \| len` of a [`PluginDescriptor`](crate::describe::PluginDescriptor) JSON (at most [`MAX_DESCRIPTOR`](crate::limits::MAX_DESCRIPTOR) bytes); called once after `dp_abi_version`, reported in `loaded` |
 //! | `dp_init` | `() -> i32` | lifecycle hook, called once after `dp_describe`; 0 = ready, anything else fails the load |
 //! | `dp_shutdown` | `() -> ()` | lifecycle hook, called once on `shutdown` before the host exits |
+//! | `dp_features` | `() -> i64` | the [`features`] (additions to replies) the guest reads, a bit set; called once after `dp_abi_version`, before `dp_describe`. Without it: none |
 //!
-//! All three run under the same deadline and fuel limits as an invocation.
+//! All four run under the same deadline and fuel limits as an invocation.
 //! `host_call` from inside them gets an `unavailable` error reply without
 //! reaching the supervisor (there is no invocation to relay it for). An
 //! export with one of these names but another type fails the load.
@@ -54,6 +55,22 @@ pub const EXPORT_DESCRIBE: &str = "dp_describe";
 pub const EXPORT_INIT: &str = "dp_init";
 /// Optional: `() -> ()`, the shutdown hook.
 pub const EXPORT_SHUTDOWN: &str = "dp_shutdown";
+/// Optional: `() -> i64`, the [`features`] the guest reads.
+pub const EXPORT_FEATURES: &str = "dp_features";
+
+/// Additions to what the host **sends** within ABI 1 that a guest opts
+/// into, because a guest built before them refuses an unknown field. A
+/// guest reports the ones it reads from `dp_features`, and the host sends
+/// an addition only to a guest that reports it. Bits a host does not know
+/// are ignored, so a guest may report more than an older host offers, and
+/// an older host never calls `dp_features` at all.
+pub mod features {
+    /// A failed `http.fetch` may carry
+    /// [`CallError::kind`](crate::CallError::kind).
+    pub const NETWORK_ERROR_KIND: u64 = 1;
+    /// Every feature this crate defines.
+    pub const ALL: u64 = NETWORK_ERROR_KIND;
+}
 
 /// Input of one `dp_invoke`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

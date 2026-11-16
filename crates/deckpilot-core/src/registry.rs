@@ -48,6 +48,17 @@ pub trait ActionHandler: Send + Sync {
         Vec::new()
     }
 
+    /// Problems of normalized parameters that the definition's schema
+    /// cannot express and that need nothing but the parameters (no
+    /// profile, so no capability): [`ActionRegistry::normalize`] reports
+    /// them with the schema's, as
+    /// [`RegistryError::InvalidParameters`], whenever an action, a
+    /// workflow step or a node is saved. Unlike [`ActionHandler::check`],
+    /// it runs for every handler, a plugin's included.
+    fn validate(&self, _parameters: &ActionParameters) -> Vec<ParameterError> {
+        Vec::new()
+    }
+
     /// Adjusts the key face of a binding that runs this action, e.g. to show
     /// the active project. `template` is the label template in use.
     fn decorate_face(
@@ -154,6 +165,18 @@ impl AliasHandler {
 
     /// The parameters for the plugin's handler.
     fn translate(&self, parameters: &ActionParameters) -> Result<ActionParameters, String> {
+        self.translated(parameters).map_err(|error| match error {
+            ParameterError::Invalid { key, reason } => format!("parameter `{key}` {reason}"),
+            other => other.to_string(),
+        })
+    }
+
+    /// The parameters for the plugin's handler, or the first one it
+    /// cannot be given.
+    fn translated(
+        &self,
+        parameters: &ActionParameters,
+    ) -> Result<ActionParameters, ParameterError> {
         let mut translated = ActionParameters::new();
         for (key, value) in parameters.iter() {
             let Some((_, default)) = self.drops.iter().find(|(k, _)| k == key) else {
@@ -162,11 +185,14 @@ impl AliasHandler {
             };
             let empty = matches!(value, ParameterValue::Text(text) if text.trim().is_empty());
             if !empty && default.as_ref() != Some(value) {
-                return Err(format!(
-                    "parameter `{key}` names something the plugin providing `{}` cannot use; \
-                     leave it empty to use the plugin's own",
-                    self.definition.id
-                ));
+                return Err(ParameterError::Invalid {
+                    key: key.clone(),
+                    reason: format!(
+                        "names something the plugin providing `{}` cannot use; leave it empty \
+                         to use the plugin's own",
+                        self.definition.id
+                    ),
+                });
             }
         }
         Ok(translated)
@@ -196,6 +222,15 @@ impl ActionHandler for AliasHandler {
     fn check(&self, parameters: &ActionParameters, profile: &Profile) -> Vec<String> {
         match self.translate(parameters) {
             Ok(parameters) => self.target.check(&parameters, profile),
+            Err(problem) => vec![problem],
+        }
+    }
+
+    /// A parameter the plugin cannot be given is refused when the action
+    /// is saved, as the run would refuse it; the rest is the plugin's.
+    fn validate(&self, parameters: &ActionParameters) -> Vec<ParameterError> {
+        match self.translated(parameters) {
+            Ok(parameters) => self.target.validate(&parameters),
             Err(problem) => vec![problem],
         }
     }
@@ -497,7 +532,10 @@ impl ActionRegistry {
         result
     }
 
-    /// Validates parameters and returns them normalized for `action_type`.
+    /// Validates parameters and returns them normalized for `action_type`:
+    /// the definition's schema (types, required, choices, ranges,
+    /// lengths; for a plugin action, its manifest's), then the handler's
+    /// [`ActionHandler::validate`].
     pub fn normalize(
         &self,
         action_type: &ActionTypeId,
@@ -509,10 +547,28 @@ impl ActionRegistry {
                 None => RegistryError::UnknownActionType(action_type.clone()),
             }
         })?;
-        handler
+        let normalized = handler
             .definition()
             .normalize(parameters)
-            .map_err(RegistryError::InvalidParameters)
+            .map_err(RegistryError::InvalidParameters)?;
+        let problems = handler.validate(&normalized);
+        if problems.is_empty() {
+            Ok(normalized)
+        } else {
+            Err(RegistryError::InvalidParameters(problems))
+        }
+    }
+
+    /// The handler's own problems with normalized `parameters`
+    /// ([`ActionHandler::validate`]); none for a type that cannot run.
+    pub fn validate_parameters(
+        &self,
+        action_type: &ActionTypeId,
+        parameters: &ActionParameters,
+    ) -> Vec<ParameterError> {
+        self.handler(action_type)
+            .map(|handler| handler.validate(parameters))
+            .unwrap_or_default()
     }
 
     /// Creates a validated action instance with a fresh id.

@@ -182,15 +182,59 @@ fn a_credential_override_is_dropped_only_when_it_is_the_default() {
         run(&registry, &fetch(), &with(LEGACY_CREDENTIAL)),
         "plugin: hi [message]"
     );
+    // Any other value is refused when it is saved (normalized), with the
+    // error a built-in's invalid parameter gets, whatever the plugin's
+    // capabilities; and still when it runs without being saved again.
     assert_eq!(
         run(&registry, &fetch(), &with("personal")),
+        "refused: invalid parameters: parameter `credential`: names something the plugin \
+         providing `legacy.fetch` cannot use; leave it empty to use the plugin's own"
+    );
+    let actions = registry.action_registry();
+    assert!(matches!(
+        actions.normalize(&fetch(), &with("personal")),
+        Err(crate::RegistryError::InvalidParameters(problems))
+            if problems == [crate::ParameterError::Invalid {
+                key: "credential".into(),
+                reason: "names something the plugin providing `legacy.fetch` cannot use; \
+                         leave it empty to use the plugin's own".into(),
+            }]
+    ));
+    assert_eq!(
+        actions
+            .validate_parameters(&fetch(), &with("personal"))
+            .len(),
+        1
+    );
+    assert_eq!(
+        actions.validate_parameters(&fetch(), &with(LEGACY_CREDENTIAL)),
+        []
+    );
+    let mut instance = ActionInstance {
+        id: crate::ActionInstanceId::new(),
+        name: "Fetch".into(),
+        action_type: fetch(),
+        parameters: with("personal"),
+        description: String::new(),
+        icon: None,
+        label: None,
+    };
+    assert!(matches!(
+        actions.validate_instance(&mut instance),
+        Err(crate::RegistryError::InvalidParameters(_))
+    ));
+    let profile = Profile::new("Work");
+    let machine = MachineConfig::new(Os::Linux);
+    let context = ExecutionContext::new(&profile, None, &machine);
+    assert_eq!(
+        actions
+            .dispatch(&fetch(), &with("personal"), &context)
+            .message,
         "parameter `credential` names something the plugin providing `legacy.fetch` cannot \
          use; leave it empty to use the plugin's own"
     );
     // Checks against the profile run with the plugin's capabilities: the
     // fixture may not read the profile, so it reports nothing.
-    let profile = Profile::new("Work");
-    let actions = registry.action_registry();
     assert_eq!(
         actions.check_parameters(&fetch(), &with("personal"), &profile),
         Vec::<String>::new()
