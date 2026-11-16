@@ -109,14 +109,16 @@ use super::bundled::{self, Bundle, Seeded};
 #[cfg(feature = "test-hooks")]
 pub(crate) mod fixture;
 pub(crate) mod legacy;
+#[cfg(feature = "test-hooks")]
+mod standin;
 #[cfg(all(test, feature = "test-hooks"))]
 mod tests;
 
 pub(crate) use legacy::{LegacyModule, LegacySnapshot};
 
 /// What the alias table does not say about a module: which settings name
-/// its credentials and origin. Static, like the alias table, and empty
-/// until a module is cut over.
+/// its credentials and origin. Static, like the alias table: one plan per
+/// alias block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MigrationPlan {
     pub module: &'static str,
@@ -133,8 +135,36 @@ pub(crate) struct MigrationPlan {
     pub open_url_hosts: &'static [&'static str],
 }
 
-/// Every plan. Empty until a module is cut over (P9: GitHub).
-pub(crate) const PLANS: &[MigrationPlan] = &[];
+/// Every plan, one per module of [`deckpilot_core::alias::ACTION_ALIASES`].
+pub(crate) const PLANS: &[MigrationPlan] = &[GITHUB];
+
+/// GitHub (P9) to `deckpilot.github`:
+///
+/// - the credential setting `credential` (a credential id, default
+///   `github.token`) is imported into the plugin's slot `token`, only with
+///   the user's consent;
+/// - the origin `apiUrl`: only `https://api.github.com`, the plugin's
+///   default, is eligible; GitHub Enterprise and any other origin keep the
+///   built-in (`not_eligible`) until G2;
+/// - `allowPrivateHost` on keeps the built-in (G3, never migrated);
+/// - `github.com` is the web host the built-in opens pages on (`openUrl`,
+///   derived: the built-in has `open-external`).
+///
+/// A per-action `credential` override other than empty or the module's
+/// own makes the module `not_eligible` ([`ParamRule::DropIfDefault`] in the
+/// alias block, until G5).
+///
+/// [`ParamRule::DropIfDefault`]: deckpilot_core::alias::ParamRule::DropIfDefault
+const GITHUB: MigrationPlan = MigrationPlan {
+    module: deckpilot_modules::github::MODULE_ID,
+    credentials: &[(deckpilot_modules::github::CREDENTIAL, "token")],
+    origin: Some((
+        deckpilot_modules::github::API_URL,
+        deckpilot_modules::github::DEFAULT_API_URL,
+    )),
+    private_network: Some(deckpilot_modules::github::ALLOW_PRIVATE),
+    open_url_hosts: &["github.com"],
+};
 
 /// The plan of `module`, if it has one.
 pub(crate) fn plan_for(module: &str) -> Option<&'static MigrationPlan> {
@@ -156,6 +186,16 @@ pub(crate) fn configured(states: &ModuleStates) -> (ModuleRegistry, Vec<String>)
         registry
             .register(Box::new(fixture::FixtureModule::new()))
             .expect("the fixture module does not conflict");
+        let problems = registry.apply_states(states);
+        return (registry, problems);
+    }
+    #[cfg(feature = "test-hooks")]
+    if let Some(api) = standin::api() {
+        let mut registry = deckpilot_modules::builtin(deckpilot_core::Os::current());
+        registry.unregister(&deckpilot_modules::github::module_id());
+        registry
+            .register(Box::new(standin::StandInGithub::new(api)))
+            .expect("the stand-in replaces the github module");
         let problems = registry.apply_states(states);
         return (registry, problems);
     }
