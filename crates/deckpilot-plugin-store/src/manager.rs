@@ -619,6 +619,39 @@ impl PluginManager {
         })
     }
 
+    /// Forgets the refusals that `decided_by` recorded (revoked grants it
+    /// decided), so those permissions are undecided again: a module
+    /// migration asking again for what the user declined in its consent
+    /// dialog. It never grants anything; grants, and refusals anybody else
+    /// decided, stay as they are. Returns the keys it forgot.
+    pub fn forget_declines(&mut self, id: &PluginId, decided_by: &str) -> Result<Vec<GrantKey>> {
+        let plugin = self.plugin(id)?;
+        let version = plugin.active().map(|v| v.version.to_string());
+        self.tx(|tx, ctx| {
+            ensure_idle(tx, id)?;
+            let mut forgotten = Vec::new();
+            for grant in store::load_grants(tx, id)? {
+                if grant.status != GrantStatus::Revoked || grant.decided_by != decided_by {
+                    continue;
+                }
+                store::delete_grant(tx, id, &grant.key)?;
+                ctx.audit(
+                    tx,
+                    id,
+                    event(
+                        version.as_deref(),
+                        "revoke",
+                        Some(&grant.key),
+                        "undecided",
+                        None,
+                    ),
+                )?;
+                forgotten.push(grant.key);
+            }
+            Ok(forgotten)
+        })
+    }
+
     // ----------------------------------------------------------------- update
 
     /// Unpacks a newer verified version next to the running one. Without a

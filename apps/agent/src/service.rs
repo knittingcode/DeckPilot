@@ -821,7 +821,7 @@ impl Agent {
             // Subscriptions are handled per connection by the server; the
             // run loop stops after replying to a shutdown request.
             Request::Subscribe
-            | Request::SubscribePluginEvents
+            | Request::SubscribePluginEvents { .. }
             | Request::Shutdown
             | Request::PrepareForUpdate => Ok(Response::Ok),
             other => self.handle_change(other),
@@ -920,7 +920,7 @@ impl Agent {
             | Request::PreviewReferences { .. }
             | Request::GetAutostart
             | Request::Subscribe
-            | Request::SubscribePluginEvents
+            | Request::SubscribePluginEvents { .. }
             | Request::Shutdown
             | Request::PrepareForUpdate
             | Request::GetWorkSession
@@ -950,7 +950,10 @@ impl Agent {
             | Request::SetPluginSettings { .. }
             | Request::ListPluginCredentials { .. }
             | Request::SetPluginCredential { .. }
-            | Request::DeletePluginCredential { .. } => {
+            | Request::DeletePluginCredential { .. }
+            | Request::ListModuleMigrations
+            | Request::DecideModuleMigration { .. }
+            | Request::RetryModuleMigration { .. } => {
                 unreachable!("plugin requests are handled by handle_command")
             }
             Request::Unlock { .. }

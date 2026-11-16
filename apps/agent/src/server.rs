@@ -162,6 +162,8 @@ async fn serve(
 
     let mut events: Option<broadcast::Receiver<AgentEvent>> = None;
     let mut plugin_events: Option<broadcast::Receiver<PluginEvent>> = None;
+    // Whether this connection asked for module migration events.
+    let mut migration_events = false;
     let mut desktop: Option<DesktopGuard> = None;
     loop {
         tokio::select! {
@@ -173,7 +175,7 @@ async fn serve(
                             value,
                             &handle,
                             (client, protocol),
-                            (&mut events, &mut plugin_events),
+                            (&mut events, &mut plugin_events, &mut migration_events),
                             &mut desktop,
                         )
                         .await
@@ -204,10 +206,13 @@ async fn serve(
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => break,
             },
-            // Only connections that asked for them (protocol 10).
+            // Only connections that asked for them (protocol 10), and
+            // migration events only to those that asked for these too.
             event = next_event(&mut plugin_events) => match event {
                 Ok(event) => {
-                    if !send(&mut writer, &ServerMessage::PluginEvent { event }).await {
+                    if event.delivered(migration_events)
+                        && !send(&mut writer, &ServerMessage::PluginEvent { event }).await
+                    {
                         break;
                     }
                 }
@@ -234,9 +239,10 @@ async fn handle_message(
     value: serde_json::Value,
     handle: &AgentHandle,
     (client, protocol): (ClientKind, u32),
-    (events, plugin_events): (
+    (events, plugin_events, migration_events): (
         &mut Option<broadcast::Receiver<AgentEvent>>,
         &mut Option<broadcast::Receiver<PluginEvent>>,
+        &mut bool,
     ),
     desktop: &mut Option<DesktopGuard>,
 ) -> ServerMessage {
@@ -273,10 +279,13 @@ async fn handle_message(
             ),
         );
     }
-    if matches!(request, Request::SubscribePluginEvents) {
+    if let Request::SubscribePluginEvents { migrations } = &request {
+        let migrations = *migrations;
         if plugin_events.is_none() {
             *plugin_events = Some(handle.subscribe_plugins());
         }
+        // Asking once is enough; a later plain subscription keeps them.
+        *migration_events |= migrations;
         return ServerMessage::Response {
             id,
             response: Response::Ok,

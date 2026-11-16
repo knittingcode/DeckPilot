@@ -298,6 +298,11 @@ pub(super) struct PluginService {
     /// The first-party plugins of the application bundle and the pins
     /// compiled into the agent (`bundled.rs`).
     bundle: Bundle,
+    /// What `deckpilot.db` said about the modules that can migrate at the
+    /// agent's last module load (the user's decisions need it); `None`
+    /// until then and whenever no alias exists. Its secrets never leave
+    /// this process and are never logged.
+    snapshot: Option<LegacySnapshot>,
 }
 
 /// What the agent saw of each plugin's host since it started
@@ -440,6 +445,7 @@ impl PluginService {
             values,
             health: HealthLog::default(),
             bundle,
+            snapshot: None,
         };
         if service.registry.is_some() {
             let _ = service.refresh();
@@ -482,15 +488,95 @@ impl PluginService {
         }
     }
 
-    /// The first module migration pass after the store opened
-    /// (`migration.rs`): the plugins it installed, enabled or granted get
-    /// their grants in the broker and an event.
-    pub fn migrate(&mut self, snapshot: &LegacySnapshot) {
-        let touched = super::migration::start(&mut self.manager, &self.bundle, snapshot);
-        for id in touched {
-            self.sync_grants(&id);
-            self.changed(&id);
+    /// What `deckpilot.db` says about the modules that can migrate, after
+    /// every module load; with `first` (the first snapshot after the store
+    /// opened) the migration pass runs (`migration.rs`). The plugins it
+    /// installed, enabled or granted get their grants in the broker and an
+    /// event, and every migration that moved gets one.
+    pub fn migrate(&mut self, snapshot: LegacySnapshot, first: bool) {
+        if first {
+            let before = self.journal();
+            let touched = super::migration::start(&mut self.manager, &self.bundle, &snapshot);
+            self.after_migration(&touched, &before, None);
         }
+        self.snapshot = Some(snapshot);
+    }
+
+    /// The migration journal now (for change events).
+    fn journal(&self) -> Vec<deckpilot_plugin_store::ModuleMigration> {
+        self.manager.store().module_migrations().unwrap_or_default()
+    }
+
+    /// After migration steps: the broker syncs the touched plugins, which
+    /// get an event, and every migration whose record changed since
+    /// `before` (and `decided`, whatever happened) gets one.
+    fn after_migration(
+        &mut self,
+        touched: &BTreeSet<PluginId>,
+        before: &[deckpilot_plugin_store::ModuleMigration],
+        decided: Option<&str>,
+    ) {
+        for id in touched {
+            self.sync_grants(id);
+            self.changed(id);
+        }
+        for record in self.journal() {
+            let moved = !before.contains(&record) || decided == Some(record.module_id.as_str());
+            if moved && !touched.contains(&record.plugin_id) {
+                let _ = self
+                    .events
+                    .plugins
+                    .send(super::migration::event_of(&record));
+            }
+        }
+    }
+
+    /// `decideModuleMigration` and `retryModuleMigration`.
+    fn decide_migration(
+        &mut self,
+        decision: &super::migration::Decision,
+    ) -> Result<Response, IpcError> {
+        use super::migration::Refusal;
+        let module = decision.module().to_owned();
+        let snapshot = self.snapshot.as_ref().ok_or_else(|| {
+            error(
+                ErrorCode::NotFound,
+                reason::UNKNOWN_MIGRATION,
+                format!("no module `{module}` can migrate here"),
+            )
+        })?;
+        let before = self.journal();
+        let touched = super::migration::decide(&mut self.manager, &self.bundle, snapshot, decision)
+            .map_err(|refusal| match &refusal {
+                Refusal::Unknown(why) => {
+                    error(ErrorCode::NotFound, reason::UNKNOWN_MIGRATION, why.clone())
+                }
+                // A store refusal is a state the request cannot change.
+                Refusal::InvalidState(why) | Refusal::Failed(why) => {
+                    error(ErrorCode::Failed, reason::INVALID_STATE, why.clone())
+                }
+                Refusal::UnknownItem(why) => error(
+                    ErrorCode::InvalidRequest,
+                    reason::UNKNOWN_PERMISSION,
+                    why.clone(),
+                ),
+            })?;
+        self.after_migration(&touched, &before, Some(&module));
+        self.migration_info(&module)
+    }
+
+    fn migration_info(&self, module: &str) -> Result<Response, IpcError> {
+        super::migration::info(&self.manager, &self.bundle, self.snapshot.as_ref(), module)
+            .map(|migration| Response::ModuleMigration {
+                migration: Box::new(migration),
+            })
+            .ok_or_else(|| {
+                error(
+                    ErrorCode::NotFound,
+                    reason::UNKNOWN_MIGRATION,
+                    format!("no migration of `{module}` is known"),
+                )
+            })
     }
 
     /// Where the legacy action types of migrated modules go now.
@@ -592,6 +678,17 @@ impl PluginService {
             plugin: id.to_string(),
             state,
         });
+        // A plugin that replaces a module: its migration's route and
+        // consent items may have changed with it (disabled, uninstalled,
+        // a grant).
+        for record in self.journal() {
+            if &record.plugin_id == id {
+                let _ = self
+                    .events
+                    .plugins
+                    .send(super::migration::event_of(&record));
+            }
+        }
     }
 
     fn record(&self, id: &PluginId) -> Result<PluginRecord, IpcError> {
@@ -1026,6 +1123,33 @@ impl PluginService {
                     .map_err(|e| store_error(&e))?;
                 info!(plugin = %id, credential = %key, "plugin credential deleted");
                 self.credentials(&id)
+            }
+            Request::ListModuleMigrations => Ok(Response::ModuleMigrations {
+                migrations: super::migration::infos(
+                    &self.manager,
+                    &self.bundle,
+                    self.snapshot.as_ref(),
+                ),
+            }),
+            Request::DecideModuleMigration {
+                module,
+                approve,
+                decline,
+            } => {
+                let keys = |items: &[String]| {
+                    convert::keys(items).map_err(|e| {
+                        error(ErrorCode::InvalidRequest, reason::UNKNOWN_PERMISSION, e)
+                    })
+                };
+                let decision = super::migration::Decision::Decide {
+                    module,
+                    approve: keys(&approve)?,
+                    decline: keys(&decline)?,
+                };
+                self.decide_migration(&decision)
+            }
+            Request::RetryModuleMigration { module } => {
+                self.decide_migration(&super::migration::Decision::Retry(module))
             }
             other => Err(IpcError::new(
                 ErrorCode::InvalidRequest,

@@ -723,3 +723,151 @@ fn the_snapshot_reads_nothing_without_aliases() {
     // Secrets never show in debug output.
     assert!(!format!("{snapshot:?}").contains(TOKEN));
 }
+
+fn decide_items(approve: &[&str], decline: &[&str]) -> Decision {
+    let keys = |items: &[&str]| {
+        items
+            .iter()
+            .map(|k| k.parse::<GrantKey>().unwrap())
+            .collect()
+    };
+    Decision::Decide {
+        module: MODULE.into(),
+        approve: keys(approve),
+        decline: keys(decline),
+    }
+}
+
+/// The consent dialog item by item: the app lists what waits (by name,
+/// never the secret), a decline keeps the built-in across starts and
+/// grants nothing, Retry asks again, and the approval cuts over.
+#[test]
+fn consent_is_decided_item_by_item() {
+    let env = Env::new();
+    let bundle = env.bundle();
+    let snapshot = env.snapshot();
+    let mut manager = env.open();
+    start(&mut manager, &bundle, &snapshot);
+
+    let info = infos(&manager, &bundle, Some(&snapshot)).pop().unwrap();
+    assert_eq!(info.phase, ipc::MigrationPhase::AwaitingConsent);
+    assert_eq!(info.module_name, "Legacy Fixture");
+    assert_eq!(info.route, ipc::MigrationRoute::Builtin);
+    assert!(!info.can_retry);
+    assert_eq!(info.aliases.len(), 1);
+    let [item] = info.consent.as_slice() else {
+        panic!("{info:?}");
+    };
+    assert_eq!(item.key, "credentials:token");
+    assert_eq!(item.decision, ipc::ConsentDecision::Pending);
+    let import = item.import.as_ref().unwrap();
+    assert_eq!(import.credential, fixture::DEFAULT_CREDENTIAL);
+    assert_eq!(import.hosts, ["api.example.com"]);
+    assert!(!serde_json::to_string(&info).unwrap().contains(TOKEN));
+    // Without the snapshot only the journal is known.
+    let bare = infos(&manager, &bundle, None).pop().unwrap();
+    assert_eq!(bare.module_name, MODULE);
+    assert_eq!(bare.consent, []);
+
+    // What does not wait, and a Retry of a waiting migration, are refused.
+    assert!(matches!(
+        decide(
+            &mut manager,
+            &bundle,
+            &snapshot,
+            &decide_items(&["notifications"], &[])
+        ),
+        Err(Refusal::UnknownItem(_))
+    ));
+    assert!(matches!(
+        decide(
+            &mut manager,
+            &bundle,
+            &snapshot,
+            &Decision::Retry(MODULE.into())
+        ),
+        Err(Refusal::InvalidState(_))
+    ));
+    assert!(matches!(
+        decide(
+            &mut manager,
+            &bundle,
+            &snapshot,
+            &Decision::Retry("someone-else".into())
+        ),
+        Err(Refusal::Unknown(_))
+    ));
+
+    // Declined: nothing granted or imported, the built-in stays, at every
+    // start.
+    decide(
+        &mut manager,
+        &bundle,
+        &snapshot,
+        &decide_items(&[], &["credentials:token"]),
+    )
+    .unwrap();
+    let declined = record(&manager);
+    assert_eq!(declined.phase, MigrationPhase::NotEligible);
+    assert!(
+        declined
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("you declined credentials:token")
+    );
+    assert_eq!(manager.store().credentials(&plugin_id()).unwrap(), []);
+    assert!(
+        !grants(manager.store())
+            .iter()
+            .any(|(key, ..)| key == "credentials:token")
+    );
+    for _ in 0..2 {
+        start(&mut manager, &bundle, &snapshot);
+        assert_eq!(record(&manager).phase, MigrationPhase::NotEligible);
+    }
+    assert_eq!(route(&manager, &bundle), LegacyRoute::Builtin);
+    let info = infos(&manager, &bundle, Some(&snapshot)).pop().unwrap();
+    assert!(info.can_retry);
+    assert_eq!(info.consent[0].decision, ipc::ConsentDecision::Declined);
+    assert!(matches!(
+        decide(
+            &mut manager,
+            &bundle,
+            &snapshot,
+            &decide_items(&["credentials:token"], &[])
+        ),
+        Err(Refusal::InvalidState(_))
+    ));
+
+    // Retry asks again; the approval cuts over.
+    decide(
+        &mut manager,
+        &bundle,
+        &snapshot,
+        &Decision::Retry(MODULE.into()),
+    )
+    .unwrap();
+    assert_eq!(record(&manager).phase, MigrationPhase::AwaitingConsent);
+    let info = infos(&manager, &bundle, Some(&snapshot)).pop().unwrap();
+    assert_eq!(info.consent[0].decision, ipc::ConsentDecision::Pending);
+    decide(
+        &mut manager,
+        &bundle,
+        &snapshot,
+        &decide_items(&["credentials:token"], &[]),
+    )
+    .unwrap();
+    assert_eq!(record(&manager).phase, MigrationPhase::CutOver);
+    assert_eq!(route(&manager, &bundle), LegacyRoute::Plugin);
+    let info = infos(&manager, &bundle, Some(&snapshot)).pop().unwrap();
+    assert_eq!(info.route, ipc::MigrationRoute::Plugin);
+    assert_eq!(info.consent, []);
+    assert!(matches!(
+        event_of(&record(&manager)),
+        ipc::PluginEvent::MigrationChanged {
+            phase: ipc::MigrationPhase::CutOver,
+            ..
+        }
+    ));
+}
