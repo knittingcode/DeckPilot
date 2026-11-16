@@ -13,6 +13,15 @@ individual features. A module contributes:
 Modules are compiled in and registered explicitly. There is no loading of
 third-party executables and no remote installation.
 
+In builds with the experimental plugin marketplace enabled, built-in
+modules move to first-party plugins one by one
+([marketplace/module-migration.md](marketplace/module-migration.md)).
+The first is `github`: such a build runs the stored `github.*` actions in
+the bundled plugin `deckpilot.github` once the user approves the use of
+the token, and keeps the built-in as the fallback and for every
+configuration the plugin cannot serve yet (GitHub Enterprise, private
+hosts). Release builds keep plugins off, and so every module below.
+
 ## Built-in modules
 
 | Module     | Pages | Capabilities |

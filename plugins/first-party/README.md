@@ -8,8 +8,9 @@ that is a separate step, not part of this directory.
 
 Experimental, like all of the plugin marketplace. One plugin is bundled:
 `deckpilot.github` (class `migration`, [github/README.md](github/README.md)),
-which nothing routes to until the cut-over lists its aliases
-(`docs/marketplace/module-migration.md` §9, P9). The published release
+to which a plugin-enabled agent routes the built-in `github.*` action
+types once a computer's migration is cut over
+(`docs/marketplace/module-migration.md` §6 and §9, P9). The published release
 pipeline does not package plugins at all (see "Packaging" below).
 
 ## Layout
