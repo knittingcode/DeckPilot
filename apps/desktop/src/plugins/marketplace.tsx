@@ -32,6 +32,8 @@ import {
   type Progress,
 } from "./components"
 import { PluginDetailsView } from "./details"
+import { MigrationNotice } from "./migration"
+import { MigrationConsentDialog } from "./migration-dialog"
 import { DiscoverView } from "./discover"
 import { InstalledView } from "./installed"
 import {
@@ -49,6 +51,7 @@ import type {
   AvailablePlugin,
   AvailableVersion,
   MarketplaceSnapshot,
+  ModuleMigration,
   PermissionChanges,
   PluginActionOutcome,
   PluginDetails,
@@ -63,7 +66,13 @@ type Load =
   | { status: "loading" }
   | { status: "unavailable"; availability: RuntimeAvailability }
   | { status: "error"; message: string; hint?: string; title: string }
-  | { status: "ready"; availability: RuntimeAvailability; snapshot: MarketplaceSnapshot }
+  | {
+      status: "ready"
+      availability: RuntimeAvailability
+      snapshot: MarketplaceSnapshot
+      /** Built-in modules moving to plugins; empty from agents without them. */
+      migrations: ModuleMigration[]
+    }
 
 /** What the screens can ask the marketplace to do. */
 export interface MarketplaceActions {
@@ -107,7 +116,10 @@ async function loadAll(client: PluginClient, refresh = false): Promise<Load> {
   const availability = availabilityOf(runtime)
   if (!runtime.available) return { status: "unavailable", availability }
   try {
-    return { status: "ready", availability, snapshot: await loadSnapshot(client, runtime, refresh) }
+    // An agent before module migrations refuses the request: none then.
+    const migrations = client.listModuleMigrations().catch(() => [])
+    const snapshot = await loadSnapshot(client, runtime, refresh)
+    return { status: "ready", availability, snapshot, migrations: await migrations }
   } catch (error) {
     return { status: "error", ...pluginErrorText(error) }
   }
@@ -147,6 +159,8 @@ export function PluginsSettings() {
   const [progress, setProgress] = useState<Map<string, Progress>>(new Map())
   /** A package file waiting for the user to confirm its installation. */
   const [packageFile, setPackageFile] = useState<string | null>(null)
+  /** A module migration whose consent dialog is open. */
+  const [consentFor, setConsentFor] = useState<ModuleMigration | null>(null)
   const returnFocus = useRef<HTMLElement | null>(null)
   const generation = useRef(0)
 
@@ -233,7 +247,7 @@ export function PluginsSettings() {
     )
   }
 
-  const { snapshot, availability } = load
+  const { snapshot, availability, migrations } = load
   const blocked = installBlock(snapshot)
   const canRun = snapshot.runtime.executionSupported
   const updates = updateCandidates(snapshot)
@@ -461,6 +475,22 @@ export function PluginsSettings() {
         busy={busy !== null}
         onRetry={actions.refresh}
       />
+      <MigrationNotice
+        migrations={migrations}
+        busy={busy}
+        onReview={(migration) => {
+          returnFocus.current =
+            document.activeElement instanceof HTMLElement ? document.activeElement : null
+          setConsentFor(migration)
+        }}
+        onRetry={(migration) => {
+          runReported(
+            migration.module,
+            () => client.retryModuleMigration(migration.module),
+            `${migration.moduleName}: trying again`,
+          )
+        }}
+      />
       {selectedPlugin ? (
         <PluginDetailsView
           key={selectedPlugin.id}
@@ -503,6 +533,24 @@ export function PluginsSettings() {
         </Tabs>
       )}
       {review && <PermissionReviewDialog request={review} onClose={closeReview} />}
+      {consentFor && (
+        <MigrationConsentDialog
+          migration={consentFor}
+          onDecide={(approve, decline) =>
+            run(
+              consentFor.module,
+              () => client.decideModuleMigration(consentFor.module, approve, decline),
+              decline.length > 0
+                ? `${consentFor.moduleName} stays built-in`
+                : `${consentFor.moduleName}: consent saved`,
+            )
+          }
+          onClose={() => {
+            setConsentFor(null)
+            returnFocus.current?.focus()
+          }}
+        />
+      )}
       <AlertDialog
         open={packageFile !== null}
         onOpenChange={(open) => {

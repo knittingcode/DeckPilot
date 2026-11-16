@@ -13,6 +13,7 @@ import type {
   GrantInfo,
   KnownPlugin,
   ManifestPermission,
+  ModuleMigration,
   NetworkPermission,
   PendingPluginUpdate,
   PermissionChanges,
@@ -208,6 +209,8 @@ export interface FakeOptions {
   helloStorage?: PluginStorageUsage
   /** Plugins `plugin_known` has besides the installed ones (e.g. uninstalled ones). */
   known?: KnownPlugin[]
+  /** Module migrations `listModuleMigrations` reports (see `githubMigration`). */
+  migrations?: ModuleMigration[]
 }
 
 /** The settings fields of the test plugin, as the agent returns them. */
@@ -359,6 +362,11 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
   const listeners = new Set<(event: PluginEvent) => void>()
   const data = new Map<string, PluginData>()
   const known = new Map<string, KnownPlugin>((options.known ?? []).map((k) => [k.id, k]))
+  const migrations = new Map<string, ModuleMigration>(
+    (options.migrations ?? []).map((m) => [m.module, structuredClone(m)]),
+  )
+  const migrationOf = (module: string): ModuleMigration =>
+    migrations.get(module) ?? refuse("unknownMigration", `no module \`${module}\` can migrate here`)
   const dataOf = (id: string): PluginData => {
     let d = data.get(id)
     if (!d) {
@@ -758,6 +766,61 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
         return { status: "ok" as const, data: { celsius: 21 } }
       }),
     ),
+    listModuleMigrations: vi.fn(() =>
+      Promise.resolve([...migrations.values()].map((m) => structuredClone(m))),
+    ),
+    decideModuleMigration: vi.fn((module: string, approve: string[], decline: string[]) =>
+      Promise.resolve().then(() => {
+        const m = migrationOf(module)
+        if (m.phase !== "awaitingConsent") {
+          refuse("invalidState", `the migration of ${module} waits for no consent`)
+        }
+        const items = m.consent ?? []
+        for (const key of [...approve, ...decline]) {
+          if (!items.some((i) => i.key === key)) {
+            refuse("unknownPermission", `the migration of ${module} does not wait for \`${key}\``)
+          }
+        }
+        for (const item of items) {
+          if (approve.includes(item.key)) item.decision = "approved"
+          if (decline.includes(item.key)) item.decision = "declined"
+        }
+        if (items.some((i) => i.decision === "declined")) {
+          m.phase = "notEligible"
+          m.canRetry = true
+          m.reason = `you declined ${items
+            .filter((i) => i.decision === "declined")
+            .map((i) => i.key)
+            .join(", ")}; the built-in stays until you ask again`
+        } else if (items.every((i) => i.decision === "approved")) {
+          m.phase = "cutOver"
+          m.route = "plugin"
+          delete m.reason
+          delete m.consent
+        }
+        emit({ type: "migrationChanged", module, plugin: m.plugin, phase: m.phase })
+        return structuredClone(m)
+      }),
+    ),
+    retryModuleMigration: vi.fn((module: string) =>
+      Promise.resolve().then(() => {
+        const m = migrationOf(module)
+        if (!m.canRetry) refuse("invalidState", `the migration of ${module} has not failed`)
+        m.attempts = 0
+        m.canRetry = false
+        if (m.consent?.length) {
+          m.phase = "awaitingConsent"
+          for (const item of m.consent) item.decision = "pending"
+          m.reason = "waiting for your consent"
+        } else {
+          m.phase = "cutOver"
+          m.route = "plugin"
+          delete m.reason
+        }
+        emit({ type: "migrationChanged", module, plugin: m.plugin, phase: m.phase })
+        return structuredClone(m)
+      }),
+    ),
     pickPackage: vi.fn(() => Promise.resolve<string | null>(null)),
     subscribe: vi.fn((listener: (event: PluginEvent) => void) => {
       listeners.add(listener)
@@ -767,4 +830,87 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
     }),
   }
   return client
+}
+
+/** The secret behind the GitHub credential of `githubMigration`; never shown. */
+export const GITHUB_SECRET = "ghp_s3cretTokenValue"
+
+/**
+ * A GitHub migration as the agent lists it: waiting for the import of the
+ * stored token (by id, never the secret), the private network too when
+ * asked, or in another `phase`.
+ */
+export function githubMigration(
+  options: {
+    phase?: ModuleMigration["phase"]
+    privateNetwork?: boolean
+    reason?: string
+    attempts?: number
+    canRetry?: boolean
+    route?: ModuleMigration["route"]
+    routeReason?: string
+  } = {},
+): ModuleMigration {
+  const phase = options.phase ?? "awaitingConsent"
+  const consent =
+    phase === "awaitingConsent"
+      ? [
+          {
+            key: "credentials:token",
+            permission: {
+              key: "credentials:token",
+              kind: "credentials",
+              tier: "high" as const,
+              status: "notGranted" as const,
+              scope: { type: "credential", hosts: ["api.github.com"], schemes: ["bearer"] },
+              justification: "Reads your pull requests with your token.",
+            },
+            import: {
+              setting: "credential",
+              credential: "github.token",
+              slot: "token",
+              hosts: ["api.github.com"],
+            },
+            why: "The built-in github used your stored credential `github.token`. The plugin gets a copy in its slot `token`, sent only to api.github.com. The stored credential is kept.",
+            decision: "pending" as const,
+          },
+          ...(options.privateNetwork
+            ? [
+                {
+                  key: "network:private-network",
+                  permission: {
+                    key: "network:private-network",
+                    kind: "network",
+                    tier: "high" as const,
+                    status: "notGranted" as const,
+                    scope: { type: "privateNetwork" },
+                    justification: "Talks to GitHub Enterprise on your network.",
+                  },
+                  why: "Private network access is never granted without your consent.",
+                  decision: "pending" as const,
+                },
+              ]
+            : []),
+        ]
+      : undefined
+  return {
+    module: "github",
+    moduleName: "GitHub",
+    plugin: "deckpilot.github",
+    pluginName: "GitHub",
+    phase,
+    ...(options.reason
+      ? { reason: options.reason }
+      : phase === "awaitingConsent"
+        ? { reason: "waiting for your consent: credentials:token" }
+        : {}),
+    attempts: options.attempts ?? 0,
+    maxAttempts: 3,
+    canRetry: options.canRetry ?? phase === "failed",
+    route: options.route ?? (phase === "cutOver" ? "plugin" : "builtin"),
+    ...(options.routeReason ? { routeReason: options.routeReason } : {}),
+    aliases: [{ legacy: "github.pull-requests", target: "deckpilot.github.pull-requests" }],
+    ...(consent ? { consent } : {}),
+    updatedAt: 1_767_225_600,
+  }
 }

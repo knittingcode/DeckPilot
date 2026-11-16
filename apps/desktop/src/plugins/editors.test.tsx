@@ -228,6 +228,7 @@ describe("the installed plugins as modules", () => {
     expect(client.listKnownPlugins).not.toHaveBeenCalled()
     expect(client.getSettings).not.toHaveBeenCalled()
     expect(client.listCredentials).not.toHaveBeenCalled()
+    expect(client.listModuleMigrations).not.toHaveBeenCalled()
     expect(loadedClient.loaded).toBe(false)
     for (const probe of screen.getAllByLabelText("plugins")) expect(probe).toHaveTextContent("")
   })

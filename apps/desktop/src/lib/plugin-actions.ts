@@ -8,10 +8,19 @@
 // only grammar is the owner rule of `ModuleId::owner_of` in the core: an
 // action type belongs to everything before its last `.`. Without the flag
 // none of this runs and the editors see the built-in modules only.
+//
+// Built-in modules that moved to a plugin (`listModuleMigrations`,
+// docs/marketplace/module-migration.md §5.2) keep their legacy action
+// types, as the core's `AliasHandler` does: once the module is routed to
+// the plugin, a legacy type shows under its built-in module with the
+// plugin's definition, marked deprecated, so it is not offered for new
+// actions next to the plugin's own type; while the module is routed to its
+// built-in nothing changes; when the user withdrew the plugin it is
+// unavailable with the agent's reason.
 
-import type { KnownPlugin, PluginSummary } from "@/plugins/types"
+import type { KnownPlugin, ModuleMigration, PluginSummary } from "@/plugins/types"
 
-import type { ActionType, ModuleInfo } from "./types"
+import type { ActionType, LegacyAlias, ModuleInfo } from "./types"
 
 /** Builds with the experimental plugin marketplace (`VITE_DECKPILOT_PLUGINS=1`). */
 export function pluginsEnabled(): boolean {
@@ -47,27 +56,84 @@ export const NOT_INSTALLED = "notInstalled"
  * without action types per plugin that was installed here before
  * (`listKnownPlugins`), so that actions still using it name it.
  */
-export function pluginModules(plugins: PluginSummary[], known: KnownPlugin[] = []): ModuleInfo[] {
+/** The legacy action types of the migrations, by the plugin that replaces them. */
+export function aliasesOf(migrations: ModuleMigration[]): Map<string, LegacyAlias[]> {
+  const byPlugin = new Map<string, LegacyAlias[]>()
+  for (const m of migrations) {
+    if (!isPluginId(m.plugin) || isPluginId(m.module)) continue
+    const route =
+      m.route === "plugin" || m.route === "pluginWithdrawn" || m.route === "builtin"
+        ? m.route
+        : "builtin"
+    const aliases = byPlugin.get(m.plugin) ?? []
+    for (const alias of m.aliases) {
+      // Only the shape the core's alias table allows.
+      if (ownerOf(alias.legacy) !== m.module || ownerOf(alias.target) !== m.plugin) continue
+      aliases.push({
+        legacy: alias.legacy,
+        target: alias.target,
+        module: m.module,
+        plugin: m.plugin,
+        pluginName: m.pluginName ?? m.plugin,
+        route,
+        ...(m.routeReason ? { routeReason: m.routeReason } : {}),
+      })
+    }
+    byPlugin.set(m.plugin, aliases)
+  }
+  return byPlugin
+}
+
+function placeholder(id: string, name: string, version: string, publisher: string): ModuleInfo {
+  return {
+    id,
+    version,
+    name: name || id,
+    description: publisher ? `Plugin by ${publisher}` : "Plugin",
+    platforms: [],
+    pages: [],
+    capabilities: [],
+    config: [],
+    dependencies: [],
+    enabledByDefault: false,
+    enabled: false,
+    supported: true,
+    configValues: {},
+    actionTypes: [],
+    plugin: { state: NOT_INSTALLED, unavailable: {} },
+  }
+}
+
+/**
+ * One module per installed plugin, from a `listPlugins` answer, one
+ * without action types per plugin that was installed here before
+ * (`listKnownPlugins`), so that actions still using it name it, and the
+ * legacy action types each replaces (`listModuleMigrations`).
+ */
+export function pluginModules(
+  plugins: PluginSummary[],
+  known: KnownPlugin[] = [],
+  migrations: ModuleMigration[] = [],
+): ModuleInfo[] {
+  const modules = installedPluginModules(plugins, known)
+  for (const [plugin, aliases] of aliasesOf(migrations)) {
+    if (aliases.length === 0) continue
+    let module = modules.find((m) => m.id === plugin)
+    if (!module) {
+      // Never installed here (or forgotten): its legacy actions still say whose they are.
+      module = placeholder(plugin, aliases[0]?.pluginName ?? plugin, "", "")
+      modules.push(module)
+    }
+    if (module.plugin) module.plugin.aliases = aliases
+  }
+  return modules
+}
+
+function installedPluginModules(plugins: PluginSummary[], known: KnownPlugin[]): ModuleInfo[] {
   const installed = new Set(plugins.map((p) => p.id))
   const gone: ModuleInfo[] = known
     .filter((k) => !k.installed && !installed.has(k.id) && isPluginId(k.id))
-    .map((k) => ({
-      id: k.id,
-      version: k.lastVersion,
-      name: k.name || k.id,
-      description: k.publisher ? `Plugin by ${k.publisher}` : "Plugin",
-      platforms: [],
-      pages: [],
-      capabilities: [],
-      config: [],
-      dependencies: [],
-      enabledByDefault: false,
-      enabled: false,
-      supported: true,
-      configValues: {},
-      actionTypes: [],
-      plugin: { state: NOT_INSTALLED, unavailable: {} },
-    }))
+    .map((k) => placeholder(k.id, k.name, k.lastVersion, k.publisher))
   return plugins
     .filter((plugin) => isPluginId(plugin.id))
     .map((plugin): ModuleInfo => {
@@ -105,9 +171,65 @@ export function pluginModules(plugins: PluginSummary[], known: KnownPlugin[] = [
     .concat(gone)
 }
 
-/** The built-in modules followed by the plugin modules; `modules` itself without plugins. */
+/**
+ * The built-in modules followed by the plugin modules; `modules` itself
+ * without plugins. A built-in module whose legacy action types a plugin
+ * replaces (see the top of this file) gets them with the plugin's
+ * definition, marked deprecated, while the module is routed to the plugin
+ * or the user withdrew it.
+ */
 export function withPluginModules(modules: ModuleInfo[], plugins: ModuleInfo[]): ModuleInfo[] {
-  return plugins.length === 0 ? modules : [...modules, ...plugins]
+  if (plugins.length === 0) return modules
+  const aliases = plugins.flatMap((p) => p.plugin?.aliases ?? [])
+  const routed = aliases.filter((a) => a.route !== "builtin")
+  const builtins =
+    routed.length === 0 ? modules : modules.map((m) => withLegacyTypes(m, routed, plugins))
+  return [...builtins, ...plugins]
+}
+
+function withLegacyTypes(
+  module: ModuleInfo,
+  aliases: LegacyAlias[],
+  plugins: ModuleInfo[],
+): ModuleInfo {
+  if (isPluginId(module.id)) return module
+  const mine = aliases.filter((a) => a.module === module.id)
+  if (mine.length === 0) return module
+  const legacy: NonNullable<ModuleInfo["legacy"]> = {}
+  const actionTypes = module.actionTypes.map((type) => {
+    const alias = mine.find((a) => a.legacy === type.id)
+    if (!alias) return type
+    const target = plugins
+      .find((p) => p.id === alias.plugin)
+      ?.actionTypes.find((t) => t.id === alias.target)
+    legacy[type.id] = {
+      target: alias.target,
+      plugin: alias.plugin,
+      pluginName: alias.pluginName,
+      unavailable:
+        alias.route === "pluginWithdrawn"
+          ? `${alias.pluginName} (${alias.plugin}): ${alias.routeReason ?? "the plugin is disabled"}`
+          : null,
+    }
+    // The plugin's definition under the legacy id, as the core's
+    // `AliasHandler` presents it; the built-in's when the plugin's is not
+    // known here.
+    return { ...(target ?? type), id: type.id, deprecated: true }
+  })
+  return { ...module, actionTypes, legacy }
+}
+
+/** The legacy alias state of `typeId`, when a plugin replaces it. */
+export function legacyAlias(
+  modules: ModuleInfo[],
+  typeId: string,
+): NonNullable<ModuleInfo["legacy"]>[string] | null {
+  if (isPluginType(typeId)) return null
+  for (const m of modules) {
+    const state = m.legacy?.[typeId]
+    if (state) return state
+  }
+  return null
 }
 
 /** Why a plugin module's action type cannot be placed or run; `null` when it can. */
@@ -122,11 +244,19 @@ export function pluginTypeUnavailable(module: ModuleInfo, typeId: string): strin
  */
 export function withPluginTypes(types: ActionType[], modules: ModuleInfo[]): ActionType[] {
   if (!pluginsEnabled()) return types
+  // Legacy types a plugin replaces: its definition, deprecated (kept for
+  // the nodes that use them, not offered for new ones).
+  const legacy = new Map(
+    modules
+      .filter((m) => m.legacy)
+      .flatMap((m) => m.actionTypes.filter((t) => m.legacy?.[t.id]).map((t) => [t.id, t] as const)),
+  )
+  const listed = legacy.size === 0 ? types : types.map((t) => legacy.get(t.id) ?? t)
   const available = modules
     .filter((m) => m.plugin)
     .flatMap((m) => m.actionTypes.filter((t) => !pluginTypeUnavailable(m, t.id)))
-  if (available.length === 0 && !types.some((t) => isPluginType(t.id))) return types
-  return [...types.filter((t) => !isPluginType(t.id)), ...available]
+  if (available.length === 0 && !listed.some((t) => isPluginType(t.id))) return listed
+  return [...listed.filter((t) => !isPluginType(t.id)), ...available]
 }
 
 /**
@@ -137,7 +267,11 @@ export function withPluginTypes(types: ActionType[], modules: ModuleInfo[]): Act
  * Places that already use such an action keep it and show this reason.
  */
 export function pluginActionUnavailable(modules: ModuleInfo[], typeId: string): string | null {
-  if (!pluginsEnabled() || !isPluginType(typeId)) return null
+  if (!pluginsEnabled()) return null
+  // A legacy type whose plugin the user withdrew: no fallback to the built-in.
+  const legacy = legacyAlias(modules, typeId)
+  if (legacy) return legacy.unavailable
+  if (!isPluginType(typeId)) return null
   const availability = typeAvailability(modules, typeId)
   return availability.available
     ? null
@@ -195,5 +329,9 @@ export function typeAvailability(modules: ModuleInfo[], typeId: string): TypeAva
       reason: `The plugin ${ownerOf(typeId) ?? ""} is not installed`,
     }
   }
+  // A legacy type of a built-in module that moved to a plugin the user
+  // then withdrew: unavailable, with the agent's reason.
+  const unavailable = owner?.legacy?.[typeId]?.unavailable
+  if (unavailable) return { available: false, owner, reason: unavailable }
   return { available: Boolean(owner?.enabled), owner, reason: null }
 }

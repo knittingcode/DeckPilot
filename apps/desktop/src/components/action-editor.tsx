@@ -95,6 +95,8 @@ export function ActionEditor({
   const chosenType = action?.actionType ?? initialType
   const availability = chosenType ? typeAvailability(modules, chosenType) : undefined
   const owner = availability?.owner
+  // A legacy type a plugin replaces (module migration): marked deprecated.
+  const legacy = chosenType ? owner?.legacy?.[chosenType] : undefined
   // A plugin action that cannot run now cannot be saved, new or not.
   const unavailable = (Boolean(action) || Boolean(availability?.reason)) && !availability?.available
   const [moduleId, setModuleId] = useState(owner?.id ?? (usable.length === 1 ? usable[0]?.id : ""))
@@ -189,6 +191,13 @@ export function ActionEditor({
           <p className="text-sm text-muted-foreground">
             {owner?.name ?? "Unknown module"} › {type?.name ?? chosenType}
             {type && <span className="block text-xs">{type.description}</span>}
+            {legacy && (
+              <span className="block text-xs" data-testid="legacy-alias">
+                Deprecated type: {owner?.name ?? "the module"} moved to the plugin{" "}
+                {legacy.pluginName}, which runs it as <code>{legacy.target}</code>. Your action
+                keeps working; new actions use the plugin's type.
+              </span>
+            )}
           </p>
           {!action && onChangeType && (
             <Button type="button" size="sm" variant="outline" onClick={onChangeType}>

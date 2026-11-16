@@ -3256,11 +3256,9 @@ fn plugin_refusal(h: &Harness, cmd: &str, args: Value) -> (String, String) {
     )
 }
 
-#[test]
-fn plugin_commands_refuse_unless_the_agent_answers_plugin_requests() {
-    let h = Harness::new();
-    // Every plugin command, with the arguments the frontend sends.
-    let commands = [
+/// Every plugin command, with the arguments the frontend sends.
+fn plugin_commands() -> Vec<(&'static str, Value)> {
+    vec![
         ("list_plugins", json!({})),
         ("get_plugin", json!({ "plugin": "example.hello" })),
         ("list_available_plugins", json!({ "refresh": true })),
@@ -3328,7 +3326,19 @@ fn plugin_commands_refuse_unless_the_agent_answers_plugin_requests() {
             "invoke_plugin_action",
             json!({ "plugin": "example.hello", "action": "greet", "params": { "name": "x" } }),
         ),
-    ];
+        ("list_module_migrations", json!({})),
+        (
+            "decide_module_migration",
+            json!({ "module": "github", "approve": ["credentials:token"], "decline": [] }),
+        ),
+        ("retry_module_migration", json!({ "module": "github" })),
+    ]
+}
+
+#[test]
+fn plugin_commands_refuse_unless_the_agent_answers_plugin_requests() {
+    let h = Harness::new();
+    let commands = plugin_commands();
 
     // No agent: typed, and nothing is sent anywhere.
     let (reason, _) = plugin_refusal(&h, "get_plugin_runtime", json!({}));

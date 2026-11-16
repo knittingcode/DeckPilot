@@ -27,7 +27,7 @@ type Classes = ReturnType<typeof classifyPlugins>
 /**
  * What DeckPilot's functionality is made of: core functionality (the
  * built-in modules, always there and configured in Settings › Modules),
- * system plugins bundled with DeckPilot (none yet), the optional plugins
+ * system plugins bundled with DeckPilot (origin `bundled`), the optional plugins
  * installed here, and the registry's plugins that are not installed.
  */
 function Classification({ classes }: { classes: Classes }) {
