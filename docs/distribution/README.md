@@ -444,6 +444,20 @@ and DeckPilot handles the result from step 8 on (section 7.3).
 | 10 | **Verify compatibility.** The app checks the agent's version (`compatibility::check`), protocol, and the agent's `distribution_channel` against its own (R6); devices are re-enumerated | Version and protocol (`agent.rs:80-104`) | + distribution field in `GetStatus` (PR E) |
 | 11 | **Commit or recover.** Success: delete the intent, log it to `updates.log`. Failure: see 7.2 | Failure before install: previous agent restarted (`updates.rs:701-712`) | + start-up recovery from the intent file |
 
+Implemented by PR E: step 4 (`deckpilot_update::intent`, written by the
+install sequence in `updates.rs`), the lock probe of step 6
+(`deckpilot_ipc::instance`, also used by "restart agent"), step 8's
+debug-only `DECKPILOT_AGENT_BIN` (`deckpilot_distribution::agent_executable_override`),
+step 10's distribution field (`AgentStatus::distribution`) and channel
+check (`AgentCompatibility::OtherDistribution`), and step 11's start-up
+recovery (`updates::recover`). Step 5 needed no change: the agent's run
+loop ends with `PrepareForUpdate`, so no run can start after it. Still
+open: the explicit "cancel workflows and install" choice of step 3 (the
+installation keeps refusing while workflows run), the version-marker check
+of section 7.3, recording the backup path from `migration_history` in the
+intent (the advice names the backup by its schema instead), and a restore
+command for pre-migration backups (G7).
+
 ### 7.2 Recovery and rollback
 
 Rollback is safe only where no data was migrated. The evidence:

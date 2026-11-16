@@ -54,6 +54,26 @@ describe("agent compatibility notice", () => {
     expect(toast.success).toHaveBeenCalledWith("The agent was restarted")
   })
 
+  it("refuses an agent of another installation and replaces it with this app's", async () => {
+    const restarted = agentConnection()
+    api.restartAgent.mockResolvedValue(restarted)
+    const { user, context } = renderWithApp(<AgentCompatibilityNotice />, {
+      agent: agentConnection({
+        compatibility: { type: "otherDistribution", agent: "apt", app: "github" },
+      }),
+    })
+    const alert = screen.getByRole("alert")
+    expect(alert).toHaveTextContent("The running agent belongs to another installation")
+    expect(alert).toHaveTextContent(
+      "The agent was installed from the APT repository, this app from GitHub Releases.",
+    )
+    await user.click(screen.getByRole("button", { name: "Restart agent" }))
+    expect(api.restartAgent).toHaveBeenCalledWith(false)
+    await waitFor(() => {
+      expect(context.setAgent).toHaveBeenCalledWith(restarted)
+    })
+  })
+
   it("says when the agent must be replaced and which features are missing", () => {
     renderWithApp(<AgentCompatibilityNotice />, {
       agent: agentConnection({
