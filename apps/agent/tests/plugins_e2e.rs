@@ -455,7 +455,9 @@ fn origin_manifest() -> Value {
          "userOrigins": [{"setting": "serverUrl", "pathPrefix": true, "privateNetwork": true}],
          "justification": "Talks to the example API and to your server."},
         {"kind": "credentials", "refs": ["token"],
-         "justification": "Signs in to your server."}
+         "justification": "Signs in to your server."},
+        {"kind": "openUrl", "hosts": [], "userOrigins": ["serverUrl"],
+         "justification": "Opens pages of your server in the browser."}
     ]);
     manifest["contributes"]["actions"] = sdk_actions();
     manifest["contributes"]["settings"] = json!({"fields": [
@@ -4230,6 +4232,7 @@ const ORIGIN_GRANTS: &[&str] = &[
     "network:api.example.com",
     "network:user-origin:serverUrl",
     "credentials:token",
+    "openUrl:user-origin:serverUrl",
 ];
 
 impl Agent {
@@ -4607,5 +4610,136 @@ async fn a_server_the_user_enters_is_reached_only_with_its_own_consent() {
         .await;
     assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
 
+    agent.stop().await;
+}
+
+/// Pages of a server the user enters (`openUrl.userOrigins`), through the
+/// real agent and host: none opens before the user allowed exactly that
+/// server; then its pages open, whatever their path, and no other
+/// server's; the permission revoked, a changed setting or a revoked
+/// consent ends it at once; a private server opens only with its own
+/// consent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // one scenario, step by step
+async fn pages_of_a_server_the_user_enters_open_only_with_its_consent() {
+    use deckpilot_ipc::plugins::UserOriginStatus as Status;
+    const OPEN_KEY: &str = "openUrl:user-origin:serverUrl";
+    let registry = shared_registry();
+    let env = Env::new("plugins-e2e-origin-pages");
+    let agent = Agent::started(&env, registry).await;
+    agent.install_enabled(ORIGIN, ORIGIN_GRANTS).await;
+    let details = agent.details(ORIGIN).await;
+    let grant = details
+        .permissions
+        .iter()
+        .find(|p| p.key == OPEN_KEY)
+        .unwrap();
+    assert_eq!(grant.status, PermissionStatus::Granted);
+    assert_eq!(grant.kind, "openUrl");
+    assert_eq!(grant.scope["type"], "openUrl", "{grant:?}");
+    let open = |url: &str| agent.run(ORIGIN, "open-url", json!({ "url": url }));
+    // One page per 2 s: a pause before every page that is to open.
+    let pause = || tokio::time::sleep(Duration::from_millis(2_100));
+
+    // ---- the server entered but not allowed: nothing opens.
+    let page = "https://code.example.com/gitlab/group/app/-/merge_requests/7";
+    let server = agent
+        .set_server("https://code.example.com/gitlab/api/v4")
+        .await;
+    assert_eq!(server.status, Status::NeedsConsent, "{server:?}");
+    assert!(server.opens_pages, "{server:?}");
+    let refused = open(page).await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    assert_eq!(env.opened_urls(), [] as [&str; 0]);
+
+    // ---- allowed: its pages open, also outside the API's path prefix.
+    agent
+        .allow_server("https://code.example.com/gitlab/api/v4", false)
+        .await
+        .unwrap();
+    let opened = open(page).await;
+    assert_eq!(opened["opened"], 1, "{opened:?}");
+    assert_eq!(env.opened_urls(), [page]);
+    // Requests stay within the prefix the user allowed.
+    let refused = agent
+        .with_token("https://code.example.com/gitlab/group/app")
+        .await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    // No other server, port or scheme.
+    for url in [
+        "https://code.example.com:8443/gitlab/",
+        "https://x.code.example.com/gitlab/",
+        "https://code.example.com.evil.example.net/gitlab/",
+        "https://api.example.com/",
+        "http://code.example.com/gitlab/",
+        "https://code.internal/gitlab/",
+        "https://10.0.0.5/",
+        "https://localhost/",
+    ] {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let refused = open(url).await;
+        assert_eq!(refused["error"], "NotPermitted", "{url}: {refused:?}");
+    }
+    assert_eq!(env.opened_urls(), [page], "a refused page was opened");
+
+    // ---- the permission revoked: requests still go there, pages do not
+    // open; granted again, they do, with the same consent to the server.
+    agent.revoke(ORIGIN, OPEN_KEY).await;
+    pause().await;
+    let refused = open(page).await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    let settings = agent
+        .origin_settings(Request::GetPluginSettings {
+            plugin: ORIGIN.into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(settings.origins[0].status, Status::Granted);
+    assert!(!settings.origins[0].opens_pages);
+    agent.grant(ORIGIN, &[OPEN_KEY]).await;
+    pause().await;
+    assert_eq!(open(page).await["opened"], 1);
+    assert_eq!(env.opened_urls(), [page, page]);
+
+    // ---- a changed setting ends it at once, for the old server and the
+    // new one.
+    let changed = agent
+        .set_server("https://code2.example.com/gitlab/api/v4")
+        .await;
+    assert_eq!(changed.status, Status::NeedsConsent, "{changed:?}");
+    pause().await;
+    for url in [page, "https://code2.example.com/gitlab/group/app"] {
+        let refused = open(url).await;
+        assert_eq!(refused["error"], "NotPermitted", "{url}: {refused:?}");
+    }
+
+    // ---- a server on a private network: only with its own consent.
+    let lan = agent
+        .set_server("https://code.internal/gitlab/api/v4")
+        .await;
+    assert!(lan.private_host, "{lan:?}");
+    let lan_page = "https://code.internal/gitlab/group/app";
+    let refused = open(lan_page).await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    agent
+        .allow_server("https://code.internal/gitlab/api/v4", true)
+        .await
+        .unwrap();
+    pause().await;
+    assert_eq!(open(lan_page).await["opened"], 1);
+    assert_eq!(env.opened_urls(), [page, page, lan_page]);
+
+    // ---- the consent revoked: refused on the very next call.
+    agent
+        .origin_settings(Request::RevokePluginUserOrigin {
+            plugin: ORIGIN.into(),
+            setting: "serverUrl".into(),
+        })
+        .await
+        .unwrap();
+    pause().await;
+    let refused = open(lan_page).await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    assert_eq!(env.opened_urls(), [page, page, lan_page]);
     agent.stop().await;
 }
