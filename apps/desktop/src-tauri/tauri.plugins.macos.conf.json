@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "externalBin": ["binaries/deckpilot-agent"],
+    "macOS": {
+      "files": {
+        "MacOS/deckpilot-plugin-host": "binaries/macos/deckpilot-plugin-host"
+      }
+    }
+  }
+}

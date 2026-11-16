@@ -16,6 +16,7 @@ on:
       - plugins/examples/**
       - plugins/schemas/**
       - rust-toolchain.toml
+      - apps/desktop/src-tauri/entitlements/**
       - .github/workflows/plugin-runtime.yml
   pull_request:
     paths:
@@ -23,6 +24,7 @@ on:
       - plugins/examples/**
       - plugins/schemas/**
       - rust-toolchain.toml
+      - apps/desktop/src-tauri/entitlements/**
       - .github/workflows/plugin-runtime.yml
   workflow_dispatch:
 
@@ -77,6 +79,17 @@ jobs:
         run: cargo clippy --locked -p deckpilot-plugin-guest -p deckpilot-test-guest -p deckpilot-plugin-sdk -p deckpilot-sdk-test-guest -p hello-weather -p hello-world -p developer-tools -p deckpilot-github --target wasm32-unknown-unknown -- -D warnings
       - name: Test
         run: cargo test --locked --no-fail-fast -- --nocapture
+      # The host as a Developer ID package signs it (hardened runtime): with
+      # exactly plugin-host.entitlements guests run and the host's own
+      # sandbox still denies files, network and exec
+      # (docs/marketplace/distribution.md, "macOS: the plugin host's
+      # entitlement"). Signed ad hoc, no Apple account. GitHub's runners do
+      # not enforce the hardened runtime's executable-memory rule, so the
+      # kill without the entitlement and with allow-jit is shown only on a
+      # stock Mac; the script reports that here.
+      - name: Hardened runtime with the plugin host's entitlement (macOS)
+        if: runner.os == 'macOS'
+        run: scripts/macos-hardened-runtime.sh
       # AppContainer network isolation is enforced by the Windows Filtering
       # Platform; show its state next to the probe results.
       - name: Windows firewall and AppContainer profiles

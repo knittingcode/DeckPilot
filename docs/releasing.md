@@ -179,7 +179,9 @@ What the release workflow does on macOS:
 4. `.github/scripts/verify-macos-app.sh` checks the app on disk, the app in
    the updater archive and the app in the disk image: a strict signature over
    the bundle, every executable signed by `APPLE_TEAM_ID` with the hardened
-   runtime and without entitlements, the agent's fixed identifier,
+   runtime, no entitlements on any Mach-O file
+   (`tools/ci/check-macos-entitlements.sh`; the one exception, the plugin
+   host of a package with plugins, is below), the agent's fixed identifier,
    Gatekeeper's assessment (`spctl`) and the stapled ticket
    (`stapler validate`). If the bundler skipped notarization (for example
    because of incomplete credentials), this step fails the release.
@@ -195,6 +197,59 @@ approves the deployment):
 `-f notarize=true` it also submits that throwaway executable for
 notarization; this records a submission in the developer account. On any
 other ref the environment refuses the job before a secret is read.
+
+### Packaging the plugins (opt-in, `DECKPILOT_RELEASE_PLUGINS=1`)
+
+`deckpilot-dev package` with `DECKPILOT_RELEASE_PLUGINS=1` adds the plugin
+host and the bundled first-party plugins
+([plugins/first-party/README.md](../plugins/first-party/README.md)). The
+published release workflow does not do this yet: its packages contain
+neither, and nothing below changes them. Without the variable,
+`deckpilot-dev package` builds with `tauri.release.conf.json` alone, as
+before.
+
+On macOS the host needs one entitlement under the hardened runtime,
+`com.apple.security.cs.allow-unsigned-executable-memory`
+(`apps/desktop/src-tauri/entitlements/plugin-host.entitlements`): wasmtime
+makes its compiled plugin code executable with `mprotect`, without
+`MAP_JIT`, and the hardened runtime kills it otherwise; `allow-jit` is
+not enough. Only the host gets it; the app and the agent keep none. Why
+this one and not `allow-jit`:
+[marketplace/distribution.md](marketplace/distribution.md#macos-the-plugin-hosts-entitlement).
+The steps on macOS:
+
+1. The host is staged at
+   `apps/desktop/src-tauri/binaries/macos/deckpilot-plugin-host` (not as an
+   external binary: the bundler signs every external binary with the
+   app's entitlements, which are none).
+2. With `APPLE_SIGNING_IDENTITY` set (the identity the bundler signs the
+   app with, or `-` for an ad hoc test package),
+   `tools/ci/sign-macos-plugin-host.sh` signs it with that identity, the
+   hardened runtime, a secure timestamp, the identifier
+   `io.github.knittingcode.deckpilot.plugin-host` and exactly that
+   entitlements file, then checks the result
+   (`tools/ci/check-macos-entitlements.sh --plugin-host`). The identity
+   must be in the keychain search list (or `SIGN_KEYCHAIN`); the script
+   never imports a certificate. `APPLE_CERTIFICATE` without
+   `APPLE_SIGNING_IDENTITY` is refused, because the bundler would sign the
+   app and leave the host unsigned. Without either, the package is
+   unsigned like any local package and the host keeps the linker's ad hoc
+   signature.
+3. `tauri.plugins.macos.conf.json` (on top of `tauri.plugins.conf.json`)
+   copies the signed host into `Contents/MacOS` as it is
+   (`bundle.macOS.files`); the bundler signs the agent and the app (no
+   entitlements, hardened runtime) around it and notarizes the whole.
+4. After bundling, `tools/ci/check-macos-entitlements.sh` checks the app:
+   exactly that entitlement on exactly `Contents/MacOS/deckpilot-plugin-host`,
+   none on the app, the agent or any other Mach-O file.
+   `verify-macos-app.sh` applies the same check to a release and also
+   requires the host's identifier when the host is present.
+
+When the release workflow packages the plugins, its macOS build must sign
+the host this way before the bundler runs, with the identity in a keychain
+that step can use: the bundler imports `APPLE_CERTIFICATE` only into a
+keychain of its own, during bundling. That is a change to the signing job
+for the owner to approve; it is not made yet.
 
 ### Windows: Authenticode (not yet provisioned)
 

@@ -46,6 +46,74 @@ application: when it is bundled, it ships *inside* the installers (like the
 agent), signed and updated with the application. It is never a release
 asset of its own and never an independently installable package.
 
+### macOS: the plugin host's entitlement
+
+The host is the only DeckPilot executable with an entitlement, and only
+in packages built with `DECKPILOT_RELEASE_PLUGINS=1`:
+`com.apple.security.cs.allow-unsigned-executable-memory`, from
+[`apps/desktop/src-tauri/entitlements/plugin-host.entitlements`](../../apps/desktop/src-tauri/entitlements/plugin-host.entitlements),
+on `Contents/MacOS/deckpilot-plugin-host` alone. The application and the
+agent keep the hardened runtime with **no** entitlements, and a package
+without the variable is exactly what it was (no host, no entitlement).
+
+- **Why.** wasmtime 50.0.1 (Cranelift) maps the compiled plugin code with
+  `mmap` and makes it executable with `mprotect`, without `MAP_JIT`. The
+  GitHub build is signed with the hardened runtime, which kills such a
+  process (`SIGKILL`, `CODESIGNING`, "Invalid Page") the moment it runs a
+  guest, without an entitlement and also with
+  `com.apple.security.cs.allow-jit`, which covers only `MAP_JIT` memory.
+  `allow-unsigned-executable-memory` is the entitlement under which it runs
+  (experiment E2 of the distribution feasibility study, PR #263,
+  `experiments/distribution/macos-sandbox-plugin-host`, and
+  `plugins/runtime/scripts/macos-hardened-runtime.sh` on a stock Mac;
+  GitHub's macOS runners do not enforce that rule, so CI runs only its
+  positive half).
+- **The host's own sandbox is unchanged.** It still confines itself with
+  `sandbox_init` and the deny-default profile
+  (`plugins/runtime/crates/host/src/sandbox/macos.rs`) before it reads a
+  plugin byte; the entitlement only lets wasmtime make its own pages
+  executable. Under the hardened runtime with the entitlement the host's
+  process, sandbox and SDK tests pass against the signed binary: guests
+  run, files, the network and `exec` stay denied
+  (`macos-hardened-runtime.sh`).
+- **Why not `allow-jit`.** It is narrower (only `MAP_JIT` regions may be
+  executable) but wasmtime has no configuration or feature that allocates
+  its code with `MAP_JIT`, and its own mapping cannot be turned into one
+  (`mmap` with `MAP_JIT | MAP_FIXED` over it fails with `EINVAL`). It
+  works only with a custom loader in the host: compile with
+  `Engine::precompile_module`, copy the image into a `MAP_JIT` region the
+  host maps itself, load it with the `unsafe` `Module::deserialize_raw`,
+  and switch the thread's write protection
+  (`pthread_jit_write_protect_np`) in a `CustomCodeMemory`. A probe of
+  that passed on arm64 (guests run, traps work, `sandbox_init` still
+  denies files), but on arm64 a `MAP_JIT` region cannot be `mprotect`ed,
+  so the whole image (data included) is executable and W^X is only per
+  thread, any code in the process can switch it, and the Intel build could
+  not be tested here (Rosetta does not enforce the hardened runtime). That
+  is new `unsafe` code in the process that holds untrusted code, for a
+  marginal gain against an attacker who already runs code in it; not done.
+  wasmtime's Pulley interpreter would need no entitlement at all, at the
+  cost of interpreted plugins; not evaluated beyond that.
+- **How it is applied.** The Tauri bundler signs every external binary
+  with the entitlements of the whole app, so on macOS the host is not an
+  external binary: `deckpilot-dev package` stages it at
+  `apps/desktop/src-tauri/binaries/macos/deckpilot-plugin-host`, signs it
+  with the app's identity (`APPLE_SIGNING_IDENTITY`), the hardened
+  runtime, the identifier `io.github.knittingcode.deckpilot.plugin-host`
+  and exactly that file (`tools/ci/sign-macos-plugin-host.sh`), and
+  `tauri.plugins.macos.conf.json` copies it into `Contents/MacOS` as it is
+  (`bundle.macOS.files`). The bundler then signs the app around it (no
+  `--deep`, so the host's signature stays) and notarizes the whole.
+- **Enforcement.** `tools/ci/check-macos-entitlements.sh` allows exactly
+  that entitlement dictionary on exactly `Contents/MacOS/deckpilot-plugin-host`
+  and none on any other Mach-O file (the app, the agent, a second copy of
+  the host anywhere); any other or additional entitlement on the host
+  fails. `.github/scripts/verify-macos-app.sh` (release) and
+  `deckpilot-dev package` (after bundling, when signing) run it;
+  `tools/ci/test-check-macos-entitlements.sh` tests it (Packaging
+  workflow, macOS). No Tauri configuration may set
+  `bundle.macOS.entitlements` (`deckpilot-dev` unit test).
+
 Registry and plugin signing never happen in this repository's workflows,
 in any environment: no `deckpilot-registry` signing or publishing command,
 no registry secret, no `registry-*` environment, and never with the
