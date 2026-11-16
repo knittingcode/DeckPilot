@@ -68,6 +68,8 @@ export interface StoragePermission {
 export interface OpenUrlPermission {
   kind: "openUrl"
   hosts: string[]
+  /** Origin settings whose server's pages may be opened too. */
+  userOrigins?: string[]
   justification: string
 }
 
@@ -340,6 +342,8 @@ export interface PluginUserOrigin {
   credentials?: string[]
   /** Seconds since the Unix epoch. */
   grantedAt?: number
+  /** The plugin may also open https pages of this server in the browser. */
+  opensPages?: boolean
 }
 
 /** One credential slot and whether a secret is stored; never the secret. */

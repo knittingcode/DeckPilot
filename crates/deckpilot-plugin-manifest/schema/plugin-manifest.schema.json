@@ -384,14 +384,25 @@
             "kind": { "const": "openUrl" },
             "hosts": {
               "type": "array",
-              "minItems": 1,
               "maxItems": 16,
               "uniqueItems": true,
               "items": { "$ref": "#/$defs/hostPattern" }
             },
+            "userOrigins": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 4,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/camelKey" },
+              "description": "Settings of the network permission's user-origin slots: pages on the server the user entered there, and allowed, may be opened too. Never granted at install: it follows the user's consent to that exact server."
+            },
             "justification": { "$ref": "#/$defs/justification" }
           },
           "required": ["hosts"],
+          "anyOf": [
+            { "properties": { "hosts": { "minItems": 1 } } },
+            { "required": ["userOrigins"] }
+          ],
           "additionalProperties": false
         },
         {

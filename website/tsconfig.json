@@ -1,0 +1,10 @@
+{
+  "extends": "astro/tsconfigs/strict",
+  "include": [".astro/types.d.ts", "src", "tests", "tools", "astro.config.ts", "playwright.config.ts"],
+  "exclude": ["dist", "dist-fixtures", "node_modules"],
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"] },
+    "noUncheckedIndexedAccess": true
+  }
+}
