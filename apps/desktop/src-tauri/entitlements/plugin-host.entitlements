@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The only entitlement in DeckPilot, and only for the plugin host
+  (Contents/MacOS/deckpilot-plugin-host), only in packages built with
+  DECKPILOT_RELEASE_PLUGINS=1. The application and the agent have none.
+
+  wasmtime (Cranelift) maps the compiled plugin code with mmap and makes it
+  executable with mprotect, without MAP_JIT. Under the hardened runtime that
+  page is killed by code signing unless this entitlement is present;
+  com.apple.security.cs.allow-jit covers only MAP_JIT memory and is not
+  enough. See docs/marketplace/distribution.md, "macOS: the plugin host's
+  entitlement". .github/scripts/check-macos-entitlements.sh enforces exactly
+  this file's content on exactly that binary.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+</dict>
+</plist>

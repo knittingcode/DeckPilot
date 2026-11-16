@@ -50,7 +50,7 @@ Short form; the reasons are in [section 2](#2-per-capability-detail).
 | Tray / menu bar | Supported | Supported | Supported | Supported | Requires adaptation | Supported (reading) | Supported (reading) | Supported |
 | Spawning the plugin host | Requires adaptation | Requires adaptation | Requires adaptation | Requires adaptation | Requires adaptation | Requires adaptation (spawn and sandbox inheritance work [E2]) | **Unverified** | Requires adaptation |
 | Plugin host's own OS sandbox | Supported (verified on CI runners, not bundled) | as GitHub | as GitHub | as GitHub | **Unverified** | **Blocked** as designed (`sandbox_init` refused inside App Sandbox [E2]) | **Unverified** | as GitHub |
-| JIT / executable memory (wasmtime) | Requires adaptation: `allow-unsigned-executable-memory`, not `allow-jit` [E2] | as GitHub | Supported | Supported | Supported (reading) | Requires adaptation: works in a sandboxed helper without the hardened runtime [E2]; review Unverified | Supported | Supported |
+| JIT / executable memory (wasmtime) | Requires adaptation, done in the opt-in plugin packaging: `allow-unsigned-executable-memory` (not `allow-jit` [E2]) on the host only; Developer ID **Unverified** | as GitHub | Supported | Supported | Supported (reading) | Requires adaptation: works in a sandboxed helper without the hardened runtime [E2]; review Unverified | Supported | Supported |
 | Downloaded plugin code | Supported | Supported | Supported | Supported | Supported (reading) | **Blocked** (policy risk) | **Unverified** (policy) | Unverified (policy) |
 | Credential store | Supported | Supported | Supported | Supported | Requires adaptation | Requires adaptation | Supported (reading), Unverified | Supported |
 | File system / data location | Supported | Supported | Supported | Supported | Requires adaptation | Requires adaptation | Requires adaptation | Supported |
@@ -79,8 +79,10 @@ signing identifier `io.github.knittingcode.deckpilot.agent` must not change
 - **Mac App Store.** Apps must be sandboxed (App Review Guideline 2.4.5(i))
   [S1]. Every executable is signed with `com.apple.security.app-sandbox`.
   Helpers inherit the sandbox (`com.apple.security.inherit`) [S4]. Today's
-  bundle has no entitlements at all, and CI enforces that
-  (`.github/scripts/verify-macos-app.sh:26-28`). A MAS variant needs its own
+  bundle has no entitlements at all, and CI enforces that, except the
+  plugin host's one entitlement in packages with plugins (2.7;
+  `tools/ci/check-macos-entitlements.sh`, run by
+  `.github/scripts/verify-macos-app.sh`). A MAS variant needs its own
   entitlements files and its own verification script. **Requires
   adaptation.**
 - **Direct GitHub (macOS).** Developer ID plus hardened runtime, no sandbox
@@ -253,13 +255,22 @@ wasmtime 50 with Cranelift writes machine code and makes it executable
   Cranelift settings is killed on its first call into compiled code
   (`SIGKILL`, `CODESIGNING`, `Invalid Page`) with no entitlement **and
   with `allow-jit`**: wasmtime maps code with `mmap` and `mprotect`, never
-  `MAP_JIT`. It runs with `allow-unsigned-executable-memory`. That
-  entitlement must be granted to the plugin host binary **only**, and
-  `verify-macos-app.sh` changed to allow exactly that. **Requires
-  adaptation.** (`plugins/runtime/README.md:174-175` still calls this
-  open; that file belongs to the plugin runtime work.) Alternative: wasmtime's
-  Pulley interpreter, which needs no executable memory, at a performance
-  cost that has not been measured.
+  `MAP_JIT`. It runs with `allow-unsigned-executable-memory`. The real
+  host shows the same (`plugins/runtime/scripts/macos-hardened-runtime.sh`
+  on a stock Mac; GitHub's macOS runners do not enforce the rule).
+  **Requires adaptation**, done in the opt-in plugin packaging
+  (`DECKPILOT_RELEASE_PLUGINS=1`): the host alone is signed with exactly
+  that entitlement (`apps/desktop/src-tauri/entitlements/plugin-host.entitlements`),
+  the app and the agent keep none, and `tools/ci/check-macos-entitlements.sh`
+  (run by `verify-macos-app.sh`) allows exactly that on exactly
+  `Contents/MacOS/deckpilot-plugin-host`. The host's own sandbox still
+  applies under it. Verified with ad hoc signatures; a Developer ID signed
+  and notarized package with the host is **Unverified**, and the release
+  workflow does not package the host yet. Why not `allow-jit` (it would
+  need a custom `MAP_JIT` loader in the host) and how it is applied:
+  [marketplace/distribution.md](../marketplace/distribution.md#macos-the-plugin-hosts-entitlement).
+  Alternative: wasmtime's Pulley interpreter, which needs no executable
+  memory, at a performance cost that has not been measured.
 - **Mac App Store.** The hardened runtime is not required for App Store
   apps [S3]. Apple engineers state that the Mac App Store does not restrict
   JIT [S7]. **Experiment [E2]:** in a helper that inherits the App Sandbox,
