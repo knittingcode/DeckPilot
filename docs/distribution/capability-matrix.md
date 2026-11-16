@@ -223,8 +223,8 @@ wasmtime 50 with Cranelift writes machine code and makes it executable
   50.0.1 maps its code with `mmap` and `mprotect`, never `MAP_JIT`: under
   the hardened runtime the host is killed (`SIGKILL`) with no entitlement
   and with `allow-jit`, and runs with `allow-unsigned-executable-memory`
-  (experiment E2, PR #263; `plugins/runtime/scripts/macos-hardened-runtime.sh`,
-  run by CI on macOS). **Requires adaptation**, done in the opt-in plugin packaging
+  (experiment E2, PR #263; `plugins/runtime/scripts/macos-hardened-runtime.sh`
+  on a stock Mac; GitHub's macOS runners do not enforce the rule). **Requires adaptation**, done in the opt-in plugin packaging
   (`DECKPILOT_RELEASE_PLUGINS=1`): the host alone is signed with exactly
   that entitlement (`apps/desktop/src-tauri/entitlements/plugin-host.entitlements`),
   the app and the agent keep none, and `tools/ci/check-macos-entitlements.sh`

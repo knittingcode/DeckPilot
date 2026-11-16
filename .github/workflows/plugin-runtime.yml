@@ -79,12 +79,14 @@ jobs:
         run: cargo clippy --locked -p deckpilot-plugin-guest -p deckpilot-test-guest -p deckpilot-plugin-sdk -p deckpilot-sdk-test-guest -p hello-weather -p hello-world -p developer-tools -p deckpilot-github --target wasm32-unknown-unknown -- -D warnings
       - name: Test
         run: cargo test --locked --no-fail-fast -- --nocapture
-      # The host as a Developer ID package signs it: the hardened runtime
-      # kills it without its entitlement and with allow-jit (wasmtime does
-      # not use MAP_JIT); with exactly plugin-host.entitlements guests run
-      # and the host's own sandbox still denies files, network and exec
+      # The host as a Developer ID package signs it (hardened runtime): with
+      # exactly plugin-host.entitlements guests run and the host's own
+      # sandbox still denies files, network and exec
       # (docs/marketplace/distribution.md, "macOS: the plugin host's
-      # entitlement"). Signed ad hoc, no Apple account.
+      # entitlement"). Signed ad hoc, no Apple account. GitHub's runners do
+      # not enforce the hardened runtime's executable-memory rule, so the
+      # kill without the entitlement and with allow-jit is shown only on a
+      # stock Mac; the script reports that here.
       - name: Hardened runtime with the plugin host's entitlement (macOS)
         if: runner.os == 'macOS'
         run: scripts/macos-hardened-runtime.sh

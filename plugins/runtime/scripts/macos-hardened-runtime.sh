@@ -18,6 +18,13 @@
 # Usage: plugins/runtime/scripts/macos-hardened-runtime.sh
 # Builds the tests (debug) in the runtime's target directory (or
 # CARGO_TARGET_DIR) first. A no-op with a message on other systems.
+#
+# Steps 1 and 2 need a Mac that enforces the hardened runtime's
+# executable-memory rule. GitHub's macOS runners do not (System Integrity
+# Protection is disabled there: the unentitled host runs guests), so there
+# the script reports that and checks step 3 only. Set
+# REQUIRE_HARDENED_RUNTIME_ENFORCEMENT=1 to make that a failure (local
+# evidence on a stock Mac).
 set -euo pipefail
 
 if [ "$(uname -s)" != Darwin ]; then
@@ -82,9 +89,23 @@ sign() {
 process=$(test_exe process)
 # A guest that cannot run: the first invocation test fails because the host
 # ended by SIGKILL while loading (the supervisor reports the wait status).
+enforced=true
 expect_killed() {
   echo "== $1: expect the host to be killed when it runs a guest"
+  if [ "$enforced" = false ]; then
+    echo "  skipped: this Mac does not enforce the hardened runtime (see above)"
+    return
+  fi
   if "$process" --exact host_starts_sandboxed_and_serves_invocations > "$work/out.txt" 2>&1; then
+    if [ "$1" = "no entitlement" ] && [ "${REQUIRE_HARDENED_RUNTIME_ENFORCEMENT-}" != 1 ]; then
+      # Without any entitlement a guest must die wherever the rule is
+      # enforced, so this Mac does not enforce it.
+      enforced=false
+      echo "  NOT ENFORCED: the unentitled host ran a guest; this Mac does not enforce the"
+      echo "  hardened runtime's executable-memory rule ($(csrutil status 2> /dev/null || echo 'csrutil unavailable'))."
+      echo "  Steps 1 and 2 prove nothing here; step 3 still runs."
+      return
+    fi
     cat "$work/out.txt"
     echo "macos-hardened-runtime: the host ran a guest under the hardened runtime with $1; update the entitlement and docs/marketplace/distribution.md" >&2
     exit 1

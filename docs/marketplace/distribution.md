@@ -65,8 +65,9 @@ without the variable is exactly what it was (no host, no entitlement).
   `allow-unsigned-executable-memory` is the entitlement under which it runs
   (experiment E2 of the distribution feasibility study, PR #263,
   `experiments/distribution/macos-sandbox-plugin-host`, and
-  `plugins/runtime/scripts/macos-hardened-runtime.sh`, which CI runs on
-  macOS).
+  `plugins/runtime/scripts/macos-hardened-runtime.sh` on a stock Mac;
+  GitHub's macOS runners do not enforce that rule, so CI runs only its
+  positive half).
 - **The host's own sandbox is unchanged.** It still confines itself with
   `sandbox_init` and the deny-default profile
   (`plugins/runtime/crates/host/src/sandbox/macos.rs`) before it reads a

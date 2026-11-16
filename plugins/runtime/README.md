@@ -230,8 +230,9 @@ Not provable this way, and why:
   entitlement and with `allow-jit`; it runs, with its sandbox intact, with
   exactly `com.apple.security.cs.allow-unsigned-executable-memory`
   (`apps/desktop/src-tauri/entitlements/plugin-host.entitlements`;
-  `scripts/macos-hardened-runtime.sh` shows all three, on the real host
-  and the sandbox probe, and CI runs it on macOS). Why that entitlement
+  `scripts/macos-hardened-runtime.sh` shows all three on the real host
+  and the sandbox probe; CI runs it on macOS, where GitHub's runners do
+  not enforce the rule, so only the last one is proven there). Why that entitlement
   and how only the host gets it: docs/marketplace/distribution.md,
   "macOS: the plugin host's entitlement". Pulley (no entitlement) is not
   evaluated. The Seatbelt interface is deprecated and undocumented.
