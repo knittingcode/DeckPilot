@@ -250,6 +250,99 @@ describe("the consent dialog", () => {
     })
   })
 
+  it("asks for the server the built-in used, and separately for its private network", async () => {
+    const server = "https://gitlab.internal/gitlab/api/v4"
+    const base = githubMigration()
+    const token = base.consent?.[0]
+    if (!token?.import) throw new Error("the fixture has a credential item")
+    const migration: ModuleMigration = {
+      ...base,
+      module: "gitlab",
+      moduleName: "GitLab",
+      plugin: "deckpilot.gitlab",
+      pluginName: "GitLab",
+      consent: [
+        {
+          ...token,
+          import: { ...token.import, hosts: ["gitlab.com"], userOrigin: "apiUrl" },
+        },
+        {
+          key: "network:user-origin:apiUrl",
+          permission: {
+            key: "network:user-origin:apiUrl",
+            kind: "network",
+            tier: "high",
+            status: "notGranted",
+            scope: { type: "userOriginSlot", methods: ["GET"], privateNetwork: true },
+          },
+          origin: {
+            setting: "apiUrl",
+            origin: server,
+            methods: ["GET"],
+            credentials: ["token"],
+            opensPages: true,
+          },
+          why: "The built-in gitlab talked to this server.",
+          decision: "pending",
+        },
+        {
+          key: "network:user-origin:apiUrl:private-network",
+          permission: {
+            key: "network:user-origin:apiUrl:private-network",
+            kind: "network",
+            tier: "high",
+            status: "notGranted",
+            scope: { type: "privateNetwork" },
+          },
+          origin: { setting: "apiUrl", origin: server, privateNetwork: true },
+          why: "The built-in gitlab was allowed to reach this server on a private network.",
+          decision: "pending",
+        },
+      ],
+    }
+    const onDecide = vi.fn(() => Promise.resolve())
+    const { user } = renderWithApp(
+      <MigrationConsentDialog migration={migration} onDecide={onDecide} onClose={vi.fn()} />,
+    )
+    const dialog = within(
+      await screen.findByRole("dialog", { name: "GitLab actions now run as a plugin" }),
+    )
+    const [credential, origin, network] = dialog.getAllByRole("listitem")
+    if (!credential || !origin || !network) throw new Error("three items")
+    // The credential: where it may go, by name.
+    expect(
+      within(credential).getByText("gitlab.com and the server you allow in apiUrl"),
+    ).toBeInTheDocument()
+    // The server: exactly it, what goes there, and its pages.
+    expect(within(origin).getByText(`Connect to ${server}`)).toBeInTheDocument()
+    const facts = within(within(origin).getByLabelText("The server"))
+    expect(facts.getByText(server)).toBeInTheDocument()
+    expect(facts.getByText("GET, to exactly this server and path")).toBeInTheDocument()
+    expect(facts.getByText("token")).toBeInTheDocument()
+    expect(facts.getByText("of https://gitlab.internal, in actions you start")).toBeInTheDocument()
+    // The private network: an item of its own, with its own decision.
+    expect(within(network).getByText(`Reach ${server} on your private network`)).toBeInTheDocument()
+    expect(within(network).getByText("High risk")).toBeInTheDocument()
+    expect(within(network).queryByText("Requests")).not.toBeInTheDocument()
+
+    const confirm = dialog.getByRole("button", { name: "Confirm" })
+    await user.click(within(credential).getByRole("radio", { name: "Allow" }))
+    await user.click(within(origin).getByRole("radio", { name: "Allow" }))
+    // Allowing the server does not allow its private network.
+    expect(confirm).toBeDisabled()
+    expect(dialog.getByText("1 of 3 items still need your decision.")).toBeInTheDocument()
+    await user.click(within(network).getByRole("radio", { name: "Allow" }))
+    await user.click(confirm)
+    expect(onDecide).toHaveBeenCalledWith(
+      [
+        "credentials:token",
+        "network:user-origin:apiUrl",
+        "network:user-origin:apiUrl:private-network",
+      ],
+      [],
+    )
+  })
+
   it("decides nothing on Not now", async () => {
     const { user, client } = renderMarketplace({ migrations: [githubMigration()] })
     await user.click((await entry("GitHub")).getByRole("button", { name: /Review/ }))
