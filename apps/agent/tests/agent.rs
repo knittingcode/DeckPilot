@@ -2891,6 +2891,156 @@ async fn http_requests_use_stored_credentials_and_keep_bodies_out_of_history() {
     agent.shutdown().await;
 }
 
+/// A built-in HTTP request action to the local `server`, stored in the
+/// agent's profile and bound to the press of key 6.
+async fn http_action_on_key_6(
+    agent: &TestAgent,
+    server: &JsonServer,
+) -> deckpilot_core::ActionInstanceId {
+    agent
+        .store()
+        .set_module_state(
+            &deckpilot_modules::http::module_id(),
+            &ModuleSettings {
+                enabled: true,
+                config: ActionParameters::new().with(
+                    deckpilot_modules::http::PRIVATE_HOSTS,
+                    deckpilot_core::ParameterValue::Text("127.0.0.1".into()),
+                ),
+            },
+        )
+        .unwrap();
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let request = registry()
+        .create_instance(
+            "Build status",
+            deckpilot_modules::http::actions::id(deckpilot_modules::http::actions::REQUEST),
+            &ActionParameters::new().with(
+                "url",
+                deckpilot_core::ParameterValue::Text(format!(
+                    "http://127.0.0.1:{}/build",
+                    server.port
+                )),
+            ),
+        )
+        .unwrap();
+    let id = request.id;
+    profile.layouts[0].pages[0]
+        .bindings
+        .push(deckpilot_core::ControlBinding {
+            control: ControlId::Key { index: 6 },
+            trigger: deckpilot_core::Trigger::Press,
+            target: deckpilot_core::BindingTarget::action(id),
+            label: None,
+            appearance: None,
+        });
+    profile.actions.push(request);
+    agent.store().save_profile(&profile).unwrap();
+    agent
+        .client()
+        .await
+        .request(Request::ReloadConfiguration)
+        .await
+        .unwrap();
+    id
+}
+
+/// How many of the requests the [`json_server`] received were for `/build`.
+fn build_requests(seen: &std::sync::Mutex<Vec<String>>) -> usize {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .filter(|head| head.starts_with("GET /build "))
+        .count()
+}
+
+// Actions run with "Run" and from keys are executed on the agent's own
+// task, inside its runtime (workflow nodes have their own threads). In
+// 0.6.0-alpha.3 an HTTP request made there ended the agent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_http_action_run_directly_succeeds_and_the_agent_keeps_running() {
+    let agent = setup().await;
+    let (server, seen) = json_server();
+    let action = http_action_on_key_6(&agent, &server).await;
+    let mut client = agent.client().await;
+
+    for sent in 1..=2 {
+        let result = within(
+            "running the HTTP action",
+            TIMEOUT,
+            run_action(&mut client, action),
+        )
+        .await;
+        assert!(result.is_success(), "{}", result.message);
+        assert_eq!(build_requests(&seen), sent);
+    }
+
+    // The agent still answers, and stops in an orderly way when asked.
+    assert!(
+        agent
+            .status()
+            .await
+            .devices
+            .iter()
+            .any(|d| d.state == ConnectionState::Connected)
+    );
+    drop(client);
+    agent.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_http_action_on_a_key_succeeds_and_the_agent_keeps_running() {
+    let agent = setup().await;
+    assert!(agent.frames_shown());
+    let (server, seen) = json_server();
+    let action = http_action_on_key_6(&agent, &server).await;
+    let mut subscriber = agent.client().await;
+    subscriber.subscribe().await.unwrap();
+    let mut client = agent.client().await;
+
+    for pressed in 1..=2 {
+        for input in [ControlInput::Press, ControlInput::Release] {
+            client
+                .request(Request::SimulateInput {
+                    device: agent.device.clone(),
+                    control: ControlId::Key { index: 6 },
+                    input,
+                })
+                .await
+                .unwrap();
+        }
+        let status = within("the key's HTTP action", TIMEOUT, async {
+            loop {
+                if let AgentEvent::ActionCompleted {
+                    action: completed,
+                    status,
+                    ..
+                } = subscriber.next_event().await.unwrap()
+                    && completed == action
+                {
+                    break status;
+                }
+            }
+        })
+        .await;
+        assert_eq!(status, ActionStatus::Succeeded);
+        assert_eq!(build_requests(&seen), pressed);
+    }
+
+    // The agent still answers, and stops in an orderly way when asked.
+    assert!(
+        agent
+            .status()
+            .await
+            .devices
+            .iter()
+            .any(|d| d.state == ConnectionState::Connected)
+    );
+    drop(client);
+    drop(subscriber);
+    agent.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn notifications_reach_the_status_bar_and_the_desktop() {
     let paths = temp_paths();

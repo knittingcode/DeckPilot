@@ -5,7 +5,9 @@ All notable changes to DeckPilot. The format follows
 [Semantic Versioning](https://semver.org/). The section of a version is used
 as the notes of its GitHub release and of the in-app update.
 
-**Release status.** No version has been published yet. 0.5.0 existed only
+**Release status.** The first public pre-release is 0.6.0-alpha.3
+(0.6.0-alpha.1 and 0.6.0-alpha.2 were not published); there is no stable
+release yet. 0.5.0 existed only
 as two signed draft prereleases (0.5.0-1 and 0.5.0-2) made to test signing,
 notarization and packaging, since deleted; they were never made public and
 are not offered by the updater. The versions before 0.5.0 were never
@@ -163,6 +165,9 @@ CHANGELOG.md.
 
 ### Fixed
 
+- HTTP, GitHub, GitLab and Jira actions run from a key or with *Run* in
+  the app no longer end the agent (0.6.0-alpha.3); in workflows they
+  already worked.
 - Duplicating a workflow no longer briefly shows an empty editor.
 - On Windows, the agent no longer fails to start when the previous
   instance is still closing its connection, and opening the configuration
