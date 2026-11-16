@@ -248,3 +248,32 @@ describe("page tree panel", () => {
     )
   })
 })
+
+describe("a folder that closes after use", () => {
+  it("is offered for pages inside a folder only, and saved with the layout", async () => {
+    api.saveLayout.mockResolvedValue({ ...main, agentReload: { state: "applied" } })
+    const user = renderEditor()
+    const name = "Close this folder after a key runs"
+    const toggle = () => screen.getByRole("switch", { name })
+    // The home page has nowhere to return to.
+    expect(screen.queryByRole("switch", { name })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole("tab", { name: "Tools" }))
+    expect(toggle()).toHaveAttribute("aria-checked", "false")
+    await user.click(toggle())
+    expect(toggle()).toHaveAttribute("aria-checked", "true")
+
+    await user.click(screen.getByRole("button", { name: "Save" }))
+    await waitFor(() => {
+      expect(api.saveLayout).toHaveBeenCalled()
+    })
+    const saved = api.saveLayout.mock.lastCall?.[1] as DeviceLayout
+    expect(saved.pages.find((p) => p.id === "tools")).toMatchObject({ autoReturn: true })
+    // No other page got the field.
+    expect(saved.pages.filter((p) => "autoReturn" in p).map((p) => p.id)).toEqual(["tools"])
+
+    // Undo takes it back, and the page is as it was.
+    await user.click(screen.getByRole("button", { name: "Undo" }))
+    expect(toggle()).toHaveAttribute("aria-checked", "false")
+  })
+})

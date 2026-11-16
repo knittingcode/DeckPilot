@@ -117,6 +117,52 @@ impl DeviceLayout {
         out
     }
 
+    /// The pages that are in no folder, in layout order: the pages *Next
+    /// page* and *Previous page* move along.
+    pub fn top_level_pages(&self) -> Vec<PageId> {
+        let parents = self.page_parents();
+        self.pages
+            .iter()
+            .map(|page| page.id)
+            .filter(|id| !parents.contains_key(id))
+            .collect()
+    }
+
+    /// The top-level page `page` belongs to: itself, or the outermost of
+    /// its folders.
+    pub fn top_level_of(&self, page: PageId) -> PageId {
+        self.ancestors(page).last().copied().unwrap_or(page)
+    }
+
+    /// Where the top-level page of `page` is among the layout's top-level
+    /// pages (from 0), and how many there are. `None` for a page that is
+    /// not in the layout.
+    pub fn page_position(&self, page: PageId) -> Option<(usize, usize)> {
+        self.page(page)?;
+        let pages = self.top_level_pages();
+        let top = self.top_level_of(page);
+        let index = pages.iter().position(|id| *id == top)?;
+        Some((index, pages.len()))
+    }
+
+    /// The top-level page one step from the top-level page of `page`:
+    /// forward, or backward. Past either end it continues at the other one
+    /// with `wrap_around`, and is `None` without. `None` too when there is
+    /// no other page to go to.
+    pub fn adjacent_page(&self, page: PageId, forward: bool, wrap_around: bool) -> Option<PageId> {
+        let (index, count) = self.page_position(page)?;
+        if count < 2 {
+            return None;
+        }
+        let target = match (forward, index) {
+            (true, last) if last + 1 == count => wrap_around.then_some(0)?,
+            (true, index) => index + 1,
+            (false, 0) => wrap_around.then_some(count - 1)?,
+            (false, index) => index - 1,
+        };
+        self.top_level_pages().get(target).copied()
+    }
+
     /// `page` and every page inside it, at any depth, in layout order
     /// (`page` first).
     pub fn subtree(&self, page: PageId) -> Vec<PageId> {
