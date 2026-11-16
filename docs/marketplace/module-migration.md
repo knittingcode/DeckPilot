@@ -483,6 +483,48 @@ module. The agent never fails to start because of a migration.
 `credentials` row, a profile document or a built-in's tables. The legacy
 data is the downgrade path.
 
+**As built (P6).** The engine is `apps/agent/src/plugins/migration.rs`.
+The agent's service task reads what it needs from `deckpilot.db` (read
+only, and nothing at all while `ACTION_ALIASES` is empty) whenever it
+loads the modules and hands it to the plugin worker, which owns
+`plugins.db`; the first snapshot after the plugin store opened runs the
+steps. The worker computes the `LegacyRouting` from the journal after
+every change, and `load_modules` sets it on the module registry before the
+action registry is built. Details beyond the text above:
+
+- Per-module knowledge the alias table does not carry (which settings name
+  the credentials, the origin and the private-network switch, and the
+  plugin's slot for each credential) is a static `MigrationPlan` next to
+  the engine, empty like the alias table until a cut-over.
+- Derived grants: the low tier, and `network` for the built-in's (default)
+  origin and `openUrl` for its web hosts when the built-in has the
+  capability; recorded with `source = 'derived'`, `decided_by =
+  'migration:<module>'` through `PluginManager::derive_grants`, which
+  refuses the high tier and never overwrites a stored decision (a
+  revocation stays). Anything else waits in `awaiting_consent`, and so
+  does every credential import: a secret is copied only when the slot's
+  grant was made by the migration's consent (`decided_by =
+  'user:migration:<module>'`), never because of a grant made elsewhere.
+- `source_digest` is the sha256 of the copied settings, the credential
+  ids and the built-in's eligibility settings (origin, private network).
+  At a start, a changed digest copies the settings again when the
+  plugin's still match the recorded digest and keeps them (with a note in
+  `reason`) otherwise; a source that is no longer eligible goes back to
+  `not_eligible`, so the built-in serves again.
+- The health check before the cut-over: the plugin is enabled, its files
+  match the pins, it declares every alias target with a contract that can
+  replace the built-in's (`alias::incompatibilities`), and its required
+  settings are set. A failed check disables the plugin again (the agent's
+  own disable, no tombstone) and records `failed`.
+- Routing: `Plugin` after the cut-over, `PluginWithdrawn` while the
+  plugin has a tombstone, and `Builtin` for a bundled copy this agent does
+  not pin (a build without the plugin) and in every other phase.
+- Until P7 adds the consent dialog and Retry, they are engine functions;
+  agent tests drive them through test hooks. The tests use a fixture
+  legacy module and alias (feature `test-hooks`, never in a release
+  build) and the fixture plugin
+  `plugins/first-party/test-fixtures/legacy-fixture`.
+
 ### 5.7 Keeping optional modules: bundled legacy implementations
 
 Until a module's replacement exists and a cut-over has succeeded on a given

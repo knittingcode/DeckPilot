@@ -1,7 +1,30 @@
 #!/usr/bin/env python3
-"""Structural check of the release workflow's gate.
+"""Structural check of the release workflow's gate, and of the downstream
+distribution jobs.
 
     tools/release-pipeline/check-workflow-gate.py [<workflow.yml>]
+    tools/release-pipeline/check-workflow-gate.py --downstream [<workflows dir>]
+
+With --downstream (default directory .github/workflows): the jobs that
+carry a published release to other channels (docs/distribution/README.md,
+section 6.1) can never change it. A downstream job is every job of a
+workflow whose file name starts with `distribute` (distribute.yml), and
+every job named `distribute-*` in any workflow. Fails unless:
+  * the job's token cannot write the repository's contents: its own
+    permissions, or else its workflow's, are declared and grant at most
+    contents: read (no write-all; no default token permissions);
+  * no step writes a release: no `gh release upload|edit|delete|
+    delete-asset|create`, no writing `gh api` or curl call on releases
+    (-X/--method POST, PATCH, PUT or DELETE, or fields, which make gh api
+    POST), no uploads.github.com, no release action, no github-script
+    release call, and no tag push or tag deletion (a release follows its
+    tag);
+  * it runs outside the environment production-release and never reads the
+    updater signing key (secrets.TAURI_SIGNING_*): it republishes, it does
+    not sign updates.
+A directory without downstream jobs passes.
+
+Without --downstream:
 
 Fails unless:
   * a job `validate-tag` exists, needs nothing, and may only read
@@ -26,6 +49,7 @@ Fails unless:
     signing secret (APPLE_*, TAURI_SIGNING_*) runs in it.
 """
 
+import pathlib
 import re
 import sys
 
@@ -212,7 +236,122 @@ def check(path):
     return problems
 
 
+# Downstream distribution jobs (docs/distribution/README.md, section 6.1).
+DOWNSTREAM_WORKFLOW = re.compile(r"^distribute")
+DOWNSTREAM_JOB = re.compile(r"^distribute-")
+READ_LEVELS = ("read", "none")
+# Shell commands that change a release or the tag it follows.
+RELEASE_WRITE = re.compile(
+    r"\bgh\s+release\s+(upload|edit|delete-asset|delete|create)\b"
+    r"|\bgh\s+api\b(?=[^\n]*/releases\b)(?![^\n]*\s(-X|--method)[\s=]*['\"]?GET\b)"
+    r"(?=[^\n]*(\s(-X|--method)[\s=]*['\"]?(POST|PATCH|PUT|DELETE)\b"
+    r"|\s(-f|-F|--field|--raw-field|--input)[\s=]))"
+    r"|\bcurl\b(?=[^\n]*/releases\b)(?=[^\n]*\s(-X|--request)[\s=]*['\"]?(POST|PATCH|PUT|DELETE)\b)"
+    r"|uploads\.github\.com"
+    r"|\bgit\s+push\b[^\n]*(\s--tags\b|\s--delete\b|\s-d\s|refs/tags/|\s:v\d|\s\+?v\d[^\s]*:)",
+    re.IGNORECASE,
+)
+RELEASE_ACTION = re.compile(
+    r"^(softprops/action-gh-release|ncipollo/release-action|svenstaro/upload-release-action"
+    r"|actions/upload-release-asset|actions/create-release|tauri-apps/tauri-action"
+    r"|xresloader/upload-to-github-release)@"
+)
+SCRIPT_RELEASE_WRITE = re.compile(
+    r"\b(createRelease|updateRelease|deleteRelease|uploadReleaseAsset|updateReleaseAsset|deleteReleaseAsset"
+    r"|generateReleaseNotes|createRef|updateRef|deleteRef)\b"
+)
+UPDATER_KEY = re.compile(r"secrets\.TAURI_SIGNING_")
+
+
+def contents_problem(permissions):
+    """Why `permissions` may let the token write contents, or None."""
+    if permissions is None:
+        return "no permissions are declared (the default token may write)"
+    if permissions == "read-all":
+        return None
+    if isinstance(permissions, str):
+        return f"permissions: {permissions}"
+    if isinstance(permissions, dict):
+        level = permissions.get("contents", "none")
+        if level not in READ_LEVELS:
+            return f"contents: {level}"
+        return None
+    return f"permissions {permissions!r}"
+
+
+def check_downstream(directory):
+    """Problems of the downstream jobs in `directory`, and their number."""
+    problems, count = [], 0
+    files = sorted([*directory.glob("*.yml"), *directory.glob("*.yaml")])
+    for path in files:
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        jobs = workflow.get("jobs") or {}
+        whole = bool(DOWNSTREAM_WORKFLOW.match(path.name))
+        top = workflow.get("permissions")
+        if whole:
+            reason = contents_problem(top)
+            if reason:
+                problems.append(
+                    f"{path.name}: the workflow-level permissions of a downstream workflow must grant at most "
+                    f"contents: read ({reason}): downstream jobs never modify the release"
+                )
+        for name, job in jobs.items():
+            if not isinstance(job, dict) or not (whole or DOWNSTREAM_JOB.match(name)):
+                continue
+            count += 1
+            where = f"{path.name}: downstream job {name}"
+            own = job.get("permissions")
+            reason = contents_problem(own if own is not None else top)
+            if reason:
+                problems.append(f"{where} may not have contents: write ({reason}): downstream jobs never modify the release")
+            environment = job.get("environment")
+            if isinstance(environment, dict):
+                environment = environment.get("name")
+            if environment == ENVIRONMENT:
+                problems.append(f"{where} may not use the environment {ENVIRONMENT}: it holds the application's signing secrets")
+            if UPDATER_KEY.search(yaml.safe_dump(job, width=10**6)):
+                problems.append(f"{where} uses the updater signing key: downstream jobs republish, they never sign updates")
+            for index, step in enumerate(job.get("steps") or []):
+                if not isinstance(step, dict):
+                    continue
+                label = f"{where}, step {step.get('name') or step.get('uses') or index + 1}"
+                uses = str(step.get("uses", ""))
+                # One line per command: continuation lines joined.
+                run = re.sub(r"\\\r?\n", " ", str(step.get("run", "")))
+                if RELEASE_ACTION.match(uses):
+                    problems.append(f"{label} writes the release ({uses.split('@')[0]}): downstream jobs never modify the release")
+                if uses.startswith("actions/github-script@") and SCRIPT_RELEASE_WRITE.search(
+                    str((step.get("with") or {}).get("script", ""))
+                ):
+                    problems.append(f"{label} writes the release or a tag (github-script): downstream jobs never modify the release")
+                match = RELEASE_WRITE.search(run)
+                if match:
+                    problems.append(
+                        f"{label} writes the release ({match.group(0).strip()[:60]}): downstream jobs never modify the release"
+                    )
+    return problems, count
+
+
+def main_downstream(arguments):
+    directory = pathlib.Path(arguments[0] if arguments else ".github/workflows")
+    if not directory.is_dir():
+        print(f"::error::{directory} is not a directory")
+        return 1
+    problems, count = check_downstream(directory)
+    for problem in problems:
+        print(f"::error::{directory}/{problem}")
+    if problems:
+        return 1
+    if count:
+        print(f"{directory}: {count} downstream job(s), none can write the release")
+    else:
+        print(f"{directory}: no downstream distribution jobs")
+    return 0
+
+
 def main():
+    if sys.argv[1:2] == ["--downstream"]:
+        return main_downstream(sys.argv[2:])
     path = sys.argv[1] if len(sys.argv) > 1 else ".github/workflows/release.yml"
     problems = check(path)
     for problem in problems:

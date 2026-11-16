@@ -203,7 +203,7 @@ fn parse_args() -> Result<Result<Args, String>, ExitCode> {
 }
 
 fn autostart_command(action: Option<&str>) -> ExitCode {
-    let autostart = match Autostart::for_current_exe() {
+    let autostart = match Autostart::for_current_exe(deckpilot_distribution::current()) {
         Ok(autostart) => autostart,
         Err(error) => {
             eprintln!("autostart is unavailable: {error}");

@@ -21,7 +21,7 @@ pattern() {
     # Package checks: files that change what is bundled or how. Plain
     # source changes are covered by the Rust jobs here and by the Packaging
     # runs on main and nightly.
-    packaging) echo '^apps/desktop/src-tauri/(tauri[^/]*\.json$|build\.rs$|Cargo\.toml$|capabilities/|icons/|app-icon\.svg$)|^apps/agent/(build\.rs|Cargo\.toml|Info\.plist)$|^packaging/|^tools/ci/|^\.github/workflows/|^Cargo\.(lock|toml)$|^apps/desktop/package\.json$' ;;
+    packaging) echo '^apps/desktop/src-tauri/(tauri[^/]*\.json$|build\.rs$|Cargo\.toml$|capabilities/|icons/|app-icon\.svg$)|^apps/agent/(build\.rs|Cargo\.toml|Info\.plist)$|^crates/deckpilot-distribution/|^packaging/|^tools/ci/|^\.github/workflows/|^Cargo\.(lock|toml)$|^apps/desktop/package\.json$' ;;
     # Real credential stores.
     keystore) echo '^crates/deckpilot-keystore/|^tools/ci/with-keyring\.sh$|^\.github/workflows/ci\.yml$' ;;
     # Assembly of the release's latest.json, including the pinned download

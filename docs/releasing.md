@@ -306,10 +306,17 @@ tag; that push starts the release workflow.
      explicitly waived);
    - runs the full installer checks of the *Packaging* workflow on the
      tagged commit, unsigned and without any secret (`packaging` job, which
-     calls `.github/workflows/packaging.yml`): Linux `.deb` and `.rpm`,
-     Windows NSIS and MSI, built with the release configuration and a
-     throwaway updater key, checked by `tools/ci/check-packages.sh` (names,
-     versions, application, bundled agent, udev rule, updater signatures).
+     calls `.github/workflows/packaging.yml`): Linux `.deb`, AppImage and
+     `.rpm`, Windows NSIS and MSI, the macOS `.app`, its updater archive
+     and disk image (the runner's architecture), built with the release
+     configuration, the distribution channel `github` and a throwaway
+     updater key, checked by `tools/ci/check-packages.sh` (names, versions,
+     layout, application, bundled agent, udev rule, AppImage `AppRun`,
+     macOS `Info.plist`, icon and the disk image's Applications link,
+     updater signatures, and in every package's copy of the application
+     the compiled distribution record — channel `github`, the version, no
+     development override — and the package format the bundler patched in,
+     docs/distribution/README.md section 2.2).
      The draft, and with it every signed build and the publication, waits
      for them. The called workflow builds the run's commit, which the gate
      checked is the tag's (`RUN_SHA`): a tag moved after the push is
@@ -341,6 +348,13 @@ tag; that push starts the release workflow.
      the draft (`tools/ci/assemble-latest-json.sh`, tested on every pull
      request with fake signed packages by `tools/ci/test-latest-json.sh`);
    - checks that the built app embeds the configured updater public key;
+   - builds with `DECKPILOT_DISTRIBUTION_CHANNEL=github` and checks the
+     distribution record compiled into the built app (and into the agent,
+     once it links `deckpilot-distribution`), read from the binary with
+     `tools/ci/check-packages.sh record`: channel `github`, no compiled
+     package format (the bundler adds it per package), the release's
+     version, no development override. The record is handed to the
+     verify job;
    - on macOS, verifies code signature, agent identity and notarization when
      signing is configured. The Developer ID certificate is put into the
      environment only right before the bundler runs and removed after it,
@@ -354,7 +368,20 @@ tag; that push starts the release workflow.
      signature and notarization per build) and a *Code signing* table in the
      release notes; a build without a platform signature is listed as
      **unsigned** — never claimed otherwise. Windows installers stay
-     unsigned until Authenticode credentials are provisioned;
+     unsigned until Authenticode credentials are provisioned.
+     `release-meta.json` also lists the release's files as `artifacts`
+     (after the existing fields, which are unchanged): per installer or
+     updater file its name, size, SHA-256, packaging-matrix entry, Rust
+     target, platform, architecture, package format, distribution channel
+     (from the build's record), update provider and updater signature
+     (`tools/release-pipeline/release-artifacts.py`). It fails if a target
+     of `docs/distribution/targets.toml` that ships in this release lacks
+     an asset, if a file belongs to no target, or if a build's record names
+     another channel or version. The downstream distribution jobs
+     (`distribute.yml`, not yet written) read the release from this list;
+     they can never write it (`check-workflow-gate.py --downstream`: a
+     read-only token, no release upload, edit or delete, no tag push, not
+     in `production-release`, no updater key);
    - attests build provenance for every artifact
      (`gh attestation verify <file> --repo knittingcode/deckpilot`);
    - downloads the draft, verifies the manifest and every signature with
@@ -716,15 +743,27 @@ Releases are authorized by tag authority; the *Release authorization* job
 of the *Signing check* workflow verified the setup on `main` at `9f8a84a`
 ([run 43609631711](https://github.com/knittingcode/deckpilot/actions/runs/43609631711)).
 
-Stage A ran end to end for `v0.6.0-alpha.2` (`13cabe6`,
-[run 43597399166](https://github.com/knittingcode/deckpilot/actions/runs/43597399166)):
-macOS arm64 and x86_64 Developer ID signed (team `PUB9L83UMZ`) with the
-hardened runtime, notarized, stapled and accepted by Gatekeeper; the
-updater signatures, `SHA256SUMS`, `release-meta.json` and `prerelease.json`
-verified; 17 assets in the draft. That draft was **not** published: its
-*Publish and verify* deployment was cancelled when the required reviewers
-were removed. Windows and Linux builds are not code-signed (Windows code
-signing is not provisioned). Stage B has not published a release yet: no
-release has been published. The first release should be treated as a test
-of the publication, and the first update between two published releases
-as the test of installation (see [updates.md](updates.md)).
+**`v0.6.0-alpha.3` is published**, the first release published by this
+pipeline: stage A and stage B ran end to end on the tag
+(`b0b23de`, [run 43635644507](https://github.com/knittingcode/deckpilot/actions/runs/43635644507)),
+and the release was published on 2026-11-14 as a GitHub **pre-release**
+(not latest), immutable, with 17 assets: both macOS builds Developer ID
+signed (team `PUB9L83UMZ`) with the hardened runtime, notarized, stapled
+and accepted by Gatekeeper; updater signatures, `SHA256SUMS`,
+`release-meta.json` and `prerelease.json` verified before and after
+publication. Windows and Linux builds are not code-signed (Windows code
+signing is not provisioned). Its `release-meta.json` predates the
+`artifacts` list; releases from now on add it after the other fields,
+which stay as they were (`tools/release-pipeline/test-publication.sh`
+regenerates alpha.3's file and notes from the same inputs and compares
+them byte for byte).
+
+Earlier tags were never published: `v0.6.0-alpha.2` (`13cabe6`,
+[run 43597399166](https://github.com/knittingcode/deckpilot/actions/runs/43597399166))
+passed stage A, but its *Publish and verify* deployment was cancelled when
+the required reviewers were removed; `v0.6.0-alpha.1` failed in stage A.
+
+Still untested: an update between two published releases (alpha.3 to the
+next pre-release) is the test of installation through the updater (see
+[updates.md](updates.md)); the first stable release will be the first on
+the stable channel (`latest.json`).

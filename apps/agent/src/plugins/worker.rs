@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use deckpilot_core::alias::LegacyRouting;
 use deckpilot_ipc::plugins::PluginEvent;
 use deckpilot_ipc::{AgentEvent, IpcError, Request, Response};
 use deckpilot_plugin_abi::{ActionOutcome, Params};
@@ -27,6 +28,7 @@ use tracing::{info, warn};
 use super::PluginSettings;
 use super::engine::CatalogPlugin;
 use super::lane::LaneEnd;
+use super::migration::LegacySnapshot;
 use super::service::{PluginService, closed_status, open_problem, store_unavailable};
 use super::variables::PublishedVariables;
 
@@ -56,6 +58,9 @@ pub(super) enum Message {
     Close,
     Rekey(StoreKey, StoreKey),
     Request(Request, oneshot::Sender<Result<Response, IpcError>>),
+    /// What `deckpilot.db` says about the modules that can migrate, after
+    /// the agent loaded its modules (`migration.rs`).
+    Migrate(Box<LegacySnapshot>),
     /// A plugin action from the workflow engine.
     Invoke {
         plugin: String,
@@ -110,6 +115,7 @@ pub(super) struct PluginWorker {
     tx: mpsc::Sender<Message>,
     thread: Option<JoinHandle<()>>,
     catalog: Arc<Mutex<Vec<CatalogPlugin>>>,
+    routing: Arc<Mutex<LegacyRouting>>,
     values: PublishedVariables,
 }
 
@@ -128,12 +134,18 @@ struct State {
     notify: Notify,
     /// The plugins' published variable values, shared with their modules.
     values: PublishedVariables,
+    /// The routing of migrated modules as last published.
+    routing: Arc<Mutex<LegacyRouting>>,
+    /// Whether the migration pass of this opening of the store ran (it
+    /// runs once, with the first snapshot after the store opened).
+    migrated: bool,
 }
 
 impl State {
     fn open(&mut self, key: &StoreKey) {
         self.close();
         self.unlocked = true;
+        self.migrated = false;
         let tx = Mutex::new(self.tx.clone());
         let ended = Arc::new(move |plugin: &str, lane: u64, why: LaneEnd| {
             if let Ok(tx) = tx.lock() {
@@ -228,6 +240,14 @@ impl State {
             Message::Close => self.close(),
             Message::Rekey(old, new) => self.rekey(&old, &new),
             Message::Request(request, reply) => self.request(request, reply),
+            Message::Migrate(snapshot) => {
+                if let Some(service) = &mut self.service
+                    && !self.migrated
+                {
+                    self.migrated = true;
+                    service.migrate(&snapshot);
+                }
+            }
             Message::Invoke {
                 plugin,
                 action,
@@ -261,19 +281,35 @@ impl State {
             .unwrap_or_default()
     }
 
-    /// Publishes the installed plugins when they changed, and says so.
+    /// Publishes the installed plugins and the routing of migrated modules
+    /// when they changed, and says so. Without an open store every module
+    /// is routed to its built-in.
     fn publish(&self) {
         let catalog = catch_unwind(AssertUnwindSafe(|| self.catalog())).unwrap_or_else(|_| {
             warn!("the plugin catalog could not be read");
             Vec::new()
         });
-        let changed = match self.published.lock() {
+        let routing = catch_unwind(AssertUnwindSafe(|| {
+            self.service
+                .as_ref()
+                .map(PluginService::legacy_routing)
+                .unwrap_or_default()
+        }))
+        .unwrap_or_default();
+        let mut changed = match self.published.lock() {
             Ok(mut current) if *current != catalog => {
                 *current = catalog;
                 true
             }
             _ => false,
         };
+        if let Ok(mut current) = self.routing.lock()
+            && *current != routing
+        {
+            info!(?routing, "module routing changed");
+            *current = routing;
+            changed = true;
+        }
         if changed {
             (self.notify)();
         }
@@ -289,8 +325,11 @@ impl PluginWorker {
     ) -> Self {
         let (tx, rx) = mpsc::channel::<Message>();
         let catalog = Arc::new(Mutex::new(Vec::new()));
+        let routing = Arc::new(Mutex::new(LegacyRouting::default()));
         let values = PublishedVariables::default();
         let mut state = State {
+            routing: routing.clone(),
+            migrated: false,
             values: values.clone(),
             settings,
             data_dir: data_dir.to_path_buf(),
@@ -329,8 +368,20 @@ impl PluginWorker {
             tx,
             thread,
             catalog,
+            routing,
             values,
         }
+    }
+
+    /// The routing of migrated modules, as last published.
+    pub fn legacy_routing(&self) -> LegacyRouting {
+        self.routing.lock().map(|r| r.clone()).unwrap_or_default()
+    }
+
+    /// Hands the worker what `deckpilot.db` says about the modules that
+    /// can migrate.
+    pub fn migrate(&self, snapshot: LegacySnapshot) {
+        let _ = self.tx.send(Message::Migrate(Box::new(snapshot)));
     }
 
     /// The plugins' published variable values (for their modules'

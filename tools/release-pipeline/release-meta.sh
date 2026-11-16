@@ -11,18 +11,33 @@
 #
 # Environment: TAG, VERSION, CHANNEL, SHA, MANIFEST, NOTES_FILE (the
 # changelog notes), MACOS_SIGNING (true: Developer ID signing and
-# notarization were configured, so both macOS builds must have them).
+# notarization were configured, so both macOS builds must have them),
+# ASSETS_DIR (the draft's files), DISTRIBUTION_DIR (the builds'
+# distribution records: {"target", "distribution_channel",
+# "package_format", "application_version"}, read from each build's binary),
+# TARGETS (the packaging matrix; default docs/distribution/targets.toml).
+#
+# release-meta.json also lists the release's files with platform, arch,
+# package format, distribution channel, update provider, SHA-256 and size
+# (`artifacts`, docs/distribution/README.md section 6.2; written by
+# release-artifacts.py), for the downstream distribution jobs. It is added
+# after the other fields, which stay as they were; the release notes do
+# not change.
 #
 # Fails if a build has no fragment, if a macOS build is not signed or not
 # notarized although signing was configured (a failed signing or
-# notarization), or if a fragment claims a signature its platform cannot
-# have in this pipeline.
+# notarization), if a fragment claims a signature its platform cannot
+# have in this pipeline, or if the files or the builds' distribution
+# records do not match the packaging matrix.
 set -euo pipefail
 
 fragments="${1:?usage: release-meta.sh <fragments dir> <release-meta.json> <notes out>}"
 meta="${2:?}"
 notes_out="${3:?}"
 : "${TAG:?}" "${VERSION:?}" "${CHANNEL:?}" "${SHA:?}" "${MANIFEST:?}" "${NOTES_FILE:?}" "${MACOS_SIGNING:?}"
+: "${ASSETS_DIR:?}" "${DISTRIBUTION_DIR:?}"
+here="$(cd "$(dirname "$0")" && pwd)"
+targets_file="${TARGETS:-$here/../../docs/distribution/targets.toml}"
 fail() {
   echo "::error::$*" >&2
   exit 1
@@ -62,11 +77,21 @@ done
 extra=$(jq -r --arg targets "$targets" '.[].target | select(. as $t | ($targets | split(" ") | index($t)) | not)' <<< "$all")
 [ -z "$extra" ] || fail "unknown build targets: $extra"
 
+case "$CHANNEL" in
+  stable) prerelease=false ;;
+  prerelease) prerelease=true ;;
+  *) fail "unknown channel $CHANNEL" ;;
+esac
+artifacts=$(VERSION="$VERSION" PRERELEASE="$prerelease" MANIFEST="$MANIFEST" \
+  python3 -I "$here/release-artifacts.py" "$targets_file" "$ASSETS_DIR" "$DISTRIBUTION_DIR") \
+  || fail "the release's files or distribution records do not match the packaging matrix"
+
 jq -n --arg tag "$TAG" --arg version "$VERSION" --arg channel "$CHANNEL" --arg commit "$SHA" \
-  --arg manifest "$MANIFEST" --argjson builds "$all" '{
+  --arg manifest "$MANIFEST" --argjson builds "$all" --argjson artifacts "$artifacts" '{
     tag: $tag, version: $version, channel: $channel, commit: $commit, manifest: $manifest,
     updater_signature: "minisign",
-    platforms: ($builds | map({key: .target, value: {codesign, notarized}}) | from_entries)
+    platforms: ($builds | map({key: .target, value: {codesign, notarized}}) | from_entries),
+    artifacts: $artifacts
   }' > "$meta"
 
 describe() {
@@ -93,3 +118,4 @@ describe() {
   echo "Every updater package is signed with the DeckPilot updater key and verified by the app before installing. \"Unsigned\" means no platform code signature: Windows SmartScreen or Gatekeeper may warn, and Linux packages are not signed by a distribution key."
 } > "$notes_out"
 echo "release-meta.json: $(jq -c .platforms "$meta")"
+echo "release-meta.json: $(jq '.artifacts | length' "$meta") artifacts: $(jq -r '[.artifacts[] | "\(.name) (\(.distribution_channel)/\(.package_format))"] | join(", ")' "$meta")"

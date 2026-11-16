@@ -1021,6 +1021,7 @@ dependencies = [
  "deckpilot-agent",
  "deckpilot-core",
  "deckpilot-device",
+ "deckpilot-distribution",
  "deckpilot-hid",
  "deckpilot-ipc",
  "deckpilot-keystore",
@@ -1162,6 +1163,7 @@ version = "0.6.0-alpha.3"
 dependencies = [
  "deckpilot-core",
  "deckpilot-device",
+ "deckpilot-distribution",
  "dirs 7.0.0",
  "getrandom 0.3.4",
  "interprocess",

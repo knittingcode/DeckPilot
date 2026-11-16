@@ -1,4 +1,7 @@
 {
   "$comment": "TEST FIXTURES, never shipped: bundled only by `plugins/first-party/build.sh --test-fixtures` (tests and dry runs).",
-  "plugins": [{ "path": "example-default", "class": "default" }]
+  "plugins": [
+    { "path": "example-default", "class": "default" },
+    { "path": "legacy-fixture", "class": "migration" }
+  ]
 }

@@ -17,8 +17,8 @@ use deckpilot_device::{
     DeviceModel, ModelCatalog, mock::MockBackend,
 };
 use deckpilot_ipc::{
-    AgentEvent, AgentPaths, AgentStatus, DeviceInfo, ErrorCode, IpcError, LockReason,
-    PROTOCOL_VERSION, ProfileInfo, ProtectionMode, Request, Response, SecurityState,
+    AgentEvent, AgentPaths, AgentStatus, DeviceInfo, DistributionRecord, ErrorCode, IpcError,
+    LockReason, PROTOCOL_VERSION, ProfileInfo, ProtectionMode, Request, Response, SecurityState,
     ShutdownReason, token,
 };
 use deckpilot_keystore::KeyStore;
@@ -1164,6 +1164,7 @@ impl Agent {
         // Module states may have changed in the configuration app.
         let before = self.modules.variables().clone();
         self.modules = load_modules(store)?;
+        self.plugins.migrate(store, &self.modules);
         register_plugin_modules(&mut self.modules, &self.plugins);
         self.update_variable_permissions();
         self.publish_module_variables(&before);
@@ -1609,6 +1610,7 @@ impl Agent {
             running_executions: Some(
                 u32::try_from(self.executions.running_count()).unwrap_or(u32::MAX),
             ),
+            distribution: Some(DistributionRecord::current()),
         }
     }
 
@@ -1639,7 +1641,7 @@ fn security_state(path: &std::path::Path) -> Result<SecurityState, StorageError>
 }
 
 fn load_modules(store: &SqliteStore) -> Result<ModuleRegistry, StorageError> {
-    let (modules, problems) = deckpilot_modules::configured(&store.module_states()?);
+    let (modules, problems) = crate::plugins::configured_modules(&store.module_states()?);
     // Schemas of all registered modules, enabled or not.
     store.apply_module_schemas(&modules.schemas())?;
     for problem in problems {
@@ -1650,8 +1652,11 @@ fn load_modules(store: &SqliteStore) -> Result<ModuleRegistry, StorageError> {
 
 /// Registers one module per installed plugin, after the built-in ones (a
 /// plugin id has a `.`, so it never collides with a built-in id). Their
-/// state comes from the plugin store, never from the `modules` table.
+/// state comes from the plugin store, never from the `modules` table. The
+/// legacy action types of migrated modules are routed as the migration
+/// engine decided (`plugins/migration.rs`).
 fn register_plugin_modules(modules: &mut ModuleRegistry, plugins: &crate::plugins::PluginRuntime) {
+    modules.set_legacy_routing(plugins.legacy_routing());
     for module in plugins.modules() {
         let id = module.manifest().id.clone();
         if let Err(error) = modules.register(module) {
@@ -1723,7 +1728,7 @@ pub fn default_options(paths: AgentPaths, mock_models: &[DeviceModel], usb: bool
     if let Some(mock) = &mock {
         backend = backend.with(Box::new(mock.clone()));
     }
-    let autostart = match Autostart::for_current_exe() {
+    let autostart = match Autostart::for_current_exe(deckpilot_distribution::current()) {
         Ok(autostart) => {
             if let Err(error) = autostart.repair() {
                 warn!(%error, "cannot update the autostart entry");

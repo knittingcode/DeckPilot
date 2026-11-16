@@ -38,8 +38,6 @@ pub const WORK_SESSION_EVENT: &str = "agent-work-session";
 /// and only from agents that answer plugin requests.
 pub const PLUGIN_EVENT: &str = "plugin-event";
 
-/// Overrides the agent executable.
-const AGENT_BIN_ENV: &str = "DECKPILOT_AGENT_BIN";
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 /// How often an agent whose plugins are off is asked again (they come on
 /// when the configuration is unlocked or the agent restarts with them).
@@ -80,7 +78,7 @@ impl AgentConnection {
     fn running(status: AgentStatus, protocol: u32, capabilities: Vec<Capability>) -> Self {
         Self {
             running: true,
-            compatibility: Some(compatibility::check(APP_VERSION, &status.version)),
+            compatibility: Some(agent_compatibility(&status)),
             status: Some(status),
             can_start: agent_executable().is_some(),
             app_version: APP_VERSION,
@@ -114,6 +112,20 @@ impl AgentConnection {
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Whether the agent of `status` belongs to this app: its own distribution
+/// channel (rule R6; agents without a record count as GitHub builds), then
+/// the same version. Anything else is restarted from this app's bundle.
+fn agent_compatibility(status: &AgentStatus) -> AgentCompatibility {
+    compatibility::check_agent(
+        deckpilot_distribution::current(),
+        &status.version,
+        status
+            .distribution
+            .as_ref()
+            .map(|record| record.distribution_channel.as_str()),
+    )
+}
+
 /// Why the agent is not stopped now.
 pub fn running_workflows_message(running: u32) -> String {
     format!(
@@ -139,6 +151,35 @@ pub async fn stop_any_version(paths: &AgentPaths, request: Request) -> Result<()
     match outcome {
         Ok(()) | Err(ClientError::NotRunning | ClientError::Closed) => Ok(()),
         Err(error) => Err(error),
+    }
+}
+
+/// Waits until the agent is gone: its endpoint closed **and** its instance
+/// lock released. The endpoint closes before the agent has finished (and
+/// released the lock), so the endpoint alone does not prove that a next
+/// agent can start, nor that no two agents run at once
+/// (docs/distribution/README.md, section 7.1, step 6). The lock is taken
+/// and released again at once, so an agent started right after still gets
+/// it.
+pub async fn wait_until_released(paths: &AgentPaths, timeout: Duration) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    if !wait_until_stopped(paths, timeout).await {
+        return Err(format!(
+            "the agent did not stop within {} seconds",
+            timeout.as_secs()
+        ));
+    }
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    match deckpilot_ipc::instance::wait_until_free(&paths.lock_file, remaining).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!(
+            "the agent closed its connection but still holds its instance lock after {} \
+             seconds",
+            timeout.as_secs()
+        )),
+        Err(error) => Err(format!(
+            "the agent's instance lock cannot be checked: {error}"
+        )),
     }
 }
 
@@ -239,9 +280,14 @@ pub fn notify_reload(paths: &AgentPaths) {
     });
 }
 
-/// `DECKPILOT_AGENT_BIN`, or `deckpilot-agent` next to this executable.
+/// `deckpilot-agent` next to this executable: the agent of this app's own
+/// bundle. Debug builds may name another one with `DECKPILOT_AGENT_BIN`
+/// (development, the end-to-end tests); release builds do not read that
+/// variable at all (`deckpilot_distribution::agent_executable_override`), so
+/// nothing in the environment can make them start another program as the
+/// agent.
 pub fn agent_executable() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os(AGENT_BIN_ENV).map(PathBuf::from) {
+    if let Some(path) = deckpilot_distribution::agent_executable_override().map(PathBuf::from) {
         return path.is_file().then_some(path);
     }
     let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
@@ -536,6 +582,74 @@ fn show_window<R: Runtime>(app: &AppHandle<R>) {
 #[cfg(test)]
 mod launch_tests {
     use super::*;
+
+    fn status(version: &str, channel: Option<&str>) -> AgentStatus {
+        let mut json = serde_json::json!({
+            "version": version, "protocol": 10, "pid": 1, "startedAt": 0,
+            "dataDir": "", "logDir": "", "endpoint": "", "backend": "mock",
+            "profiles": [], "activeProfile": null, "activeProject": null,
+            "devices": [], "brightness": 50, "lastInputAt": null
+        });
+        if let Some(channel) = channel {
+            let mut record =
+                serde_json::to_value(deckpilot_ipc::DistributionRecord::current()).unwrap();
+            record["distributionChannel"] = channel.into();
+            json["distribution"] = record;
+        }
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn an_agent_of_another_channel_is_refused() {
+        let own = deckpilot_distribution::current()
+            .distribution_channel()
+            .name();
+        assert_eq!(
+            agent_compatibility(&status(APP_VERSION, Some(own))),
+            AgentCompatibility::Compatible
+        );
+        let other = if own == "apt" { "github" } else { "apt" };
+        assert_eq!(
+            agent_compatibility(&status(APP_VERSION, Some(other))),
+            AgentCompatibility::OtherDistribution {
+                agent: other.into(),
+                app: own.into()
+            }
+        );
+        // An agent without a record (0.6.0-alpha.3 and earlier) was a
+        // GitHub build; it is checked by its version as before.
+        let without = agent_compatibility(&status("0.5.0", None));
+        if own == "github" {
+            assert!(
+                matches!(without, AgentCompatibility::AgentOutdated { .. }),
+                "{without:?}"
+            );
+        } else {
+            assert!(
+                matches!(without, AgentCompatibility::OtherDistribution { .. }),
+                "{without:?}"
+            );
+        }
+    }
+
+    /// Debug builds (these tests) honour the override; release builds do
+    /// not read it at all, which `deckpilot-distribution`'s
+    /// `tests/release_build.rs` shows on a release binary.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_builds_honour_the_agent_executable_override() {
+        assert_eq!(
+            deckpilot_distribution::AGENT_EXECUTABLE_OVERRIDE_VARIABLE,
+            "DECKPILOT_AGENT_BIN"
+        );
+        match std::env::var_os("DECKPILOT_AGENT_BIN") {
+            Some(path) if !path.is_empty() => {
+                let path = PathBuf::from(path);
+                assert_eq!(agent_executable(), path.is_file().then_some(path));
+            }
+            _ => assert_eq!(deckpilot_distribution::agent_executable_override(), None),
+        }
+    }
 
     #[test]
     fn inside_an_appimage_the_agent_is_started_through_the_appimage() {

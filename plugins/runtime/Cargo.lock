@@ -363,6 +363,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "deckpilot-legacy-fixture"
+version = "0.1.0"
+dependencies = [
+ "deckpilot-plugin-sdk",
+ "jsonschema",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "deckpilot-plugin-abi"
 version = "0.1.0"
 dependencies = [

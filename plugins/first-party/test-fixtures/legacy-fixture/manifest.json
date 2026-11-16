@@ -1,0 +1,94 @@
+{
+  "$schema": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
+  "id": "deckpilot.legacy-fixture",
+  "name": "Legacy Fixture",
+  "version": "0.1.0",
+  "publisher": {
+    "id": "deckpilot",
+    "name": "DeckPilot",
+    "url": "https://github.com/knittingcode/deckpilot"
+  },
+  "description": "TEST FIXTURE, never shipped: the migration-class bundled plugin that replaces the agent's fixture legacy module in the module migration tests.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/knittingcode/deckpilot",
+    "directory": "plugins/first-party/test-fixtures/legacy-fixture"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["test", "bundled", "migration"],
+  "categories": ["other"],
+  "engines": { "deckpilot": ">=0.5.0 <1.0.0", "pluginApi": "^1.0", "sdk": "0.1.0" },
+  "runtime": { "kind": "wasm", "abi": 1 },
+  "entry": "src/lib.rs",
+  "icons": { "128": "assets/icon-128.png" },
+  "permissions": [
+    {
+      "kind": "notifications",
+      "justification": "Test fixture: a low-tier permission, granted when the plugin is installed."
+    },
+    {
+      "kind": "network",
+      "hosts": ["api.example.com"],
+      "methods": ["GET"],
+      "justification": "Test fixture: the API the built-in used, granted by the migration (medium tier, derived)."
+    },
+    {
+      "kind": "credentials",
+      "refs": ["token"],
+      "justification": "Test fixture: the token the built-in used, only after the user confirms (high tier)."
+    }
+  ],
+  "contributes": {
+    "settings": {
+      "fields": [
+        {
+          "key": "greeting",
+          "label": "Greeting",
+          "required": false,
+          "kind": { "type": "text", "maxLength": 32 },
+          "default": { "type": "text", "value": "Hello" },
+          "portability": "portable"
+        }
+      ]
+    },
+    "credentials": [
+      {
+        "key": "token",
+        "label": "Fixture token",
+        "description": "The token of the fixture API.",
+        "hosts": ["api.example.com"],
+        "schemes": ["bearer"]
+      }
+    ],
+    "actions": [
+      {
+        "id": "whoami",
+        "name": "Who am I",
+        "description": "Asks the fixture API whom the stored token belongs to and greets them.",
+        "category": "Legacy Fixture",
+        "parameters": [
+          {
+            "key": "prefix",
+            "label": "Prefix",
+            "description": "Put before the greeting.",
+            "required": false,
+            "kind": { "type": "text", "maxLength": 32 }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "user",
+          "outputs": [
+            { "key": "who", "label": "Who", "kind": "text", "always": true },
+            { "key": "source", "label": "Source", "kind": "text", "always": true }
+          ],
+          "timeoutMs": 10000,
+          "retrySafe": true,
+          "idempotent": true,
+          "effect": "readOnly"
+        }
+      }
+    ]
+  }
+}
