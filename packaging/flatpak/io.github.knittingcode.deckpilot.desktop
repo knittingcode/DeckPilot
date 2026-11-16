@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DeckPilot
+Comment=Stream Deck management
+Exec=deckpilot-desktop
+Icon=io.github.knittingcode.deckpilot
+Categories=Utility;
+Terminal=false
+StartupWMClass=deckpilot-desktop
