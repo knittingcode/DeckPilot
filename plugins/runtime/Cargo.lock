@@ -385,6 +385,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "deckpilot-jira"
+version = "0.1.0"
+dependencies = [
+ "deckpilot-first-party-support",
+ "deckpilot-plugin-abi",
+ "deckpilot-plugin-sdk",
+ "jsonschema",
+ "serde_json",
+]
+
+[[package]]
 name = "deckpilot-legacy-fixture"
 version = "0.1.0"
 dependencies = [
