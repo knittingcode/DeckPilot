@@ -18,7 +18,7 @@ secret or an environment.
 | Served from | GitHub Releases of `knittingcode/deckpilot` (URLs keep the `knittingcode/DeckPilot` spelling installed clients require) | registry metadata: GitHub Pages, <https://knittingcode.github.io/deckpilot-plugins/v1/>; packages: GitHub Releases of `knittingcode/deckpilot-plugins` |
 | Signed with | the application updater key (minisign, `TAURI_SIGNING_PRIVATE_KEY`) and the Apple Developer ID | the registry roles: root keys (offline), index key and timestamp key (`crates/deckpilot-plugin-registry/PUBLISHING.md`) |
 | Signing environments | `production-release` | `registry-publish` (release tags `*--v*`: index and timestamp keys) and `registry-timestamp` (`main` only: the timestamp key, daily refresh), in `knittingcode/deckpilot-plugins` only |
-| Trusted because | the updater signature, against the public key built into the app | the registry signatures, against the root keys built into the app (`DECKPILOT_REGISTRY_ROOT_PUBKEYS`) |
+| Trusted because | the updater signature, against the public key built into the app | the registry signatures, against the root keys built into the app (`DECKPILOT_REGISTRY_ROOT_PUBKEYS`, a repository variable read at build time; [agent-integration.md](agent-integration.md#trusted-root-keys)) |
 | Lifecycle | application versions, tags `v*` of this repository | plugin versions and registry snapshots, on their own schedule |
 
 ## `knittingcode/deckpilot`: the application only
@@ -84,9 +84,22 @@ made inside the tests.
   rotating one never affects the other.
 - No secret and no environment is shared between the two repositories'
   release workflows.
-- The application embeds only *public* registry keys (the root role); a
-  root rotation that clients must learn of is the one case that needs an
-  application release (`PUBLISHING.md`, "Root loss or compromise").
+- The application embeds only *public* registry keys (the root role). They
+  reach the build as the **repository variable**
+  `DECKPILOT_REGISTRY_ROOT_PUBKEYS` of `knittingcode/deckpilot` (never a
+  secret: nothing in this repository can sign with them), holding the
+  content of `keys/roots.json` of the registry repository. `release.yml`
+  passes it to the agent build only when it is set; the build checks it
+  and fails on a malformed value; unset, nothing is embedded and the
+  application uses no registry. A release build with embedded roots
+  cannot be given other roots at run time (`--plugin-registry-roots`
+  overrides them in debug and test builds only). Steps for the owner:
+  [agent-integration.md](agent-integration.md#enabling-the-public-registry-in-release-builds).
+- The embedded roots are only the anchor: a routine root rotation is a
+  key set signed by the old and the new roots, which clients follow
+  without an application release. Only the loss or compromise of the
+  embedded roots needs one, with new roots (`PUBLISHING.md`, "Root loss
+  or compromise").
 
 ## Enforcement in this repository
 

@@ -57,11 +57,13 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
   (`--plugin-registry <dir>`, the publishing tool's layout: `site/v1/`,
   `releases/`), both read through a `RegistrySource` (`plugins/registry.rs`,
   `plugins/fetch.rs`) and verified by the same `RegistryClient`. The root
-  keys come separately from `--plugin-registry-roots <roots.json>`; none is
-  built in (production root keys are not approved, U-10), so without them
-  nothing is fetched and the status says no registry is configured. With
-  roots and neither a URL nor a directory the official site
-  `https://knittingcode.github.io/deckpilot-plugins/` is used
+  keys are compiled in at build time (`DECKPILOT_REGISTRY_ROOT_PUBKEYS`,
+  [below](#trusted-root-keys)) or given at run time with
+  `--plugin-registry-roots <roots.json>`. No build embeds them yet
+  (production root keys await the key ceremony, U-10), so without
+  `--plugin-registry-roots` nothing is fetched and the status says no
+  registry is configured. With roots and neither a URL nor a directory the
+  official site `https://knittingcode.github.io/deckpilot-plugins/` is used
   (`registry::DEFAULT_REGISTRY_URL`). The verified state is kept in
   `<data dir>/plugin-registry/` ([why not plugins.db](#trust-state-stays-a-file)).
 - **Install.** Registry refresh (key sets, timestamp, index), revocations,
@@ -261,6 +263,83 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
     design's other kinds (`timer`, `settingsChanged`) need background work
     and settings, which do not exist yet, and a capability call inside a
     hook is refused locally by the host (`unavailable`).
+
+## Trusted root keys
+
+The registry's root role (`roots.json`: `{"keys": [...], "threshold": n}`,
+1 to 4 base64-wrapped minisign public keys, the file
+`deckpilot-registry keyset init` writes and `keys/roots.json` of
+`knittingcode/deckpilot-plugins` holds) is the only trust anchor. It comes
+from one of two places (`deckpilot_plugin_registry::roots`):
+
+- **Embedded at build time.** `DECKPILOT_REGISTRY_ROOT_PUBKEYS`, set when
+  the agent is compiled, holds the role: the JSON itself or the absolute
+  path of a `roots.json`. The registry crate's `build.rs` checks it with
+  the client's own rules and **fails the build** on anything malformed
+  (not JSON, an unknown field, no or more than 4 keys, a key that is not a
+  minisign public key, a key listed twice, a threshold of 0, above 4 or
+  above the number of keys, a path that is relative or unreadable), so a
+  build never carries partial roots. Unset or empty (every build so far):
+  nothing is embedded. Nothing reads the variable at run time.
+- **Configured at run time.** `--plugin-registry-roots <roots.json>` or
+  `DECKPILOT_PLUGIN_REGISTRY_ROOTS`.
+
+| Build | Embedded | Configured | Trusted |
+| --- | --- | --- | --- |
+| any | no | no | nothing: no registry, nothing fetched, "not configured" |
+| any | no | yes | the configured file (development, self-hosted registries) |
+| debug, or `test-hooks` | yes | yes | the configured file |
+| release | yes | yes | the embedded roots; the file is ignored, with a warning in the log |
+| any | yes | no | the embedded roots |
+
+So a release build with embedded roots cannot be pointed at other roots
+by its command line or environment (like the other development overrides
+since #236 and #249, the override exists only in debug and `test-hooks`
+builds), while a release build without them keeps today's behaviour and
+still accepts `--plugin-registry-roots` for a self-hosted registry: such
+a build trusts nothing by default, so the flag adds trust only where none
+was built in. With roots of either kind and no registry named, the
+official site is used.
+
+Embedded roots are only the anchor. Every refresh still walks the signed
+key set chain from them (`keys/1.json` signed by them, each later key set
+by the previous roots and, for a root rotation, by the new roots too), so
+rotating root, index or timestamp keys needs no new app build. Only the
+loss or compromise of the embedded roots does: a release with new
+embedded roots, whose fingerprint differs, makes the client drop the
+stored chain and walk it again from `keys/1.json` (rollback floor and
+revocations are kept). Switching a debug build between embedded and
+configured roots does the same.
+
+Tests: `crates/deckpilot-plugin-registry/tests/embedded_roots.rs` builds
+the crate's `registry_roots` example with throwaway roots embedded (made
+with the publishing tool), in the release and debug profiles: it trusts
+the registry they signed and refuses another; the release build ignores a
+configured `roots.json`, the debug and `test-hooks` builds use it; without
+embedded roots nothing is fetched; malformed values fail the build. The
+agent's `plugins::fetch::tests::embedded_roots_trust_the_registry_they_signed`
+opens a registry from embedded roots and follows a root rotation.
+
+### Enabling the public registry in release builds
+
+After the key ceremony (`crates/deckpilot-plugin-registry/PUBLISHING.md`,
+U-10) has committed `keys/roots.json` to `knittingcode/deckpilot-plugins`:
+
+1. Create the repository variable (not a secret: these are public keys)
+   `DECKPILOT_REGISTRY_ROOT_PUBKEYS` in `knittingcode/deckpilot`, with the
+   exact content of that `keys/roots.json`, for example with
+   `gh variable set DECKPILOT_REGISTRY_ROOT_PUBKEYS --repo knittingcode/deckpilot < roots.json`.
+   An environment variable of `production-release` works too.
+2. Check it locally first: `DECKPILOT_REGISTRY_ROOT_PUBKEYS="$(cat roots.json)"
+   cargo build --release -p deckpilot-agent --features plugins` must
+   succeed (a malformed value fails here exactly as in the release).
+3. The next release's agent build (`release.yml`, "Build and stage the
+   agent") passes the variable to Cargo only when it is set. The agent
+   then uses `https://knittingcode.github.io/deckpilot-plugins/` with no
+   flag at all. Release builds do not enable the `plugins` feature yet, so
+   the roots take effect in the first release that ships plugins.
+
+Deleting the variable makes the following releases embed nothing again.
 
 ## Registry over HTTPS
 
@@ -693,8 +772,10 @@ Windows (not a required check).
 
 - The registry trust state lives in a file, not in the encrypted database
   ([why](#trust-state-stays-a-file)).
-- No production root keys and no default trust: the official site URL is
-  known, but without `--plugin-registry-roots` nothing is fetched (U-10).
+- No production root keys and no default trust yet: builds can embed root
+  keys ([how](#enabling-the-public-registry-in-release-builds)), but none
+  exist until the key ceremony (U-10), so without `--plugin-registry-roots`
+  nothing is fetched.
   The GitHub asset redirect hosts for packages come from the design, whose
   §20.1 lists the release-asset redirect host as unverified; no test
   reaches GitHub.

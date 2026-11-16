@@ -30,6 +30,11 @@
 #   vars.DECKPILOT_UPDATER_PUBKEY              matching public key, compiled
 #                                              into the app to verify updates
 #
+# Optional:
+#   vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS       the plugin registry's root role
+#                                              (public keys, roots.json content),
+#                                              compiled into the agent when set
+#
 # macOS Developer ID signing and notarization (all required together):
 #   secrets.APPLE_CERTIFICATE           base64 .p12: "Developer ID Application" certificate and key
 #   secrets.APPLE_CERTIFICATE_PASSWORD  its password
@@ -346,9 +351,21 @@ jobs:
           if (-not (Test-Path $perl)) { Write-Error "Strawberry Perl not found at $perl"; exit 1 }
           "OPENSSL_SRC_PERL=$perl" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       # The agent ships inside the bundle as a Tauri external binary.
+      # vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS (optional; public keys, not a
+      # secret) is the plugin registry's root role, keys/roots.json of
+      # knittingcode/deckpilot-plugins. Only when it is set is it passed to
+      # the build, which checks it and compiles it in (a malformed value
+      # fails the build); unset, nothing is embedded and the agent uses no
+      # registry (docs/marketplace/agent-integration.md).
       - name: Build and stage the agent
         shell: bash
+        env:
+          REGISTRY_ROOTS: ${{ vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS }}
         run: |
+          if [ -n "$REGISTRY_ROOTS" ]; then
+            export DECKPILOT_REGISTRY_ROOT_PUBKEYS="$REGISTRY_ROOTS"
+            echo "Embedding the plugin registry root keys (vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS)"
+          fi
           cargo build --release --locked -p deckpilot-agent --target ${{ matrix.target }}
           suffix=""; [ "${{ runner.os }}" = "Windows" ] && suffix=".exe"
           mkdir -p apps/desktop/src-tauri/binaries
