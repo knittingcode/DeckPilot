@@ -5,7 +5,11 @@
 // plugin client, so no request is ever sent. The answer of `listPlugins`
 // is also what the backend validates plugin actions against
 // (`src-tauri/src/plugin_actions.rs`), so the editors and the backend see
-// the same plugins.
+// the same plugins. With an agent that pages plugin answers (runtime
+// feature `pagedAnswers`) the backend reads every plugin's actions page by
+// page (`deckpilot_ipc::plugin_answers`), so the list is complete however
+// many actions and outputs a plugin has; an older agent answers in one
+// message, without the definitions of plugins that do not fit it.
 
 import { useEffect, useState } from "react"
 

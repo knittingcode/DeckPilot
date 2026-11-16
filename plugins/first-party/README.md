@@ -8,8 +8,9 @@ that is a separate step, not part of this directory.
 
 Experimental, like all of the plugin marketplace. Two plugins are bundled:
 `deckpilot.github` (class `migration`, [github/README.md](github/README.md)),
-which nothing routes to until the cut-over lists its aliases
-(`docs/marketplace/module-migration.md` §9, P9), and
+to which a plugin-enabled agent routes the built-in `github.*` action
+types once a computer's migration is cut over
+(`docs/marketplace/module-migration.md` §6 and §9, P9), and
 `deckpilot.notifications` (class `default`, the first of the default set,
 [notifications/README.md](notifications/README.md)), seeded on every
 computer and routed through the alias block `notifications.*` (P10). The published release

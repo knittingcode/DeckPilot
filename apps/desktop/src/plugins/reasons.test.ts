@@ -41,6 +41,7 @@ const REASONS = [
   "broken",
   "busy",
   "invalidParameters",
+  "answerTooLarge",
 ]
 
 describe("reason titles", () => {

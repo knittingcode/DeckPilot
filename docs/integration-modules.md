@@ -301,6 +301,22 @@ comment, approve, merge or change anything.
 
 Capabilities: send network requests, use stored credentials, open pages.
 
+**Moving to a plugin (builds with plugins only).** In a build with the
+experimental plugin marketplace enabled, GitHub moves to the bundled
+first-party plugin `deckpilot.github`
+([its README](../plugins/first-party/github/README.md),
+[module-migration.md](marketplace/module-migration.md) §6). Nothing you
+saved changes: keys, workflow nodes and actions keep their `github.*`
+types and run in the plugin once you approve, in Settings › Plugins,
+that the plugin may use your stored token (it is copied into the
+plugin's own credential slot; the credential here stays). Until then, if
+you decline, and with GitHub Enterprise, a private API host or an action
+that names a credential other than the module's, this module keeps
+running them. If you disable or uninstall the plugin, the `github.*`
+actions are unavailable rather than silently run by this module. Release
+builds have plugins off: there, and in an older app on the same data,
+this module runs them as before.
+
 Settings: **API URL** (`apiUrl`, `https://api.github.com`; for GitHub
 Enterprise Server `https://<host>/api/v3`; machine-specific), **Token
 credential** (`credential`, the *name* of a stored credential, default

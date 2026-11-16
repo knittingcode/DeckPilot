@@ -125,6 +125,25 @@ impl ActionAlias {
 /// of the module is cut over, and in every build without plugins, the
 /// legacy ids keep running the built-in.
 pub const ACTION_ALIASES: &[ActionAlias] = &[
+    // GitHub (P9): `deckpilot.github` (`plugins/first-party/github`), its
+    // contract checked by `crates/deckpilot-modules/tests/contracts.rs`.
+    // The per-action `credential` override is dropped when it is empty or
+    // names the module's credential (the plugin uses its slot `token`);
+    // `github.open` has none.
+    github("github.current-user", "deckpilot.github.current-user", true),
+    github("github.repository", "deckpilot.github.repository", true),
+    github(
+        "github.pull-requests",
+        "deckpilot.github.pull-requests",
+        true,
+    ),
+    github(
+        "github.review-requests",
+        "deckpilot.github.review-requests",
+        true,
+    ),
+    github("github.checks", "deckpilot.github.checks", true),
+    github("github.open", "deckpilot.github.open", false),
     // Notifications (P10): `deckpilot.notifications`
     // (`plugins/first-party/notifications`), the first plugin of the
     // default set; its contract checked by
@@ -136,6 +155,22 @@ pub const ACTION_ALIASES: &[ActionAlias] = &[
         "deckpilot.notifications.workflow-summary",
     ),
 ];
+
+/// One alias of the `github` block.
+const fn github(legacy: &'static str, target: &'static str, credential: bool) -> ActionAlias {
+    ActionAlias {
+        legacy,
+        target,
+        module: "github",
+        plugin: "deckpilot.github",
+        since: "0.6.0",
+        params: if credential {
+            &[ParamRule::DropIfDefault("credential")]
+        } else {
+            &[]
+        },
+    }
+}
 
 /// One alias of the `notifications` block.
 const fn notifications(legacy: &'static str, target: &'static str) -> ActionAlias {
@@ -572,30 +607,40 @@ mod tests {
         validate(entries).map_err(|e| e.reason)
     }
 
+    /// The shipped table: GitHub's block (P9) and the notifications
+    /// block (P10), nothing else.
     #[test]
-    fn the_shipped_table_is_valid_and_has_the_notifications_block() {
+    fn the_shipped_table_is_the_github_and_notifications_blocks() {
         assert_eq!(validate(ACTION_ALIASES), Ok(()));
-        let notifications: Vec<&ActionAlias> = ACTION_ALIASES
-            .iter()
-            .filter(|a| a.module == "notifications")
-            .collect();
+        let legacy: Vec<&str> = ACTION_ALIASES.iter().map(|a| a.legacy).collect();
         assert_eq!(
-            notifications
-                .iter()
-                .map(|a| (a.legacy, a.target))
-                .collect::<Vec<_>>(),
+            legacy,
             [
-                ("notifications.show", "deckpilot.notifications.show"),
-                (
-                    "notifications.workflow-summary",
-                    "deckpilot.notifications.workflow-summary"
-                ),
+                "github.current-user",
+                "github.repository",
+                "github.pull-requests",
+                "github.review-requests",
+                "github.checks",
+                "github.open",
+                "notifications.show",
+                "notifications.workflow-summary",
             ]
         );
-        for alias in notifications {
-            assert_eq!(alias.plugin, "deckpilot.notifications");
-            assert_eq!(alias.params, &[]);
+        for alias in ACTION_ALIASES {
+            let (plugin, params): (&str, &[ParamRule]) = match alias.module {
+                "github" if alias.legacy == "github.open" => ("deckpilot.github", &[]),
+                "github" => (
+                    "deckpilot.github",
+                    &[ParamRule::DropIfDefault("credential")],
+                ),
+                "notifications" => ("deckpilot.notifications", &[]),
+                other => panic!("an unexpected block: {other}"),
+            };
+            assert_eq!(alias.plugin, plugin, "{}", alias.legacy);
+            assert_eq!(alias.params, params, "{}", alias.legacy);
         }
+        let found = alias_of(&ActionTypeId::new("github.pull-requests").unwrap()).unwrap();
+        assert_eq!(found.target, "deckpilot.github.pull-requests");
         let found = alias_of(&ActionTypeId::new("notifications.show").unwrap()).unwrap();
         assert_eq!(found.target, "deckpilot.notifications.show");
         assert_eq!(

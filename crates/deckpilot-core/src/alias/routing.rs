@@ -74,8 +74,8 @@ fn outcome(registry: &ModuleRegistry) -> AliasOutcome {
 #[test]
 fn the_shipped_table_routes_only_what_it_lists() {
     // Even with a routing that says "migrated" and the plugin there: the
-    // shipped table has no alias for `legacy`, and its own entries are
-    // not routed by the agent, so their built-ins serve (none here).
+    // shipped table (GitHub's and the notifications block) has no alias
+    // for `legacy`, and its own entries are not routed by the agent.
     let mut registry = ModuleRegistry::new(Os::Linux);
     registry.register(Box::new(LegacyModule::new())).unwrap();
     registry.register(Box::new(PluginFixture::new())).unwrap();
@@ -84,6 +84,7 @@ fn the_shipped_table_routes_only_what_it_lists() {
     assert_eq!(statuses.len(), ACTION_ALIASES.len());
     for status in &statuses {
         assert_ne!(status.plugin, id("deckpilot.legacy"));
+        // Not routed by the agent: the built-in's, never the plugin's.
         assert_eq!(status.outcome, AliasOutcome::Builtin, "{}", status.legacy);
     }
     assert_eq!(

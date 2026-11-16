@@ -141,6 +141,13 @@ jobs:
       # canned GitHub answers: every action, the same results.
       - name: GitHub plugin parity end to end
         run: cargo test -p deckpilot-agent --features plugins --test plugins_github --locked -- --nocapture
+      # The GitHub cut-over (P9): an alpha.3 configuration upgraded to a
+      # plugin-enabled build, the consent through IPC, a key and a workflow
+      # node in the plugin with the imported token, downgrade, GitHub
+      # Enterprise, disable, uninstall and decline. GitHub never answers:
+      # canned for the plugin, a stand-in on 127.0.0.1 for the built-in.
+      - name: GitHub cut-over end to end
+        run: cargo test -p deckpilot-agent --features plugins --test plugins_cutover --locked -- --nocapture
       # deckpilot.notifications, the first default-class plugin: parity
       # with the built-in through the real agent, first launch on a fresh
       # data directory, the user's uninstall and disable across restarts

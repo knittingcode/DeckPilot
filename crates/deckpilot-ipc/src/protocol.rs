@@ -80,7 +80,13 @@ use crate::work_session::{MAX_WORK_SESSION_LIST, WorkSessionSettings, WorkSessio
 ///
 /// Without a new version: the status carries the agent's distribution
 /// record ([`AgentStatus::distribution`]), an optional field that older
-/// clients ignore and older agents leave out.
+/// clients ignore and older agents leave out. Plugin answers that need not
+/// fit one message: `listPluginsPaged`, `getPluginPaged`,
+/// `getPluginActions` and `getPluginIcon`, used only with an agent that
+/// lists the feature
+/// [`plugins::feature::PAGED_ANSWERS`]; an answer too large for a client
+/// that does not use them is shortened or refused with
+/// [`plugins::reason::ANSWER_TOO_LARGE`] ([`crate::plugin_answers`]).
 pub const PROTOCOL_VERSION: u32 = 10;
 
 /// Most references one `previewReferences` may ask about.
@@ -465,6 +471,32 @@ pub enum Request {
     GetPlugin {
         plugin: String,
     },
+    /// `listPlugins` answered without the plugins' actions, which
+    /// `getPluginActions` pages ([`plugins::PluginSummary::action_count`]).
+    /// Since protocol 10, feature [`plugins::feature::PAGED_ANSWERS`].
+    ListPluginsPaged,
+    /// `getPlugin` answered without the plugin's actions (also left out of
+    /// its manifest) and icon, which `getPluginActions` and
+    /// `getPluginIcon` give. Since protocol 10, feature
+    /// [`plugins::feature::PAGED_ANSWERS`].
+    GetPluginPaged {
+        plugin: String,
+    },
+    /// The actions of an installed plugin with their definitions and
+    /// manifest entries, as many from index `from` on as fit one message.
+    /// Since protocol 10, feature [`plugins::feature::PAGED_ANSWERS`].
+    GetPluginActions {
+        plugin: String,
+        #[serde(default)]
+        from: u32,
+    },
+    /// One chunk of an installed plugin's icon, from byte `offset` on.
+    /// Since protocol 10, feature [`plugins::feature::PAGED_ANSWERS`].
+    GetPluginIcon {
+        plugin: String,
+        #[serde(default)]
+        offset: u64,
+    },
     /// The plugins the verified registry offers; `refresh` re-reads the
     /// registry first. Since protocol 10.
     ListAvailablePlugins {
@@ -625,6 +657,7 @@ impl Request {
                 ))
             }
             Self::GetPlugin { plugin }
+            | Self::GetPluginPaged { plugin }
             | Self::DisablePlugin { plugin }
             | Self::DeclinePluginUpdate { plugin }
             | Self::RollbackPlugin { plugin }
@@ -632,6 +665,8 @@ impl Request {
             | Self::GetPluginSettings { plugin }
             | Self::ListPluginCredentials { plugin } => plugins::check_text("plugin", plugin),
             Self::SetPluginSettings { .. }
+            | Self::GetPluginActions { .. }
+            | Self::GetPluginIcon { .. }
             | Self::SetPluginCredential { .. }
             | Self::DeletePluginCredential { .. }
             | Self::RetryModuleMigration { .. }
@@ -847,6 +882,27 @@ pub enum Response {
     /// Since protocol 10.
     Plugin {
         plugin: Box<plugins::PluginDetails>,
+    },
+    /// Answer to `getPluginActions`: the actions from index `from` on that
+    /// fit, of the plugin's active `version`, which has `total` actions;
+    /// `next` is the index to ask for next, absent after the last action.
+    /// Since protocol 10.
+    PluginActions {
+        plugin: String,
+        version: String,
+        total: u32,
+        actions: Vec<plugins::PluginActionEntry>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next: Option<u32>,
+    },
+    /// Answer to `getPluginIcon`: absent when the plugin has no icon the
+    /// app may show (missing, not a PNG, larger than
+    /// [`plugins::MAX_ICON_BYTES`] or not matching its integrity record).
+    /// Since protocol 10.
+    PluginIcon {
+        plugin: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        icon: Option<plugins::PluginIconChunk>,
     },
     /// Answer to `listAvailablePlugins`. Since protocol 10.
     AvailablePlugins {
@@ -1150,6 +1206,10 @@ impl Request {
             | Self::GetPluginRuntime
             | Self::ListPlugins
             | Self::GetPlugin { .. }
+            | Self::ListPluginsPaged
+            | Self::GetPluginPaged { .. }
+            | Self::GetPluginActions { .. }
+            | Self::GetPluginIcon { .. }
             | Self::ListAvailablePlugins { .. }
             | Self::InstallPlugin { .. }
             | Self::EnablePlugin { .. }
@@ -2172,6 +2232,21 @@ mod tests {
             },
             Request::GetPlugin {
                 plugin: "acme x".into(),
+            },
+            Request::GetPluginPaged {
+                plugin: "acme x".into(),
+            },
+            Request::GetPluginActions {
+                plugin: long.clone(),
+                from: 0,
+            },
+            Request::GetPluginActions {
+                plugin: "acme.x".into(),
+                from: crate::plugins::MAX_ACTION_INDEX + 1,
+            },
+            Request::GetPluginIcon {
+                plugin: "acme.x".into(),
+                offset: crate::plugins::MAX_ICON_BYTES as u64 + 1,
             },
             Request::EnablePlugin {
                 plugin: "acme.x".into(),

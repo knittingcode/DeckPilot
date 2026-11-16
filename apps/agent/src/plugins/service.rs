@@ -23,7 +23,7 @@ use deckpilot_ipc::plugins::{
     self as ipc, PluginInstallSource, PluginOperation, PluginRuntimeStatus, PluginStage,
     PluginUpdateOutcome, reason,
 };
-use deckpilot_ipc::{ErrorCode, IpcError, Request, Response};
+use deckpilot_ipc::{ErrorCode, IpcError, Request, Response, plugin_answers};
 use deckpilot_plugin_abi::capability::{RunContext, RunTrigger};
 use deckpilot_plugin_abi::protocol::{Enforcement, SandboxReport};
 use deckpilot_plugin_abi::{ActionOutcome, Params};
@@ -645,6 +645,7 @@ impl PluginService {
                 (platform, registry) => registry.or(platform),
             },
             registry: self.registry.as_ref().map(Registry::status),
+            features: super::features(),
         }
     }
 
@@ -702,6 +703,11 @@ impl PluginService {
     }
 
     fn details(&self, id: &PluginId) -> Result<Response, IpcError> {
+        self.details_as(id, false)
+    }
+
+    /// `getPlugin`, or with `paged` `getPluginPaged` (no actions, no icon).
+    fn details_as(&self, id: &PluginId, paged: bool) -> Result<Response, IpcError> {
         let record = self.record(id)?;
         let store = self.manager.store();
         let grants = store.grants(id).map_err(|e| store_error(&e))?;
@@ -712,12 +718,82 @@ impl PluginService {
             .map_err(|e| store_error(&e))?;
         let mut details = convert::details(&record, &grants, &audit, pending);
         details.summary.health = self.health.get(id.as_str());
-        details.icon = record
-            .active()
-            .and_then(|v| convert::icon(&self.manager.layout().resolve(&v.install_dir), &record));
+        if paged {
+            plugin_answers::paged_details(&mut details);
+        } else {
+            details.icon = record.active().and_then(|v| {
+                convert::icon(&self.manager.layout().resolve(&v.install_dir), &record)
+            });
+        }
         details.storage = self.storage_usage(id);
         Ok(Response::Plugin {
             plugin: Box::new(details),
+        })
+    }
+
+    /// `listPlugins`, or with `paged` `listPluginsPaged` (no actions).
+    fn list(&self, paged: bool) -> Result<Response, IpcError> {
+        let store = self.manager.store();
+        let plugins = store.plugins().map_err(|e| store_error(&e))?;
+        Ok(Response::Plugins {
+            plugins: plugins
+                .iter()
+                .map(|record| {
+                    let mut summary =
+                        convert::summary(record, &store.grants(&record.id).unwrap_or_default());
+                    summary.health = self.health.get(record.id.as_str());
+                    if paged {
+                        plugin_answers::paged_summary(&mut summary);
+                    }
+                    summary
+                })
+                .collect(),
+        })
+    }
+
+    /// `getPluginActions`: the actions from `from` on that fit one answer.
+    fn actions_page(&self, id: &PluginId, from: u32) -> Result<Response, IpcError> {
+        let record = self.record(id)?;
+        let grants = self
+            .manager
+            .store()
+            .grants(id)
+            .map_err(|e| store_error(&e))?;
+        let entries = convert::action_entries(&record, &grants);
+        let total = u32::try_from(entries.len()).unwrap_or(u32::MAX);
+        let (actions, next) = plugin_answers::page_actions(entries, from);
+        for entry in actions.iter().filter(|e| e.too_large) {
+            warn!(
+                plugin = %id,
+                action = %entry.action.action,
+                "an action's definition does not fit one IPC message; the editors do not offer it"
+            );
+        }
+        Ok(Response::PluginActions {
+            plugin: id.to_string(),
+            version: record
+                .active()
+                .map(|v| v.version.to_string())
+                .unwrap_or_default(),
+            total,
+            actions,
+            next,
+        })
+    }
+
+    /// `getPluginIcon`: the chunk of the icon at `offset`.
+    fn icon_chunk(&self, id: &PluginId, offset: u64) -> Result<Response, IpcError> {
+        let record = self.record(id)?;
+        let icon = record.active().and_then(|v| {
+            convert::icon_chunk(
+                &self.manager.layout().resolve(&v.install_dir),
+                &record,
+                offset,
+            )
+        });
+        Ok(Response::PluginIcon {
+            plugin: id.to_string(),
+            icon,
         })
     }
 
@@ -957,6 +1033,20 @@ impl PluginService {
         if let Err(e) = self.broker.set_grants(&broker_id, &approved) {
             warn!(plugin = %id, error = %e, "the broker refused the grants; the plugin gets none");
             self.broker.remove_plugin(&broker_id);
+            return;
+        }
+        // A credential slot whose host lost its network grant is unusable
+        // (towards that host) until the grant is back; the rest stays.
+        if let Ok(grants) = deckpilot_plugin_broker::Grants::derive(&approved) {
+            for (slot, origins) in grants.suspended_credentials() {
+                let origins: Vec<String> = origins.iter().map(ToString::to_string).collect();
+                info!(
+                    plugin = %id,
+                    slot,
+                    ?origins,
+                    "credential slot withheld from hosts without a network grant"
+                );
+            }
         }
     }
 
@@ -1008,28 +1098,16 @@ impl PluginService {
             Request::GetPluginRuntime => Ok(Response::PluginRuntime {
                 status: Box::new(self.status()),
             }),
-            Request::ListPlugins => {
-                let plugins = self
-                    .manager
-                    .store()
-                    .plugins()
-                    .map_err(|e| store_error(&e))?;
-                let store = self.manager.store();
-                Ok(Response::Plugins {
-                    plugins: plugins
-                        .iter()
-                        .map(|record| {
-                            let mut summary = convert::summary(
-                                record,
-                                &store.grants(&record.id).unwrap_or_default(),
-                            );
-                            summary.health = self.health.get(record.id.as_str());
-                            summary
-                        })
-                        .collect(),
-                })
-            }
+            Request::ListPlugins => self.list(false),
+            Request::ListPluginsPaged => self.list(true),
             Request::GetPlugin { plugin } => self.details(&plugin_id(&plugin)?),
+            Request::GetPluginPaged { plugin } => self.details_as(&plugin_id(&plugin)?, true),
+            Request::GetPluginActions { plugin, from } => {
+                self.actions_page(&plugin_id(&plugin)?, from)
+            }
+            Request::GetPluginIcon { plugin, offset } => {
+                self.icon_chunk(&plugin_id(&plugin)?, offset)
+            }
             Request::ListAvailablePlugins { refresh } => self.available(refresh),
             Request::InstallPlugin { source, consent } => self.install(&source, &consent),
             Request::EnablePlugin { plugin, consent } => {
@@ -2210,6 +2288,7 @@ pub(super) fn closed_status(problem: Option<&str>, unlocked: bool) -> PluginRunt
             str::to_owned,
         )),
         registry: None,
+        features: super::features(),
     }
 }
 
