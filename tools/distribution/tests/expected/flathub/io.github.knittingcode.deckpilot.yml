@@ -1,0 +1,83 @@
+# DRAFT Flatpak manifest for DeckPilot (docs/distribution/README.md, PR G).
+# Not submitted to Flathub and never built in CI. See README.md next to this
+# file for its status, the permissions, and how to try it.
+#
+# App ID: io.github.knittingcode.deckpilot, the bundle identifier exactly
+# (tauri.conf.json `identifier`, crates/deckpilot-ipc/src/paths.rs
+# APP_IDENTIFIER). See README.md, "Application ID".
+#
+# v0.6.0-alpha.3 and b0b23de9bd1183352cffc059a373d0ba3f550841 are filled in by tools/distribution/generate.py
+# flathub from a verified release; cargo-sources.json and
+# node-sources.json are generated from the lock files of that commit
+# (README.md, "Offline sources").
+app-id: io.github.knittingcode.deckpilot
+# Tauri 2 on Linux links WebKitGTK 4.1, which the GNOME runtime ships.
+# Check the current GNOME runtime version before a submission.
+runtime: org.gnome.Platform
+runtime-version: "49"
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.node24
+command: deckpilot-desktop
+
+finish-args:
+  # Stream Decks are hidraw nodes; Flatpak has no hidraw-only device
+  # option, and --device=usb covers /dev/bus/usb only. The host still needs
+  # the udev rule (udev.md).
+  - --device=all
+  # Modules and plugins reach the network (HTTP, GitHub, GitLab, ...).
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # WebKitGTK rendering.
+  - --device=dri
+  # Tray icon (StatusNotifierItem through the tray-icon crate).
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # The database key in the Secret Service (crates/deckpilot-keystore).
+  - --talk-name=org.freedesktop.secrets
+  # Not granted in this draft: --filesystem=xdg-data/io.github.knittingcode.deckpilot
+  # would let the Flatpak read data written by the .deb or AppImage. It is
+  # a reviewer decision; without it users export and import (README.md).
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node24/bin
+  env:
+    CARGO_HOME: /run/build/deckpilot/cargo
+    CARGO_NET_OFFLINE: "true"
+    # The build-time distribution record (crates/deckpilot-distribution):
+    # baked in, never read at run time. No DECKPILOT_UPDATER_PUBKEY: the
+    # Flathub build has no updater key and, with --no-default-features, no
+    # updater plugin at all (rule R1).
+    DECKPILOT_DISTRIBUTION_CHANNEL: flathub
+    DECKPILOT_PACKAGE_FORMAT: flatpak
+
+modules:
+  - name: deckpilot
+    buildsystem: simple
+    build-commands:
+      # Front end from the offline pnpm store (node-sources.json).
+      - pnpm config set store-dir "$PWD/flatpak-node/pnpm-store"
+      - pnpm install --offline --frozen-lockfile
+      - pnpm --filter ./apps/desktop build
+      # The agent and the application, without the self-update feature.
+      - cargo build --release --locked --offline -p deckpilot-agent
+      - cargo build --release --locked --offline -p deckpilot-desktop --no-default-features
+      - install -Dm755 target/release/deckpilot-agent /app/bin/deckpilot-agent
+      - install -Dm755 target/release/deckpilot-desktop /app/bin/deckpilot-desktop
+      # Bundled first-party plugins (a Tauri resource in the other
+      # packages): where the Flatpak build puts them is open, see README.md.
+      - install -Dm644 packaging/flatpak/io.github.knittingcode.deckpilot.desktop /app/share/applications/io.github.knittingcode.deckpilot.desktop
+      - install -Dm644 packaging/flatpak/io.github.knittingcode.deckpilot.metainfo.xml /app/share/metainfo/io.github.knittingcode.deckpilot.metainfo.xml
+      - install -Dm644 apps/desktop/src-tauri/icons/128x128.png /app/share/icons/hicolor/128x128/apps/io.github.knittingcode.deckpilot.png
+      - install -Dm644 apps/desktop/src-tauri/icons/32x32.png /app/share/icons/hicolor/32x32/apps/io.github.knittingcode.deckpilot.png
+    sources:
+      - type: git
+        url: https://github.com/knittingcode/deckpilot.git
+        tag: "v0.6.0-alpha.3"
+        commit: "b0b23de9bd1183352cffc059a373d0ba3f550841"
+      # flatpak-builder-tools: flatpak-cargo-generator.py Cargo.lock
+      - cargo-sources.json
+      # flatpak-builder-tools: flatpak-node-generator pnpm pnpm-lock.yaml
+      - node-sources.json

@@ -1,0 +1,4 @@
+date = 2026-11-16T03:53:00Z
+macos = 27.2 (26B123)
+arch = arm64
+wasmtime = 50.0.1 (cranelift, runtime, std)

@@ -1,0 +1,18 @@
+{
+  "channel": "msstore",
+  "tag": "v0.6.0-alpha.3",
+  "commit": "b0b23de9bd1183352cffc059a373d0ba3f550841",
+  "dry_run": true,
+  "published": false,
+  "outputs": [
+    "AppxManifest.xml",
+    "listing.json"
+  ],
+  "blockers": [
+    "pre-release 0.6.0-alpha.3: MSIX has no distinct version for it (0.6.0.0 is the release's)",
+    "Authenticode signing from a Microsoft Trusted Root Program CA is required for the MSI listing (not provisioned)",
+    "a Microsoft Partner Center account, a reserved name, its publisher identity and API credentials (not provisioned)",
+    "hidapi inside an MSIX package has not been tested (distribute.yml experiment-msix-hid, manual)",
+    "the plugin host's AppContainer child from a packaged full-trust process is untested"
+  ]
+}

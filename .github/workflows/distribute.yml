@@ -1,0 +1,219 @@
+# Downstream distribution, DRY RUN ONLY (docs/distribution/README.md,
+# sections 6.1, 6.3, 6.4; PR G).
+#
+# Started by hand for a published release tag. Each channel job verifies the
+# release (tools/distribution/verify-release-input.sh: published, immutable,
+# tag at release-meta.json's commit, assets matching SHA256SUMS and
+# release-meta.json's artifacts), generates that channel's files
+# (tools/distribution/generate.py) and uploads them as a workflow artifact
+# for review. Nothing is published: no job pushes to another repository,
+# writes the release, submits to a store or uses a secret, and the token
+# can only read (tools/release-pipeline/check-workflow-gate.py --downstream).
+# The jobs are independent: one channel's failure blocks no other.
+#
+# A release must carry release-meta.json's `artifacts` (PR D) to pass the
+# verification; v0.6.0-alpha.3 predates it and is refused with that reason.
+# Real publication (credentials, protected environments distribute-*,
+# provenance attestations, the first submissions) is a separate,
+# explicitly authorized change.
+#
+# experiment-msix-hid is an optional feasibility experiment
+# (experiments/distribution/msix-hid), never part of a release.
+name: Distribute (dry run)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release tag to verify and generate channel files for (for example v0.7.0)
+        type: string
+        required: false
+        default: ""
+      experiment-msix-hid:
+        description: Also run the MSIX HID experiment on Windows (feasibility only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  distribute-homebrew:
+    name: Homebrew cask (dry run)
+    if: inputs.tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the release input
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: tools/distribution/verify-release-input.sh "$TAG" homebrew "$RUNNER_TEMP/input"
+      - name: Generate the cask
+        run: python3 -I tools/distribution/generate.py homebrew --input "$RUNNER_TEMP/input/input.json" --out "$RUNNER_TEMP/out"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: distribute-homebrew-dry-run
+          path: ${{ runner.temp }}/out
+          if-no-files-found: error
+          retention-days: 14
+
+  distribute-winget:
+    name: WinGet manifests (dry run)
+    if: inputs.tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the release input
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: tools/distribution/verify-release-input.sh "$TAG" winget "$RUNNER_TEMP/input"
+      # msiinfo reads the MSI's Property table without running it.
+      - name: Read the MSI ProductCode
+        id: msi
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q msitools
+          msi=$(jq -r '.artifacts[0].path' "$RUNNER_TEMP/input/input.json")
+          code=$(msiinfo export "$msi" Property | tr -d '\r' | awk -F '\t' '$1 == "ProductCode" { print $2 }')
+          [[ "$code" =~ ^\{[0-9A-Fa-f-]{36}\}$ ]] || { echo "::error::no ProductCode in $msi"; exit 1; }
+          echo "product-code=$code" >> "$GITHUB_OUTPUT"
+      - name: Generate the manifests
+        env:
+          PRODUCT_CODE: ${{ steps.msi.outputs.product-code }}
+        run: |
+          python3 -I tools/distribution/generate.py winget --input "$RUNNER_TEMP/input/input.json" \
+            --out "$RUNNER_TEMP/out" --product-code "$PRODUCT_CODE"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: distribute-winget-dry-run
+          path: ${{ runner.temp }}/out
+          if-no-files-found: error
+          retention-days: 14
+
+  distribute-apt:
+    name: APT repository (dry run)
+    if: inputs.tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Takes only the apt .deb variant (rule R7): a release without one
+      # fails here, and the GitHub .deb is never used instead.
+      - name: Verify the release input
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: tools/distribution/verify-release-input.sh "$TAG" apt "$RUNNER_TEMP/input"
+      - name: Generate the repository tree (unsigned)
+        run: python3 -I tools/distribution/generate.py apt --input "$RUNNER_TEMP/input/input.json" --out "$RUNNER_TEMP/out"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: distribute-apt-dry-run
+          path: ${{ runner.temp }}/out
+          if-no-files-found: error
+          retention-days: 14
+
+  distribute-flathub:
+    name: Flathub manifest (dry run)
+    if: inputs.tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the release input
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: tools/distribution/verify-release-input.sh "$TAG" flathub "$RUNNER_TEMP/input"
+      - name: Generate the manifest
+        run: python3 -I tools/distribution/generate.py flathub --input "$RUNNER_TEMP/input/input.json" --out "$RUNNER_TEMP/out"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: distribute-flathub-dry-run
+          path: ${{ runner.temp }}/out
+          if-no-files-found: error
+          retention-days: 14
+
+  distribute-mas:
+    name: Mac App Store plan (dry run)
+    if: inputs.tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the release input
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: tools/distribution/verify-release-input.sh "$TAG" mas "$RUNNER_TEMP/input"
+      # No build: the variant needs Apple Distribution signing, which does
+      # not exist. The plan and the draft entitlements only.
+      - name: Generate the build plan
+        run: python3 -I tools/distribution/generate.py mas --input "$RUNNER_TEMP/input/input.json" --out "$RUNNER_TEMP/out"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: distribute-mas-dry-run
+          path: ${{ runner.temp }}/out
+          if-no-files-found: error
+          retention-days: 14
+
+  distribute-msstore:
+    name: Microsoft Store drafts (dry run)
+    if: inputs.tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the release input
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: tools/distribution/verify-release-input.sh "$TAG" msstore "$RUNNER_TEMP/input"
+      - name: Generate the MSIX manifest and the MSI listing
+        run: python3 -I tools/distribution/generate.py msstore --input "$RUNNER_TEMP/input/input.json" --out "$RUNNER_TEMP/out"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: distribute-msstore-dry-run
+          path: ${{ runner.temp }}/out
+          if-no-files-found: error
+          retention-days: 14
+
+  experiment-msix-hid:
+    name: MSIX HID experiment (feasibility, optional)
+    if: inputs.experiment-msix-hid
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Package, install and run the probe
+        shell: pwsh
+        run: >-
+          ./experiments/distribution/msix-hid/run.ps1
+          -Work "$env:RUNNER_TEMP\msix-hid" -Results "$env:RUNNER_TEMP\msix-hid-results"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: experiment-msix-hid
+          path: ${{ runner.temp }}/msix-hid-results
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,12 @@
+Identifier=direct-hardened-555549447b3cb900a80b3888ac98b3e86e4cbb6d
+Signature=adhoc
+entitlements:
+  (none)
+--- report
+child.label = direct-hardened
+child.pid = 24983
+child.app_sandbox_container_id = (not set)
+child.read_dir(~/Library/Preferences) = readable
+child.engine = ok
+experiments/distribution/macos-sandbox-plugin-host/run.sh: line 48: 24983 Killed: 9               "$@"
+exit status 137

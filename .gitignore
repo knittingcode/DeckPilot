@@ -1,5 +1,6 @@
 # Rust
 /target/
+/experiments/**/target/
 **/*.rs.bk
 
 # Node / frontend
@@ -70,3 +71,6 @@ GEMINI.md
 .roo/
 .clinerules
 .junie/
+
+# Python
+__pycache__/

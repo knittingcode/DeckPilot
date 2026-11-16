@@ -1,0 +1,17 @@
+Identifier=direct-hardened-unsigned-555549447b3cb900a80b3888ac98b3e86e4cbb6d
+Signature=adhoc
+entitlements:
+{
+  "com.apple.security.cs.allow-unsigned-executable-memory" => true
+}
+--- report
+child.label = direct-hardened-unsigned
+child.pid = 25072
+child.app_sandbox_container_id = (not set)
+child.read_dir(~/Library/Preferences) = readable
+child.engine = ok
+child.jit_before_sandbox_init = ok (add(40, 2) = 42)
+child.sandbox_init(deny default) = ok
+child.after_sandbox_init.read_dir(/) = denied (Operation not permitted (os error 1))
+child.jit_after_sandbox_init = ok (add(40, 2) = 42)
+end
