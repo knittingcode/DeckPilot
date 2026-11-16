@@ -157,6 +157,8 @@ fn full_manifest_parses_and_validates() {
     let slot = &network.user_origins()[0];
     assert_eq!(slot.setting, "serverUrl");
     assert!(slot.path_prefix() && slot.private_network());
+    assert!(manifest.opens_user_origin("serverUrl"));
+    assert!(!manifest.opens_user_origin("pollMinutes"));
     assert_eq!(
         manifest.contributes.credentials()[3].user_origin.as_deref(),
         Some("serverUrl")
@@ -1003,6 +1005,28 @@ fn fixtures() -> Vec<Fixture> {
             true,
             Invalid("permissions[0].hosts", C::Count),
             |v| set(v, "/permissions/0/hosts", json!([])),
+        ),
+        mutate(
+            "an openUrl permission without hosts or user origins",
+            true,
+            Invalid("permissions[4].hosts", C::Count),
+            |v| {
+                at(v, "/permissions").as_array_mut().unwrap().push(json!({
+                    "kind": "openUrl", "hosts": [],
+                    "justification": "Opens pages in the browser."
+                }));
+            },
+        ),
+        mutate(
+            "an openUrl user origin that is no origin setting of the network permission",
+            false,
+            Invalid("permissions[4].userOrigins[0]", C::UnknownReference),
+            |v| {
+                at(v, "/permissions").as_array_mut().unwrap().push(json!({
+                    "kind": "openUrl", "hosts": [], "userOrigins": ["serverUrl"],
+                    "justification": "Opens pages of your server in the browser."
+                }));
+            },
         ),
         mutate(
             "a user origin naming no setting",

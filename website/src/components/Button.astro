@@ -1,0 +1,30 @@
+---
+/**
+ * Button: a link styled as a button, or a real <button> when no href is
+ * given. Variants: primary (one per view), secondary, ghost.
+ */
+import type { HTMLAttributes } from 'astro/types';
+
+type Props = {
+  href?: string;
+  variant?: 'primary' | 'secondary' | 'ghost';
+  size?: 'md' | 'sm';
+  external?: boolean;
+  class?: string;
+} & Omit<HTMLAttributes<'a'> & HTMLAttributes<'button'>, 'class' | 'href'>;
+
+const { href, variant = 'primary', size = 'md', external = false, class: extra, ...rest } = Astro.props;
+const classes = ['btn', `btn-${variant}`, size === 'sm' && 'btn-sm', extra];
+---
+
+{
+  href ? (
+    <a href={href} class:list={classes} rel={external ? 'noopener' : undefined} {...rest}>
+      <slot />
+    </a>
+  ) : (
+    <button type="button" class:list={classes} {...rest}>
+      <slot />
+    </button>
+  )
+}

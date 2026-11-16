@@ -1,0 +1,55 @@
+---
+/**
+ * DocsSidebar: the documentation pages by group. A disclosure on small
+ * screens, always open from the `lg` breakpoint (components.css).
+ */
+import { ChevronDown } from '@lucide/astro';
+import { t, type Lang } from '@/i18n';
+import { grouped, slugOf, type Doc } from '@/lib/docs';
+import { page } from '@/lib/paths';
+
+type Props = { lang: Lang; docs: Doc[]; current?: string };
+const { lang, docs, current } = Astro.props;
+const dict = t(lang);
+---
+
+<nav class="docs-sidebar" aria-label={dict.docs.sidebarLabel}>
+  <details data-docs-menu>
+    <summary>
+      {dict.docs.menu}
+      <ChevronDown class="h-4 w-4" aria-hidden="true" />
+    </summary>
+    <div>
+      {
+        grouped(docs).map(({ group, docs: pages }) => (
+          <div class="side-group">
+            <p class="side-heading">{dict.docs.groups[group]}</p>
+            <ul class="side-list">
+              {pages.map((doc) => (
+                <li>
+                  <a
+                    class="side-link"
+                    href={page(lang, `docs/${slugOf(doc)}`)}
+                    aria-current={slugOf(doc) === current ? 'page' : undefined}
+                  >
+                    {doc.data.title}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))
+      }
+    </div>
+  </details>
+</nav>
+<script>
+  // The menu is a disclosure on small screens and always open on large ones.
+  const menu = document.querySelector<HTMLDetailsElement>('[data-docs-menu]');
+  const wide = matchMedia('(min-width: 60rem)');
+  const sync = () => {
+    if (menu) menu.open = wide.matches;
+  };
+  wide.addEventListener('change', sync);
+  sync();
+</script>

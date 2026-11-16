@@ -139,13 +139,16 @@ Remaining:
   driver
 - Hardware testing on Windows and Linux
 
-## Proposed (not planned)
+## Experimental (off by default)
 
-- Plugin marketplace: a design proposal (pull request
-  [#191](https://github.com/knittingcode/deckpilot/pull/191)) and
-  experimental feasibility spikes for its runtime and trust model (pull
-  request [#202](https://github.com/knittingcode/deckpilot/pull/202)).
-  Nothing of it is part of DeckPilot, and it is not scheduled.
+- Plugin marketplace: sandboxed WebAssembly plugins behind a permission
+  broker, a signed registry and the move of some built-in modules to
+  plugins are being developed on `main`
+  ([docs/marketplace](marketplace/agent-integration.md)). It is compiled
+  out of release builds and switched off by default elsewhere; no
+  published release contains it, no production registry key exists and no
+  plugin package has been published. The original design proposal is pull
+  request [#191](https://github.com/knittingcode/deckpilot/pull/191).
 
 ## Out of scope
 

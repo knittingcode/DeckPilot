@@ -1,0 +1,64 @@
+---
+/**
+ * The site root. Humans are forwarded to their language: the one they chose
+ * before, else Polish for a Polish browser, else English. Without
+ * JavaScript the page forwards to English after showing both links.
+ */
+import '@/styles/global.css';
+import iconSvg from '@/assets/brand/icon.svg';
+import { LANG_NAMES, LANGS, t } from '@/i18n';
+import { absolute, page } from '@/lib/paths';
+
+const en = t('en');
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{en.root.title}</title>
+    <meta name="description" content={en.site.description} />
+    <meta name="robots" content="noindex, follow" />
+    <link rel="canonical" href={absolute(Astro.site, page('en'))} />
+    {LANGS.map((code) => <link rel="alternate" hreflang={code} href={absolute(Astro.site, page(code))} />)}
+    <link rel="alternate" hreflang="x-default" href={absolute(Astro.site, page('en'))} />
+    <link rel="icon" href={iconSvg.src} type="image/svg+xml" />
+    <meta name="color-scheme" content="light dark" />
+    <script is:inline define:vars={{ en: page('en'), pl: page('pl') }}>
+      (function () {
+        var lang = null;
+        try {
+          lang = localStorage.getItem('dp-lang');
+          var theme = localStorage.getItem('dp-theme');
+          if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+        } catch (e) {}
+        if (lang !== 'en' && lang !== 'pl') {
+          var langs = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language || 'en'];
+          lang = /^pl\b/i.test(langs[0]) ? 'pl' : 'en';
+        }
+        location.replace((lang === 'pl' ? pl : en) + location.search + location.hash);
+      })();
+    </script>
+    <noscript><meta http-equiv="refresh" content={`0; url=${page('en')}`} /></noscript>
+  </head>
+  <body>
+    <main class="container grid min-h-screen place-items-center py-16 text-center">
+      <div>
+        <img src={iconSvg.src} alt="" width="64" height="64" class="mx-auto mb-6 rounded-2xl" />
+        <h1 class="text-2xl">{en.site.name}</h1>
+        <ul class="mt-8 flex list-none justify-center gap-3 p-0">
+          {
+            LANGS.map((code) => (
+              <li>
+                <a class="btn btn-secondary" href={page(code)} hreflang={code} lang={code}>
+                  {LANG_NAMES[code]}
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+    </main>
+  </body>
+</html>

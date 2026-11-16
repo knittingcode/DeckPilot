@@ -1,0 +1,309 @@
+---
+/**
+ * Download page. Everything about the release (version, pre-release flag,
+ * date, installers, sizes, checksums, signing) is read from the published
+ * GitHub release while the site is built (src/lib/releases.ts); the page
+ * links to GitHub's release assets and hosts no file itself.
+ */
+import { ArrowRight, ArrowUpRight, Download as DownloadIcon, Laptop, Monitor, PackageOpen, Terminal } from '@lucide/astro';
+import Button from '@/components/Button.astro';
+import CodeBlock from '@/components/CodeBlock.astro';
+import EmptyState from '@/components/EmptyState.astro';
+import GitHubMark from '@/components/GitHubMark.astro';
+import Notice from '@/components/Notice.astro';
+import { LINKS, REPO_SLUG } from '@/data/site';
+import { DATE_LOCALE, fill, langPaths, t, type Lang } from '@/i18n';
+import Base from '@/layouts/Base.astro';
+import { page } from '@/lib/paths';
+import { megabytes, type Download, type Os, type Release } from '@/lib/release-model';
+import { getReleases } from '@/lib/releases';
+
+export const getStaticPaths = langPaths;
+const lang = Astro.params.lang as Lang;
+const dict = t(lang);
+const d = dict.download;
+const { primary, newerPrerelease } = await getReleases();
+
+const date = (iso: string) => new Intl.DateTimeFormat(DATE_LOCALE[lang], { dateStyle: 'long', timeZone: 'UTC' }).format(new Date(iso));
+const OS_ICONS = { macos: Laptop, windows: Monitor, linux: Terminal } as const;
+const OSES: Os[] = ['macos', 'windows', 'linux'];
+
+function archLabel(download: Download): string {
+  if (download.os === 'macos') return download.arch === 'arm64' ? d.arch.arm64 : d.arch.intel;
+  return download.arch === 'arm64' ? d.arch.arm64Generic : d.arch.x64;
+}
+
+/** What the release itself records about how this build was signed. */
+function signing(release: Release, download: Download): { text: string; warn: boolean } {
+  const record = release.signing[`${download.os}-${download.arch}`];
+  if (!record) return { text: d.signing.unknown, warn: false };
+  if (download.os === 'macos') {
+    if (record.codesign === 'developer-id') {
+      return record.notarized === true ? { text: d.signing.macSigned, warn: false } : { text: d.signing.macSignedNotNotarized, warn: true };
+    }
+    return { text: d.signing.unknown, warn: false };
+  }
+  if (download.os === 'windows') {
+    if (record.codesign === 'authenticode') return { text: d.signing.winSigned, warn: false };
+    if (record.codesign === 'unsigned') return { text: d.signing.winUnsigned, warn: true };
+    return { text: d.signing.unknown, warn: false };
+  }
+  return record.codesign === 'unsigned' ? { text: d.signing.linuxUnsigned, warn: false } : { text: d.signing.unknown, warn: false };
+}
+
+const groups = primary
+  ? OSES.map((os) => ({ os, downloads: primary.downloads.filter((download) => download.os === os) })).filter((group) => group.downloads.length > 0)
+  : [];
+const sample = primary?.downloads[0]?.name ?? 'DeckPilot.dmg';
+---
+
+<Base lang={lang} title={d.metaTitle} description={d.description}>
+  <div class="container py-12 md:py-16" data-download data-release-tag={primary?.tag ?? ''} data-release-prerelease={primary ? String(primary.prerelease) : ''}>
+    <h1 class="section-title">{d.title}</h1>
+    <p class="section-lead max-w-2xl">{d.lead}</p>
+
+    {
+      primary ? (
+        <>
+          <dl class="release-bar mt-10">
+            <div>
+              <dt>{d.release.version}</dt>
+              <dd class="release-version" data-release-version>
+                {primary.tag}
+              </dd>
+            </div>
+            <div>
+              <dt>{d.release.channel}</dt>
+              <dd>
+                <span class:list={['badge', primary.prerelease ? 'badge-warning' : 'badge-success']} data-release-channel>
+                  {primary.prerelease ? dict.status.prerelease : dict.status.stable}
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt>{d.release.published}</dt>
+              <dd>
+                <time datetime={primary.publishedAt} data-release-date>
+                  {date(primary.publishedAt)}
+                </time>
+              </dd>
+            </div>
+            <div>
+              <dt>{d.release.notes}</dt>
+              <dd>
+                <a class="link-arrow" href={primary.url} rel="noopener" data-release-notes>
+                  <GitHubMark />
+                  {primary.tag}
+                  <ArrowUpRight aria-hidden="true" class="h-4 w-4" />
+                </a>
+              </dd>
+            </div>
+          </dl>
+
+          <p
+            class="notice notice-warning mt-6"
+            role="status"
+            hidden
+            data-fresh
+            data-api={`https://api.github.com/repos/${REPO_SLUG}/releases?per_page=10`}
+            data-template={d.fresh.newer}
+          >
+            <span>
+              <span data-fresh-text />{' '}
+              <a href={LINKS.releases} rel="noopener" data-fresh-link>
+                {d.fresh.link}
+              </a>
+            </span>
+          </p>
+
+          {primary.prerelease && (
+            <Notice class="mt-6" variant="warning">
+              <strong>{d.release.prereleaseTitle}.</strong> {d.release.prereleaseText}
+            </Notice>
+          )}
+          {newerPrerelease && (
+            <Notice class="mt-6">
+              {fill(d.release.newerPrerelease, { version: newerPrerelease.tag })}{' '}
+              <a href={newerPrerelease.url} rel="noopener">
+                {d.release.newerPrereleaseLink}
+              </a>
+            </Notice>
+          )}
+
+          {groups.length === 0 && <Notice class="mt-8">{d.noInstallers}</Notice>}
+
+          <div class="mt-10 grid gap-6">
+            {groups.map(({ os, downloads }) => {
+              const Icon = OS_ICONS[os];
+              return (
+                <section class="card" aria-labelledby={`os-${os}`} data-os={os}>
+                  <div class="os-card-head">
+                    <span class="icon-tile" aria-hidden="true">
+                      <Icon />
+                    </span>
+                    <h2 class="text-2xl" id={`os-${os}`}>
+                      {d.os[os]}
+                    </h2>
+                  </div>
+                  <div class="grid gap-x-10 gap-y-8 lg:grid-cols-2">
+                    {downloads.map((download) => {
+                      const sign = signing(primary, download);
+                      return (
+                        <div class="grid content-start gap-4" data-asset={download.name}>
+                          <div class="asset-head">
+                            <div>
+                              <h3 class="asset-name">
+                                {d.format[download.format]} · {archLabel(download)}
+                              </h3>
+                              <p class="asset-meta">
+                                {d.size}: {megabytes(download.size)}
+                              </p>
+                            </div>
+                            <a class="btn btn-primary" href={download.url} rel="noopener" data-asset-link>
+                              <DownloadIcon aria-hidden="true" />
+                              {d.downloadAsset}
+                              <span class="sr-only">
+                                {' '}
+                                {download.name}
+                              </span>
+                            </a>
+                          </div>
+                          <p class="asset-file">{download.name}</p>
+                          <div>
+                            <span class="hash-label">{d.sha256}</span>
+                            {download.sha256 ? (
+                              <code class="hash" data-asset-sha>
+                                {download.sha256}
+                              </code>
+                            ) : (
+                              <p class="asset-meta">{d.noSha}</p>
+                            )}
+                          </div>
+                          <p class="asset-meta" data-asset-signing>
+                            <span class:list={['badge', sign.warn && 'badge-warning', 'mr-2']}>{d.signing.title}</span>
+                            {sign.text}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p class="os-note">{d.notes[os]}</p>
+                </section>
+              );
+            })}
+          </div>
+
+          <p class="mt-6 flex flex-wrap gap-x-8 gap-y-2 text-sm">
+            <a class="link-arrow" href={primary.url} rel="noopener">
+              {d.release.allAssets}
+              <ArrowUpRight aria-hidden="true" class="h-4 w-4" />
+            </a>
+            {primary.checksumsUrl && (
+              <a class="link-arrow" href={primary.checksumsUrl} rel="noopener" data-checksums>
+                {d.release.checksums}
+                <ArrowUpRight aria-hidden="true" class="h-4 w-4" />
+              </a>
+            )}
+          </p>
+          <p class="mt-3 text-sm text-subtle">{fill(d.release.generated, { date: date(new Date().toISOString()) })}</p>
+        </>
+      ) : (
+        <EmptyState class="mt-10" title={d.empty.title} headingLevel={2} id="no-release">
+          <PackageOpen slot="icon" />
+          {d.empty.text}
+          <Fragment slot="actions">
+            <Button href={LINKS.releases} external>
+              <GitHubMark />
+              {d.empty.releases}
+            </Button>
+            <Button href={LINKS.docsDevelopment} variant="secondary" external>
+              {d.empty.source}
+            </Button>
+          </Fragment>
+        </EmptyState>
+      )
+    }
+
+    <section class="mt-16 max-w-3xl" aria-labelledby="requirements-title">
+      <h2 class="text-2xl" id="requirements-title">{d.requirements.title}</h2>
+      <div class="prose mt-4">
+        <ul>
+          {d.requirements.items.map((item) => <li>{item}</li>)}
+        </ul>
+      </div>
+      <p class="mt-6">
+        <a class="link-arrow" href={page(lang, 'docs/installation')}>
+          {d.requirements.install}
+          <ArrowRight aria-hidden="true" />
+        </a>
+      </p>
+    </section>
+
+    {
+      primary && (
+        <>
+          <section class="mt-16 max-w-3xl" aria-labelledby="verify-title">
+            <h2 class="text-2xl" id="verify-title">
+              {d.verify.title}
+            </h2>
+            <p class="mt-4 text-muted">{d.verify.lead}</p>
+            <CodeBlock code={`shasum -a 256 ${sample}`} lang="sh" title={d.verify.macLinux} locale={lang} />
+            <CodeBlock code={`Get-FileHash .\\${primary.downloads.find((x) => x.os === 'windows')?.name ?? sample} -Algorithm SHA256`} lang="powershell" title={d.verify.windows} locale={lang} />
+            {primary.checksumsUrl && <p class="mt-4 text-muted">{d.verify.sums}</p>}
+            <p class="mt-4 text-muted">{d.verify.attest}</p>
+            <CodeBlock code={`gh attestation verify ${sample} --repo ${REPO_SLUG}`} lang="sh" title="GitHub CLI" locale={lang} />
+          </section>
+
+          <section class="mt-16 max-w-3xl" aria-labelledby="files-title">
+            <h2 class="text-2xl" id="files-title">
+              {d.updater.title}
+            </h2>
+            <p class="mt-4 text-muted">{d.updater.lead}</p>
+            <dl class="file-list mt-6">
+              {d.updater.items.map((item) => (
+                <div>
+                  <dt>{item.name}</dt>
+                  <dd>{item.text}</dd>
+                </div>
+              ))}
+            </dl>
+            <Notice class="mt-6">{d.updater.note}</Notice>
+          </section>
+        </>
+      )
+    }
+  </div>
+
+  <script>
+    // The page is rebuilt daily and after a release, so it can be up to a
+    // day behind. Ask GitHub once whether a newer release has been published
+    // since, and say so; when the request fails nothing changes.
+    const root = document.querySelector<HTMLElement>('[data-download]');
+    const notice = document.querySelector<HTMLElement>('[data-fresh]');
+    const shown = root?.dataset.releaseTag;
+    if (root && notice && shown) {
+      const stable = root.dataset.releasePrerelease === 'false';
+      fetch(notice.dataset.api ?? '', { headers: { Accept: 'application/vnd.github+json' } })
+        .then((response) => (response.ok ? response.json() : []))
+        .then((list: unknown) => {
+          if (!Array.isArray(list)) return;
+          type Item = { tag_name: string; draft: boolean; prerelease: boolean; published_at: string | null; html_url: string };
+          const published = (list as Item[])
+            .filter((item) => item.draft === false && typeof item.published_at === 'string' && (!stable || !item.prerelease))
+            .sort((a, b) => Date.parse(b.published_at ?? '') - Date.parse(a.published_at ?? ''));
+          const current = (list as Item[]).find((item) => item.tag_name === shown);
+          const newest = published[0];
+          if (!newest || newest.tag_name === shown) return;
+          if (current?.published_at && Date.parse(newest.published_at ?? '') <= Date.parse(current.published_at)) return;
+          if (!/^https:\/\/github\.com\/knittingcode\/deckpilot\/releases\/tag\/[\w.+-]+$/i.test(newest.html_url)) return;
+          const text = notice.querySelector<HTMLElement>('[data-fresh-text]');
+          const link = notice.querySelector<HTMLAnchorElement>('[data-fresh-link]');
+          if (!text || !link) return;
+          text.textContent = (notice.dataset.template ?? '').replace('{version}', newest.tag_name);
+          link.href = newest.html_url;
+          notice.hidden = false;
+        })
+        .catch(() => {});
+    }
+  </script>
+</Base>

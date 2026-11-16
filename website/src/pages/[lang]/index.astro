@@ -1,0 +1,468 @@
+---
+/**
+ * Homepage. Sections, in order: hero, product overview, supported
+ * platforms, device support, profiles and layouts, actions and workflows,
+ * Plugin Marketplace, background agent, security and privacy, open-source
+ * development, FAQ.
+ */
+import {
+  ArrowRight,
+  ArrowUpRight,
+  Bell,
+  BookOpen,
+  Boxes,
+  Check,
+  Code,
+  Container,
+  Cpu,
+  Crosshair,
+  DatabaseBackup,
+  FileKey,
+  FolderGit2,
+  FolderTree,
+  GitBranch,
+  GitPullRequest,
+  Globe,
+  HandHelping,
+  KeyRound,
+  LayoutGrid,
+  Lock,
+  Map as MapIcon,
+  MessagesSquare,
+  MonitorCog,
+  MousePointerClick,
+  Palette,
+  PanelsTopLeft,
+  Plus,
+  Power,
+  RefreshCw,
+  Scale,
+  ShieldCheck,
+  ShieldEllipsis,
+  SquareTerminal,
+  Ticket,
+  Timer,
+  ToggleRight,
+  Undo2,
+  Workflow,
+  Zap,
+} from '@lucide/astro';
+import Button from '@/components/Button.astro';
+import Card from '@/components/Card.astro';
+import GitHubMark from '@/components/GitHubMark.astro';
+import Notice from '@/components/Notice.astro';
+import Section from '@/components/Section.astro';
+import Deck from '@/components/home/Deck.astro';
+import { LINKS, marketplace } from '@/data/site';
+import { fill, langPaths, t, type Lang } from '@/i18n';
+import Base from '@/layouts/Base.astro';
+import { page } from '@/lib/paths';
+import { getReleases } from '@/lib/releases';
+
+export const getStaticPaths = langPaths;
+
+const lang = Astro.params.lang as Lang;
+const dict = t(lang);
+const h = dict.home;
+const { primary } = await getReleases();
+const statusBadge = primary
+  ? fill(primary.prerelease ? dict.status.prereleaseBadge : dict.status.stableBadge, { version: primary.tag })
+  : dict.status.noRelease;
+
+const overviewIcons = [Crosshair, FolderGit2, Workflow, Lock];
+const partIcons = [Cpu, PanelsTopLeft];
+const layoutIcons = [Boxes, FolderGit2, FolderTree, Palette, MousePointerClick, Undo2];
+const moduleIcons = [MessagesSquare, RefreshCw, SquareTerminal, Code, GitBranch, Container, Globe, GitPullRequest, GitPullRequest, Ticket, Bell, Timer];
+const agentIcons = [MonitorCog, Power, ToggleRight, ShieldEllipsis];
+const securityIcons = [Lock, KeyRound, ShieldCheck, FileKey, KeyRound, DatabaseBackup];
+const openSourceCards = [
+  { icon: Code, href: LINKS.app },
+  { icon: HandHelping, href: LINKS.contributing },
+  { icon: MapIcon, href: LINKS.roadmap },
+  { icon: Scale, href: LINKS.license },
+];
+---
+
+<Base lang={lang} title={h.title} description={h.description}>
+  <!-- Hero -->
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="container grid items-center gap-14 py-16 md:py-24 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16 lg:py-28">
+      <div>
+        <p class="mb-6">
+          <a class:list={['badge', primary?.prerelease === false ? 'badge-accent' : 'badge-warning', 'no-underline']} href={page(lang, 'download')} data-release-badge>
+            <span class="badge-dot" aria-hidden="true"></span>
+            {statusBadge}
+          </a>
+        </p>
+        <h1 class="hero-title" id="hero-title">{h.hero.headline}</h1>
+        <p class="hero-lead">{h.hero.lead}</p>
+        <div class="mt-9 flex flex-wrap gap-3">
+          <Button href={page(lang, 'download')}>{h.hero.download}<ArrowRight aria-hidden="true" /></Button>
+          <Button href={marketplace(lang)} variant="secondary" external data-marketplace-link>
+            {h.hero.plugins}
+            <ArrowUpRight aria-hidden="true" />
+          </Button>
+        </div>
+        <p class="mt-6">
+          <a class="link-arrow text-sm text-muted" href={LINKS.app} rel="noopener">
+            <GitHubMark />
+            {h.hero.github}
+          </a>
+        </p>
+        <p class="hero-note">{h.hero.note}</p>
+      </div>
+      <div class="mx-auto w-full max-w-[34rem] lg:max-w-none">
+        <Deck />
+      </div>
+    </div>
+  </section>
+
+  <!-- Product overview -->
+  <section id="overview" class="section" aria-labelledby="overview-title">
+    <div class="container grid gap-12 lg:grid-cols-[1.1fr_0.9fr] lg:gap-16">
+      <div>
+        <span class="eyebrow">{h.overview.eyebrow}</span>
+        <h2 class="section-title" id="overview-title">{h.overview.title}</h2>
+        <p class="section-lead">{h.overview.lead}</p>
+        <ul class="mt-10 grid list-none gap-8 p-0 sm:grid-cols-2">
+          {
+            h.overview.points.map((point, i) => {
+              const Icon = overviewIcons[i] ?? Zap;
+              return (
+                <li class="feature">
+                  <span class="icon-tile" aria-hidden="true">
+                    <Icon />
+                  </span>
+                  <div>
+                    <h3 class="feature-title">{point.title}</h3>
+                    <p class="feature-text">{point.text}</p>
+                  </div>
+                </li>
+              );
+            })
+          }
+        </ul>
+      </div>
+      <div class="self-center">
+        <p class="eyebrow">{h.overview.partsLabel}</p>
+        <div class="parts">
+          {
+            h.overview.parts.map((part, i) => {
+              const Icon = partIcons[i] ?? Cpu;
+              return (
+                <>
+                  {i > 0 && <p class="parts-link" aria-hidden="true">local IPC</p>}
+                  <div class="card">
+                    <div class="feature">
+                      <span class="icon-tile" aria-hidden="true">
+                        <Icon />
+                      </span>
+                      <div>
+                        <h3 class="feature-title">{part.title}</h3>
+                        <p class="feature-text">{part.text}</p>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              );
+            })
+          }
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Supported platforms -->
+  <Section id="platforms" eyebrow={h.platforms.eyebrow} title={h.platforms.title} lead={h.platforms.lead} alt>
+    <ul class="grid list-none gap-5 p-0 md:grid-cols-3">
+      {
+        h.platforms.items.map((item) => (
+          <li class="card">
+            <div class="platform-head">
+              <h3 class="platform-name">{item.name}</h3>
+              <span class:list={['badge', item.verified ? 'badge-success' : 'badge-warning']}>{item.verification}</span>
+            </div>
+            <dl class="spec-list">
+              <div>
+                <dt>{h.platforms.labels.arch}</dt>
+                <dd>{item.arch}</dd>
+              </div>
+              <div>
+                <dt>{h.platforms.labels.formats}</dt>
+                <dd>{item.formats}</dd>
+              </div>
+              <div>
+                <dt>{h.platforms.labels.signing}</dt>
+                <dd>{item.signing}</dd>
+              </div>
+            </dl>
+          </li>
+        ))
+      }
+    </ul>
+    <p class="mt-8">
+      <a class="link-arrow" href={page(lang, 'download')}>
+        {h.platforms.cta}
+        <ArrowRight aria-hidden="true" />
+      </a>
+    </p>
+  </Section>
+
+  <!-- Stream Deck device support -->
+  <Section id="devices" eyebrow={h.devices.eyebrow} title={h.devices.title} lead={h.devices.lead}>
+    <!-- Scrolls sideways on small screens, so it has to be reachable by keyboard. -->
+    <div class="table-wrap" tabindex="0" role="region" aria-labelledby="devices-caption">
+      <table class="table">
+        <caption id="devices-caption">{h.devices.caption}</caption>
+        <thead>
+          <tr>
+            <th scope="col">{h.devices.columns.model}</th>
+            <th scope="col">{h.devices.columns.controls}</th>
+            <th scope="col">{h.devices.columns.status}</th>
+            <th scope="col">{h.devices.columns.detail}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {
+            h.devices.rows.map((row) => (
+              <tr>
+                <th scope="row">{row.model}</th>
+                <td>{row.controls}</td>
+                <td class="cell-status">
+                  <span class:list={['badge', row.supported ? 'badge-success' : 'badge-warning']}>{row.status}</span>
+                </td>
+                <td>{row.detail}</td>
+              </tr>
+            ))
+          }
+        </tbody>
+      </table>
+    </div>
+    <Notice class="mt-6">{h.devices.note}</Notice>
+    <p class="mt-8">
+      <a class="link-arrow" href={page(lang, 'docs/devices')}>
+        {h.devices.more}
+        <ArrowRight aria-hidden="true" />
+      </a>
+    </p>
+  </Section>
+
+  <!-- Profiles and layouts -->
+  <Section id="layouts" eyebrow={h.layouts.eyebrow} title={h.layouts.title} lead={h.layouts.lead} alt>
+    <ul class="grid list-none gap-5 p-0 sm:grid-cols-2 lg:grid-cols-3">
+      {
+        h.layouts.items.map((item, i) => {
+          const Icon = layoutIcons[i] ?? LayoutGrid;
+          return (
+            <Card as="li" title={item.title}>
+              <span slot="icon" class="icon-tile" aria-hidden="true">
+                <Icon />
+              </span>
+              <p class="card-text text-sm">{item.text}</p>
+            </Card>
+          );
+        })
+      }
+    </ul>
+    <p class="mt-8">
+      <a class="link-arrow" href={page(lang, 'docs/layouts')}>
+        {h.layouts.more}
+        <ArrowRight aria-hidden="true" />
+      </a>
+    </p>
+  </Section>
+
+  <!-- Actions and workflows -->
+  <Section id="actions" eyebrow={h.actions.eyebrow} title={h.actions.title} lead={h.actions.lead}>
+    <div class="grid gap-12 lg:grid-cols-[1.25fr_0.75fr] lg:gap-16">
+      <div>
+        <h3 class="mb-5 text-xl">{h.actions.modulesTitle}</h3>
+        <ul class="module-grid">
+          {
+            h.actions.modules.map((module, i) => {
+              const Icon = moduleIcons[i] ?? Zap;
+              return (
+                <li class="module">
+                  <Icon aria-hidden="true" />
+                  <div>
+                    <p class="module-name" lang="en">{module.name}</p>
+                    <p class="module-text">{module.text}</p>
+                  </div>
+                </li>
+              );
+            })
+          }
+        </ul>
+      </div>
+      <div>
+        <h3 class="mb-5 text-xl">{h.actions.workflowsTitle}</h3>
+        <ul class="check-list">
+          {
+            h.actions.workflows.map((point) => (
+              <li>
+                <Check aria-hidden="true" />
+                <span>{point}</span>
+              </li>
+            ))
+          }
+        </ul>
+        <p class="mt-8">
+          <a class="link-arrow" href={page(lang, 'docs/actions')}>
+            {h.actions.more}
+            <ArrowRight aria-hidden="true" />
+          </a>
+        </p>
+      </div>
+    </div>
+  </Section>
+
+  <!-- Plugin Marketplace -->
+  <section id="marketplace" class="section section-alt" aria-labelledby="marketplace-title">
+    <div class="container">
+      <div class="panel grid items-center gap-10 lg:grid-cols-[1.2fr_0.8fr] lg:gap-16">
+        <div>
+          <p class="mb-4 flex flex-wrap items-center gap-3">
+            <span class="eyebrow !mb-0">{h.marketplace.eyebrow}</span>
+            <span class="badge badge-warning">{h.marketplace.badge}</span>
+          </p>
+          <h2 class="section-title" id="marketplace-title">{h.marketplace.title}</h2>
+          <p class="section-lead">{h.marketplace.lead}</p>
+          <p class="mt-4 text-muted">{h.marketplace.status}</p>
+          <div class="mt-8 flex flex-wrap gap-3">
+            <Button href={marketplace(lang)} external data-marketplace-link>
+              {h.marketplace.explore}
+              <ArrowUpRight aria-hidden="true" />
+            </Button>
+            <Button href={marketplace(lang, 'developers')} variant="secondary" external data-marketplace-link>
+              {h.marketplace.developers}
+            </Button>
+          </div>
+        </div>
+        <ul class="check-list">
+          {
+            h.marketplace.points.map((point) => (
+              <li>
+                <Check aria-hidden="true" />
+                <span>{point}</span>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Background agent -->
+  <section id="agent" class="section" aria-labelledby="agent-title">
+    <div class="container grid gap-12 lg:grid-cols-[0.9fr_1.1fr] lg:gap-16">
+      <div>
+        <span class="eyebrow">{h.agent.eyebrow}</span>
+        <h2 class="section-title" id="agent-title">{h.agent.title}</h2>
+        <p class="section-lead">{h.agent.lead}</p>
+        <p class="mt-8">
+          <a class="link-arrow" href={page(lang, 'docs/background-agent')}>
+            {h.agent.more}
+            <ArrowRight aria-hidden="true" />
+          </a>
+        </p>
+      </div>
+      <ul class="grid list-none gap-8 p-0 sm:grid-cols-2">
+        {
+          h.agent.points.map((point, i) => {
+            const Icon = agentIcons[i] ?? Cpu;
+            return (
+              <li class="feature">
+                <span class="icon-tile" aria-hidden="true">
+                  <Icon />
+                </span>
+                <div>
+                  <h3 class="feature-title">{point.title}</h3>
+                  <p class="feature-text">{point.text}</p>
+                </div>
+              </li>
+            );
+          })
+        }
+      </ul>
+    </div>
+  </section>
+
+  <!-- Security and privacy -->
+  <Section id="security" eyebrow={h.security.eyebrow} title={h.security.title} lead={h.security.lead} alt>
+    <ul class="grid list-none gap-5 p-0 sm:grid-cols-2 lg:grid-cols-3">
+      {
+        h.security.points.map((point, i) => {
+          const Icon = securityIcons[i] ?? ShieldCheck;
+          return (
+            <Card as="li" title={point.title}>
+              <span slot="icon" class="icon-tile" aria-hidden="true">
+                <Icon />
+              </span>
+              <p class="card-text text-sm">{point.text}</p>
+            </Card>
+          );
+        })
+      }
+    </ul>
+    <Notice class="mt-6" variant="warning">{h.security.caveat}</Notice>
+    <div class="mt-8 flex flex-wrap gap-x-8 gap-y-3">
+      <a class="link-arrow" href={LINKS.docsSecurity} rel="noopener">
+        {h.security.more}
+        <ArrowUpRight aria-hidden="true" />
+      </a>
+      <a class="link-arrow" href={LINKS.security} rel="noopener">
+        {h.security.report}
+        <ArrowUpRight aria-hidden="true" />
+      </a>
+    </div>
+  </Section>
+
+  <!-- Open-source development -->
+  <Section id="open-source" eyebrow={h.openSource.eyebrow} title={h.openSource.title} lead={h.openSource.lead}>
+    <ul class="grid list-none gap-5 p-0 sm:grid-cols-2 lg:grid-cols-4">
+      {
+        h.openSource.cards.map((card, i) => {
+          const meta = openSourceCards[i]!;
+          return (
+            <Card as="li" title={card.title} href={meta.href} external>
+              <span slot="icon" class="icon-tile" aria-hidden="true">
+                <meta.icon />
+              </span>
+              <p class="card-text flex-1 text-sm">{card.text}</p>
+              <p class="link-arrow mt-5 text-sm text-accent-text" aria-hidden="true">
+                {card.link}
+                <ArrowUpRight />
+              </p>
+            </Card>
+          );
+        })
+      }
+    </ul>
+    <p class="mt-8">
+      <a class="link-arrow" href={page(lang, 'docs')}>
+        <BookOpen aria-hidden="true" class="h-4 w-4" />
+        {dict.footer.docs}
+        <ArrowRight aria-hidden="true" />
+      </a>
+    </p>
+  </Section>
+
+  <!-- FAQ -->
+  <Section id="faq" eyebrow={h.faq.eyebrow} title={h.faq.title} alt narrow>
+    <div class="faq">
+      {
+        h.faq.items.map((item) => (
+          <details>
+            <summary>
+              {item.q}
+              <Plus aria-hidden="true" />
+            </summary>
+            <div class="faq-answer">
+              <p>{item.a}</p>
+            </div>
+          </details>
+        ))
+      }
+    </div>
+  </Section>
+</Base>

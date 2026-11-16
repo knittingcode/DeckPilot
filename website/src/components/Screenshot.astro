@@ -1,0 +1,69 @@
+---
+/**
+ * Screenshot: one frame of the gallery. With an image in
+ * src/assets/screenshots/ it renders a responsive <picture> (AVIF and WebP
+ * in several widths, the dark variant in the dark theme when there is one)
+ * with a real text alternative. Without one it renders a frame that plainly
+ * says the screenshot does not exist yet; it never draws stand-in UI.
+ */
+import { Picture } from 'astro:assets';
+import { ImageOff } from '@lucide/astro';
+import { imagesOf, type ScreenshotId } from '@/data/screenshots';
+import { t, type Lang } from '@/i18n';
+
+type Props = { id: ScreenshotId; file: string; lang: Lang; headingLevel?: 2 | 3; eager?: boolean };
+const { id, file, lang, headingLevel = 2, eager = false } = Astro.props;
+const dict = t(lang);
+const item = dict.screenshots.items[id];
+const images = imagesOf(file);
+const Heading = `h${headingLevel}` as 'h2';
+const WIDTHS = [640, 960, 1280, 1920];
+const SIZES = '(min-width: 72rem) 34rem, (min-width: 48rem) 46vw, 92vw';
+const loading = eager ? 'eager' : 'lazy';
+---
+
+<figure class="shot" data-screenshot={id} data-state={images ? 'image' : 'placeholder'}>
+  {
+    images ? (
+      <div class="shot-frame">
+        <Picture
+          src={images.light}
+          alt={item.alt}
+          widths={WIDTHS.filter((width) => width <= images.light.width)}
+          sizes={SIZES}
+          formats={['avif', 'webp']}
+          loading={loading}
+          class={images.dark ? 'only-light' : undefined}
+        />
+        {images.dark && (
+          <Picture
+            src={images.dark}
+            alt={item.alt}
+            widths={WIDTHS.filter((width) => width <= (images.dark?.width ?? 0))}
+            sizes={SIZES}
+            formats={['avif', 'webp']}
+            loading={loading}
+            class="only-dark"
+          />
+        )}
+      </div>
+    ) : (
+      <div class="shot-frame is-placeholder">
+        <p class="shot-empty">
+          <ImageOff aria-hidden="true" />
+          <span>{dict.screenshots.placeholder}</span>
+        </p>
+      </div>
+    )
+  }
+  <figcaption class="shot-caption">
+    <Heading class="shot-title">
+      {item.title}
+      {!images && <span class="badge">{dict.screenshots.placeholderBadge}</span>}
+    </Heading>
+    <p class="shot-text">
+      {!images && <span class="sr-only">{dict.screenshots.willShow}: </span>}
+      {item.text}
+    </p>
+  </figcaption>
+</figure>
