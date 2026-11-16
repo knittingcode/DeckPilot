@@ -1,0 +1,32 @@
+---
+/** Section: vertical rhythm, an optional heading block, and the container. */
+type Props = {
+  id?: string;
+  eyebrow?: string;
+  title?: string;
+  lead?: string;
+  alt?: boolean;
+  centered?: boolean;
+  narrow?: boolean;
+  class?: string;
+};
+const { id, eyebrow, title, lead, alt = false, centered = false, narrow = false, class: extra } = Astro.props;
+const headingId = id && title ? `${id}-title` : undefined;
+---
+
+<section id={id} class:list={['section', alt && 'section-alt', extra]} aria-labelledby={headingId}>
+  <div class:list={['container', narrow && 'container-narrow']}>
+    {
+      title && (
+        <div class:list={['section-head', centered && 'is-centered']}>
+          {eyebrow && <span class="eyebrow">{eyebrow}</span>}
+          <h2 class="section-title" id={headingId}>
+            {title}
+          </h2>
+          {lead && <p class="section-lead">{lead}</p>}
+        </div>
+      )
+    }
+    <slot />
+  </div>
+</section>

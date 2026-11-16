@@ -230,4 +230,44 @@ describe("the install consent for an origin setting", () => {
       "Allow Forge to send data to https://ghe.example.com? Requests (GET, POST) go to exactly this server, nowhere else.",
     )
   })
+
+  it("says in the consent that pages of the server may be opened, by server, not by path", () => {
+    expect(
+      consentText(
+        "Forge",
+        origin({
+          origin: "https://code.example.com/gitlab/api/v4",
+          credentials: [],
+          opensPages: true,
+        }),
+      ),
+    ).toBe(
+      "Allow Forge to send data to https://code.example.com/gitlab/api/v4? Requests (GET, POST) go to exactly this server and path, nowhere else. It may also open pages of https://code.example.com in your browser, in actions you start.",
+    )
+  })
+
+  it("keys the permission to open pages of an entered server as the agent keys it", () => {
+    const grants = grantsOf([
+      {
+        kind: "openUrl",
+        hosts: ["github.com"],
+        userOrigins: ["apiUrl"],
+        justification: "Opens pull requests.",
+      },
+    ])
+    expect(grants.map((g) => g.key)).toEqual(["openUrl:github.com", "openUrl:user-origin:apiUrl"])
+    expect(grants[1]?.tier).toBe("medium")
+    expect(grants[1]?.title).toBe(
+      "Open pages of the server you enter in its setting “apiUrl” in your browser",
+    )
+    expect(grants[1]?.detail).toMatch(/None until you enter a server and allow exactly it/)
+    const info = grantOfInfo({
+      key: "openUrl:user-origin:apiUrl",
+      kind: "openUrl",
+      tier: "medium",
+      status: "granted",
+      scope: { type: "openUrl" },
+    })
+    expect(info.title).toBe(grants[1]?.title)
+  })
 })

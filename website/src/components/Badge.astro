@@ -1,0 +1,11 @@
+---
+/** Badge: a short, non-interactive label. */
+type Props = {
+  variant?: 'neutral' | 'accent' | 'success' | 'warning' | 'danger';
+  mono?: boolean;
+  class?: string;
+};
+const { variant = 'neutral', mono = false, class: extra } = Astro.props;
+---
+
+<span class:list={['badge', variant !== 'neutral' && `badge-${variant}`, mono && 'badge-mono', extra]}><slot /></span>

@@ -9,3 +9,5 @@ apps/desktop/src-tauri/icons/
 apps/agent/tests/fixtures/
 # Expected outputs of tools/distribution/test.sh, compared byte for byte.
 tools/distribution/tests/expected/
+# The product website has its own toolchain and checks (website/README.md).
+website/

@@ -1,0 +1,26 @@
+---
+/**
+ * EmptyState: shown where content would be when there is none (an empty
+ * registry, a search without results). Actions go in the `actions` slot.
+ */
+import { PackageOpen } from '@lucide/astro';
+
+type Props = { title: string; headingLevel?: 2 | 3; class?: string; id?: string };
+const { title, headingLevel = 3, class: extra, id } = Astro.props;
+const Heading = `h${headingLevel}` as 'h3';
+---
+
+<div class:list={['state', extra]} id={id}>
+  <div class="state-icon" aria-hidden="true">
+    <slot name="icon"><PackageOpen /></slot>
+  </div>
+  <Heading class="state-title">{title}</Heading>
+  <p class="state-text"><slot /></p>
+  {
+    Astro.slots.has('actions') && (
+      <div class="state-actions">
+        <slot name="actions" />
+      </div>
+    )
+  }
+</div>

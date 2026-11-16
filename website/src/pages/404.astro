@@ -1,0 +1,30 @@
+---
+/**
+ * 404.html, served by GitHub Pages for every missing path of the site (with
+ * status 404). It is the English page; a visitor whose missing address is under /pl/, or who chose Polish
+ * before, is forwarded to the Polish one (/pl/404/) so a page never mixes
+ * languages.
+ */
+import NotFound from '@/components/NotFound.astro';
+import { t } from '@/i18n';
+import Base from '@/layouts/Base.astro';
+import { BASE, page } from '@/lib/paths';
+
+const dict = t('en');
+---
+
+<Base lang="en" title={dict.notFound.title} description={dict.notFound.description} noindex>
+  <script slot="head" is:inline define:vars={{ base: BASE, target: page('pl', '404') }}>
+    (function () {
+      var path = location.pathname;
+      var polish = path.indexOf(base + '/pl/') === 0 || path === base + '/pl';
+      if (!polish && path.indexOf(base + '/en/') !== 0) {
+        try {
+          polish = localStorage.getItem('dp-lang') === 'pl';
+        } catch (e) {}
+      }
+      if (polish && path !== target) location.replace(target);
+    })();
+  </script>
+  <NotFound lang="en" />
+</Base>
