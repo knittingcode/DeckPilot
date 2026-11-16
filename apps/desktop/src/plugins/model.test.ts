@@ -192,9 +192,12 @@ describe("permissions", () => {
   })
 
   it("says that pages open only in actions the user starts", () => {
-    const [grant] = grantsOf([
+    const grants = grantsOf([
       { kind: "openUrl", hosts: ["github.com"], justification: "Opens pull requests." },
     ])
+    const [grant] = grants
+    if (grant === undefined) throw new Error("no grant")
+    expect(grants).toHaveLength(1)
     expect(grant).toMatchObject({
       key: "openUrl:github.com",
       tier: "medium",
