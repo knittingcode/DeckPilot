@@ -485,6 +485,9 @@ pub fn approved_with(
                 None => skipped.push(key.to_string()),
             },
             (PermissionKind::Notifications, _) => out.push(ApprovedPermission::Notifications {}),
+            // Passed with the consented origin itself (`user_origins`).
+            (PermissionKind::OpenUrl, GrantScope::OpenUrl)
+                if deckpilot_plugin_store::open_url_user_origin_setting(key).is_some() => {}
             (PermissionKind::OpenUrl, GrantScope::OpenUrl) => match origin_of(&key.key) {
                 Some(origin) => out.push(ApprovedPermission::OpenUrl { origin }),
                 None => skipped.push(key.to_string()),

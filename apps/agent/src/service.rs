@@ -33,6 +33,7 @@ use crate::devices::{CLOSE_TIMEOUT, DeviceIo, DeviceSignal};
 use crate::instance::{InstanceLock, LockError};
 use crate::render;
 
+mod deck;
 mod executions;
 mod gestures;
 mod security;
@@ -340,6 +341,8 @@ pub struct Agent {
     /// Last open error per device, to avoid repeating the same warning.
     open_failures: BTreeMap<DeviceId, String>,
     persisted_project: Option<ProjectId>,
+    /// The pages devices show per profile, as last saved (see `deck.rs`).
+    saved_pages: Option<String>,
     last_input_at: Option<u64>,
     /// Report of the last workflow, for the summary window.
     last_workflow: Option<deckpilot_core::WorkflowReport>,
@@ -472,6 +475,7 @@ impl Agent {
             next_session: 0,
             open_failures: BTreeMap::new(),
             persisted_project,
+            saved_pages: None,
             last_input_at: None,
             last_workflow: None,
             last_unlock_prompt: None,
@@ -865,11 +869,13 @@ impl Agent {
                 Ok(self.active_project_response())
             }
             Request::RunAction { action } => {
-                let result = self
+                let mut result = self
                     .runtime
                     .run_action(action)
                     .map_err(|e| engine_error(&e))?;
-                self.report_action(action, &result);
+                let name = self.action_name(action);
+                self.apply_deck_request(&mut result);
+                self.report_action_as(action, name, &result);
                 self.after_change();
                 Ok(Response::ActionResult { result })
             }
@@ -1007,6 +1013,8 @@ impl Agent {
                 session.set_brightness(brightness);
             }
         }
+        // Before the profile is loaded: devices go to the page they showed.
+        self.restore_pages();
         self.reload_configuration()?;
         self.recover_work_session();
         Ok(())
@@ -1253,6 +1261,7 @@ impl Agent {
                 Err(error) => warn!(%error, "cannot persist the active project"),
             }
         }
+        self.persist_pages();
         // Something happened: live states may refresh once their
         // interval allows.
         self.states.invalidate();
@@ -1386,12 +1395,22 @@ impl Agent {
         self.after_change();
     }
 
-    fn report_action(&self, action: ActionInstanceId, result: &ActionResult) {
-        let name = self
-            .runtime
+    /// The name of `action` in the active profile.
+    fn action_name(&self, action: ActionInstanceId) -> String {
+        self.runtime
             .profile()
             .and_then(|p| p.action(action))
-            .map_or_else(|| action.to_string(), |a| a.name.clone());
+            .map_or_else(|| action.to_string(), |a| a.name.clone())
+    }
+
+    fn report_action(&self, action: ActionInstanceId, result: &ActionResult) {
+        self.report_action_as(action, self.action_name(action), result);
+    }
+
+    /// [`Agent::report_action`] for an action whose `name` was read before
+    /// it ran: one that switched the profile is no longer in the active
+    /// one.
+    fn report_action_as(&self, action: ActionInstanceId, name: String, result: &ActionResult) {
         // The result message may contain paths or other machine details, so
         // only the status is logged.
         info!(action = %name, status = ?result.status, "action executed");

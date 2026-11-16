@@ -492,6 +492,52 @@ fn wrap_around_default() -> bool {
     true
 }
 
+/// Which profile a [`DeckRequest::SwitchProfile`] activates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileTarget {
+    Profile(crate::ProfileId),
+    /// The profile after the active one, in the order profiles are listed.
+    Next,
+    /// The profile before the active one.
+    Previous,
+}
+
+/// Something an action asks the deck that ran it, or the agent, to do.
+///
+/// Like a [`ContextEffect`], a request is only asked for: the device
+/// runtime moves the pages of the device whose key ran the action, and the
+/// agent switches profiles, after the registry checked that the module
+/// holds [`Capability::DeckControl`](crate::Capability::DeckControl).
+///
+/// A request never leaves the process. It is not serialized with the
+/// result (so it is not part of IPC answers, events or the execution
+/// history), and a plugin, whose results arrive as data, cannot make one.
+/// A run that nothing can apply it for (a workflow node) fails instead of
+/// reporting a success that did nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeckRequest {
+    /// Shows the next top-level page of the layout on the device.
+    NextPage { wrap_around: bool },
+    /// Shows the previous top-level page of the layout on the device.
+    PreviousPage { wrap_around: bool },
+    /// Activates another profile, for every device.
+    SwitchProfile {
+        target: ProfileTarget,
+        wrap_around: bool,
+    },
+}
+
+impl DeckRequest {
+    /// Whether the request acts on the device whose control ran the
+    /// action, and so cannot be applied without one.
+    pub fn needs_device(self) -> bool {
+        match self {
+            Self::NextPage { .. } | Self::PreviousPage { .. } => true,
+            Self::SwitchProfile { .. } => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ActionStatus {
@@ -518,6 +564,11 @@ pub struct ActionResult {
     /// with the message and available to workflow conditions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
+    /// What the action asks the deck or the agent to do (see
+    /// [`DeckRequest`]). Never serialized; whoever ran the action applies
+    /// the request and takes it out. Boxed to keep results small.
+    #[serde(skip)]
+    pub request: Option<Box<DeckRequest>>,
 }
 
 impl ActionResult {
@@ -528,6 +579,7 @@ impl ActionResult {
             effects: Vec::new(),
             data: BTreeMap::new(),
             code: None,
+            request: None,
         }
     }
 
@@ -538,6 +590,7 @@ impl ActionResult {
             effects: Vec::new(),
             data: BTreeMap::new(),
             code: None,
+            request: None,
         }
     }
 
@@ -548,6 +601,7 @@ impl ActionResult {
             effects: Vec::new(),
             data: BTreeMap::new(),
             code: None,
+            request: None,
         }
     }
 
@@ -569,6 +623,17 @@ impl ActionResult {
     pub fn with_effect(mut self, effect: ContextEffect) -> Self {
         self.effects.push(effect);
         self
+    }
+
+    #[must_use]
+    pub fn with_request(mut self, request: DeckRequest) -> Self {
+        self.request = Some(Box::new(request));
+        self
+    }
+
+    /// The request of the result, if it has one.
+    pub fn deck_request(&self) -> Option<DeckRequest> {
+        self.request.as_deref().copied()
     }
 
     pub fn is_success(&self) -> bool {

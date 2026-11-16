@@ -80,7 +80,7 @@ export function Inspector(props: InspectorProps) {
           <CardTitle className="text-sm">Control</CardTitle>
           <CardDescription>
             Select a key, dial or touch zone to configure it. Shift-click selects a range, arrow
-            keys move between controls and Shift+Enter opens a folder.
+            keys move between controls, and a double-click or Shift+Enter opens a folder.
           </CardDescription>
         </CardHeader>
       </Card>
