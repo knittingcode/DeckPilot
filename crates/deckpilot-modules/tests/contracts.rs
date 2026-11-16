@@ -1284,7 +1284,8 @@ mod first_party {
 
     use super::*;
 
-    /// The `github` aliases the cut-over (P9) adds to `ACTION_ALIASES`:
+    /// The `github` aliases the cut-over (P9) added to `ACTION_ALIASES`,
+    /// written out again so a change to the shipped block shows here:
     /// the per-action `credential` override is dropped when it names the
     /// module's credential (the plugin uses its slot), and `github.open`
     /// has none.
@@ -1510,24 +1511,18 @@ mod first_party {
 
         github_settings(&module, &manifest);
 
-        // Once the cut-over lists the aliases, they are exactly these.
+        // The cut-over (P9) ships exactly these aliases.
         let shipped: Vec<&ActionAlias> = ACTION_ALIASES
             .iter()
             .filter(|a| a.module == "github")
             .collect();
-        if !shipped.is_empty() {
-            for alias in GITHUB {
-                let found = shipped
-                    .iter()
-                    .find(|a| a.legacy == alias.legacy)
-                    .unwrap_or_else(|| panic!("{} has no alias", alias.legacy));
-                assert_eq!(
-                    (found.target, found.plugin, found.params),
-                    (alias.target, alias.plugin, alias.params),
-                    "{}",
-                    alias.legacy
-                );
-            }
+        assert_eq!(shipped.len(), GITHUB.len(), "the shipped github block");
+        for alias in GITHUB {
+            let found = shipped
+                .iter()
+                .find(|a| a.legacy == alias.legacy)
+                .unwrap_or_else(|| panic!("{} has no alias", alias.legacy));
+            assert_eq!(**found, *alias, "{}", alias.legacy);
         }
     }
 

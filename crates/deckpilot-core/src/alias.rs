@@ -117,9 +117,50 @@ impl ActionAlias {
     }
 }
 
-/// Every alias. Empty until a module is cut over to its plugin; entries
-/// are never removed afterwards, also not when the built-in is.
-pub const ACTION_ALIASES: &[ActionAlias] = &[];
+/// Every alias, one block per module cut over to its plugin; entries are
+/// never removed afterwards, also not when the built-in is.
+///
+/// Listing a module here changes nothing by itself: the agent's migration
+/// journal decides the [`LegacyRouting`], so until a computer's migration
+/// of the module is cut over, and in every build without plugins, the
+/// legacy ids keep running the built-in.
+pub const ACTION_ALIASES: &[ActionAlias] = &[
+    // GitHub (P9): `deckpilot.github` (`plugins/first-party/github`), its
+    // contract checked by `crates/deckpilot-modules/tests/contracts.rs`.
+    // The per-action `credential` override is dropped when it is empty or
+    // names the module's credential (the plugin uses its slot `token`);
+    // `github.open` has none.
+    github("github.current-user", "deckpilot.github.current-user", true),
+    github("github.repository", "deckpilot.github.repository", true),
+    github(
+        "github.pull-requests",
+        "deckpilot.github.pull-requests",
+        true,
+    ),
+    github(
+        "github.review-requests",
+        "deckpilot.github.review-requests",
+        true,
+    ),
+    github("github.checks", "deckpilot.github.checks", true),
+    github("github.open", "deckpilot.github.open", false),
+];
+
+/// One alias of the `github` block.
+const fn github(legacy: &'static str, target: &'static str, credential: bool) -> ActionAlias {
+    ActionAlias {
+        legacy,
+        target,
+        module: "github",
+        plugin: "deckpilot.github",
+        since: "0.6.0",
+        params: if credential {
+            &[ParamRule::DropIfDefault("credential")]
+        } else {
+            &[]
+        },
+    }
+}
 
 const _: () = assert_valid(ACTION_ALIASES);
 
@@ -544,12 +585,35 @@ mod tests {
         validate(entries).map_err(|e| e.reason)
     }
 
+    /// The shipped table: GitHub's block (P9), nothing else.
     #[test]
-    fn the_shipped_table_is_empty_and_valid() {
-        assert_eq!(ACTION_ALIASES, &[]);
+    fn the_shipped_table_is_the_github_block() {
         assert_eq!(validate(ACTION_ALIASES), Ok(()));
+        let legacy: Vec<&str> = ACTION_ALIASES.iter().map(|a| a.legacy).collect();
         assert_eq!(
-            alias_of(&ActionTypeId::new("github.pull-requests").unwrap()),
+            legacy,
+            [
+                "github.current-user",
+                "github.repository",
+                "github.pull-requests",
+                "github.review-requests",
+                "github.checks",
+                "github.open",
+            ]
+        );
+        for alias in ACTION_ALIASES {
+            assert_eq!((alias.module, alias.plugin), ("github", "deckpilot.github"));
+            let credential: &[ParamRule] = if alias.legacy == "github.open" {
+                &[]
+            } else {
+                &[ParamRule::DropIfDefault("credential")]
+            };
+            assert_eq!(alias.params, credential, "{}", alias.legacy);
+        }
+        let found = alias_of(&ActionTypeId::new("github.pull-requests").unwrap()).unwrap();
+        assert_eq!(found.target, "deckpilot.github.pull-requests");
+        assert_eq!(
+            alias_of(&ActionTypeId::new("gitlab.merge-requests").unwrap()),
             None
         );
     }

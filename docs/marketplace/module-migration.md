@@ -500,7 +500,7 @@ action registry is built. Details beyond the text above:
 - Per-module knowledge the alias table does not carry (which settings name
   the credentials, the origin and the private-network switch, and the
   plugin's slot for each credential) is a static `MigrationPlan` next to
-  the engine, empty like the alias table until a cut-over.
+  the engine, one per alias block (GitHub's since P9, §6).
 - Derived grants: the low tier, and `network` for the built-in's (default)
   origin and `openUrl` for its web hosts when the built-in has the
   capability; recorded with `source = 'derived'`, `decided_by =
@@ -651,6 +651,67 @@ error codes, the `Date`-based time limit, the agent's rates for plugins),
 is listed in [`plugins/first-party/github/README.md`](../../plugins/first-party/github/README.md).
 Lists use pages of 50 (two for more than 50 pull requests, ten for the
 built-in's 500 checks).
+
+*As built (P9), the cut-over.* The first behaviour change, and only in
+builds with plugins enabled; release builds keep plugins off, so for them
+nothing changes.
+
+- `ACTION_ALIASES` (`crates/deckpilot-core/src/alias.rs`) has one block:
+  `github.<action>` → `deckpilot.github.<action>` for `current-user`,
+  `repository`, `pull-requests`, `review-requests`, `checks` and `open`,
+  module `github`, plugin `deckpilot.github`, since `0.6.0`, with
+  `ParamRule::DropIfDefault("credential")` on every action but `open`
+  (which has no `credential`). `contracts.rs` (`first_party`) checks
+  that the shipped block is exactly the one it validates.
+- The `MigrationPlan` of `github` (`apps/agent/src/plugins/migration.rs`,
+  `GITHUB`): the credential setting `credential` (a credential id,
+  default `github.token`) goes to the plugin's slot `token`; the origin
+  setting `apiUrl`, eligible only as `https://api.github.com`; the
+  private-network switch `allowPrivateHost`, never migrated; `openUrl`
+  derived for `github.com`. A per-action `credential` other than empty or
+  the module's own makes the module `not_eligible` (G5).
+- Consent: `network:api.github.com` and `openUrl:github.com` are derived
+  (the built-in demonstrably used them); the token import
+  (`credentials:token`, high tier) waits for the user's approval in
+  Settings › Plugins. Until then, after a decline (until Retry) and on
+  every computer that is not eligible, the built-in serves.
+- `bundled.json` lists `deckpilot.github` as class `migration`, so every
+  plugin-enabled package (`DECKPILOT_RELEASE_PLUGINS=1`) builds it, ships
+  it and compiles its pins into the agent; CI's bundle dry run checks the
+  release set is exactly that.
+- The plugin is built with #257's SDK: it exports `dp_features`, reads the
+  network kind and reports the built-in's transport codes; P8's difference
+  4 is gone. The remaining differences (save-time semantic checks, which
+  stay run-time only: repository, ref and URL format; two messages and
+  the network message wording; `retryAfterSeconds`; the `Date`-based time
+  limit; the agent's limits for plugins) are listed in the plugin's
+  README.
+- `apps/agent/tests/plugins_cutover.rs` runs the upgrade end to end from
+  an alpha.3 configuration (a key bound to `github.pull-requests`, a
+  workflow node running `github.checks`, the token in `github.token`):
+  seeded and pinned, settings copied, the built-in serving until the
+  approval through IPC, then the key and the node in the plugin with the
+  imported token (in the request headers, nowhere in answers or logs);
+  `deckpilot.db` byte-identical; a build without plugins on the same data
+  runs the built-in; a GitHub Enterprise configuration stays
+  `not_eligible`; disabling the plugin makes the legacy actions
+  unavailable, with no fallback; uninstalling and upgrading again does
+  not reinstall it; a decline keeps the built-in until Retry. The
+  built-in's requests go to a stand-in on 127.0.0.1
+  (`DECKPILOT_TEST_BUILTIN_GITHUB_API`, feature `test-hooks`, never in a
+  release build), its stored settings untouched.
+- Found by that test and fixed: a built-in network action (`github`,
+  `http`, `gitlab`, `jira`) bound to a key, or run with `runAction`, runs
+  on the agent's service task, where `deckpilot-net` blocked on a runtime
+  inside the agent's and panicked, ending the agent. A request from a
+  runtime's thread now runs on a thread of its own. The service task still
+  waits for it, as for every built-in action run from a key.
+- Follow-up: the desktop end-to-end suite (`marketplace_gui`,
+  `.github/workflows/desktop-e2e.yml`) does not show the migration
+  notice and consent dialog yet. It needs the GitHub plugin built and
+  staged with its pins and an alpha.3 data directory before the app
+  starts; the agent side of that dialog is covered by
+  `plugins_cutover.rs` and P7's `plugins_migration.rs`.
 
 `notifications` follows as the first `default`-class bundled plugin. It is
 the one that proves seeding, tombstones and first launch.
@@ -934,7 +995,7 @@ they change.
 | P6 | Migration engine | `apps/agent/src/plugins/migration.rs` (new), the routing hand-off to the core in `apps/agent/src/service.rs` (`load_modules`) | P1, P3, P5 | Eligibility, steps, drift, failure, retries. Tested with a fixture module and plugin |
 | P7 | IPC and app: migration notice, consent, Retry; alias-aware editors | `crates/deckpilot-ipc/src/plugins.rs`, `apps/desktop/src/plugins/migration*.tsx` (new), `apps/desktop/src/lib/plugin-actions.ts` | #228, P6 | Additive protocol fields |
 | P8 | `deckpilot.github` plugin source and contract test | `plugins/first-party/github/` (new), `crates/deckpilot-modules/tests/contracts.rs` | P4 (G1, G6), P5 | Built and pinned, not yet routed |
-| P9 | GitHub cut-over | one `ACTION_ALIASES` block, a `migration`-class entry in `bundled/pins.json` | P6, P7, P8 | The first behaviour change. The built-in stays as the legacy implementation |
+| P9 | GitHub cut-over | one `ACTION_ALIASES` block, the `github` `MigrationPlan`, a `migration`-class entry in `bundled/pins.json` | P6, P7, P8 | The first behaviour change, in plugin-enabled builds only. The built-in stays as the legacy implementation. **Landed** ([§6](#6-the-first-module), *As built (P9)*) |
 | P10 | `deckpilot.notifications` as the first default plugin | `plugins/first-party/notifications/`, its alias block | P4 (G8, G9), P9 | Proves first launch, tombstones and fresh installs |
 | P11 | G2 user origins, then gitlab and jira | runtime, executor, settings consent UI, `plugins/first-party/{gitlab,jira}/` | P9 | GHE users become eligible |
 | P12 | Remove a legacy built-in | `modules/<name>`, `crates/deckpilot-modules/src/lib.rs` | §5.7 criteria | The alias entries stay forever |
