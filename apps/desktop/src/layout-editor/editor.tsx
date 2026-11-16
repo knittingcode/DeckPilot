@@ -34,6 +34,7 @@ import {
   controlLabel,
   page as findPage,
   hasWayBack,
+  pagePosition,
   targetLabel,
   triggerLabel,
 } from "@/lib/layout-model"
@@ -216,11 +217,15 @@ export function LayoutEditor({
   }, [pageBindings, actions])
   const previewed = projects.find((p) => p.id === previewProject)
   const summaries = useMemo(() => {
+    const position = pagePosition(draft, pageId)
     const render = (text: string) =>
       text
         .replaceAll("{profile}", view.profile.name)
         .replaceAll("{project.key}", previewed?.key ?? "-")
         .replaceAll("{project.name}", previewed?.name ?? "-")
+        .replaceAll("{page.number}", String(position.number))
+        .replaceAll("{page.count}", String(position.count))
+        .replaceAll("{page.name}", findPage(draft, pageId)?.name ?? "-")
     const map = new Map<string, string>()
     for (const control of orderedControls(model)) {
       const labels = bindingsFor(draft, pageId, control).map(
@@ -341,6 +346,7 @@ export function LayoutEditor({
               onAdd={commands.addPage}
               onRename={commands.renamePage}
               onDelete={commands.deletePage}
+              onAutoReturn={commands.setAutoReturn}
             />
             <PageTreePanel
               profileId={profileId}

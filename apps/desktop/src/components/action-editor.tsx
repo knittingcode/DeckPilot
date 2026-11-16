@@ -341,6 +341,7 @@ export function ActionEditor({
                   spec={spec}
                   value={values[spec.key] ?? initialValue(spec)}
                   projects={projects}
+                  actionType={type.id}
                   onChange={(next) => {
                     setValues((current) => ({ ...current, [spec.key]: next }))
                   }}

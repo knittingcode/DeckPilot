@@ -60,6 +60,12 @@ Action labels and binding labels may contain `{profile}`, `{project.key}` and
 is drawn, so a project switcher labelled `{project.key}` shows SHOP, CMR,
 CMS, SHOP as it is pressed.
 
+The label of any key (also of folder and Back keys) may contain
+`{page.number}`, `{page.count}` and `{page.name}`: the position of the
+device among the top-level pages of its layout (from 1), how many there
+are, and the name of the page it shows. Inside a folder the position is
+that of the page the folder belongs to, and the name is the folder's.
+
 ### Action types of the built-in modules
 
 Action types are provided by [feature modules](modules.md#action-catalog).
@@ -121,7 +127,8 @@ bound on this machine, kind mismatch.
   `bindings: ControlBinding[]`, optional `gestures: KeyGestureSettings[]`
   (`control`, optional `doubleClickMs` 150–1000, optional `longPressMs`
   300–5000; unset values use this computer's defaults, setting
-  `gestures.defaults`, 300 and 700 ms).
+  `gestures.defaults`, 300 and 700 ms), optional `autoReturn` (see
+  [Pages and folders](#pages-and-folders); omitted when off).
 - **ControlBinding** – `control`, `trigger` (`press`, `release`,
   `rotateClockwise`, `rotateCounterClockwise`, `touch { gesture }`, `click`,
   `doubleClick`, `longPress`), `target` (`action { action, overrides? }`,
@@ -217,6 +224,33 @@ the layout preview shows it too.
 **Navigation.** Opening a page pushes it on the device's page stack. Back
 goes to the current page's folder (also when the page was opened directly
 from elsewhere); for a top-level page, back to the page that opened it.
+The actions *Next page* and *Previous page*
+([Deck actions](modules.md#deck-actions)) move along the top-level pages
+and leave nothing of a folder on the stack.
+
+**Folders that close.** A folder page with `autoReturn` closes after one
+of its keys ran an action or started a workflow: the device returns to the
+folder's parent, as Back would, at the moment the key is handled and
+whatever the action's result. Keys that open a page or go back do not
+close it, an unbound key does nothing, and a key that already changed the
+page (*Next page*) is not followed by a second step. On a page outside
+folders the setting has no effect. Layouts without it are stored exactly
+as before.
+
+**The page a device returns to.** The runtime remembers, per profile and
+device, the top-level page the device showed when the profile was left;
+when the profile becomes active again the device shows that page, with
+folders closed, if it still is a top-level page of the layout, else the
+home page. The first time a profile is shown, devices start on the home
+page. The agent saves these pages in the setting `navigation.pages`
+whenever they change and restores them after a restart, so a device comes
+back on the page it showed. Only pages other than the home page are
+saved: a configuration whose devices never leave their home page (or only
+open its folders) gets no such setting. This is runtime state of the computer: it is
+not part of a profile and is never exported. An unreadable value, a
+profile that is gone and a page that is gone are ignored. A device that
+reconnects while its profile stays active keeps its whole page stack, as
+before.
 
 **Moving and copying** (`Profile::move_page`, `Profile::copy_page`) take a
 page with its bindings and every page inside it, at any depth:
@@ -369,7 +403,7 @@ again. Restoring the named backup returns to the previous state.
 | `active_projects`  | Active project per profile (runtime state)           |
 | `machine_config`   | Single row; JSON document + document version          |
 | `modules`          | Enabled flag and configuration per feature module     |
-| `settings`         | Key/value: active profile, device brightness, update preferences |
+| `settings`         | Key/value: active profile, device brightness, update preferences, the pages devices show (`navigation.pages`) |
 | `app_launches`     | Recent start versions per component                   |
 | `migration_notes`  | Changes a migration made to user data, shown in Settings |
 | `migration_history`| Schema upgrades: from, to, backup file, result, time  |
