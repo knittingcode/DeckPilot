@@ -1,0 +1,25 @@
+# A distribute-* job in another workflow: checked as well; it inherits the
+# workflow's read-only permissions.
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+
+permissions: read-all
+
+jobs:
+  distribute-flathub:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: distribute-flathub
+    steps:
+      - run: echo "build from the release commit"
+  # Not a downstream job: other jobs of the workflow are not checked here.
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - run: echo "tests"

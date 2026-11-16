@@ -1,0 +1,23 @@
+# expect: the workflow-level permissions of a downstream workflow must grant at most contents: read (contents: write)
+name: Distribute
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  distribute-homebrew:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: distribute-homebrew
+    permissions:
+      contents: read
+    steps:
+      - name: Update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo hello
