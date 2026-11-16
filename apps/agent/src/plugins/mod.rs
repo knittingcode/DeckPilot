@@ -37,6 +37,8 @@ mod lane;
 #[cfg(feature = "plugins")]
 mod migration;
 #[cfg(feature = "plugins")]
+mod origins;
+#[cfg(feature = "plugins")]
 mod registry;
 #[cfg(feature = "plugins")]
 mod service;

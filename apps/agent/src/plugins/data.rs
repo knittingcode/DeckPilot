@@ -325,6 +325,7 @@ pub fn settings(manifest: &Manifest, saved: BTreeMap<String, Value>) -> ipc::Plu
         values: saved,
         effective,
         missing,
+        origins: Vec::new(),
     }
 }
 

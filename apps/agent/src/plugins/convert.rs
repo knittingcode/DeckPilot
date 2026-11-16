@@ -376,10 +376,29 @@ fn origin_of(host: &str) -> Option<String> {
 /// `openUrl` grant is passed per exact host, like `network`; a wildcard
 /// host is not (the broker opens exact origins only).
 pub fn approved(effective: &[(GrantKey, GrantScope)]) -> (ApprovedPermissions, Vec<String>) {
-    let mut out = Vec::new();
+    approved_with(effective, Vec::new())
+}
+
+/// [`approved`], plus the user-entered origins the user consented to
+/// (G2, `origins::approved`). A credential slot with no fixed host is
+/// passed when one of them binds it, so its secret goes there only.
+pub fn approved_with(
+    effective: &[(GrantKey, GrantScope)],
+    user_origins: Vec<ApprovedPermission>,
+) -> (ApprovedPermissions, Vec<String>) {
+    let bound: BTreeSet<String> = user_origins
+        .iter()
+        .flat_map(|p| match p {
+            ApprovedPermission::UserOrigin { credentials, .. } => credentials.clone(),
+            _ => BTreeSet::new(),
+        })
+        .collect();
+    let mut out = user_origins;
     let mut skipped = Vec::new();
     for (key, scope) in effective {
         match (key.kind, scope) {
+            // Passed as the consented origin itself (`user_origins`).
+            (PermissionKind::Network, GrantScope::UserOriginSlot { .. }) => {}
             (PermissionKind::Network, GrantScope::Host { methods }) => match origin_of(&key.key) {
                 Some(origin) => out.push(ApprovedPermission::Network {
                     origin,
@@ -398,11 +417,14 @@ pub fn approved(effective: &[(GrantKey, GrantScope)]) -> (ApprovedPermissions, V
                     quota_kb: *quota_kb,
                 });
             }
-            (PermissionKind::Credentials, GrantScope::Credential { hosts, schemes }) => {
+            (PermissionKind::Credentials, GrantScope::Credential { hosts, schemes, .. }) => {
                 let origins: Option<BTreeSet<String>> =
                     hosts.iter().map(|h| origin_of(h)).collect();
                 match origins {
-                    Some(origins) if !origins.is_empty() && !schemes.is_empty() => {
+                    Some(origins)
+                        if (!origins.is_empty() || bound.contains(&key.key))
+                            && !schemes.is_empty() =>
+                    {
                         out.push(ApprovedPermission::Credential {
                             key: key.key.clone(),
                             origins,

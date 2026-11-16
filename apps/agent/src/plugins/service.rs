@@ -950,7 +950,8 @@ impl PluginService {
             .store()
             .effective_grants(id)
             .unwrap_or_default();
-        let (approved, skipped) = convert::approved(&effective);
+        let user_origins = self.user_origins(id, &effective);
+        let (approved, skipped) = convert::approved_with(&effective, user_origins);
         if !skipped.is_empty() {
             info!(plugin = %id, ?skipped, "grants the broker does not enforce are not passed on");
         }
@@ -958,6 +959,68 @@ impl PluginService {
             warn!(plugin = %id, error = %e, "the broker refused the grants; the plugin gets none");
             self.broker.remove_plugin(&broker_id);
         }
+    }
+
+    /// The consents to user-entered origins (G2) the broker may use now:
+    /// only those whose setting still holds exactly that origin, within
+    /// what the active manifest and the effective grants allow.
+    fn user_origins(
+        &self,
+        id: &PluginId,
+        effective: &[(GrantKey, deckpilot_plugin_store::GrantScope)],
+    ) -> Vec<deckpilot_plugin_broker::ApprovedPermission> {
+        let store = self.manager.store();
+        let Some(manifest) = store
+            .plugin(id)
+            .ok()
+            .flatten()
+            .and_then(|r| r.active().map(|v| v.manifest.clone()))
+        else {
+            return Vec::new();
+        };
+        let rows = store.user_origins(id).unwrap_or_default();
+        if rows.is_empty() {
+            return Vec::new();
+        }
+        let saved = store.settings(id).unwrap_or_default();
+        super::origins::approved(&manifest, &saved, effective, &rows)
+    }
+
+    /// Consents to the origin an origin setting holds (G2): exactly that
+    /// origin, a private network only when the request asks for it.
+    fn grant_user_origin(
+        &mut self,
+        id: &PluginId,
+        setting: &str,
+        origin: &str,
+        private_network: bool,
+    ) -> Result<Response, IpcError> {
+        let manifest = self.active_manifest(id)?;
+        let saved = self
+            .manager
+            .store()
+            .settings(id)
+            .map_err(|e| store_error(&e))?;
+        let consent = super::origins::consent(&manifest, &saved, setting, origin, private_network)
+            .map_err(|e| error(ErrorCode::InvalidRequest, reason::INVALID_DATA, e))?;
+        self.manager
+            .grant_user_origin(id, &consent, DECIDED_BY)
+            .map_err(|e| store_error(&e))?;
+        info!(plugin = %id, %setting, origin = %consent.display(),
+            private_network = consent.private_network, "user origin granted");
+        self.sync_grants(id);
+        self.changed(id);
+        self.settings(id)
+    }
+
+    fn revoke_user_origin(&mut self, id: &PluginId, setting: &str) -> Result<Response, IpcError> {
+        self.manager
+            .revoke_user_origin(id, setting, "revoked by the user")
+            .map_err(|e| store_error(&e))?;
+        info!(plugin = %id, %setting, "user origin revoked");
+        self.sync_grants(id);
+        self.changed(id);
+        self.settings(id)
     }
 
     /// Stops the plugin's lane: a running invocation is aborted, queued
@@ -1088,7 +1151,7 @@ impl PluginService {
                 })
             }
             Request::GetPluginSettings { plugin } => self.settings(&plugin_id(&plugin)?),
-            Request::SetPluginSettings { plugin, values } => {
+            Request::SetPluginSettings { plugin, mut values } => {
                 let id = plugin_id(&plugin)?;
                 let manifest = self.active_manifest(&id)?;
                 let saved = self
@@ -1096,13 +1159,44 @@ impl PluginService {
                     .store()
                     .settings(&id)
                     .map_err(|e| store_error(&e))?;
+                // Origin settings (G2) are saved as the broker reads them.
+                super::origins::normalize(&manifest, &mut values)
+                    .map_err(|e| error(ErrorCode::InvalidRequest, reason::INVALID_DATA, e))?;
                 let merged = data::merge_settings(&manifest, &saved, &values)
                     .map_err(|e| error(ErrorCode::InvalidRequest, reason::INVALID_DATA, e))?;
+                let before = super::origins::current(&manifest, &saved);
                 self.manager
                     .set_settings(&id, &merged)
                     .map_err(|e| store_error(&e))?;
                 info!(plugin = %id, "plugin settings saved");
+                // A changed origin setting ends the consent to its old
+                // origin at once; the new one needs consent of its own.
+                let after = super::origins::current(&manifest, &merged);
+                let changed = super::origins::changed(&before, &after);
+                for setting in &changed {
+                    if let Some(old) = self
+                        .manager
+                        .revoke_user_origin(&id, setting, "the setting changed")
+                        .map_err(|e| store_error(&e))?
+                    {
+                        info!(plugin = %id, %setting, origin = %old,
+                            "user origin revoked: the setting changed");
+                    }
+                }
+                if !changed.is_empty() {
+                    self.sync_grants(&id);
+                    self.changed(&id);
+                }
                 self.settings(&id)
+            }
+            Request::GrantPluginUserOrigin {
+                plugin,
+                setting,
+                origin,
+                private_network,
+            } => self.grant_user_origin(&plugin_id(&plugin)?, &setting, &origin, private_network),
+            Request::RevokePluginUserOrigin { plugin, setting } => {
+                self.revoke_user_origin(&plugin_id(&plugin)?, &setting)
             }
             Request::ListPluginCredentials { plugin } => self.credentials(&plugin_id(&plugin)?),
             Request::SetPluginCredential {
@@ -1514,13 +1608,15 @@ impl PluginService {
 
     fn settings(&self, id: &PluginId) -> Result<Response, IpcError> {
         let manifest = self.active_manifest(id)?;
-        let saved = self
-            .manager
-            .store()
-            .settings(id)
-            .map_err(|e| store_error(&e))?;
+        let store = self.manager.store();
+        let saved = store.settings(id).map_err(|e| store_error(&e))?;
+        let grants = store.grants(id).map_err(|e| store_error(&e))?;
+        let rows = store.user_origins(id).map_err(|e| store_error(&e))?;
+        let origins = super::origins::infos(&manifest, &saved, &grants, &rows);
+        let mut settings = data::settings(&manifest, saved);
+        settings.origins = origins;
         Ok(Response::PluginSettings {
-            settings: Box::new(data::settings(&manifest, saved)),
+            settings: Box::new(settings),
         })
     }
 
