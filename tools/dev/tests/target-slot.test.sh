@@ -76,36 +76,77 @@ ts release --owner "$h4" "$s4"; ts release --owner "$h5" "$s5"
 
 # --- run, concurrency ------------------------------------------------------------
 # Each run marks its slot busy; a second run in the same slot at the same
-# time would fail to create the mark.
+# time fails to create the mark and exits 9. The mark is a file that the
+# shell creates with O_EXCL (noclobber), which no implementation of mkdir or
+# touch can get wrong. With a second argument the job holds its slot until
+# that file appears (at most 60 s), otherwise for 2 s.
 cat > "$work/job.sh" << 'EOF'
 #!/bin/sh
-mkdir "$CARGO_TARGET_DIR/busy" || exit 9
+(set -C && : > "$CARGO_TARGET_DIR/busy") 2> /dev/null \
+  || { echo "job: another run is using $CARGO_TARGET_DIR" >&2; exit 9; }
 echo "$CARGO_TARGET_DIR" > "$1"
-sleep 2
-rmdir "$CARGO_TARGET_DIR/busy"
+if [ -n "${2:-}" ]; then
+  n=0
+  while [ ! -e "$2" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n + 1)); done
+else
+  sleep 2
+fi
+rm "$CARGO_TARGET_DIR/busy"
 EOF
 chmod +x "$work/job.sh"
 
-# Three at once, two slots, no waiting: two run in distinct slots, one is
-# turned away.
-pids=""
-for i in 1 2 3; do ts run -- "$work/job.sh" "$work/run3.$i" 2> "$work/err3.$i" & pids="$pids $!"; done
-codes=""
-for p in $pids; do c=0; wait "$p" || c=$?; codes="$codes $c"; done
-check "of 3 concurrent runs with 2 slots, 2 succeed and 1 exits 3" \
-  test "$(echo "$codes" | tr ' ' '\n' | sort | tr '\n' ' ')" = " 0 0 3 "
-[ "$(echo "$codes" | tr " " "\n" | sort | tr "\n" " ")" = " 0 0 3 " ] || { echo "     exit codes:$codes"; cat "$work"/err3.*; }
-check "the two runs used different slots" test "$(cat "$work"/run3.* | sort -u | wc -l | tr -d ' ')" = 2
+concurrent_runs() { # <label>
+  local i p c n pids codes bad
+  # Three at once, two slots, no waiting: two run in distinct slots, one is
+  # turned away. The two hold their slots until every run has either
+  # started its job or ended, so the third cannot get a slot that a quick
+  # first run has already given back, however the three are scheduled.
+  rm -f "$work"/run3.* "$work"/err3.* "$work"/exit3.* "$work/go3"
+  pids=""
+  for i in 1 2 3; do
+    (
+      c=0
+      ts run -- "$work/job.sh" "$work/run3.$i" "$work/go3" 2> "$work/err3.$i" || c=$?
+      echo "$c" > "$work/exit3.$i"
+    ) &
+    pids="$pids $!"
+  done
+  n=0
+  while [ "$(find "$work" -maxdepth 1 \( -name 'run3.*' -o -name 'exit3.*' \) | wc -l)" -lt 3 ] && [ "$n" -lt 600 ]; do
+    sleep 0.1
+    n=$((n + 1))
+  done
+  : > "$work/go3"
+  for p in $pids; do wait "$p" || true; done
+  codes=$(cat "$work"/exit3.* | sort | tr '\n' ' ')
+  check "$1of 3 concurrent runs with 2 slots, 2 succeed and 1 exits 3" test "$codes" = "0 0 3 "
+  [ "$codes" = "0 0 3 " ] || { echo "     exit codes: $codes"; cat "$work"/err3.*; }
+  check "$1the two runs used different slots" test "$(cat "$work"/run3.* | sort -u | wc -l | tr -d ' ')" = 2
 
-# Six at once with --wait: all succeed, never two in the same slot.
-pids=""
-codes=""
-for i in 1 2 3 4 5 6; do ts run --wait 60 -- "$work/job.sh" "$work/run6.$i" 2> "$work/err6.$i" & pids="$pids $!"; done
-bad=0
-for p in $pids; do c=0; wait "$p" || c=$?; codes="$codes $c"; [ "$c" = 0 ] || bad=$((bad + 1)); done
-check "6 concurrent runs with --wait all succeed, one per slot at a time" test "$bad" = 0
-[ "$bad" = 0 ] || { echo "     exit codes:$codes"; cat "$work"/err6.*; }
-check "run releases its slot" test ! -e "$work/pool/slot-1.lock" -a ! -e "$work/pool/slot-2.lock"
+  # Six at once with --wait: all succeed, never two in the same slot.
+  pids=""
+  codes=""
+  for i in 1 2 3 4 5 6; do ts run --wait 60 -- "$work/job.sh" "$work/run6.$i" 2> "$work/err6.$i" & pids="$pids $!"; done
+  bad=0
+  for p in $pids; do c=0; wait "$p" || c=$?; codes="$codes $c"; [ "$c" = 0 ] || bad=$((bad + 1)); done
+  check "${1}6 concurrent runs with --wait all succeed, one per slot at a time" test "$bad" = 0
+  [ "$bad" = 0 ] || { echo "     exit codes:$codes"; cat "$work"/err6.*; }
+  check "$1run releases its slot" test ! -e "$work/pool/slot-1.lock" -a ! -e "$work/pool/slot-2.lock"
+}
+concurrent_runs ""
+
+# The same with a mkdir that does not fail when the directory exists. That
+# is what mkdir of uutils coreutils (Ubuntu 26.04) does when two
+# of them race for one path: both exit 0. Here it happens every time, so a
+# lock that trusts mkdir's exit status puts all three runs in slot-1.
+mkdir "$work/shim"
+printf '#!/bin/sh\nexec %s -p "$@"\n' "$(command -v mkdir)" > "$work/shim/mkdir"
+chmod +x "$work/shim/mkdir"
+check "the stand-in mkdir succeeds on an existing directory" env PATH="$work/shim:$PATH" mkdir "$work/shim"
+real_path="$PATH"
+PATH="$work/shim:$PATH"
+concurrent_runs "with a mkdir that is not exclusive, "
+PATH="$real_path"
 status=0; ts run -- sh -c 'exit 7' || status=$?
 check "run passes the command's exit status" test "$status" = 7
 
