@@ -678,10 +678,11 @@ exact `openUrl` origins from the manifest (wildcards are not granted), the
 broker's strict URL parser (https only, no userinfo, no IP literal or
 local name, at most 2,048 bytes), 1 per 2 s plus 20 per 10 minutes per
 plugin and 3 per invocation, audited and logged by origin only, opened
-through the core launcher. Not yet: the restriction to invocations a key
-press or the app started. The invocation does not carry its trigger in
-ABI 1; that arrives with G8's run context, and the consent text says only
-what is enforced today.
+through the core launcher. Since G8, only in a run the user started (a
+key press, a gesture, the app, or a workflow the user started): the
+broker denies it as `not-permitted` in a run a schedule, a lifecycle
+event, the agent's start or a work session started, and the consent text
+says so.
 
 ### G2 User-entered origins (github GHE, gitlab self-managed, jira, http)
 
@@ -761,6 +762,19 @@ invocation's own run only, never another workflow's definition. Profile read
 (`profile` kind, `ProfileScope`) gives the profile name and the active
 project's id, key and name, as #191 §5.2 specifies. Risk: low to medium.
 **Offer.**
+
+*Status (P4):* the run part is implemented as the op `run.context`
+(`Context::run_context`, always allowed): the trigger (`key`, `gesture`,
+`app`, `test`, `workflow`), for a workflow the cause of its run (`user`,
+`schedule`, `event`, `startup`, `workSession`), and for a node of a
+workflow graph the run's summary: the workflow's name, the counts of
+succeeded, failed, skipped and cancelled nodes and the ids of the failed
+ones, bounded. The invocation's own run only. It is a capability call
+that only new guests make, so guests built before it are unchanged. The
+agent derives it from the core's `RunOrigin`, which the engine threads
+from the key press, gesture, `runAction`, `invokePluginAction` and the
+workflow run's trigger; it also restricts G1's `url.open`. Not yet: the
+profile read (`profile` kind).
 
 ### G9 Notification severity and routing (notifications)
 

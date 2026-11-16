@@ -13,8 +13,9 @@ use serde_json::Value;
 
 use crate::limits::{
     MAX_BODY_LEN, MAX_CREDENTIAL_KEY, MAX_HEADER_LEN, MAX_HEADERS, MAX_LOG_LEN, MAX_NOTIFY_BODY,
-    MAX_NOTIFY_TITLE, MAX_OPEN_URL_LEN, MAX_STORAGE_KEY, MAX_STORAGE_VALUE, MAX_URL_LEN,
-    MAX_VARIABLE_ID, MAX_VARIABLE_VALUE,
+    MAX_NOTIFY_TITLE, MAX_OPEN_URL_LEN, MAX_RUN_FAILED_NODES, MAX_RUN_NODE_ID,
+    MAX_RUN_WORKFLOW_NAME, MAX_STORAGE_KEY, MAX_STORAGE_VALUE, MAX_URL_LEN, MAX_VARIABLE_ID,
+    MAX_VARIABLE_VALUE,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -66,6 +67,161 @@ pub enum CapabilityRequest {
     /// whether it was opened. Added compatibly within ABI 1.
     #[serde(rename = "url.open")]
     OpenUrl(OpenUrl),
+    /// What started the invocation's run, and how the workflow run it is
+    /// a node of is going ([`RunContext`], G8): the invocation's own run
+    /// only. Always allowed. Added compatibly within ABI 1: a guest built
+    /// before it never sends it, so nothing it receives changes; a host or
+    /// agent that predates it refuses the unknown op.
+    #[serde(rename = "run.context")]
+    RunContext(NoArgs),
+}
+
+/// The `ok` value of `run.context` (G8). Unknown fields are **ignored**
+/// (host to guest only), and a trigger or cause added later reads as
+/// `other`, so the agent can add to it within ABI 1.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunContext {
+    pub trigger: RunTrigger,
+    /// For [`RunTrigger::Workflow`]: what started the workflow's run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<RunCause>,
+    /// How the workflow run is going when this node starts; only for a
+    /// node of a workflow graph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<RunSummary>,
+}
+
+impl RunContext {
+    /// A run that was not started by a workflow.
+    pub fn direct(trigger: RunTrigger) -> Self {
+        Self {
+            trigger,
+            cause: None,
+            run: None,
+        }
+    }
+
+    /// A node of a workflow run started by `cause`.
+    pub fn workflow(cause: RunCause, run: Option<RunSummary>) -> Self {
+        Self {
+            trigger: RunTrigger::Workflow,
+            cause: Some(cause),
+            run,
+        }
+    }
+
+    /// What nobody said anything about: not started by the user.
+    pub fn unknown() -> Self {
+        Self::direct(RunTrigger::Other)
+    }
+
+    /// Whether the user started the run directly: a key, a gesture, the
+    /// app (the editor, the Action Library or the plugin's own page), or a
+    /// workflow the user started that way. Never a schedule, an event,
+    /// the agent's start, a work session or anything unknown. `url.open`
+    /// is allowed only then.
+    pub fn is_user_initiated(&self) -> bool {
+        match self.trigger {
+            RunTrigger::Key | RunTrigger::Gesture | RunTrigger::App | RunTrigger::Test => true,
+            RunTrigger::Workflow => self.cause == Some(RunCause::User),
+            RunTrigger::Other => false,
+        }
+    }
+
+    /// The same context within the ABI's bounds: the workflow name and
+    /// node ids cut, at most [`MAX_RUN_FAILED_NODES`] node ids.
+    #[must_use]
+    pub fn bounded(mut self) -> Self {
+        if let Some(run) = &mut self.run {
+            run.workflow = run
+                .workflow
+                .take()
+                .map(|name| cut(&name, MAX_RUN_WORKFLOW_NAME));
+            run.failed_nodes.truncate(MAX_RUN_FAILED_NODES);
+            for node in &mut run.failed_nodes {
+                *node = cut(node, MAX_RUN_NODE_ID);
+            }
+        }
+        self
+    }
+}
+
+fn cut(text: &str, max_chars: usize) -> String {
+    text.chars().take(max_chars).collect()
+}
+
+/// What started an invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RunTrigger {
+    /// A key, dial or touch control of a device.
+    Key,
+    /// A gesture (double press, long press…) on a control.
+    Gesture,
+    /// The app: the profile editor or the Action Library.
+    App,
+    /// A node of a workflow run; [`RunContext::cause`] says what started
+    /// the run.
+    Workflow,
+    /// The plugin's own page in the app, trying one of its actions.
+    Test,
+    /// Unknown, or a trigger this guest does not know yet.
+    #[serde(other)]
+    Other,
+}
+
+/// What started a workflow run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RunCause {
+    /// The user, from a key, a gesture or the app.
+    User,
+    /// One of the workflow's schedules.
+    Schedule,
+    /// A lifecycle event (a device connected, the project changed…).
+    Event,
+    /// The agent started.
+    Startup,
+    /// A work session's start or end-verification workflow.
+    WorkSession,
+    /// A cause this guest does not know yet.
+    #[serde(other)]
+    Other,
+}
+
+/// How the invocation's own workflow run is going when its node starts:
+/// the workflow's name, counts and node ids. No messages, outputs,
+/// parameters or anything of another workflow or plugin.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSummary {
+    /// The workflow's name (at most [`MAX_RUN_WORKFLOW_NAME`] characters).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
+    /// Since the run started.
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    /// Nodes finished so far, by status.
+    #[serde(default)]
+    pub succeeded: u32,
+    #[serde(default)]
+    pub failed: u32,
+    #[serde(default)]
+    pub skipped: u32,
+    #[serde(default)]
+    pub cancelled: u32,
+    /// Ids of the nodes that failed so far (the first
+    /// [`MAX_RUN_FAILED_NODES`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_nodes: Vec<String>,
+}
+
+impl RunSummary {
+    /// Whether a node of the run failed so far.
+    pub fn has_failed(&self) -> bool {
+        self.failed > 0
+    }
 }
 
 /// A URL to open in the user's browser.
@@ -343,6 +499,7 @@ impl CapabilityRequest {
             Self::VariablesPublish(_) => "variables.publish",
             Self::VariablesClear(_) => "variables.clear",
             Self::OpenUrl(_) => "url.open",
+            Self::RunContext(_) => "run.context",
         }
     }
 
@@ -406,7 +563,7 @@ impl CapabilityRequest {
                     return Err(RequestError::TooLarge("credential"));
                 }
             }
-            Self::StorageUsage(_) | Self::SettingsGet(_) => {}
+            Self::StorageUsage(_) | Self::SettingsGet(_) | Self::RunContext(_) => {}
             Self::VariablesPublish(p) => {
                 if !is_variable_id(&p.id) {
                     return Err(RequestError::TooLarge("variable"));
@@ -705,6 +862,118 @@ mod tests {
 
     fn parse(json: &str) -> Result<CapabilityRequest, serde_json::Error> {
         serde_json::from_str(json)
+    }
+
+    #[test]
+    fn run_context_is_a_request_without_arguments() {
+        let json = r#"{"op":"run.context","args":{}}"#;
+        let r = parse(json).unwrap();
+        assert_eq!(r, CapabilityRequest::RunContext(NoArgs {}));
+        assert_eq!(r.op(), "run.context");
+        r.validate().unwrap();
+        assert_eq!(serde_json::to_string(&r).unwrap(), json);
+        for bad in [
+            r#"{"op":"run.context","args":{"plugin":"other"}}"#,
+            r#"{"op":"run.context","args":{"workflow":"w"}}"#,
+            r#"{"op":"run.context"}"#,
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn run_contexts_round_trip_and_tolerate_additions() {
+        let key = RunContext::direct(RunTrigger::Key);
+        let json = serde_json::to_string(&key).unwrap();
+        assert_eq!(json, r#"{"trigger":"key"}"#);
+        assert_eq!(serde_json::from_str::<RunContext>(&json).unwrap(), key);
+
+        let run = RunSummary {
+            workflow: Some("Deploy".into()),
+            elapsed_ms: 1_200,
+            succeeded: 3,
+            failed: 1,
+            skipped: 0,
+            cancelled: 0,
+            failed_nodes: vec!["push".into()],
+        };
+        let scheduled = RunContext::workflow(RunCause::Schedule, Some(run.clone()));
+        let json = serde_json::to_string(&scheduled).unwrap();
+        assert_eq!(
+            json,
+            r#"{"trigger":"workflow","cause":"schedule","run":{"workflow":"Deploy","elapsedMs":1200,"succeeded":3,"failed":1,"skipped":0,"cancelled":0,"failedNodes":["push"]}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<RunContext>(&json).unwrap(),
+            scheduled
+        );
+        assert!(run.has_failed());
+
+        // What a later agent may add reaches this guest as `other` or is
+        // ignored, never as a malformed reply.
+        let later: RunContext = serde_json::from_str(
+            r#"{"trigger":"voice","cause":"webhook","run":{"nodes":9},"profile":"p"}"#,
+        )
+        .unwrap();
+        assert_eq!(later.trigger, RunTrigger::Other);
+        assert_eq!(later.cause, Some(RunCause::Other));
+        assert_eq!(later.run, Some(RunSummary::default()));
+        assert!(!later.is_user_initiated());
+    }
+
+    #[test]
+    fn only_runs_the_user_started_count_as_user_initiated() {
+        for trigger in [
+            RunTrigger::Key,
+            RunTrigger::Gesture,
+            RunTrigger::App,
+            RunTrigger::Test,
+        ] {
+            assert!(
+                RunContext::direct(trigger).is_user_initiated(),
+                "{trigger:?}"
+            );
+        }
+        assert!(RunContext::workflow(RunCause::User, None).is_user_initiated());
+        for cause in [
+            RunCause::Schedule,
+            RunCause::Event,
+            RunCause::Startup,
+            RunCause::WorkSession,
+            RunCause::Other,
+        ] {
+            assert!(
+                !RunContext::workflow(cause, None).is_user_initiated(),
+                "{cause:?}"
+            );
+        }
+        assert!(!RunContext::unknown().is_user_initiated());
+        // A workflow without a cause is not the user's.
+        let no_cause = RunContext {
+            cause: None,
+            ..RunContext::workflow(RunCause::User, None)
+        };
+        assert!(!no_cause.is_user_initiated());
+    }
+
+    #[test]
+    fn run_summaries_are_bounded() {
+        let run = RunSummary {
+            workflow: Some("w".repeat(MAX_RUN_WORKFLOW_NAME + 10)),
+            failed_nodes: (0..MAX_RUN_FAILED_NODES + 5)
+                .map(|i| format!("{i}{}", "n".repeat(MAX_RUN_NODE_ID)))
+                .collect(),
+            ..RunSummary::default()
+        };
+        let bounded = RunContext::workflow(RunCause::User, Some(run)).bounded();
+        let run = bounded.run.unwrap();
+        assert_eq!(run.workflow.unwrap().chars().count(), MAX_RUN_WORKFLOW_NAME);
+        assert_eq!(run.failed_nodes.len(), MAX_RUN_FAILED_NODES);
+        assert!(
+            run.failed_nodes
+                .iter()
+                .all(|n| n.chars().count() <= MAX_RUN_NODE_ID)
+        );
     }
 
     #[test]

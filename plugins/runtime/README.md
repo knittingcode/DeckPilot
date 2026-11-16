@@ -90,7 +90,19 @@ unchanged byte for byte (tested in `crates/abi` and `crates/host/tests/lifecycle
   (`MAX_OPEN_URL_LEN`), rate limited per plugin (`RateLimits::open_url`,
   1 per 2 s, and `open_url_window`, 20 per 10 minutes) and audited by
   origin only. `Allowed::OpenUrl` hands the executor the normalized URL.
+  Allowed only in a run the user started (G8): `Session::authorize_in`
+  takes the invocation's `RunContext`, which the supervisor reads from
+  the executor (`CapabilityExecutor::run_context`, never from the
+  guest), and denies `url.open` with `DenyReason::NotUserInitiated`
+  (`not-permitted`) before any rate limit unless
+  `RunContext::is_user_initiated` (a key, a gesture, the app, the
+  plugin's page, or a workflow with cause `user`). `Session::authorize`
+  and an executor without a context count as not started by the user.
   SDK: `Context::open_url`.
+- `run.context {}` (G8): the invocation's `RunContext` (trigger, the
+  workflow run's cause, and for a workflow node a bounded `RunSummary`),
+  always allowed (`Allowed::RunContext`). Only guests that read it send
+  it, so older guests are unchanged. SDK: `Context::run_context`.
 - `notify` takes an optional `severity` (`info`, `success`, `warning`,
   `error`; `Allowed::Notify` always carries one, `info` by default). It
   sets only how the notification looks. SDK: `Context::notify_with`.

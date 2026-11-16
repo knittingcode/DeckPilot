@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use deckpilot_plugin_abi::capability::AuthScheme;
+use deckpilot_plugin_abi::capability::{AuthScheme, RunCause, RunContext, RunTrigger};
 use deckpilot_plugin_abi::describe::ParamKind;
 use deckpilot_plugin_abi::protocol::{FatalReason, exit_code};
 use deckpilot_plugin_abi::{ActionOutcome, CallResult, HttpMethod, ParamValue, Params};
@@ -37,6 +37,8 @@ const FORECAST: &str = r#"{"current":{"time":"2026-11-14T12:00","temperature_2m"
 struct StubExecutor {
     executed: Vec<Allowed>,
     delay: Duration,
+    /// The run context the agent would hand over (G8).
+    run: Option<RunContext>,
 }
 
 impl CapabilityExecutor for StubExecutor {
@@ -50,8 +52,13 @@ impl CapabilityExecutor for StubExecutor {
                 std::thread::sleep(self.delay);
                 CallResult::Ok(json!({"status": 200}))
             }
+            Allowed::RunContext(run) => CallResult::Ok(serde_json::to_value(run).unwrap()),
             _ => CallResult::Ok(Value::Null),
         }
+    }
+
+    fn run_context(&self) -> Option<&RunContext> {
+        self.run.as_ref()
     }
 }
 
@@ -453,7 +460,10 @@ fn sdk_features_through_the_real_host() {
 fn urls_are_opened_only_on_granted_origins_through_the_real_host() {
     let f = fixture(r#"[{"kind":"openUrl","origin":"https://github.com"}]"#);
     let mut h = spawn(&config(SDK_TEST_GUEST), &f);
-    let mut ex = StubExecutor::default();
+    let mut ex = StubExecutor {
+        run: Some(RunContext::direct(RunTrigger::Key)),
+        ..StubExecutor::default()
+    };
     let open = |h: &mut PluginHost, ex: &mut StubExecutor, url: &str| {
         let o = h
             .invoke("open-url", &params(json!({"url": url})), T, ex)
@@ -506,6 +516,102 @@ fn urls_are_opened_only_on_granted_origins_through_the_real_host() {
     assert!(
         !audit.contains("pull") && !audit.contains("passwd"),
         "{audit}"
+    );
+
+    // G8: in a scheduled run, or one nobody described, the broker refuses
+    // the page before the executor sees it.
+    for run in [Some(RunContext::workflow(RunCause::Schedule, None)), None] {
+        f.clock.advance(Duration::from_secs(3));
+        let mut ex = StubExecutor {
+            run,
+            ..StubExecutor::default()
+        };
+        let refused = open(&mut h, &mut ex, "https://github.com/acme/app");
+        assert_eq!(refused["error"], text("NotPermitted"), "{refused:?}");
+        assert!(ex.executed.is_empty(), "{:?}", ex.executed);
+    }
+}
+
+/// G8 through the real host: a guest built with `run.context` reads the
+/// context the executor holds (never one it could make up), `url.open`
+/// follows it, and guests built before it run exactly as before.
+#[test]
+fn the_run_context_reaches_new_guests_and_old_guests_are_unchanged() {
+    let f = fixture(r#"[{"kind":"openUrl","origin":"https://github.com"}]"#);
+    let mut h = spawn(&config(SDK_TEST_GUEST), &f);
+    let run = deckpilot_plugin_abi::capability::RunSummary {
+        workflow: Some("Nightly".into()),
+        succeeded: 3,
+        failed: 1,
+        failed_nodes: vec!["deploy".into()],
+        ..Default::default()
+    };
+    let mut ex = StubExecutor {
+        run: Some(RunContext::workflow(RunCause::Schedule, Some(run))),
+        ..StubExecutor::default()
+    };
+    let o = h.invoke("run-context", &Params::new(), T, &mut ex).unwrap();
+    let d = data(&o);
+    assert_eq!(d["trigger"], text("workflow"), "{d:?}");
+    assert_eq!(d["cause"], text("schedule"));
+    assert_eq!(d["userInitiated"], ParamValue::Bool(false));
+    assert_eq!(d["workflow"], text("Nightly"));
+    assert_eq!(d["failed"], ParamValue::Integer(1));
+    assert_eq!(d["failedNodes"], text("deploy"));
+    let o = h
+        .invoke(
+            "open-if-user",
+            &params(json!({"url": "https://github.com/acme/app"})),
+            T,
+            &mut ex,
+        )
+        .unwrap();
+    assert_eq!(data(&o)["opened"], ParamValue::Integer(0), "{o:?}");
+    assert_eq!(data(&o)["error"], text("NotPermitted"));
+
+    let mut ex = StubExecutor {
+        run: Some(RunContext::direct(RunTrigger::Key)),
+        ..StubExecutor::default()
+    };
+    let o = h.invoke("run-context", &Params::new(), T, &mut ex).unwrap();
+    assert_eq!(data(&o)["trigger"], text("key"), "{o:?}");
+    assert_eq!(data(&o)["userInitiated"], ParamValue::Bool(true));
+    assert!(!data(&o).contains_key("workflow"));
+    let o = h
+        .invoke(
+            "open-if-user",
+            &params(json!({"url": "https://github.com/acme/app"})),
+            T,
+            &mut ex,
+        )
+        .unwrap();
+    assert_eq!(data(&o)["opened"], ParamValue::Integer(1), "{o:?}");
+    // Without a context the guest learns `other`.
+    let mut ex = StubExecutor::default();
+    let o = h.invoke("run-context", &Params::new(), T, &mut ex).unwrap();
+    assert_eq!(data(&o)["trigger"], text("other"), "{o:?}");
+    assert_eq!(data(&o)["userInitiated"], ParamValue::Bool(false));
+    assert!(h.is_running());
+    assert_eq!(h.shutdown(T).and_then(|s| s.code()), Some(exit_code::CLEAN));
+
+    // The sample, built before `run.context`, with an executor that has
+    // one: its invocations are unchanged (it never asks).
+    let f = fixture(&format!(
+        r#"[{{"kind":"network","origin":"{OPEN_METEO}","methods":["GET"]}}]"#
+    ));
+    let mut h = spawn(&config(HELLO_WEATHER), &f);
+    let mut ex = StubExecutor {
+        run: Some(RunContext::workflow(RunCause::Event, None)),
+        ..StubExecutor::default()
+    };
+    let o = h
+        .invoke("greet", &params(json!({"name": "Ada"})), T, &mut ex)
+        .unwrap();
+    assert!(matches!(o, ActionOutcome::Ok { .. }), "{o:?}");
+    assert!(
+        !ex.executed
+            .iter()
+            .any(|a| matches!(a, Allowed::RunContext(_)))
     );
 }
 
