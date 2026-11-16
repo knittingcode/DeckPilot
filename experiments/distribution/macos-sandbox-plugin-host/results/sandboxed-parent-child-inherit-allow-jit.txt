@@ -1,0 +1,27 @@
+== parent
+Identifier=io.github.knittingcode.deckpilot.experiment.sandboxed-parent-child-inherit-allow-jit
+Signature=adhoc
+entitlements:
+{
+  "com.apple.security.app-sandbox" => true
+}
+== child
+Identifier=plugin-host-child-555549447b3cb900a80b3888ac98b3e86e4cbb6d
+Signature=adhoc
+entitlements:
+{
+  "com.apple.security.app-sandbox" => true
+  "com.apple.security.cs.allow-jit" => true
+  "com.apple.security.inherit" => true
+}
+--- report
+parent.label = sandboxed-parent-child-inherit-allow-jit
+parent.app_sandbox_container_id = io.github.knittingcode.deckpilot.experiment.sandboxed-parent-child-inherit-allow-jit
+parent.read_dir(~/Library/Preferences) = denied (Operation not permitted (os error 1))
+parent.spawn = ok, child exit status signal: 9 (SIGKILL)
+child.label = sandboxed-parent-child-inherit-allow-jit
+child.pid = 25119
+child.app_sandbox_container_id = io.github.knittingcode.deckpilot.experiment.sandboxed-parent-child-inherit-allow-jit
+child.read_dir(~/Library/Preferences) = denied (Operation not permitted (os error 1))
+child.engine = ok
+--- stderr

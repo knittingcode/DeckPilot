@@ -1,0 +1,31 @@
+== parent
+Identifier=io.github.knittingcode.deckpilot.experiment.sandboxed-parent-child-inherit-unsigned
+Signature=adhoc
+entitlements:
+{
+  "com.apple.security.app-sandbox" => true
+}
+== child
+Identifier=plugin-host-child-555549447b3cb900a80b3888ac98b3e86e4cbb6d
+Signature=adhoc
+entitlements:
+{
+  "com.apple.security.app-sandbox" => true
+  "com.apple.security.cs.allow-unsigned-executable-memory" => true
+  "com.apple.security.inherit" => true
+}
+--- report
+parent.label = sandboxed-parent-child-inherit-unsigned
+parent.app_sandbox_container_id = io.github.knittingcode.deckpilot.experiment.sandboxed-parent-child-inherit-unsigned
+parent.read_dir(~/Library/Preferences) = denied (Operation not permitted (os error 1))
+parent.spawn = ok, child exit status exit status: 0
+child.label = sandboxed-parent-child-inherit-unsigned
+child.pid = 25152
+child.app_sandbox_container_id = io.github.knittingcode.deckpilot.experiment.sandboxed-parent-child-inherit-unsigned
+child.read_dir(~/Library/Preferences) = denied (Operation not permitted (os error 1))
+child.engine = ok
+child.jit_before_sandbox_init = ok (add(40, 2) = 42)
+child.sandbox_init(deny default) = failed (rc -1: Operation not permitted)
+end
+child.stderr: sandbox initialization failed: Operation not permitted
+--- stderr

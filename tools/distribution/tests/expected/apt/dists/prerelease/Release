@@ -1,0 +1,9 @@
+Origin: DeckPilot
+Label: DeckPilot
+Suite: prerelease
+Codename: prerelease
+Architectures: amd64
+Components: main
+Description: DeckPilot APT repository (dry run, unsigned)
+SHA256:
+ 044d3513ed9d487ebc34dff570036b8fbb0906cff943235220c159be3fb781a8 317 main/binary-amd64/Packages

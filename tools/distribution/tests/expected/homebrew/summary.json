@@ -1,0 +1,14 @@
+{
+  "channel": "homebrew",
+  "tag": "v0.6.0-alpha.3",
+  "commit": "b0b23de9bd1183352cffc059a373d0ba3f550841",
+  "dry_run": true,
+  "published": false,
+  "outputs": [
+    "deckpilot@alpha.rb"
+  ],
+  "blockers": [
+    "pre-release: the distribute-homebrew job publishes stable releases only",
+    "a GitHub token for a fork of Homebrew/homebrew-cask or for an own tap (not provisioned)"
+  ]
+}

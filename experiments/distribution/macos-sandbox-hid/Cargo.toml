@@ -1,0 +1,21 @@
+[package]
+name = "macos-sandbox-hid"
+description = "Feasibility probe: can hidapi enumerate and open HID devices inside the macOS App Sandbox?"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+
+# Not a member of the DeckPilot workspace: an experiment with its own lock
+# file, built only by run.sh (docs/distribution/README.md, PR G).
+[workspace]
+
+[dependencies]
+# The version and the default features the agent uses (root Cargo.toml):
+# on macOS devices are opened in exclusive mode, as DeckPilot opens them.
+hidapi = "=2.6.7"
+libc = "0.2"
+
+[profile.release]
+debug = false
+strip = true

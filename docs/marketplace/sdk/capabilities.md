@@ -142,10 +142,54 @@ Ok(Output::message("opened the pull request"))
   (`Throttled`); 3 per invocation (`Throttled`).
 - The agent's audit and log name the origin only, never the path or
   query, which may carry tokens.
-- Open URLs in actions the user starts on purpose (an "Open pull request"
-  key). ABI 1 does not yet tell an action whether a key press or a
-  schedule started it; the agent may refuse `url.open` outside user-started
-  runs in a later version.
+- Only in a run the user started: a key press, a gesture, the app (the
+  profile editor, the Action Library or the plugin's own page), or a
+  workflow the user started that way. In a run that a schedule, a
+  lifecycle event, the agent's start or a work session started, the
+  broker denies the call with `NotPermitted` ("pages open only in an
+  action the user started …") before it uses any rate limit, and the
+  executor checks again before anything is opened. The run context is the
+  agent's, never something the plugin sends. Use
+  [`Context::run_context`](#run-context) to tell beforehand, for example
+  to report a link as an output instead.
+
+## Run context
+
+```rust
+let run = ctx.run_context()?;
+if run.is_user_initiated() {
+    ctx.open_url(page)?;
+}
+if let Some(summary) = &run.run {
+    // A node of a workflow graph: how its own run is going so far.
+    let failed = summary.has_failed();
+    let name = summary.workflow.as_deref().unwrap_or("workflow");
+}
+```
+
+- `Context::run_context() -> RunContext` (op `run.context`, always
+  allowed): what started the invocation's run, and for a workflow node how
+  that run is going.
+- `trigger` (`RunTrigger`): `key` (a key, dial or touch control), `gesture`
+  (a double or long press), `app` (the editor or the Action Library),
+  `test` (the plugin's own page in the app), `workflow`, or `other`
+  (unknown). For `workflow`, `cause` (`RunCause`) says what started the
+  run: `user` (a key, a gesture or the app), `schedule`, `event` (a
+  lifecycle event such as a device connecting), `startup` (the agent
+  started), `workSession`, or `other`.
+- `RunContext::is_user_initiated()`: `key`, `gesture`, `app`, `test`, or
+  `workflow` with cause `user`. Exactly the runs `url.open` is allowed in.
+- `run` (`RunSummary`, only for a node of a workflow graph): the
+  workflow's name (at most 128 characters), `elapsedMs`, how many nodes
+  `succeeded`, `failed`, were `skipped` or `cancelled` so far, and the ids
+  of the nodes that failed (`failedNodes`, at most 32). `has_failed()`.
+  That is the invocation's own run only: no messages, outputs or
+  parameters, nothing of another workflow or plugin, never a secret.
+- Compatible within ABI 1: a module built before it never sends the op,
+  and nothing it receives changes. The reply ignores fields it does not
+  know, and a trigger or cause added later reads as `other`. An agent
+  older than the op refuses it (`UnsupportedOp`); treat that as unknown.
+- `testing::MockHost::allow_all()` answers it as a run from the app.
 
 ## Credentials
 
@@ -297,7 +341,8 @@ clock and no random source: `std::time::SystemTime::now()` and random
 number generators fail or panic in the guest, so there is no "now", no
 random UUID (v4) and no ULID (Developer Tools uses the `Date` header of a
 response as the time of a check, and name-based UUIDs). No reading of the
-active profile or project, of variables, no device
+active profile or project (the run context names what started the run and
+how its workflow run is going, nothing more), of variables, no device
 access, no timers or background work, no streaming HTTP, no WebSockets.
 The JavaScript design (`plugins/sdk-js`) declares several of these; ABI 1
 does not implement them.

@@ -1,0 +1,17 @@
+{
+  "channel": "apt",
+  "tag": "v0.6.0-alpha.3",
+  "commit": "b0b23de9bd1183352cffc059a373d0ba3f550841",
+  "dry_run": true,
+  "published": false,
+  "outputs": [
+    "dists/prerelease/Release",
+    "dists/prerelease/main/binary-amd64/Packages",
+    "pool/main/d/deck-pilot/DeckPilot_0.6.0-alpha.3_amd64_apt.deb"
+  ],
+  "blockers": [
+    "the release workflow does not build the apt variant yet (targets.toml apt-deb is planned)",
+    "repository GPG key for InRelease and Release.gpg (not provisioned)",
+    "a repository host and its deploy credential (not provisioned)"
+  ]
+}

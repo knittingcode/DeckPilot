@@ -40,6 +40,78 @@ pub struct ExecutionContext<'a> {
         crate::variables::ExecutionDependencies<'a>,
         &'a crate::variables::ResolutionContext,
     )>,
+    /// What started the run, when the caller said.
+    origin: Option<RunOrigin>,
+}
+
+/// What started the run an action belongs to: the user directly (a key, a
+/// gesture, the app), or a workflow and what started that. Actions that
+/// may only act on the user's direct request (a plugin's `url.open`) read
+/// it through [`ExecutionContext::origin`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum RunOrigin {
+    /// A key, dial or touch control of a device, pressed.
+    Key,
+    /// A recognized gesture (double press, long press…) on a control.
+    Gesture,
+    /// The app: the editor or the Action Library.
+    App,
+    /// A plugin's own page in the app, trying one of its actions.
+    Test,
+    /// A node of a workflow run, started by `cause`.
+    Workflow { cause: WorkflowCause },
+}
+
+/// What started a workflow run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkflowCause {
+    /// The user: a key, a gesture or the app.
+    User,
+    /// One of the workflow's schedules.
+    Schedule,
+    /// A lifecycle event (a device connected, the project changed…).
+    Event,
+    /// The agent started (the `agentStarted` lifecycle event).
+    Startup,
+    /// A work session's start or end-verification workflow.
+    WorkSession,
+    /// Something else.
+    #[serde(other)]
+    Other,
+}
+
+impl WorkflowCause {
+    /// The cause of a run recorded with `trigger` (and, for lifecycle
+    /// events, `detail`, the event's name).
+    pub fn of(trigger: crate::ExecutionTrigger, detail: Option<&str>) -> Self {
+        use crate::ExecutionTrigger as T;
+        match trigger {
+            T::App | T::Device => Self::User,
+            T::Schedule => Self::Schedule,
+            T::Lifecycle
+                if detail == Some(crate::trigger::LifecycleEvent::AgentStarted.as_str()) =>
+            {
+                Self::Startup
+            }
+            T::Lifecycle => Self::Event,
+            T::WorkSession => Self::WorkSession,
+            T::Other => Self::Other,
+        }
+    }
+}
+
+impl RunOrigin {
+    /// Whether the user started the run directly: a key, a gesture, the
+    /// app, or a workflow the user started. Never a schedule, an event,
+    /// the agent's start or a work session.
+    pub fn is_user_initiated(self) -> bool {
+        match self {
+            Self::Key | Self::Gesture | Self::App | Self::Test => true,
+            Self::Workflow { cause } => cause == WorkflowCause::User,
+        }
+    }
 }
 
 /// How the workflow run an action belongs to is going, for actions that
@@ -48,6 +120,9 @@ pub struct ExecutionContext<'a> {
 #[serde(rename_all = "camelCase")]
 pub struct RunSummary {
     pub workflow: Option<crate::WorkflowId>,
+    /// The workflow's name when the run started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_name: Option<String>,
     pub elapsed_ms: u64,
     pub succeeded: u32,
     pub failed: u32,
@@ -124,7 +199,20 @@ impl<'a> ExecutionContext<'a> {
             credentials: None,
             notifier: None,
             dependencies: None,
+            origin: None,
         }
+    }
+
+    /// The same context, for a run started by `origin` (`None`: unknown,
+    /// which counts as not started by the user).
+    #[must_use]
+    pub fn with_origin(self, origin: Option<RunOrigin>) -> Self {
+        Self { origin, ..self }
+    }
+
+    /// What started the run, if the caller said.
+    pub fn origin(&self) -> Option<RunOrigin> {
+        self.origin
     }
 
     /// The same context with the services of an execution, handed over

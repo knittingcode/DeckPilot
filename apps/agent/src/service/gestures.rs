@@ -29,7 +29,7 @@ use deckpilot_core::gesture::{
     BoundGestures, GestureCancel, GestureEngine, GestureFired, GestureOutput, GestureTimings,
     KeyContext,
 };
-use deckpilot_core::{ExecutionTrigger, PageId, RuntimeOutcome};
+use deckpilot_core::{ExecutionTrigger, PageId, RunOrigin, RuntimeOutcome};
 use deckpilot_device::{ControlId, ControlInput, DeviceEvent, DeviceId};
 use deckpilot_ipc::SecurityState;
 use tracing::{debug, warn};
@@ -183,7 +183,7 @@ impl Agent {
             input,
         };
         let outcome = self.runtime.handle_event(&event);
-        self.handle_outcome(device, control, outcome);
+        self.handle_outcome(device, control, RunOrigin::Key, outcome);
     }
 
     /// What a binding did, from a raw edge or a gesture: report an action,
@@ -193,6 +193,7 @@ impl Agent {
         &mut self,
         device: &DeviceId,
         control: ControlId,
+        origin: RunOrigin,
         outcome: Result<RuntimeOutcome, deckpilot_core::EngineError>,
     ) {
         match outcome {
@@ -206,7 +207,7 @@ impl Agent {
                 overrides,
                 device,
             }) => {
-                self.run_detached(action, Some(overrides), Some(device), None);
+                self.run_detached(action, Some(overrides), Some(device), origin, None);
                 return;
             }
             Ok(RuntimeOutcome::WorkflowRequested { workflow }) => {
@@ -253,7 +254,7 @@ impl Agent {
             self.run_stateful(fired, binding, *gesture);
             return;
         }
-        self.handle_outcome(&fired.device, fired.control, outcome);
+        self.handle_outcome(&fired.device, fired.control, RunOrigin::Gesture, outcome);
     }
 }
 
