@@ -50,6 +50,24 @@ pub fn user_origin_setting(key: &GrantKey) -> Option<&str> {
         .flatten()
 }
 
+/// The declared grant to open pages on the server the user entered in
+/// `setting` (`openUrl:user-origin:<setting>`, the manifest's
+/// `openUrl.userOrigins`). It allows nothing by itself: pages are opened
+/// only on a server the user also consented to ([`UserOriginConsent`]).
+pub fn open_url_user_origin_key(setting: &str) -> GrantKey {
+    GrantKey::new(
+        PermissionKind::OpenUrl,
+        format!("{USER_ORIGIN_KEY_PREFIX}{setting}"),
+    )
+}
+
+/// The setting of an `openUrl` user-origin grant key, if `key` is one.
+pub fn open_url_user_origin_setting(key: &GrantKey) -> Option<&str> {
+    (key.kind == PermissionKind::OpenUrl)
+        .then(|| key.key.strip_prefix(USER_ORIGIN_KEY_PREFIX))
+        .flatten()
+}
+
 /// The origin slot declared for `setting` in `manifest`, and the methods
 /// it allows (its own, or the permission's, or all of them).
 pub fn declared_slot<'a>(
