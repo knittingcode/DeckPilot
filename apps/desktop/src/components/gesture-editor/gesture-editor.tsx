@@ -445,6 +445,7 @@ function GestureRow({
                         spec={spec}
                         value={value}
                         projects={profile.projects}
+                        actionType={action.actionType}
                         onChange={(next) => {
                           setOverrides(setOverride(overrides, spec.key, next))
                         }}

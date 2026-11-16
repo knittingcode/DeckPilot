@@ -7,14 +7,19 @@ import {
   clearControls,
   controlRows,
   copyControls,
+  createFolder,
+  deletionNotes,
   dropOnControl,
   duplicateControls,
   emptySelection,
   extendSelection,
   folderOf,
+  freeFolderName,
+  isFree,
   moveControl,
   neighbour,
   orderedControls,
+  pageDeletion,
   parentPage,
   parseControlKey,
   pasteControls,
@@ -23,7 +28,7 @@ import {
   selectedInOrder,
   toggleSelected,
 } from "./editing"
-import { bindingsFor } from "@/lib/layout-model"
+import { ancestors, bindingsFor, deletePage, hasWayBack, pageParents } from "@/lib/layout-model"
 import type { ControlBinding, ControlId, DeviceLayout, DeviceModel } from "@/lib/types"
 
 const mk2: DeviceModel = {
@@ -312,6 +317,144 @@ describe("pages", () => {
     expect(parentPage(l, "folder")).toBe("home")
     expect(parentPage(l, "home")).toBe("home")
     expect(parentPage(layout([]), "folder")).toBe("home")
+  })
+})
+
+describe("folders", () => {
+  it("creates a folder in the open page and makes the control open it", () => {
+    const l = layout([press(key(0), "a")])
+    const made = must(createFolder(mk2, l, "home", key(3), "new"))
+    // The page is new, named so that it clashes with none, and stored
+    // inside the page it was created from.
+    expect(made.pages.at(-1)).toEqual({ id: "new", name: "Folder 2", parent: "home", bindings: [] })
+    expect(bindingsFor(made, "home", key(3))).toEqual([
+      {
+        control: key(3),
+        trigger: { type: "press" },
+        target: { type: "openPage", page: "new" },
+        label: null,
+      },
+    ])
+    expect(folderOf(made, "home", key(3))).toBe("new")
+    expect(parentPage(made, "new")).toBe("home")
+    // Nothing else changed: the other key, the other page.
+    expect(actionsOn(made, "home", key(0))).toEqual(["a"])
+    expect(made.pages.slice(0, 2)).toEqual([
+      { ...l.pages[0], bindings: made.pages[0]?.bindings },
+      l.pages[1],
+    ])
+    // The device adds a Back key itself; the editor says so.
+    expect(hasWayBack(made, "new")).toBe(false)
+  })
+
+  it("nests folders at any depth without cycles", () => {
+    let l = layout([])
+    l = must(createFolder(mk2, l, "home", key(0), "one"))
+    l = must(createFolder(mk2, l, "one", key(0), "two"))
+    l = must(createFolder(mk2, l, "two", key(0), "three"))
+    expect(ancestors(l, "three")).toEqual(["two", "one", "home"])
+    expect(l.pages.map((p) => p.name)).toEqual([
+      "Home",
+      "Folder",
+      "Folder 2",
+      "Folder 3",
+      "Folder 4",
+    ])
+    // Every page has one folder at most, and none is inside itself.
+    const parents = pageParents(l)
+    for (const page of l.pages) expect(ancestors(l, page.id)).not.toContain(page.id)
+    expect(Object.fromEntries(parents)).toEqual({ one: "home", two: "one", three: "two" })
+  })
+
+  it("never overwrites a control that does something", () => {
+    const l = layout([press(key(0), "a")])
+    expect(isFree(l, "home", key(0))).toBe(false)
+    expect(isFree(l, "home", key(1))).toBe(true)
+    expect(createFolder(mk2, l, "home", key(0), "new")).toBeNull()
+    // Nor an id that exists, nor on a page that does not.
+    expect(createFolder(mk2, l, "home", key(1), "folder")).toBeNull()
+    expect(createFolder(mk2, l, "gone", key(1), "new")).toBeNull()
+    // On a dial the folder takes the dial's first trigger, as any library
+    // entry dropped there does.
+    const dials: DeviceLayout = { ...layout([]), model: dialsOnly.id }
+    const onDial = must(createFolder(dialsOnly, dials, "home", dial(0), "new"))
+    expect(bindingsFor(onDial, "home", dial(0)).map((b) => b.trigger)).toEqual([
+      { type: "rotateClockwise" },
+    ])
+    // The library entry alone carries no id: the editor creates the folder.
+    expect(dropOnControl(mk2, l, "home", { type: "newFolder" }, key(1))).toBeNull()
+  })
+
+  it("names new folders so that no two pages share a name", () => {
+    const named = (...names: string[]): DeviceLayout => ({
+      ...layout([]),
+      pages: names.map((name, index) => ({ id: `p${index}`, name, bindings: [] })),
+    })
+    expect(freeFolderName(named("Home"))).toBe("Folder")
+    expect(freeFolderName(named("Home", "folder "))).toBe("Folder 2")
+    expect(freeFolderName(named("Folder", "Folder 2", "Folder 4"))).toBe("Folder 3")
+  })
+
+  it("says what goes with a deleted page", () => {
+    const opener = (index: number, page: string): ControlBinding => ({
+      control: key(index),
+      trigger: { type: "press" },
+      target: { type: "openPage", page },
+    })
+    const l: DeviceLayout = {
+      ...layout([]),
+      explicitTree: true,
+      pages: [
+        { id: "home", name: "Home", bindings: [opener(0, "tools"), opener(1, "tools")] },
+        {
+          id: "tools",
+          name: "Tools",
+          parent: "home",
+          bindings: [
+            press(key(0), "a"),
+            { ...press(key(0), "b"), trigger: { type: "release" } },
+            opener(2, "git"),
+          ],
+        },
+        { id: "git", name: "Git", parent: "tools", bindings: [opener(5, "tools")] },
+        { id: "lone", name: "", bindings: [] },
+      ],
+    }
+    expect(pageDeletion(l, "home")).toBeNull()
+    expect(pageDeletion(l, "gone")).toBeNull()
+    const tools = must(pageDeletion(l, "tools"))
+    // Two bindings of one key count once; openers on every other page.
+    expect(tools).toEqual({
+      name: "Tools",
+      controls: 2,
+      openers: 3,
+      inside: ["Git"],
+      folder: "Home",
+    })
+    expect(deletionNotes(tools)).toEqual([
+      "2 controls on it are deleted with it.",
+      "3 controls on other pages that open it will do nothing afterwards.",
+      "The page inside it (“Git”) is kept and moves to “Home”.",
+    ])
+    // What the dialog says is what deleting does.
+    const after = deletePage(l, "tools")
+    expect(after.pages.map((p) => [p.id, p.parent])).toEqual([
+      ["home", undefined],
+      ["git", "home"],
+      ["lone", undefined],
+    ])
+    expect(after.pages.flatMap((p) => p.bindings)).toEqual([])
+
+    expect(deletionNotes(must(pageDeletion(l, "lone")))).toEqual([
+      "The page is empty and nothing opens it.",
+    ])
+    expect(
+      deletionNotes({ name: "X", controls: 1, openers: 1, inside: ["A", ""], folder: null }),
+    ).toEqual([
+      "1 control on it is deleted with it.",
+      "1 control on other pages that opens it will do nothing afterwards.",
+      "The pages inside it (“A”, “Untitled”) are kept and move to the top level.",
+    ])
   })
 })
 

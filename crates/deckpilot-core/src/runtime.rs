@@ -962,7 +962,7 @@ impl Engine {
         let result = self
             .registry
             .dispatch(&instance.action_type, &parameters, &execution);
-        let mut result = redactor.redact_result(result);
+        let mut result = settle_request(redactor.redact_result(result), invocation);
         if result.is_success() {
             let requested = std::mem::take(&mut result.effects);
             for effect in &requested {
@@ -977,6 +977,34 @@ impl Engine {
         }
         Ok(result)
     }
+}
+
+/// The error code of an action with [`crate::DeckRequest`]s that was run
+/// where nothing applies them, e.g. as a workflow node.
+pub const NOT_FROM_A_KEY: &str = "not-from-a-key";
+
+/// `result` as its caller may see it: with its [`crate::DeckRequest`] only
+/// when the action succeeded and the caller of a run started by
+/// `invocation` applies requests. The device runtime does, for a key, a
+/// gesture and a run from the app; a workflow run does not, and the action
+/// fails there rather than report a success that did nothing.
+fn settle_request(mut result: ActionResult, invocation: &Invocation) -> ActionResult {
+    if !result.is_success() {
+        result.request = None;
+        return result;
+    }
+    let applied = invocation.workflow.is_none()
+        && matches!(
+            invocation.origin,
+            Some(crate::RunOrigin::Key | crate::RunOrigin::Gesture | crate::RunOrigin::App)
+        );
+    if result.request.is_some() && !applied {
+        return ActionResult::error(
+            NOT_FROM_A_KEY,
+            "this action runs from a key or from the app, not inside a workflow",
+        );
+    }
+    result
 }
 
 /// Applies `effect` to `context` and returns it as applied. Selection is

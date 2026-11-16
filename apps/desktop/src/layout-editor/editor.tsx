@@ -34,6 +34,7 @@ import {
   controlLabel,
   page as findPage,
   hasWayBack,
+  pagePosition,
   targetLabel,
   triggerLabel,
 } from "@/lib/layout-model"
@@ -51,10 +52,13 @@ import type {
 import { effectiveUsage } from "./appearance"
 import { AppearancePanel, type IconState } from "./appearance-panel"
 import { ControlMenu } from "./control-menu"
+import { DeletePageDialog } from "./delete-page-dialog"
 import {
   boundControls,
   folderOf,
+  isFree,
   orderedControls,
+  pageDeletion,
   parseControlKey,
   type DragSource,
 } from "./editing"
@@ -216,11 +220,15 @@ export function LayoutEditor({
   }, [pageBindings, actions])
   const previewed = projects.find((p) => p.id === previewProject)
   const summaries = useMemo(() => {
+    const position = pagePosition(draft, pageId)
     const render = (text: string) =>
       text
         .replaceAll("{profile}", view.profile.name)
         .replaceAll("{project.key}", previewed?.key ?? "-")
         .replaceAll("{project.name}", previewed?.name ?? "-")
+        .replaceAll("{page.number}", String(position.number))
+        .replaceAll("{page.count}", String(position.count))
+        .replaceAll("{page.name}", findPage(draft, pageId)?.name ?? "-")
     const map = new Map<string, string>()
     for (const control of orderedControls(model)) {
       const labels = bindingsFor(draft, pageId, control).map(
@@ -341,6 +349,7 @@ export function LayoutEditor({
               onAdd={commands.addPage}
               onRename={commands.renamePage}
               onDelete={commands.deletePage}
+              onAutoReturn={commands.setAutoReturn}
             />
             <PageTreePanel
               profileId={profileId}
@@ -370,6 +379,7 @@ export function LayoutEditor({
                   selection={selection.controls}
                   focused={selection.focus}
                   onSelect={commands.select}
+                  onOpen={commands.openFolder}
                   onControlKeyDown={onControlKeyDown}
                   droppable
                   draggable
@@ -385,6 +395,7 @@ export function LayoutEditor({
                           const id = folderOf(draft, pageId, control)
                           return id ? findPage(draft, id)?.name : undefined
                         })(),
+                        canCreateFolder: isFree(draft, pageId, control),
                       }}
                       commands={{
                         onOpen: () => {
@@ -399,6 +410,9 @@ export function LayoutEditor({
                         openFolder: () => {
                           commands.openFolder(control)
                         },
+                        newFolder: () => {
+                          commands.newFolder(control)
+                        },
                       }}
                     >
                       {element}
@@ -411,8 +425,8 @@ export function LayoutEditor({
             )}
             {hasControls && bound.size === 0 && (
               <EmptyState title={isFolderPage ? "This folder is empty" : "This page is empty"}>
-                Drag an action or workflow from the library onto a control, or select a control and
-                choose in the inspector.
+                Drag an action, a workflow or “New folder” from the library onto a control, or
+                select a control and choose in the inspector.
               </EmptyState>
             )}
             {isFolderPage && !hasWayBack(draft, pageId) && (
@@ -480,6 +494,11 @@ export function LayoutEditor({
           }
         />
       </div>
+      <DeletePageDialog
+        deletion={editing.deleting ? pageDeletion(draft, editing.deleting) : null}
+        onCancel={commands.cancelDeletePage}
+        onConfirm={commands.confirmDeletePage}
+      />
     </DndContext>
   )
 }

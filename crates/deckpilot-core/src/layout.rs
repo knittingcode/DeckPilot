@@ -189,6 +189,11 @@ pub struct LayoutPage {
     /// defaults.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gestures: Vec<KeyGestureSettings>,
+    /// A folder that closes by itself: after one of its keys ran an action
+    /// or started a workflow, the device returns to the folder's parent,
+    /// as Back would. Not stored when off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_return: bool,
 }
 
 impl LayoutPage {
@@ -199,6 +204,7 @@ impl LayoutPage {
             parent: None,
             bindings: Vec::new(),
             gestures: Vec::new(),
+            auto_return: false,
         }
     }
 

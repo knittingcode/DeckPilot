@@ -196,6 +196,9 @@ pub enum Capability {
     /// receives through its parameters need no capability: the user put the
     /// reference there.
     VariablesRead,
+    /// Change what a deck shows: move between its pages and switch the
+    /// active profile (see [`DeckRequest`](crate::DeckRequest)).
+    DeckControl,
 }
 
 impl Capability {
@@ -211,6 +214,7 @@ impl Capability {
             Self::Notifications => "Show desktop notifications",
             Self::Credentials => "Use credentials stored on this computer",
             Self::VariablesRead => "Read shared variables",
+            Self::DeckControl => "Change pages and profiles on the deck",
         }
     }
 }
