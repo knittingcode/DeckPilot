@@ -1,0 +1,87 @@
+Identifier=io.github.knittingcode.deckpilot.experiment.hid-sandbox-usb
+Format=app bundle with Mach-O thin (arm64)
+Signature=adhoc
+entitlements:
+{
+  "com.apple.security.app-sandbox" => true
+  "com.apple.security.device.usb" => true
+}
+--- report
+probe = macos-sandbox-hid
+label = sandbox-usb-open
+pid = 13544
+app_sandbox_container_id = io.github.knittingcode.deckpilot.experiment.hid-sandbox-usb
+home = ~/Library/Containers/io.github.knittingcode.deckpilot.experiment.hid-sandbox-usb/Data
+read_dir(~/Library/Preferences) = denied (Operation not permitted (os error 1))
+input_monitoring (IOHIDCheckAccess ListenEvent) = 1 denied
+hid_init = ok
+hid_devices = 22
+elgato_devices (vendor 0x0fd9) = 0
+device[0] vid=0x0000 pid=0x0000 usage_page=0xff00 usage=0x0048 interface=-1 product="BTM" manufacturer="APPL"
+device[0] open exclusive = opened, read_timeout(0) = 0 bytes
+device[0] open shared = opened, read_timeout(0) = 0 bytes
+device[1] vid=0x0000 pid=0x0000 usage_page=0xff00 usage=0x0003 interface=-1 product="Apple Internal Keyboard / Trackpad" manufacturer="Apple"
+device[1] open exclusive = opened, read_timeout(0) = 0 bytes
+device[1] open shared = opened, read_timeout(0) = 0 bytes
+device[2] vid=0x0000 pid=0x0000 usage_page=0x0001 usage=0x0006 interface=-1 product="Apple Internal Keyboard / Trackpad" manufacturer="Apple"
+device[2] open exclusive = failed (hidapi error: hid_open_path: failed to open IOHIDDevice from mach entry: (0xE00002E2) (iokit/common) not permitted)
+device[2] open shared = failed (hidapi error: hid_open_path: failed to open IOHIDDevice from mach entry: (0xE00002E2) (iokit/common) not permitted)
+device[3] vid=0x0000 pid=0x0000 usage_page=0x000c usage=0x0001 interface=-1 product="Apple Internal Keyboard / Trackpad" manufacturer="Apple"
+device[3] open exclusive = failed (hidapi error: hid_open_path: failed to open IOHIDDevice from mach entry: (0xE00002E2) (iokit/common) not permitted)
+device[3] open shared = failed (hidapi error: hid_open_path: failed to open IOHIDDevice from mach entry: (0xE00002E2) (iokit/common) not permitted)
+device[4] vid=0x0000 pid=0x0000 usage_page=0xff00 usage=0x0006 interface=-1 product="Apple Internal Keyboard / Trackpad" manufacturer="Apple"
+device[4] open exclusive = failed (hidapi error: hid_open_path: failed to open IOHIDDevice from mach entry: (0xE00002E2) (iokit/common) not permitted)
+device[4] open shared = failed (hidapi error: hid_open_path: failed to open IOHIDDevice from mach entry: (0xE00002E2) (iokit/common) not permitted)
+device[5] vid=0x0000 pid=0x0000 usage_page=0x0001 usage=0x0002 interface=-1 product="Apple Internal Keyboard / Trackpad" manufacturer="Apple"
+device[5] open exclusive = failed (hidapi error: hid_open_path: failed to open IOHIDDevice from mach entry: (0xE00002E2) (iokit/common) not permitted)
+device[5] open shared = failed (hidapi error: hid_open_path: failed to open IOHIDDevice from mach entry: (0xE00002E2) (iokit/common) not permitted)
+device[6] vid=0x0000 pid=0x0000 usage_page=0x0001 usage=0x0001 interface=-1 product="Apple Internal Keyboard / Trackpad" manufacturer="Apple"
+device[6] open exclusive = failed (hidapi error: hid_open_path: failed to open IOHIDDevice from mach entry: (0xE00002E2) (iokit/common) not permitted)
+device[6] open shared = failed (hidapi error: hid_open_path: failed to open IOHIDDevice from mach entry: (0xE00002E2) (iokit/common) not permitted)
+device[7] vid=0x0000 pid=0x0000 usage_page=0x000d usage=0x0005 interface=-1 product="Apple Internal Keyboard / Trackpad" manufacturer="Apple"
+device[7] open exclusive = failed (hidapi error: hid_open_path: failed to open IOHIDDevice from mach entry: (0xE00002E2) (iokit/common) not permitted)
+device[7] open shared = failed (hidapi error: hid_open_path: failed to open IOHIDDevice from mach entry: (0xE00002E2) (iokit/common) not permitted)
+device[8] vid=0x0000 pid=0x0000 usage_page=0xff00 usage=0x000c interface=-1 product="Apple Internal Keyboard / Trackpad" manufacturer="Apple"
+device[8] open exclusive = failed (hidapi error: hid_open_path: failed to open IOHIDDevice from mach entry: (0xE00002E2) (iokit/common) not permitted)
+device[8] open shared = failed (hidapi error: hid_open_path: failed to open IOHIDDevice from mach entry: (0xE00002E2) (iokit/common) not permitted)
+device[9] vid=0x0000 pid=0x0000 usage_page=0xff00 usage=0x0004 interface=-1 product="als" manufacturer="Apple"
+device[9] open exclusive = opened, read_timeout(0) = 0 bytes
+device[9] open shared = opened, read_timeout(0) = 0 bytes
+device[10] vid=0x0000 pid=0x0000 usage_page=0xff0c usage=0x0005 interface=-1 product="devmotion6" manufacturer="Apple"
+device[10] open exclusive = opened, read_timeout(0) = 0 bytes
+device[10] open shared = opened, read_timeout(0) = 0 bytes
+device[11] vid=0x05ac pid=0x8104 usage_page=0xff00 usage=0x0009 interface=-1 product="gyro" manufacturer="Apple"
+device[11] open exclusive = opened, read_timeout(0) = 0 bytes
+device[11] open shared = opened, read_timeout(0) = 0 bytes
+device[12] vid=0x05ac pid=0x8104 usage_page=0x0020 usage=0x008a interface=-1 product="las" manufacturer="Apple"
+device[12] open exclusive = opened, read_timeout(0) = 0 bytes
+device[12] open shared = opened, read_timeout(0) = 0 bytes
+device[13] vid=0x0000 pid=0x0000 usage_page=0x000c usage=0x0001 interface=-1 product="Headset" manufacturer="Apple"
+device[13] open exclusive = opened, read_timeout(0) = 0 bytes
+device[13] open shared = opened, read_timeout(0) = 0 bytes
+device[14] vid=0x0000 pid=0x0000 usage_page=0xff00 usage=0x005f interface=-1 product="Apple Internal Keyboard / Trackpad" manufacturer="Apple"
+device[14] open exclusive = opened, read_timeout(0) = 0 bytes
+device[14] open shared = opened, read_timeout(0) = 0 bytes
+device[15] vid=0x0000 pid=0x0000 usage_page=0xff00 usage=0x000d interface=-1 product="Apple Internal Keyboard / Trackpad" manufacturer="Apple"
+device[15] open exclusive = opened, read_timeout(0) = 0 bytes
+device[15] open shared = opened, read_timeout(0) = 0 bytes
+device[16] vid=0x0000 pid=0x0000 usage_page=0xff00 usage=0x000b interface=-1 product="Apple Internal Keyboard / Trackpad" manufacturer="Apple"
+device[16] open exclusive = opened, read_timeout(0) = 0 bytes
+device[16] open shared = opened, read_timeout(0) = 0 bytes
+device[17] vid=0x05ac pid=0x0000 usage_page=0xff00 usage=0x000f interface=-1 product="Keyboard Backlight" manufacturer=""
+device[17] open exclusive = opened, read_timeout(0) = 0 bytes
+device[17] open shared = opened, read_timeout(0) = 0 bytes
+device[18] vid=0x0000 pid=0x0000 usage_page=0xff00 usage=0x00ff interface=-1 product="wakehint" manufacturer="Apple"
+device[18] open exclusive = opened, read_timeout(0) = 0 bytes
+device[18] open shared = opened, read_timeout(0) = 0 bytes
+device[19] vid=0x0000 pid=0x0000 usage_page=0xff0c usage=0x0001 interface=-1 product="cma" manufacturer="Apple"
+device[19] open exclusive = opened, read_timeout(0) = 0 bytes
+device[19] open shared = opened, read_timeout(0) = 0 bytes
+device[20] vid=0x05ac pid=0x8104 usage_page=0xff00 usage=0x0003 interface=-1 product="accel" manufacturer="Apple"
+device[20] open exclusive = opened, read_timeout(0) = 0 bytes
+device[20] open shared = opened, read_timeout(0) = 0 bytes
+device[21] vid=0x05ac pid=0x8104 usage_page=0xff00 usage=0x0005 interface=-1 product="als-temp" manufacturer="Apple"
+device[21] open exclusive = opened, read_timeout(0) = 0 bytes
+device[21] open shared = opened, read_timeout(0) = 0 bytes
+end
+--- stderr

@@ -1,0 +1,19 @@
+[package]
+name = "msix-hid"
+description = "Feasibility probe: can hidapi enumerate HID devices from inside a full-trust MSIX package?"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+
+# Not a member of the DeckPilot workspace: an experiment with its own lock
+# file, built only by run.ps1 (docs/distribution/README.md, PR G).
+[workspace]
+
+[dependencies]
+# The agent's version and default features (root Cargo.toml).
+hidapi = "=2.6.7"
+
+[profile.release]
+debug = false
+strip = true
