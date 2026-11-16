@@ -1,0 +1,39 @@
+{
+  "name": "deckpilot-website",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "build:fixtures": "node tests/build-fixtures.mjs",
+    "preview": "astro preview",
+    "check": "astro check",
+    "check:design": "node tools/check-design-system.mjs",
+    "test:unit": "node --test tests/unit/*.test.ts",
+    "test:static": "node tests/check-no-version.mjs && node tests/check-links.mjs dist && node tests/check-i18n.mjs dist",
+    "test:browser": "playwright test",
+    "test": "npm run test:unit && npm run test:static && npm run test:browser",
+    "verify": "npm run check:design && npm run check && npm run build && npm run build:fixtures && npm test",
+    "test:live": "SITE_URL=${SITE_URL:-https://knittingcode.github.io/deckpilot/} playwright test"
+  },
+  "dependencies": {
+    "@astrojs/check": "0.9.12",
+    "@astrojs/sitemap": "3.7.5",
+    "@fontsource-variable/inter": "5.3.0",
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
+    "@lucide/astro": "1.73.0",
+    "@tailwindcss/vite": "4.3.5",
+    "astro": "7.4.12",
+    "tailwindcss": "4.3.5",
+    "typescript": "6.0.3"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.65.1"
+  }
+}
