@@ -9,9 +9,12 @@ import {
   deletePage,
   hasWayBack,
   pageParents,
+  pagePosition,
   removeBinding,
+  setAutoReturn,
   setBinding,
   supportedTriggers,
+  topLevelPages,
 } from "./layout-model"
 import type { ControlBinding, DeviceLayout, DeviceModel } from "./types"
 
@@ -210,5 +213,46 @@ describe("page tree", () => {
     expect(hasWayBack(l, "c")).toBe(true)
     expect(hasWayBack(l, "d")).toBe(false)
     expect(hasWayBack(l, "lost")).toBe(true)
+  })
+
+  it("counts the pages in no folder, as the device does", () => {
+    // Folders sit between the pages in the list: only the tree counts.
+    const l = tree(
+      [
+        { id: "home", name: "Home", bindings: [] },
+        { id: "tools", name: "Tools", parent: "two", bindings: [] },
+        { id: "two", name: "Two", bindings: [open(0, "tools")] },
+        { id: "deep", name: "Deep", parent: "tools", bindings: [] },
+        { id: "three", name: "Three", bindings: [] },
+      ],
+      true,
+    )
+    expect(topLevelPages(l)).toEqual(["home", "two", "three"])
+    expect(pagePosition(l, "home")).toEqual({ number: 1, count: 3 })
+    expect(pagePosition(l, "three")).toEqual({ number: 3, count: 3 })
+    // Inside folders: the position of the page they belong to.
+    expect(pagePosition(l, "tools")).toEqual({ number: 2, count: 3 })
+    expect(pagePosition(l, "deep")).toEqual({ number: 2, count: 3 })
+    // A layout from before stored trees: a page opened from home is its
+    // folder, not a page of the sequence.
+    const old = tree([
+      { id: "home", name: "Home", bindings: [open(0, "more")] },
+      { id: "more", name: "More", bindings: [] },
+    ])
+    expect(topLevelPages(old)).toEqual(["home"])
+    expect(pagePosition(old, "more")).toEqual({ number: 1, count: 1 })
+  })
+
+  it("stores that a folder closes after use only when it does", () => {
+    const l = tree([
+      { id: "home", name: "Home", bindings: [open(0, "tools")] },
+      { id: "tools", name: "Tools", bindings: [] },
+    ])
+    const closing = setAutoReturn(l, "tools", true)
+    expect(closing.pages[1]).toEqual({ id: "tools", name: "Tools", bindings: [], autoReturn: true })
+    expect(closing.pages[0]).toBe(l.pages[0])
+    // Off again: the page is exactly as before, without the field.
+    expect(setAutoReturn(closing, "tools", false)).toEqual(l)
+    expect(setAutoReturn(l, "tools", false).pages.some((p) => "autoReturn" in p)).toBe(false)
   })
 })

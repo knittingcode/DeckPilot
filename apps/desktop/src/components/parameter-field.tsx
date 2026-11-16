@@ -13,6 +13,7 @@ import { ReferenceInput } from "@/components/variable-picker/reference-input"
 import { ReferenceValueField } from "@/components/variable-picker/reference-value"
 import { VariablePicker } from "@/components/variable-picker/variable-picker"
 import { initialValue } from "@/lib/parameters"
+import { PROFILE_PARAMETER, ProfileField, SWITCH_PROFILE_TYPE } from "@/modules/deck/profile-field"
 import type { ParameterSpec, ParameterValue, Project, ResourceRef } from "@/lib/types"
 import { TEMPLATE_KIND, templateReferences } from "@/lib/variables"
 
@@ -25,27 +26,43 @@ import { TEMPLATE_KIND, templateReferences } from "@/lib/variables"
  * the variable picker: text takes `{{ … }}` references at the cursor (a
  * `template` value), other kinds a whole-value `reference` of a compatible
  * type. The reference is what is saved, never its previewed value.
+ *
+ * `actionType` is the type the parameter belongs to, when the caller knows
+ * it: a parameter whose text names something of the application (the
+ * profile of "Switch profile") is then drawn as a list of what exists.
  */
 export function ParameterField({
   spec,
   value,
   projects = [],
+  actionType,
   onChange,
 }: {
   spec: ParameterSpec
   value: ParameterValue
   projects?: Project[]
+  actionType?: string
   onChange: (value: ParameterValue) => void
 }) {
   const id = `parameter-${spec.key}`
   const labelId = `${id}-label`
+  const profile =
+    actionType === SWITCH_PROFILE_TYPE && spec.key === PROFILE_PARAMETER && value.type === "text"
   return (
     <div className="grid gap-2">
       <Label id={labelId} htmlFor={id}>
         {spec.label}
         {spec.required && <span className="text-destructive">*</span>}
       </Label>
-      {value.type === "reference" ? (
+      {profile ? (
+        <ProfileField
+          id={id}
+          value={value.value}
+          onChange={(profileId) => {
+            onChange({ type: "text", value: profileId })
+          }}
+        />
+      ) : value.type === "reference" ? (
         <ReferenceValueField
           id={id}
           labelId={labelId}

@@ -87,6 +87,11 @@ pub struct RateLimits {
     /// Opening URLs over a longer window (20 per 10 minutes, refilled
     /// continuously): a plugin cannot keep opening tabs at the short rate.
     pub open_url_window: Rate,
+    /// `time.now` (20/s).
+    pub time: Rate,
+    /// `random.bytes`, counted in **bytes**: 4,096 per minute, refilled
+    /// continuously, so one run is bounded as well.
+    pub random_bytes: Rate,
 }
 
 impl Default for RateLimits {
@@ -100,6 +105,8 @@ impl Default for RateLimits {
             variables: Rate::new(10, Duration::from_secs(1)),
             open_url: Rate::new(1, Duration::from_secs(2)),
             open_url_window: Rate::new(20, Duration::from_secs(600)),
+            time: Rate::new(20, Duration::from_secs(1)),
+            random_bytes: Rate::new(4096, Duration::from_secs(60)),
         }
     }
 }
@@ -119,14 +126,21 @@ impl Bucket {
     }
 
     /// Takes one token if available.
+    #[cfg(test)]
     pub(crate) fn take(&mut self, rate: Rate, now: Duration) -> bool {
+        self.take_n(rate, now, 1)
+    }
+
+    /// Takes `n` tokens if all of them are available, none otherwise.
+    pub(crate) fn take_n(&mut self, rate: Rate, now: Duration, n: u32) -> bool {
         let elapsed = now.saturating_sub(self.last).as_secs_f64();
         let per = rate.per.as_secs_f64().max(f64::MIN_POSITIVE);
         let cap = f64::from(rate.capacity);
         self.tokens = (self.tokens + elapsed * cap / per).min(cap);
         self.last = now;
-        if self.tokens >= 1.0 {
-            self.tokens -= 1.0;
+        let n = f64::from(n);
+        if self.tokens >= n {
+            self.tokens -= n;
             true
         } else {
             false
@@ -137,6 +151,22 @@ impl Bucket {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn several_tokens_are_taken_together_or_not_at_all() {
+        let rate = Rate::new(10, Duration::from_secs(10));
+        let mut b = Bucket::new(rate, Duration::ZERO);
+        assert!(b.take_n(rate, Duration::ZERO, 6));
+        // Four are left: six are refused and nothing is taken.
+        assert!(!b.take_n(rate, Duration::ZERO, 6));
+        assert!(b.take_n(rate, Duration::ZERO, 4));
+        assert!(!b.take_n(rate, Duration::ZERO, 1));
+        // One token per second comes back.
+        assert!(b.take_n(rate, Duration::from_secs(3), 3));
+        assert!(!b.take_n(rate, Duration::from_secs(3), 1));
+        // More than the capacity is never available.
+        assert!(!b.take_n(rate, Duration::from_secs(3600), 11));
+    }
 
     #[test]
     fn bucket_refills() {

@@ -1,4 +1,13 @@
-import { ClipboardPaste, Copy, CopyPlus, Eraser, FolderOpen, Plus, Scissors } from "lucide-react"
+import {
+  ClipboardPaste,
+  Copy,
+  CopyPlus,
+  Eraser,
+  FolderOpen,
+  FolderPlus,
+  Plus,
+  Scissors,
+} from "lucide-react"
 import type { ReactElement } from "react"
 
 import {
@@ -25,6 +34,8 @@ export interface ControlMenuState {
   hasBindings: boolean
   canPaste: boolean
   folderName: string | undefined
+  /** The control is empty: a folder can be created on it. */
+  canCreateFolder: boolean
 }
 
 export interface ControlMenuCommands {
@@ -36,6 +47,7 @@ export interface ControlMenuCommands {
   duplicate: () => void
   clear: () => void
   openFolder: () => void
+  newFolder: () => void
 }
 
 /** Right-click menu of a control; commands apply to the whole selection. */
@@ -90,9 +102,21 @@ export function ControlMenu({
             ))}
           </ContextMenuSubContent>
         </ContextMenuSub>
-        {state.folderName && (
+        {state.folderName ? (
           <ContextMenuItem onSelect={commands.openFolder}>
             <FolderOpen /> Open “{state.folderName}”
+          </ContextMenuItem>
+        ) : (
+          <ContextMenuItem
+            onSelect={commands.newFolder}
+            disabled={!state.canCreateFolder}
+            title={
+              state.canCreateFolder
+                ? undefined
+                : "Clear the control first: it already does something"
+            }
+          >
+            <FolderPlus /> New folder
           </ContextMenuItem>
         )}
         <ContextMenuSeparator />

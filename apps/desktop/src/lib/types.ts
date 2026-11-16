@@ -419,6 +419,12 @@ export interface LayoutPage {
   bindings: ControlBinding[]
   /** Gesture timings of controls that differ from the machine's defaults. */
   gestures?: KeyGestureSettings[]
+  /**
+   * A folder that closes by itself: after one of its keys ran an action or
+   * started a workflow, the device returns to the folder's parent. Not
+   * stored when off.
+   */
+  autoReturn?: boolean
 }
 
 export interface DeviceLayout {

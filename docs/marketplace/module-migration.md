@@ -718,6 +718,32 @@ nothing changes.
   starts; the agent side of that dialog is covered by
   `plugins_cutover.rs` and P7's `plugins_migration.rs`.
 
+*As built (P11, the GitLab plugin):* `plugins/first-party/gitlab`
+(`deckpilot.gitlab`, class `migration` in `bundled.json`) reproduces all
+six actions of the built-in `gitlab` module; no variables on either side.
+It is built and pinned, and **not routed**: its alias block and migration
+plan come with its cut-over.
+
+- The API URL is a user-entered origin (G2): `gitlab.com` is the declared
+  host and the default, and a self-managed GitLab (with its path, possibly
+  on a private network) is reached, sent the token and opened only after
+  the user allowed exactly that server. The token is the slot `token`,
+  sent in `PRIVATE-TOKEN`; pages open on the same server
+  (`openUrl.userOrigins`, §7 G1).
+- `contracts.rs` (`first_party`) checks the manifest against the built-in
+  (actions, settings, and that the permissions are exactly these three);
+  `apps/agent/tests/plugins_gitlab.rs` runs every action through the agent
+  and the host against the built-in on the same canned answers, on
+  GitLab.com and on an entered GitLab under a path, with identical
+  results.
+- Lists use pages of 50 (two for more than 50 merge requests, ten for the
+  built-in's 500 jobs or uncounted merge requests), and pages of 10 when
+  an answer is over the 512 KiB a plugin gets. The differences, all on
+  failure paths, limits or the editor, are listed in
+  [`plugins/first-party/gitlab/README.md`](../../plugins/first-party/gitlab/README.md).
+- `plugins/first-party/support` holds what the plugins for a user-entered
+  server share (URLs without the `url` crate, the `Date`-based time limit).
+
 `notifications` follows as the first `default`-class bundled plugin. It is
 the one that proves seeding, tombstones and first launch.
 

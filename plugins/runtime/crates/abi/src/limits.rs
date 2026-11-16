@@ -79,3 +79,7 @@ pub const MAX_RUN_WORKFLOW_NAME: usize = 128;
 pub const MAX_RUN_FAILED_NODES: usize = 32;
 /// One node id in a `run.context` reply.
 pub const MAX_RUN_NODE_ID: usize = 64;
+/// Bytes one `random.bytes` call returns at most.
+pub const MAX_RANDOM_BYTES: usize = 64;
+/// Largest local UTC offset in a `time.now` reply, in minutes either way.
+pub const MAX_UTC_OFFSET_MINUTES: i32 = 24 * 60;
