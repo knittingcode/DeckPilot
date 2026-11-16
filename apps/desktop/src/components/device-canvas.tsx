@@ -7,6 +7,7 @@ import {
   neighbour,
   parseControlKey,
   type Direction,
+  type DragSource,
   type SelectMode,
 } from "@/layout-editor/editing"
 import { controlKey, controlLabel, controlsOf, sameControl } from "@/lib/layout-model"
@@ -28,6 +29,8 @@ interface CanvasProps {
   /** The control that takes keyboard focus (roving tab stop). */
   focused?: ControlId | null
   onSelect?: (control: ControlId, mode: SelectMode) => void
+  /** A control was double-clicked, e.g. to enter the folder it opens. */
+  onOpen?: (control: ControlId) => void
   /** Keys other than arrows pressed on a control (Delete, Escape, …). */
   onControlKeyDown?: (event: KeyboardEvent<HTMLButtonElement>, control: ControlId) => void
   /** Controls accept drops from the action palette. */
@@ -65,9 +68,12 @@ function Control({
 }) {
   const key = controlKey(control)
   const drop = useDroppable({ id: key, disabled: !props.droppable })
+  // What the editor's drop handler reads: without the type it took a
+  // dragged control for a library entry.
+  const source: DragSource = { type: "control", control }
   const drag = useDraggable({
     id: `control:${key}`,
-    data: { control },
+    data: source,
     disabled: !props.draggable,
   })
   const selected = props.selection?.some((c) => sameControl(c, control)) ?? false
@@ -104,6 +110,7 @@ function Control({
       )}
       onPointerDown={onPointerDown}
       onClick={(event) => props.onSelect?.(control, selectMode(event))}
+      onDoubleClick={() => props.onOpen?.(control)}
       onKeyDown={(event) => {
         props.onControlKeyDown?.(event, control)
       }}
