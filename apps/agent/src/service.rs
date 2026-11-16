@@ -1170,20 +1170,25 @@ impl Agent {
         let Some(store) = self.store.as_ref() else {
             return Ok(());
         };
+        let mut stages = ReloadStages::start();
         if let Some(machine) = store.load_machine_config()?
             && machine != *self.runtime.machine()
         {
             self.runtime.set_machine(machine);
             let _ = self.handle.events.send(AgentEvent::ResourceBindingsChanged);
         }
+        stages.done("machine");
         // Module states may have changed in the configuration app.
         let before = self.modules.variables().clone();
         self.modules = load_modules(store)?;
+        stages.done("modules");
         self.plugins.migrate(store, &self.modules);
         register_plugin_modules(&mut self.modules, &self.plugins);
+        stages.done("plugins");
         self.update_variable_permissions();
         self.publish_module_variables(&before);
         self.reload_variables()?;
+        stages.done("variables");
         self.auto_lock = deckpilot_storage::policy::security_policy(store)?.auto_lock;
         self.runtime
             .set_gesture_defaults(deckpilot_storage::gestures::gesture_defaults(store)?);
@@ -1191,6 +1196,7 @@ impl Agent {
         // Credentials are loaded with the configuration, so the app asks
         // for a reload after changing one.
         let credentials = store.load_credentials()?;
+        stages.done("profile");
         let notifier = crate::notifications::AgentNotifier {
             events: self.handle.events.clone(),
             desktop_clients: self.handle.desktop_clients.clone(),
@@ -1216,8 +1222,11 @@ impl Agent {
             }
             other => self.runtime.set_profile(other, project),
         }
+        stages.done("engine");
         self.reload_icons();
         self.work_session_settings_reloaded();
+        stages.done("faces");
+        stages.report();
         info!("configuration reloaded");
         self.after_change();
         Ok(())
@@ -1659,6 +1668,57 @@ fn security_state(path: &std::path::Path) -> Result<SecurityState, StorageError>
     })
 }
 
+/// A reload longer than this is reported with the time of each stage: the
+/// app waits a few seconds for a reload after a save, and nothing else is
+/// answered while one runs.
+const SLOW_RELOAD: Duration = Duration::from_millis(500);
+
+/// How long each stage of a configuration reload took, so a slow one says
+/// where the time went (the database, the plugin worker, rendering).
+struct ReloadStages {
+    started: std::time::Instant,
+    last: std::time::Instant,
+    stages: Vec<(&'static str, Duration)>,
+}
+
+impl ReloadStages {
+    fn start() -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            started: now,
+            last: now,
+            stages: Vec::new(),
+        }
+    }
+
+    /// The stage `name` ended now.
+    fn done(&mut self, name: &'static str) {
+        let now = std::time::Instant::now();
+        self.stages.push((name, now.duration_since(self.last)));
+        self.last = now;
+    }
+
+    /// `machine 1 ms, modules 5210 ms, …`.
+    fn describe(&self) -> String {
+        self.stages
+            .iter()
+            .map(|(name, took)| format!("{name} {} ms", took.as_millis()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Logs the stages: a warning for a slow reload, otherwise at debug.
+    fn report(&self) {
+        let total = self.last.duration_since(self.started);
+        let stages = self.describe();
+        if total >= SLOW_RELOAD {
+            warn!(total_ms = total.as_millis(), %stages, "the configuration reload was slow");
+        } else {
+            debug!(total_ms = total.as_millis(), %stages, "configuration reload stages");
+        }
+    }
+}
+
 fn load_modules(store: &SqliteStore) -> Result<ModuleRegistry, StorageError> {
     let (modules, problems) = crate::plugins::configured_modules(&store.module_states()?);
     // Schemas of all registered modules, enabled or not.
@@ -1816,5 +1876,29 @@ pub async fn shutdown_signal() {
     #[cfg(not(unix))]
     {
         let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+#[cfg(test)]
+mod reload_stage_tests {
+    use super::*;
+
+    #[test]
+    fn stages_are_named_in_order_with_their_times() {
+        let mut stages = ReloadStages::start();
+        stages.done("machine");
+        std::thread::sleep(Duration::from_millis(20));
+        stages.done("modules");
+        let described = stages.describe();
+        let (machine, modules) = described.split_once(", ").unwrap();
+        assert!(machine.starts_with("machine ") && machine.ends_with(" ms"));
+        let took: u64 = modules
+            .strip_prefix("modules ")
+            .and_then(|m| m.strip_suffix(" ms"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(took >= 20, "{described}");
+        assert!(stages.last.duration_since(stages.started) >= Duration::from_millis(20));
     }
 }
