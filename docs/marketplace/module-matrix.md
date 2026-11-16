@@ -512,6 +512,12 @@ remaining differences: `plugins/first-party/gitlab/README.md`.
 8. **Referenced ids.** All four.
 9. **Complexity and risk.** Medium and low. **Plugin**, after G2.
 
+*Status (P11):* `plugins/first-party/jira` (`deckpilot.jira`) reproduces
+the four actions for the Jira Cloud site or Data Center the user enters
+(G2; no host of its own), with the credential slot `credential` (Basic or
+Bearer by `deployment`); bundled with class `migration`, not routed yet.
+Parity and the remaining differences: `plugins/first-party/jira/README.md`.
+
 ## Audit of 2026-11-16: where the migration stands
 
 Taken on `origin/main` at `dc1a8a2e` and `knittingcode/deckpilot-plugins`
