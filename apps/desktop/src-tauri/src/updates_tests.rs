@@ -1183,8 +1183,8 @@ fn release_builds_accept_only_this_repositorys_release_downloads() {
     let package = b"DeckPilot update package".to_vec();
     let signature = sign(&h.keys, &package, VERSION);
     h.server.reply("package", Reply::Ok(package));
-    // The escaping URL passes as a string; only as the updater parses it
-    // does it leave the release downloads.
+    // The escaping URL is refused as written, before the updater parses
+    // it (and again as the updater parsed it).
     assert_eq!(
         ArtifactPolicy::GithubRelease.validate_artifact(
             &deckpilot_update::manifest::PlatformArtifact {
@@ -1192,7 +1192,9 @@ fn release_builds_accept_only_this_repositorys_release_downloads() {
                 url: ESCAPING_URL.to_owned(),
             }
         ),
-        Ok(())
+        Err(deckpilot_update::manifest::ManifestError::UntrustedUrl(
+            ESCAPING_URL.to_owned()
+        ))
     );
     let key = installed_format_key();
     for url in [

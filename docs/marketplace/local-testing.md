@@ -105,9 +105,12 @@ now. `rm -rf "$SCRATCH"` starts over with new keys.
 In a second shell (with the variables above). Use the environment variables rather than the flags: the app starts the
 agent (on launch, and from Settings › Background Agent › Start agent) as
 `deckpilot-agent` next to its own executable, which for `tauri dev` is
-`target/debug/deckpilot-agent` (the build from step 1;
-`DECKPILOT_AGENT_BIN` names another one), and that agent inherits the app's
-environment. `DECKPILOT_DATA_DIR` keeps your real configuration untouched
+`target/debug/deckpilot-agent` (the build from step 1). A debug build of
+the app, such as `tauri dev`, also accepts `DECKPILOT_AGENT_BIN` naming
+another agent executable; a release build ignores the variable and always
+starts the agent next to its own executable
+([background-agent.md](../background-agent.md)). That agent inherits the
+app's environment. `DECKPILOT_DATA_DIR` keeps your real configuration untouched
 (a debug build, or any custom data directory, keeps its key under the
 keychain service `DeckPilot Development`).
 
