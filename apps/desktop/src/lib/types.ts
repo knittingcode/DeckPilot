@@ -857,6 +857,11 @@ export interface KeyFace {
   progress?: number | null
   toggle?: boolean | null
   appearance?: KeyAppearance | null
+  /** Marks of a live state, drawn by the renderer (as the others above). */
+  accent?: string | null
+  glyph?: string | null
+  badge?: string | null
+  series?: number[] | null
 }
 
 export interface ControlFace {
