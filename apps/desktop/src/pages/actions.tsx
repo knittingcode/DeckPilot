@@ -235,6 +235,7 @@ function Library({
               profileId={profileId}
               modules={modules}
               projects={view.profile.projects}
+              workflows={view.profile.workflows}
               action={current}
               references={actionReferences(view.profile, current.id)}
               candidates={view.profile.actions}
@@ -260,9 +261,11 @@ function Library({
               profileId={profileId}
               modules={modules}
               projects={view.profile.projects}
+              workflows={view.profile.workflows}
               action={null}
               initialType={newType}
               references={[]}
+              candidates={view.profile.actions}
               canRun={false}
               onSaved={(action) => {
                 setNewType(null)

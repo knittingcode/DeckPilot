@@ -35,6 +35,7 @@ import {
   Search,
   Server,
   Settings,
+  Shuffle,
   Star,
   Terminal,
   Timer,
@@ -86,6 +87,7 @@ export const ACTION_ICONS: Record<string, LucideIcon> = {
   power: Power,
   star: Star,
   settings: Settings,
+  shuffle: Shuffle,
   wrench: Wrench,
   user: User,
 }

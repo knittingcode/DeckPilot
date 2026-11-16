@@ -32,6 +32,7 @@ import type {
   ModuleInfo,
   ParameterValue,
   Project,
+  Workflow,
 } from "@/lib/types"
 
 function valuesFor(type: ActionType | undefined, action: ActionInstance | null) {
@@ -63,6 +64,7 @@ export function ActionEditor({
   initialType,
   references,
   candidates = [],
+  workflows,
   canRun,
   onSaved,
   onDeleted,
@@ -80,6 +82,8 @@ export function ActionEditor({
   references: ActionReference[]
   /** Actions a reference can use instead when this one is deleted. */
   candidates?: ActionInstance[]
+  /** The profile's workflows, for what a Random Action picks from. */
+  workflows?: Workflow[]
   canRun: boolean
   onSaved: (action: ActionInstance) => void
   onDeleted: () => void
@@ -342,6 +346,7 @@ export function ActionEditor({
                   value={values[spec.key] ?? initialValue(spec)}
                   projects={projects}
                   actionType={type.id}
+                  targets={workflows ? { actions: candidates, workflows } : undefined}
                   onChange={(next) => {
                     setValues((current) => ({ ...current, [spec.key]: next }))
                   }}
