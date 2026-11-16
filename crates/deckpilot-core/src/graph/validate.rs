@@ -1128,16 +1128,29 @@ impl<'a> Checker<'a> {
         // variable references (which no earlier graph contains) are still
         // checked.
         let mut stopped = false;
-        if let Err(errors) = definition.normalize(configured) {
-            for error in errors {
-                if let crate::ParameterError::Missing(key) = &error
-                    && mappings.contains_key(key)
-                {
-                    stopped = true;
-                    break;
+        match definition.normalize(configured) {
+            Err(errors) => {
+                for error in errors {
+                    if let crate::ParameterError::Missing(key) = &error
+                        && mappings.contains_key(key)
+                    {
+                        stopped = true;
+                        break;
+                    }
+                    self.issues
+                        .push(GraphIssue::error(Some(id), error.to_string()));
                 }
-                self.issues
-                    .push(GraphIssue::error(Some(id), error.to_string()));
+            }
+            // What the handler refuses beyond the schema (a parameter an
+            // aliased plugin cannot be given), as saving the action would.
+            Ok(normalized) => {
+                for error in self
+                    .registry
+                    .validate_parameters(&definition.id, &normalized)
+                {
+                    self.issues
+                        .push(GraphIssue::error(Some(id), error.to_string()));
+                }
             }
         }
         for (key, mapping) in mappings {

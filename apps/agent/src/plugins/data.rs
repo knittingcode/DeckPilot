@@ -440,6 +440,105 @@ mod tests {
         }
     }
 
+    /// The app validates saved plugin actions with the definition the
+    /// agent reports (`PluginActionInfo::definition`); it must refuse what
+    /// an invocation refuses here, so every constraint of the manifest has
+    /// to survive the trip as it is.
+    #[test]
+    fn the_app_saves_with_the_schema_invocations_are_checked_against() {
+        let action: deckpilot_plugin_manifest::Action = serde_json::from_value(serde_json::json!({
+            "id": "run", "name": "Run", "description": "Checks.", "category": "Test",
+            "parameters": [
+                {"key": "name", "label": "Name", "required": true,
+                 "kind": {"type": "text", "maxLength": 8}},
+                {"key": "count", "label": "Count", "required": false,
+                 "kind": {"type": "integer", "min": 1, "max": 10},
+                 "default": {"type": "integer", "value": 3}},
+                {"key": "style", "label": "Style", "required": false,
+                 "kind": {"type": "choice", "options": ["plain", "fancy"]}},
+                {"key": "tags", "label": "Tags", "required": false,
+                 "kind": {"type": "lines", "maxItems": 2, "maxLength": 4}},
+                {"key": "headers", "label": "Headers", "required": false,
+                 "kind": {"type": "pairs", "separator": ":", "maxItems": 1, "noSecrets": true}},
+                {"key": "body", "label": "Body", "required": false,
+                 "kind": {"type": "code", "language": "json", "maxLength": 16}},
+                {"key": "on", "label": "On", "required": false, "kind": {"type": "boolean"}}
+            ]
+        }))
+        .unwrap();
+        let definition = super::super::engine::action_type("acme.checks", &action).unwrap();
+        let info = ipc::PluginActionInfo {
+            action: "run".into(),
+            action_type: "acme.checks.run".into(),
+            name: "Run".into(),
+            description: None,
+            available: true,
+            unavailable_reason: None,
+            definition: Some(definition.clone()),
+        };
+        let shipped: ipc::PluginActionInfo =
+            serde_json::from_value(serde_json::to_value(&info).unwrap()).unwrap();
+        let saved_with = shipped.definition.unwrap();
+        assert_eq!(saved_with, definition);
+        for (key, expected) in [
+            (
+                "name",
+                serde_json::json!({"type": "text", "multiline": false, "max_length": 8}),
+            ),
+            (
+                "count",
+                serde_json::json!({"type": "integer", "min": 1, "max": 10}),
+            ),
+            (
+                "tags",
+                serde_json::json!({"type": "lines", "max_items": 2, "max_length": 4}),
+            ),
+            (
+                "body",
+                serde_json::json!({"type": "code", "language": "json", "max_length": 16}),
+            ),
+        ] {
+            let spec = saved_with.parameters.iter().find(|p| p.key == key).unwrap();
+            assert_eq!(serde_json::to_value(&spec.kind).unwrap(), expected, "{key}");
+        }
+
+        // The same answer for the same values, saved or invoked.
+        for (values, valid) in [
+            (serde_json::json!({"name": "Ada"}), true),
+            (
+                serde_json::json!({"name": "Ada", "count": 10, "tags": "a\nbcd"}),
+                true,
+            ),
+            (serde_json::json!({}), false),
+            (serde_json::json!({"name": "  "}), false),
+            (serde_json::json!({"name": "Augusta Ada"}), false),
+            (serde_json::json!({"name": "Ada", "count": 11}), false),
+            (serde_json::json!({"name": "Ada", "count": 0}), false),
+            (serde_json::json!({"name": "Ada", "style": "loud"}), false),
+            (serde_json::json!({"name": "Ada", "tags": "a\nb\nc"}), false),
+            (serde_json::json!({"name": "Ada", "tags": "abcde"}), false),
+            (
+                serde_json::json!({"name": "Ada", "headers": "a: 1\nb: 2"}),
+                false,
+            ),
+            (
+                serde_json::json!({"name": "Ada", "headers": "Authorization: x"}),
+                false,
+            ),
+            (
+                serde_json::json!({"name": "Ada", "body": "{\"much\": \"too long\"}"}),
+                false,
+            ),
+            (serde_json::json!({"name": "Ada", "extra": 1}), false),
+        ] {
+            let invoked = normalize_params(&definition, &params(values.clone()));
+            let typed: BTreeMap<String, Value> = serde_json::from_value(values.clone()).unwrap();
+            let saved = normalize(&saved_with, &typed);
+            assert_eq!(invoked.is_ok(), valid, "{values}: {invoked:?}");
+            assert_eq!(saved.is_ok(), valid, "{values}: {saved:?}");
+        }
+    }
+
     #[test]
     fn settings_merge_validate_and_fall_back_to_defaults() {
         let manifest = sample();

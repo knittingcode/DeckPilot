@@ -3614,3 +3614,194 @@ fn a_save_is_in_the_agent_when_it_returns() {
         );
     }
 }
+
+/// A plugin action with every kind of constraint its manifest can declare,
+/// as the agent reports it: the definition `engine::action_type` builds
+/// from the manifest (constraints in the core's own form).
+fn constrained_plugin() -> deckpilot_ipc::plugins::PluginSummary {
+    serde_json::from_value(json!({
+        "id": "acme.checks",
+        "name": "Checks",
+        "publisher": "acme",
+        "version": "1.0.0",
+        "state": "enabled",
+        "origin": { "type": "sideload" },
+        "actions": [{
+            "action": "run",
+            "actionType": "acme.checks.run",
+            "name": "Run",
+            "available": true,
+            "definition": {
+                "id": "acme.checks.run",
+                "name": "Run",
+                "description": "Checks its parameters.",
+                "category": "Test",
+                "parameters": [
+                    { "key": "name", "label": "Name", "required": true,
+                      "kind": { "type": "text", "multiline": false, "max_length": 8 } },
+                    { "key": "count", "label": "Count", "required": false,
+                      "kind": { "type": "integer", "min": 1, "max": 10 } },
+                    { "key": "style", "label": "Style", "required": false,
+                      "kind": { "type": "choice", "options": ["plain", "fancy"] } },
+                    { "key": "tags", "label": "Tags", "required": false,
+                      "kind": { "type": "lines", "max_items": 2, "max_length": 4 } },
+                    { "key": "on", "label": "On", "required": false,
+                      "kind": { "type": "boolean" } }
+                ],
+                "requiresProject": false,
+                "node": { "cancellable": true }
+            }
+        }]
+    }))
+    .unwrap()
+}
+
+/// Saving a plugin action checks its parameters against the manifest's
+/// schema when it is saved, in the Action Library (create, edit) and in
+/// the workflow editor (a node's overrides), and refuses it with the same
+/// error as a built-in action's invalid parameter.
+#[allow(clippy::too_many_lines)] // Every constraint, every editor.
+#[test]
+fn invalid_plugin_actions_are_refused_when_saved_like_built_in_ones() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    h.window
+        .state::<AppState>()
+        .plugin_actions()
+        .replace(&[constrained_plugin()]);
+    let create = |action_type: &str, parameters: Value| {
+        h.call(
+            "create_action",
+            json!({
+                "profileId": profile_id,
+                "action": { "name": "Checked", "actionType": action_type, "parameters": parameters }
+            }),
+        )
+    };
+    let refusal = |result: Result<Value, Value>| -> String {
+        result.unwrap_err().as_str().unwrap().to_owned()
+    };
+
+    // The built-in's refusal, for comparison.
+    assert_eq!(
+        refusal(create(
+            "general.wait",
+            json!({ "seconds": { "type": "integer", "value": 999 } })
+        )),
+        "invalid parameters: parameter `seconds`: 999 is out of range"
+    );
+    assert_eq!(
+        refusal(create(
+            "general.wait",
+            json!({ "nope": { "type": "boolean", "value": true } })
+        )),
+        "invalid parameters: unknown parameter `nope`"
+    );
+
+    let name = json!({ "type": "text", "value": "Ada" });
+    for (parameters, expected) in [
+        (
+            json!({}),
+            "invalid parameters: parameter `name` is required",
+        ),
+        (
+            json!({ "name": { "type": "text", "value": "   " } }),
+            "invalid parameters: parameter `name` is required",
+        ),
+        (
+            json!({ "name": { "type": "text", "value": "Augusta Ada" } }),
+            "invalid parameters: parameter `name`: must be at most 8 characters",
+        ),
+        (
+            json!({ "name": { "type": "integer", "value": 3 } }),
+            "invalid parameters: parameter `name` expects a text value",
+        ),
+        (
+            json!({ "name": name, "count": { "type": "integer", "value": 11 } }),
+            "invalid parameters: parameter `count`: 11 is out of range",
+        ),
+        (
+            json!({ "name": name, "count": { "type": "integer", "value": 0 } }),
+            "invalid parameters: parameter `count`: 0 is out of range",
+        ),
+        (
+            json!({ "name": name, "style": { "type": "choice", "value": "loud" } }),
+            "invalid parameters: parameter `style`: `loud` is not one of plain, fancy",
+        ),
+        (
+            json!({ "name": name, "tags": { "type": "text", "value": "a\nb\nc" } }),
+            "invalid parameters: parameter `tags`: at most 2 items are allowed",
+        ),
+        (
+            json!({ "name": name, "on": { "type": "text", "value": "yes" } }),
+            "invalid parameters: parameter `on` expects a boolean value",
+        ),
+        (
+            json!({ "name": name, "extra": { "type": "text", "value": "x" } }),
+            "invalid parameters: unknown parameter `extra`",
+        ),
+    ] {
+        let refused = refusal(create("acme.checks.run", parameters.clone()));
+        assert_eq!(refused, expected, "{parameters}");
+    }
+    // Several problems at once, as for a built-in.
+    let several = refusal(create(
+        "acme.checks.run",
+        json!({ "count": { "type": "integer", "value": 99 }, "style": { "type": "choice", "value": "x" } }),
+    ));
+    assert!(several.starts_with("invalid parameters: "), "{several}");
+    assert_eq!(several.matches("; ").count(), 2, "{several}");
+
+    // A valid one is saved, with the declared defaults filled in.
+    let saved = create(
+        "acme.checks.run",
+        json!({ "name": name, "count": { "type": "integer", "value": 10 },
+                "tags": { "type": "text", "value": "a\nbcd" } }),
+    )
+    .unwrap();
+    assert_eq!(saved["parameters"]["count"]["value"], 10);
+
+    // Editing it is checked the same way.
+    let mut edited = saved.clone();
+    edited["parameters"]["name"] = json!({ "type": "text", "value": "much too long" });
+    assert_eq!(
+        refusal(h.call(
+            "update_action",
+            json!({ "profileId": profile_id, "action": edited })
+        )),
+        "invalid parameters: parameter `name`: must be at most 8 characters"
+    );
+    let view = h.ok("get_profile", json!({ "profileId": profile_id }));
+    assert_eq!(
+        view["profile"]["actions"][0]["parameters"]["name"]["value"],
+        "Ada"
+    );
+
+    // In the workflow editor: a node overriding a parameter with a value
+    // the schema refuses is not saved, as for a built-in action.
+    let workflow = |overrides: Value| {
+        json!({
+            "id": deckpilot_core::WorkflowId::new(), "name": "Checks", "steps": [],
+            "graph": { "version": 1,
+                "nodes": [
+                    {"id": "start", "type": "trigger"},
+                    {"id": "run", "type": "action", "action": saved["id"], "overrides": overrides}
+                ],
+                "edges": [{"from": "start", "to": "run"}] }
+        })
+    };
+    let refused = refusal(h.call(
+        "save_workflow",
+        json!({ "profileId": profile_id,
+                "workflow": workflow(json!({ "count": { "type": "integer", "value": 42 } })) }),
+    ));
+    assert!(
+        refused.contains("parameter `count`: 42 is out of range"),
+        "{refused}"
+    );
+    h.ok(
+        "save_workflow",
+        json!({ "profileId": profile_id,
+                "workflow": workflow(json!({ "count": { "type": "integer", "value": 2 } })) }),
+    );
+}
