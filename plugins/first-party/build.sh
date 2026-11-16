@@ -12,7 +12,7 @@
 # ships DIR/bundled as a Tauri resource (tauri.plugins.conf.json); the
 # agent trusts the files only if they match the pins compiled into it.
 #
-# The plugins are those of plugins/first-party/bundled.json (none yet).
+# The plugins are those of plugins/first-party/bundled.json.
 # --test-fixtures adds plugins/first-party/test-fixtures/bundled.json (the
 # test plugin deckpilot.example-default), for tests and dry runs only:
 # a release bundle never contains a test fixture.

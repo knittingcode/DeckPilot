@@ -18,6 +18,8 @@ semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# Artifact URLs must read the same to a URL parser (no `%2e%2e` segments).
+url.workspace = true
 
 [dev-dependencies]
 minisign = "0.10"

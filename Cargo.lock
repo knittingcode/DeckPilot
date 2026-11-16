@@ -1318,6 +1318,7 @@ dependencies = [
  "deckpilot-module-system",
  "deckpilot-module-work-session",
  "deckpilot-module-workspace",
+ "deckpilot-plugin-manifest",
  "rustls",
  "serde_json",
  "url",
@@ -1515,6 +1516,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "toml 1.2.1+spec-1.1.0",
+ "url",
 ]
 
 [[package]]

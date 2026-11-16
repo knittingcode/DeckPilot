@@ -1,0 +1,20 @@
+# expect: uses the updater signing key
+name: Distribute
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  distribute-homebrew:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: distribute-homebrew
+    steps:
+      - name: Sign
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: echo sign

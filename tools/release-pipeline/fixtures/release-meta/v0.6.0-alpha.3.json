@@ -1,0 +1,26 @@
+{
+  "tag": "v0.6.0-alpha.3",
+  "version": "0.6.0-alpha.3",
+  "channel": "prerelease",
+  "commit": "b0b23de9bd1183352cffc059a373d0ba3f550841",
+  "manifest": "prerelease.json",
+  "updater_signature": "minisign",
+  "platforms": {
+    "aarch64-apple-darwin": {
+      "codesign": "developer-id",
+      "notarized": true
+    },
+    "x86_64-apple-darwin": {
+      "codesign": "developer-id",
+      "notarized": true
+    },
+    "x86_64-pc-windows-msvc": {
+      "codesign": "unsigned",
+      "notarized": null
+    },
+    "x86_64-unknown-linux-gnu": {
+      "codesign": "unsigned",
+      "notarized": null
+    }
+  }
+}

@@ -1,0 +1,32 @@
+# TEST FIXTURE, never shipped: the migration-class bundled plugin of the
+# module migration tests (plugins/first-party/README.md). It replaces the
+# agent's fixture legacy module `legacy-fixture` (feature `test-hooks`).
+# Not in plugins/first-party/bundled.json, so no release bundle contains
+# it; only `build.sh --test-fixtures` does.
+#
+# A member of the plugins/runtime workspace (shared Cargo.lock and the
+# `guest` profile), built for wasm32-unknown-unknown; the rlib crate type
+# lets its native unit tests run with plain `cargo test`.
+[package]
+name = "deckpilot-legacy-fixture"
+description = "Test fixture: a migration-class bundled first-party plugin (never shipped)"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+publish = false
+workspace = "../../../runtime"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+deckpilot-plugin-sdk.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

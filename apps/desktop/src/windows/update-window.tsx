@@ -4,9 +4,16 @@ import { useEffect, useState } from "react"
 
 import { ModalShell } from "@/components/modal-shell"
 import { Progress } from "@/components/ui/progress"
+import {
+  DevelopmentOverrideNotice,
+  ManagedNotice,
+  PackageManagerNotice,
+  UpdateErrorNotice,
+} from "@/components/updates-card"
 import { UPDATE_STATE_EVENT, api } from "@/lib/api"
 import { failureMessage } from "@/lib/failure"
 import type { UpdateState } from "@/lib/types"
+import { CHANNEL_LABELS, notConfiguredExplanation, updateControls } from "@/lib/update-distribution"
 
 import { useWindow } from "./window-context"
 
@@ -21,7 +28,9 @@ const PHASES: Record<UpdateState["phase"], string> = {
 /**
  * Progress of an update: download, signature verification and
  * installation. Follows the backend's update state; actions are the same
- * as in Settings. Closing the window does not cancel anything.
+ * as in Settings. Closing the window does not cancel anything. Builds that
+ * do not update themselves (package managers, stores, no key) only explain
+ * how they are updated; the window offers nothing else.
  */
 export function UpdateWindow() {
   const { close } = useWindow()
@@ -61,7 +70,9 @@ export function UpdateWindow() {
       ? Math.round((progress.downloaded / progress.total) * 100)
       : null
   const phase = state?.phase ?? "idle"
-  const primary = !state?.configured
+  const controls = state ? updateControls(state) : null
+  const selfUpdate = controls?.selfUpdate ?? false
+  const primary = !selfUpdate
     ? { label: "Close", onClick: close }
     : !available
       ? {
@@ -101,25 +112,45 @@ export function UpdateWindow() {
     <ModalShell
       size="compact"
       icon={phase === "ready" ? RotateCw : available ? Download : RefreshCw}
-      title={available ? `DeckPilot ${available.version}` : "DeckPilot update"}
+      title={selfUpdate && available ? `DeckPilot ${available.version}` : "DeckPilot update"}
       description={
         state
-          ? state.configured
+          ? selfUpdate
             ? `Installed: ${state.currentVersion}`
-            : "Updates are not available in this build: it has no update signing key."
+            : state.updateProvider === "none"
+              ? `Installed: ${state.currentVersion}. Updates are not available in this build.`
+              : `Installed: ${state.currentVersion} from ${CHANNEL_LABELS[state.distributionChannel]}`
           : undefined
       }
       loading={!state && !error}
-      error={error ?? state?.error ?? null}
+      error={error}
       onClose={close}
-      secondary={state?.configured ? { label: "Close", onClick: close } : undefined}
+      secondary={selfUpdate ? { label: "Close", onClick: close } : undefined}
       primary={primary}
     >
-      {state?.configured && !available && phase === "idle" && (
+      {state?.developmentOverride && <DevelopmentOverrideNotice state={state} />}
+      {state?.updateProvider === "none" && (
+        <p className="text-sm text-muted-foreground">
+          {notConfiguredExplanation(state.notConfiguredReason)}
+        </p>
+      )}
+      {state && controls?.managed && <ManagedNotice state={state} instruction={controls.managed} />}
+      {state && controls?.command && (
+        <PackageManagerNotice state={state} command={controls.command} />
+      )}
+      {controls?.versionNotice && available && (
+        <p className="text-sm">
+          Version {available.version} is available; update with your package manager.
+        </p>
+      )}
+      {state?.error && <UpdateErrorNotice error={state.error} />}
+      {selfUpdate && !available && phase === "idle" && (
         <p className="text-sm text-muted-foreground">DeckPilot is up to date.</p>
       )}
-      {phase !== "idle" && <p className="text-sm text-muted-foreground">{PHASES[phase]}</p>}
-      {phase === "downloading" && (
+      {selfUpdate && phase !== "idle" && (
+        <p className="text-sm text-muted-foreground">{PHASES[phase]}</p>
+      )}
+      {selfUpdate && phase === "downloading" && (
         <div className="grid gap-1">
           <Progress value={percent ?? undefined} aria-label="Download progress" />
           <span className="text-xs text-muted-foreground">
@@ -127,15 +158,17 @@ export function UpdateWindow() {
           </span>
         </div>
       )}
-      {available?.notes && (
+      {selfUpdate && available?.notes && (
         <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
           {available.notes}
         </pre>
       )}
-      <p className="text-xs text-muted-foreground">
-        Updates are installed only if their signature verifies. Your configuration stays encrypted
-        and is never uploaded.
-      </p>
+      {selfUpdate && (
+        <p className="text-xs text-muted-foreground">
+          Updates are installed only if their signature verifies. Your configuration stays encrypted
+          and is never uploaded.
+        </p>
+      )}
     </ModalShell>
   )
 }

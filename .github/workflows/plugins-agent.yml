@@ -114,7 +114,7 @@ jobs:
         run: cargo build --locked -p deckpilot-plugin-host --bin deckpilot-plugin-host
       - name: Build the example plugins and the SDK test guest
         working-directory: plugins/runtime
-        run: cargo build --locked -p hello-weather -p hello-world -p developer-tools -p deckpilot-sdk-test-guest -p deckpilot-example-default --target wasm32-unknown-unknown --profile guest
+        run: cargo build --locked -p hello-weather -p hello-world -p developer-tools -p deckpilot-sdk-test-guest -p deckpilot-example-default -p deckpilot-legacy-fixture -p deckpilot-github --target wasm32-unknown-unknown --profile guest
       - name: Plugin unit tests (incl. the registry over HTTPS)
         run: "cargo test -p deckpilot-agent --features plugins --lib --locked plugins::"
       - name: End to end
@@ -131,6 +131,16 @@ jobs:
       # seeded offline, checked against its pins and run in the host.
       - name: Bundled plugins end to end
         run: cargo test -p deckpilot-agent --features plugins --test plugins_bundled --locked -- --nocapture
+      # A built-in module moved to its migration-class bundled plugin: the
+      # agent's fixture legacy module and the fixture plugin, consent,
+      # restarts mid-migration, health check, retries, drift, the user's
+      # disable and uninstall, and downgrades.
+      - name: Module migration end to end
+        run: cargo test -p deckpilot-agent --features plugins --test plugins_migration --locked -- --nocapture
+      # deckpilot.github against the built-in github module on the same
+      # canned GitHub answers: every action, the same results.
+      - name: GitHub plugin parity end to end
+        run: cargo test -p deckpilot-agent --features plugins --test plugins_github --locked -- --nocapture
       # The bundle layout as a release with DECKPILOT_RELEASE_PLUGINS=1
       # would build it, with the test fixture: built twice from clean
       # target directories (reproducible on this platform), the agent
@@ -139,9 +149,12 @@ jobs:
       - name: Bundle layout dry run
         run: |
           exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
-          # The release set (no plugin yet) against the agent built without pins.
+          # The release set: exactly the plugins of bundled.json, with their
+          # classes. The fixture builds below contain it too, and are checked
+          # against an agent compiled with their pins.
           plugins/first-party/build.sh --out "$RUNNER_TEMP/bundle-release"
-          tools/release-pipeline/check-bundled-plugins.sh "$RUNNER_TEMP/bundle-release/bundled" "target/debug/deckpilot-agent$exe"
+          jq -c '[.plugins[] | {id, class}]' "$RUNNER_TEMP/bundle-release/bundled/pins.json" | tr -d '\r' > "$RUNNER_TEMP/release-set.json"
+          echo '[{"id":"deckpilot.github","class":"migration"}]' | diff - "$RUNNER_TEMP/release-set.json"
           for run in a b; do
             plugins/first-party/build.sh --test-fixtures --out "$RUNNER_TEMP/bundle-$run" --target-dir "$RUNNER_TEMP/first-party-$run"
           done

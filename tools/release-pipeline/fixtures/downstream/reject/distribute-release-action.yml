@@ -1,0 +1,19 @@
+# expect: writes the release (softprops/action-gh-release)
+name: Distribute
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  distribute-homebrew:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: distribute-homebrew
+    steps:
+      - uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2
+        with:
+          files: Casks/deckpilot.rb

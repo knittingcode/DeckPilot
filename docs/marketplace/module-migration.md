@@ -346,8 +346,11 @@ So a replacement plugin **must** declare:
 - the same parameter keys with compatible kinds and constraints (same
   choices; ranges at least as wide);
 - the same output keys, kinds and `sensitive` flags;
-- a node spec at least as permissive: the same `effects`, `retrySafe`,
-  `idempotent` and `cancellable`, and a timeout at least as long.
+- a node spec at least as permissive: the same `effects`, `retrySafe` and
+  `idempotent`, a timeout at least as long, and `cancellable` wherever the
+  built-in is. The agent makes every plugin action cancellable (it can
+  always stop the plugin), so a plugin may replace an action that cannot be
+  interrupted, such as `github.open`; never the other way.
 
 `deckpilot-modules/tests/contracts.rs` gains a test that loads each aliased
 plugin's manifest (from `plugins/first-party/<name>/manifest.json`) and
@@ -485,6 +488,48 @@ module. The agent never fails to start because of a migration.
 `credentials` row, a profile document or a built-in's tables. The legacy
 data is the downgrade path.
 
+**As built (P6).** The engine is `apps/agent/src/plugins/migration.rs`.
+The agent's service task reads what it needs from `deckpilot.db` (read
+only, and nothing at all while `ACTION_ALIASES` is empty) whenever it
+loads the modules and hands it to the plugin worker, which owns
+`plugins.db`; the first snapshot after the plugin store opened runs the
+steps. The worker computes the `LegacyRouting` from the journal after
+every change, and `load_modules` sets it on the module registry before the
+action registry is built. Details beyond the text above:
+
+- Per-module knowledge the alias table does not carry (which settings name
+  the credentials, the origin and the private-network switch, and the
+  plugin's slot for each credential) is a static `MigrationPlan` next to
+  the engine, empty like the alias table until a cut-over.
+- Derived grants: the low tier, and `network` for the built-in's (default)
+  origin and `openUrl` for its web hosts when the built-in has the
+  capability; recorded with `source = 'derived'`, `decided_by =
+  'migration:<module>'` through `PluginManager::derive_grants`, which
+  refuses the high tier and never overwrites a stored decision (a
+  revocation stays). Anything else waits in `awaiting_consent`, and so
+  does every credential import: a secret is copied only when the slot's
+  grant was made by the migration's consent (`decided_by =
+  'user:migration:<module>'`), never because of a grant made elsewhere.
+- `source_digest` is the sha256 of the copied settings, the credential
+  ids and the built-in's eligibility settings (origin, private network).
+  At a start, a changed digest copies the settings again when the
+  plugin's still match the recorded digest and keeps them (with a note in
+  `reason`) otherwise; a source that is no longer eligible goes back to
+  `not_eligible`, so the built-in serves again.
+- The health check before the cut-over: the plugin is enabled, its files
+  match the pins, it declares every alias target with a contract that can
+  replace the built-in's (`alias::incompatibilities`), and its required
+  settings are set. A failed check disables the plugin again (the agent's
+  own disable, no tombstone) and records `failed`.
+- Routing: `Plugin` after the cut-over, `PluginWithdrawn` while the
+  plugin has a tombstone, and `Builtin` for a bundled copy this agent does
+  not pin (a build without the plugin) and in every other phase.
+- Until P7 adds the consent dialog and Retry, they are engine functions;
+  agent tests drive them through test hooks. The tests use a fixture
+  legacy module and alias (feature `test-hooks`, never in a release
+  build) and the fixture plugin
+  `plugins/first-party/test-fixtures/legacy-fixture`.
+
 ### 5.7 Keeping optional modules: bundled legacy implementations
 
 Until a module's replacement exists and a cut-over has succeeded on a given
@@ -558,6 +603,18 @@ credential override stay `not_eligible` and keep the built-in until G2, G3
 or G5 lands, which demonstrates the eligibility path. GitHub pagination must
 fit 512 KiB per response. With `per_page` of at most 50 a search page is far
 below it, so G4 is not on the critical path.
+
+*As built (P8):* `plugins/first-party/github` (`deckpilot.github`, class
+`migration` in `bundled.json`) reproduces all six actions; no variables on
+either side. `contracts.rs` (`first_party`) checks the manifest against the
+built-in, and `apps/agent/tests/plugins_github.rs` runs every action through
+the agent and the host against the built-in on the same canned answers,
+with identical results. What differs, all on failure paths, limits or the
+editor (save-time checks, two messages, `retryAfterSeconds`, transport
+error codes, the `Date`-based time limit, the agent's rates for plugins),
+is listed in [`plugins/first-party/github/README.md`](../../plugins/first-party/github/README.md).
+Lists use pages of 50 (two for more than 50 pull requests, ten for the
+built-in's 500 checks).
 
 `notifications` follows as the first `default`-class bundled plugin. It is
 the one that proves seeding, tombstones and first launch.

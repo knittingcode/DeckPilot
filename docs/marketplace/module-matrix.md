@@ -449,6 +449,11 @@ table, not the keychain).
 9. **Complexity and risk.** Medium and low (opt-in, niche, read-only).
    **Plugin, first.**
 
+*Status (P8):* `plugins/first-party/github` (`deckpilot.github`) reproduces
+the six actions with G1 and G6, pages of 50 and the credential slot
+`token`; bundled with class `migration`, not routed yet. Parity and the
+remaining differences: `plugins/first-party/github/README.md`.
+
 ### `gitlab`
 
 1. **Actions.** `gitlab.current-user`, `.project`, `.merge-requests`,

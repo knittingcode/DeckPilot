@@ -74,7 +74,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Clippy (wasm guest crates)
-        run: cargo clippy --locked -p deckpilot-plugin-guest -p deckpilot-test-guest -p deckpilot-plugin-sdk -p deckpilot-sdk-test-guest -p hello-weather -p hello-world -p developer-tools --target wasm32-unknown-unknown -- -D warnings
+        run: cargo clippy --locked -p deckpilot-plugin-guest -p deckpilot-test-guest -p deckpilot-plugin-sdk -p deckpilot-sdk-test-guest -p hello-weather -p hello-world -p developer-tools -p deckpilot-github --target wasm32-unknown-unknown -- -D warnings
       - name: Test
         run: cargo test --locked --no-fail-fast -- --nocapture
       # AppContainer network isolation is enforced by the Windows Filtering

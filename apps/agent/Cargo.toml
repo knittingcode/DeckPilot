@@ -27,7 +27,7 @@ required-features = ["plugins", "test-hooks"]
 # Entry points of the work session for agent tests, until key gestures
 # drive them. Never part of a release build: the configuration app has no
 # way to start, verify or finish a session (decision D11).
-test-hooks = []
+test-hooks = ["deckpilot-core/test-hooks"]
 # Experimental plugin marketplace backend (docs/marketplace/): the plugin
 # store, registry client, package verification, supervisor and broker, and
 # IPC protocol 10's plugin requests. Off by default: release builds contain
@@ -148,6 +148,12 @@ required-features = ["plugins"]
 # agent process and the real plugin host.
 [[test]]
 name = "plugins_bundled"
+required-features = ["plugins"]
+
+# Module migration: the fixture legacy module moved to its migration-class
+# bundled plugin, through a real agent process and the real plugin host.
+[[test]]
+name = "plugins_migration"
 required-features = ["plugins"]
 
 # The registry over HTTPS (a local TLS server, a throwaway CA) through a
