@@ -957,8 +957,43 @@ export interface UpdateInfo {
   date: string | null
 }
 
+/** Who delivered a build (docs/distribution/README.md, section 1). */
+export type DistributionChannel =
+  "github" | "homebrew" | "winget" | "apt" | "flathub" | "mac_app_store" | "microsoft_store"
+
+/**
+ * Who updates the installation, from the channel; `none` also for a GitHub
+ * build that cannot update itself (see `notConfiguredReason`).
+ */
+export type UpdateProviderKind =
+  "github_release" | "external_package_manager" | "store_managed" | "none"
+
+/** The class of the build's own version. */
+export type ReleaseChannel = "stable" | "beta" | "alpha"
+
+export type PackageFormat =
+  "app" | "msi" | "nsis" | "deb" | "rpm" | "appimage" | "flatpak" | "mas_pkg" | "msix"
+
+/** What the update provider of the build may do. */
+export interface UpdateCapabilities {
+  /** Download and install updates in the app. */
+  selfUpdate: boolean
+  /** Check, download and install in the background. */
+  automaticUpdates: boolean
+  /** Choose between the stable and prerelease channel. */
+  channelChoice: boolean
+  /** Check for a newer version (for package managers: the version notice). */
+  versionCheck: boolean
+}
+
+/**
+ * The backend's update state (`UpdateState` in
+ * `apps/desktop/src-tauri/src/updates.rs`). `src/test/fixtures/update-states.json`
+ * is written by a Rust test from that type and checked against this one.
+ */
 export interface UpdateState {
   currentVersion: string
+  /** Whether this build updates itself: a GitHub build with a key. */
   configured: boolean
   target: string
   endpoint: string
@@ -967,6 +1002,21 @@ export interface UpdateState {
   available: UpdateInfo | null
   progress: { downloaded: number; total: number | null } | null
   error: string | null
+  distributionChannel: DistributionChannel
+  updateProvider: UpdateProviderKind
+  releaseChannel: ReleaseChannel
+  supportsAutomaticUpdates: boolean
+  /** The installed format, where known. */
+  packageFormat: PackageFormat | null
+  capabilities: UpdateCapabilities
+  /** The channel that updates the installation when the app does not. */
+  managedBy: DistributionChannel | null
+  /** How the user updates then: a command (package managers) or a sentence (stores). */
+  updateInstruction: string | null
+  /** Why the build has no updates, for the `none` provider. */
+  notConfiguredReason: string | null
+  /** A debug build's development override replaced the compiled channel. */
+  developmentOverride: boolean
 }
 
 export interface LaunchView {

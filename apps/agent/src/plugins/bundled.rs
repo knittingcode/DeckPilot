@@ -144,7 +144,7 @@ pub(super) fn decided_by() -> String {
 
 /// The low-tier permissions `manifest` declares (what seeding may grant),
 /// and the others (what needs the user's consent).
-fn split_by_tier(manifest: &Manifest) -> (Vec<GrantKey>, Vec<GrantKey>) {
+pub(super) fn split_by_tier(manifest: &Manifest) -> (Vec<GrantKey>, Vec<GrantKey>) {
     let declared = GrantSet::from_manifest(manifest);
     let (low, other): (Vec<_>, Vec<_>) = declared
         .iter()
@@ -201,7 +201,7 @@ fn seed_one(manager: &mut PluginManager, bundle: &Bundle, pin: &Pin) -> Seeded {
 }
 
 /// The plugin's files in `bundled/`, checked against `pin`.
-fn verified(
+pub(super) fn verified(
     bundle: &Bundle,
     pin: &Pin,
 ) -> Result<deckpilot_plugin_package::VerifiedPackage, String> {
@@ -239,7 +239,7 @@ fn install(manager: &mut PluginManager, bundle: &Bundle, pin: &Pin) -> Seeded {
     }
 }
 
-fn refresh(
+pub(super) fn refresh(
     manager: &mut PluginManager,
     bundle: &Bundle,
     pin: &Pin,

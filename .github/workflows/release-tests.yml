@@ -19,6 +19,8 @@ on:
       - tools/dev/src/versions.rs
       - tools/dev/src/prepare.rs
       - crates/deckpilot-update/**
+      # The packaging matrix release-meta.json's artifacts are checked against.
+      - docs/distribution/targets.toml
   workflow_dispatch:
 
 permissions:

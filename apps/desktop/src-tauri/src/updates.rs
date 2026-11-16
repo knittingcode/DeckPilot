@@ -1283,6 +1283,134 @@ mod tests {
             assert!(!may_start(busy), "{busy:?}");
         }
     }
+
+    /// The frontend's `UpdateState` (`apps/desktop/src/lib/types.ts`) is
+    /// checked against these states, and its tests render them, so the
+    /// frontend and this serialization cannot drift apart. Regenerate with
+    /// `DECKPILOT_UPDATE_FIXTURES=1` after a deliberate change.
+    #[test]
+    // One list of states, one per channel and refusal.
+    #[allow(clippy::too_many_lines)]
+    fn update_states_match_the_frontend_fixture() {
+        use deckpilot_update::manifest::ManifestError;
+        use deckpilot_update::provider::{
+            Architecture, Distribution, DistributionChannel as C, PackageFormat as F, Platform,
+        };
+        const FIXTURE: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../src/test/fixtures/update-states.json"
+        );
+        const VERSION: &str = "0.6.0-alpha.3";
+
+        let state = |channel, platform, bundled, key| {
+            let record =
+                Distribution::new(channel, None, VERSION, platform, Architecture::Aarch64).unwrap();
+            let active = ActiveProvider::select(record, bundled, key);
+            UpdateState {
+                current_version: VERSION,
+                configured: active.may_self_update(),
+                target: match platform {
+                    Platform::Macos => "darwin-aarch64",
+                    Platform::Linux => "linux-aarch64",
+                    Platform::Windows => "windows-aarch64",
+                }
+                .to_owned(),
+                endpoint: deckpilot_update::STABLE_ENDPOINT,
+                preferences: UpdatePreferences::default(),
+                phase: Phase::Idle,
+                available: None,
+                progress: None,
+                error: None,
+                distribution: active.info(),
+            }
+        };
+        let notes = UpdateInfo {
+            version: "0.6.0".to_owned(),
+            notes: Some("Fixes and improvements".to_owned()),
+            date: Some("2026-11-01".to_owned()),
+        };
+        let mut github = state(C::Github, Platform::Macos, Some(F::App), true);
+        github.available = Some(notes.clone());
+        let mut downloading = state(C::Github, Platform::Linux, Some(F::AppImage), true);
+        downloading.available = Some(notes.clone());
+        downloading.phase = Phase::Downloading;
+        downloading.progress = Some(Progress {
+            downloaded: 25,
+            total: Some(100),
+        });
+        let mut ready = state(C::Github, Platform::Windows, Some(F::Msi), true);
+        ready.available = Some(notes);
+        ready.phase = Phase::Ready;
+        let mut untrusted_url = state(C::Github, Platform::Macos, Some(F::App), true);
+        untrusted_url.error = CheckError::Manifest(ManifestError::UntrustedUrl(
+            "https://example.com/DeckPilot.app.tar.gz".to_owned(),
+        ))
+        .refused();
+        let mut other_format = state(C::Github, Platform::Linux, Some(F::Deb), true);
+        other_format.error = CheckError::OtherFormat {
+            expected: "linux-aarch64-deb".to_owned(),
+            offered: "linux-aarch64".to_owned(),
+        }
+        .refused();
+        let mut development_override = state(C::Apt, Platform::Linux, Some(F::Deb), false);
+        // Only a debug build's override sets it; the UI labels it.
+        development_override.distribution.development_override = true;
+
+        let states = [
+            ("github", github),
+            ("githubDownloading", downloading),
+            ("githubReady", ready),
+            ("githubUntrustedUrl", untrusted_url),
+            ("githubOtherFormat", other_format),
+            ("apt", state(C::Apt, Platform::Linux, Some(F::Deb), false)),
+            ("homebrew", state(C::Homebrew, Platform::Macos, None, false)),
+            ("winget", state(C::Winget, Platform::Windows, None, false)),
+            ("flathub", state(C::Flathub, Platform::Linux, None, false)),
+            (
+                "macAppStore",
+                state(C::MacAppStore, Platform::Macos, None, false),
+            ),
+            (
+                "microsoftStore",
+                state(C::MicrosoftStore, Platform::Windows, None, false),
+            ),
+            (
+                "notConfigured",
+                state(C::Github, Platform::Macos, Some(F::App), false),
+            ),
+            (
+                "unknownFormat",
+                state(C::Github, Platform::Linux, None, true),
+            ),
+            (
+                "formatMismatch",
+                state(C::Apt, Platform::Linux, Some(F::AppImage), false),
+            ),
+            (
+                "formatNotUpdatable",
+                state(C::Github, Platform::Linux, Some(F::Msi), true),
+            ),
+            ("developmentOverride", development_override),
+        ];
+        let actual = serde_json::Value::Object(
+            states
+                .into_iter()
+                .map(|(name, state)| (name.to_owned(), serde_json::to_value(state).unwrap()))
+                .collect(),
+        );
+        if std::env::var_os("DECKPILOT_UPDATE_FIXTURES").is_some() {
+            let text = serde_json::to_string_pretty(&actual).unwrap();
+            std::fs::write(FIXTURE, text + "\n").unwrap();
+        }
+        let expected: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(FIXTURE).unwrap()).unwrap();
+        assert!(
+            actual == expected,
+            "{FIXTURE} is out of date; regenerate it with DECKPILOT_UPDATE_FIXTURES=1 and \
+             update `UpdateState` in apps/desktop/src/lib/types.ts to match:\n{}",
+            serde_json::to_string_pretty(&actual).unwrap()
+        );
+    }
 }
 
 #[cfg(test)]

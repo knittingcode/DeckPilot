@@ -29,6 +29,7 @@ import type {
   UpdateState,
 } from "@/lib/types"
 import { moduleStatusItems } from "@/modules"
+import { updateState } from "@/test/fixtures"
 import { appContext } from "@/test/render"
 
 /** Listeners of backend events, as the app registers them. */
@@ -98,18 +99,7 @@ function agent(overrides: Partial<NonNullable<AgentConnection["status"]>> = {}, 
 }
 
 function updates(overrides: Partial<UpdateState> = {}): UpdateState {
-  return {
-    currentVersion: "0.5.0",
-    configured: true,
-    target: "darwin-aarch64",
-    endpoint: "https://example.invalid",
-    preferences: {} as UpdateState["preferences"],
-    phase: "idle",
-    available: null,
-    progress: null,
-    error: null,
-    ...overrides,
-  }
+  return updateState("github", { available: null, ...overrides })
 }
 
 const security = {

@@ -1,0 +1,529 @@
+{
+  "apt": {
+    "available": null,
+    "capabilities": {
+      "automaticUpdates": false,
+      "channelChoice": false,
+      "selfUpdate": false,
+      "versionCheck": false
+    },
+    "configured": false,
+    "currentVersion": "0.6.0-alpha.3",
+    "developmentOverride": false,
+    "distributionChannel": "apt",
+    "endpoint": "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json",
+    "error": null,
+    "managedBy": "apt",
+    "notConfiguredReason": null,
+    "packageFormat": "deb",
+    "phase": "idle",
+    "preferences": {
+      "automaticChecks": true,
+      "channel": "stable",
+      "checkIntervalHours": 24,
+      "lastCheck": null,
+      "mode": "notifyOnly"
+    },
+    "progress": null,
+    "releaseChannel": "alpha",
+    "supportsAutomaticUpdates": false,
+    "target": "linux-aarch64",
+    "updateInstruction": "sudo apt update && sudo apt upgrade",
+    "updateProvider": "external_package_manager"
+  },
+  "developmentOverride": {
+    "available": null,
+    "capabilities": {
+      "automaticUpdates": false,
+      "channelChoice": false,
+      "selfUpdate": false,
+      "versionCheck": false
+    },
+    "configured": false,
+    "currentVersion": "0.6.0-alpha.3",
+    "developmentOverride": true,
+    "distributionChannel": "apt",
+    "endpoint": "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json",
+    "error": null,
+    "managedBy": "apt",
+    "notConfiguredReason": null,
+    "packageFormat": "deb",
+    "phase": "idle",
+    "preferences": {
+      "automaticChecks": true,
+      "channel": "stable",
+      "checkIntervalHours": 24,
+      "lastCheck": null,
+      "mode": "notifyOnly"
+    },
+    "progress": null,
+    "releaseChannel": "alpha",
+    "supportsAutomaticUpdates": false,
+    "target": "linux-aarch64",
+    "updateInstruction": "sudo apt update && sudo apt upgrade",
+    "updateProvider": "external_package_manager"
+  },
+  "flathub": {
+    "available": null,
+    "capabilities": {
+      "automaticUpdates": false,
+      "channelChoice": false,
+      "selfUpdate": false,
+      "versionCheck": false
+    },
+    "configured": false,
+    "currentVersion": "0.6.0-alpha.3",
+    "developmentOverride": false,
+    "distributionChannel": "flathub",
+    "endpoint": "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json",
+    "error": null,
+    "managedBy": "flathub",
+    "notConfiguredReason": null,
+    "packageFormat": "flatpak",
+    "phase": "idle",
+    "preferences": {
+      "automaticChecks": true,
+      "channel": "stable",
+      "checkIntervalHours": 24,
+      "lastCheck": null,
+      "mode": "notifyOnly"
+    },
+    "progress": null,
+    "releaseChannel": "alpha",
+    "supportsAutomaticUpdates": false,
+    "target": "linux-aarch64",
+    "updateInstruction": "Updates are installed by `flatpak update` or your software center",
+    "updateProvider": "store_managed"
+  },
+  "formatMismatch": {
+    "available": null,
+    "capabilities": {
+      "automaticUpdates": false,
+      "channelChoice": false,
+      "selfUpdate": false,
+      "versionCheck": false
+    },
+    "configured": false,
+    "currentVersion": "0.6.0-alpha.3",
+    "developmentOverride": false,
+    "distributionChannel": "apt",
+    "endpoint": "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json",
+    "error": null,
+    "managedBy": null,
+    "notConfiguredReason": "the compiled package format deb differs from the bundled appimage",
+    "packageFormat": "deb",
+    "phase": "idle",
+    "preferences": {
+      "automaticChecks": true,
+      "channel": "stable",
+      "checkIntervalHours": 24,
+      "lastCheck": null,
+      "mode": "notifyOnly"
+    },
+    "progress": null,
+    "releaseChannel": "alpha",
+    "supportsAutomaticUpdates": false,
+    "target": "linux-aarch64",
+    "updateInstruction": null,
+    "updateProvider": "none"
+  },
+  "formatNotUpdatable": {
+    "available": null,
+    "capabilities": {
+      "automaticUpdates": false,
+      "channelChoice": false,
+      "selfUpdate": false,
+      "versionCheck": false
+    },
+    "configured": false,
+    "currentVersion": "0.6.0-alpha.3",
+    "developmentOverride": false,
+    "distributionChannel": "github",
+    "endpoint": "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json",
+    "error": null,
+    "managedBy": null,
+    "notConfiguredReason": "GitHub updates do not install msi packages on this platform",
+    "packageFormat": "msi",
+    "phase": "idle",
+    "preferences": {
+      "automaticChecks": true,
+      "channel": "stable",
+      "checkIntervalHours": 24,
+      "lastCheck": null,
+      "mode": "notifyOnly"
+    },
+    "progress": null,
+    "releaseChannel": "alpha",
+    "supportsAutomaticUpdates": false,
+    "target": "linux-aarch64",
+    "updateInstruction": null,
+    "updateProvider": "none"
+  },
+  "github": {
+    "available": {
+      "date": "2026-11-01",
+      "notes": "Fixes and improvements",
+      "version": "0.6.0"
+    },
+    "capabilities": {
+      "automaticUpdates": true,
+      "channelChoice": true,
+      "selfUpdate": true,
+      "versionCheck": true
+    },
+    "configured": true,
+    "currentVersion": "0.6.0-alpha.3",
+    "developmentOverride": false,
+    "distributionChannel": "github",
+    "endpoint": "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json",
+    "error": null,
+    "managedBy": null,
+    "notConfiguredReason": null,
+    "packageFormat": "app",
+    "phase": "idle",
+    "preferences": {
+      "automaticChecks": true,
+      "channel": "stable",
+      "checkIntervalHours": 24,
+      "lastCheck": null,
+      "mode": "notifyOnly"
+    },
+    "progress": null,
+    "releaseChannel": "alpha",
+    "supportsAutomaticUpdates": true,
+    "target": "darwin-aarch64",
+    "updateInstruction": null,
+    "updateProvider": "github_release"
+  },
+  "githubDownloading": {
+    "available": {
+      "date": "2026-11-01",
+      "notes": "Fixes and improvements",
+      "version": "0.6.0"
+    },
+    "capabilities": {
+      "automaticUpdates": true,
+      "channelChoice": true,
+      "selfUpdate": true,
+      "versionCheck": true
+    },
+    "configured": true,
+    "currentVersion": "0.6.0-alpha.3",
+    "developmentOverride": false,
+    "distributionChannel": "github",
+    "endpoint": "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json",
+    "error": null,
+    "managedBy": null,
+    "notConfiguredReason": null,
+    "packageFormat": "appimage",
+    "phase": "downloading",
+    "preferences": {
+      "automaticChecks": true,
+      "channel": "stable",
+      "checkIntervalHours": 24,
+      "lastCheck": null,
+      "mode": "notifyOnly"
+    },
+    "progress": {
+      "downloaded": 25,
+      "total": 100
+    },
+    "releaseChannel": "alpha",
+    "supportsAutomaticUpdates": true,
+    "target": "linux-aarch64",
+    "updateInstruction": null,
+    "updateProvider": "github_release"
+  },
+  "githubOtherFormat": {
+    "available": null,
+    "capabilities": {
+      "automaticUpdates": true,
+      "channelChoice": true,
+      "selfUpdate": true,
+      "versionCheck": true
+    },
+    "configured": true,
+    "currentVersion": "0.6.0-alpha.3",
+    "developmentOverride": false,
+    "distributionChannel": "github",
+    "endpoint": "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json",
+    "error": "update check failed: the update is not a package of the format DeckPilot was installed as; nothing was downloaded. Install the update from the releases page (the update is `linux-aarch64`, this installation `linux-aarch64-deb`)",
+    "managedBy": null,
+    "notConfiguredReason": null,
+    "packageFormat": "deb",
+    "phase": "idle",
+    "preferences": {
+      "automaticChecks": true,
+      "channel": "stable",
+      "checkIntervalHours": 24,
+      "lastCheck": null,
+      "mode": "notifyOnly"
+    },
+    "progress": null,
+    "releaseChannel": "alpha",
+    "supportsAutomaticUpdates": true,
+    "target": "linux-aarch64",
+    "updateInstruction": null,
+    "updateProvider": "github_release"
+  },
+  "githubReady": {
+    "available": {
+      "date": "2026-11-01",
+      "notes": "Fixes and improvements",
+      "version": "0.6.0"
+    },
+    "capabilities": {
+      "automaticUpdates": true,
+      "channelChoice": true,
+      "selfUpdate": true,
+      "versionCheck": true
+    },
+    "configured": true,
+    "currentVersion": "0.6.0-alpha.3",
+    "developmentOverride": false,
+    "distributionChannel": "github",
+    "endpoint": "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json",
+    "error": null,
+    "managedBy": null,
+    "notConfiguredReason": null,
+    "packageFormat": "msi",
+    "phase": "ready",
+    "preferences": {
+      "automaticChecks": true,
+      "channel": "stable",
+      "checkIntervalHours": 24,
+      "lastCheck": null,
+      "mode": "notifyOnly"
+    },
+    "progress": null,
+    "releaseChannel": "alpha",
+    "supportsAutomaticUpdates": true,
+    "target": "windows-aarch64",
+    "updateInstruction": null,
+    "updateProvider": "github_release"
+  },
+  "githubUntrustedUrl": {
+    "available": null,
+    "capabilities": {
+      "automaticUpdates": true,
+      "channelChoice": true,
+      "selfUpdate": true,
+      "versionCheck": true
+    },
+    "configured": true,
+    "currentVersion": "0.6.0-alpha.3",
+    "developmentOverride": false,
+    "distributionChannel": "github",
+    "endpoint": "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json",
+    "error": "update check failed: the update description names a download outside DeckPilot's releases on GitHub, so it was refused; nothing was downloaded. Do not install DeckPilot from another source; report the problem if it persists (artifact URL `https://example.com/DeckPilot.app.tar.gz` does not point to a DeckPilot release download)",
+    "managedBy": null,
+    "notConfiguredReason": null,
+    "packageFormat": "app",
+    "phase": "idle",
+    "preferences": {
+      "automaticChecks": true,
+      "channel": "stable",
+      "checkIntervalHours": 24,
+      "lastCheck": null,
+      "mode": "notifyOnly"
+    },
+    "progress": null,
+    "releaseChannel": "alpha",
+    "supportsAutomaticUpdates": true,
+    "target": "darwin-aarch64",
+    "updateInstruction": null,
+    "updateProvider": "github_release"
+  },
+  "homebrew": {
+    "available": null,
+    "capabilities": {
+      "automaticUpdates": false,
+      "channelChoice": false,
+      "selfUpdate": false,
+      "versionCheck": false
+    },
+    "configured": false,
+    "currentVersion": "0.6.0-alpha.3",
+    "developmentOverride": false,
+    "distributionChannel": "homebrew",
+    "endpoint": "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json",
+    "error": null,
+    "managedBy": "homebrew",
+    "notConfiguredReason": null,
+    "packageFormat": "app",
+    "phase": "idle",
+    "preferences": {
+      "automaticChecks": true,
+      "channel": "stable",
+      "checkIntervalHours": 24,
+      "lastCheck": null,
+      "mode": "notifyOnly"
+    },
+    "progress": null,
+    "releaseChannel": "alpha",
+    "supportsAutomaticUpdates": false,
+    "target": "darwin-aarch64",
+    "updateInstruction": "brew upgrade --cask deckpilot",
+    "updateProvider": "external_package_manager"
+  },
+  "macAppStore": {
+    "available": null,
+    "capabilities": {
+      "automaticUpdates": false,
+      "channelChoice": false,
+      "selfUpdate": false,
+      "versionCheck": false
+    },
+    "configured": false,
+    "currentVersion": "0.6.0-alpha.3",
+    "developmentOverride": false,
+    "distributionChannel": "mac_app_store",
+    "endpoint": "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json",
+    "error": null,
+    "managedBy": "mac_app_store",
+    "notConfiguredReason": null,
+    "packageFormat": "mas_pkg",
+    "phase": "idle",
+    "preferences": {
+      "automaticChecks": true,
+      "channel": "stable",
+      "checkIntervalHours": 24,
+      "lastCheck": null,
+      "mode": "notifyOnly"
+    },
+    "progress": null,
+    "releaseChannel": "alpha",
+    "supportsAutomaticUpdates": false,
+    "target": "darwin-aarch64",
+    "updateInstruction": "Updates are installed by the App Store",
+    "updateProvider": "store_managed"
+  },
+  "microsoftStore": {
+    "available": null,
+    "capabilities": {
+      "automaticUpdates": false,
+      "channelChoice": false,
+      "selfUpdate": false,
+      "versionCheck": false
+    },
+    "configured": false,
+    "currentVersion": "0.6.0-alpha.3",
+    "developmentOverride": false,
+    "distributionChannel": "microsoft_store",
+    "endpoint": "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json",
+    "error": null,
+    "managedBy": "microsoft_store",
+    "notConfiguredReason": null,
+    "packageFormat": "msix",
+    "phase": "idle",
+    "preferences": {
+      "automaticChecks": true,
+      "channel": "stable",
+      "checkIntervalHours": 24,
+      "lastCheck": null,
+      "mode": "notifyOnly"
+    },
+    "progress": null,
+    "releaseChannel": "alpha",
+    "supportsAutomaticUpdates": false,
+    "target": "windows-aarch64",
+    "updateInstruction": "Updates are installed by the Microsoft Store",
+    "updateProvider": "store_managed"
+  },
+  "notConfigured": {
+    "available": null,
+    "capabilities": {
+      "automaticUpdates": false,
+      "channelChoice": false,
+      "selfUpdate": false,
+      "versionCheck": false
+    },
+    "configured": false,
+    "currentVersion": "0.6.0-alpha.3",
+    "developmentOverride": false,
+    "distributionChannel": "github",
+    "endpoint": "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json",
+    "error": null,
+    "managedBy": null,
+    "notConfiguredReason": "no update key is compiled into this build",
+    "packageFormat": "app",
+    "phase": "idle",
+    "preferences": {
+      "automaticChecks": true,
+      "channel": "stable",
+      "checkIntervalHours": 24,
+      "lastCheck": null,
+      "mode": "notifyOnly"
+    },
+    "progress": null,
+    "releaseChannel": "alpha",
+    "supportsAutomaticUpdates": false,
+    "target": "darwin-aarch64",
+    "updateInstruction": null,
+    "updateProvider": "none"
+  },
+  "unknownFormat": {
+    "available": null,
+    "capabilities": {
+      "automaticUpdates": false,
+      "channelChoice": false,
+      "selfUpdate": false,
+      "versionCheck": false
+    },
+    "configured": false,
+    "currentVersion": "0.6.0-alpha.3",
+    "developmentOverride": false,
+    "distributionChannel": "github",
+    "endpoint": "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json",
+    "error": null,
+    "managedBy": null,
+    "notConfiguredReason": "the package format of this build is unknown",
+    "packageFormat": null,
+    "phase": "idle",
+    "preferences": {
+      "automaticChecks": true,
+      "channel": "stable",
+      "checkIntervalHours": 24,
+      "lastCheck": null,
+      "mode": "notifyOnly"
+    },
+    "progress": null,
+    "releaseChannel": "alpha",
+    "supportsAutomaticUpdates": false,
+    "target": "linux-aarch64",
+    "updateInstruction": null,
+    "updateProvider": "none"
+  },
+  "winget": {
+    "available": null,
+    "capabilities": {
+      "automaticUpdates": false,
+      "channelChoice": false,
+      "selfUpdate": false,
+      "versionCheck": false
+    },
+    "configured": false,
+    "currentVersion": "0.6.0-alpha.3",
+    "developmentOverride": false,
+    "distributionChannel": "winget",
+    "endpoint": "https://github.com/knittingcode/DeckPilot/releases/latest/download/latest.json",
+    "error": null,
+    "managedBy": "winget",
+    "notConfiguredReason": null,
+    "packageFormat": null,
+    "phase": "idle",
+    "preferences": {
+      "automaticChecks": true,
+      "channel": "stable",
+      "checkIntervalHours": 24,
+      "lastCheck": null,
+      "mode": "notifyOnly"
+    },
+    "progress": null,
+    "releaseChannel": "alpha",
+    "supportsAutomaticUpdates": false,
+    "target": "windows-aarch64",
+    "updateInstruction": "winget upgrade KnittingCode.DeckPilot",
+    "updateProvider": "external_package_manager"
+  }
+}
