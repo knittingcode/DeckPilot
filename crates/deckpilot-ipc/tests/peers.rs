@@ -439,6 +439,16 @@ async fn a_protocol_9_agent_is_never_asked_about_plugins() {
             plugin: plugin(),
             key: "token".into(),
         },
+        Request::GrantPluginUserOrigin {
+            plugin: plugin(),
+            setting: "apiUrl".into(),
+            origin: "https://ghe.example.com".into(),
+            private_network: false,
+        },
+        Request::RevokePluginUserOrigin {
+            plugin: plugin(),
+            setting: "apiUrl".into(),
+        },
     ] {
         let refused = client.request(request).await;
         assert!(
