@@ -303,6 +303,17 @@ fn sdk_actions() -> Value {
         "failedNodes",
     ]);
     let headers = outputs(HEADERS_OUTPUTS);
+    let ambient = outputs(&[
+        "error",
+        "detail",
+        "unixMs",
+        "utcOffsetMinutes",
+        "minuteOfDay",
+        "weekday",
+        "hex",
+        "answered",
+        "roll",
+    ]);
     let actions: Vec<Value> = [
         ("scale", vec![]),
         ("inits", vec![]),
@@ -350,6 +361,21 @@ fn sdk_actions() -> Value {
         ("get", vec![text("url")]),
         ("run-context", vec![]),
         ("open-if-user", vec![text("url")]),
+        ("clock", vec![]),
+        (
+            "random",
+            vec![
+                json!({"key": "length", "label": "Length", "required": false,
+                    "kind": {"type": "integer", "min": 0, "max": 1000}}),
+                json!({"key": "times", "label": "Times", "required": false,
+                    "kind": {"type": "integer", "min": 1, "max": 200}}),
+            ],
+        ),
+        (
+            "dice",
+            vec![json!({"key": "sides", "label": "Sides", "required": false,
+                "kind": {"type": "integer", "min": 1}})],
+        ),
     ]
     .into_iter()
     .map(|(id, parameters)| {
@@ -360,6 +386,7 @@ fn sdk_actions() -> Value {
             "settings" => &settings,
             "open-url" | "open-if-user" => &open,
             "run-context" => &run,
+            "clock" | "random" | "dice" => &ambient,
             "headers" | "get" => &headers,
             _ => &basic,
         };
@@ -4741,5 +4768,71 @@ async fn pages_of_a_server_the_user_enters_open_only_with_its_consent() {
     let refused = open(lan_page).await;
     assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
     assert_eq!(env.opened_urls(), [page, page, lan_page]);
+    agent.stop().await;
+}
+
+/// Plugin API 1.1 through the real agent and sandboxed host: a plugin
+/// reads the agent's clock with the local UTC offset and takes bytes from
+/// the system's random source, within the per-call bound and the
+/// per-plugin byte budget. Neither is one of its permissions (the broker's
+/// tests show both allowed with none granted).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugins_read_the_clock_and_random_bytes_within_their_budget() {
+    use chrono::Offset as _;
+    let registry = shared_registry();
+    let env = Env::new("plugins-e2e-ambient");
+    let agent = Agent::started(&env, registry).await;
+    agent.install_enabled(OPENER, OPENER_GRANTS).await;
+
+    let unix_ms = || {
+        i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap()
+    };
+    let before = unix_ms();
+    let clock = agent.run(OPENER, "clock", json!({})).await;
+    let after = unix_ms();
+    let seen = clock["unixMs"].as_i64().unwrap();
+    assert!((before..=after).contains(&seen), "{before} {seen} {after}");
+    let offset = i64::from(chrono::Local::now().offset().fix().local_minus_utc() / 60);
+    assert_eq!(clock["utcOffsetMinutes"], offset, "{clock:?}");
+    let minute = (seen / 1000 + offset * 60).rem_euclid(86_400) / 60;
+    assert_eq!(clock["minuteOfDay"], minute, "{clock:?}");
+    assert!((0..7).contains(&clock["weekday"].as_i64().unwrap()));
+
+    // Fresh bytes of the length asked for, never the same twice.
+    let first = agent.run(OPENER, "random", json!({"length": 32})).await;
+    let second = agent.run(OPENER, "random", json!({"length": 32})).await;
+    let hex = |data: &BTreeMap<String, Value>| data["hex"].as_str().unwrap().to_owned();
+    assert_eq!(hex(&first).len(), 64, "{first:?}");
+    assert!(hex(&first).chars().all(|c| c.is_ascii_hexdigit()));
+    assert_ne!(hex(&first), hex(&second));
+    assert_ne!(hex(&first), "0".repeat(64));
+    for _ in 0..20 {
+        let roll = agent.run(OPENER, "dice", json!({"sides": 6})).await["roll"]
+            .as_i64()
+            .unwrap();
+        assert!((1..=6).contains(&roll), "{roll}");
+    }
+
+    // More than 64 bytes at once is refused before the agent is asked.
+    let too_many = agent.run(OPENER, "random", json!({"length": 65})).await;
+    assert_eq!(too_many["error"], "BadRequest", "{too_many:?}");
+    // The budget is 4,096 bytes a minute per plugin, refilled as time
+    // passes: 704 are spent, so 100 calls of 64 cannot all be answered,
+    // and the refusal is `throttled`, not an error of the action.
+    let drained = agent
+        .run(OPENER, "random", json!({"length": 64, "times": 100}))
+        .await;
+    assert_eq!(drained["error"], "Throttled", "{drained:?}");
+    let answered = drained["answered"].as_i64().unwrap();
+    assert!((40..100).contains(&answered), "{drained:?}");
+    // The clock has its own limit and still answers.
+    assert!(agent.run(OPENER, "clock", json!({})).await["unixMs"].is_i64());
+
     agent.stop().await;
 }

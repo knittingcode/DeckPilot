@@ -14,7 +14,7 @@ use deckpilot_plugin_abi::{ActionOutcome, ParamValue, Params};
 use crate::args::{Args, normalize};
 use crate::context::{Context, Transport};
 use crate::output::{ActionResult, IntoValue, PluginError, codes};
-use crate::{API_LEVEL, SDK_NAME, SDK_VERSION};
+use crate::{API_LEVEL, ApiLevel, LATEST_API_LEVEL, SDK_NAME, SDK_VERSION};
 
 /// An action handler. Plain functions and non-capturing closures coerce to
 /// it.
@@ -40,6 +40,7 @@ pub struct Plugin {
     init: Option<InitHook>,
     shutdown: Option<ShutdownHook>,
     init_state: OnceLock<Result<(), PluginError>>,
+    requires_api: ApiLevel,
 }
 
 impl fmt::Debug for Plugin {
@@ -63,6 +64,7 @@ impl Plugin {
             init: None,
             shutdown: None,
             init_state: OnceLock::new(),
+            requires_api: API_LEVEL,
         }
     }
 
@@ -96,6 +98,29 @@ impl Plugin {
         &self.actions
     }
 
+    /// Declares that the plugin cannot work on an agent below plugin API
+    /// `level`, e.g. `ApiLevel { major: 1, minor: 1 }` for a plugin that
+    /// needs [`Context::now`](crate::Context::now) or
+    /// [`Context::random_bytes`](crate::Context::random_bytes). The
+    /// manifest then declares `"engines": { "pluginApi": "^1.1" }` and an
+    /// older agent does not install the plugin. A plugin that handles
+    /// `unsupported` from the newer calls keeps 1.0 and runs everywhere.
+    /// A level below 1.0 or above what this SDK implements
+    /// ([`LATEST_API_LEVEL`]) is brought into that range.
+    #[must_use]
+    pub fn requires_api(mut self, level: ApiLevel) -> Self {
+        self.requires_api = level.clamp(API_LEVEL, LATEST_API_LEVEL);
+        self
+    }
+
+    /// The plugin API level the plugin needs: what
+    /// [`Plugin::requires_api`] declared, 1.0 otherwise. It is the
+    /// manifest's `engines.pluginApi` (`"^<level>"`) and what
+    /// `dp_describe` reports.
+    pub fn api_level(&self) -> ApiLevel {
+        self.requires_api
+    }
+
     pub fn find(&self, id: &str) -> Option<&Action> {
         self.actions.iter().find(|a| a.id == id)
     }
@@ -105,7 +130,7 @@ impl Plugin {
     pub fn descriptor(&self) -> PluginDescriptor {
         PluginDescriptor {
             sdk: format!("{SDK_NAME}/{SDK_VERSION}"),
-            api_level: API_LEVEL.to_string(),
+            api_level: self.api_level().to_string(),
             actions: self.actions.iter().map(Action::descriptor).collect(),
         }
     }
