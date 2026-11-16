@@ -1,0 +1,176 @@
+# The product website (website/): https://knittingcode.github.io/deckpilot/
+#
+# Independent of the application's release pipeline. It builds no Rust, uses
+# no secret and no signing key, never runs in the environment
+# production-release, and publishes nothing but the static pages of
+# website/dist: no installer, no update manifest, no release asset. The
+# download page links to GitHub Releases, which stays the only source of
+# installers and updates.
+#
+# - Pull requests that touch the website: build and test. Never deployed.
+# - Pushes to main that touch the website: build, test, deploy to Pages.
+# - Every day, and when started by hand: the same from main, so the download
+#   page (built from the published releases, website/src/lib/releases.ts)
+#   cannot stay behind a release for more than a day.
+# - A published release: starts the workflow again on main (`refresh`), so
+#   the deployment still comes from main and the github-pages environment
+#   can keep allowing main only. A release published with the workflow
+#   token (release.yml) raises no event, so the daily run is what covers it.
+#
+# Not a required check: pull requests that do not touch the website do not
+# start this workflow.
+name: Website
+
+on:
+  pull_request:
+    paths:
+      - website/**
+      - .github/workflows/website.yml
+      # The website's brand files are checked against these originals.
+      - .github/assets/branding/**
+  push:
+    branches: [main]
+    paths:
+      - website/**
+      - .github/workflows/website.yml
+      - .github/assets/branding/**
+  release:
+    types: [published]
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+# Nothing by default: every job states what it needs.
+permissions: {}
+
+# Pull requests: a new push cancels the obsolete run. Everything else shares
+# one group and is never cancelled, so two deployments cannot overlap.
+concurrency:
+  group: website-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build and test website
+    if: github.event_name != 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: website/.node-version
+          package-manager-cache: false
+      - name: Install the locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Shared design system and brand files are unmodified copies
+        run: npm run check:design
+      - name: Unit tests (release selection)
+        run: npm run test:unit
+      - name: Type check
+        run: npm run check
+      # The published releases are read from GitHub's public API. The token
+      # is the workflow's own read-only one and only raises the rate limit.
+      - name: Build the site
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npm run build
+      - name: Build the test-only variants (never deployed)
+        run: npm run build:fixtures
+      - name: No hardcoded version, links, language parity, hreflang and canonical
+        run: npm run test:static
+      - name: Install the browser
+        run: npx playwright install --with-deps chromium
+      - name: Browser tests (navigation, downloads, accessibility in both themes, SEO)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npm run test:browser
+      - name: Only pages are deployed
+        run: |
+          # No installer, update manifest, signature or checksum list may be
+          # in the build: those live on GitHub Releases only.
+          found=$(find dist -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.AppImage' \
+            -o -name '*.deb' -o -name '*.rpm' -o -name '*.sig' -o -name '*.tar.gz' -o -name '*.json' \
+            -o -name 'SHA256SUMS' -o -name 'FIXTURE_BUILD' \))
+          if [ -n "$found" ]; then
+            echo "::error::files that must not be deployed:"
+            echo "$found"
+            exit 1
+          fi
+          echo "Pages: $(find dist -name '*.html' | wc -l | tr -d ' ') HTML files, $(du -sh dist | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        with:
+          path: website/dist
+
+  # Reports when the Marketplace repository's design system has moved on
+  # from the copy in website/src/styles/shared. It only warns: neither site's
+  # deployment depends on the other repository.
+  design-drift:
+    name: Design system drift (report only)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: website/.node-version
+          package-manager-cache: false
+      - name: Compare with knittingcode/deckpilot-plugins
+        working-directory: website
+        run: |
+          status=0
+          node tools/check-design-system.mjs --upstream > "$RUNNER_TEMP/drift.txt" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/drift.txt"
+          case "$status" in
+            0) ;;
+            3) echo "::warning title=Design system drift::$(tail -n 1 "$RUNNER_TEMP/drift.txt")" ;;
+            1) exit 1 ;;
+            *) echo "::warning title=Design system drift::the Marketplace repository could not be read" ;;
+          esac
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  # A release event runs on the tag, which the github-pages environment does
+  # not accept. This job only asks for a run on main; it checks out nothing
+  # and runs no code of the repository.
+  refresh:
+    name: Rebuild after a release
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Start the workflow on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run website.yml --ref main

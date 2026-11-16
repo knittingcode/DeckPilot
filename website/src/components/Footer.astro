@@ -1,0 +1,83 @@
+---
+/** Footer: what the site is, navigation, project and policy links, notices. */
+import wordmark from '@/assets/brand/wordmark.svg';
+import wordmarkDark from '@/assets/brand/wordmark-dark.svg';
+import { LINKS, marketplace } from '@/data/site';
+import { t, type Lang } from '@/i18n';
+import { page } from '@/lib/paths';
+
+type Props = { lang: Lang };
+const { lang } = Astro.props;
+const dict = t(lang);
+const f = dict.footer;
+
+type FooterLink = { label: string; href: string; external?: true; marketplace?: true };
+const columns: { title: string; links: FooterLink[] }[] = [
+  {
+    title: f.product,
+    links: [
+      { label: f.download, href: page(lang, 'download') },
+      { label: f.features, href: page(lang, '#overview') },
+      { label: f.screenshots, href: page(lang, 'screenshots') },
+      { label: f.security, href: page(lang, '#security') },
+      { label: f.faq, href: page(lang, '#faq') },
+    ],
+  },
+  {
+    title: f.resources,
+    links: [
+      { label: f.docs, href: page(lang, 'docs') },
+      { label: f.installation, href: page(lang, 'docs/installation') },
+      { label: f.troubleshooting, href: page(lang, 'docs/troubleshooting') },
+      { label: f.marketplace, href: marketplace(lang), external: true, marketplace: true },
+      { label: f.pluginDevelopers, href: marketplace(lang, 'developers'), external: true, marketplace: true },
+    ],
+  },
+  {
+    title: f.project,
+    links: [
+      { label: f.github, href: LINKS.app, external: true },
+      { label: f.releases, href: LINKS.releases, external: true },
+      { label: f.changelog, href: LINKS.changelog, external: true },
+      { label: f.contributing, href: LINKS.contributing, external: true },
+      { label: f.securityPolicy, href: LINKS.security, external: true },
+      { label: f.codeOfConduct, href: LINKS.codeOfConduct, external: true },
+      { label: f.license, href: LINKS.license, external: true },
+    ],
+  },
+];
+---
+
+<footer class="site-footer">
+  <div class="container py-14">
+    <div class="grid gap-10 md:grid-cols-[1.4fr_repeat(3,1fr)]">
+      <div class="max-w-sm">
+        <img class="only-light" src={wordmark.src} alt="DeckPilot" width="143" height="24" loading="lazy" />
+        <img class="only-dark" src={wordmarkDark.src} alt="DeckPilot" width="143" height="24" loading="lazy" />
+        <p class="mt-4">{f.about}</p>
+      </div>
+      <nav class="contents" aria-label={dict.a11y.footerNav}>
+        {
+          columns.map((column) => (
+            <div>
+              <h2 class="footer-heading">{column.title}</h2>
+              <ul class="footer-list">
+                {column.links.map((link) => (
+                  <li>
+                    <a href={link.href} rel={link.external ? 'noopener' : undefined} data-marketplace-link={link.marketplace ? '' : undefined}>
+                      {link.label}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))
+        }
+      </nav>
+    </div>
+    <div class="mt-12 grid gap-2 border-t border-line pt-6 text-[0.8125rem] text-subtle">
+      <p>{f.legal}</p>
+      <p>{f.trademark}</p>
+    </div>
+  </div>
+</footer>

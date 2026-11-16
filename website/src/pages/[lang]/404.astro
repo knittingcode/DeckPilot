@@ -1,0 +1,14 @@
+---
+/** The 404 page in each language (see ../404.astro); kept out of indexes. */
+import NotFound from '@/components/NotFound.astro';
+import { langPaths, t, type Lang } from '@/i18n';
+import Base from '@/layouts/Base.astro';
+
+export const getStaticPaths = langPaths;
+const lang = Astro.params.lang as Lang;
+const dict = t(lang);
+---
+
+<Base lang={lang} title={dict.notFound.title} description={dict.notFound.description} noindex>
+  <NotFound lang={lang} />
+</Base>
