@@ -97,6 +97,7 @@ under `cargo test` (against `testing::MockHost`).
 | `log` | `Context::log(LogLevel, ..)`, `debug`, `info`, `warn`, `error` | [capabilities.md](capabilities.md#log) | SDK doc test and `logging_is_best_effort_and_bounded` |
 | Exports (`dp_abi_version`, `dp_alloc`, `dp_invoke`, `dp_describe`, `dp_features`) | `plugin!` | [actions.md](actions.md) | host `sdk_e2e.rs`, `engine.rs` (`network_kinds_reach_only_guests_that_read_them`); every agent e2e |
 | Network kind of a failed `http.fetch` | `CapabilityError::network_kind -> Option<NetworkErrorKind>`; `?` reports its code | [capabilities.md](capabilities.md#errors) | SDK unit test `network_failures_keep_the_built_in_codes`; agent `plugins_e2e.rs` (canned DNS, connection, TLS, blocked address and redirect failures) |
+| `dp_state` (API 1.2) | `Action::state(StateHandler)`, `KeyState` builder (`label`, `detail`, `indicator`, `progress`, `toggle`, `accent`, `glyph`, `badge`, `series`), `StateOutcome` | [actions.md](actions.md#key-state) | ABI `state.rs`; broker `key_state.rs`; host `engine.rs` (`key_state_output_is_bounded_and_typed`) and `sdk_e2e.rs` (read only, budgets, crashes); SDK doc test and `tests/runtime.rs` |
 | `dp_init`, `dp_shutdown` | `Plugin::on_init`, `Plugin::on_shutdown` | [lifecycle.md](lifecycle.md) | SDK `tests/runtime.rs`; host `lifecycle.rs`, `sdk_e2e.rs` |
 | Testing | `testing::MockHost` (`new`, `allow_all`, `deny_all`, `invoke`, `context`, `requests`), `testing::manifest_mismatches` | [building.md](building.md#testing) | SDK doc tests and `tests/runtime.rs`; used by every example |
 

@@ -83,3 +83,15 @@ pub const MAX_RUN_NODE_ID: usize = 64;
 pub const MAX_RANDOM_BYTES: usize = 64;
 /// Largest local UTC offset in a `time.now` reply, in minutes either way.
 pub const MAX_UTC_OFFSET_MINUTES: i32 = 24 * 60;
+/// Largest key state (`dp_state` output, JSON).
+pub const MAX_STATE_OUTPUT: usize = 4 << 10;
+/// Label and detail of a key state, in characters.
+pub const MAX_STATE_TEXT: usize = 32;
+/// Badge of a key state, in characters.
+pub const MAX_STATE_BADGE: usize = 4;
+/// Points of a key state's series.
+pub const MAX_STATE_SERIES: usize = 32;
+/// `host_call`s one state call may make; more are answered `throttled`.
+pub const MAX_STATE_HOST_CALLS: u32 = 8;
+/// A state call gets an invocation's fuel divided by this.
+pub const STATE_FUEL_DIVISOR: u64 = 10;

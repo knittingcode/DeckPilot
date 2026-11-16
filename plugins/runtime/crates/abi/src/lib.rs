@@ -22,11 +22,13 @@ pub mod frame;
 pub mod guest;
 pub mod limits;
 pub mod protocol;
+pub mod state;
 pub mod value;
 
 pub use capability::{
     CallError, CallErrorCode, CallResult, CapabilityRequest, HttpMethod, NetworkErrorKind,
 };
+pub use state::{KeyState, StateOutcome};
 pub use value::{ActionOutcome, ParamValue, Params, ValidationError};
 
 /// The ABI version implemented by this crate.
@@ -47,5 +49,7 @@ pub use value::{ActionOutcome, ParamValue, Params, ValidationError};
 /// ([`capability::NotifyDelivery`], G9) instead of `null`; and the
 /// capability operations `time.now` ([`capability::Timestamp`]) and
 /// `random.bytes` ([`capability::RandomReply`]) of plugin API 1.1, which
-/// only a guest that uses them sends.
+/// only a guest that uses them sends; and the optional guest export
+/// `dp_state` of plugin API 1.2 ([`state`]), with the host protocol
+/// messages `state` and `stateResult` that carry it.
 pub const ABI_VERSION: u32 = 1;
