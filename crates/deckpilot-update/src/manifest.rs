@@ -127,10 +127,41 @@ fn release_download_path(url: &str) -> Option<&str> {
     (owner.eq_ignore_ascii_case(want_owner) && repo.eq_ignore_ascii_case(want_repo)).then_some(path)
 }
 
+/// Whether `url` is a release download of [`REPOSITORY`] that every client
+/// reads the same way: no query, fragment or backslash; every segment after
+/// the prefix non-empty, not `.` or `..`, and without a percent-escape of
+/// `.`, `/`, `\` or `%` in either case (`%2e%2e` is `..` to a URL parser,
+/// `%252e` is `%2e` once decoded); and unchanged when a URL parser
+/// normalizes it.
+fn is_release_download(url: &str) -> bool {
+    let Some(path) = release_download_path(url) else {
+        return false;
+    };
+    !url.contains(['?', '#', '\\'])
+        && path.split('/').all(plain_segment)
+        && url::Url::parse(url).is_ok_and(|parsed| parsed.as_str() == url)
+}
+
+/// A path segment that names itself: not empty, not a dot segment, and no
+/// percent-escape that decodes to `.`, `/`, `\` or `%` (or is malformed).
+/// Other escapes (`%2B` for `+`) are kept as they are.
+fn plain_segment(segment: &str) -> bool {
+    if segment.is_empty() || segment == "." || segment == ".." {
+        return false;
+    }
+    let mut escapes = segment.split('%');
+    escapes.next();
+    escapes.all(|rest| {
+        rest.get(..2)
+            .filter(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit()))
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            .is_some_and(|byte| !matches!(byte, b'.' | b'/' | b'\\' | b'%'))
+    })
+}
+
 fn validate_artifact(artifact: &PlatformArtifact) -> Result<(), ManifestError> {
     let url = &artifact.url;
-    let path = release_download_path(url).unwrap_or_default();
-    if path.is_empty() || path.contains("..") || url.contains(['?', '#', '\\']) {
+    if !is_release_download(url) {
         return Err(ManifestError::UntrustedUrl(url.clone()));
     }
     crate::signature::decode_signature(&artifact.signature)
@@ -316,6 +347,118 @@ mod tests {
             Err(ManifestError::MissingPlatform(_))
         ));
         assert!(matches!(Manifest::parse("{}"), Err(ManifestError::Json(_))));
+    }
+
+    fn validate(url: &str) -> Result<(), ManifestError> {
+        manifest("1.0.0", url).validate_artifacts()
+    }
+
+    #[test]
+    fn rejects_encoded_and_dot_segments() {
+        for rest in [
+            // Percent-encoded dot segments, in any case: `..` to a URL
+            // parser, which resolves them out of the release downloads.
+            "v1/%2e%2e/%2e%2e/other/x",
+            "v1/%2E%2E/%2E%2E/other/x",
+            "v1/%2e%2E/x",
+            "v1/%2E./x",
+            "v1/.%2e/x",
+            "v1/%2e/x",
+            "%2e%2e/%2e%2e/%2e%2e/%2e%2e/attacker/deckpilot/releases/download/v1/x",
+            // An encoded dot inside a name, too.
+            "v1/a%2emsi",
+            // Encoded separators.
+            "v1%2fa.msi",
+            "v1/..%2Fx",
+            "v1/a%5cb.msi",
+            "v1/..%5C..%5Cx",
+            // Double encoding: `%252e` is `%2e` once decoded.
+            "v1/%252e%252e/x",
+            "v1/%252E%252E/x",
+            "v1/%252f/x",
+            "v1/%255c/x",
+            "v1/a%25.msi",
+            // Malformed escapes.
+            "v1/a%",
+            "v1/a%2",
+            "v1/a%zz.msi",
+            "v1/a%+2.msi",
+            "v1/a%%2e.msi",
+            // Plain dot segments and empty segments.
+            "v1/../x",
+            "v1/./a.msi",
+            "./v1/a.msi",
+            "v1//a.msi",
+            "v1/a.msi/",
+            "v1/",
+            "/v1/a.msi",
+            // What a URL parser changes: not the URL as written.
+            "v1/a b.msi",
+            "v1/a\tb.msi",
+            "v1/a\nb.msi",
+            "v1/ä.msi",
+            "v1/a\"b.msi",
+            "v1/a<b>.msi",
+            // As before.
+            "v1/a\\b.msi",
+            "v1/a.msi?x=1",
+            "v1/a.msi#x",
+        ] {
+            for prefix in [
+                DOWNLOAD_PREFIX,
+                "https://github.com/knittingcode/deckpilot/releases/download/",
+            ] {
+                let bad = format!("{prefix}{rest}");
+                assert_eq!(
+                    validate(&bad),
+                    Err(ManifestError::UntrustedUrl(bad.clone())),
+                    "{bad}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn accepts_plain_and_encoded_plus_asset_names() {
+        for rest in [
+            "v0.6.0-alpha.3/DeckPilot_aarch64.app.tar.gz",
+            "v0.6.0-alpha.3/DeckPilot_0.6.0-alpha.3_x64_en-US.msi",
+            "v0.6.0/DeckPilot-0.6.0-1.x86_64.rpm",
+            // Build metadata, as written or encoded.
+            "v1.0.0/DeckPilot_1.0.0+build.1_x64.msi",
+            "v1.0.0/DeckPilot_1.0.0%2Bbuild.1_x64.msi",
+            "v1.0.0/DeckPilot_1.0.0%2bbuild.1_x64.msi",
+            "v1.0.0/DeckPilot_1.0.0~1_amd64.deb",
+        ] {
+            let good = format!("{DOWNLOAD_PREFIX}{rest}");
+            assert_eq!(validate(&good), Ok(()), "{good}");
+        }
+    }
+
+    /// The manifest published with 0.6.0-alpha.3, byte for byte: every URL
+    /// still passes, and reads the same to a URL parser.
+    #[test]
+    fn the_published_alpha_3_manifest_validates() {
+        let manifest = Manifest::parse(include_str!(
+            "../tests/fixtures/v0.6.0-alpha.3-prerelease.json"
+        ))
+        .unwrap();
+        assert_eq!(manifest.version, "0.6.0-alpha.3");
+        assert_eq!(manifest.platforms.len(), 10);
+        assert_eq!(manifest.validate_artifacts(), Ok(()));
+        for (key, artifact) in &manifest.platforms {
+            assert!(
+                artifact
+                    .url
+                    .starts_with(&format!("{DOWNLOAD_PREFIX}v0.6.0-alpha.3/")),
+                "{key}: {}",
+                artifact.url
+            );
+            assert_eq!(
+                url::Url::parse(&artifact.url).unwrap().as_str(),
+                artifact.url
+            );
+        }
     }
 
     #[test]

@@ -540,7 +540,8 @@ impl Source {
     /// installed format's entry (R4) and every artifact URL of its manifest
     /// passes the policy (G10). The URL the updater will request is checked
     /// as well, as it parsed it: parsing resolves `%2e%2e` segments, which
-    /// could otherwise lead out of the release downloads.
+    /// could otherwise lead out of the release downloads (the manifest check
+    /// already refuses them as written; this keeps the two in step).
     #[cfg(feature = "self-update")]
     fn verify(&self, update: &Update) -> Result<(), CheckError> {
         if update.target != self.target {

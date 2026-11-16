@@ -568,6 +568,25 @@ jq -r '.platforms[].url' "$STUB_DIR/assets/$id/prerelease.json" | grep -v -q -F 
   && bad "the draft's manifest is not under the pinned prefix" || ok "every update of the draft is under the pinned DeckPilot prefix"
 change_manifest '.platforms["linux-x86_64-deb"].url |= sub("knittingcode/DeckPilot"; "knittingcode/deckpilot")'
 expect_draft "the right package under the renamed repository's spelling" "not to an asset of v0.6.0-rc.1" v0.6.0-rc.1
+# Percent-encoded dot segments and separators (any case, also double
+# encoded): a URL parser resolves `%2e%2e` to `..` and so out of the
+# release; the URL as written is never an asset of this tag.
+for edit in 'sub("/v0.6.0-rc.1/"; "/v0.6.0-rc.1/%2e%2e/v0.6.0-rc.1/")' \
+  'sub("/v0.6.0-rc.1/"; "/v0.6.0-rc.1/%2E%2E/v0.6.0-rc.1/")' \
+  'sub("/v0.6.0-rc.1/"; "/v0.6.0-rc.1/%2e%2E/v0.6.0-rc.1/")' \
+  'sub("/v0.6.0-rc.1/"; "/v0.6.0-rc.1/%252e%252e/v0.6.0-rc.1/")' \
+  'sub("/v0.6.0-rc.1/"; "/v0.6.0-rc.1%2F")' \
+  'sub("/v0.6.0-rc.1/"; "/v0.6.0-rc.1%2f")' \
+  'sub("/v0.6.0-rc.1/"; "/v0.6.0-rc.1%5C")' \
+  'sub("/v0.6.0-rc.1/"; "/v0.6.0-rc.1/%5c")' \
+  'sub("/download/v0.6.0-rc.1/"; "/download/%2e%2e/download/v0.6.0-rc.1/")' \
+  'sub("[.]deb$"; "%2edeb")'; do
+  fresh
+  id=$(draft v0.6.0-rc.1)
+  change_manifest ".platforms[\"linux-x86_64-deb\"].url |= $edit"
+  expect_draft "an encoded manifest URL ($(jq -r '.platforms["linux-x86_64-deb"].url' "$STUB_DIR/assets/$id/prerelease.json"))" \
+    "not to an asset of v0.6.0-rc.1" v0.6.0-rc.1
+done
 fresh
 id=$(draft v0.6.0-rc.1)
 change_manifest '.platforms["linux-aarch64"] = .platforms["linux-x86_64"]'
@@ -645,6 +664,24 @@ run discard.log "$here/discard-draft.sh" v0.6.0-rc.3 && [ -z "$(release v0.6.0-r
 draft v0.6.0-rc.3 > /dev/null && ok "and built again" || bad "rebuilding the draft"
 expect_failure "a published release is never discarded" "is published" "$here/discard-draft.sh" v0.6.0-rc.2
 [ "$(release v0.6.0-rc.2 | jq -r .draft)" = false ] && ok "the published release is untouched" || bad "published release changed"
+
+echo "== a published manifest with encoded URLs"
+# Verification after publication compares every package URL with the
+# verified asset's URL as written: an encoded dot segment or separator
+# never passes, even where it would resolve to the same asset.
+for edit in 'sub("/v0.6.0-rc.4/"; "/v0.6.0-rc.4/%2e%2e/v0.6.0-rc.4/")' \
+  'sub("/v0.6.0-rc.4/"; "/v0.6.0-rc.4/%2E%2E/v0.6.0-rc.4/")' \
+  'sub("/v0.6.0-rc.4/"; "/v0.6.0-rc.4/%252e%252e/v0.6.0-rc.4/")' \
+  'sub("/v0.6.0-rc.4/"; "/v0.6.0-rc.4/x%2f..%2f")' \
+  'sub("/v0.6.0-rc.4/"; "/v0.6.0-rc.4/x%5C..%5C")'; do
+  fresh
+  env_for 0.6.0-rc.4
+  id=$(draft v0.6.0-rc.4)
+  run publish.log publish v0.6.0-rc.4 || bad "publishing v0.6.0-rc.4: $(cat "$work/publish.log")"
+  change_manifest ".platforms[\"linux-x86_64-deb\"].url |= $edit"
+  expect_failure "a published encoded manifest URL ($(jq -r '.platforms["linux-x86_64-deb"].url' "$STUB_DIR/assets/$id/prerelease.json"))" \
+    "which is not a verified asset of v0.6.0-rc.4" publish v0.6.0-rc.4
+done
 
 echo "== the renamed repository (knittingcode/deckpilot)"
 # GitHub now reports the repository as knittingcode/deckpilot. Installed
