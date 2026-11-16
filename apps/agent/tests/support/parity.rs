@@ -15,7 +15,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use deckpilot_core::{
@@ -77,11 +77,13 @@ pub struct Artifacts {
 }
 
 /// The host and the plugin's module, built from `plugins/runtime` (or
-/// taken from `DECKPILOT_E2E_PLUGIN_HOST` and `DECKPILOT_E2E_WASM_DIR`).
-/// One plugin per test binary.
+/// taken from `DECKPILOT_E2E_PLUGIN_HOST` and `DECKPILOT_E2E_WASM_DIR`),
+/// once per plugin and test binary.
 pub fn artifacts(plugin: &Plugin) -> &'static Artifacts {
-    static ARTIFACTS: OnceLock<Artifacts> = OnceLock::new();
-    ARTIFACTS.get_or_init(|| {
+    static ARTIFACTS: Mutex<BTreeMap<&'static str, &'static Artifacts>> =
+        Mutex::new(BTreeMap::new());
+    let mut built = ARTIFACTS.lock().unwrap_or_else(|e| e.into_inner());
+    *built.entry(plugin.package).or_insert_with(|| {
         let wasm = format!("{}.wasm", plugin.package.replace('-', "_"));
         let wasm_dir = std::env::var_os("DECKPILOT_E2E_WASM_DIR")
             .map(PathBuf::from)
@@ -116,10 +118,10 @@ pub fn artifacts(plugin: &Plugin) -> &'static Artifacts {
             },
             PathBuf::from,
         );
-        Artifacts {
+        Box::leak(Box::new(Artifacts {
             host,
             module: wasm_dir.join(wasm),
-        }
+        }))
     })
 }
 
