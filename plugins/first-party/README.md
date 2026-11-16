@@ -64,7 +64,10 @@ plugins, the agent with the `plugins` feature and their pins, and the
 plugin host from `plugins/runtime`, then bundles with
 `apps/desktop/src-tauri/tauri.plugins.conf.json` on top of
 `tauri.release.conf.json`: the host as an external binary next to the
-agent, `bundled/` as a resource. Without the variable (the default) the
+agent, `bundled/` as a resource. On macOS the host is signed first with
+its one entitlement and copied into `Contents/MacOS` instead
+(`tauri.plugins.macos.conf.json`; [docs/releasing.md](../../docs/releasing.md),
+"Packaging the plugins"). Without the variable (the default) the
 package is exactly what it was. The published release workflow
 (`.github/workflows/release.yml`) is unchanged and packages neither the
 host nor bundled plugins until the owner enables the marketplace.
