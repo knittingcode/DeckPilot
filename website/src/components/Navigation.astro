@@ -1,0 +1,41 @@
+---
+/**
+ * Navigation: the main links, marking the current section. "Plugins" leads
+ * to the Marketplace site (same language), and says so to assistive
+ * technology and with an arrow.
+ */
+import { ArrowUpRight } from '@lucide/astro';
+import { NAV } from '@/data/nav';
+import { marketplace } from '@/data/site';
+import { t, type Lang } from '@/i18n';
+import { page, routeOf } from '@/lib/paths';
+
+type Props = { lang: Lang };
+const { lang } = Astro.props;
+const dict = t(lang);
+const route = routeOf(Astro.url.pathname);
+---
+
+<ul class="nav-list">
+  {
+    NAV.map((item) => (
+      <li>
+        {'route' in item ? (
+          <a
+            class="nav-link"
+            href={page(lang, item.route)}
+            aria-current={route === item.route || route.startsWith(`${item.route}/`) ? 'page' : undefined}
+          >
+            {dict.nav[item.key]}
+          </a>
+        ) : (
+          <a class="nav-link nav-link-external" href={marketplace(lang, item.marketplace)} rel="noopener" data-marketplace-link>
+            {dict.nav[item.key]}
+            <ArrowUpRight aria-hidden="true" />
+            <span class="sr-only">({dict.a11y.marketplaceSite})</span>
+          </a>
+        )}
+      </li>
+    ))
+  }
+</ul>

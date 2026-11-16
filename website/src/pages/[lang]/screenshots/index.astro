@@ -1,0 +1,37 @@
+---
+/** The screenshot gallery (src/data/screenshots.ts says how to add images). */
+import Notice from '@/components/Notice.astro';
+import Screenshot from '@/components/Screenshot.astro';
+import { anyMissing, SCREENSHOTS } from '@/data/screenshots';
+import { langPaths, t, type Lang } from '@/i18n';
+import Base from '@/layouts/Base.astro';
+
+export const getStaticPaths = langPaths;
+const lang = Astro.params.lang as Lang;
+const dict = t(lang);
+const s = dict.screenshots;
+const pending = anyMissing();
+---
+
+<Base lang={lang} title={s.metaTitle} description={s.description}>
+  <div class="container py-12 md:py-16">
+    <h1 class="section-title">{s.title}</h1>
+    <p class="section-lead max-w-2xl">{s.lead}</p>
+    {
+      pending && (
+        <Notice class="mt-8 max-w-3xl">
+          <strong>{s.pendingTitle}.</strong> {s.pendingText}
+        </Notice>
+      )
+    }
+    <ul class="mt-12 grid list-none gap-x-8 gap-y-12 p-0 md:grid-cols-2">
+      {
+        SCREENSHOTS.map((shot, i) => (
+          <li>
+            <Screenshot id={shot.id} file={shot.file} lang={lang} eager={i < 2} />
+          </li>
+        ))
+      }
+    </ul>
+  </div>
+</Base>
