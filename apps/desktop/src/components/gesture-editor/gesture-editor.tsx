@@ -1,5 +1,5 @@
 import { useDndMonitor, useDroppable } from "@dnd-kit/core"
-import { X } from "lucide-react"
+import { ListOrdered, X } from "lucide-react"
 import { useState, type ReactNode } from "react"
 
 import { ParameterField } from "@/components/parameter-field"
@@ -121,6 +121,11 @@ export interface GestureEditorProps {
    * `null`: it cannot be put on a gesture.
    */
   resolveDrop?: (dragged: unknown) => Promise<BindingTarget | null> | BindingTarget | null
+  /**
+   * Opens the steps of a step workflow (a Multi Action) a gesture runs;
+   * without it, no "Edit steps" is offered.
+   */
+  onEditWorkflow?: (workflow: string) => void
 }
 
 /**
@@ -407,6 +412,7 @@ function GestureRow({
   onChange,
   slot,
   resolveDrop,
+  onEditWorkflow,
 }: GestureEditorProps & {
   /** The id of the row's drop target. */
   slot: string
@@ -424,6 +430,11 @@ function GestureRow({
   const type = action ? types.find((t) => t.id === action.actionType) : undefined
   const overrides = target?.type === "action" ? (target.overrides ?? {}) : {}
   const overrideCount = Object.keys(overrides).length
+  // A step workflow is edited from the key; a graph in the workflow builder.
+  const steps =
+    target?.type === "workflow"
+      ? profile.workflows.find((w) => w.id === target.workflow && !w.graph)
+      : undefined
 
   const setOverrides = (next: ActionParameters) => {
     if (!binding || binding.target.type !== "action") return
@@ -492,6 +503,18 @@ function GestureRow({
               )
             }}
           />
+        )}
+        {steps && onEditWorkflow && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-fit"
+            onClick={() => {
+              onEditWorkflow(steps.id)
+            }}
+          >
+            <ListOrdered /> Edit steps ({steps.steps.length})
+          </Button>
         )}
         {action && type && type.parameters.length > 0 && (
           <>
