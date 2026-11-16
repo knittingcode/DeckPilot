@@ -19,8 +19,11 @@ import type {
   ProfilesView,
   Project,
   Saved,
+  UpdateState,
   Workflow,
 } from "@/lib/types"
+
+import updateStatesFixture from "./fixtures/update-states.json"
 
 export { moduleInfo }
 
@@ -255,4 +258,24 @@ export function deviceInfo(change: Partial<DeviceInfo> = {}): DeviceInfo {
     source: "mock",
     ...change,
   }
+}
+
+/**
+ * Update states as the backend serializes them, written by the Rust test
+ * `updates::tests::update_states_match_the_frontend_fixture`; `UpdateState`
+ * is checked against them in `src/lib/update-state.test.ts`.
+ */
+export const UPDATE_STATES = updateStatesFixture as unknown as Record<
+  keyof typeof updateStatesFixture,
+  UpdateState
+>
+
+export type UpdateStateName = keyof typeof UPDATE_STATES
+
+/** A copy of the backend's state `name`, with `overrides`. */
+export function updateState(
+  name: UpdateStateName,
+  overrides: Partial<UpdateState> = {},
+): UpdateState {
+  return { ...structuredClone(UPDATE_STATES[name]), ...overrides }
 }
