@@ -664,7 +664,64 @@ fn permissions(c: &mut Checker, m: &Manifest) {
                     c.warn(&path, "grants nothing: set `state` or `icons` to true");
                 }
             }
-            Permission::Notifications { .. } => {}
+            Permission::Notifications {
+                routing: Some(routing),
+                ..
+            } => notification_routing(c, &format!("{path}.routing"), routing, m),
+            Permission::Notifications { routing: None, .. } => {}
+        }
+    }
+}
+
+/// `notifications.routing` (G9): every member names one of the
+/// manifest's settings of the kind it needs.
+fn notification_routing(
+    c: &mut Checker,
+    path: &str,
+    routing: &crate::model::NotificationRouting,
+    m: &Manifest,
+) {
+    let members = routing.members();
+    if members.is_empty() {
+        c.error(
+            path,
+            IssueCode::Count,
+            "names no setting: set `desktop`, `statusBar` or `minimumSeverity`, or leave \
+             `routing` out"
+                .to_owned(),
+        );
+    }
+    let settings = m.contributes.settings();
+    for (member, key) in members {
+        let field = format!("{path}.{member}");
+        let Some(setting) = settings.iter().find(|s| s.key == key) else {
+            c.error(
+                &field,
+                IssueCode::UnknownReference,
+                format!("`{key}` is not one of contributes.settings"),
+            );
+            continue;
+        };
+        let fits = match (&setting.kind, member) {
+            (ParameterKind::Boolean {}, "desktop" | "statusBar") => true,
+            (ParameterKind::Choice { options }, "minimumSeverity") => {
+                !options.is_empty()
+                    && options
+                        .iter()
+                        .all(|o| crate::model::NOTIFICATION_SEVERITIES.contains(&o.as_str()))
+            }
+            _ => false,
+        };
+        if !fits {
+            c.error(
+                &field,
+                IssueCode::InvalidValue,
+                if member == "minimumSeverity" {
+                    format!("`{key}` must be a choice setting of info, success, warning and error")
+                } else {
+                    format!("`{key}` must be a boolean setting")
+                },
+            );
         }
     }
 }

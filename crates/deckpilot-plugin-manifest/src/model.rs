@@ -218,7 +218,12 @@ pub enum Permission {
         refs: Vec<String>,
         justification: String,
     },
+    /// Notifications, titled with the plugin's name. Without `routing`
+    /// they reach the status bar only; with it, the agent shows them where
+    /// the user's settings say (G9).
     Notifications {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        routing: Option<NotificationRouting>,
         justification: String,
     },
     Profile {
@@ -255,6 +260,55 @@ pub enum Permission {
         icons: Option<bool>,
         justification: String,
     },
+}
+
+/// Where a plugin's notifications go, as the user sets it in the plugin's
+/// settings (G9): each member names one of the manifest's own settings,
+/// which the **agent** reads when it shows a notification, never the
+/// plugin. A member that is absent keeps what a plugin without routing
+/// gets: no desktop notifications, the status bar, every severity.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationRouting {
+    /// A boolean setting: also show them as notifications of the
+    /// operating system.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop: Option<String>,
+    /// A boolean setting: show them in the status bar of an open window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_bar: Option<String>,
+    /// A choice setting of severities (`info`, `success`, `warning`,
+    /// `error`): less severe notifications are not shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_severity: Option<String>,
+}
+
+/// The severities a [`NotificationRouting::minimum_severity`] setting
+/// chooses from, least severe first.
+pub const NOTIFICATION_SEVERITIES: [&str; 4] = ["info", "success", "warning", "error"];
+
+impl NotificationRouting {
+    /// The members that are set, as `(member, setting key)`.
+    pub fn members(&self) -> Vec<(&'static str, &str)> {
+        [
+            ("desktop", self.desktop.as_deref()),
+            ("statusBar", self.status_bar.as_deref()),
+            ("minimumSeverity", self.minimum_severity.as_deref()),
+        ]
+        .into_iter()
+        .filter_map(|(member, key)| Some((member, key?)))
+        .collect()
+    }
+}
+
+impl Manifest {
+    /// The notification routing the `notifications` permission declares.
+    pub fn notification_routing(&self) -> Option<&NotificationRouting> {
+        self.permissions.iter().find_map(|p| match p {
+            Permission::Notifications { routing, .. } => routing.as_ref(),
+            _ => None,
+        })
+    }
 }
 
 /// The kind of a [`Permission`], without its scope.
@@ -307,7 +361,7 @@ impl Permission {
         match self {
             Self::Network { justification, .. }
             | Self::Credentials { justification, .. }
-            | Self::Notifications { justification }
+            | Self::Notifications { justification, .. }
             | Self::Profile { justification, .. }
             | Self::Variables { justification, .. }
             | Self::Storage { justification, .. }

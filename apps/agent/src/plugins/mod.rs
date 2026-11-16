@@ -286,6 +286,7 @@ impl PluginRuntime {
         data_dir: &std::path::Path,
         events: &tokio::sync::broadcast::Sender<deckpilot_ipc::AgentEvent>,
         plugin_events: &tokio::sync::broadcast::Sender<deckpilot_ipc::plugins::PluginEvent>,
+        notifier: std::sync::Arc<dyn deckpilot_core::notify::Notifier>,
         changed: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
         #[cfg(feature = "plugins")]
@@ -297,6 +298,7 @@ impl PluginRuntime {
                     worker::Events {
                         agent: events.clone(),
                         plugins: plugin_events.clone(),
+                        notifier,
                     },
                     changed,
                 )
@@ -305,7 +307,7 @@ impl PluginRuntime {
         }
         #[cfg(not(feature = "plugins"))]
         {
-            let _ = (data_dir, events, plugin_events, changed);
+            let _ = (data_dir, events, plugin_events, notifier, changed);
             Self { settings }
         }
     }

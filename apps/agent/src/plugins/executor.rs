@@ -17,7 +17,13 @@
 //!   (`variables.rs`): only ids its active manifest declares, of the
 //!   declared type, machine scope only, within the generation the
 //!   invocation started in.
-//! * `notify` as an agent notification, titled with the plugin's name.
+//! * `notify` through the agent's notifier, titled with the plugin's name:
+//!   in the status bar of an open app, and (G9) where the user's settings
+//!   for the plugin say when its manifest declares a notification routing
+//!   (`permissions[notifications].routing`): on the desktop, in the status
+//!   bar, from a least severity on. The agent reads those settings; the
+//!   plugin only learns where it was shown ([`NotifyDelivery`], for guests
+//!   that read it).
 //! * `log` into the agent's log, attributed to the plugin.
 //! * Storage (`storage.*`) in the plugin's own rows of plugins.db
 //!   ([`PluginData`]), within the quota the broker passed with the call.
@@ -59,11 +65,11 @@
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
-use deckpilot_core::notify::{Notification, Severity};
+use deckpilot_core::notify::{Delivery, Notification, Notifier, Severity};
 use deckpilot_ipc::AgentEvent;
 use deckpilot_plugin_abi::capability::{
-    AuthScheme, Header, HttpResponse, LogLevel, NotifySeverity, RunContext, StorageUsage,
-    is_response_header,
+    AuthScheme, Header, HttpResponse, LogLevel, NotifyDelivery, NotifySeverity, RunContext,
+    StorageUsage, is_response_header,
 };
 use deckpilot_plugin_abi::limits::{MAX_HEADER_LEN, MAX_HEADERS};
 use deckpilot_plugin_abi::{CallErrorCode, CallResult, HttpMethod, NetworkErrorKind};
@@ -422,6 +428,10 @@ pub(super) struct Executor {
     /// The plugin's display name, for notifications.
     name: String,
     events: broadcast::Sender<AgentEvent>,
+    /// The agent's notifier: the status bar of open app windows and the
+    /// desktop ([`Executor::with_notifier`]); by default the status bar
+    /// only, through `events`.
+    notifier: Arc<dyn Notifier>,
     transport: Transport,
     variables: OwnVariables,
     /// Storage, credentials and settings; without it they are
@@ -455,6 +465,7 @@ impl Executor {
         Self {
             broker,
             name,
+            notifier: Arc::new(StatusBar(events.clone())),
             events,
             transport,
             variables,
@@ -463,6 +474,13 @@ impl Executor {
             opened: std::sync::atomic::AtomicU32::new(0),
             run: RunContext::unknown(),
         }
+    }
+
+    /// Plugin notifications go to `notifier` (the agent's: the status bar
+    /// of open app windows, and the desktop).
+    pub fn with_notifier(mut self, notifier: Arc<dyn Notifier>) -> Self {
+        self.notifier = notifier;
+        self
     }
 
     /// The executor of an invocation whose run `run` describes.
@@ -514,6 +532,89 @@ impl Executor {
                 )
             }
         }
+    }
+
+    /// Shows an allowed notification, titled with the plugin's name, where
+    /// the user's routing for the plugin says (G9); without a routing in
+    /// the manifest, in the status bar only, as for every plugin before
+    /// it. The answer says where it was shown (the host passes it only to
+    /// guests that read it); a notification shown nowhere is still `ok`.
+    fn notify(
+        &self,
+        plugin: &PluginId,
+        title: &str,
+        body: &str,
+        severity: NotifySeverity,
+    ) -> CallResult {
+        let severity = notification_severity(severity);
+        let mut notification =
+            Notification::new(&format!("{}: {title}", self.name), body, severity);
+        let route = match self.route(plugin) {
+            Ok(route) => route,
+            Err(refused) => return refused,
+        };
+        let delivery = if rank(severity) < rank(route.minimum) {
+            NotifyDelivery::not_shown("less important than the plugin's setting")
+        } else if !route.desktop && !route.status_bar {
+            NotifyDelivery::not_shown(&format!(
+                "notifications are turned off in Settings › Plugins › {}",
+                self.name
+            ))
+        } else {
+            notification.desktop = route.desktop;
+            notification.status_bar = route.status_bar;
+            match self.notifier.notify(&notification) {
+                Ok(shown) => NotifyDelivery::shown(shown.desktop, shown.status_bar),
+                Err(reason) => NotifyDelivery::not_shown(&reason),
+            }
+        };
+        debug!(plugin = %plugin, shown = delivery.shown, desktop = delivery.desktop,
+            status_bar = delivery.status_bar, "a plugin notification");
+        serde_json::to_value(&delivery).map_or_else(
+            |e| CallResult::error(CallErrorCode::Failed, e.to_string()),
+            CallResult::Ok,
+        )
+    }
+
+    /// Where the plugin's notifications go: the settings its manifest's
+    /// routing names, as the user saved them (defaults filled in), read
+    /// here and never by the plugin. Without a routing: the status bar
+    /// only, every severity.
+    fn route(&self, plugin: &PluginId) -> Result<Route, CallResult> {
+        let without = Route {
+            desktop: false,
+            status_bar: true,
+            minimum: Severity::Info,
+        };
+        let Some(routing) = self
+            .access
+            .as_ref()
+            .and_then(|access| access.manifest.notification_routing().cloned())
+        else {
+            return Ok(without);
+        };
+        self.with_store(plugin, |data, id, manifest| {
+            let saved = data
+                .settings(id)
+                .map_err(|e| CallResult::error(CallErrorCode::Failed, e.to_string()))?;
+            let (effective, _) = super::data::effective_settings(manifest, &saved);
+            let flag = |key: Option<&String>, absent: bool| {
+                key.map_or(absent, |key| {
+                    effective.get(key).and_then(Value::as_bool).unwrap_or(false)
+                })
+            };
+            Ok(Route {
+                desktop: flag(routing.desktop.as_ref(), false),
+                status_bar: flag(routing.status_bar.as_ref(), true),
+                minimum: routing
+                    .minimum_severity
+                    .as_ref()
+                    .and_then(|key| effective.get(key))
+                    .and_then(Value::as_str)
+                    .map_or(Severity::Info, Severity::parse),
+            })
+        })
+        .and_then(|route| route)
     }
 
     /// Gives the executor the plugin's data (storage, credentials,
@@ -764,15 +865,54 @@ fn redacted(exchange: Exchange, forms: &[String]) -> Exchange {
     }
 }
 
-/// A plugin's severity as the core's: how the notification looks, nothing
-/// else (it is still shown in the status bar only, prefixed and rate
-/// limited).
+/// A plugin's severity as the core's: how the notification looks, and
+/// (with a routing) whether it is less severe than the user shows.
 fn notification_severity(severity: NotifySeverity) -> Severity {
     match severity {
         NotifySeverity::Info => Severity::Info,
         NotifySeverity::Success => Severity::Success,
         NotifySeverity::Warning => Severity::Warning,
         NotifySeverity::Error => Severity::Error,
+    }
+}
+
+/// The status bar only, through the agent's events (an executor without
+/// the agent's notifier).
+#[derive(Debug)]
+struct StatusBar(broadcast::Sender<AgentEvent>);
+
+impl Notifier for StatusBar {
+    fn notify(&self, notification: &Notification) -> Result<Delivery, String> {
+        if !notification.status_bar {
+            return Err("desktop notifications are not available".into());
+        }
+        self.0
+            .send(AgentEvent::Notification {
+                notification: notification.clone(),
+            })
+            .map(|_| Delivery {
+                desktop: false,
+                status_bar: true,
+            })
+            .map_err(|_| "the app is not open".to_owned())
+    }
+}
+
+/// Where one plugin notification goes.
+#[derive(Debug, Clone, Copy)]
+struct Route {
+    desktop: bool,
+    status_bar: bool,
+    /// Less severe notifications are not shown.
+    minimum: Severity,
+}
+
+fn rank(severity: Severity) -> u8 {
+    match severity {
+        Severity::Info => 0,
+        Severity::Success => 1,
+        Severity::Warning => 2,
+        Severity::Error => 3,
     }
 }
 
@@ -873,15 +1013,7 @@ impl Executor {
                 title,
                 body,
                 severity,
-            } => {
-                let notification = Notification::new(
-                    &format!("{}: {title}", self.name),
-                    body,
-                    notification_severity(*severity),
-                );
-                let _ = self.events.send(AgentEvent::Notification { notification });
-                CallResult::Ok(serde_json::Value::Null)
-            }
+            } => self.notify(plugin, title, body, *severity),
             Allowed::Log { level, message } => {
                 let plugin = plugin.as_str();
                 match level {
@@ -1125,12 +1257,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let record = dir.join("opened.txt");
         let _ = std::fs::remove_file(&record);
-        let (events, _) = broadcast::channel(4);
         let broker = Broker::new(
             Arc::new(deckpilot_plugin_broker::MemoryAudit::new(10)),
             Arc::new(deckpilot_plugin_broker::SystemClock::default()),
             deckpilot_plugin_broker::RateLimits::default(),
         );
+        let (events, _) = broadcast::channel(4);
         let executor = Executor::new(
             broker,
             "Test".into(),

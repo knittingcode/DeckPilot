@@ -95,6 +95,58 @@ fn example_manifest_parses_and_validates() {
     );
 }
 
+/// G9: a `notifications` permission may name the settings the agent
+/// routes the plugin's notifications by; without `routing` it is the
+/// permission it always was.
+#[test]
+fn notification_routing_names_settings_of_the_right_kind() {
+    let mut value = example();
+    let fields = value["contributes"]["settings"]["fields"]
+        .as_array_mut()
+        .unwrap();
+    fields.push(
+        json!({"key": "desktop", "label": "Desktop", "required": true,
+        "kind": {"type": "boolean"}, "default": {"type": "boolean", "value": true}}),
+    );
+    fields.push(
+        json!({"key": "least", "label": "Show from", "required": true,
+        "kind": {"type": "choice", "options": ["info", "warning", "error"]},
+        "default": {"type": "choice", "value": "info"}}),
+    );
+    push(
+        &mut value,
+        "/permissions",
+        json!({"kind": "notifications",
+               "routing": {"desktop": "desktop", "minimumSeverity": "least"},
+               "justification": "Tells you when the review count changes."}),
+    );
+    assert_eq!(schema_errors(&schema(), &value), [] as [String; 0]);
+    let manifest = Manifest::parse_and_validate(&value.to_string()).unwrap();
+    let routing = manifest.notification_routing().unwrap();
+    assert_eq!(
+        routing.members(),
+        [("desktop", "desktop"), ("minimumSeverity", "least")]
+    );
+    assert_eq!(serde_json::to_value(&manifest).unwrap(), value);
+
+    // A choice of something else than severities is refused.
+    let mut wrong = value.clone();
+    wrong["contributes"]["settings"]["fields"][3]["kind"]["options"] = json!(["info", "loud"]);
+    let error = Manifest::parse_and_validate(&wrong.to_string()).unwrap_err();
+    assert!(
+        error.to_string().contains("routing.minimumSeverity"),
+        "{error}"
+    );
+
+    // Without routing: nothing changes.
+    assert_eq!(
+        Manifest::parse_and_validate(EXAMPLE)
+            .unwrap()
+            .notification_routing(),
+        None
+    );
+}
+
 #[test]
 fn full_manifest_parses_and_validates() {
     let manifest = Manifest::parse_and_validate(FULL).unwrap();
@@ -220,6 +272,59 @@ fn fixtures() -> Vec<Fixture> {
             Structure("unknown field `extra`"),
             |v| {
                 set(v, "/extra", json!(1));
+            },
+        ),
+        // Notification routing (G9): settings of the right kind only.
+        mutate(
+            "routing names an undeclared setting",
+            false,
+            Invalid("permissions[4].routing.desktop", C::UnknownReference),
+            |v| {
+                push(
+                    v,
+                    "/permissions",
+                    json!({"kind": "notifications", "routing": {"desktop": "nowhere"},
+                           "justification": "Tells you when the review count changes."}),
+                );
+            },
+        ),
+        mutate(
+            "routing desktop is not a boolean setting",
+            false,
+            Invalid("permissions[4].routing.desktop", C::InvalidValue),
+            |v| {
+                push(
+                    v,
+                    "/permissions",
+                    json!({"kind": "notifications", "routing": {"desktop": "pollMinutes"},
+                           "justification": "Tells you when the review count changes."}),
+                );
+            },
+        ),
+        mutate(
+            "routing names no setting",
+            true,
+            Invalid("permissions[4].routing", C::Count),
+            |v| {
+                push(
+                    v,
+                    "/permissions",
+                    json!({"kind": "notifications", "routing": {},
+                           "justification": "Tells you when the review count changes."}),
+                );
+            },
+        ),
+        mutate(
+            "unknown routing member",
+            true,
+            Structure("unknown field `sound`"),
+            |v| {
+                push(
+                    v,
+                    "/permissions",
+                    json!({"kind": "notifications", "routing": {"sound": "pollMinutes"},
+                           "justification": "Tells you when the review count changes."}),
+                );
             },
         ),
         mutate(

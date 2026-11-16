@@ -514,6 +514,11 @@ impl Agent {
             &self.options.paths.data_dir,
             &self.handle.events,
             &self.handle.plugin_events,
+            Arc::new(crate::notifications::AgentNotifier {
+                events: self.handle.events.clone(),
+                desktop_clients: self.handle.desktop_clients.clone(),
+                native: self.options.notifier.clone(),
+            }),
             Arc::new(move || {
                 let _ = commands.send(Command::PluginsChanged);
             }),
@@ -1766,7 +1771,7 @@ pub fn default_options(paths: AgentPaths, mock_models: &[DeviceModel], usb: bool
         cancel_grace: executions::CANCEL_GRACE,
         clock: options_clock(),
         screen_lock: deckpilot_presence::screen_lock_monitor().map(Arc::from),
-        notifier: Some(Arc::new(crate::notifications::SystemNotifier)),
+        notifier: Some(crate::notifications::native()),
     }
 }
 

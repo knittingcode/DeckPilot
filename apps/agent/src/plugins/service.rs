@@ -1740,6 +1740,7 @@ impl PluginService {
             variables,
             self.opener.clone(),
         )
+        .with_notifier(self.events.notifier.clone())
         .with_data(access);
         Ok((
             record,

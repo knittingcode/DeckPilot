@@ -68,8 +68,12 @@ pub mod features {
     /// A failed `http.fetch` may carry
     /// [`CallError::kind`](crate::CallError::kind).
     pub const NETWORK_ERROR_KIND: u64 = 1;
+    /// A `notify` is answered with where it was shown
+    /// ([`NotifyDelivery`](crate::capability::NotifyDelivery)) instead of
+    /// `null` (G9).
+    pub const NOTIFY_DELIVERY: u64 = 2;
     /// Every feature this crate defines.
-    pub const ALL: u64 = NETWORK_ERROR_KIND;
+    pub const ALL: u64 = NETWORK_ERROR_KIND | NOTIFY_DELIVERY;
 }
 
 /// Input of one `dp_invoke`.

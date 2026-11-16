@@ -97,8 +97,8 @@ pub mod testing;
 
 pub use args::{Args, FromArg};
 pub use context::{
-    CapabilityError, CapabilityErrorKind, Context, MAX_LOG_LEN, Request, Response, RunCause,
-    RunContext, RunSummary, RunTrigger, SecretHandle, Settings, StorageUsage,
+    CapabilityError, CapabilityErrorKind, Context, MAX_LOG_LEN, NotifyDelivery, Request, Response,
+    RunCause, RunContext, RunSummary, RunTrigger, SecretHandle, Settings, StorageUsage,
 };
 pub use definition::{Action, DefinitionError, Handler, Param, Plugin};
 pub use output::{ActionResult, IntoValue, Output, PluginError, codes};
@@ -144,9 +144,9 @@ pub const API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 0 };
 pub mod prelude {
     pub use crate::{
         Action, ActionOutcome, ActionResult, Args, AuthScheme, CapabilityError,
-        CapabilityErrorKind, Context, HttpMethod, LogLevel, NetworkErrorKind, NotifySeverity,
-        Output, Param, Plugin, PluginError, Request, Response, RunCause, RunContext, RunTrigger,
-        SecretHandle, Settings, StorageUsage, codes,
+        CapabilityErrorKind, Context, HttpMethod, LogLevel, NetworkErrorKind, NotifyDelivery,
+        NotifySeverity, Output, Param, Plugin, PluginError, Request, Response, RunCause,
+        RunContext, RunTrigger, SecretHandle, Settings, StorageUsage, codes,
     };
 }
 
@@ -216,7 +216,8 @@ pub mod __rt {
     static PLUGIN: OnceLock<Plugin> = OnceLock::new();
 
     /// What `dp_features` reports: this SDK reads every addition of its
-    /// ABI crate (the network kind of a failed fetch).
+    /// ABI crate (the network kind of a failed fetch, the delivery of a
+    /// notification).
     pub const FEATURES: u64 = deckpilot_plugin_abi::guest::features::ALL;
 
     pub fn registered(build: fn() -> Plugin) -> &'static Plugin {

@@ -61,6 +61,48 @@ impl Notifier for SystemNotifier {
     }
 }
 
+/// The native notifier of the agent's process: the platform's own tool.
+/// Test only (feature `test-hooks`, never in a release build): with
+/// `DECKPILOT_TEST_NOTIFICATIONS` naming a file, native notifications are
+/// appended to it as JSON lines instead, so an end-to-end test never shows
+/// a real one; while a file `<that file>.deny` exists they fail as on a
+/// desktop where they are turned off.
+pub(crate) fn native() -> Arc<dyn Notifier> {
+    #[cfg(feature = "test-hooks")]
+    if let Some(path) = std::env::var_os("DECKPILOT_TEST_NOTIFICATIONS").filter(|p| !p.is_empty()) {
+        return Arc::new(RecordedNotifier(std::path::PathBuf::from(path)));
+    }
+    Arc::new(SystemNotifier)
+}
+
+/// Native notifications recorded in a file (feature `test-hooks`).
+#[cfg(feature = "test-hooks")]
+#[derive(Debug)]
+struct RecordedNotifier(std::path::PathBuf);
+
+#[cfg(feature = "test-hooks")]
+impl Notifier for RecordedNotifier {
+    fn notify(&self, notification: &Notification) -> Result<Delivery, String> {
+        use std::io::Write as _;
+        let mut deny = self.0.clone().into_os_string();
+        deny.push(".deny");
+        if std::path::Path::new(&deny).exists() {
+            return Err("notifications are turned off for DeckPilot".into());
+        }
+        let line = serde_json::to_string(notification).map_err(|e| e.to_string())?;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.0)
+            .and_then(|mut file| writeln!(file, "{line}"))
+            .map_err(|e| e.to_string())?;
+        Ok(Delivery {
+            desktop: true,
+            status_bar: false,
+        })
+    }
+}
+
 /// The agent's notifier: the status bar of every open app window, and the
 /// native notifier when one is configured.
 #[derive(Debug)]

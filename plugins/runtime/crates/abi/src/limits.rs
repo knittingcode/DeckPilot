@@ -62,6 +62,9 @@ pub const MAX_LOG_LEN: usize = 2 << 10;
 pub const MAX_NOTIFY_TITLE: usize = 64;
 /// Notification body (design §5.2).
 pub const MAX_NOTIFY_BODY: usize = 300;
+/// Why a notification was not shown, in a `notify` reply (longer reasons
+/// are cut).
+pub const MAX_NOTIFY_REASON: usize = 200;
 /// Storage key (design §5.2).
 pub const MAX_STORAGE_KEY: usize = 128;
 /// Storage value, serialized (design §5.2).
