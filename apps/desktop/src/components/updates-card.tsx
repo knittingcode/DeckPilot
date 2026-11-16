@@ -1,8 +1,17 @@
-import { Download, RefreshCw, RotateCw } from "lucide-react"
-import { useState } from "react"
+import {
+  ClipboardCopy,
+  Download,
+  FlaskConical,
+  PackageCheck,
+  RefreshCw,
+  RotateCw,
+  TriangleAlert,
+} from "lucide-react"
+import { Fragment, useState } from "react"
+import { toast } from "sonner"
 
-import { ErrorNotice } from "@/components/page"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
@@ -20,7 +29,17 @@ import { toastFailure } from "@/lib/failure"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { useAppContext } from "@/lib/app-context"
 import { formatTimestamp } from "@/lib/format"
-import type { UpdateChannel, UpdateMode, UpdatePreferences } from "@/lib/types"
+import type { UpdateChannel, UpdateMode, UpdatePreferences, UpdateState } from "@/lib/types"
+import {
+  CHANNEL_LABELS,
+  RELEASE_CHANNEL_LABELS,
+  deliveredBy,
+  describeUpdateError,
+  installedFrom,
+  notConfiguredExplanation,
+  providerLabel,
+  updateControls,
+} from "@/lib/update-distribution"
 
 const MODES: { value: UpdateMode; label: string; description: string }[] = [
   { value: "notifyOnly", label: "Notify me", description: "Show that an update is available." },
@@ -57,20 +76,25 @@ export function UpdatesCard() {
   const checkNow = () => {
     void run(() => api.checkForUpdates(), "Checking for updates failed", INTERNET)
   }
-  const downloading = updates?.phase === "downloading" ? updates.progress : null
+  const controls = updates ? updateControls(updates) : null
+  const downloading =
+    controls?.selfUpdate && updates?.phase === "downloading" ? updates.progress : null
   useTitlebar({
-    actions: [
-      {
-        id: "updates.check",
-        label: "Check for updates",
-        icon: RefreshCw,
-        placement: "primary",
-        busy: updates?.phase === "checking",
-        disabled: !updates?.configured || busy || updates.phase !== "idle",
-        hint: updates?.configured ? undefined : "Updates are not available in this build",
-        onSelect: checkNow,
-      },
-    ],
+    // Store builds have no check at all; the store updates them.
+    actions: controls?.check
+      ? [
+          {
+            id: "updates.check",
+            label: "Check for updates",
+            icon: RefreshCw,
+            placement: "primary",
+            busy: updates?.phase === "checking",
+            disabled: !controls.checkEnabled || busy || updates?.phase !== "idle",
+            hint: controls.checkEnabled ? undefined : "Updates are not available in this build",
+            onSelect: checkNow,
+          },
+        ]
+      : [],
     progress:
       downloading === null
         ? undefined
@@ -78,7 +102,7 @@ export function UpdatesCard() {
           ? Math.round((downloading.downloaded / downloading.total) * 100)
           : true,
   })
-  if (!updates) return null
+  if (!updates || !controls) return null
   const { preferences, available, progress, phase } = updates
 
   const savePreferences = (change: Partial<UpdatePreferences>) => {
@@ -107,171 +131,321 @@ export function UpdatesCard() {
       <CardHeader>
         <CardTitle>Updates</CardTitle>
         <CardDescription>
-          Version {updates.currentVersion} ({updates.target}). Updates come from GitHub Releases and
-          are installed only if their signature verifies. Your configuration is never uploaded.
+          {controls.selfUpdate
+            ? "Updates come from GitHub Releases and are installed only if their signature verifies. Your configuration is never uploaded."
+            : controls.managed || controls.command
+              ? `${deliveredBy(updates)}. DeckPilot does not download or install updates itself in this installation. Your configuration is never uploaded.`
+              : "Your configuration is never uploaded."}
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
-        {!updates.configured && (
+        <InstallationDetails state={updates} />
+        {updates.developmentOverride && <DevelopmentOverrideNotice state={updates} />}
+        {updates.updateProvider === "none" && (
           <Alert>
             <AlertTitle>Updates are not available in this build</AlertTitle>
             <AlertDescription>
-              Development and self-built versions have no update signing key. Official releases
-              check for updates automatically.
+              {notConfiguredExplanation(updates.notConfiguredReason)}
             </AlertDescription>
           </Alert>
         )}
-        {updates.error && <ErrorNotice error={updates.error} />}
+        {controls.managed && <ManagedNotice state={updates} instruction={controls.managed} />}
+        {controls.command && <PackageManagerNotice state={updates} command={controls.command} />}
+        {updates.error && <UpdateErrorNotice error={updates.error} />}
 
-        <p className="text-xs text-muted-foreground">
-          {phase === "checking"
-            ? "Checking for updates…"
-            : preferences.lastCheck
-              ? `Last checked ${formatTimestamp(preferences.lastCheck)}`
-              : "Not checked yet"}
-        </p>
-
-        {available ? (
-          <div className="grid gap-3 rounded-lg border p-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium">Version {available.version} is available</span>
-              {available.date && (
-                <span className="text-xs text-muted-foreground">{available.date}</span>
-              )}
-            </div>
-            {available.notes && (
-              <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
-                {available.notes}
-              </pre>
-            )}
-            {phase === "downloading" && (
-              <div className="grid gap-1">
-                <Progress value={percent ?? undefined} aria-label="Download progress" />
-                <span className="text-xs text-muted-foreground">
-                  {percent !== null ? `${percent}%` : "Downloading…"}
-                </span>
-              </div>
-            )}
-            <div className="flex flex-wrap gap-2">
-              {phase !== "ready" && (
-                <Button
-                  disabled={busy || phase !== "idle"}
-                  onClick={() => {
-                    // Progress follows in its own window as well.
-                    void api.openWindow("updates.progress").catch(() => undefined)
-                    void run(() => api.downloadUpdate(), "The update was not downloaded", INTERNET)
-                  }}
-                >
-                  <Download /> Download
-                </Button>
-              )}
-              {phase === "ready" && (
-                <Button
-                  disabled={busy}
-                  onClick={() => {
-                    void api.openWindow("updates.progress").catch(() => undefined)
-                    void run(() => api.installUpdate(), "The update was not installed")
-                  }}
-                >
-                  <RotateCw /> Install and restart
-                </Button>
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Installing stops the background agent after its current task, releases the devices,
-              installs, and restarts DeckPilot with the new agent.
-            </p>
-          </div>
-        ) : (
-          updates.configured && (
-            <p className="text-sm text-muted-foreground">DeckPilot is up to date.</p>
-          )
+        {controls.check && controls.checkEnabled && (
+          <p className="text-xs text-muted-foreground">
+            {phase === "checking"
+              ? "Checking for updates…"
+              : preferences.lastCheck
+                ? `Last checked ${formatTimestamp(preferences.lastCheck)}`
+                : "Not checked yet"}
+          </p>
         )}
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="grid gap-2">
-            <Label htmlFor="update-mode">When an update is available</Label>
-            <Select
-              value={preferences.mode}
-              onValueChange={(mode) => {
-                savePreferences({ mode: mode as UpdateMode })
-              }}
-            >
-              <SelectTrigger id="update-mode" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {MODES.map((mode) => (
-                  <SelectItem key={mode.value} value={mode.value}>
-                    {mode.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              {MODES.find((m) => m.value === preferences.mode)?.description}
-            </p>
+        {controls.versionNotice && available && (
+          <p className="text-sm">
+            Version {available.version} is available; update with your package manager.
+          </p>
+        )}
+
+        {controls.selfUpdate &&
+          (available ? (
+            <div className="grid gap-3 rounded-lg border p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">Version {available.version} is available</span>
+                {available.date && (
+                  <span className="text-xs text-muted-foreground">{available.date}</span>
+                )}
+              </div>
+              {available.notes && (
+                <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
+                  {available.notes}
+                </pre>
+              )}
+              {phase === "downloading" && (
+                <div className="grid gap-1">
+                  <Progress value={percent ?? undefined} aria-label="Download progress" />
+                  <span className="text-xs text-muted-foreground">
+                    {percent !== null ? `${percent}%` : "Downloading…"}
+                  </span>
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {phase !== "ready" && (
+                  <Button
+                    disabled={busy || phase !== "idle"}
+                    onClick={() => {
+                      // Progress follows in its own window as well.
+                      void api.openWindow("updates.progress").catch(() => undefined)
+                      void run(
+                        () => api.downloadUpdate(),
+                        "The update was not downloaded",
+                        INTERNET,
+                      )
+                    }}
+                  >
+                    <Download /> Download
+                  </Button>
+                )}
+                {phase === "ready" && (
+                  <Button
+                    disabled={busy}
+                    onClick={() => {
+                      void api.openWindow("updates.progress").catch(() => undefined)
+                      void run(() => api.installUpdate(), "The update was not installed")
+                    }}
+                  >
+                    <RotateCw /> Install and restart
+                  </Button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {phase === "ready" ? "Downloaded and verified. " : ""}Installing stops the
+                background agent after its current task, releases the devices, installs, and
+                restarts DeckPilot with the new agent.
+              </p>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">DeckPilot is up to date.</p>
+          ))}
+
+        {(controls.mode || controls.channelChoice || controls.schedule) && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            {controls.mode && (
+              <div className="grid gap-2">
+                <Label htmlFor="update-mode">When an update is available</Label>
+                <Select
+                  value={preferences.mode}
+                  onValueChange={(mode) => {
+                    savePreferences({ mode: mode as UpdateMode })
+                  }}
+                >
+                  <SelectTrigger id="update-mode" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MODES.map((mode) => (
+                      <SelectItem key={mode.value} value={mode.value}>
+                        {mode.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {MODES.find((m) => m.value === preferences.mode)?.description}
+                </p>
+              </div>
+            )}
+            {controls.channelChoice && (
+              <div className="grid gap-2">
+                <Label htmlFor="update-channel">Update channel</Label>
+                <Select
+                  value={preferences.channel}
+                  disabled={busy || (phase !== "idle" && phase !== "ready")}
+                  onValueChange={(channel) => {
+                    savePreferences({ channel: channel as UpdateChannel })
+                  }}
+                >
+                  <SelectTrigger id="update-channel" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CHANNELS.map((channel) => (
+                      <SelectItem key={channel.value} value={channel.value}>
+                        {channel.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {CHANNELS.find((c) => c.value === preferences.channel)?.description}
+                </p>
+              </div>
+            )}
+            {controls.schedule && (
+              <div className="grid gap-2">
+                <Label htmlFor="update-interval">Check every</Label>
+                <Select
+                  value={String(preferences.checkIntervalHours)}
+                  disabled={!preferences.automaticChecks}
+                  onValueChange={(hours) => {
+                    savePreferences({ checkIntervalHours: Number(hours) })
+                  }}
+                >
+                  <SelectTrigger id="update-interval" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[...new Set([...INTERVALS, preferences.checkIntervalHours])]
+                      .sort((a, b) => a - b)
+                      .map((hours) => (
+                        <SelectItem key={hours} value={String(hours)}>
+                          {hours < 24
+                            ? `${hours} hours`
+                            : `${hours / 24} day${hours === 24 ? "" : "s"}`}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+                <label className="flex items-center gap-2 text-sm">
+                  <Switch
+                    checked={preferences.automaticChecks}
+                    onCheckedChange={(automaticChecks) => {
+                      savePreferences({ automaticChecks })
+                    }}
+                  />
+                  Check automatically while DeckPilot is open
+                </label>
+              </div>
+            )}
           </div>
-          <div className="grid gap-2">
-            <Label htmlFor="update-channel">Update channel</Label>
-            <Select
-              value={preferences.channel}
-              disabled={busy || (phase !== "idle" && phase !== "ready")}
-              onValueChange={(channel) => {
-                savePreferences({ channel: channel as UpdateChannel })
-              }}
-            >
-              <SelectTrigger id="update-channel" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {CHANNELS.map((channel) => (
-                  <SelectItem key={channel.value} value={channel.value}>
-                    {channel.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              {CHANNELS.find((c) => c.value === preferences.channel)?.description}
-            </p>
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="update-interval">Check every</Label>
-            <Select
-              value={String(preferences.checkIntervalHours)}
-              disabled={!preferences.automaticChecks}
-              onValueChange={(hours) => {
-                savePreferences({ checkIntervalHours: Number(hours) })
-              }}
-            >
-              <SelectTrigger id="update-interval" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {[...new Set([...INTERVALS, preferences.checkIntervalHours])]
-                  .sort((a, b) => a - b)
-                  .map((hours) => (
-                    <SelectItem key={hours} value={String(hours)}>
-                      {hours < 24
-                        ? `${hours} hours`
-                        : `${hours / 24} day${hours === 24 ? "" : "s"}`}
-                    </SelectItem>
-                  ))}
-              </SelectContent>
-            </Select>
-            <label className="flex items-center gap-2 text-sm">
-              <Switch
-                checked={preferences.automaticChecks}
-                onCheckedChange={(automaticChecks) => {
-                  savePreferences({ automaticChecks })
-                }}
-              />
-              Check automatically while DeckPilot is open
-            </label>
-          </div>
-        </div>
+        )}
       </CardContent>
     </Card>
+  )
+}
+
+/** Version, channels and who updates this installation. */
+export function InstallationDetails({ state }: { state: UpdateState }) {
+  const rows: [string, string][] = [
+    ["Version", state.currentVersion],
+    ["Release channel", RELEASE_CHANNEL_LABELS[state.releaseChannel]],
+    ["Installed from", installedFrom(state)],
+    ["Updates", providerLabel(state)],
+  ]
+  return (
+    <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
+      {rows.map(([term, value]) => (
+        <Fragment key={term}>
+          <dt className="text-muted-foreground">{term}</dt>
+          <dd>{value}</dd>
+        </Fragment>
+      ))}
+    </dl>
+  )
+}
+
+/** A debug build pretending to be installed from another channel. */
+export function DevelopmentOverrideNotice({ state }: { state: UpdateState }) {
+  return (
+    <Alert>
+      <FlaskConical />
+      <AlertTitle className="flex flex-wrap items-center gap-2">
+        <Badge variant="outline">Development override</Badge>
+        Simulated installation
+      </AlertTitle>
+      <AlertDescription>
+        This debug build behaves as if installed from {CHANNEL_LABELS[state.distributionChannel]}{" "}
+        (set by DECKPILOT_DISTRIBUTION_OVERRIDE). Release builds ignore the override.
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+/** Store builds: the store installs updates; there is nothing to check or install here. */
+export function ManagedNotice({ state, instruction }: { state: UpdateState; instruction: string }) {
+  return (
+    <Alert>
+      <PackageCheck />
+      <AlertTitle>{deliveredBy(state)}</AlertTitle>
+      <AlertDescription>
+        <p>
+          <InlineCode text={sentenceOf(instruction)} />
+        </p>
+        <p>{RESTART_AFTER_EXTERNAL_UPDATE}</p>
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+/** Package-manager builds: the documented command, copyable; never an install button. */
+export function PackageManagerNotice({ state, command }: { state: UpdateState; command: string }) {
+  return (
+    <Alert>
+      <PackageCheck />
+      <AlertTitle>{deliveredBy(state)}</AlertTitle>
+      <AlertDescription className="grid gap-2">
+        <p>Update DeckPilot with your package manager:</p>
+        <div className="flex w-full items-center gap-2">
+          <code
+            className="flex-1 overflow-x-auto rounded-md bg-muted px-2 py-1 font-mono text-xs whitespace-nowrap text-foreground"
+            aria-label="Update command"
+          >
+            {command}
+          </code>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              navigator.clipboard.writeText(command).then(
+                () => toast.success("Command copied"),
+                (e: unknown) => {
+                  toastFailure("The command was not copied", e, "Select it and copy it by hand")
+                },
+              )
+            }}
+          >
+            <ClipboardCopy /> Copy
+          </Button>
+        </div>
+        <p>{RESTART_AFTER_EXTERNAL_UPDATE}</p>
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+const RESTART_AFTER_EXTERNAL_UPDATE =
+  "After an update is installed, quit and reopen DeckPilot. If the background agent still runs the previous version, DeckPilot offers to restart it."
+
+/** An update error of the backend, with a title that says what happened. */
+export function UpdateErrorNotice({ error }: { error: string }) {
+  const described = describeUpdateError(error)
+  return (
+    <Alert variant="destructive">
+      <TriangleAlert />
+      <AlertTitle>{described.title}</AlertTitle>
+      <AlertDescription>
+        <p>{described.message}</p>
+        {described.detail && <p className="text-xs opacity-80">Details: {described.detail}</p>}
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+function sentenceOf(text: string): string {
+  return /[.!?]$/.test(text) ? text : `${text}.`
+}
+
+/** `text` with `backticked` parts as code. */
+function InlineCode({ text }: { text: string }) {
+  return text.split("`").map((part, i) =>
+    i % 2 === 1 ? (
+      <code key={i} className="rounded bg-muted px-1 font-mono text-xs text-foreground">
+        {part}
+      </code>
+    ) : (
+      <Fragment key={i}>{part}</Fragment>
+    ),
   )
 }

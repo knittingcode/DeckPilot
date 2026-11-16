@@ -6,7 +6,8 @@ import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { ImportPreview, SecurityView, UpdateState } from "@/lib/types"
+import type { ImportPreview, SecurityView } from "@/lib/types"
+import { type UpdateStateName, updateState } from "@/test/fixtures"
 
 import { LogsWindow } from "./logs-window"
 import { ExportWindow, ImportWindow } from "./portability-windows"
@@ -284,23 +285,7 @@ describe("logs and update windows", () => {
   })
 
   it("explains builds without updates and offers the next step otherwise", async () => {
-    const base: UpdateState = {
-      currentVersion: "0.4.0",
-      configured: false,
-      target: "darwin-aarch64",
-      endpoint: "",
-      preferences: {
-        mode: "notifyOnly",
-        automaticChecks: true,
-        checkIntervalHours: 24,
-        lastCheck: null,
-        channel: "stable",
-      },
-      phase: "idle",
-      available: null,
-      progress: null,
-      error: null,
-    }
+    const base = updateState("notConfigured")
     api.updateState.mockResolvedValue(base)
     const { unmount } = inWindow(<UpdateWindow />)
     expect(await screen.findByText(/no update signing key/)).toBeInTheDocument()
@@ -308,8 +293,7 @@ describe("logs and update windows", () => {
 
     const user = userEvent.setup()
     api.updateState.mockResolvedValue({
-      ...base,
-      configured: true,
+      ...updateState("githubDownloading"),
       phase: "downloading",
       available: { version: "0.4.1", notes: "Fixes", date: null },
       progress: { downloaded: 50, total: 100 },
@@ -318,8 +302,7 @@ describe("logs and update windows", () => {
     expect(await screen.findByText("50%")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /Downloading/ })).toBeDisabled()
     api.updateState.mockResolvedValue({
-      ...base,
-      configured: true,
+      ...updateState("githubReady"),
       phase: "ready",
       available: { version: "0.4.1", notes: null, date: null },
     })
@@ -327,5 +310,51 @@ describe("logs and update windows", () => {
     inWindow(<UpdateWindow />)
     await user.click(await screen.findByRole("button", { name: "Install and restart" }))
     expect(api.installUpdate).toHaveBeenCalled()
+  })
+
+  it.each<[UpdateStateName, string | null, string | null]>([
+    ["apt", "Updates are delivered by APT", "sudo apt update && sudo apt upgrade"],
+    ["homebrew", "Updates are delivered by Homebrew", "brew upgrade --cask deckpilot"],
+    ["winget", "Updates are delivered by WinGet", "winget upgrade KnittingCode.DeckPilot"],
+    ["flathub", "Updates are delivered by Flathub", null],
+    ["macAppStore", "Updates are delivered by the Mac App Store", null],
+    ["microsoftStore", "Updates are delivered by the Microsoft Store", null],
+    ["notConfigured", null, null],
+  ])("offers a %s build nothing to check, download or install", async (name, by, command) => {
+    // Even with an update in its state, as the GitHub code path would leave it.
+    api.updateState.mockResolvedValue(
+      updateState(name, {
+        phase: "ready",
+        available: { version: "0.7.0", notes: "Notes", date: null },
+      }),
+    )
+    const user = userEvent.setup()
+    inWindow(<UpdateWindow />)
+    expect(await screen.findByText(/^Installed: 0\.6\.0-alpha\.3/)).toBeInTheDocument()
+    if (by) expect(screen.getByText(by)).toBeInTheDocument()
+    if (command) expect(screen.getByLabelText("Update command")).toHaveTextContent(command)
+    else expect(screen.queryByLabelText("Update command")).not.toBeInTheDocument()
+    expect(screen.queryByText("Notes")).not.toBeInTheDocument()
+    for (const label of [/Install/, /Download/, /Check now/]) {
+      expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument()
+    }
+    for (const button of screen.getAllByRole("button")) {
+      if (!/Copy/.test(button.textContent)) continue
+      await user.click(button)
+    }
+    await user.click(screen.getAllByRole("button", { name: "Close" })[0] as HTMLElement)
+    expect(close).toHaveBeenCalled()
+    expect(api.installUpdate).not.toHaveBeenCalled()
+    expect(api.downloadUpdate).not.toHaveBeenCalled()
+    expect(api.checkForUpdates).not.toHaveBeenCalled()
+  })
+
+  it("shows a refused GitHub update with its reason", async () => {
+    api.updateState.mockResolvedValue(updateState("githubUntrustedUrl"))
+    inWindow(<UpdateWindow />)
+    expect(
+      await screen.findByText("Update refused: unexpected download address"),
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Check now" })).toBeInTheDocument()
   })
 })
