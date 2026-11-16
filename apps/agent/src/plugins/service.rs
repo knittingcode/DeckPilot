@@ -72,9 +72,10 @@ const MAX_INVOCATION: Duration = Duration::from_secs(600);
 /// Where the registry's verified state is kept (outside `plugins/`,
 /// whose unknown entries the store's recovery sweeps away).
 const REGISTRY_STATE_DIR: &str = "plugin-registry";
-/// Without trusted root keys no registry is used (none is built in).
+/// Without trusted root keys no registry is used (none built in, none
+/// configured).
 const NOT_CONFIGURED: &str = "no plugin registry is configured: no trusted root keys \
-     (--plugin-registry-roots); nothing is fetched or trusted without them";
+     (none built in, no --plugin-registry-roots); nothing is fetched or trusted without them";
 
 /// Broker decisions go to the agent's log (operation, origin and
 /// decision; never values).

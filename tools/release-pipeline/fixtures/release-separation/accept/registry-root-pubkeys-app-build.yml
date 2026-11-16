@@ -1,0 +1,39 @@
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: production-release
+    steps:
+      # The registry's root role (public keys only, keys/roots.json of the
+      # registry repository) compiled into the agent as its trust anchor:
+      # a repository variable, never a secret, and nothing is signed or
+      # published with it. The app's own signing secrets in the same job
+      # are fine.
+      - name: Build and stage the agent
+        shell: bash
+        env:
+          REGISTRY_ROOTS: ${{ vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS }}
+        run: |
+          if [ -n "$REGISTRY_ROOTS" ]; then
+            export DECKPILOT_REGISTRY_ROOT_PUBKEYS="$REGISTRY_ROOTS"
+          fi
+          cargo build --release --locked -p deckpilot-agent --features plugins
+          cp target/release/deckpilot-agent \
+            apps/desktop/src-tauri/binaries/deckpilot-agent-x86_64-unknown-linux-gnu
+      - name: Embedded registry roots in a local build (path form)
+        env:
+          DECKPILOT_REGISTRY_ROOT_PUBKEYS: ${{ github.workspace }}/keys/roots.json
+        run: cargo build --release --locked -p deckpilot-agent --features plugins
+      - uses: tauri-apps/tauri-action@0123456789abcdef0123456789abcdef01234567
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        with:
+          projectPath: apps/desktop
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" SHA256SUMS release-meta.json latest.json --clobber

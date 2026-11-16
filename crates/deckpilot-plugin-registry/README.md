@@ -28,6 +28,11 @@ feature the library has no signing code and no extra dependencies.
 ## API
 
 - `RegistryClient::open(embedded_roots, store, Policy)`.
+- `roots::EMBEDDED`: the root role compiled in from
+  `DECKPILOT_REGISTRY_ROOT_PUBKEYS` at build time (checked by `build.rs`;
+  `None` when unset), and `roots::choose(configured)`: embedded roots, or a
+  run-time `roots.json` where it may override them (debug builds and the
+  `test-hooks` feature only). See [PUBLISHING.md](PUBLISHING.md#embedding-the-roots-in-a-release-build).
 - `refresh(&source, now)`: key set chain, timestamp, index; an unavailable
   source gives `Refresh::Offline(freshness)`.
 - Step by step: `apply_keyset(bytes, signatures)`,

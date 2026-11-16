@@ -33,6 +33,18 @@ zeroize = { workspace = true, optional = true }
 # `publish` module). Off by default, so the client library keeps its
 # dependency footprint.
 publish = ["dep:minisign", "dep:zeroize"]
+# Lets a configured roots.json take precedence over roots embedded at build
+# time (DECKPILOT_REGISTRY_ROOT_PUBKEYS) in an optimized build, as debug
+# builds always do (`roots::choose`). Enabled by the agent's `test-hooks`;
+# never part of a release build.
+test-hooks = []
+
+# build.rs checks DECKPILOT_REGISTRY_ROOT_PUBKEYS with src/roots_check.rs.
+[build-dependencies]
+base64.workspace = true
+minisign-verify.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [[bin]]
 name = "deckpilot-registry"
@@ -42,6 +54,17 @@ required-features = ["publish"]
 [[test]]
 name = "publish"
 required-features = ["publish"]
+
+# Builds the `registry_roots` example with roots embedded, malformed, and
+# none, in the debug and release profiles (its own target directory).
+[[test]]
+name = "embedded_roots"
+required-features = ["publish"]
+
+# Opens a client with this build's roots (`roots::choose`) and refreshes
+# a local registry site: what the embedded_roots test runs.
+[[example]]
+name = "registry_roots"
 
 [dev-dependencies]
 # Signs test documents with throwaway keys generated per test.
