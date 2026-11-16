@@ -7,8 +7,10 @@
 //! agent asks for the state off the device loop, never more often than the
 //! declared [`RefreshPolicy`] allows, caches it and redraws only keys whose
 //! state changed. The renderer only knows the typed [`ButtonState`] (label,
-//! detail, [`Indicator`], progress, toggle); it knows nothing about Git,
-//! Docker or any other module.
+//! detail, [`Indicator`], progress, toggle, and the marks [`Accent`],
+//! [`Glyph`], badge and series); it knows nothing about Git, Docker or any
+//! other module. A state never carries pixels, fonts or markup: a provider
+//! describes, the renderer draws.
 
 use std::time::Duration;
 
@@ -23,6 +25,81 @@ pub const MAX_REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 pub const MAX_STATE_TEXT: usize = 32;
 /// Longest error message kept for a failed state, in characters.
 pub const MAX_STATE_ERROR: usize = 120;
+/// Longest badge a state may set, in characters.
+pub const MAX_STATE_BADGE: usize = 4;
+/// Most points of a state's series; of a longer one the last are kept.
+pub const MAX_STATE_SERIES: usize = 32;
+
+/// A background colour for a key from the renderer's fixed palette, each
+/// dark enough for the title to stay readable. The colours the user chose
+/// for the key win.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Accent {
+    Blue,
+    Green,
+    Amber,
+    Red,
+    Purple,
+    Teal,
+    Grey,
+}
+
+impl Accent {
+    pub const ALL: [Self; 7] = [
+        Self::Blue,
+        Self::Green,
+        Self::Amber,
+        Self::Red,
+        Self::Purple,
+        Self::Teal,
+        Self::Grey,
+    ];
+}
+
+/// A simple shape the renderer draws above a key's title, at the key's
+/// resolution. A closed set: there is no way to supply another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Glyph {
+    Check,
+    Cross,
+    Play,
+    Pause,
+    Stop,
+    Timer,
+    Bell,
+    Up,
+    Down,
+    Dot,
+    Circle,
+    Square,
+    Diamond,
+    Triangle,
+    Star,
+    Heart,
+}
+
+impl Glyph {
+    pub const ALL: [Self; 16] = [
+        Self::Check,
+        Self::Cross,
+        Self::Play,
+        Self::Pause,
+        Self::Stop,
+        Self::Timer,
+        Self::Bell,
+        Self::Up,
+        Self::Down,
+        Self::Dot,
+        Self::Circle,
+        Self::Square,
+        Self::Diamond,
+        Self::Triangle,
+        Self::Star,
+        Self::Heart,
+    ];
+}
 
 /// A small status mark drawn in a corner of the key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -63,6 +140,20 @@ pub struct ButtonState {
     /// edge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toggle: Option<bool>,
+    /// The key's background, from the renderer's palette.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent: Option<Accent>,
+    /// A shape above the title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glyph: Option<Glyph>,
+    /// A short label in the top left corner, e.g. a count; at most
+    /// [`MAX_STATE_BADGE`] characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badge: Option<String>,
+    /// Values 0–100, oldest first, drawn as a small chart behind the
+    /// texts; 2 to [`MAX_STATE_SERIES`] points.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<Vec<u8>>,
 }
 
 impl ButtonState {
@@ -100,26 +191,60 @@ impl ButtonState {
         self
     }
 
+    #[must_use]
+    pub fn with_accent(mut self, accent: Accent) -> Self {
+        self.accent = Some(accent);
+        self
+    }
+
+    #[must_use]
+    pub fn with_glyph(mut self, glyph: Glyph) -> Self {
+        self.glyph = Some(glyph);
+        self
+    }
+
+    #[must_use]
+    pub fn with_badge(mut self, badge: impl Into<String>) -> Self {
+        self.badge = Some(badge.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_series(mut self, series: impl Into<Vec<u8>>) -> Self {
+        self.series = Some(series.into());
+        self
+    }
+
     /// The state with texts shortened to [`MAX_STATE_TEXT`] characters
-    /// (without control characters) and progress capped at 100. Applied by
-    /// the core to every state a module returns.
+    /// (without control characters), the badge to [`MAX_STATE_BADGE`],
+    /// progress and series values capped at 100 and the series cut to its
+    /// last [`MAX_STATE_SERIES`] points (a series of fewer than two points
+    /// is no chart and is dropped). Applied by the core to every state a
+    /// module returns.
     #[must_use]
     pub fn sanitized(self) -> Self {
-        let clean = |text: String| {
-            let text: String = text
-                .chars()
-                .filter(|c| !c.is_control())
-                .take(MAX_STATE_TEXT)
-                .collect();
-            let text = text.trim().to_owned();
-            (!text.is_empty()).then_some(text)
+        let clean = |max: usize| {
+            move |text: String| {
+                let text: String = text.chars().filter(|c| !c.is_control()).take(max).collect();
+                let text = text.trim().to_owned();
+                (!text.is_empty()).then_some(text)
+            }
         };
+        let series = self.series.and_then(|points| {
+            let skip = points.len().saturating_sub(MAX_STATE_SERIES);
+            let points: Vec<u8> = points.into_iter().skip(skip).map(|p| p.min(100)).collect();
+            (points.len() >= 2).then_some(points)
+        });
         Self {
-            label: self.label.and_then(clean),
-            detail: self.detail.and_then(clean),
+            label: self.label.and_then(clean(MAX_STATE_TEXT)),
+            detail: self.detail.and_then(clean(MAX_STATE_TEXT)),
             indicator: self.indicator,
             progress: self.progress.map(|p| p.min(100)),
             toggle: self.toggle,
+            accent: self.accent,
+            glyph: self.glyph,
+            badge: self.badge.and_then(clean(MAX_STATE_BADGE)),
+            series,
         }
     }
 }
@@ -295,6 +420,32 @@ mod tests {
         assert_eq!(state.label.as_deref().map(str::len), Some(MAX_STATE_TEXT));
         assert_eq!(state.detail, None);
         assert_eq!(state.progress, Some(100));
+        let marks = ButtonState::new()
+            .with_badge("12345\n")
+            .with_series(
+                (0..40u8)
+                    .map(|i| if i < 10 { i * 10 } else { 200 })
+                    .collect::<Vec<u8>>(),
+            )
+            .with_accent(Accent::Teal)
+            .with_glyph(Glyph::Timer)
+            .sanitized();
+        assert_eq!(marks.badge.as_deref(), Some("1234"));
+        // The last 32 points, none above 100.
+        let series = marks.series.unwrap();
+        assert_eq!(series.len(), MAX_STATE_SERIES);
+        assert_eq!((series[0], series[2], series[31]), (80, 100, 100));
+        assert_eq!(
+            (marks.accent, marks.glyph),
+            (Some(Accent::Teal), Some(Glyph::Timer))
+        );
+        for (badge, series) in [("", vec![]), (" \t", vec![7])] {
+            let none = ButtonState::new()
+                .with_badge(badge)
+                .with_series(series)
+                .sanitized();
+            assert_eq!(none, ButtonState::default());
+        }
         let error = StateError::new("x", "a\nb".repeat(200)).sanitized();
         assert_eq!(error.message.chars().count(), MAX_STATE_ERROR);
         assert!(!error.message.contains('\n'));
@@ -313,6 +464,32 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&snapshot).unwrap(),
             serde_json::json!({"type": "ready", "state": {"indicator": "ok"}})
+        );
+        // The marks are optional members with closed names.
+        let marks = ButtonState::new()
+            .with_accent(Accent::Amber)
+            .with_glyph(Glyph::Bell)
+            .with_badge("3")
+            .with_series([10, 90]);
+        let json = serde_json::json!({
+            "accent": "amber", "glyph": "bell", "badge": "3", "series": [10, 90]
+        });
+        assert_eq!(serde_json::to_value(&marks).unwrap(), json);
+        assert_eq!(serde_json::from_value::<ButtonState>(json).unwrap(), marks);
+        for bad in [
+            serde_json::json!({"accent": "#ff0000"}),
+            serde_json::json!({"glyph": "skull"}),
+            serde_json::json!({"series": [300]}),
+        ] {
+            assert!(
+                serde_json::from_value::<ButtonState>(bad.clone()).is_err(),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            Accent::ALL.len() + Glyph::ALL.len(),
+            23,
+            "a new name is a change of the renderer and the plugin ABI"
         );
     }
 }

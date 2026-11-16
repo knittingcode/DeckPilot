@@ -19,6 +19,8 @@ use deckpilot_ipc::{ErrorCode, IpcError, Request, Response};
 use tokio::sync::oneshot;
 
 #[cfg(feature = "plugins")]
+mod ambient;
+#[cfg(feature = "plugins")]
 mod bundled;
 #[cfg(feature = "plugins")]
 mod convert;

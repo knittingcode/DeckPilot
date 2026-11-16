@@ -1,0 +1,31 @@
+# Code the first-party plugins for a server the user enters share
+# (deckpilot.gitlab, deckpilot.jira): the few URLs they build and check
+# without a URL parser, the action's time limit counted with the server's
+# `Date` headers, and text helpers. A library only: it is compiled into
+# each plugin's module, never bundled or installed by itself.
+#
+# A member of the plugins/runtime workspace (shared Cargo.lock and the
+# `guest` profile).
+[package]
+name = "deckpilot-first-party-support"
+description = "Shared code of DeckPilot's first-party plugins for user-entered servers"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+publish = false
+workspace = "../../runtime"
+
+[dependencies]
+deckpilot-plugin-sdk.workspace = true
+# URL encoding without a URL parser: the `url` crate's IDNA tables would
+# more than double a module (src/server.rs).
+form_urlencoded = "1.2.2"
+percent-encoding = "2.3.2"
+
+[dev-dependencies]
+# The built-in modules' URL handling, to compare src/server.rs with.
+url.workspace = true
+
+[lints]
+workspace = true

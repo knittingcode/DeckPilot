@@ -2,7 +2,7 @@
 
 Status: **experimental.** Plugins are off in every DeckPilot release build
 (the agent needs the `plugins` cargo feature and `--enable-plugins`,
-[agent-integration.md](../agent-integration.md)). Plugin API 1.0, guest
+[agent-integration.md](../agent-integration.md)). Plugin API 1.1, guest
 ABI 1 and the manifest version 1 described here are what `main` implements
 today; they can still change before plugins ship. Nothing here is
 published: not the SDK crate, not the JavaScript package, not the example
@@ -92,6 +92,8 @@ under `cargo test` (against `testing::MockHost`).
 | `storage.get`, `storage.set`, `storage.delete` | `Context::storage_get`, `storage_get_as::<T>`, `storage_set`, `storage_delete` | [capabilities.md](capabilities.md#storage) | SDK doc and unit tests; agent `plugins_e2e.rs` (isolation, quota, revocation); `plugins_examples.rs` (`last-values`) |
 | `storage.keys`, `storage.usage` | `Context::storage_keys`, `Context::storage_usage -> StorageUsage` | [capabilities.md](capabilities.md#storage) | SDK doc and unit tests; agent `plugins_e2e.rs`; `plugins_examples.rs` (`storageBytes`) |
 | `notify` | `Context::notify(title, body)` | [capabilities.md](capabilities.md#notifications) | SDK doc test; `developer-tools` unit test (`build_status_publishes_stores_and_notifies_on_change`) |
+| `time.now` (API 1.1) | `Context::now() -> Now` (`unix_ms`, `utc_offset_minutes`, `unix_seconds`, `local_seconds`, `local_minutes_of_day`, `local_weekday`, `millis_since`) | [capabilities.md](capabilities.md#time) | SDK doc test; broker `time_random.rs`; host `sdk_e2e.rs`; agent unit tests (`plugins::ambient`) and `plugins_e2e.rs` |
+| `random.bytes` (API 1.1) | `Context::random_bytes(n)`, `random_u64`, `random_below(bound)` | [capabilities.md](capabilities.md#randomness) | broker `time_random.rs` (byte budget); host `sdk_e2e.rs`; agent unit tests (`plugins::ambient`) and `plugins_e2e.rs` |
 | `log` | `Context::log(LogLevel, ..)`, `debug`, `info`, `warn`, `error` | [capabilities.md](capabilities.md#log) | SDK doc test and `logging_is_best_effort_and_bounded` |
 | Exports (`dp_abi_version`, `dp_alloc`, `dp_invoke`, `dp_describe`, `dp_features`) | `plugin!` | [actions.md](actions.md) | host `sdk_e2e.rs`, `engine.rs` (`network_kinds_reach_only_guests_that_read_them`); every agent e2e |
 | Network kind of a failed `http.fetch` | `CapabilityError::network_kind -> Option<NetworkErrorKind>`; `?` reports its code | [capabilities.md](capabilities.md#errors) | SDK unit test `network_failures_keep_the_built_in_codes`; agent `plugins_e2e.rs` (canned DNS, connection, TLS, blocked address and redirect failures) |
