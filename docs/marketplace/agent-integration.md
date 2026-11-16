@@ -112,7 +112,12 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
   `service.rs`). The broker decides `url.open` with it and the executor
   answers `run.context` from it.
   `notify` becomes an agent notification titled with the plugin's
-  name; `log` goes to the agent log; `variables.publish` and
+  name, through the agent's notifier: the status bar of open windows
+  and, when the manifest's `notifications` permission declares a
+  `routing` (G9), the desktop, as the plugin's settings the routing
+  names say (read by the agent at every `notify`, never by the plugin);
+  guests that report `NOTIFY_DELIVERY` are answered where it was shown;
+  `log` goes to the agent log; `variables.publish` and
   `variables.clear` go to the plugin's own variables (below). Storage,
   credential injection and settings: see
   [Plugin data](#plugin-data-storage-credentials-settings).

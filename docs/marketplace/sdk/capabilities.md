@@ -317,9 +317,26 @@ if let Err(e) = ctx.notify(format!("Build {status}"), format!("{repo} {branch}: 
   shows it as its own notification, titled with the plugin's name.
 - `Context::notify_with(NotifySeverity::{Info, Success, Warning, Error},
   title, body)` sets how it looks. The severity changes nothing else: the
-  same permission, prefix, destination (the app's status bar) and rate.
+  same permission, prefix and rate (and, without a routing, destination).
   An agent that predates severities refuses it as `BadRequest`; fall back
   to `notify`.
+- **Where it goes is the agent's decision.** Without a routing, a
+  notification goes to the status bar of an open DeckPilot window. With a
+  `routing` in the manifest's `notifications` permission
+  ([permissions.md](permissions.md#notification-routing)), the agent reads
+  the plugin's settings it names, as the user saved them, each time: on
+  the desktop (a notification of the operating system), in the status bar,
+  and only from a least severity on. The plugin never reads or decides
+  this; a user who turns them off in Settings › Plugins is obeyed.
+- `Context::notify_delivered(severity, title, body)` answers where it was
+  shown: `Ok(Some(NotifyDelivery { shown, desktop, status_bar, reason }))`.
+  Shown nowhere (the app closed and desktop notifications off or refused,
+  less severe than the user's setting) is still `Ok`, with `shown: false`
+  and the `reason` in words for the user; not granted and the rate limit
+  are errors as for `notify`. `Ok(None)` comes from an agent that predates
+  deliveries. Guests built with this SDK report the ABI feature
+  `NOTIFY_DELIVERY` (`dp_features`); every other guest gets `null`, as
+  before.
 
 ## Log
 

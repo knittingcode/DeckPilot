@@ -51,6 +51,35 @@ user grants and revokes.
 | `background` | `minIntervalSeconds` (15-86,400) | `background` | Nothing yet: no background work or timers in ABI 1 |
 | `device` | `state`, `icons` (booleans) | `device:state`, `device:icons` | Nothing yet |
 
+### Notification routing
+
+The `notifications` permission may name the plugin's own settings that say
+where its notifications go (G9). The agent reads them, as the user saved
+them, every time the plugin shows one; the plugin never does:
+
+```json
+{
+  "kind": "notifications",
+  "routing": { "desktop": "desktop", "statusBar": "statusBar", "minimumSeverity": "minimumSeverity" },
+  "justification": "Shows the notifications your workflows ask for, where you choose in the settings."
+}
+```
+
+- `desktop`: a boolean setting; on, notifications are also shown by the
+  operating system.
+- `statusBar`: a boolean setting; on, they are listed in the status bar of
+  an open DeckPilot window.
+- `minimumSeverity`: a choice setting of `info`, `success`, `warning` and
+  `error`; less severe notifications are not shown.
+
+At least one member; each must name a setting of `contributes.settings` of
+that kind (`invalid-value` or `unknown-reference` otherwise). A member left
+out keeps what a plugin without routing gets: no desktop notifications,
+the status bar, every severity. The grant, its low tier, the prefix and
+the rate are the same with or without it; the consent dialog says that
+the plugin's settings decide where they appear. An agent older than
+routing refuses the manifest (unknown field).
+
 Kinds that are **never grantable** to plugins have no representation at
 all: file system, processes, shell, clipboard, USB/HID, firmware, workflows, UI (the manifest
 crate refuses them with a clear message, `FORBIDDEN_PERMISSION_KINDS`).

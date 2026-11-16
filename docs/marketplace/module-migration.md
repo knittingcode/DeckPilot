@@ -125,7 +125,12 @@ So **no variable needs to migrate**, and the variable alias design in
 | `deckpilot.notifications` | `notifications.show`, `notifications.workflow-summary` | G8 (run summary of the invocation's own workflow) and G9 (`notify` with severity and critical) | `notifications` (low tier) |
 
 `system` and `general` contribute nothing ([§3](#3-the-core-boundary)). The
-set is deliberately small. A bundled plugin must not need a permission the
+set is deliberately small.
+
+*As built (P10):* `deckpilot.notifications` (`plugins/first-party/notifications`)
+is bundled with class `default` and is the only member of the set. Its one
+permission is `notifications` with a routing (G9), low tier, so seeding
+enables it at the first start; see [§9](#9-pr-sequence) P10. A bundled plugin must not need a permission the
 user has not seen, and only `notifications` fits that today. Optional
 integration plugins (`deckpilot.github` and later ones) can use the same
 mechanism as **migration payloads** ([§4.3](#43-bundled-classes)), but they
@@ -655,6 +660,23 @@ built-in's 500 checks).
 `notifications` follows as the first `default`-class bundled plugin. It is
 the one that proves seeding, tombstones and first launch.
 
+*As built (P10):* `plugins/first-party/notifications`
+(`deckpilot.notifications`, class `default`) reproduces both actions; the
+alias block `notifications.*` → `deckpilot.notifications.*` and its
+(empty) migration plan are shipped. The migration engine takes a
+`default`-class plugin as the built-in's replacement whether or not the
+data uses the built-in: a fresh install cuts over at its first start, with
+nothing to migrate; an upgrade copies the module's three settings first.
+Both are low tier only, so no consent is asked. A built-in the user had
+turned off turns the seeded plugin off once (the enabled state is copied
+once, §5.5), and the module stays `not_eligible` on its built-in.
+`contracts.rs` checks the manifest; `apps/agent/tests/plugins_notifications.rs`
+compares 14 scenarios with the built-in through the real agent and host,
+and covers the first launch, tombstones across restarts and an app update,
+and an alpha.3 upgrade with an older build on the same data. The
+differences are listed in
+[`plugins/first-party/notifications/README.md`](../../plugins/first-party/notifications/README.md).
+
 ## 7. SDK gaps
 
 Each gap names the modules that need it, a security design sketch, and
@@ -796,6 +818,37 @@ plugin) and a manifest-declared rate up to 30 per minute. They need plugin
 settings the notifier reads and a consent change, and land with G8 before
 P10.
 
+*Status (P10):* the decisions for parity with the built-in
+`notifications`:
+
+- **Routing: done.** The manifest's `notifications` permission takes an
+  optional `routing` naming the plugin's own settings for `desktop`,
+  `statusBar` and `minimumSeverity` (boolean, boolean and a choice of the
+  severities; validated). The agent reads them, as the user saved them,
+  at every `notify`, and shows the notification through its own notifier
+  (the native helper and the status bar of open windows) or not at all.
+  The plugin never decides where. Without a routing: the status bar only,
+  as before. Desktop notifications are still "show notifications": the
+  grant and its low tier are unchanged, the plugin-name prefix stays, and
+  the consent text says that the plugin's settings decide where they
+  appear. The settings move with the module's migration (copied one to
+  one, §5.5).
+- **Delivery: done.** A guest that reports the ABI feature
+  `NOTIFY_DELIVERY` (`dp_features`, as #257 did for network kinds) gets
+  where it was shown, or why not (`NotifyDelivery`; SDK
+  `Context::notify_delivered`); every other guest still gets `null`. Not
+  shown is an `ok` reply; not granted and the rate limit stay errors.
+- **`critical`: no host change.** It is the built-in's "fail the node when
+  the notification was shown nowhere"; with the delivery reply the plugin
+  decides it itself (`notification-not-shown`). A host-side `critical`
+  would add nothing a plugin could not do, and nothing it should.
+- **Higher rate: not offered.** A manifest-declared rate above 5 per
+  minute is medium tier, which a `default`-class plugin must not need
+  (seeding grants the low tier only, §4.2). The plugin keeps 5 per minute:
+  a 6th notification in a minute is dropped and its node goes on (or
+  fails, when critical). Workflows rarely show more; the difference is
+  documented in the plugin's README. No action stays built-in for it.
+
 ### G10 Cancellable sleep (general.wait; retries and backoff in any plugin)
 
 Sketch: `time.sleep {ms ≤ remaining deadline}`, woken early by the
@@ -935,7 +988,7 @@ they change.
 | P7 | IPC and app: migration notice, consent, Retry; alias-aware editors | `crates/deckpilot-ipc/src/plugins.rs`, `apps/desktop/src/plugins/migration*.tsx` (new), `apps/desktop/src/lib/plugin-actions.ts` | #228, P6 | Additive protocol fields |
 | P8 | `deckpilot.github` plugin source and contract test | `plugins/first-party/github/` (new), `crates/deckpilot-modules/tests/contracts.rs` | P4 (G1, G6), P5 | Built and pinned, not yet routed |
 | P9 | GitHub cut-over | one `ACTION_ALIASES` block, a `migration`-class entry in `bundled/pins.json` | P6, P7, P8 | The first behaviour change. The built-in stays as the legacy implementation |
-| P10 | `deckpilot.notifications` as the first default plugin | `plugins/first-party/notifications/`, its alias block | P4 (G8, G9), P9 | Proves first launch, tombstones and fresh installs |
+| P10 | `deckpilot.notifications` as the first default plugin | `plugins/first-party/notifications/`, its alias block | P4 (G8, G9), P9 | Proves first launch, tombstones and fresh installs. *Done*: G9 routing and delivery, class `default` in the engine (§6 "As built (P10)") |
 | P11 | G2 user origins, then gitlab and jira | runtime, executor, settings consent UI, `plugins/first-party/{gitlab,jira}/` | P9 | GHE users become eligible |
 | P12 | Remove a legacy built-in | `modules/<name>`, `crates/deckpilot-modules/src/lib.rs` | §5.7 criteria | The alias entries stay forever |
 
