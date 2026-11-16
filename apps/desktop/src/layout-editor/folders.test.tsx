@@ -180,7 +180,7 @@ describe("folders in the layout editor", { timeout: 20_000 }, () => {
   it("creates a folder by dragging New folder onto an empty key", async () => {
     const user = renderEditor()
     expect(
-      within(screen.getByRole("region", { name: "Folders" })).getByText("New folder"),
+      within(screen.getByRole("region", { name: "Navigation" })).getByText("New folder"),
     ).toBeInTheDocument()
     drop(NEW_FOLDER_DRAG_ID, "key:4")
     // The key opens a folder that now exists, as a page of its own.
