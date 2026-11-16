@@ -428,8 +428,20 @@ impl SqliteStore {
     /// Applies the declared schema migrations of feature modules, each module
     /// in its own transaction. Versions are tracked in `module_schemas`.
     /// Migrations are SQL declared by the module; no module code runs.
+    ///
+    /// A module whose recorded version is the declared one is only read:
+    /// nothing is written and no write lock is taken. The agent and the
+    /// app call this at every start and the agent at every reload, where
+    /// one write transaction per module would wait for another process's
+    /// writes (up to the busy timeout each) and for a commit to reach the
+    /// disk, a dozen times, for nothing.
     pub fn apply_module_schemas(&self, modules: &[(ModuleId, Vec<ModuleMigration>)]) -> Result<()> {
+        let recorded = self.module_schema_versions()?;
         for (module, migrations) in modules {
+            let supported = u32::try_from(migrations.len()).unwrap_or(u32::MAX);
+            if recorded.get(module.as_str()) == Some(&supported) {
+                continue;
+            }
             let tx = rusqlite::Transaction::new_unchecked(
                 &self.connection,
                 rusqlite::TransactionBehavior::Immediate,
@@ -442,7 +454,6 @@ impl SqliteStore {
                 )
                 .optional()?
                 .unwrap_or(0);
-            let supported = u32::try_from(migrations.len()).unwrap_or(u32::MAX);
             if current > supported {
                 return Err(StorageError::UnsupportedModuleSchema {
                     module: module.to_string(),
@@ -464,6 +475,15 @@ impl SqliteStore {
             tx.commit()?;
         }
         Ok(())
+    }
+
+    /// The recorded schema version of every module that has one.
+    fn module_schema_versions(&self) -> Result<std::collections::BTreeMap<String, u32>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT module_id, version FROM module_schemas")?;
+        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Schema version of a module's own tables, `0` if none were created.
@@ -2749,6 +2769,89 @@ mod tests {
                 .is_err()
         );
         assert_eq!(store.module_schema_version(&module).unwrap(), 2);
+    }
+
+    /// Schemas that are current are only read: while another connection
+    /// (the app, saving) holds the write lock, applying them neither waits
+    /// for it nor writes. A module whose schema is behind still waits for
+    /// the lock, as every writer does.
+    #[test]
+    fn current_module_schemas_take_no_write_lock() {
+        let dir = std::env::temp_dir().join(format!("deckpilot-schemas-{}", ProfileId::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("deckpilot.db");
+        let store = SqliteStore::open(&path, &Encryption::None).unwrap();
+        let step = |version: u32, sql: &str| ModuleMigration {
+            version,
+            description: String::new(),
+            sql: sql.into(),
+        };
+        let modules = vec![
+            (ModuleId::new("plain").unwrap(), Vec::new()),
+            (
+                ModuleId::new("notes").unwrap(),
+                vec![step(
+                    1,
+                    "CREATE TABLE notes_items (id INTEGER PRIMARY KEY);",
+                )],
+            ),
+        ];
+        store.apply_module_schemas(&modules).unwrap();
+        let recorded = |store: &SqliteStore| -> Vec<(String, u32, i64)> {
+            let mut statement = store
+                .connection
+                .prepare("SELECT module_id, version, updated_at FROM module_schemas ORDER BY 1")
+                .unwrap();
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        let before = recorded(&store);
+        assert_eq!(before.len(), 2);
+        let changes = store.connection.total_changes();
+
+        // Another connection holds the write lock (the app, mid-save).
+        let other = SqliteStore::open(&path, &Encryption::None).unwrap();
+        other.connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let started = std::time::Instant::now();
+        store.apply_module_schemas(&modules).unwrap();
+        assert!(
+            started.elapsed() < BUSY_TIMEOUT / 5,
+            "current schemas waited {:?} for a write lock",
+            started.elapsed()
+        );
+        assert_eq!(
+            store.connection.total_changes(),
+            changes,
+            "nothing is written"
+        );
+        assert_eq!(recorded(&store), before);
+
+        // A schema that is behind is a write, and waits for the lock.
+        let mut newer = modules.clone();
+        newer[1].1.push(step(
+            2,
+            "ALTER TABLE notes_items ADD COLUMN done INTEGER NOT NULL DEFAULT 0;",
+        ));
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            other.connection.execute_batch("COMMIT").unwrap();
+        });
+        let started = std::time::Instant::now();
+        store.apply_module_schemas(&newer).unwrap();
+        assert!(started.elapsed() >= std::time::Duration::from_millis(250));
+        release.join().unwrap();
+        assert_eq!(
+            store
+                .module_schema_version(&ModuleId::new("notes").unwrap())
+                .unwrap(),
+            2
+        );
+        // Windows cannot delete files that are still open.
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
