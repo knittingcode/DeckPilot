@@ -10,6 +10,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use deckpilot_plugin_manifest::PackageDigest;
 use deckpilot_plugin_package::sha256;
 use deckpilot_plugin_registry::publish::{Io, run};
+use deckpilot_plugin_registry::roots;
 use deckpilot_plugin_registry::{
     FetchError, Freshness, MemoryTrustStore, Policy, Refresh, RegistryClient, RegistryError, Role,
     StaleReason,
@@ -762,10 +763,84 @@ fn with_roots_and_no_registry_named_the_official_site_is_used() {
     .unwrap()
     .expect("a registry");
     assert_eq!(registry.name, DEFAULT_REGISTRY_URL);
-    // Without roots: none, whatever else is set.
+    // Without roots (none embedded, none configured): none.
     assert!(
-        Registry::from_settings(&PluginSettings::default(), &state)
-            .unwrap()
-            .is_none()
+        Registry::from_choice(
+            &PluginSettings::default(),
+            &roots::choose_from(None, true, None),
+            &state
+        )
+        .unwrap()
+        .is_none()
     );
+}
+
+/// Roots embedded at build time are the trust anchor of a registry they
+/// signed: a release build ignores a configured `roots.json`, and a root
+/// rotation is followed through the signed key set chain. (The build-time
+/// embedding itself: `crates/deckpilot-plugin-registry/tests/embedded_roots.rs`.)
+#[test]
+fn embedded_roots_trust_the_registry_they_signed() {
+    use crate::plugins::PluginSettings;
+    use crate::plugins::registry::Registry;
+    use deckpilot_plugin_registry::roots::RootsSource;
+    let site = Site::new("embedded-roots");
+    let other = Site::new("embedded-roots-other");
+    let today = (Utc::now() - t0()).num_days();
+    site.publish(today);
+    other.publish(today);
+    // The registry directory layout: site/v1 and releases/.
+    let settings = |site: &Site| PluginSettings {
+        registry: Some(site.work()),
+        // In a release build this is ignored (the embedded roots win).
+        registry_roots: Some(other.work().join("roots.json")),
+        ..PluginSettings::default()
+    };
+    let embedded: &'static str = Box::leak(
+        std::fs::read_to_string(site.work().join("roots.json"))
+            .unwrap()
+            .into_boxed_str(),
+    );
+    let release = roots::choose_from(
+        Some(embedded),
+        false,
+        Some(&other.work().join("roots.json")),
+    );
+    assert_eq!(release.source, Some(RootsSource::Embedded(embedded)));
+    assert!(release.ignored.is_some());
+
+    let state = site.scratch.0.join("state");
+    let mut registry = Registry::from_choice(&settings(&site), &release, &state)
+        .unwrap()
+        .expect("a registry");
+    assert!(matches!(registry.refresh(), Ok(Refresh::Updated { .. })));
+    assert_eq!(registry.client().keys_version(), 1);
+
+    // The other registry is not signed by the embedded roots.
+    let mut refused =
+        Registry::from_choice(&settings(&other), &release, &other.scratch.0.join("state"))
+            .unwrap()
+            .expect("a registry");
+    assert!(refused.refresh().is_err());
+
+    // Root rotation: key set 2 names a new root, signed by the old and the
+    // new one; the embedded roots stay the anchor of the chain.
+    site.run(&[
+        "keys",
+        "generate",
+        "--role",
+        "root",
+        "--out",
+        &site.key("root2.key"),
+        "--no-password",
+    ]);
+    site.run(&["keyset", "rotate", "--root", &site.key("root2.key.pub")]);
+    site.run(&["keyset", "sign", "--key", &site.key("root.key")]);
+    site.run(&["keyset", "sign", "--key", &site.key("root2.key")]);
+    site.publish(today);
+    let mut registry = Registry::from_choice(&settings(&site), &release, &state)
+        .unwrap()
+        .expect("a registry");
+    assert!(matches!(registry.refresh(), Ok(Refresh::Updated { .. })));
+    assert_eq!(registry.client().keys_version(), 2);
 }

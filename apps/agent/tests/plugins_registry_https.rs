@@ -848,6 +848,11 @@ async fn expired_and_frozen_registries_block_installs() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn without_root_keys_nothing_is_fetched() {
+    // A build with roots embedded (DECKPILOT_REGISTRY_ROOT_PUBKEYS set at
+    // build time) always has root keys; this is about one without.
+    if deckpilot_plugin_registry::roots::EMBEDDED.is_some() {
+        return;
+    }
     let registry = Registry::create();
     let server = HttpsServer::start(&registry.work());
     let env = Env::new("plugins-https-no-roots");

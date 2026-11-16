@@ -34,7 +34,10 @@ Fails unless, in every workflow of the directory (default
 
 Running the registry crate's tests (cargo test -p deckpilot-plugin-registry
 ..., throwaway keys made inside the tests) is not a registry command and
-stays allowed. So does a plugin host executable staged into the
+stays allowed. So is compiling the registry's root role into the agent
+(vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS, the public keys of roots.json, in
+the application build): public keys are the app's trust anchor, not
+signing material, and nothing is signed or published with them. So does a plugin host executable staged into the
 application bundle (for example as a Tauri externalBin), and so do the
 unpacked first-party plugins under bundled/ with their pins.json (a Tauri
 resource; tools/release-pipeline/check-bundled-plugins.sh checks them):
