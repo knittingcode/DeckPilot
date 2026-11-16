@@ -365,8 +365,11 @@ pub struct AliasStatus {
 ///   parameters only when optional;
 /// - every output of the built-in, with the same kind and `sensitive`
 ///   flag;
-/// - the same `effect`, `retrySafe`, `idempotent`, `cancellable` and
-///   `changesContext`, and a timeout at least as long.
+/// - the same `effect`, `retrySafe`, `idempotent` and `changesContext`, a
+///   timeout at least as long, and `cancellable` wherever the built-in is
+///   (the agent makes every plugin action cancellable: it can always stop
+///   the plugin, so a plugin replacing an action that cannot be
+///   interrupted, such as `github.open`, only stops sooner).
 pub fn incompatibilities(
     alias: &ActionAlias,
     builtin: &ActionType,
@@ -413,7 +416,7 @@ pub fn incompatibilities(
         ("effect", b.effect == t.effect),
         ("retrySafe", b.retry_safe == t.retry_safe),
         ("idempotent", b.idempotent == t.idempotent),
-        ("cancellable", b.cancellable == t.cancellable),
+        ("cancellable", !b.cancellable || t.cancellable),
         ("changesContext", b.changes_context == t.changes_context),
     ] {
         if !same {
@@ -796,15 +799,36 @@ mod tests {
         narrower.node.outputs[0].sensitive = true;
         narrower.node.timeout_ms = 1;
         narrower.node.effect = crate::graph::ActionEffect::Modifies;
+        narrower.node.cancellable = !builtin.node.cancellable;
+        let mut expected = vec![
+            "parameter `message`: its kind or constraints are narrower",
+            "new parameter `extra` is required",
+            "output `body` has another `sensitive` flag",
+            "the node's `effect` differs",
+        ];
+        if builtin.node.cancellable {
+            expected.push("the node's `cancellable` differs");
+        }
+        expected.push("the node's timeout is shorter");
+        assert_eq!(incompatibilities(alias, &builtin, &narrower), expected);
+
+        // A plugin may be cancellable where the built-in is not (the agent
+        // makes every plugin action cancellable), never the other way.
+        let mut stubborn = builtin.clone();
+        stubborn.node.cancellable = false;
+        let mut cancellable = plugin.clone();
+        cancellable.node.cancellable = true;
         assert_eq!(
-            incompatibilities(alias, &builtin, &narrower),
-            [
-                "parameter `message`: its kind or constraints are narrower",
-                "new parameter `extra` is required",
-                "output `body` has another `sensitive` flag",
-                "the node's `effect` differs",
-                "the node's timeout is shorter",
-            ]
+            incompatibilities(alias, &stubborn, &cancellable),
+            Vec::<String>::new()
+        );
+        let mut eager = builtin.clone();
+        eager.node.cancellable = true;
+        let mut uninterruptible = plugin.clone();
+        uninterruptible.node.cancellable = false;
+        assert_eq!(
+            incompatibilities(alias, &eager, &uninterruptible),
+            ["the node's `cancellable` differs"]
         );
 
         let mut missing = plugin;

@@ -1,4 +1,4 @@
 {
-  "$comment": "The first-party plugins the application bundles (plugins/first-party/README.md). None yet: built-in modules move here one by one (docs/marketplace/module-migration.md §9).",
-  "plugins": []
+  "$comment": "The first-party plugins the application bundles (plugins/first-party/README.md). Built-in modules move here one by one (docs/marketplace/module-migration.md §9). A `migration`-class plugin is installed only by the migration engine, and the built-in's action types are routed to it only once ACTION_ALIASES lists them.",
+  "plugins": [{ "path": "github", "class": "migration" }]
 }

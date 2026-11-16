@@ -586,17 +586,21 @@ impl DeviceLayout {
                         ));
                     }
                 }
-                if let Err(errors) = definition.normalize(&instance.parameters.overlay(overrides)) {
-                    // Problems of the instance's own values are the
-                    // instance's, reported where it is edited.
-                    for error in errors {
-                        let (ParameterError::Unknown(key)
-                        | ParameterError::Missing(key)
-                        | ParameterError::WrongType { key, .. }
-                        | ParameterError::Invalid { key, .. }) = &error;
-                        if overrides.get(key).is_some() {
-                            report(error.to_string());
-                        }
+                let errors = match definition.normalize(&instance.parameters.overlay(overrides)) {
+                    Ok(normalized) => {
+                        registry.validate_parameters(&instance.action_type, &normalized)
+                    }
+                    Err(errors) => errors,
+                };
+                // Problems of the instance's own values are the
+                // instance's, reported where it is edited.
+                for error in errors {
+                    let (ParameterError::Unknown(key)
+                    | ParameterError::Missing(key)
+                    | ParameterError::WrongType { key, .. }
+                    | ParameterError::Invalid { key, .. }) = &error;
+                    if overrides.get(key).is_some() {
+                        report(error.to_string());
                     }
                 }
             }

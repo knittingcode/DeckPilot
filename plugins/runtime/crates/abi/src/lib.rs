@@ -24,7 +24,9 @@ pub mod limits;
 pub mod protocol;
 pub mod value;
 
-pub use capability::{CallError, CallErrorCode, CallResult, CapabilityRequest, HttpMethod};
+pub use capability::{
+    CallError, CallErrorCode, CallResult, CapabilityRequest, HttpMethod, NetworkErrorKind,
+};
 pub use value::{ActionOutcome, ParamValue, Params, ValidationError};
 
 /// The ABI version implemented by this crate.
@@ -35,5 +37,8 @@ pub use value::{ActionOutcome, ParamValue, Params, ValidationError};
 /// credential handle) in `http.fetch` and the [`capability::HttpResponse`]
 /// shape of its reply; `descriptor` in the `loaded` message; the
 /// capability operations `storage.keys`, `storage.usage`,
-/// `credentials.has` and `settings.get`.
+/// `credentials.has` and `settings.get`; the optional export
+/// `dp_features` and, for a guest that reports
+/// [`guest::features::NETWORK_ERROR_KIND`] there, the `kind` of a failed
+/// `http.fetch` ([`capability::NetworkErrorKind`]).
 pub const ABI_VERSION: u32 = 1;

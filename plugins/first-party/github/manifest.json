@@ -1,0 +1,358 @@
+{
+  "$schema": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
+  "id": "deckpilot.github",
+  "name": "GitHub",
+  "version": "0.1.0",
+  "publisher": {
+    "id": "deckpilot",
+    "name": "DeckPilot",
+    "url": "https://github.com/knittingcode/deckpilot"
+  },
+  "description": "Pull requests, review requests, checks and repositories from GitHub. Read-only.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/knittingcode/deckpilot",
+    "directory": "plugins/first-party/github"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["github", "pull-requests", "checks", "reviews"],
+  "categories": ["developer-tools"],
+  "engines": { "deckpilot": ">=0.6.0 <1.0.0", "pluginApi": "^1.0", "sdk": "0.1.0" },
+  "runtime": { "kind": "wasm", "abi": 1 },
+  "entry": "src/lib.rs",
+  "icons": { "128": "assets/icon-128.png" },
+  "permissions": [
+    {
+      "kind": "network",
+      "hosts": ["api.github.com"],
+      "methods": ["GET"],
+      "justification": "Reads your user, repositories, pull requests, review requests and checks from the GitHub API. Only reads; never changes anything on GitHub."
+    },
+    {
+      "kind": "credentials",
+      "refs": ["token"],
+      "justification": "Sends your GitHub token to api.github.com, and nowhere else, to read what the token may see."
+    },
+    {
+      "kind": "openUrl",
+      "hosts": ["github.com"],
+      "justification": "Opens a repository, a pull request or another GitHub page in your browser when you run Open on GitHub."
+    }
+  ],
+  "contributes": {
+    "actions": [
+      {
+        "id": "current-user",
+        "name": "Current GitHub user",
+        "description": "The account the token belongs to; also checks that the token works.",
+        "category": "GitHub",
+        "parameters": [],
+        "node": {
+          "version": 1,
+          "icon": "user",
+          "outputs": [
+            { "key": "login", "label": "Login", "kind": "text", "always": true },
+            { "key": "name", "label": "Name", "kind": "text", "always": false },
+            { "key": "url", "label": "Profile", "kind": "url", "always": true },
+            {
+              "key": "rateLimitRemaining",
+              "label": "Requests left",
+              "kind": "integer",
+              "always": false
+            }
+          ],
+          "timeoutMs": 130000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "repository",
+        "name": "GitHub repository",
+        "description": "A repository's default branch, visibility, counts and when it was last pushed.",
+        "category": "GitHub",
+        "parameters": [
+          {
+            "key": "repository",
+            "label": "Repository",
+            "description": "owner/name, e.g. octo-org/website.",
+            "required": true,
+            "kind": { "type": "text", "maxLength": 140 }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "book-open",
+          "outputs": [
+            { "key": "fullName", "label": "Repository", "kind": "text", "always": true },
+            {
+              "key": "description",
+              "label": "Description",
+              "kind": "text",
+              "always": false,
+              "sensitive": true
+            },
+            { "key": "defaultBranch", "label": "Default branch", "kind": "text", "always": true },
+            { "key": "private", "label": "Private", "kind": "boolean", "always": true },
+            { "key": "archived", "label": "Archived", "kind": "boolean", "always": true },
+            {
+              "key": "openIssues",
+              "label": "Open issues and pull requests",
+              "kind": "integer",
+              "always": true
+            },
+            { "key": "stars", "label": "Stars", "kind": "integer", "always": true },
+            { "key": "forks", "label": "Forks", "kind": "integer", "always": true },
+            { "key": "url", "label": "Page", "kind": "url", "always": true },
+            { "key": "pushedAt", "label": "Last push", "kind": "text", "always": false }
+          ],
+          "timeoutMs": 130000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "pull-requests",
+        "name": "Open pull requests",
+        "description": "Counts and lists open pull requests of a repository, or yours across repositories.",
+        "category": "GitHub",
+        "parameters": [
+          {
+            "key": "repository",
+            "label": "Repository",
+            "description": "owner/name, e.g. octo-org/website. Empty: every repository.",
+            "required": false,
+            "kind": { "type": "text", "maxLength": 140 }
+          },
+          {
+            "key": "filter",
+            "label": "Which",
+            "description": "all: every open pull request of the repository; author-me: opened by you; review-requested: waiting for your review (also of your teams).",
+            "required": false,
+            "kind": { "type": "choice", "options": ["all", "author-me", "review-requested"] },
+            "default": { "type": "choice", "value": "all" }
+          },
+          {
+            "key": "limit",
+            "label": "Listed",
+            "description": "At most this many pull requests in the list; the count is always complete.",
+            "required": false,
+            "kind": { "type": "integer", "min": 1, "max": 100 },
+            "default": { "type": "integer", "value": 20 }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "git-branch",
+          "outputs": [
+            { "key": "count", "label": "Open pull requests", "kind": "integer", "always": true },
+            { "key": "listed", "label": "Listed", "kind": "integer", "always": true },
+            {
+              "key": "items",
+              "label": "Pull requests",
+              "kind": "text",
+              "always": true,
+              "sensitive": true
+            },
+            { "key": "truncated", "label": "List truncated", "kind": "boolean", "always": true },
+            { "key": "firstUrl", "label": "First pull request", "kind": "url", "always": false }
+          ],
+          "timeoutMs": 130000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "review-requests",
+        "name": "Review requests",
+        "description": "Open pull requests waiting for your review (directly or through a team), in every repository or one.",
+        "category": "GitHub",
+        "parameters": [
+          {
+            "key": "repository",
+            "label": "Repository",
+            "description": "owner/name, e.g. octo-org/website. Empty: every repository.",
+            "required": false,
+            "kind": { "type": "text", "maxLength": 140 }
+          },
+          {
+            "key": "limit",
+            "label": "Listed",
+            "description": "At most this many pull requests in the list; the count is always complete.",
+            "required": false,
+            "kind": { "type": "integer", "min": 1, "max": 100 },
+            "default": { "type": "integer", "value": 20 }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "search",
+          "outputs": [
+            { "key": "count", "label": "Open pull requests", "kind": "integer", "always": true },
+            { "key": "listed", "label": "Listed", "kind": "integer", "always": true },
+            {
+              "key": "items",
+              "label": "Pull requests",
+              "kind": "text",
+              "always": true,
+              "sensitive": true
+            },
+            { "key": "truncated", "label": "List truncated", "kind": "boolean", "always": true },
+            { "key": "firstUrl", "label": "First pull request", "kind": "url", "always": false }
+          ],
+          "timeoutMs": 130000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "checks",
+        "name": "Checks",
+        "description": "The checks and commit statuses of a branch, tag, commit or pull request: overall ok, failing or pending, and counts.",
+        "category": "GitHub",
+        "parameters": [
+          {
+            "key": "repository",
+            "label": "Repository",
+            "description": "owner/name, e.g. octo-org/website.",
+            "required": true,
+            "kind": { "type": "text", "maxLength": 140 }
+          },
+          {
+            "key": "ref",
+            "label": "Branch, tag or commit",
+            "description": "Used when no pull request is given.",
+            "required": false,
+            "kind": { "type": "text", "maxLength": 250 }
+          },
+          {
+            "key": "pullRequest",
+            "label": "Pull request",
+            "description": "Its latest commit is checked.",
+            "required": false,
+            "kind": { "type": "integer", "min": 1 }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "list-checks",
+          "outputs": [
+            {
+              "key": "state",
+              "label": "State (ok, failing, pending, none)",
+              "kind": "text",
+              "always": true
+            },
+            { "key": "sha", "label": "Commit", "kind": "text", "always": true },
+            { "key": "total", "label": "Checks", "kind": "integer", "always": true },
+            { "key": "passed", "label": "Passed", "kind": "integer", "always": true },
+            { "key": "failed", "label": "Failed", "kind": "integer", "always": true },
+            { "key": "pending", "label": "Pending", "kind": "integer", "always": true },
+            { "key": "failing", "label": "Failing checks", "kind": "text", "always": true },
+            { "key": "truncated", "label": "Not all read", "kind": "boolean", "always": true },
+            { "key": "url", "label": "Page", "kind": "url", "always": true }
+          ],
+          "timeoutMs": 130000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "open",
+        "name": "Open on GitHub",
+        "description": "Opens a repository, a pull request or a GitHub page in the browser.",
+        "category": "GitHub",
+        "parameters": [
+          {
+            "key": "url",
+            "label": "Page",
+            "description": "An https page on the configured GitHub, e.g. a pull request's URL from an earlier node. Empty: the repository below.",
+            "required": false,
+            "kind": { "type": "text", "maxLength": 2048 }
+          },
+          {
+            "key": "repository",
+            "label": "Repository",
+            "description": "owner/name, e.g. octo-org/website. Empty: every repository.",
+            "required": false,
+            "kind": { "type": "text", "maxLength": 140 }
+          },
+          {
+            "key": "pullRequest",
+            "label": "Pull request",
+            "description": "Opens this pull request of the repository.",
+            "required": false,
+            "kind": { "type": "integer", "min": 1 }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "link",
+          "outputs": [{ "key": "url", "label": "Opened", "kind": "url", "always": true }],
+          "timeoutMs": 15000,
+          "retrySafe": true,
+          "idempotent": false,
+          "cancellable": false,
+          "effect": "opens"
+        }
+      }
+    ],
+    "settings": {
+      "portabilityVersion": 1,
+      "fields": [
+        {
+          "key": "apiUrl",
+          "label": "API URL",
+          "description": "https://api.github.com. GitHub Enterprise and other hosts are not supported by this plugin yet; they keep using the built-in GitHub module. Only for this computer.",
+          "required": true,
+          "kind": { "type": "text", "maxLength": 512 },
+          "default": { "type": "text", "value": "https://api.github.com" },
+          "portability": "machineSpecific"
+        },
+        {
+          "key": "timeoutSeconds",
+          "label": "Time limit (s)",
+          "description": "For all requests of one action.",
+          "required": true,
+          "kind": { "type": "integer", "min": 1, "max": 120 },
+          "default": { "type": "integer", "value": 20 },
+          "portability": "portable"
+        }
+      ]
+    },
+    "credentials": [
+      {
+        "key": "token",
+        "label": "GitHub token",
+        "description": "A GitHub token with read access to what the actions read. Sent only to api.github.com, as a bearer token.",
+        "hosts": ["api.github.com"],
+        "schemes": ["bearer"],
+        "setupUrl": "https://github.com/settings/personal-access-tokens"
+      }
+    ],
+    "errorCodes": {
+      "invalid-api-url": "The configured API URL is not https://api.github.com.",
+      "invalid-repository": "The repository is not owner/name.",
+      "invalid-ref": "The ref is not a branch, tag or commit name.",
+      "unauthorized": "GitHub refused the token (401).",
+      "forbidden": "The token may not read this (403), e.g. a missing scope or SSO.",
+      "not-found": "Not found, or not visible with this token (404).",
+      "rate-limited": "GitHub's rate limit is reached; the message says how long to wait.",
+      "github-error": "Another error status from GitHub.",
+      "invalid-response": "The answer is not the JSON expected, or too large.",
+      "url-not-allowed": "The page to open is not an https page on github.com.",
+      "timed-out": "GitHub did not answer within the time limit of the settings."
+    }
+  }
+}

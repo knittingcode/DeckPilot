@@ -34,8 +34,9 @@
 //! ## What the SDK does for you
 //!
 //! * **Exports** ([`plugin!`]): `dp_abi_version`, `dp_alloc`, `dp_invoke`
-//!   and the optional `dp_describe`, `dp_init`, `dp_shutdown` of guest
-//!   ABI 1. The plugin crate contains no `unsafe` of its own; the macro's
+//!   and the optional `dp_describe`, `dp_init`, `dp_shutdown` and
+//!   `dp_features` of guest ABI 1 (the module reads the network kind of a
+//!   failed fetch: [`CapabilityError::network_kind`]). The plugin crate contains no `unsafe` of its own; the macro's
 //!   export attributes need `unsafe_code` to be `deny` rather than `forbid`.
 //! * **Parameters** ([`Param`], [`Args`]): the declared kinds (`text`,
 //!   `integer`, `number`, `boolean`, `choice`, `secret`) are checked, ranges
@@ -105,7 +106,8 @@ pub use output::{ActionResult, IntoValue, Output, PluginError, codes};
 pub use deckpilot_plugin_abi::capability::{AuthScheme, Header, LogLevel, NotifySeverity};
 pub use deckpilot_plugin_abi::describe::{ParamKind, PluginDescriptor};
 pub use deckpilot_plugin_abi::{
-    ActionOutcome, CallErrorCode, CallResult, CapabilityRequest, HttpMethod, ParamValue, Params,
+    ActionOutcome, CallErrorCode, CallResult, CapabilityRequest, HttpMethod, NetworkErrorKind,
+    ParamValue, Params,
 };
 
 /// The guest ABI this SDK implements.
@@ -142,8 +144,9 @@ pub const API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 0 };
 pub mod prelude {
     pub use crate::{
         Action, ActionOutcome, ActionResult, Args, AuthScheme, CapabilityError,
-        CapabilityErrorKind, Context, HttpMethod, LogLevel, NotifySeverity, Output, Param, Plugin,
-        PluginError, Request, Response, SecretHandle, Settings, StorageUsage, codes,
+        CapabilityErrorKind, Context, HttpMethod, LogLevel, NetworkErrorKind, NotifySeverity,
+        Output, Param, Plugin, PluginError, Request, Response, SecretHandle, Settings,
+        StorageUsage, codes,
     };
 }
 
@@ -190,6 +193,12 @@ macro_rules! plugin {
         pub extern "C" fn dp_shutdown() {
             $crate::__rt::shutdown($crate::__rt::registered($build))
         }
+
+        #[allow(unsafe_code)]
+        #[unsafe(no_mangle)]
+        pub extern "C" fn dp_features() -> i64 {
+            $crate::__rt::FEATURES as i64
+        }
     };
 }
 
@@ -205,6 +214,10 @@ pub mod __rt {
     use crate::{ActionOutcome, Plugin, codes};
 
     static PLUGIN: OnceLock<Plugin> = OnceLock::new();
+
+    /// What `dp_features` reports: this SDK reads every addition of its
+    /// ABI crate (the network kind of a failed fetch).
+    pub const FEATURES: u64 = deckpilot_plugin_abi::guest::features::ALL;
 
     pub fn registered(build: fn() -> Plugin) -> &'static Plugin {
         PLUGIN.get_or_init(build)
