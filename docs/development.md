@@ -387,11 +387,12 @@ more. With a dozen worktrees that is the whole disk. The options:
 `tools/dev/target-slot.sh` hands out slots under
 `~/.cache/deckpilot/target-pool/slot-1` … `slot-N`
 (`DECKPILOT_TARGET_SLOTS`, default 3; `DECKPILOT_TARGET_POOL`). A slot is
-held by one process at a time with a `mkdir` lock (macOS has no `flock`)
-that records the owner's PID and start time; a lock whose owner is gone, or
-whose PID now belongs to another process, is taken over. A worktree gets
-the slot it used last when that one is free, so its incremental state is
-reused.
+held by one process at a time with a lock directory (macOS has no `flock`;
+the shell creates a file in it with `O_EXCL`, since not every `mkdir`
+command is exclusive) that records the owner's PID and start time; a lock
+whose owner is gone, or whose PID now belongs to another process, is taken
+over. A worktree gets the slot it used last when that one is free, so its
+incremental state is reused.
 
 ```sh
 # One command in a slot, released when it ends (waits up to 10 min):

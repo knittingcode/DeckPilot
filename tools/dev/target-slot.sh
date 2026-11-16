@@ -6,11 +6,12 @@
 # would make parallel agents wait for each other). Opt-in; see
 # docs/development.md, "Worktrees and build caches".
 #
-# The lock is a directory (mkdir is atomic on every file system; macOS has
-# no flock(1)) holding the owner's PID and start time; a lock whose owner is
-# gone is taken over. A slot changing worktree is scrubbed of that
-# worktree's own crates first (scrub_slot). Runs with bash 3.2 and newer, on
-# macOS and Linux.
+# The lock is a directory (macOS has no flock(1)) holding the owner's PID
+# and start time; a lock whose owner is gone is taken over. Who holds it is
+# decided by the shell creating a file in it with O_EXCL, not by the exit
+# status of mkdir (see take_dir). A slot changing worktree is scrubbed of
+# that worktree's own crates first (scrub_slot). Runs with bash 3.2 and
+# newer, on macOS and Linux.
 set -euo pipefail
 
 usage() {
@@ -76,6 +77,27 @@ write_owner() { # <lock> <pid>
   mv -f "$1/owner.$$" "$1/owner"
 }
 
+# Takes the lock directory <dir>: true for exactly one of the processes that
+# try at the same time. mkdir(2) is atomic, but mkdir(1) is not everywhere:
+# the one of uutils coreutils (Ubuntu 26.04) exits 0 when another
+# process creates the directory between its own existence check and its
+# mkdir(2), so two processes can both "create" it. The directory is
+# therefore only where the lock lives; the lock is the file `claimed` in it,
+# which the shell itself creates with O_EXCL (noclobber).
+take_dir() { # <dir>
+  mkdir "$1" 2> /dev/null || return 1
+  (set -C && : > "$1/claimed") 2> /dev/null
+}
+
+# Removes the lock directory <dir> in one step (a rename), then its
+# contents. Emptied in place, it could lose the `claimed` file of a process
+# that takes the lock anew in the meantime.
+drop_dir() { # <dir>
+  gone="$1.gone.$$"
+  rm -rf "$gone"
+  if mv "$1" "$gone" 2> /dev/null; then rm -rf "$gone"; fi
+}
+
 # Whether the lock of slot <n> has an owner that is still running. A lock
 # without a complete owner file is being created (or its creator died right
 # after mkdir): it counts as held for 30 seconds. Sets lock_seen to whether
@@ -97,7 +119,7 @@ lock_held() { # <n>
 # Tries to take slot <n> for <owner pid>; takes over a stale lock.
 try_slot() { # <n> <owner>
   lock="$pool/slot-$1.lock"
-  if mkdir "$lock" 2> /dev/null; then
+  if take_dir "$lock"; then
     write_owner "$lock" "$2"
     return 0
   fi
@@ -106,23 +128,23 @@ try_slot() { # <n> <owner>
   # process that saw the old lock as stale cannot remove the new one that
   # another process has just created in its place.
   reclaim="$pool/slot-$1.reclaim"
-  if ! mkdir "$reclaim" 2> /dev/null; then
+  if ! take_dir "$reclaim"; then
     # Its holder died while reclaiming (it holds it for milliseconds).
-    if [ "$(age_of "$reclaim")" -ge 30 ]; then rm -rf "$reclaim"; fi
+    if [ "$(age_of "$reclaim")" -ge 30 ]; then drop_dir "$reclaim"; fi
     return 1
   fi
   taken=1
   # Only a lock that is there and stale is removed: one that its owner
   # released meanwhile may already be another process's new lock.
   if ! lock_held "$1" && [ "$lock_seen" = 1 ]; then
-    rm -rf "$lock"
+    drop_dir "$lock"
     echo "target-slot: took over the stale lock of slot-$1" >&2
   fi
-  if mkdir "$lock" 2> /dev/null; then
+  if take_dir "$lock"; then
     write_owner "$lock" "$2"
     taken=0
   fi
-  rmdir "$reclaim"
+  drop_dir "$reclaim"
   return "$taken"
 }
 
@@ -227,7 +249,7 @@ acquire() { # <owner> <wait seconds>
         # scrub is redone by the next acquisition.
         if [ "$(cat "$pool/slot-$n/.deckpilot-slot-user" 2> /dev/null || true)" != "$key" ]; then
           if ! (scrub_slot "$pool/slot-$n" "$key"); then
-            rm -rf "$pool/slot-$n.lock"
+            drop_dir "$pool/slot-$n.lock"
             die "could not clean slot-$n for $key"
           fi
           printf '%s\n' "$key" > "$pool/slot-$n/.deckpilot-slot-user"
@@ -253,7 +275,7 @@ release() { # <owner> <slot path>
   opid=""
   [ ! -f "$lock/owner" ] || read -r opid _ < "$lock/owner" || true
   if [ "$opid" = "$1" ] || ! lock_held "$n"; then
-    rm -rf "$lock"
+    drop_dir "$lock"
   else
     die "slot-$n is held by process $opid, not $1"
   fi

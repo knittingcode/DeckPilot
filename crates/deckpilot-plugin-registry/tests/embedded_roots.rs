@@ -16,7 +16,7 @@
 //! * a malformed value fails the build, and nothing is embedded.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, ExitStatus, Output};
 
 use deckpilot_plugin_registry::publish::{Io, run};
 use tempfile::TempDir;
@@ -158,8 +158,25 @@ fn build(test: &str, release: bool, features: &[&str], embed: Option<&str>, name
     let exe = format!("registry_roots{}", std::env::consts::EXE_SUFFIX);
     let built = target_dir(test).join(profile).join("examples").join(&exe);
     let copy = target_dir(test).join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-    std::fs::copy(&built, &copy).unwrap();
+    install(&built, &copy);
     copy
+}
+
+/// Copies the executable `built` to `copy` as a new file. A copy left by an
+/// earlier run of the tests (the target directory outlives them, and CI
+/// runs this file twice in one job) is removed first, never written over:
+/// `std::fs::copy` onto an existing file keeps its inode, and macOS on
+/// Apple Silicon keeps the code signature of an executable that has run
+/// cached per inode, so it kills (SIGKILL, no output) the next process
+/// started from a file whose content was replaced in place.
+fn install(built: &Path, copy: &Path) {
+    match std::fs::remove_file(copy) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => panic!("cannot remove {}: {e}", copy.display()),
+    }
+    std::fs::copy(built, copy)
+        .unwrap_or_else(|e| panic!("cannot copy {} to {}: {e}", built.display(), copy.display()));
 }
 
 /// Runs a built example against `site` with a fresh state, and the
@@ -178,10 +195,29 @@ fn verify(exe: &Path, site: &Site, configured: Option<&Path>) -> String {
     let output = command.output().expect("the example runs");
     assert!(
         output.status.success(),
-        "{}",
+        "{} failed: {}\nstdout: {}\nstderr: {}",
+        exe.display(),
+        describe(output.status),
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+/// How a process ended: its exit code, or on Unix the signal that killed
+/// it (a killed process writes nothing, so its output alone says nothing).
+fn describe(status: ExitStatus) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return format!("killed by signal {signal} ({status})");
+        }
+    }
+    match status.code() {
+        Some(code) => format!("exit code {code}"),
+        None => status.to_string(),
+    }
 }
 
 fn assert_starts(line: &str, prefix: &str) {
@@ -257,7 +293,16 @@ fn debug_builds_let_the_runtime_roots_override() {
     assert_starts(&line, "roots=file ignored=false");
     assert!(line.contains("result=updated seq 1"), "{line}");
 
-    let exe = build(test, false, &[], None, "none");
+    let none = build(test, false, &[], None, "none");
+    assert_eq!(
+        verify(&none, &a, None),
+        "roots=none ignored=false fetches=0 result=not-configured"
+    );
+
+    // A copy that has run can be replaced by another build and run again
+    // (see `install`): `exe` ran above with roots embedded, now it is the
+    // build without.
+    install(&none, &exe);
     assert_eq!(
         verify(&exe, &a, None),
         "roots=none ignored=false fetches=0 result=not-configured"
