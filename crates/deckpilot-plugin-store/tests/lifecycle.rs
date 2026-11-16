@@ -1036,3 +1036,71 @@ fn a_bundled_plugin_is_seeded_with_derived_low_tier_grants_only() {
         Err(StoreError::ConsentRequired { .. })
     ));
 }
+
+/// A module migration derives grants of the low and medium tier (what the
+/// built-in used), never of the high tier, and never over a stored
+/// decision.
+#[test]
+fn derived_grants_are_at_most_medium_tier_and_never_overwrite() {
+    let env = Env::new();
+    let mut manager = env.open();
+    let first_party = deckpilot_plugin_manifest::PluginId::parse("deckpilot.github-prs").unwrap();
+    let package = bundled_package(first_party.as_str(), "1.0.0", &with_notifications());
+    let declared = grants_of(&package);
+    manager
+        .install(
+            &package,
+            &InstallSource::Bundled,
+            &Consent::none("migration:github-prs"),
+        )
+        .unwrap();
+    let tier_of = |tier: Tier| -> std::collections::BTreeSet<GrantKey> {
+        declared
+            .iter()
+            .filter(|(_, scope)| scope.tier() == tier)
+            .map(|(key, _)| key.clone())
+            .collect()
+    };
+    let (medium, high) = (tier_of(Tier::Medium), tier_of(Tier::High));
+    assert!(!medium.is_empty() && !high.is_empty());
+
+    for key in &high {
+        let result = manager.derive_grants(
+            &first_party,
+            &std::collections::BTreeSet::from([key.clone()]),
+            "migration:github-prs",
+        );
+        assert!(
+            matches!(&result, Err(StoreError::BundledGrant { key: k, .. }) if k == key),
+            "{result:?}"
+        );
+    }
+    assert_eq!(manager.store().grants(&first_party).unwrap(), []);
+
+    // The user revoked one medium-tier key: deriving leaves it revoked.
+    let revoked = medium.iter().next().unwrap().clone();
+    manager.revoke(&first_party, &revoked, "user").unwrap();
+    let granted = manager
+        .derive_grants(&first_party, &medium, "migration:github-prs")
+        .unwrap();
+    assert_eq!(granted.len(), medium.len() - 1);
+    assert!(!granted.contains(&revoked));
+    let stored = manager.store().grants(&first_party).unwrap();
+    for grant in &stored {
+        if grant.key == revoked {
+            assert_eq!(grant.status, GrantStatus::Revoked);
+            assert_eq!(grant.source, GrantSource::User);
+        } else {
+            assert_eq!(grant.status, GrantStatus::Granted);
+            assert_eq!(grant.source, GrantSource::Derived);
+            assert_eq!(grant.decided_by, "migration:github-prs");
+        }
+    }
+    // Idempotent.
+    assert_eq!(
+        manager
+            .derive_grants(&first_party, &medium, "migration:github-prs")
+            .unwrap(),
+        []
+    );
+}

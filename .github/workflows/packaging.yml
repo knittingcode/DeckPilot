@@ -1,8 +1,12 @@
-# Full installer packaging with the release configuration: Linux .deb and
-# .rpm, Windows NSIS and MSI, their updater artifacts signed with a throwaway
-# key, and the assertions of tools/ci/check-packages.sh (names, versions,
-# app, bundled agent, udev rule, updater signatures). Nothing is code-signed
-# or published; no repository secret is used.
+# Full installer packaging with the release configuration: Linux .deb,
+# AppImage and .rpm, Windows NSIS and MSI, the macOS .app, its updater
+# archive and the disk image, their updater artifacts signed with a
+# throwaway key, and the assertions of tools/ci/check-packages.sh (names,
+# versions, layout, app, bundled agent, udev rule, the distribution record
+# and package format compiled or patched into each package's application,
+# updater signatures). Built in the distribution channel `github`, as the
+# release builds are. Nothing is code-signed or published; no repository
+# secret is used.
 #
 # Runs:
 # - on pull requests, only when packaging-relevant paths change
@@ -80,6 +84,10 @@ env:
   PRERELEASE_INPUT: ${{ inputs.prerelease && 'true' || 'false' }}
   MSI_VERSION_INPUT: ${{ inputs.msi-version }}
   RUST_CACHE_SAVE: ${{ github.ref == 'refs/heads/main' }}
+  # The distribution record compiled into the app and the agent
+  # (crates/deckpilot-distribution), as in the release builds; the package
+  # checks read it back from every package.
+  DECKPILOT_DISTRIBUTION_CHANNEL: github
 
 jobs:
   changes:
@@ -98,11 +106,12 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: tools/ci/changed-paths.sh
 
-  # Builds the Linux .deb and .rpm with the release configuration (bundled
-  # agent, udev rule) and their updater artifacts, signed with a throwaway
-  # key, to catch packaging mistakes before a release. Nothing is published.
+  # Builds the Linux .deb, AppImage and .rpm with the release configuration
+  # (bundled agent, udev rule) and their updater artifacts, signed with a
+  # throwaway key, to catch packaging mistakes before a release. Nothing is
+  # published.
   package-linux:
-    name: Package check (Linux .deb)
+    name: Package check (Linux .deb, AppImage)
     needs: changes
     if: needs.changes.outputs.packaging == 'true'
     runs-on: ubuntu-22.04
@@ -135,7 +144,8 @@ jobs:
           mkdir -p apps/desktop/src-tauri/binaries
           cp target/release/deckpilot-agent "apps/desktop/src-tauri/binaries/deckpilot-agent-$(rustc -vV | sed -n 's/^host: //p')"
       # A pre-release version (input, or a "-" in the version) builds no
-      # .rpm: RPM does not allow "-" in versions.
+      # .rpm: RPM does not allow "-" in versions. The AppImage is always
+      # built, as in the release.
       - name: Pre-release or final version
         run: |
           version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
@@ -143,13 +153,13 @@ jobs:
           case "$version" in *-*) prerelease=true ;; esac
           echo "PRERELEASE=$prerelease" >> "$GITHUB_ENV"
           echo "version $version, pre-release: $prerelease"
-      - name: Build the .deb (and .rpm for final versions)
+      - name: Build the .deb and AppImage (and .rpm for final versions)
         run: >
           pnpm --filter @deckpilot/desktop tauri build
-          --bundles "$([ "$PRERELEASE" = true ] && echo deb || echo deb,rpm)"
+          --bundles "$([ "$PRERELEASE" = true ] && echo deb,appimage || echo deb,appimage,rpm)"
           --config src-tauri/tauri.release.conf.json
           --config "$THROWAWAY_UPDATER_CONFIG"
-      - name: Names, versions, app, agent, udev rule and updater signatures
+      - name: Names, versions, layout, distribution record and updater signatures
         run: tools/ci/check-packages.sh linux
       - name: Checked version
         id: version
@@ -228,6 +238,57 @@ jobs:
           & 7z x -y "-o$env:RUNNER_TEMP\nsis" (Resolve-Path $nsis).Path | Out-Null
           $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @("/a", "`"$((Resolve-Path $msi).Path)`"", "/qn", "TARGETDIR=`"$env:RUNNER_TEMP\msi`"")
           if ($process.ExitCode -ne 0) { Write-Error "administrative MSI extraction failed: $($process.ExitCode)"; exit 1 }
-      - name: Names, versions, app, agent and updater signatures
+      - name: Names, versions, app, agent, distribution record and updater signatures
         shell: bash
         run: tools/ci/check-packages.sh windows "$RUNNER_TEMP"
+
+  # Builds the macOS .app, its updater archive (.app.tar.gz) and the disk
+  # image with the release configuration, for the runner's architecture
+  # (the release builds both with the same layout), with updater signatures
+  # from a throwaway key, and checks the layout, Info.plist, bundled agent,
+  # distribution record, updater archive and disk image. Not code-signed or
+  # notarized (release.yml verifies the signed bundles with
+  # .github/scripts/verify-macos-app.sh); nothing is published.
+  package-macos:
+    name: Package check (macOS .app, disk image)
+    needs: changes
+    if: needs.changes.outputs.packaging == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: package-macos
+          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Throwaway updater key (not the release key)
+        run: tools/ci/throwaway-updater-key.sh
+      - name: Build and stage the agent
+        run: |
+          cargo build --release --locked -p deckpilot-agent
+          mkdir -p apps/desktop/src-tauri/binaries
+          cp target/release/deckpilot-agent "apps/desktop/src-tauri/binaries/deckpilot-agent-$(rustc -vV | sed -n 's/^host: //p')"
+      - name: Pre-release or final version
+        run: |
+          version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
+          prerelease="$PRERELEASE_INPUT"
+          case "$version" in *-*) prerelease=true ;; esac
+          echo "PRERELEASE=$prerelease" >> "$GITHUB_ENV"
+          echo "version $version, pre-release: $prerelease"
+      - name: Build the .app, its updater archive and the disk image
+        run: >
+          pnpm --filter @deckpilot/desktop tauri build --bundles app,dmg
+          --config src-tauri/tauri.release.conf.json
+          --config "$THROWAWAY_UPDATER_CONFIG"
+      - name: Names, versions, layout, distribution record, disk image and updater signatures
+        run: tools/ci/check-packages.sh macos

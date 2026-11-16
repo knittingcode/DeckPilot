@@ -23,6 +23,7 @@ members = [
     # First-party plugins bundled with the application, and the test
     # fixture of the bundling tests (plugins/first-party/README.md).
     "../first-party/test-fixtures/example-default",
+    "../first-party/test-fixtures/legacy-fixture",
 ]
 # The test guests are wasm32 cdylibs, compiled for wasm32-unknown-unknown by
 # crates/test-fixtures/build.rs, together with the sample plugin. Plain
@@ -40,6 +41,7 @@ default-members = [
     "../examples/hello-world",
     "../examples/developer-tools",
     "../first-party/test-fixtures/example-default",
+    "../first-party/test-fixtures/legacy-fixture",
 ]
 
 [workspace.package]

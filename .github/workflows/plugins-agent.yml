@@ -114,7 +114,7 @@ jobs:
         run: cargo build --locked -p deckpilot-plugin-host --bin deckpilot-plugin-host
       - name: Build the example plugins and the SDK test guest
         working-directory: plugins/runtime
-        run: cargo build --locked -p hello-weather -p hello-world -p developer-tools -p deckpilot-sdk-test-guest -p deckpilot-example-default --target wasm32-unknown-unknown --profile guest
+        run: cargo build --locked -p hello-weather -p hello-world -p developer-tools -p deckpilot-sdk-test-guest -p deckpilot-example-default -p deckpilot-legacy-fixture --target wasm32-unknown-unknown --profile guest
       - name: Plugin unit tests (incl. the registry over HTTPS)
         run: "cargo test -p deckpilot-agent --features plugins --lib --locked plugins::"
       - name: End to end
@@ -131,6 +131,12 @@ jobs:
       # seeded offline, checked against its pins and run in the host.
       - name: Bundled plugins end to end
         run: cargo test -p deckpilot-agent --features plugins --test plugins_bundled --locked -- --nocapture
+      # A built-in module moved to its migration-class bundled plugin: the
+      # agent's fixture legacy module and the fixture plugin, consent,
+      # restarts mid-migration, health check, retries, drift, the user's
+      # disable and uninstall, and downgrades.
+      - name: Module migration end to end
+        run: cargo test -p deckpilot-agent --features plugins --test plugins_migration --locked -- --nocapture
       # The bundle layout as a release with DECKPILOT_RELEASE_PLUGINS=1
       # would build it, with the test fixture: built twice from clean
       # target directories (reproducible on this platform), the agent

@@ -1,0 +1,18 @@
+# expect: downstream job distribute-homebrew may not have contents: write (no permissions are declared
+name: Distribute
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  distribute-homebrew:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: distribute-homebrew
+    steps:
+      - name: Update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo hello

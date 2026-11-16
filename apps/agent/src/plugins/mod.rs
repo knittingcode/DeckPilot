@@ -35,6 +35,8 @@ pub mod key;
 #[cfg(feature = "plugins")]
 mod lane;
 #[cfg(feature = "plugins")]
+mod migration;
+#[cfg(feature = "plugins")]
 mod registry;
 #[cfg(feature = "plugins")]
 mod service;
@@ -167,6 +169,23 @@ pub fn platform_problem() -> Option<String> {
             platform()
         )
     })
+}
+
+/// The built-in modules with their stored states, for the agent's module
+/// registry. With the `plugins` feature and `test-hooks`, an agent test
+/// can add the migration test fixture (`migration/fixture.rs`); every
+/// other build gets exactly `deckpilot_modules::configured`.
+pub(crate) fn configured_modules(
+    states: &deckpilot_core::ModuleStates,
+) -> (deckpilot_core::ModuleRegistry, Vec<String>) {
+    #[cfg(feature = "plugins")]
+    {
+        migration::configured(states)
+    }
+    #[cfg(not(feature = "plugins"))]
+    {
+        deckpilot_modules::configured(states)
+    }
 }
 
 /// Requests of protocol 10's plugin API.
@@ -304,6 +323,42 @@ impl PluginRuntime {
                 .collect();
         }
         Vec::new()
+    }
+
+    /// Hands the module migration engine what `deckpilot.db` says about
+    /// the modules with an alias block (`modules`: the built-in modules
+    /// just loaded, before plugins are registered). Reads `deckpilot.db`,
+    /// never writes it; nothing is read while no alias exists. The first
+    /// snapshot after the plugin store opened runs the migration.
+    pub(crate) fn migrate(
+        &self,
+        store: &deckpilot_storage::SqliteStore,
+        modules: &deckpilot_core::ModuleRegistry,
+    ) {
+        #[cfg(feature = "plugins")]
+        if let Some(worker) = &self.worker {
+            match migration::LegacySnapshot::read(store, modules) {
+                Ok(snapshot) if snapshot.modules.is_empty() => {}
+                Ok(snapshot) => worker.migrate(snapshot),
+                Err(error) => {
+                    tracing::warn!(%error, "the modules that can migrate cannot be read");
+                }
+            }
+        }
+        #[cfg(not(feature = "plugins"))]
+        let _ = (store, modules);
+    }
+
+    /// Where the legacy action types of migrated modules go
+    /// (`docs/marketplace/module-migration.md` §5.2): from the migration
+    /// journal while the plugin store is open; every module to its
+    /// built-in otherwise, and without the `plugins` feature.
+    pub(crate) fn legacy_routing(&self) -> deckpilot_core::alias::LegacyRouting {
+        #[cfg(feature = "plugins")]
+        if let Some(worker) = &self.worker {
+            return worker.legacy_routing();
+        }
+        deckpilot_core::alias::LegacyRouting::default()
     }
 
     /// Answers a plugin request (here or on the worker).
