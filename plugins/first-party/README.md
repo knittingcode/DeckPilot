@@ -6,11 +6,13 @@ release build and shipped **inside the installers** as app components
 `knittingcode/deckpilot-plugins` by pinned commit for registry updates;
 that is a separate step, not part of this directory.
 
-Experimental, like all of the plugin marketplace. Two plugins are bundled:
+Experimental, like all of the plugin marketplace. Three plugins are bundled:
 `deckpilot.github` (class `migration`, [github/README.md](github/README.md)),
 to which a plugin-enabled agent routes the built-in `github.*` action
 types once a computer's migration is cut over
-(`docs/marketplace/module-migration.md` §6 and §9, P9), and
+(`docs/marketplace/module-migration.md` §6 and §9, P9),
+`deckpilot.gitlab` (class `migration`, [gitlab/README.md](gitlab/README.md)),
+built and pinned but not routed until its cut-over (P11), and
 `deckpilot.notifications` (class `default`, the first of the default set,
 [notifications/README.md](notifications/README.md)), seeded on every
 computer and routed through the alias block `notifications.*` (P10). The published release
@@ -22,6 +24,8 @@ pipeline does not package plugins at all (see "Packaging" below).
 | --- | --- |
 | `bundled.json` | The plugins a release bundles: `{"path": "<dir>", "class": "default" \| "migration"}` |
 | `github/` | `deckpilot.github`, class `migration`: the replacement of the built-in `github` module, checked against it by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_github.rs` |
+| `gitlab/` | `deckpilot.gitlab`, class `migration`: the replacement of the built-in `gitlab` module, for GitLab.com or a self-managed GitLab the user enters and allows; checked against the built-in by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_gitlab.rs` |
+| `support/` | `deckpilot-first-party-support`: a library the plugins for a user-entered server share (URLs without a URL parser, the time limit counted with `Date` headers, text helpers). Compiled into each plugin's module; never bundled by itself |
 | `notifications/` | `deckpilot.notifications`, class `default`: the replacement of the built-in `notifications` module, checked against it by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_notifications.rs` |
 | `<name>/` | One plugin: `Cargo.toml` (a member of the `plugins/runtime` workspace), `src/`, `manifest.json` (id `deckpilot.<name>`), `LICENSE` and its icons in `assets/` |
 | `build.sh` | Builds the listed plugins to wasm (`wasm32-unknown-unknown`, `guest` profile, reproducible on one platform) and stages them with their pins |
