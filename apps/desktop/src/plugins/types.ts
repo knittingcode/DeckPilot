@@ -114,6 +114,13 @@ export interface PluginRuntimeStatus {
   platform: string
   reason?: string
   registry?: RegistryStatus
+  /**
+   * What the agent can do beyond the original plugin requests, e.g.
+   * `pagedAnswers` (the app's backend then reads a plugin's actions and
+   * icon in parts, so no plugin is too large to list). Absent from older
+   * agents.
+   */
+  features?: string[]
 }
 
 export type PluginState =
@@ -174,6 +181,11 @@ export interface PluginSummary {
   origin: PluginOrigin
   previousVersion?: string
   stagedVersion?: string
+  /**
+   * Every action, each with its definition. The app's backend reads them
+   * page by page from agents that page plugin answers, so the list is
+   * complete whatever its size.
+   */
   actions: PluginActionInfo[]
   /** Host failures the agent saw since it started; absent when none. */
   health?: PluginHealth

@@ -126,6 +126,11 @@ pub struct Grants {
     pub(crate) storage_quota: Option<u64>,
     /// Origins whose URLs the plugin may open in the browser.
     pub(crate) open_url: BTreeSet<Origin>,
+    /// Credential origins withheld because they have no network grant
+    /// (revoked after consent), by slot key. A slot left with no origin is
+    /// not in [`Grants::credentials`] at all: it is unusable until the
+    /// network grant is back.
+    pub(crate) suspended: BTreeMap<String, BTreeSet<Origin>>,
 }
 
 /// Where and how one credential slot may be injected.
@@ -152,7 +157,10 @@ pub const MAX_CREDENTIALS: usize = 8;
 pub const MAX_ORIGINS: usize = 64;
 
 impl Grants {
-    /// Derives grants. Fails on the first invalid entry; never partial.
+    /// Derives grants. Fails on the first invalid entry; never partial. A
+    /// credential origin that lacks a network grant is not invalid (the
+    /// user may revoke a host at any time): only that origin is withheld
+    /// from its slot ([`Grants::suspended_credentials`]).
     pub fn derive(approved: &ApprovedPermissions) -> Result<Self, GrantError> {
         let mut g = Grants::default();
         for p in &approved.0 {
@@ -212,16 +220,38 @@ impl Grants {
         if g.credentials.len() > MAX_CREDENTIALS {
             return Err(GrantError::TooManyCredentials);
         }
-        // A secret may only travel to origins the plugin can reach at all.
-        let reachable = g
-            .credentials
-            .values()
-            .flat_map(|c| c.origins.iter())
-            .all(|o| g.network.contains_key(o));
-        if !reachable {
-            return Err(GrantError::CredentialOriginNotGranted);
-        }
+        g.suspend_unreachable_credentials();
         Ok(g)
+    }
+
+    /// A secret may only travel to origins the plugin can reach at all: a
+    /// credential origin without a network grant (the user revoked that
+    /// host after consenting to the slot) is withheld from its slot, and a
+    /// slot left without origins is removed, so every call using it is
+    /// denied as not granted. Everything else the plugin was granted stays
+    /// in force; the slot comes back with the network grant.
+    pub(crate) fn suspend_unreachable_credentials(&mut self) {
+        let network = &self.network;
+        let suspended = &mut self.suspended;
+        self.credentials.retain(|key, slot| {
+            let (kept, withheld): (BTreeSet<Origin>, BTreeSet<Origin>) =
+                std::mem::take(&mut slot.origins)
+                    .into_iter()
+                    .partition(|o| network.contains_key(o));
+            if !withheld.is_empty() {
+                suspended.entry(key.clone()).or_default().extend(withheld);
+            }
+            slot.origins = kept;
+            !slot.origins.is_empty()
+        });
+    }
+
+    /// Credential origins withheld from their slot because the plugin has
+    /// no network grant for them, by slot key. A slot whose every origin
+    /// is withheld is not granted at all ([`Grants::credential`] is
+    /// `None`).
+    pub fn suspended_credentials(&self) -> &BTreeMap<String, BTreeSet<Origin>> {
+        &self.suspended
     }
 
     pub fn credential(&self, key: &str) -> Option<&CredentialGrant> {
@@ -261,8 +291,6 @@ pub enum GrantError {
     EmptyCredential,
     DuplicateCredential,
     TooManyCredentials,
-    /// A credential slot names an origin without a network grant.
-    CredentialOriginNotGranted,
     /// A storage quota outside 257 to 10,240 KiB, or granted twice.
     StorageQuota,
 }
@@ -281,9 +309,6 @@ impl fmt::Display for GrantError {
             Self::EmptyCredential => f.write_str("credential without origins or schemes"),
             Self::DuplicateCredential => f.write_str("credential key granted twice"),
             Self::TooManyCredentials => f.write_str("too many credentials"),
-            Self::CredentialOriginNotGranted => {
-                f.write_str("credential origin has no network grant")
-            }
             Self::StorageQuota => f.write_str("storage quota outside 257 to 10240 KiB"),
         }
     }
