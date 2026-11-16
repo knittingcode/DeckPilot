@@ -1,0 +1,67 @@
+# First-party plugins
+
+DeckPilot's own plugins (`deckpilot.*`), built by the application's
+release build and shipped **inside the installers** as app components
+(`docs/marketplace/module-migration.md` §4). They are also submitted to
+`knittingcode/deckpilot-plugins` by pinned commit for registry updates;
+that is a separate step, not part of this directory.
+
+Experimental, like all of the plugin marketplace. **No first-party plugin
+is bundled yet**: `bundled.json` is empty, and the published release
+pipeline does not package plugins at all (see "Packaging" below).
+
+## Layout
+
+| Path | What |
+| --- | --- |
+| `bundled.json` | The plugins a release bundles: `{"path": "<dir>", "class": "default" \| "migration"}`. Empty for now |
+| `<name>/` | One plugin: `Cargo.toml` (a member of the `plugins/runtime` workspace), `src/`, `manifest.json` (id `deckpilot.<name>`), `LICENSE` and its icons in `assets/` |
+| `build.sh` | Builds the listed plugins to wasm (`wasm32-unknown-unknown`, `guest` profile, reproducible on one platform) and stages them with their pins |
+| `test-fixtures/` | **Test fixtures, never shipped**: `example-default` (`deckpilot.example-default`, class `default`, one action, one low-tier permission) and its own `bundled.json`, used only with `build.sh --test-fixtures` |
+
+## What the build produces
+
+```sh
+plugins/first-party/build.sh --out target/bundled-plugins            # the release set
+plugins/first-party/build.sh --out target/bundle --test-fixtures     # tests, dry runs
+```
+
+```text
+<out>/bundled/
+  pins.json                              id, version, class, size and sha256 of every file
+  deckpilot.<name>/manifest.json
+  deckpilot.<name>/plugin.wasm
+  deckpilot.<name>/LICENSE
+  deckpilot.<name>/assets/icon-128.png   the icons the manifest names, nothing else
+```
+
+Never a `.dpplugin`, never an archive of its own, never a signature: a
+bundled plugin is trusted by the **pins compiled into the agent**
+(option B of §4.4), plus the app bundle's code seal on macOS (option A).
+
+## How the pins are trusted
+
+1. `build.sh` writes `bundled/pins.json`.
+2. The agent is compiled with `DECKPILOT_BUNDLED_PINS=<out>/bundled/pins.json`:
+   `crates/deckpilot-plugin-bundled/build.rs` copies the file into the
+   build and `include_bytes!` embeds it. Without the variable (every build
+   today) nothing is pinned and nothing is seeded.
+3. `tools/release-pipeline/check-bundled-plugins.sh <out>/bundled <agent>`
+   checks the staged files against `pins.json` and `pins.json` against
+   the agent's `--print-bundled-pins`.
+4. At start-up or unlock the agent seeds the bundled plugins from the
+   application's resources (`apps/agent/src/plugins/bundled.rs`), checking
+   every file against the compiled pins, never against the `pins.json`
+   next to them, and checks the installed copy again at every load.
+
+## Packaging
+
+`deckpilot-dev package` with `DECKPILOT_RELEASE_PLUGINS=1` builds the
+plugins, the agent with the `plugins` feature and their pins, and the
+plugin host from `plugins/runtime`, then bundles with
+`apps/desktop/src-tauri/tauri.plugins.conf.json` on top of
+`tauri.release.conf.json`: the host as an external binary next to the
+agent, `bundled/` as a resource. Without the variable (the default) the
+package is exactly what it was. The published release workflow
+(`.github/workflows/release.yml`) is unchanged and packages neither the
+host nor bundled plugins until the owner enables the marketplace.

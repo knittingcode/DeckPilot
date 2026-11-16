@@ -1,0 +1,20 @@
+# expect: stages a plugin package into the application bundle
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Copied into the bundled resources before the bundler runs: the
+      # bundler step itself names no package.
+      - name: Stage the bundled plugins
+        run: |
+          mkdir -p apps/desktop/src-tauri/bundled
+          cp target/plugins/deckpilot.notifications-1.0.0.dpplugin apps/desktop/src-tauri/bundled/
+      - uses: tauri-apps/tauri-action@0123456789abcdef0123456789abcdef01234567
+        with:
+          projectPath: apps/desktop
+          args: --config src-tauri/tauri.release.conf.json --config src-tauri/tauri.plugins.conf.json

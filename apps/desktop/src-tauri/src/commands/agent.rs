@@ -38,8 +38,9 @@ pub async fn stop_agent(state: State<'_, AppState>) -> CommandResult<()> {
     Ok(())
 }
 
-/// Stops the running agent (of any version) and starts the one shipped with
-/// this application, e.g. after an update or when versions differ.
+/// Stops the running agent (of any version or channel) and starts the one
+/// shipped with this application, e.g. after an update, when versions
+/// differ, or when the agent came from another installation (rule R6).
 ///
 /// Workflows running in the agent would be interrupted, so the restart is
 /// refused while any run unless `interrupt_running` confirms it; the
@@ -58,11 +59,11 @@ pub async fn restart_agent(
         )));
     }
     agent::stop_any_version(&state.paths, Request::Shutdown).await?;
-    if !agent::wait_until_stopped(&state.paths, Duration::from_secs(10)).await {
-        return Err(CommandError::Invalid(
-            "the running agent did not stop".into(),
-        ));
-    }
+    // Started only once the old agent has released its instance lock, so
+    // the two never run at the same time.
+    agent::wait_until_released(&state.paths, Duration::from_secs(10))
+        .await
+        .map_err(CommandError::Invalid)?;
     agent::start_agent().map_err(CommandError::Invalid)?;
     Ok(agent::wait_until_running(&state.paths, Duration::from_secs(5)).await)
 }

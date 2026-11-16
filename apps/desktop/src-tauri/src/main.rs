@@ -148,7 +148,9 @@ fn main() {
                 {
                     eprintln!("{error}");
                 }
-                agent::spawn_bridge(handle, paths);
+                agent::spawn_bridge(handle.clone(), paths);
+                // Finishes or reports an update the previous run recorded.
+                updates::recover(&handle, !managed).await;
             });
             updates::spawn_background(app.handle().clone());
             Ok(())

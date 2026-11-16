@@ -11,6 +11,9 @@
 //!   release checks read from built binaries;
 //! * the debug binary contains the name and honours the override, which
 //!   shows that the search above would have found it;
+//! * the same holds for the agent executable override
+//!   (`DECKPILOT_AGENT_BIN`, audit finding G6): absent from the release
+//!   binary and ignored by it, honoured by the debug binary;
 //! * invalid compile-time values fail the build.
 //!
 //! The crate has no dependencies, so the builds take seconds.
@@ -22,6 +25,11 @@ use std::process::{Command, Output};
 /// the name is assembled; the checked binaries are the example's.
 fn override_variable() -> String {
     ["DECKPILOT_DISTRIBUTION", "_OVERRIDE"].concat()
+}
+
+/// The agent executable override, spelled in two parts for the same reason.
+fn agent_variable() -> String {
+    ["DECKPILOT_AGENT", "_BIN"].concat()
 }
 
 const BUILD_VARIABLES: [&str; 2] = ["DECKPILOT_DISTRIBUTION_CHANNEL", "DECKPILOT_PACKAGE_FORMAT"];
@@ -48,7 +56,8 @@ fn cargo_build(test: &str, release: bool, env: &[(&str, &str)]) -> Output {
         .arg(target_dir(test))
         .env("CARGO_INCREMENTAL", "0")
         .env_remove("CARGO_BUILD_TARGET")
-        .env_remove(override_variable());
+        .env_remove(override_variable())
+        .env_remove(agent_variable());
     if release {
         command.arg("--release");
     }
@@ -83,10 +92,21 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 
 /// The record the binary prints, with the override set to `override_value`.
 fn record(binary: &Path, override_value: Option<&str>) -> String {
+    run(binary, &[(override_variable(), override_value)])
+}
+
+/// The record the binary prints, with each variable set to its value or
+/// removed.
+fn run(binary: &Path, variables: &[(String, Option<&str>)]) -> String {
     let mut command = Command::new(binary);
-    command.env_remove(override_variable());
-    if let Some(value) = override_value {
-        command.env(override_variable(), value);
+    command
+        .env_remove(override_variable())
+        .env_remove(agent_variable());
+    for (name, value) in variables {
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
     }
     let output = command.output().expect("the example runs");
     assert!(output.status.success(), "{output:?}");
@@ -152,6 +172,45 @@ fn the_release_build_has_no_override_and_the_debug_build_does() {
     assert_eq!(field(&apt, "update_provider"), "external_package_manager");
     assert_eq!(field(&apt, "package_format"), "deb");
     assert_eq!(field(&apt, "development_override"), "true");
+}
+
+#[test]
+fn the_release_build_ignores_the_agent_executable_override() {
+    let name = agent_variable();
+    let impostor = if cfg!(windows) {
+        r"C:\Windows\System32\cmd.exe"
+    } else {
+        "/bin/sh"
+    };
+
+    let release = build(true);
+    let bytes = std::fs::read(&release).expect("release binary");
+    assert!(
+        !contains(&bytes, name.as_bytes()),
+        "{name} occurs in the release binary {}",
+        release.display()
+    );
+    let plain = run(&release, &[]);
+    assert_eq!(field(&plain, "agent_executable_override"), "");
+    // Setting it changes nothing: a release build starts only the agent in
+    // its own bundle.
+    assert_eq!(run(&release, &[(name.clone(), Some(impostor))]), plain);
+
+    // The positive control: the debug build contains the name and honours
+    // it (the desktop end-to-end tests rely on that).
+    let debug = build(false);
+    let bytes = std::fs::read(&debug).expect("debug binary");
+    assert!(
+        contains(&bytes, name.as_bytes()),
+        "{name} should occur in the debug binary {}",
+        debug.display()
+    );
+    assert_eq!(field(&run(&debug, &[]), "agent_executable_override"), "");
+    let honoured = run(&debug, &[(name.clone(), Some(impostor))]);
+    assert_eq!(field(&honoured, "agent_executable_override"), impostor);
+    // An empty value is no override.
+    let empty = run(&debug, &[(name, Some(""))]);
+    assert_eq!(field(&empty, "agent_executable_override"), "");
 }
 
 #[test]

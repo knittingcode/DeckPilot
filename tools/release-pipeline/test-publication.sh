@@ -343,6 +343,17 @@ for name in deckpilot-plugin-host deckpilot-plugin-host-x86_64-unknown-linux-gnu
   with_asset "$name"
   expect_failure "an asset outside the application allowlist ($name)" "not application assets: $name" "$here/check-assets.sh" "$work/a.txt" --final
 done
+# Bundled first-party plugins are app components inside the installers
+# (docs/marketplace/module-migration.md section 4.5): never assets, neither
+# as packages nor as their unpacked files or pins.
+for name in deckpilot.notifications-1.0.0.dpplugin deckpilot.example-default-0.1.0.dpplugin; do
+  with_asset "$name"
+  expect_failure "a bundled plugin as a package asset ($name)" "$name, a plugin package" "$here/check-assets.sh" "$work/a.txt" --final
+done
+for name in pins.json bundled.tar.gz bundled-plugins.zip deckpilot.example-default plugin.wasm manifest.json; do
+  with_asset "$name"
+  expect_failure "a bundled plugin file as an asset ($name)" "not application assets: $name" "$here/check-assets.sh" "$work/a.txt" --final
+done
 grep -v -x -E 'release-meta.json|SHA256SUMS' "$work/assets.txt" > "$work/a.txt"
 run assets.log "$here/check-assets.sh" "$work/a.txt" && ok "before --final, a release without release-meta.json and SHA256SUMS is still complete" \
   || bad "not final: $(cat "$work/assets.log")"
@@ -571,6 +582,16 @@ done
 resum
 run publish.log publish v0.6.0-rc.1 && ok "installers that bundle the plugin host are published" \
   || bad "plugin host inside the installers: $(cat "$work/publish.log")"
+# So are bundled first-party plugins, with their pins.
+fresh
+id=$(draft v0.6.0-rc.1)
+for name in DeckPilot_0.6.0-rc.1_amd64.deb DeckPilot_0.6.0-rc.1_amd64.AppImage DeckPilot_0.6.0-rc.1_x64-setup.exe; do
+  printf 'installer with /usr/lib/DeckPilot/bundled/pins.json and bundled/deckpilot.example-default/plugin.wasm\n' \
+    > "$STUB_DIR/assets/$id/$name"
+done
+resum
+run publish.log publish v0.6.0-rc.1 && ok "installers that bundle first-party plugins are published" \
+  || bad "bundled plugins inside the installers: $(cat "$work/publish.log")"
 fresh
 id=$(draft v0.6.0-rc.1)
 change_manifest '.version = "0.6.0-rc.0"'

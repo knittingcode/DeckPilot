@@ -1021,6 +1021,7 @@ dependencies = [
  "deckpilot-agent",
  "deckpilot-core",
  "deckpilot-device",
+ "deckpilot-distribution",
  "deckpilot-hid",
  "deckpilot-ipc",
  "deckpilot-keystore",
@@ -1028,6 +1029,7 @@ dependencies = [
  "deckpilot-net",
  "deckpilot-plugin-abi",
  "deckpilot-plugin-broker",
+ "deckpilot-plugin-bundled",
  "deckpilot-plugin-manifest",
  "deckpilot-plugin-package",
  "deckpilot-plugin-registry",
@@ -1049,6 +1051,7 @@ dependencies = [
  "sha2 0.10.9",
  "tao",
  "tar",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -1160,6 +1163,7 @@ version = "0.6.0-alpha.3"
 dependencies = [
  "deckpilot-core",
  "deckpilot-device",
+ "deckpilot-distribution",
  "dirs 7.0.0",
  "getrandom 0.3.4",
  "interprocess",
@@ -1347,6 +1351,21 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "deckpilot-plugin-bundled"
+version = "0.6.0-alpha.3"
+dependencies = [
+ "core-foundation 0.10.1",
+ "deckpilot-plugin-manifest",
+ "deckpilot-plugin-package",
+ "security-framework",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "externalBin": ["binaries/deckpilot-agent", "binaries/deckpilot-plugin-host"],
+    "resources": {
+      "../../../target/bundled-plugins/bundled/": "bundled/"
+    }
+  }
+}

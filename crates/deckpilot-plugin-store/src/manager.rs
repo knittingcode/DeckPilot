@@ -228,6 +228,9 @@ impl PluginManager {
         store::check_source(&id, source)?;
         let declared = GrantSet::from_manifest(package.manifest());
         check_consent(&id, &declared, consent)?;
+        if *source == InstallSource::Bundled {
+            check_bundled_consent(&id, &declared, consent)?;
+        }
         let pending = pending_version(package)?;
         let payload = Payload::Install {
             package: pending.clone(),
@@ -453,7 +456,11 @@ impl PluginManager {
         })
     }
 
-    pub(crate) fn mark_broken(&mut self, id: &PluginId, problem: &str) -> Result<()> {
+    /// Marks the plugin `Broken` with `problem` (audited) when its state
+    /// allows it: for integrity checks the store cannot make itself, such
+    /// as the agent's check of a bundled plugin against the digests
+    /// compiled into it.
+    pub fn mark_broken(&mut self, id: &PluginId, problem: &str) -> Result<()> {
         self.tx(|tx, ctx| {
             let Some(plugin) = store::load_plugin(tx, id)? else {
                 return Ok(());
@@ -1168,6 +1175,25 @@ fn check_consent(id: &PluginId, declared: &GrantSet, consent: &Consent) -> Resul
     }
 }
 
+/// Seeding a bundled plugin grants low-tier permissions only (recorded as
+/// `derived`); a medium- or high-tier one waits for the user's consent.
+fn check_bundled_consent(id: &PluginId, declared: &GrantSet, consent: &Consent) -> Result<()> {
+    for key in &consent.keys {
+        let tier = declared
+            .get(key)
+            .map(crate::grants::GrantScope::tier)
+            .ok_or_else(|| unknown(id, key))?;
+        if tier != crate::grants::Tier::Low {
+            return Err(StoreError::BundledGrant {
+                id: id.clone(),
+                key: key.clone(),
+                tier,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Refuses a second operation on a plugin with an unfinished one.
 pub(crate) fn ensure_idle(conn: &Connection, id: &PluginId) -> Result<()> {
     match store::journal_for(conn, id)? {
@@ -1208,6 +1234,12 @@ pub(crate) fn commit_install(
     store::insert_version(tx, id, pending, VersionRole::Active, ctx.now)?;
     let declared = GrantSet::from_manifest(&pending.manifest()?);
     let version = pending.version.to_string();
+    // Seeding decides for a bundled plugin, not an install dialog.
+    let grant_source = if plugin.source == InstallSource::Bundled {
+        GrantSource::Derived
+    } else {
+        GrantSource::Install
+    };
     for key in &consent.keys {
         let scope = declared.get(key).cloned().ok_or_else(|| unknown(id, key))?;
         store::upsert_grant(
@@ -1217,7 +1249,7 @@ pub(crate) fn commit_install(
                 key: key.clone(),
                 scope,
                 status: GrantStatus::Granted,
-                source: GrantSource::Install,
+                source: grant_source,
                 decided_by: consent.decided_by.clone(),
                 decided_at: ctx.now,
                 granted_for_version: version.clone(),
@@ -1427,10 +1459,10 @@ fn apply_grant_changes(
 #[cfg(all(test, feature = "sqlcipher"))]
 mod tests {
     //! First-party plugins, tombstones and the module migration journal.
-    //! The manifest validator still reserves the `deckpilot` publisher, so
-    //! no package of a first-party id can be built yet; these tests set up
-    //! the plugin rows directly, through the store helpers the lifecycle
-    //! uses.
+    //! These tests set up the plugin rows directly, through the store
+    //! helpers the lifecycle uses. (A first-party package is only ever a
+    //! bundled one, `deckpilot_plugin_package::verify_bundled_files`; the
+    //! lifecycle tests in `tests/lifecycle.rs` install one.)
 
     use std::sync::atomic::{AtomicI64, Ordering};
 

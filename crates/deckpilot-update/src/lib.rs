@@ -14,11 +14,13 @@
 //! * [`policy`]: update modes, check scheduling and when installing is
 //!   safe;
 //! * [`compatibility`]: whether a running agent fits the application;
+//! * [`intent`]: the update intent and the start-up recovery decision;
 //! * [`provider`]: which update provider a build's distribution channel
 //!   gets, and the cross-channel rules (not used by the apps yet).
 
 pub mod channel;
 pub mod compatibility;
+pub mod intent;
 pub mod manifest;
 pub mod policy;
 pub mod provider;

@@ -16,6 +16,11 @@ Fails unless, in every workflow of the directory (default
     upload, release action, Pages upload or deployment, release asset API
     call or workflow artifact whose files name *.dpplugin, site/v1,
     roots.json, timestamp.json, index or key set documents or *.minisig;
+  * no step stages a plugin package into the application bundle: a step
+    that names a *.dpplugin and the bundle's staging (src-tauri/, a
+    bundled/ resources directory); bundled first-party plugins are
+    unpacked files trusted by the digests compiled into the agent
+    (docs/marketplace/module-migration.md section 4.5), never packages;
   * no step runs a registry publishing or signing command (deckpilot-registry
     keys, keyset, package, add-version, build-index, sign-index, timestamp,
     yank, revoke, ...; verify-site and help only read), signs a plugin
@@ -30,8 +35,11 @@ Fails unless, in every workflow of the directory (default
 Running the registry crate's tests (cargo test -p deckpilot-plugin-registry
 ..., throwaway keys made inside the tests) is not a registry command and
 stays allowed. So does a plugin host executable staged into the
-application bundle (for example as a Tauri externalBin): it is a component
-of the application installers, not an independently installable package.
+application bundle (for example as a Tauri externalBin), and so do the
+unpacked first-party plugins under bundled/ with their pins.json (a Tauri
+resource; tools/release-pipeline/check-bundled-plugins.sh checks them):
+they are components of the application installers, not independently
+installable packages.
 """
 
 import pathlib
@@ -74,6 +82,9 @@ REGISTRY_COMMAND = re.compile(
     r"|lift-revocation|build-index|sign-index|timestamp)\b"
     r"|\bcargo\s+run\b[^\n]*deckpilot-plugin-registry[^\n]*\s--\s+(?!verify-site\b|help\b)\S"
 )
+# A plugin package copied, moved or mapped into the application bundle.
+PACKAGE_FILE = re.compile(r"\.dpplugin\b")
+BUNDLE_STAGING = re.compile(r"src-tauri/|(^|[\s\"'/=])bundled/")
 PLUGIN_SIGNING = re.compile(r"\b(minisign|rsign|signer\s+sign)\b[^\n]*\.dpplugin\b")
 REGISTRY_SECRET = re.compile(r"secrets\.REGISTRY_")
 REGISTRY_ENVIRONMENT = re.compile(r"^registry-")
@@ -124,6 +135,13 @@ def check(path, workflow):
                 problems.append(
                     f"{label} publishes plugin packages or registry metadata: they are distributed by "
                     "knittingcode/deckpilot-plugins, never with an application release"
+                )
+            if PACKAGE_FILE.search(text) and BUNDLE_STAGING.search(text):
+                registry_step = True
+                problems.append(
+                    f"{label} stages a plugin package into the application bundle: bundled first-party "
+                    "plugins are unpacked files under bundled/ trusted by the pins compiled into the agent, "
+                    "never packages (docs/marketplace/module-migration.md section 4.5)"
                 )
             if REGISTRY_COMMAND.search(text):
                 registry_step = True

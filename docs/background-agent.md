@@ -174,6 +174,17 @@ set and the agent lies inside `$APPDIR`):
 - an enabled entry is rewritten when the agent starts, which repairs
   entries that earlier versions recorded with a path inside the mount.
 
+The mechanism depends on the build's distribution channel, which is
+compiled in (see [distribution/README.md](distribution/README.md)). GitHub,
+APT, Homebrew and WinGet builds are ordinary installations and use the
+entries above. Store builds must not write them: the Mac App Store sandbox
+does not allow a LaunchAgent file (a sandboxed app registers a login item
+with `SMAppService`), an MSIX package declares a `windows.startupTask`
+instead of writing the Run key, and a Flatpak asks the Background portal.
+Those are not implemented yet, so a Mac App Store, Microsoft Store or
+Flathub build reports start at login as off, refuses to turn it on with a
+message saying so, and writes nothing (`autostart::Strategy`).
+
 ## Storage ownership
 
 The agent and the configuration app open the same SQLite database (WAL mode
@@ -345,8 +356,11 @@ results are logged by name and status only; result messages are not logged
 because they may contain machine-specific paths.
 
 The configuration app starts `deckpilot-agent` from the same directory as its
-own executable when no agent is running (`DECKPILOT_AGENT_BIN` overrides the
-path). In development, build both first:
+own executable when no agent is running. Debug builds of the app accept
+`DECKPILOT_AGENT_BIN` naming another agent executable (development, the
+desktop end-to-end tests); release builds do not read the variable at all,
+so nothing in the environment can make them start another program as the
+agent. In development, build both first:
 
 ```sh
 cargo build -p deckpilot-agent

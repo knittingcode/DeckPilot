@@ -63,6 +63,11 @@ jobs:
       # metadata (docs/marketplace/distribution.md): fast, so first.
       - name: Release separation (workflow check and its fixtures)
         run: tools/release-pipeline/test-release-separation.sh "$RUNNER_TEMP/release-separation"
+      # Bundled first-party plugins are app components inside the
+      # installers, trusted by the pins compiled into the agent: the check
+      # of the staged bundle and its fixtures.
+      - name: Bundled plugins (the bundle check and its fixtures)
+        run: tools/release-pipeline/test-bundled-plugins.sh "$RUNNER_TEMP/bundled-plugins"
       - name: Two-stage publication (stubbed GitHub)
         run: tools/release-pipeline/test-publication.sh "$RUNNER_TEMP/release-publication"
       - name: Release commands of deckpilot-dev and the channel rules

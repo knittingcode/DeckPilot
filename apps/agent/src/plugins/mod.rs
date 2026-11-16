@@ -19,6 +19,8 @@ use deckpilot_ipc::{ErrorCode, IpcError, Request, Response};
 use tokio::sync::oneshot;
 
 #[cfg(feature = "plugins")]
+mod bundled;
+#[cfg(feature = "plugins")]
 mod convert;
 #[cfg(feature = "plugins")]
 mod data;
@@ -46,8 +48,13 @@ pub const BUILT: bool = cfg!(feature = "plugins");
 
 /// Environment variable that enables plugins like `--enable-plugins` (`1`).
 pub const ENABLE_ENV: &str = "DECKPILOT_ENABLE_PLUGINS";
-/// Environment variable naming the plugin host executable.
+/// Environment variable naming the plugin host executable (development;
+/// an installed application finds the host next to the agent).
 pub const HOST_ENV: &str = "DECKPILOT_PLUGIN_HOST";
+/// Environment variable naming a `bundled` directory of first-party
+/// plugins (development and test builds only; an installed application
+/// uses the one in its resources).
+pub const BUNDLED_ENV: &str = "DECKPILOT_BUNDLED_PLUGINS";
 /// Environment variable naming the local registry directory.
 pub const REGISTRY_ENV: &str = "DECKPILOT_PLUGIN_REGISTRY";
 /// Environment variable naming the registry's root keys (`roots.json`).
@@ -62,9 +69,13 @@ pub const REGISTRY_RELEASES_URL_ENV: &str = "DECKPILOT_PLUGIN_REGISTRY_RELEASES_
 pub struct PluginSettings {
     /// Plugin requests are answered (`--enable-plugins`). Off by default.
     pub enabled: bool,
-    /// The `deckpilot-plugin-host` executable. Default: next to the agent's
-    /// own executable.
+    /// The `deckpilot-plugin-host` executable (development). Default: next
+    /// to the agent's own executable, where the installers put it.
     pub host: Option<PathBuf>,
+    /// The `bundled` directory of first-party plugins (`--bundled-plugins`,
+    /// honoured by debug and test builds only). Default: the application's
+    /// resources (`deckpilot_plugin_bundled::locate`).
+    pub bundled: Option<PathBuf>,
     /// A local registry: a directory with the static site in `site/v1/`
     /// and the release assets in `releases/` (the layout the publishing
     /// tool writes).
@@ -98,11 +109,27 @@ impl PluginSettings {
         Self {
             enabled: std::env::var(ENABLE_ENV).is_ok_and(|v| v == "1"),
             host: path(HOST_ENV),
+            bundled: path(BUNDLED_ENV),
             registry: path(REGISTRY_ENV),
             registry_url: text(REGISTRY_URL_ENV),
             registry_releases_url: text(REGISTRY_RELEASES_URL_ENV),
             registry_roots: path(REGISTRY_ROOTS_ENV),
         }
+    }
+}
+
+/// The pins of the bundled first-party plugins compiled into this agent
+/// (`deckpilot-agent --print-bundled-pins`, for the release check
+/// `tools/release-pipeline/check-bundled-plugins.sh`). A build without the
+/// `plugins` feature bundles nothing.
+pub fn embedded_pins() -> &'static [u8] {
+    #[cfg(feature = "plugins")]
+    {
+        deckpilot_plugin_bundled::EMBEDDED_PINS
+    }
+    #[cfg(not(feature = "plugins"))]
+    {
+        b"{\"pinsVersion\":1,\"plugins\":[]}\n"
     }
 }
 

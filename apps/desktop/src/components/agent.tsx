@@ -67,6 +67,21 @@ const MISSING_FEATURES: Partial<Record<AgentCapability, string>> = {
   notifications: "workflow notifications",
 }
 
+/** How a distribution channel is named to the user. */
+const CHANNEL_NAMES: Record<string, string> = {
+  github: "GitHub Releases",
+  homebrew: "Homebrew",
+  winget: "WinGet",
+  apt: "the APT repository",
+  flathub: "Flathub",
+  mac_app_store: "the Mac App Store",
+  microsoft_store: "the Microsoft Store",
+}
+
+function channelName(channel: string): string {
+  return CHANNEL_NAMES[channel] ?? channel
+}
+
 /** Shown when the running agent is not the one shipped with this app. */
 export function AgentCompatibilityNotice() {
   const { agent, setAgent } = useAppContext()
@@ -93,20 +108,33 @@ export function AgentCompatibilityNotice() {
           .filter(([capability]) => !agent.capabilities?.includes(capability as AgentCapability))
           .map(([, label]) => label)
   const required = compatibility.type === "updateRequired"
+  const otherInstallation = compatibility.type === "otherDistribution"
   return (
-    <Alert variant={required ? "destructive" : "default"}>
+    <Alert variant={required || otherInstallation ? "destructive" : "default"}>
       <TriangleAlert />
       <AlertTitle>
         {required
           ? "The running agent is too old for this app"
-          : "The running agent does not match this app"}
+          : otherInstallation
+            ? "The running agent belongs to another installation"
+            : "The running agent does not match this app"}
       </AlertTitle>
       <AlertDescription>
         <p>
-          Agent {compatibility.agent}, app {compatibility.app}.{" "}
-          {required
-            ? "Nothing can be configured until it is replaced by the agent of this app."
-            : "Restart the agent so both run the same version."}
+          {otherInstallation ? (
+            <>
+              The agent was installed from {channelName(compatibility.agent)}, this app from{" "}
+              {channelName(compatibility.app)}. DeckPilot works only with the agent of its own
+              installation; restarting replaces it with this app&apos;s agent.
+            </>
+          ) : (
+            <>
+              Agent {compatibility.agent}, app {compatibility.app}.{" "}
+              {required
+                ? "Nothing can be configured until it is replaced by the agent of this app."
+                : "Restart the agent so both run the same version."}
+            </>
+          )}
         </p>
         {missing.length > 0 && <p>Until then these are unavailable: {missing.join(", ")}.</p>}
         {running > 0 && (

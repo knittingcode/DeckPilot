@@ -121,6 +121,50 @@ pub fn package(version: &str, permissions: &[Value]) -> VerifiedPackage {
     package_for(ID, version, permissions)
 }
 
+/// A first-party plugin as the application bundle ships it (unpacked
+/// files, verified against pins of exactly these files).
+pub fn bundled_package(id: &str, version: &str, permissions: &[Value]) -> VerifiedPackage {
+    let files: deckpilot_plugin_package::Files = [
+        ("manifest.json", manifest_json(id, version, permissions)),
+        (
+            "plugin.wasm",
+            deckpilot_plugin_package::wasm::minimal_abi_module_with_note(&format!(
+                "{id} {version}"
+            )),
+        ),
+        ("LICENSE", b"MIT License\n".to_vec()),
+        ("README.md", b"# GitHub PR Count\n".to_vec()),
+        ("assets/icon-128.png", noise(300, 1)),
+        ("assets/icon-32.png", noise(100, 2)),
+        ("assets/keys/pr.png", noise(100, 3)),
+    ]
+    .into_iter()
+    .map(|(path, bytes)| (path.to_owned(), bytes))
+    .collect();
+    let expected = deckpilot_plugin_package::ExpectedFiles {
+        id: PluginId::parse(id).unwrap(),
+        version: Version::parse(version).unwrap(),
+        files: files
+            .iter()
+            .map(|(path, bytes)| {
+                (
+                    path.clone(),
+                    deckpilot_plugin_manifest::PackageDigest {
+                        sha256: deckpilot_plugin_package::sha256(bytes),
+                        size: bytes.len() as u64,
+                    },
+                )
+            })
+            .collect(),
+    };
+    deckpilot_plugin_package::verify_bundled_files(
+        files,
+        &expected,
+        &deckpilot_plugin_package::Limits::default(),
+    )
+    .unwrap()
+}
+
 pub fn grants_of(package: &VerifiedPackage) -> GrantSet {
     GrantSet::from_manifest(package.manifest())
 }

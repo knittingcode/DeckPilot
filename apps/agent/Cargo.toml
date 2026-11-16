@@ -38,6 +38,7 @@ test-hooks = []
 plugins = [
     "dep:base64",
     "dep:deckpilot-plugin-abi",
+    "dep:deckpilot-plugin-bundled",
     "dep:deckpilot-plugin-broker",
     "dep:deckpilot-plugin-manifest",
     "dep:deckpilot-plugin-package",
@@ -60,6 +61,9 @@ auto-launch.workspace = true
 chrono.workspace = true
 deckpilot-core.workspace = true
 deckpilot-device = { workspace = true, features = ["mock"] }
+# The build's distribution record: reported in `getStatus` and selecting
+# the autostart strategy.
+deckpilot-distribution.workspace = true
 deckpilot-hid.workspace = true
 deckpilot-ipc.workspace = true
 deckpilot-modules.workspace = true
@@ -82,6 +86,9 @@ tray-icon.workspace = true
 base64 = { workspace = true, optional = true }
 deckpilot-plugin-abi = { workspace = true, optional = true }
 deckpilot-plugin-broker = { workspace = true, optional = true }
+# The bundled first-party plugins: pins compiled in (DECKPILOT_BUNDLED_PINS
+# at build time), verification, the macOS code seal.
+deckpilot-plugin-bundled = { workspace = true, optional = true }
 deckpilot-plugin-manifest = { workspace = true, optional = true }
 deckpilot-plugin-package = { workspace = true, optional = true }
 deckpilot-plugin-registry = { workspace = true, optional = true }
@@ -108,6 +115,7 @@ deckpilot-agent = { path = ".", features = ["test-hooks"] }
 # plugins_e2e: a local signed registry made with the publishing tool and
 # throwaway keys, packages, and reading plugins.db from outside.
 base64.workspace = true
+deckpilot-plugin-bundled.workspace = true
 deckpilot-plugin-manifest.workspace = true
 deckpilot-plugin-package.workspace = true
 deckpilot-plugin-registry = { workspace = true, features = ["publish"] }
@@ -115,6 +123,7 @@ deckpilot-plugin-store.workspace = true
 flate2.workspace = true
 sha2.workspace = true
 tar.workspace = true
+tempfile.workspace = true
 deckpilot-render.workspace = true
 zeroize.workspace = true
 deckpilot-modules.workspace = true
@@ -132,6 +141,13 @@ workspace = true
 # sample plugin (built from plugins/runtime by the test).
 [[test]]
 name = "plugins_e2e"
+required-features = ["plugins"]
+
+# Bundled first-party plugins: the test fixture built, staged as an
+# installed application ships it, seeded offline and run through a real
+# agent process and the real plugin host.
+[[test]]
+name = "plugins_bundled"
 required-features = ["plugins"]
 
 # The registry over HTTPS (a local TLS server, a throwaway CA) through a
