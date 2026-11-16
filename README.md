@@ -22,10 +22,10 @@ Apache-2.0 &nbsp;·&nbsp; macOS · Windows · Linux &nbsp;·&nbsp; Pre-release
 </div>
 
 > [!NOTE]
-> DeckPilot is in **early development**. No release has been published yet; the `v0.6.0-alpha.2`
-> draft is verified, and the first public pre-release will be a later 0.6.0-alpha tag. Only the
-> Elgato **Stream Deck MK.2** is supported, and it has been tested on real hardware on **macOS** so
-> far. See [Supported devices](#supported-devices) and [Known limitations](#known-limitations).
+> DeckPilot is in **early development**. The first public pre-release is
+> [`v0.6.0-alpha.3`](https://github.com/knittingcode/deckpilot/releases/tag/v0.6.0-alpha.3); there
+> is no stable release yet. Only the Elgato **Stream Deck MK.2** is supported, and it has been
+> tested on real hardware on **macOS** so far. See [Supported devices](#supported-devices) and [Known limitations](#known-limitations).
 
 ## What is DeckPilot?
 
@@ -130,9 +130,10 @@ a password instead. Encrypted exports are the backup and move a configuration to
 
 ## Download
 
-No release has been published yet. The `v0.6.0-alpha.2` draft is verified but not published; the
-first public pre-release will be a later **0.6.0-alpha** tag and will appear on the
-[Releases page](https://github.com/knittingcode/deckpilot/releases) with these installers:
+The first public pre-release is
+[`v0.6.0-alpha.3`](https://github.com/knittingcode/deckpilot/releases/tag/v0.6.0-alpha.3); there is
+no stable release yet. Each release on the
+[Releases page](https://github.com/knittingcode/deckpilot/releases) has these installers:
 
 | Platform | Installer | Notes |
 | --- | --- | --- |
@@ -233,8 +234,8 @@ real configuration. `pnpm dev` runs the same session in the foreground. All comm
 ## Known limitations
 
 - Only the Stream Deck MK.2 is supported, and it has been tried on hardware on macOS only.
-- No release has been published; automatic installation of updates stays off by default until an
-  update between two real releases has been tested.
+- Only one pre-release has been published; automatic installation of updates stays off by default
+  until an update between two real releases has been tested.
 - Windows installers are not code-signed yet.
 - Device discovery rescans every two seconds instead of using hotplug notifications.
 - On Linux desktops without AppIndicator support the tray icon is not shown (the agent keeps
