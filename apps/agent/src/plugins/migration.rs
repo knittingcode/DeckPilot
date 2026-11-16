@@ -67,6 +67,13 @@
 //! (decided by `user:migration:<module>`); a grant made for other reasons
 //! does not import anything.
 //!
+//! The app asks with `decideModuleMigration`, item by item ([`decide`],
+//! [`infos`] lists the items). A declined item is a refusal decided by
+//! `user:migration:<module>`: the module stays on its built-in
+//! (`not_eligible`, at every start) until the user presses Retry, which
+//! forgets those refusals and asks again. Nothing is ever granted without
+//! an approval.
+//!
 //! # After the cut-over
 //!
 //! At every start a cut-over module is reconciled: if the built-in's
@@ -86,6 +93,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use deckpilot_core::alias::{LegacyRoute, LegacyRouting};
 use deckpilot_core::{Capability, ModuleId, ModuleRegistry, ModuleStates, ParameterValue};
+use deckpilot_ipc::plugins as ipc;
 use deckpilot_plugin_bundled::{BundleClass, Pin};
 use deckpilot_plugin_manifest::{Manifest, PermissionKind, PluginId};
 use deckpilot_plugin_store::{
@@ -154,16 +162,59 @@ pub(crate) fn configured(states: &ModuleStates) -> (ModuleRegistry, Vec<String>)
     deckpilot_modules::configured(states)
 }
 
-/// A decision of the user's (P7 makes them requests; agent tests take
-/// them from `DECKPILOT_TEST_MIGRATION_DECISIONS`).
+/// A decision of the user's: the requests `decideModuleMigration` and
+/// `retryModuleMigration` of the app's migration notice and consent
+/// dialog. Agent tests can also give `Consent` and `Retry` through
+/// `DECKPILOT_TEST_MIGRATION_DECISIONS` (feature `test-hooks`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(not(any(test, feature = "test-hooks")), allow(dead_code))]
 pub(crate) enum Decision {
-    /// The one-time consent dialog: grant what is not derived and import
-    /// the stored credentials.
+    /// Approves everything the migration waits for (grants what is not
+    /// derived and imports the stored credentials). Test hooks only.
+    #[cfg_attr(not(any(test, feature = "test-hooks")), allow(dead_code))]
     Consent(String),
-    /// Retry in Settings › Plugins: a failed migration starts again.
+    /// The consent dialog, item by item: grant keys the user approves and
+    /// declines. Every item approved: the migration goes on; any item
+    /// declined: the built-in stays until Retry.
+    Decide {
+        module: String,
+        approve: BTreeSet<GrantKey>,
+        decline: BTreeSet<GrantKey>,
+    },
+    /// Retry in the migration notice: a failed migration starts again, and
+    /// one the user declined asks again.
     Retry(String),
+}
+
+impl Decision {
+    pub fn module(&self) -> &str {
+        match self {
+            Self::Consent(module) | Self::Retry(module) | Self::Decide { module, .. } => module,
+        }
+    }
+}
+
+/// Why a decision was not applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// No migration of that module is known here.
+    Unknown(String),
+    /// The migration is not in a phase the decision applies to.
+    InvalidState(String),
+    /// An item the migration does not wait for.
+    UnknownItem(String),
+    /// The plugin store refused.
+    Failed(String),
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown(why)
+            | Self::InvalidState(why)
+            | Self::UnknownItem(why)
+            | Self::Failed(why) => f.write_str(why),
+        }
+    }
 }
 
 /// `migration:<module>`: who decided the derived grants.
@@ -508,6 +559,19 @@ impl Engine<'_> {
         self.advance(m, MigrationPhase::Installed, None, None)?;
         let digest = self.copy_settings(m)?;
         self.advance(m, MigrationPhase::SettingsCopied, None, digest)?;
+        // The user declined in the consent dialog: the built-in stays, at
+        // every start, until the user asks again (Retry).
+        let declined = self.declined(m)?;
+        if !declined.is_empty() {
+            return Err(Stop::NotEligible(format!(
+                "you declined {}; the built-in stays until you ask again",
+                declined
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
         let waiting = self.consent_needed(m)?;
         if !waiting.is_empty() {
             return self.advance(
@@ -835,26 +899,110 @@ impl Engine<'_> {
         self.record(m, MigrationPhase::CutOver, Some(note), Some(now))
     }
 
-    /// The user's consent (§5.5): grants what is not derived, decided by
-    /// `user:migration:<module>`, which also allows the imports.
-    fn consent(&mut self, m: &LegacyModule) -> Result<(), String> {
+    /// The keys the user declined in the migration's consent dialog (revoked
+    /// by `user:migration:<module>`) among those the migration needs.
+    fn declined(&self, m: &LegacyModule) -> Step<BTreeSet<GrantKey>> {
+        let consented = consented_by(&m.module);
+        let stored = self.manager.store().grants(&m.plugin).map_err(failed)?;
+        let needed = self.consent_keys(m)?;
+        Ok(stored
+            .into_iter()
+            .filter(|g| {
+                g.status == GrantStatus::Revoked
+                    && g.decided_by == consented
+                    && needed.contains(&g.key)
+            })
+            .map(|g| g.key)
+            .collect())
+    }
+
+    /// The user's decisions in the consent dialog (§5.5), item by item:
+    /// approvals are grants decided by `user:migration:<module>`, which
+    /// also allow the imports; declines are refusals decided the same way,
+    /// which keep the built-in. `approve` and `decline` name only what the
+    /// migration waits for. Then the steps run on.
+    fn consent(
+        &mut self,
+        m: &LegacyModule,
+        approve: Option<&BTreeSet<GrantKey>>,
+        decline: &BTreeSet<GrantKey>,
+    ) -> Result<(), Refusal> {
         let record = self.migration(m);
         if record.as_ref().map(|r| r.phase) != Some(MigrationPhase::AwaitingConsent) {
-            return Err(format!(
+            return Err(Refusal::InvalidState(format!(
                 "the migration of {} waits for no consent",
                 m.module
-            ));
+            )));
         }
-        let keys = self.consent_keys(m).map_err(|stop| match stop {
-            Stop::Failed(why) | Stop::NotEligible(why) => why,
-        })?;
-        if !keys.is_empty() {
+        let stop = |stop: Stop| match stop {
+            Stop::Failed(why) | Stop::NotEligible(why) => Refusal::Failed(why),
+        };
+        let waiting = self.consent_keys(m).map_err(stop)?;
+        // `None`: everything that waits (the test hooks' `consent:`).
+        let approve = approve.cloned().unwrap_or_else(|| waiting.clone());
+        if let Some(key) = approve
+            .iter()
+            .chain(decline)
+            .find(|key| !waiting.contains(key))
+        {
+            return Err(Refusal::UnknownItem(format!(
+                "the migration of {} does not wait for `{key}`",
+                m.module
+            )));
+        }
+        let by = consented_by(&m.module);
+        if !approve.is_empty() {
             self.manager
-                .grant(&m.plugin, &Consent::of(keys, consented_by(&m.module)))
-                .map_err(|e| e.to_string())?;
+                .grant(&m.plugin, &Consent::of(approve.iter().cloned(), by.clone()))
+                .map_err(|e| Refusal::Failed(e.to_string()))?;
             self.touched.insert(m.plugin.clone());
         }
-        info!(module = %m.module, plugin = %m.plugin, "the user consented to the migration");
+        for key in decline {
+            self.manager
+                .revoke(&m.plugin, key, &by)
+                .map_err(|e| Refusal::Failed(e.to_string()))?;
+            self.touched.insert(m.plugin.clone());
+        }
+        info!(module = %m.module, plugin = %m.plugin, approved = approve.len(),
+            declined = decline.len(), "the user decided on the migration");
+        self.run(m, false);
+        Ok(())
+    }
+
+    /// The user's Retry: a failed migration starts again with no failed
+    /// attempts; one the user declined (or that was not eligible) is
+    /// checked again, and what the user declined is asked again.
+    fn retry(&mut self, m: &LegacyModule) -> Result<(), Refusal> {
+        let phase = self.migration(m).map(|r| r.phase);
+        if !matches!(
+            phase,
+            Some(MigrationPhase::Failed | MigrationPhase::NotEligible)
+        ) {
+            return Err(Refusal::InvalidState(format!(
+                "the migration of {} has not failed",
+                m.module
+            )));
+        }
+        if self
+            .manager
+            .store()
+            .plugin(&m.plugin)
+            .map_err(|e| Refusal::Failed(e.to_string()))?
+            .is_some()
+        {
+            let forgotten = self
+                .manager
+                .forget_declines(&m.plugin, &consented_by(&m.module))
+                .map_err(|e| Refusal::Failed(e.to_string()))?;
+            if !forgotten.is_empty() {
+                self.touched.insert(m.plugin.clone());
+            }
+        }
+        self.manager
+            .retry_migration(m.module.as_str())
+            .map_err(|e| Refusal::Failed(e.to_string()))?
+            .ok_or_else(|| Refusal::Unknown(format!("`{}` has no migration to retry", m.module)))?;
+        info!(module = %m.module, "the user retries the migration");
         self.run(m, false);
         Ok(())
     }
@@ -873,6 +1021,8 @@ pub(super) fn start(
         touched: BTreeSet::new(),
         exit_after: test_hooks::exit_after(),
     };
+    // Test hooks only (an empty list in every other build): what an agent
+    // test decided before this start, as the requests would.
     let decisions = test_hooks::decisions();
     for decision in &decisions {
         if let Decision::Retry(module) = decision {
@@ -900,37 +1050,31 @@ fn decide_with(
     engine: &mut Engine<'_>,
     snapshot: &LegacySnapshot,
     decision: &Decision,
-) -> Result<(), String> {
-    let (Decision::Consent(module) | Decision::Retry(module)) = decision;
+) -> Result<(), Refusal> {
+    let module = decision.module();
     let m = snapshot
         .modules
         .iter()
         .find(|m| m.module.as_str() == module)
-        .ok_or_else(|| format!("no module `{module}` can migrate"))?;
+        .ok_or_else(|| Refusal::Unknown(format!("no module `{module}` can migrate here")))?;
     match decision {
-        Decision::Consent(_) => engine.consent(m),
-        Decision::Retry(_) => {
-            engine
-                .manager
-                .retry_migration(module)
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| format!("`{module}` has no migration to retry"))?;
-            info!(%module, "the user retries the migration");
-            engine.run(m, false);
-            Ok(())
-        }
+        Decision::Consent(_) => engine.consent(m, None, &BTreeSet::new()),
+        Decision::Decide {
+            approve, decline, ..
+        } => engine.consent(m, Some(approve), decline),
+        Decision::Retry(_) => engine.retry(m),
     }
 }
 
-/// Applies a decision of the user's and runs that module's steps
-/// (the consent dialog and Retry of P7).
-#[cfg_attr(not(test), allow(dead_code))]
+/// Applies a decision of the user's (`decideModuleMigration`,
+/// `retryModuleMigration`) and runs that module's steps. Returns the
+/// plugins whose state or grants changed.
 pub(super) fn decide(
     manager: &mut PluginManager,
     bundle: &Bundle,
     snapshot: &LegacySnapshot,
     decision: &Decision,
-) -> Result<BTreeSet<PluginId>, String> {
+) -> Result<BTreeSet<PluginId>, Refusal> {
     let mut engine = Engine {
         manager,
         bundle,
@@ -939,6 +1083,44 @@ pub(super) fn decide(
     };
     decide_with(&mut engine, snapshot, decision)?;
     Ok(engine.touched)
+}
+
+/// The route of one journaled module (§5.2), and why it is unavailable
+/// when the user withdrew the plugin.
+fn route_of(
+    manager: &PluginManager,
+    bundle: &Bundle,
+    record: &ModuleMigration,
+) -> (LegacyRoute, Option<String>) {
+    let store = manager.store();
+    if record.phase != MigrationPhase::CutOver {
+        return (LegacyRoute::Builtin, None);
+    }
+    if let Some(tombstone) = store.tombstone(&record.plugin_id).ok().flatten() {
+        let name = store
+            .known()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|k| k.id == record.plugin_id)
+            .map(|k| k.display_name)
+            .filter(|name| !name.is_empty());
+        let who = match name {
+            Some(name) => format!("{name} ({})", record.plugin_id),
+            None => record.plugin_id.to_string(),
+        };
+        return (
+            LegacyRoute::PluginWithdrawn,
+            Some(format!("{who} was {} by you", tombstone.decision)),
+        );
+    }
+    match store.plugin(&record.plugin_id).ok().flatten() {
+        Some(plugin)
+            if plugin.source == InstallSource::Bundled && bundle.pin_of(&plugin).is_none() =>
+        {
+            (LegacyRoute::Builtin, None)
+        }
+        _ => (LegacyRoute::Plugin, None),
+    }
 }
 
 /// The routing of every module with a migration record (§5.2): `Plugin`
@@ -958,28 +1140,231 @@ pub(super) fn routing(manager: &PluginManager, bundle: &Bundle) -> LegacyRouting
         if record.phase != MigrationPhase::CutOver {
             continue;
         }
-        let route = if store.tombstone(&record.plugin_id).ok().flatten().is_some() {
-            LegacyRoute::PluginWithdrawn
-        } else {
-            match store.plugin(&record.plugin_id).ok().flatten() {
-                Some(plugin)
-                    if plugin.source == InstallSource::Bundled
-                        && bundle.pin_of(&plugin).is_none() =>
-                {
-                    LegacyRoute::Builtin
-                }
-                _ => LegacyRoute::Plugin,
-            }
-        };
+        let (route, _) = route_of(manager, bundle, &record);
         routing = routing.with(module, route);
     }
     routing
 }
 
+/// Every journaled migration as the app shows it
+/// (`listModuleMigrations`): phase, reason, attempts, route, aliases and
+/// the consent items. `snapshot` is what `deckpilot.db` said at the last
+/// module load (names, aliases, the credentials to import); without it
+/// only the journal is known. Never a value or a secret: credentials by
+/// id, settings by key.
+pub(super) fn infos(
+    manager: &PluginManager,
+    bundle: &Bundle,
+    snapshot: Option<&LegacySnapshot>,
+) -> Vec<ipc::ModuleMigrationInfo> {
+    let Ok(records) = manager.store().module_migrations() else {
+        return Vec::new();
+    };
+    records
+        .iter()
+        .map(|record| info_of(manager, bundle, snapshot, record))
+        .collect()
+}
+
+/// The migration of `module`, if it is journaled.
+pub(super) fn info(
+    manager: &PluginManager,
+    bundle: &Bundle,
+    snapshot: Option<&LegacySnapshot>,
+    module: &str,
+) -> Option<ipc::ModuleMigrationInfo> {
+    let record = manager.store().module_migration(module).ok().flatten()?;
+    Some(info_of(manager, bundle, snapshot, &record))
+}
+
+fn phase(phase: MigrationPhase) -> ipc::MigrationPhase {
+    match phase {
+        MigrationPhase::Pending => ipc::MigrationPhase::Pending,
+        MigrationPhase::NotEligible => ipc::MigrationPhase::NotEligible,
+        MigrationPhase::Installed => ipc::MigrationPhase::Installed,
+        MigrationPhase::SettingsCopied => ipc::MigrationPhase::SettingsCopied,
+        MigrationPhase::AwaitingConsent => ipc::MigrationPhase::AwaitingConsent,
+        MigrationPhase::CutOver => ipc::MigrationPhase::CutOver,
+        MigrationPhase::Failed => ipc::MigrationPhase::Failed,
+    }
+}
+
+/// The event of a journaled migration.
+pub(super) fn event_of(record: &ModuleMigration) -> ipc::PluginEvent {
+    ipc::PluginEvent::MigrationChanged {
+        module: record.module_id.clone(),
+        plugin: record.plugin_id.to_string(),
+        phase: phase(record.phase),
+    }
+}
+
+fn info_of(
+    manager: &PluginManager,
+    bundle: &Bundle,
+    snapshot: Option<&LegacySnapshot>,
+    record: &ModuleMigration,
+) -> ipc::ModuleMigrationInfo {
+    let m = snapshot.and_then(|s| {
+        s.modules
+            .iter()
+            .find(|m| m.module.as_str() == record.module_id)
+    });
+    let plugin = manager.store().plugin(&record.plugin_id).ok().flatten();
+    let manifest = plugin
+        .as_ref()
+        .and_then(|p| p.active())
+        .map(|a| a.manifest.clone());
+    let (route, route_reason) = route_of(manager, bundle, record);
+    let consent = match (m, &manifest, record.phase) {
+        (
+            Some(m),
+            Some(manifest),
+            MigrationPhase::AwaitingConsent | MigrationPhase::NotEligible,
+        ) => consent_items(manager, m, manifest),
+        _ => Vec::new(),
+    };
+    // Not eligible for another reason: nothing was declined, nothing to show.
+    let consent = if record.phase == MigrationPhase::NotEligible
+        && !consent
+            .iter()
+            .any(|item| item.decision == ipc::ConsentDecision::Declined)
+    {
+        Vec::new()
+    } else {
+        consent
+    };
+    let declined = record.phase == MigrationPhase::NotEligible && !consent.is_empty();
+    ipc::ModuleMigrationInfo {
+        module: record.module_id.clone(),
+        module_name: m.and_then(|m| m.manifest.as_ref()).map_or_else(
+            || record.module_id.clone(),
+            |manifest| manifest.name.clone(),
+        ),
+        plugin: record.plugin_id.to_string(),
+        plugin_name: manifest.as_ref().map(|manifest| manifest.name.clone()),
+        phase: phase(record.phase),
+        reason: record.reason.clone(),
+        attempts: record.attempts,
+        max_attempts: deckpilot_plugin_store::MAX_MIGRATION_ATTEMPTS,
+        can_retry: record.phase == MigrationPhase::Failed || declined,
+        route: match route {
+            LegacyRoute::Builtin => ipc::MigrationRoute::Builtin,
+            LegacyRoute::Plugin => ipc::MigrationRoute::Plugin,
+            LegacyRoute::PluginWithdrawn => ipc::MigrationRoute::PluginWithdrawn,
+        },
+        route_reason,
+        aliases: m
+            .map(|m| {
+                m.aliases
+                    .iter()
+                    .map(|alias| ipc::ModuleActionAlias {
+                        legacy: alias.legacy.to_owned(),
+                        target: alias.target.to_owned(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        consent,
+        updated_at: record.updated_at,
+    }
+}
+
+/// What the migration of `m` asks the user (§5.5): every permission it
+/// needs that is not granted, and every credential import, with the
+/// user's decision so far. Keys, ids and hosts only.
+fn consent_items(
+    manager: &PluginManager,
+    m: &LegacyModule,
+    manifest: &Manifest,
+) -> Vec<ipc::MigrationConsentItem> {
+    let Ok(stored) = manager.store().grants(&m.plugin) else {
+        return Vec::new();
+    };
+    let filled = manager.store().credentials(&m.plugin).unwrap_or_default();
+    let declared = GrantSet::from_manifest(manifest);
+    let missing: BTreeSet<GrantKey> = missing_grants(&stored, &declared).into_iter().collect();
+    let consented = consented_by(&m.module);
+    let imports: BTreeMap<&str, &legacy::LegacyCredential> = m
+        .credentials
+        .iter()
+        .filter(|c| c.secret.is_some() && !filled.iter().any(|f| f.key == c.slot))
+        .map(|c| (c.slot.as_str(), c))
+        .collect();
+    declared
+        .iter()
+        .filter_map(|(key, scope)| {
+            let decided = stored
+                .iter()
+                .find(|g| &g.key == key && g.decided_by == consented);
+            let import = (key.kind == PermissionKind::Credentials)
+                .then(|| imports.get(key.key.as_str()))
+                .flatten();
+            if !missing.contains(key) && import.is_none() && decided.is_none() {
+                return None;
+            }
+            let decision = match decided.map(|g| g.status) {
+                Some(GrantStatus::Granted) => ipc::ConsentDecision::Approved,
+                Some(GrantStatus::Revoked) => ipc::ConsentDecision::Declined,
+                _ => ipc::ConsentDecision::Pending,
+            };
+            let status = match stored.iter().find(|g| &g.key == key) {
+                Some(g) if g.status == GrantStatus::Granted && g.scope.covers(scope) => {
+                    ipc::PermissionStatus::Granted
+                }
+                Some(g) if g.status == GrantStatus::Revoked => ipc::PermissionStatus::Revoked,
+                _ => ipc::PermissionStatus::NotGranted,
+            };
+            let hosts = match scope {
+                deckpilot_plugin_store::GrantScope::Credential { hosts, .. } => hosts.clone(),
+                _ => Vec::new(),
+            };
+            let why = match (import, scope.tier()) {
+                (Some(c), _) => format!(
+                    "The built-in {} used your stored credential `{}`. The plugin gets a copy in \
+                     its slot `{}`, sent only to {}. The stored credential is kept.",
+                    m.module,
+                    c.id.as_ref().map(ToString::to_string).unwrap_or_default(),
+                    c.slot,
+                    if hosts.is_empty() {
+                        "the hosts the plugin declares".to_owned()
+                    } else {
+                        hosts.join(", ")
+                    }
+                ),
+                (None, Tier::High) if key.kind == PermissionKind::Credentials => format!(
+                    "The plugin's credential slot `{}`: credentials are never granted without \
+                     your consent. Nothing is imported.",
+                    key.key
+                ),
+                (None, Tier::High) => {
+                    "Private network access is never granted without your consent.".to_owned()
+                }
+                (None, _) => format!(
+                    "The built-in {} did not use this on this computer, so it is not granted \
+                     without your consent.",
+                    m.module
+                ),
+            };
+            Some(ipc::MigrationConsentItem {
+                key: key.to_string(),
+                permission: super::convert::permission(manifest, key, scope, status),
+                import: import.map(|c| ipc::CredentialImport {
+                    setting: c.setting.clone(),
+                    credential: c.id.as_ref().map(ToString::to_string).unwrap_or_default(),
+                    slot: c.slot.clone(),
+                    hosts: hosts.clone(),
+                }),
+                why,
+                decision,
+            })
+        })
+        .collect()
+}
+
 /// Test only (feature `test-hooks`, never in a release build): the user's
 /// decisions and a crash point, from the environment, so an end-to-end
-/// test drives the engine through a real agent before P7 adds the
-/// requests.
+/// test can decide before the agent starts (the app decides with the
+/// requests) or end the agent after a step.
 #[cfg(feature = "test-hooks")]
 mod test_hooks {
     use deckpilot_plugin_store::MigrationPhase;

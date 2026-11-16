@@ -1104,3 +1104,44 @@ fn derived_grants_are_at_most_medium_tier_and_never_overwrite() {
         []
     );
 }
+
+/// Forgetting a migration's declines makes exactly those permissions
+/// undecided again: nothing is granted, and refusals and grants anybody
+/// else decided stay.
+#[test]
+fn forgetting_declines_grants_nothing() {
+    let env = Env::new();
+    let mut manager = env.open();
+    let first_party = deckpilot_plugin_manifest::PluginId::parse("deckpilot.github-prs").unwrap();
+    let package = bundled_package(first_party.as_str(), "1.0.0", &with_notifications());
+    let declared = grants_of(&package);
+    manager
+        .install(
+            &package,
+            &InstallSource::Bundled,
+            &Consent::none("migration:github-prs"),
+        )
+        .unwrap();
+    let keys: Vec<GrantKey> = declared.iter().map(|(key, _)| key.clone()).collect();
+    assert!(keys.len() >= 3, "{keys:?}");
+    let by_migration = "user:migration:github-prs";
+    manager
+        .revoke(&first_party, &keys[0], by_migration)
+        .unwrap();
+    manager.revoke(&first_party, &keys[1], "user").unwrap();
+    manager
+        .grant(&first_party, &Consent::of([keys[2].clone()], by_migration))
+        .unwrap();
+
+    let forgotten = manager.forget_declines(&first_party, by_migration).unwrap();
+    assert_eq!(forgotten, [keys[0].clone()]);
+    let stored = manager.store().grants(&first_party).unwrap();
+    assert!(!stored.iter().any(|g| g.key == keys[0]), "undecided again");
+    let status = |key: &GrantKey| stored.iter().find(|g| &g.key == key).map(|g| g.status);
+    assert_eq!(status(&keys[1]), Some(GrantStatus::Revoked));
+    assert_eq!(status(&keys[2]), Some(GrantStatus::Granted));
+    assert_eq!(
+        manager.forget_declines(&first_party, by_migration).unwrap(),
+        []
+    );
+}

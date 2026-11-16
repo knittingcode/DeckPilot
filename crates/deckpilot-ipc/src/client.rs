@@ -301,7 +301,19 @@ impl AgentClient {
 
     /// Subscribes to plugin events (protocol 10).
     pub async fn subscribe_plugin_events(&mut self) -> Result<(), ClientError> {
-        match self.request(Request::SubscribePluginEvents).await? {
+        self.subscribe_plugin_events_with(false).await
+    }
+
+    /// Subscribes to plugin events, with `migrations` also to module
+    /// migration events ([`PluginEvent::MigrationChanged`]).
+    pub async fn subscribe_plugin_events_with(
+        &mut self,
+        migrations: bool,
+    ) -> Result<(), ClientError> {
+        match self
+            .request(Request::SubscribePluginEvents { migrations })
+            .await?
+        {
             Response::Ok => Ok(()),
             other => Err(ClientError::Protocol(format!("{other:?}"))),
         }

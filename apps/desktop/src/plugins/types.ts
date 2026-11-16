@@ -127,7 +127,11 @@ export type PluginState =
   | "quarantined"
 
 export type PluginOrigin =
-  { type: "registry"; registry: string } | { type: "sideload" } | { type: "dev" }
+  | { type: "registry"; registry: string }
+  | { type: "sideload" }
+  | { type: "dev" }
+  /** Shipped with DeckPilot, checked against the pins compiled into the agent. */
+  | { type: "bundled" }
 
 export type PermissionTier = "low" | "medium" | "high"
 
@@ -396,6 +400,78 @@ export type PluginEvent =
       message?: string
     }
   | { type: "changed"; plugin: string; state?: PluginState }
+  /** A module migration moved; `listModuleMigrations` has the details. */
+  | { type: "migrationChanged"; module: string; plugin: string; phase: MigrationPhase }
+
+// ---- Module migrations (docs/marketplace/module-migration.md §5.5-5.7) ----
+
+/** Where a built-in module's move to its first-party plugin stands. */
+export type MigrationPhase =
+  | "pending"
+  | "notEligible"
+  | "installed"
+  | "settingsCopied"
+  | "awaitingConsent"
+  | "cutOver"
+  | "failed"
+  /** A phase added by a newer agent. */
+  | "other"
+
+/** Where the module's legacy action types run now. */
+export type MigrationRoute = "builtin" | "plugin" | "pluginWithdrawn" | "other"
+
+export type ConsentDecision = "pending" | "approved" | "declined"
+
+/** A stored credential the migration copies into a plugin slot: names only, never the secret. */
+export interface CredentialImport {
+  /** The built-in's setting naming it (`credential`). */
+  setting: string
+  /** The stored credential's id (`github.token`). */
+  credential: string
+  /** The plugin's slot (`token`). */
+  slot: string
+  /** The only hosts the plugin may send it to. */
+  hosts: string[]
+}
+
+/** One thing a migration waits for the user to allow. */
+export interface MigrationConsentItem {
+  /** The grant key `decideModuleMigration` names. */
+  key: string
+  permission: GrantInfo
+  import?: CredentialImport
+  /** Why the migration asks, in the agent's words. */
+  why: string
+  decision: ConsentDecision
+}
+
+export interface ModuleActionAlias {
+  /** `github.pull-requests`. */
+  legacy: string
+  /** `deckpilot.github.pull-requests`. */
+  target: string
+}
+
+/** `listModuleMigrations`: one built-in module moving to its first-party plugin. */
+export interface ModuleMigration {
+  module: string
+  moduleName: string
+  plugin: string
+  pluginName?: string
+  phase: MigrationPhase
+  /** Why it is not eligible, failed or waits; never a value or a secret. */
+  reason?: string
+  attempts: number
+  maxAttempts: number
+  canRetry: boolean
+  route: MigrationRoute
+  /** Why the legacy actions are unavailable (`route: "pluginWithdrawn"`). */
+  routeReason?: string
+  aliases: ModuleActionAlias[]
+  /** What waits for a decision, or what the user declined. */
+  consent?: MigrationConsentItem[]
+  updatedAt: number
+}
 
 // ---- What the screens show ----
 

@@ -720,6 +720,12 @@ export interface ModuleInfo {
    * `lib/plugin-actions.ts`). Never sent by the backend's `list_modules`.
    */
   plugin?: PluginModuleState
+  /**
+   * Set only on a built-in module whose legacy action types a plugin
+   * replaces (module migrations; see `lib/plugin-actions.ts`), by legacy
+   * action type id. Never sent by the backend's `list_modules`.
+   */
+  legacy?: Record<string, LegacyActionState>
 }
 
 /** What the agent reports about the plugin behind a plugin module. */
@@ -731,6 +737,35 @@ export interface PluginModuleState {
    * Types without an entry are available.
    */
   unavailable: Record<string, string>
+  /** The legacy action types of the built-in module this plugin replaces. */
+  aliases?: LegacyAlias[]
+}
+
+/** A legacy action type and the plugin action type that replaces it. */
+export interface LegacyAlias {
+  /** `github.pull-requests`. */
+  legacy: string
+  /** `deckpilot.github.pull-requests`. */
+  target: string
+  /** The built-in module (`github`). */
+  module: string
+  /** The plugin (`deckpilot.github`). */
+  plugin: string
+  pluginName: string
+  /** Where the agent routes the legacy type now. */
+  route: "builtin" | "plugin" | "pluginWithdrawn"
+  /** Why it is unavailable (`pluginWithdrawn`). */
+  routeReason?: string
+}
+
+/** A legacy action type a plugin replaces, as the editors show it. */
+export interface LegacyActionState {
+  /** The plugin's action type that replaces it. */
+  target: string
+  plugin: string
+  pluginName: string
+  /** Why it cannot be placed or run (the user withdrew the plugin); `null` when it can. */
+  unavailable: string | null
 }
 
 export interface MigrationNote {

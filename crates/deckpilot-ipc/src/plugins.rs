@@ -20,11 +20,17 @@
 //! | `listKnownPlugins` | `knownPlugins` | every plugin installed here at some point (`plugin_known`) |
 //! | `getPluginSettings` / `setPluginSettings` | `pluginSettings` | a plugin's settings fields and values, validated against the manifest |
 //! | `listPluginCredentials` / `setPluginCredential` / `deletePluginCredential` | `pluginCredentials` | a plugin's credential slots and whether each has a secret; a secret goes in, never out ([`PluginSecret`]) |
+//! | `listModuleMigrations` | `moduleMigrations` | the built-in modules moving to their first-party plugins: phase, reason, attempts, routing, aliases and what waits for consent ([`ModuleMigrationInfo`]) |
+//! | `decideModuleMigration` | `moduleMigration` | approves or declines, item by item, what a migration waits for |
+//! | `retryModuleMigration` | `moduleMigration` | runs a failed (or declined) migration again |
 //!
 //! Progress and state changes arrive as `pluginEvent` messages
 //! ([`PluginEvent`]) on connections that sent `subscribePluginEvents`
 //! (`AgentClient::subscribe_plugin_events` and
-//! `AgentClient::next_plugin_event`). Permissions are named by their grant key
+//! `AgentClient::next_plugin_event`); changes of a module migration
+//! ([`PluginEvent::MigrationChanged`]) only on connections that asked for
+//! them (`subscribePluginEvents` with `migrations: true`), so an app that
+//! predates them never receives an event it cannot read. Permissions are named by their grant key
 //! ([`PluginPermission::key`]): `network:api.example.com`,
 //! `notifications`, `credentials:apiToken`, … The agent answers plugin
 //! requests only when it was built with plugins and they are enabled;
@@ -100,7 +106,14 @@ pub mod reason {
     /// Settings values or a credential that the plugin's manifest does not
     /// declare, or that do not fit their declaration.
     pub const INVALID_DATA: &str = "invalidData";
+    /// No migration of that module is known.
+    pub const UNKNOWN_MIGRATION: &str = "unknownMigration";
 }
+
+/// Most consent items one `decideModuleMigration` may decide.
+pub const MAX_MIGRATION_ITEMS: usize = 64;
+/// Longest module id in a request.
+pub const MAX_MODULE_ID: usize = 64;
 
 /// Longest credential secret a request may carry.
 pub const MAX_PLUGIN_SECRET: usize = 16 * 1024;
@@ -205,9 +218,16 @@ pub enum PluginState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum PluginOrigin {
-    Registry { registry: String },
+    Registry {
+        registry: String,
+    },
     Sideload,
     Dev,
+    /// Shipped with DeckPilot: a bundled first-party plugin, verified
+    /// against the pins compiled into the agent. Agents before the module
+    /// migration UI reported these as `sideload` (no release bundles one
+    /// yet).
+    Bundled,
 }
 
 /// Consent tier of a permission (design section 5.2).
@@ -580,6 +600,237 @@ pub enum PluginEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         state: Option<PluginState>,
     },
+    /// A module migration moved: its phase, reason, attempts, route or what
+    /// waits for consent changed; `listModuleMigrations` has the details.
+    /// Only on connections that subscribed with `migrations: true`.
+    MigrationChanged {
+        /// The built-in module (`github`).
+        module: String,
+        /// Its plugin (`deckpilot.github`).
+        plugin: String,
+        phase: MigrationPhase,
+    },
+}
+
+impl PluginEvent {
+    /// Whether a connection receives the event: migration events only when
+    /// it asked for them (`subscribePluginEvents` with `migrations: true`).
+    pub fn delivered(&self, migrations: bool) -> bool {
+        migrations || !matches!(self, Self::MigrationChanged { .. })
+    }
+}
+
+/// Where a built-in module's move to its first-party plugin stands
+/// (`module_migrations.phase`, `docs/marketplace/module-migration.md`
+/// §5.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MigrationPhase {
+    /// Recorded, nothing done yet.
+    Pending,
+    /// The user's data or this computer does not allow it, or the user
+    /// declined (see the reason); the built-in stays.
+    NotEligible,
+    /// The plugin is installed (disabled), with the derived grants.
+    Installed,
+    /// The built-in's settings were copied.
+    SettingsCopied,
+    /// Waits for the user's consent ([`ModuleMigrationInfo::consent`]);
+    /// the built-in serves meanwhile.
+    AwaitingConsent,
+    /// The plugin serves the module's actions.
+    CutOver,
+    /// A step failed (see the reason); the built-in serves. Retried at the
+    /// next starts up to [`ModuleMigrationInfo::max_attempts`] times, then
+    /// only on Retry.
+    Failed,
+    /// A phase added by a newer agent.
+    #[serde(other)]
+    Other,
+}
+
+/// Where the module's legacy action types run now (design §5.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MigrationRoute {
+    /// The built-in handles them.
+    Builtin,
+    /// The plugin handles them (the built-in takes over if the plugin
+    /// breaks).
+    Plugin,
+    /// The user disabled or uninstalled the plugin after the cut-over:
+    /// they are unavailable, with no fallback
+    /// ([`ModuleMigrationInfo::route_reason`] says why).
+    PluginWithdrawn,
+    /// A route added by a newer agent.
+    #[serde(other)]
+    Other,
+}
+
+/// A legacy action type of the module and the plugin action type that
+/// replaces it (`ActionAlias`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModuleActionAlias {
+    /// `github.pull-requests`.
+    pub legacy: String,
+    /// `deckpilot.github.pull-requests`.
+    pub target: String,
+}
+
+/// The user's decision on one consent item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConsentDecision {
+    /// Not decided yet.
+    Pending,
+    Approved,
+    /// The built-in stays until the user asks again (Retry).
+    Declined,
+}
+
+/// A stored credential the migration copies into the plugin's slot. Names
+/// only: the secret never leaves the agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialImport {
+    /// The built-in's setting that names the credential (`credential`).
+    pub setting: String,
+    /// The stored credential's id (`github.token`), never its secret.
+    pub credential: String,
+    /// The plugin's slot it is copied into (`token`).
+    pub slot: String,
+    /// The only hosts the plugin may send it to.
+    pub hosts: Vec<String>,
+}
+
+/// One thing a migration waits for the user to allow: a permission that
+/// is never derived (a credential, the private network, a medium-tier
+/// permission the built-in did not use here) and, with a credential
+/// permission, the import of the stored credential.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationConsentItem {
+    /// The grant key it decides (`credentials:token`,
+    /// `network:api.example.com`); what `decideModuleMigration` names.
+    pub key: String,
+    /// The permission as `getPlugin` shows it: tier, scope, the
+    /// manifest's justification.
+    pub permission: PluginPermission,
+    /// The stored credential copied into the slot on approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import: Option<CredentialImport>,
+    /// Why the migration asks, in words.
+    pub why: String,
+    pub decision: ConsentDecision,
+}
+
+/// One built-in module's move to its first-party plugin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModuleMigrationInfo {
+    /// The built-in module (`github`).
+    pub module: String,
+    /// Its name (`GitHub`), or the id when the built-in is not part of
+    /// this app.
+    pub module_name: String,
+    /// The plugin (`deckpilot.github`).
+    pub plugin: String,
+    /// The plugin's name, once it is installed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_name: Option<String>,
+    pub phase: MigrationPhase,
+    /// Why it is not eligible, failed or waits, or what a later start did;
+    /// never a value or a secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Failed attempts since the last cut-over.
+    pub attempts: u32,
+    /// Attempts the agent makes by itself before only Retry runs it again.
+    pub max_attempts: u32,
+    /// Whether `retryModuleMigration` is possible now: failed, or not
+    /// eligible because the user declined.
+    pub can_retry: bool,
+    pub route: MigrationRoute,
+    /// Why the legacy action types are unavailable
+    /// (`route: pluginWithdrawn`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_reason: Option<String>,
+    /// The module's legacy action types and their plugin replacements.
+    pub aliases: Vec<ModuleActionAlias>,
+    /// What waits for the user's decision (`phase: awaitingConsent`), or
+    /// what the user declined (`phase: notEligible`). Empty otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub consent: Vec<MigrationConsentItem>,
+    /// When the record last changed (seconds since the Unix epoch).
+    pub updated_at: i64,
+}
+
+/// Checks the plugin data and module migration requests.
+pub(crate) fn check_request(request: &crate::Request) -> Result<(), String> {
+    match request {
+        crate::Request::SetPluginSettings { plugin, values } => {
+            check_text("plugin", plugin)?;
+            check_settings(values)
+        }
+        crate::Request::SetPluginCredential {
+            plugin,
+            key,
+            secret,
+        } => {
+            check_text("plugin", plugin)?;
+            check_text("credential", key)?;
+            check_secret(secret)
+        }
+        crate::Request::DeletePluginCredential { plugin, key } => {
+            check_text("plugin", plugin)?;
+            check_text("credential", key)
+        }
+        crate::Request::RetryModuleMigration { module } => check_module(module),
+        crate::Request::DecideModuleMigration {
+            module,
+            approve,
+            decline,
+        } => {
+            check_module(module)?;
+            check_decisions(approve, decline)
+        }
+        _ => Ok(()),
+    }
+}
+
+fn check_module(module: &str) -> Result<(), String> {
+    if module.is_empty() || module.len() > MAX_MODULE_ID {
+        return Err(format!(
+            "module must be between 1 and {MAX_MODULE_ID} characters"
+        ));
+    }
+    if !module
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Err("module must be a built-in module id".into());
+    }
+    Ok(())
+}
+
+fn check_decisions(approve: &[String], decline: &[String]) -> Result<(), String> {
+    if approve.is_empty() && decline.is_empty() {
+        return Err("a decision approves or declines at least one item".into());
+    }
+    if approve.len() + decline.len() > MAX_MIGRATION_ITEMS {
+        return Err(format!(
+            "a decision covers at most {MAX_MIGRATION_ITEMS} items"
+        ));
+    }
+    approve
+        .iter()
+        .chain(decline)
+        .try_for_each(|key| check_text("permission", key))?;
+    if approve.iter().any(|key| decline.contains(key)) {
+        return Err("an item is either approved or declined".into());
+    }
+    Ok(())
 }
 
 /// A credential secret the user enters (`setPluginCredential`). It goes
@@ -939,6 +1190,119 @@ mod tests {
                 .unwrap()
                 .get("icon")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn bundled_is_an_origin() {
+        assert_eq!(
+            serde_json::to_value(PluginOrigin::Bundled).unwrap(),
+            serde_json::json!({"type": "bundled"})
+        );
+        let parsed: PluginOrigin =
+            serde_json::from_value(serde_json::json!({"type": "bundled"})).unwrap();
+        assert_eq!(parsed, PluginOrigin::Bundled);
+    }
+
+    fn waiting() -> ModuleMigrationInfo {
+        ModuleMigrationInfo {
+            module: "github".into(),
+            module_name: "GitHub".into(),
+            plugin: "deckpilot.github".into(),
+            plugin_name: Some("GitHub".into()),
+            phase: MigrationPhase::AwaitingConsent,
+            reason: Some("waiting for your consent: credentials:token".into()),
+            attempts: 0,
+            max_attempts: 3,
+            can_retry: false,
+            route: MigrationRoute::Builtin,
+            route_reason: None,
+            aliases: vec![ModuleActionAlias {
+                legacy: "github.pull-requests".into(),
+                target: "deckpilot.github.pull-requests".into(),
+            }],
+            consent: vec![MigrationConsentItem {
+                key: "credentials:token".into(),
+                permission: PluginPermission {
+                    key: "credentials:token".into(),
+                    kind: "credentials".into(),
+                    tier: PermissionTier::High,
+                    status: PermissionStatus::NotGranted,
+                    scope: serde_json::json!({"type": "credential"}),
+                    justification: Some("Reads your pull requests.".into()),
+                },
+                import: Some(CredentialImport {
+                    setting: "credential".into(),
+                    credential: "github.token".into(),
+                    slot: "token".into(),
+                    hosts: vec!["api.github.com".into()],
+                }),
+                why: "the built-in used the stored token".into(),
+                decision: ConsentDecision::Pending,
+            }],
+            updated_at: 1_767_225_600,
+        }
+    }
+
+    #[test]
+    fn a_migration_names_what_it_imports_never_a_value() {
+        let info = waiting();
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["phase"], "awaitingConsent");
+        assert_eq!(json["route"], "builtin");
+        assert_eq!(json["moduleName"], "GitHub");
+        assert_eq!(json["maxAttempts"], 3);
+        assert_eq!(json["canRetry"], false);
+        assert_eq!(json["aliases"][0]["legacy"], "github.pull-requests");
+        let item = &json["consent"][0];
+        assert_eq!(item["key"], "credentials:token");
+        assert_eq!(item["decision"], "pending");
+        assert_eq!(item["permission"]["tier"], "high");
+        assert_eq!(
+            item["import"],
+            serde_json::json!({"setting": "credential", "credential": "github.token",
+                "slot": "token", "hosts": ["api.github.com"]})
+        );
+        assert!(json.get("routeReason").is_none());
+        assert_eq!(
+            serde_json::from_value::<ModuleMigrationInfo>(json).unwrap(),
+            info
+        );
+        // Nothing waits: no `consent` key at all.
+        let done = ModuleMigrationInfo {
+            phase: MigrationPhase::CutOver,
+            route: MigrationRoute::Plugin,
+            consent: vec![],
+            reason: None,
+            ..info
+        };
+        let json = serde_json::to_value(&done).unwrap();
+        assert!(json.get("consent").is_none());
+        assert!(json.get("reason").is_none());
+    }
+
+    #[test]
+    fn phases_and_routes_of_a_newer_agent_still_parse() {
+        let mut json = serde_json::to_value(waiting()).unwrap();
+        json["phase"] = "rollingBack".into();
+        json["route"] = "somewhereElse".into();
+        let info: ModuleMigrationInfo = serde_json::from_value(json).unwrap();
+        assert_eq!(info.phase, MigrationPhase::Other);
+        assert_eq!(info.route, MigrationRoute::Other);
+        for (phase, text) in [
+            (MigrationPhase::Pending, "pending"),
+            (MigrationPhase::NotEligible, "notEligible"),
+            (MigrationPhase::Installed, "installed"),
+            (MigrationPhase::SettingsCopied, "settingsCopied"),
+            (MigrationPhase::AwaitingConsent, "awaitingConsent"),
+            (MigrationPhase::CutOver, "cutOver"),
+            (MigrationPhase::Failed, "failed"),
+        ] {
+            assert_eq!(serde_json::to_value(phase).unwrap(), text);
+        }
+        assert_eq!(
+            serde_json::to_value(MigrationRoute::PluginWithdrawn).unwrap(),
+            "pluginWithdrawn"
         );
     }
 

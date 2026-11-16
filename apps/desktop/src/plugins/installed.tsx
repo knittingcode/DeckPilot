@@ -178,6 +178,7 @@ function InstalledItem({
             <span className="text-xs text-muted-foreground">v{summary.version}</span>
             {summary.origin.type === "dev" && <Badge variant="outline">DEV</Badge>}
             {summary.origin.type === "sideload" && <Badge variant="outline">Local package</Badge>}
+            {summary.origin.type === "bundled" && <Badge variant="outline">Bundled</Badge>}
             <Badge variant={blockedState ? "destructive" : "outline"}>
               {STATE_LABELS[summary.state]}
             </Badge>

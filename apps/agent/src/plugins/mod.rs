@@ -215,6 +215,9 @@ pub(crate) fn is_plugin_request(request: &Request) -> bool {
             | Request::ListPluginCredentials { .. }
             | Request::SetPluginCredential { .. }
             | Request::DeletePluginCredential { .. }
+            | Request::ListModuleMigrations
+            | Request::DecideModuleMigration { .. }
+            | Request::RetryModuleMigration { .. }
     )
 }
 

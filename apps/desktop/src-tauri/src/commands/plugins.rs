@@ -17,9 +17,9 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use deckpilot_ipc::plugins::{
-    self, AvailablePlugin, KnownPlugin, PluginActionOutcome, PluginCredentialSlot, PluginDetails,
-    PluginInstallSource, PluginRetention, PluginRuntimeStatus, PluginSettings, PluginSummary,
-    PluginUpdateOutcome, RegistryStatus,
+    self, AvailablePlugin, KnownPlugin, ModuleMigrationInfo, PluginActionOutcome,
+    PluginCredentialSlot, PluginDetails, PluginInstallSource, PluginRetention, PluginRuntimeStatus,
+    PluginSettings, PluginSummary, PluginUpdateOutcome, RegistryStatus,
 };
 use deckpilot_ipc::{
     AgentClient, Capability, ClientError, ClientKind, ErrorCode, Request, Response,
@@ -463,6 +463,55 @@ pub async fn delete_plugin_credential(
     key: String,
 ) -> PluginResult<Vec<PluginCredentialSlot>> {
     plugin_credentials(&state, Request::DeletePluginCredential { plugin, key }).await
+}
+
+/// The built-in modules moving to their first-party plugins
+/// (`listModuleMigrations`): phase, reason, attempts, route, aliases and
+/// what waits for consent. Names only; no answer carries a secret.
+#[tauri::command]
+pub async fn list_module_migrations(
+    state: State<'_, AppState>,
+) -> PluginResult<Vec<ModuleMigrationInfo>> {
+    match plugin_request(&state, Request::ListModuleMigrations).await? {
+        Response::ModuleMigrations { migrations } => Ok(migrations),
+        other => Err(PluginError::unexpected(&other)),
+    }
+}
+
+async fn module_migration(state: &AppState, request: Request) -> PluginResult<ModuleMigrationInfo> {
+    match plugin_request(state, request).await? {
+        Response::ModuleMigration { migration } => Ok(*migration),
+        other => Err(PluginError::unexpected(&other)),
+    }
+}
+
+/// The consent dialog of a module migration: the grant keys the user
+/// approved and declined, item by item (`decideModuleMigration`).
+#[tauri::command]
+pub async fn decide_module_migration(
+    state: State<'_, AppState>,
+    module: String,
+    approve: Vec<String>,
+    decline: Vec<String>,
+) -> PluginResult<ModuleMigrationInfo> {
+    module_migration(
+        &state,
+        Request::DecideModuleMigration {
+            module,
+            approve,
+            decline,
+        },
+    )
+    .await
+}
+
+/// Retry in the migration notice (`retryModuleMigration`).
+#[tauri::command]
+pub async fn retry_module_migration(
+    state: State<'_, AppState>,
+    module: String,
+) -> PluginResult<ModuleMigrationInfo> {
+    module_migration(&state, Request::RetryModuleMigration { module }).await
 }
 
 /// Asks for a `.dpplugin` file in a native open dialog. `None` when the

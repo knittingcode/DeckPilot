@@ -479,7 +479,7 @@ older clients ignore.
 | `rollbackPlugin` | `plugin` | `plugin` |
 | `uninstallPlugin` | `plugin`, `keep?: {settings?, credentials?}` | `ok` (see [retention](#uninstall-retention)) |
 | `invokePluginAction` | `plugin`, `action`, `params: {name: bool \| number \| text \| list}` | `pluginActionResult { outcome: {status: "ok", message?, data} \| {status: "skipped"} \| {status: "failed", code, message?, retryable} }` (parameters that do not match the manifest: `failed`, `invalid-parameters`, before the host runs) |
-| `subscribePluginEvents` | — | `ok`; then `pluginEvent` messages on this connection |
+| `subscribePluginEvents` | `migrations?: bool` (omitted when false) | `ok`; then `pluginEvent` messages on this connection, `migrationChanged` ones only with `migrations: true` |
 | `listKnownPlugins` | — | `knownPlugins { plugins: [{id, name, publisher, namespace, lastVersion, installed, firstSeenAt, lastSeenAt}] }` |
 | `getPluginSettings` | `plugin` | `pluginSettings { settings: {plugin, fields, values, effective, missing?} }` |
 | `setPluginSettings` | `plugin`, `values: {key: value \| null}` (merged; `null` resets to the default) | `pluginSettings` (refused with `invalidData` unless every value fits its field) |
@@ -532,12 +532,39 @@ with `subscribePluginEvents` (`AgentClient::subscribe_plugin_events`,
   `fetching`, `verifying`, `installing`, `finished`, `failed`.
 - `{"type": "changed", plugin, state?}`: a new state; no `state` means
   uninstalled.
+- `{"type": "migrationChanged", module, plugin, phase}`: a module
+  migration moved (see below); only after `subscribePluginEvents` with
+  `migrations: true`.
 
 Reasons: `pluginsUnavailable`, `platformUnsupported`, `locked`,
 `storeUnavailable`, `notInstalled`, `alreadyInstalled`, `unknownPlugin`,
 `consentRequired`, `unknownPermission`, `registryUnavailable`, `revoked`,
 `incompatible`, `invalidPackage`, `unsupportedRuntime`, `invalidState`,
-`notEnabled`, `hostFailed`, `broken`, `invalidData`.
+`notEnabled`, `hostFailed`, `broken`, `invalidData`, `unknownMigration`.
+
+### Module migrations
+
+Built-in modules moving to their first-party plugins
+([module-migration.md](module-migration.md) §5.5–§5.7), all additive under
+protocol 10:
+
+| Request | Fields | Answer |
+| --- | --- | --- |
+| `listModuleMigrations` | — | `moduleMigrations { migrations: [ModuleMigrationInfo] }` |
+| `decideModuleMigration` | `module`, `approve?: [key]`, `decline?: [key]` (at least one key, none in both) | `moduleMigration { migration }`; `unknownPermission` for a key it does not wait for, `invalidState` unless it waits for consent |
+| `retryModuleMigration` | `module` | `moduleMigration { migration }`; `invalidState` unless it failed or was declined |
+
+`ModuleMigrationInfo`: `module`, `moduleName`, `plugin`, `pluginName?`,
+`phase` (`pending`, `notEligible`, `installed`, `settingsCopied`,
+`awaitingConsent`, `cutOver`, `failed`), `reason?`, `attempts`,
+`maxAttempts`, `canRetry`, `route` (`builtin`, `plugin`,
+`pluginWithdrawn`), `routeReason?`, `aliases: [{legacy, target}]`,
+`consent?: [{key, permission, import?: {setting, credential, slot,
+hosts}, why, decision: pending | approved | declined}]`, `updatedAt`.
+Credentials are named by id; no answer carries a secret. The Tauri
+commands are `list_module_migrations`, `decide_module_migration` and
+`retry_module_migration`. `PluginOrigin` gains `{"type": "bundled"}` for
+bundled first-party plugins (reported as `sideload` before).
 
 The app reaches the data requests through the Tauri commands
 `list_known_plugins`, `get_plugin_settings`, `set_plugin_settings`,

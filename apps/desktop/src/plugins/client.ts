@@ -10,6 +10,7 @@ import { toPluginError, type PluginClient } from "./api"
 import type {
   AvailablePlugins,
   KnownPlugin,
+  ModuleMigration,
   PluginActionOutcome,
   PluginCredentialSlot,
   PluginDetails,
@@ -126,6 +127,14 @@ export function createTauriPluginClient(): PluginClient {
     deleteCredential: deletePluginCredential,
     invokeAction: (plugin, action, params) =>
       call<PluginActionOutcome>("invoke_plugin_action", { plugin, action, params }),
+    listModuleMigrations: () => call<ModuleMigration[]>("list_module_migrations"),
+    decideModuleMigration: (module, approve, decline) =>
+      call<ModuleMigration>("decide_module_migration", {
+        module,
+        approve: [...approve],
+        decline: [...decline],
+      }),
+    retryModuleMigration: (module) => call<ModuleMigration>("retry_module_migration", { module }),
     pickPackage: () => call<string | null>("pick_plugin_package"),
     subscribe: (listener) => {
       let active = true
