@@ -44,7 +44,7 @@ test('only installers become downloads, and only from this repository', () => {
     primary?.downloads.map((download) => `${download.os}/${download.arch}/${download.format}`),
     ['macos/arm64/dmg', 'windows/x64/exe', 'linux/x64/rpm'],
   );
-  assert.equal(primary?.downloads.some((download) => download.url.includes('example.com')), false);
+  assert.deepEqual([...new Set(primary?.downloads.map((download) => new URL(download.url).hostname))], ['github.com']);
   assert.equal(primary?.checksumsUrl, `${PREFIX}SHA256SUMS`);
   assert.equal(primary?.metaUrl, `${PREFIX}release-meta.json`);
   assert.equal(primary?.updaterSignatures, true);

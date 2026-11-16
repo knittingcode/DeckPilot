@@ -22,7 +22,8 @@ for (const lang of ['en', 'pl'] as const) {
       await expect(page.locator('meta[property="og:description"]')).toHaveAttribute('content', description ?? '');
       await expect(page.locator('meta[property="og:url"]')).toHaveAttribute('content', `${ORIGIN}/${lang}/${route}`);
       await expect(page.locator('meta[property="og:locale"]')).toHaveAttribute('content', lang === 'en' ? 'en_US' : 'pl_PL');
-      await expect(page.locator('meta[property="og:image"]')).toHaveAttribute('content', new RegExp(`^${ORIGIN}/_astro/.+\\.png$`));
+      const image = (await page.locator('meta[property="og:image"]').getAttribute('content')) ?? '';
+      expect(image.startsWith(`${ORIGIN}/_astro/`) && image.endsWith('.png'), image).toBe(true);
       await expect(page.locator('meta[name="twitter:card"]')).toHaveAttribute('content', 'summary_large_image');
       await expect(page.locator('meta[name="robots"]')).toHaveCount(0);
       await expect(page.locator('meta[name="generator"]')).toHaveCount(0);
@@ -74,7 +75,7 @@ test('sitemap lists the pages of both languages and nothing else', async ({ requ
   expect(urls).toContain(`${ORIGIN}/pl/docs/workflows/`);
   expect(urls.filter((u) => u.includes('/en/')).length).toBe(urls.filter((u) => u.includes('/pl/')).length);
   for (const url of urls) {
-    expect(url).toMatch(new RegExp(`^${ORIGIN}/(en|pl)/`));
+    expect(url.startsWith(`${ORIGIN}/en/`) || url.startsWith(`${ORIGIN}/pl/`), url).toBe(true);
     expect(url).not.toContain('/404/');
   }
   expect(sitemap).toContain('hreflang="pl"');

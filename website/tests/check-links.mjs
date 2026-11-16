@@ -32,7 +32,11 @@ const idsOf = (file) => {
   if (!ids.has(file)) ids.set(file, new Set([...readFileSync(file, 'utf8').matchAll(/\sid="([^"]+)"/g)].map((m) => m[1])));
   return ids.get(file);
 };
-const decode = (text) => text.replace(/&amp;/g, '&').replace(/&#38;/g, '&').replace(/&#x26;/g, '&');
+// One pass, so an already decoded ampersand is never decoded again.
+const decode = (text) => text.replace(/&(?:amp|#38|#x26);/g, '&');
+// Schemes that are not addresses to check, and schemes that run code.
+const SKIPPED = new Set(['mailto:', 'tel:', 'data:']);
+const SCRIPT = new Set(['javascript:', 'vbscript:']);
 
 const problems = [];
 const externals = new Map();
@@ -44,11 +48,12 @@ for (const file of pages) {
   const pageUrl = new URL(`${BASE}${rel.replace(/index\.html$/, '')}`, ORIGIN);
   const refs = [...html.matchAll(/<(?:a|link|img|script|source)\b[^>]*?\s(?:href|src)="([^"]*)"/g)].map((m) => decode(m[1]));
   for (const ref of refs) {
-    if (/^(mailto:|tel:|data:|javascript:)/.test(ref)) {
-      if (ref.startsWith('javascript:')) problems.push(`${rel}: javascript: link`);
+    const url = new URL(ref.trim(), pageUrl);
+    if (SCRIPT.has(url.protocol)) {
+      problems.push(`${rel}: ${url.protocol} link`);
       continue;
     }
-    const url = new URL(ref, pageUrl);
+    if (SKIPPED.has(url.protocol)) continue;
     // The Plugin Marketplace is a separate site on the same host: external.
     const sister = url.origin === ORIGIN && (url.pathname === SISTER || url.pathname.startsWith(`${SISTER}/`));
     if (url.origin !== ORIGIN || sister) {

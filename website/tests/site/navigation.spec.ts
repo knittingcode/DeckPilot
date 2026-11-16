@@ -146,8 +146,9 @@ test.describe('Marketplace', () => {
       await page.goto(`${lang}/`);
       const links = page.locator('a[data-marketplace-link]');
       expect(await links.count()).toBeGreaterThanOrEqual(5);
+      const allowed = [`${MARKETPLACE}/${lang}/`, `${MARKETPLACE}/${lang}/developers/`];
       for (const href of await links.evaluateAll((els) => els.map((el) => (el as HTMLAnchorElement).href))) {
-        expect(href).toMatch(new RegExp(`^${MARKETPLACE}/${lang}/(developers/)?$`));
+        expect(allowed).toContain(href);
       }
       const nav = page.getByRole('navigation', { name: lang === 'en' ? 'Main' : 'Główna' }).first();
       await expect(nav.locator('a[data-marketplace-link]')).toHaveAttribute('href', `${MARKETPLACE}/${lang}/`);
