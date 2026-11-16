@@ -707,12 +707,29 @@ fn derived_grants_are_never_high_tier_and_never_overwrite() {
 #[test]
 fn the_snapshot_reads_nothing_without_aliases() {
     let env = Env::new();
-    let registry = deckpilot_modules::builtin(Os::current());
+    let registry = deckpilot_modules::builtin(Os::current()).with_aliases(&[]);
     assert!(
         LegacySnapshot::read(&env.config, &registry)
             .unwrap()
             .modules
             .is_empty()
+    );
+    // The shipped table: GitHub's block, with its plan.
+    let registry = deckpilot_modules::builtin(Os::current());
+    let shipped = LegacySnapshot::read(&env.config, &registry).unwrap();
+    let [github] = shipped.modules.as_slice() else {
+        panic!("{shipped:?}");
+    };
+    assert_eq!(github.module.as_str(), "github");
+    assert_eq!(github.plugin.as_str(), "deckpilot.github");
+    assert_eq!(github.aliases.len(), 6);
+    assert_eq!(github.plan, super::plan_for("github"));
+    assert_eq!(github.credentials[0].setting, "credential");
+    assert_eq!(github.credentials[0].slot, "token");
+    assert_eq!(
+        github.credentials[0].id.as_ref().map(CredentialId::as_str),
+        Some("github.token"),
+        "the module's default credential"
     );
     let snapshot = env.snapshot();
     let module = &snapshot.modules[0];
@@ -722,6 +739,80 @@ fn the_snapshot_reads_nothing_without_aliases() {
     assert_eq!(module.credentials[0].slot, "token");
     // Secrets never show in debug output.
     assert!(!format!("{snapshot:?}").contains(TOKEN));
+}
+
+/// The shipped GitHub plan (P9): GitHub's API URL and the module's own
+/// credential are eligible; GitHub Enterprise (another `apiUrl`), a
+/// private API host and a per-action credential other than the module's
+/// keep the built-in, each with its reason.
+#[test]
+fn the_github_plan_keeps_enterprise_private_hosts_and_overrides_on_the_builtin() {
+    fn github(config: &[(&str, ParameterValue)], credential: Option<&str>) -> Option<String> {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut parameters = ActionParameters::new();
+        for (key, value) in config {
+            parameters = parameters.with(*key, value.clone());
+        }
+        store
+            .set_module_state(
+                &ModuleId::new("github").unwrap(),
+                &ModuleSettings {
+                    enabled: true,
+                    config: parameters,
+                },
+            )
+            .unwrap();
+        let mut profile = Profile::new("Work");
+        let mut params =
+            ActionParameters::new().with("repository", ParameterValue::Text("octo/site".into()));
+        if let Some(credential) = credential {
+            params = params.with("credential", ParameterValue::Text(credential.into()));
+        }
+        profile.actions.push(ActionInstance {
+            id: ActionInstanceId::new(),
+            name: "PRs".into(),
+            action_type: ActionTypeId::new("github.pull-requests").unwrap(),
+            parameters: params,
+            description: String::new(),
+            icon: None,
+            label: None,
+        });
+        store.save_profile(&profile).unwrap();
+        let mut registry = deckpilot_modules::builtin(Os::current());
+        registry.apply_states(&store.module_states().unwrap());
+        let snapshot = LegacySnapshot::read(&store, &registry).unwrap();
+        let [module] = snapshot.modules.as_slice() else {
+            panic!("{snapshot:?}");
+        };
+        assert_eq!(module.plan, plan_for("github"));
+        eligibility(module)
+    }
+    let text = |s: &str| ParameterValue::Text(s.into());
+    let eligible = |reason: Option<String>| {
+        if crate::plugins::execution_supported() {
+            assert_eq!(reason, None);
+        }
+    };
+    eligible(github(&[], None));
+    eligible(github(
+        &[("apiUrl", text("https://api.github.com/"))],
+        Some(""),
+    ));
+    eligible(github(
+        &[("credential", text("work.github"))],
+        Some("work.github"),
+    ));
+    eligible(github(&[], Some("github.token")));
+
+    let ghe = github(&[("apiUrl", text("https://ghe.example.com/api/v3"))], None).unwrap();
+    assert!(ghe.contains("`apiUrl` is not the default origin"), "{ghe}");
+    let private = github(&[("allowPrivateHost", ParameterValue::Boolean(true))], None).unwrap();
+    assert!(private.contains("`allowPrivateHost`"), "{private}");
+    let other = github(&[], Some("other.token")).unwrap();
+    assert!(
+        other.contains("`PRs` sets `credential`") && other.contains("G5"),
+        "{other}"
+    );
 }
 
 fn decide_items(approve: &[&str], decline: &[&str]) -> Decision {

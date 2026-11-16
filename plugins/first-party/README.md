@@ -8,8 +8,9 @@ that is a separate step, not part of this directory.
 
 Experimental, like all of the plugin marketplace. One plugin is bundled:
 `deckpilot.github` (class `migration`, [github/README.md](github/README.md)),
-which nothing routes to until the cut-over lists its aliases
-(`docs/marketplace/module-migration.md` §9, P9). The published release
+to which a plugin-enabled agent routes the built-in `github.*` action
+types once a computer's migration is cut over
+(`docs/marketplace/module-migration.md` §6 and §9, P9). The published release
 pipeline does not package plugins at all (see "Packaging" below).
 
 ## Layout
@@ -64,7 +65,10 @@ plugins, the agent with the `plugins` feature and their pins, and the
 plugin host from `plugins/runtime`, then bundles with
 `apps/desktop/src-tauri/tauri.plugins.conf.json` on top of
 `tauri.release.conf.json`: the host as an external binary next to the
-agent, `bundled/` as a resource. Without the variable (the default) the
+agent, `bundled/` as a resource. On macOS the host is signed first with
+its one entitlement and copied into `Contents/MacOS` instead
+(`tauri.plugins.macos.conf.json`; [docs/releasing.md](../../docs/releasing.md),
+"Packaging the plugins"). Without the variable (the default) the
 package is exactly what it was. The published release workflow
 (`.github/workflows/release.yml`) is unchanged and packages neither the
 host nor bundled plugins until the owner enables the marketplace.

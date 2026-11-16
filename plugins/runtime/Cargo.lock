@@ -354,6 +354,7 @@ dependencies = [
 name = "deckpilot-github"
 version = "0.1.0"
 dependencies = [
+ "deckpilot-plugin-abi",
  "deckpilot-plugin-sdk",
  "form_urlencoded",
  "jsonschema",

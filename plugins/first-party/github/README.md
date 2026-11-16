@@ -2,10 +2,21 @@
 
 The first-party GitHub plugin: the replacement of the built-in `github`
 module (`modules/github`), the first module to move
-(`docs/marketplace/module-migration.md` §6, PR P8). Bundled with class
-`migration` (`../bundled.json`) and pinned in builds that enable bundled
-plugins. **Not routed yet**: `ACTION_ALIASES` has no `github` entry until
-the cut-over (P9), so `github.*` instances keep running the built-in.
+(`docs/marketplace/module-migration.md` §6, PRs P8 and P9). Bundled with
+class `migration` (`../bundled.json`) and pinned in builds that enable
+bundled plugins.
+
+**Routed since the cut-over (P9)**, in builds with plugins only:
+`ACTION_ALIASES` (`crates/deckpilot-core/src/alias.rs`) maps every
+`github.<action>` to `deckpilot.github.<action>`, and the agent's
+migration plan for `github` (`apps/agent/src/plugins/migration.rs`)
+installs this plugin, copies the module's settings and, once the user
+approves, imports the token. From then on the stored `github.*` keys,
+workflow nodes and actions run here; nothing stored is rewritten, so a
+build without plugins (every release build today) keeps running the
+built-in on the same data. Until the user approves, after a decline and
+for every computer that is not eligible (below), the built-in serves.
+`apps/agent/tests/plugins_cutover.rs` runs that upgrade end to end.
 
 Read-only. It talks to `https://api.github.com` only (GET), with the
 user's token from the credential slot `token` (bearer), and opens pages on
@@ -28,7 +39,9 @@ that way:
   built-in on the same answers served from 127.0.0.1: the same status,
   message, outputs and error code, 30 scenarios (success and every error
   code), the same opened pages, and the same requests but for the page
-  size.
+  size; and two network failures (a name that does not resolve, a
+  certificate that is not trusted) with the same transport codes,
+  `dns-failed` and `tls-failed`.
 
 | Built-in | Plugin | Definition | Results |
 | --- | --- | --- | --- |
@@ -58,28 +71,35 @@ idempotency flags and timeouts are identical.
 Only GitHub Enterprise or another API origin, a private API host and a
 per-action credential other than the module's keep the built-in. The
 rest works the same, with these differences, all on failure paths, limits
-or the editor:
+or the editor. The numbers are P8's; its difference 4 (transport failures
+reported as `request-failed`) is gone: the plugin is built with the SDK
+of #257, exports `dp_features`, reads the agent's network kind and so
+reports the built-in's transport code (`dns-failed`,
+`connection-failed`, `timed-out`, `tls-failed`, `too-many-redirects`,
+`insecure-redirect`, `blocked-address`) with the same retryability.
 
 1. **Checks when an action is saved.** The built-in's `check` reports an
    invalid repository, ref, credential name or page as soon as an instance
-   is saved. Plugin API 1 has no such hook: the same errors, with the same
-   codes and messages, come when the action runs.
-2. **Two failure messages.** `unauthorized` (401) and `credential-missing`
+   is saved. Since #257 the agent and the app check every plugin action
+   on save against its manifest's schema (kinds, required parameters,
+   choices, ranges, lengths), and a legacy `github.*` type served by the
+   plugin refuses a `credential` override it cannot be given; but the
+   plugin-specific semantic checks (repository `owner/name`, a ref
+   name, a GitHub page URL) cannot be derived from a schema and plugin
+   API 1 has no validation hook. They stay **run-time only**: the same
+   errors, with the same codes and messages, come when the action runs.
+2. **Failure messages.** `unauthorized` (401) and `credential-missing`
    name the plugin's slot and Settings › Plugins › GitHub instead of the
-   credential id `github.token` and Settings › HTTP › Credentials. Codes are
-   the same.
+   credential id `github.token` and Settings › HTTP › Credentials; a
+   network failure's message is the agent's explanation
+   (`http.fetch to https://api.github.com failed (…)`) rather than the
+   built-in's. Codes are the same. When the browser cannot be started for
+   `open`, the code differs too: the launcher's in the built-in, the
+   agent's `request-failed` here.
 3. **`rate-limited` carries no data.** The built-in's failure has
    `retryAfterSeconds`; a plugin failure has a code, a message and
    `retryable` only. The wait is in the message ("try again in 30 s") and
    the failure is retryable. Nothing reads the field today.
-4. **Network failures.** Where the built-in reports the transport's code
-   (`dns-failed`, `connection-failed`, `tls-failed`, …) the plugin reports
-   `request-failed` with the agent's reason; likewise when the browser
-   cannot be started for `open` (the launcher's code in the built-in, the
-   agent's `request-failed` here). Answers over 512 KiB (the
-   agent's limit for plugins; the built-in reads up to 4 MiB) are
-   `invalid-response`; with 50 items per page GitHub's answers stay far
-   below it.
 5. **Time.** The time limit is counted from GitHub's first answer with its
    `Date` headers (one-second steps), and each request has the agent's
    15 s; rate-limit waits are counted from the answer's `Date`.
@@ -88,7 +108,9 @@ or the editor:
    an output text holds at most 16 KiB, so a list of pull requests or
    failing checks longer than that is cut at a line (`listed` and
    `truncated` say so for pull requests, a last line "… and N more" for
-   checks).
+   checks). Answers over 512 KiB (the agent's limit for plugins; the
+   built-in reads up to 4 MiB) are `invalid-response`; with 50 items per
+   page GitHub's answers stay far below it.
 
 ## Build
 

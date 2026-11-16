@@ -236,8 +236,18 @@ Not provable this way, and why:
   CI job prints the firewall state next to the probe results. On macOS and
   Linux the host still exits on stdin EOF only, which needs it to be
   responsive (tested for an idle host, see above).
-- Signed, hardened-runtime macOS helper (`allow-jit`), notarization,
-  Pulley; the Seatbelt interface is deprecated and undocumented.
+- Hardened runtime on macOS: verified with an ad hoc signature, not yet
+  with a Developer ID signature and notarization. wasmtime does not use
+  `MAP_JIT`, so the host is killed under the hardened runtime without an
+  entitlement and with `allow-jit`; it runs, with its sandbox intact, with
+  exactly `com.apple.security.cs.allow-unsigned-executable-memory`
+  (`apps/desktop/src-tauri/entitlements/plugin-host.entitlements`;
+  `scripts/macos-hardened-runtime.sh` shows all three on the real host
+  and the sandbox probe; CI runs it on macOS, where GitHub's runners do
+  not enforce the rule, so only the last one is proven there). Why that entitlement
+  and how only the host gets it: docs/marketplace/distribution.md,
+  "macOS: the plugin host's entitlement". Pulley (no entitlement) is not
+  evaluated. The Seatbelt interface is deprecated and undocumented.
 - Linux `full` on kernels with Landlock ABI 8 rests on seccomp for
   pathname UNIX sockets (`ResolveUnix` arrives with ABI 9, Linux 7.1); it is
   verified on Docker Desktop's 7.0 linuxkit kernel (aarch64, local) and on

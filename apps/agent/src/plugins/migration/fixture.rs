@@ -1,7 +1,10 @@
 //! TEST FIXTURE, never in a release build (features `plugins` and
 //! `test-hooks`): a legacy built-in module, its alias entry and its
-//! migration plan, so the migration engine is tested end to end while the
-//! shipped [`deckpilot_core::alias::ACTION_ALIASES`] stays empty.
+//! migration plan, so the migration engine is tested end to end on a
+//! module of its own, independent of the shipped
+//! [`deckpilot_core::alias::ACTION_ALIASES`] (whose GitHub block
+//! `apps/agent/tests/plugins_cutover.rs` covers). An agent with the
+//! fixture routes the fixture's table in place of the shipped one.
 //!
 //! The module `legacy-fixture` looks like the GitHub module: an API origin
 //! (`apiUrl`, default `https://api.example.com`), a token credential

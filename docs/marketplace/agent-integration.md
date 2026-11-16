@@ -616,6 +616,18 @@ commands are `list_module_migrations`, `decide_module_migration` and
 `retry_module_migration`. `PluginOrigin` gains `{"type": "bundled"}` for
 bundled first-party plugins (reported as `sideload` before).
 
+The first migration is GitHub's (P9, [module-migration.md](module-migration.md)
+§6): an agent with plugins enabled lists `module: "github"`, `plugin:
+"deckpilot.github"`, the six `github.*` aliases and, while it waits, one
+consent item `credentials:token` with `import: {setting: "credential",
+credential: "github.token" (or the module's configured id), slot:
+"token", hosts: ["api.github.com"]}`; `network:api.github.com` and
+`openUrl:github.com` are derived and never listed. A GitHub Enterprise
+or private-host configuration is `notEligible` with the reason. Once
+`cutOver`, the stored `github.*` actions, keys and workflow nodes run in
+the plugin under their legacy ids (`route: plugin`); an agent without
+plugins, or with `route: builtin`, runs the built-in on the same data.
+
 The app reaches the data requests through the Tauri commands
 `list_known_plugins`, `get_plugin_settings`, `set_plugin_settings`,
 `list_plugin_credentials`, `set_plugin_credential`,
@@ -815,6 +827,15 @@ Windows (not a required check).
 
 ## Not done
 
+- On macOS a package with the host (`DECKPILOT_RELEASE_PLUGINS=1`) and a
+  signing identity signs the host with the hardened runtime and its one
+  entitlement, `com.apple.security.cs.allow-unsigned-executable-memory`,
+  which wasmtime's executable memory needs; the app and the agent keep
+  none ([distribution contract](distribution.md#macos-the-plugin-hosts-entitlement)).
+  Verified with ad hoc signatures (`plugins/runtime/scripts/macos-hardened-runtime.sh`
+  and a local package); a Developer ID signed and notarized package with
+  the host has not been built, and the published release workflow does not
+  package the host yet.
 - The registry trust state lives in a file, not in the encrypted database
   ([why](#trust-state-stays-a-file)).
 - No production root keys and no default trust yet: builds can embed root

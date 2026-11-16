@@ -18,14 +18,20 @@
 //! * every action's result is compared: the same status, message, outputs
 //!   and error code. Where the two cannot agree the difference is listed
 //!   in [`DIFFERENT_MESSAGES`] with its reason (and in
-//!   `plugins/first-party/github/README.md`).
+//!   `plugins/first-party/github/README.md`);
+//! * network failures (a name that does not resolve, a certificate that
+//!   is not trusted) report the built-in's transport code on both sides:
+//!   the plugin reads the agent's network kind (`dp_features`).
 //!
-//! The plugin is pinned here as a `default`-class plugin: `migration`-class
-//! plugins are installed only by the migration engine (P6), which this
-//! test does not need. Nothing is routed: `ACTION_ALIASES` stays empty
-//! until the cut-over (P9).
+//! The plugin is pinned here as a `default`-class plugin and invoked by its
+//! own action types: `migration`-class plugins are installed only by the
+//! migration engine, and the legacy `github.*` types reach the plugin only
+//! after a computer's migration is cut over. That path, from an alpha.3
+//! configuration through the consent, is `plugins_cutover.rs`.
 #![cfg(feature = "plugins")]
 
+#[path = "support/https.rs"]
+mod https;
 mod support;
 
 use std::collections::BTreeMap;
@@ -790,15 +796,27 @@ fn plugin_routes() -> Value {
     // starts the request's.
     urls.sort_by_key(|u| std::cmp::Reverse(u.len()));
     urls.dedup();
-    Value::Array(
-        urls.iter()
-            .map(|url| {
-                let a = answer(API, url.strip_prefix(API).unwrap());
-                json!({"url": url, "status": a.status, "headers": a.headers, "body": a.body})
-            })
-            .collect(),
-    )
+    let mut routes: Vec<Value> = NETWORK_FAILURES
+        .iter()
+        .map(|(repository, code)| {
+            json!({"url": format!("{API}/repos/{repository}"), "status": 0, "body": "", "fail": code})
+        })
+        .collect();
+    routes.extend(urls.iter().map(|url| {
+        let a = answer(API, url.strip_prefix(API).unwrap());
+        json!({"url": url, "status": a.status, "headers": a.headers, "body": a.body})
+    }));
+    Value::Array(routes)
 }
+
+/// Repositories whose request gets no answer, and the transport's code:
+/// canned for the plugin, real for the built-in (a name under `.invalid`,
+/// which never resolves; a local HTTPS server whose throwaway CA the
+/// built-in does not trust).
+const NETWORK_FAILURES: &[(&str, &str)] = &[
+    ("octo/unresolved", "dns-failed"),
+    ("octo/untrusted", "tls-failed"),
+];
 
 struct Env {
     dir: TempDir,
@@ -1217,4 +1235,75 @@ async fn the_plugin_answers_as_the_builtin_does() {
     };
     let plugin_paths = paths(&sent.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>());
     assert_eq!(plugin_paths, paths(&seen));
+
+    network_failures(&env, &agent).await;
+}
+
+/// No answer at all: a name that does not resolve and a certificate that
+/// is not trusted end in the built-in's transport codes on both sides,
+/// with the transport's retryability for the plugin (`dns-failed`
+/// retryable, `tls-failed` not). The messages are each side's
+/// explanation of the same failure; neither names the token.
+async fn network_failures(env: &Env, agent: &Agent) {
+    let launcher = Arc::new(RecordingLauncher::new());
+    let root = env.dir.path().join("https-root");
+    std::fs::create_dir_all(&root).unwrap();
+    let untrusted = https::HttpsServer::start(&root);
+    let unresolved = builtin(
+        &ActionParameters::new().with(
+            github::API_URL,
+            ParameterValue::Text("https://api.github.invalid".into()),
+        ),
+        &launcher,
+    );
+    let untrusted_api = builtin(
+        &ActionParameters::new()
+            .with(
+                github::API_URL,
+                ParameterValue::Text(format!("https://127.0.0.1:{}", untrusted.port)),
+            )
+            .with(github::ALLOW_PRIVATE, ParameterValue::Boolean(true)),
+        &launcher,
+    );
+    for (repository, code) in NETWORK_FAILURES {
+        let params = json!({"repository": repository});
+        let modules = if *code == "dns-failed" {
+            &unresolved
+        } else {
+            &untrusted_api
+        };
+        let builtin = blocking(|| run_builtin(modules, "repository", &params, Some(TOKEN)));
+        assert_eq!(
+            builtin.code.as_deref(),
+            Some(*code),
+            "the built-in: {builtin:?}"
+        );
+        let outcome = match agent
+            .request(Request::InvokePluginAction {
+                plugin: ID.into(),
+                action: "repository".into(),
+                params: serde_json::from_value(params.clone()).unwrap(),
+            })
+            .await
+            .unwrap()
+        {
+            Response::PluginActionResult { outcome } => outcome,
+            other => panic!("unexpected {other:?}"),
+        };
+        eprintln!("network {repository}: {outcome:?}");
+        let PluginActionOutcome::Failed {
+            code: plugin_code,
+            message,
+            retryable,
+        } = &outcome
+        else {
+            panic!("{repository}: {outcome:?}\n{}", agent.log());
+        };
+        assert_eq!(plugin_code, code, "{outcome:?}");
+        assert_eq!(*retryable, *code == "dns-failed", "{outcome:?}");
+        for text in [message.as_deref().unwrap_or_default(), &builtin.message] {
+            assert!(!text.contains(TOKEN), "{text}");
+            assert_ne!(text, "");
+        }
+    }
 }
