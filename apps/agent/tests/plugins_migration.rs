@@ -738,6 +738,7 @@ async fn the_app_lists_and_approves_the_consent() {
             credential: CREDENTIAL.into(),
             slot: "token".into(),
             hosts: vec!["api.example.com".into()],
+            user_origin: None,
         })
     );
     assert!(item.why.contains(CREDENTIAL), "{}", item.why);
