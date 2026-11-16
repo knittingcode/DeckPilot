@@ -36,6 +36,10 @@ led to it; where the code differs, the code and the tests win.
   Git, Docker, HTTP, GitHub, GitLab, Jira and Notifications modules.
 - [Compatibility](compatibility.md): protocol negotiation and the tested
   matrix of app and agent versions.
+- [Built-in actions and feature parity](feature-parity.md): what exists
+  for folders, pages, profile switching, key gestures, multi actions,
+  system and device actions, what is missing, and the designs for it.
+  *Audit and design record.*
 
 ## Plugin marketplace (experimental)
 
