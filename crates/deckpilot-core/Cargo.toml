@@ -16,6 +16,12 @@ serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 
+[features]
+# Test only, never in a release build: `ModuleRegistry::with_aliases`, so
+# agent tests can route a fixture alias table (the shipped
+# `ACTION_ALIASES` stays empty until a module is cut over).
+test-hooks = []
+
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", default-features = false, features = ["process", "std"] }
 

@@ -513,12 +513,26 @@ impl ModuleRegistry {
         }
     }
 
-    /// The registry with `aliases` in place of [`ACTION_ALIASES`].
-    #[cfg(test)]
-    pub(crate) fn with_aliases(mut self, aliases: &'static [ActionAlias]) -> Self {
+    /// The registry with `aliases` in place of [`ACTION_ALIASES`]: a
+    /// fixture table, in this crate's tests and in agent tests (feature
+    /// `test-hooks`, never in a release build).
+    ///
+    /// # Panics
+    ///
+    /// For a table that [`crate::alias::validate`] refuses.
+    #[cfg(any(test, feature = "test-hooks"))]
+    #[must_use]
+    pub fn with_aliases(mut self, aliases: &'static [ActionAlias]) -> Self {
         crate::alias::assert_valid(aliases);
         self.aliases = aliases;
         self
+    }
+
+    /// The alias table this registry routes: [`ACTION_ALIASES`], or a
+    /// fixture table in tests. The agent's migration engine reads it to
+    /// know which modules can move to which plugin.
+    pub fn alias_table(&self) -> &'static [ActionAlias] {
+        self.aliases
     }
 
     /// Sets where the legacy action types of migrated modules go. Without

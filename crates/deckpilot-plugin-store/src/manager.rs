@@ -10,6 +10,7 @@
 //! quarantine) need no journal; their file clean-up after the commit is
 //! repeated by recovery's orphan sweep.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::File;
 use std::path::Path;
@@ -525,6 +526,61 @@ impl PluginManager {
                 )?;
             }
             Ok(())
+        })
+    }
+
+    /// Records grants that a decision other than the user's derived
+    /// (`plugin_grants.source = 'derived'`): a module migration granting
+    /// what the built-in demonstrably used on this computer
+    /// (`docs/marketplace/module-migration.md` §5.5). Only low- and
+    /// medium-tier permissions; a high-tier one (a credential, the private
+    /// network) is refused, it always needs the user's consent. A key
+    /// already granted is left as it is, so the user's own decision and a
+    /// revocation are never overwritten: a revoked key stays revoked.
+    /// Returns the keys it granted.
+    pub fn derive_grants(
+        &mut self,
+        id: &PluginId,
+        keys: &BTreeSet<GrantKey>,
+        decided_by: &str,
+    ) -> Result<Vec<GrantKey>> {
+        let plugin = self.plugin(id)?;
+        let active = active_of(&plugin)?;
+        let declared = active.grants();
+        let consent = Consent::of(keys.iter().cloned(), decided_by);
+        check_consent(id, &declared, &consent)?;
+        check_bundled_tiers(id, &declared, &consent, crate::grants::Tier::Medium)?;
+        let version = active.version.to_string();
+        self.tx(|tx, ctx| {
+            ensure_idle(tx, id)?;
+            let stored = store::load_grants(tx, id)?;
+            let mut granted = Vec::new();
+            for key in keys {
+                if stored.iter().any(|g| &g.key == key) {
+                    continue;
+                }
+                let scope = declared.get(key).cloned().ok_or_else(|| unknown(id, key))?;
+                store::upsert_grant(
+                    tx,
+                    id,
+                    &StoredGrant {
+                        key: key.clone(),
+                        scope,
+                        status: GrantStatus::Granted,
+                        source: GrantSource::Derived,
+                        decided_by: decided_by.to_owned(),
+                        decided_at: ctx.now,
+                        granted_for_version: version.clone(),
+                    },
+                )?;
+                ctx.audit(
+                    tx,
+                    id,
+                    event(Some(&version), "grant", Some(key), "derived", None),
+                )?;
+                granted.push(key.clone());
+            }
+            Ok(granted)
         })
     }
 
@@ -1178,12 +1234,22 @@ fn check_consent(id: &PluginId, declared: &GrantSet, consent: &Consent) -> Resul
 /// Seeding a bundled plugin grants low-tier permissions only (recorded as
 /// `derived`); a medium- or high-tier one waits for the user's consent.
 fn check_bundled_consent(id: &PluginId, declared: &GrantSet, consent: &Consent) -> Result<()> {
+    check_bundled_tiers(id, declared, consent, crate::grants::Tier::Low)
+}
+
+/// Every key of `consent` is at most of tier `highest`.
+fn check_bundled_tiers(
+    id: &PluginId,
+    declared: &GrantSet,
+    consent: &Consent,
+    highest: crate::grants::Tier,
+) -> Result<()> {
     for key in &consent.keys {
         let tier = declared
             .get(key)
             .map(crate::grants::GrantScope::tier)
             .ok_or_else(|| unknown(id, key))?;
-        if tier != crate::grants::Tier::Low {
+        if tier > highest {
             return Err(StoreError::BundledGrant {
                 id: id.clone(),
                 key: key.clone(),
