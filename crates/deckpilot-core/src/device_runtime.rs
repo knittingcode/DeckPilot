@@ -20,9 +20,13 @@ use crate::stateful::StatefulBinding;
 use crate::{
     ActionInstanceId, ActionParameters, ActionRegistry, ActionResult, ActiveProjectContext,
     BindingTarget, ControlBinding, CycleDirection, DeviceLayout, Engine, EngineError, FaceStyle,
-    KeyFace, LayoutId, MachineConfig, PageId, Profile, Project, ProjectId, Trigger, WorkflowId,
-    WorkflowReport, render_label,
+    KeyFace, LayoutId, MachineConfig, PageId, PageLabel, Profile, ProfileId, Project, ProjectId,
+    Trigger, WorkflowId, WorkflowReport, render_label, render_page_label,
 };
+
+/// The error code of an action that changes a device's page and was run
+/// without a device, e.g. with "Run" in the app.
+pub const NO_DEVICE: &str = "no-device";
 
 /// Whether a profile provides a usable layout for a device model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,6 +142,11 @@ impl DetachedAction {
                 "an action that runs detached cannot change the project context",
             ));
         }
+        if result.request.is_some() {
+            return Ok(ActionResult::failure(
+                "an action that runs detached cannot change pages or profiles",
+            ));
+        }
         Ok(result)
     }
 }
@@ -167,7 +176,16 @@ pub struct Runtime {
     /// Gesture timings of controls whose page sets none (a machine
     /// setting).
     gesture_defaults: GestureTimings,
+    /// The top-level page each device showed in a profile when the profile
+    /// was left (or when the agent last ran), shown again when the device
+    /// next shows that profile. Folders are not reopened. A device on the
+    /// home page has no entry: that is where it starts anyway.
+    remembered: BTreeMap<(ProfileId, DeviceId), PageId>,
 }
+
+/// Most pages kept in [`Runtime::remembered_pages`]: profiles times
+/// devices, far beyond real use. Beyond it nothing more is remembered.
+const MAX_REMEMBERED_PAGES: usize = 512;
 
 impl Runtime {
     pub fn new(engine: Engine, catalog: ModelCatalog, machine: MachineConfig) -> Self {
@@ -181,6 +199,77 @@ impl Runtime {
             parked: BTreeMap::new(),
             placeholder: None,
             gesture_defaults: GestureTimings::default(),
+            remembered: BTreeMap::new(),
+        }
+    }
+
+    /// The top-level page each device shows, or showed last, per profile,
+    /// where that is not the home page: what [`Runtime::restore_pages`]
+    /// takes after a restart. Empty while every device is on its home page,
+    /// so nothing needs to be saved for a deck that never left it.
+    pub fn remembered_pages(&self) -> Vec<(ProfileId, DeviceId, PageId)> {
+        let mut pages = self.remembered.clone();
+        if let Some(profile) = self.profile() {
+            for (device, stack) in self.navigation.iter().chain(&self.parked) {
+                let key = (profile.id, device.clone());
+                match self.top_level_shown(&device.model, stack) {
+                    Some(page) => pages.insert(key, page),
+                    None => pages.remove(&key),
+                };
+            }
+        }
+        pages
+            .into_iter()
+            .map(|((profile, device), page)| (profile, device, page))
+            .collect()
+    }
+
+    /// Makes devices start on the pages of an earlier run. A page that no
+    /// longer exists, or is inside a folder now, is ignored when its
+    /// device connects.
+    pub fn restore_pages(
+        &mut self,
+        pages: impl IntoIterator<Item = (ProfileId, DeviceId, PageId)>,
+    ) {
+        for (profile, device, page) in pages.into_iter().take(MAX_REMEMBERED_PAGES) {
+            self.remembered.insert((profile, device), page);
+        }
+    }
+
+    /// The top-level page of the page on top of `stack`, in the layout
+    /// for `model`; `None` for the home page, which needs no remembering.
+    fn top_level_shown(&self, model: &DeviceModelId, stack: &[PageId]) -> Option<PageId> {
+        let layout = self.layout_for(model)?;
+        let page = *stack.last()?;
+        layout.page(page)?;
+        Some(layout.top_level_of(page)).filter(|top| *top != layout.home_page)
+    }
+
+    /// Notes the page every device shows in the active profile, before the
+    /// profile is left.
+    fn remember_pages(&mut self) {
+        let Some(profile) = self.profile().map(|profile| profile.id) else {
+            return;
+        };
+        let shown: Vec<(DeviceId, Option<PageId>)> = self
+            .navigation
+            .iter()
+            .chain(&self.parked)
+            .map(|(device, stack)| (device.clone(), self.top_level_shown(&device.model, stack)))
+            .collect();
+        for (device, page) in shown {
+            let key = (profile, device);
+            match page {
+                Some(page)
+                    if self.remembered.len() < MAX_REMEMBERED_PAGES
+                        || self.remembered.contains_key(&key) =>
+                {
+                    self.remembered.insert(key, page);
+                }
+                _ => {
+                    self.remembered.remove(&key);
+                }
+            }
         }
     }
 
@@ -309,8 +398,11 @@ impl Runtime {
 
     /// Activates `profile` (or none). The project selection is restored from
     /// `project` when it belongs to the profile, and every connected device
-    /// returns to the home page of its layout. No action is executed.
+    /// shows the top-level page it showed in that profile before (the home
+    /// page of its layout the first time); folders are closed. No action is
+    /// executed.
     pub fn set_profile(&mut self, profile: Option<Profile>, project: Option<ProjectId>) {
+        self.remember_pages();
         self.parked.clear();
         self.session = profile.map(|profile| Session {
             projects: ActiveProjectContext::restore(&profile, project),
@@ -382,13 +474,24 @@ impl Runtime {
     pub fn run_action(&mut self, action: ActionInstanceId) -> Result<ActionResult, EngineError> {
         let session = self.session.as_mut().ok_or(EngineError::NoActiveProfile)?;
         // Run from the app (`runAction`).
-        self.engine.run_action_from(
+        let result = self.engine.run_action_from(
             &session.profile,
             &self.machine,
             &mut session.projects,
             action,
             &crate::resolution::Invocation::default().with_origin(crate::RunOrigin::App),
-        )
+        )?;
+        // No device asked: its pages cannot be meant.
+        if result
+            .deck_request()
+            .is_some_and(crate::DeckRequest::needs_device)
+        {
+            return Ok(ActionResult::error(
+                NO_DEVICE,
+                "this action changes the page of the device whose key runs it; run it from a key",
+            ));
+        }
+        Ok(result)
     }
 
     /// Whether the active profile's `action` runs detached
@@ -488,12 +591,89 @@ impl Runtime {
         })
     }
 
+    /// Sends `device` to the page it showed last in the active profile, if
+    /// that is still a top-level page of its layout, else to the home page.
     fn reset_navigation(&mut self, device: &DeviceId) {
-        let home = self
-            .layout_for(&device.model)
-            .map(|layout| layout.home_page);
+        let start = self.layout_for(&device.model).map(|layout| {
+            self.profile()
+                .and_then(|profile| self.remembered.get(&(profile.id, device.clone())))
+                .copied()
+                .filter(|page| layout.top_level_pages().contains(page))
+                .unwrap_or(layout.home_page)
+        });
         self.navigation
-            .insert(device.clone(), home.into_iter().collect());
+            .insert(device.clone(), start.into_iter().collect());
+    }
+
+    /// Back on `device`: to the folder of the page it shows; for a page
+    /// outside folders, to the page that opened it. `None`: there is no
+    /// page to return to.
+    fn go_back(&mut self, device: &DeviceId) -> Option<PageId> {
+        let current = self.current_page(device);
+        let folder = current.and_then(|page| {
+            let layout = self.layout_for(&device.model)?;
+            let parent = layout.parent_of(page)?;
+            let mut path = layout.ancestors(parent);
+            path.reverse();
+            path.push(parent);
+            Some((parent, path))
+        });
+        let stack = self.navigation.entry(device.clone()).or_default();
+        match folder {
+            Some((parent, path)) => match stack.iter().position(|p| *p == parent) {
+                Some(index) => stack.truncate(index + 1),
+                None => *stack = path,
+            },
+            None if stack.len() > 1 => {
+                stack.pop();
+            }
+            None => {}
+        }
+        stack.last().copied()
+    }
+
+    /// Whether the page `device` shows is a folder that closes after one of
+    /// its keys ran something ([`crate::LayoutPage::auto_return`]).
+    fn closes_after_use(&self, device: &DeviceId) -> bool {
+        self.layout_for(&device.model)
+            .zip(self.current_page(device))
+            .is_some_and(|(layout, page)| {
+                layout.page(page).is_some_and(|p| p.auto_return) && layout.parent_of(page).is_some()
+            })
+    }
+
+    /// Applies the page request of an action's `result` to `device` and
+    /// takes it out; a request for the agent (a profile switch) stays in
+    /// the result for the caller.
+    fn apply_page_request(&mut self, device: &DeviceId, result: &mut ActionResult) {
+        let (forward, wrap_around) = match result.deck_request() {
+            Some(crate::DeckRequest::NextPage { wrap_around }) => (true, wrap_around),
+            Some(crate::DeckRequest::PreviousPage { wrap_around }) => (false, wrap_around),
+            Some(crate::DeckRequest::SwitchProfile { .. }) | None => return,
+        };
+        result.request = None;
+        let target = self
+            .layout_for(&device.model)
+            .zip(self.current_page(device))
+            .and_then(|(layout, page)| {
+                let target = layout.adjacent_page(page, forward, wrap_around)?;
+                Some((target, layout.page(target)?.name.clone()))
+            });
+        match target {
+            Some((page, name)) => {
+                self.navigation.insert(device.clone(), vec![page]);
+                result.message = format!("page {name}");
+                result.data.insert("pageId".into(), page.to_string());
+                result.data.insert("pageName".into(), name);
+            }
+            None => {
+                result.message = if forward {
+                    "there is no next page".into()
+                } else {
+                    "there is no previous page".into()
+                };
+            }
+        }
     }
 
     /// What every display-capable control of a connected device should show.
@@ -652,6 +832,31 @@ impl Runtime {
         target: BindingTarget,
         origin: crate::RunOrigin,
     ) -> Result<RuntimeOutcome, EngineError> {
+        // A folder that closes by itself returns once one of its keys ran
+        // an action or started a workflow, whatever came of it.
+        let closes = self.closes_after_use(device);
+        let shown = self.current_page(device);
+        let outcome = self.dispatch_target(device, target, origin)?;
+        if closes
+            && self.current_page(device) == shown
+            && matches!(
+                outcome,
+                RuntimeOutcome::Action { .. }
+                    | RuntimeOutcome::ActionRequested { .. }
+                    | RuntimeOutcome::WorkflowRequested { .. }
+            )
+        {
+            self.go_back(device);
+        }
+        Ok(outcome)
+    }
+
+    fn dispatch_target(
+        &mut self,
+        device: &DeviceId,
+        target: BindingTarget,
+        origin: crate::RunOrigin,
+    ) -> Result<RuntimeOutcome, EngineError> {
         match target {
             BindingTarget::Action { action, overrides } => {
                 if self.runs_detached(action) {
@@ -665,7 +870,7 @@ impl Runtime {
                 // are resolved in (`system.device.current.id`). The
                 // binding's overrides are resolved in the same pipeline.
                 let session = self.session.as_mut().ok_or(EngineError::NoActiveProfile)?;
-                let result = self.engine.run_action_with(
+                let mut result = self.engine.run_action_with(
                     &session.profile,
                     &self.machine,
                     &mut session.projects,
@@ -673,6 +878,7 @@ impl Runtime {
                     Some(&overrides),
                     &crate::resolution::Invocation::from_device(device.clone()).with_origin(origin),
                 )?;
+                self.apply_page_request(device, &mut result);
                 Ok(RuntimeOutcome::Action { action, result })
             }
             BindingTarget::Workflow { workflow } => {
@@ -689,39 +895,17 @@ impl Runtime {
                     page,
                 })
             }
-            BindingTarget::Back => {
-                // Back returns to the page's folder; for a page outside
-                // folders, to the page that opened it.
-                let current = self.current_page(device);
-                let folder = current.and_then(|page| {
-                    let layout = self.layout_for(&device.model)?;
-                    let parent = layout.parent_of(page)?;
-                    let mut path = layout.ancestors(parent);
-                    path.reverse();
-                    path.push(parent);
-                    Some((parent, path))
-                });
-                let stack = self.navigation.entry(device.clone()).or_default();
-                match folder {
-                    Some((parent, path)) => match stack.iter().position(|p| *p == parent) {
-                        Some(index) => stack.truncate(index + 1),
-                        None => *stack = path,
-                    },
-                    None if stack.len() > 1 => {
-                        stack.pop();
-                    }
-                    None => {}
-                }
-                match stack.last() {
-                    Some(page) => Ok(RuntimeOutcome::Navigated {
-                        device: device.clone(),
-                        page: *page,
-                    }),
-                    None => Ok(RuntimeOutcome::Ignored {
-                        reason: "no page to return to".into(),
-                    }),
-                }
-            }
+            // Back returns to the page's folder; for a page outside
+            // folders, to the page that opened it.
+            BindingTarget::Back => match self.go_back(device) {
+                Some(page) => Ok(RuntimeOutcome::Navigated {
+                    device: device.clone(),
+                    page,
+                }),
+                None => Ok(RuntimeOutcome::Ignored {
+                    reason: "no page to return to".into(),
+                }),
+            },
             // Refused when a layout is saved: the state at the press
             // belongs to a gesture.
             BindingTarget::Stateful(_) => Ok(RuntimeOutcome::Ignored {
@@ -748,11 +932,17 @@ pub fn page_faces(
             .collect();
     };
     let automatic_back = layout.automatic_back(page.id, controls);
+    let (index, count) = layout.page_position(page.id).unwrap_or((0, 1));
+    let label = PageLabel {
+        number: index + 1,
+        count,
+        name: &page.name,
+    };
     controls
         .iter()
         .map(|control| {
             let binding = shown_binding(page, *control);
-            let face = binding.map_or_else(
+            let mut face = binding.map_or_else(
                 || {
                     if automatic_back == Some(*control) {
                         KeyFace::new(FaceStyle::Back, "Back")
@@ -765,6 +955,8 @@ pub fn page_faces(
                         .with_appearance(binding.appearance.as_ref())
                 },
             );
+            face.title = render_page_label(&face.title, label);
+            face.detail = face.detail.map(|detail| render_page_label(&detail, label));
             (*control, face)
         })
         .collect()
@@ -849,6 +1041,9 @@ fn face_for(
         ),
     }
 }
+
+#[cfg(test)]
+mod deck_tests;
 
 #[cfg(test)]
 mod tests {

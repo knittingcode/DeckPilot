@@ -2,6 +2,7 @@
   "$comment": "The first-party plugins the application bundles (plugins/first-party/README.md). Built-in modules move here one by one (docs/marketplace/module-migration.md §9). A `default`-class plugin is seeded on every computer, fresh or upgraded, unless the user removed or disabled it; a `migration`-class plugin is installed only by the migration engine. The built-in's action types are routed to either only once ACTION_ALIASES lists them and the migration is cut over.",
   "plugins": [
     { "path": "github", "class": "migration" },
+    { "path": "gitlab", "class": "migration" },
     { "path": "notifications", "class": "default" }
   ]
 }

@@ -1,5 +1,5 @@
 import { useDraggable } from "@dnd-kit/core"
-import { ArrowLeft, Folder, ListOrdered } from "lucide-react"
+import { ArrowLeft, Folder, FolderPlus, ListOrdered } from "lucide-react"
 
 import { ActionIcon } from "@/components/action-icon"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -59,6 +59,42 @@ function LibraryEntry({ option }: { option: TargetOption }) {
   )
 }
 
+/** The id of the "New folder" entry among the editor's draggables. */
+export const NEW_FOLDER_DRAG_ID = "library:new-folder"
+
+/**
+ * "New folder": dropped on an empty control, it creates a folder in the
+ * open page and makes the control open it.
+ */
+function NewFolderEntry() {
+  const source: DragSource = { type: "newFolder" }
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: NEW_FOLDER_DRAG_ID,
+    data: source,
+  })
+  return (
+    <section className="grid gap-1" aria-label="Folders">
+      <h3 className="text-xs font-medium text-muted-foreground">Folders</h3>
+      <ul className="grid gap-1">
+        <li
+          ref={setNodeRef}
+          className={cn(
+            "flex min-w-0 cursor-grab items-center gap-2 rounded-md border border-dashed bg-card px-2 py-1.5 text-sm hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+            isDragging && "opacity-60",
+          )}
+          {...attributes}
+          {...listeners}
+          aria-label="Drag New folder onto an empty control"
+          title="Drop on an empty key to create a folder there. Double-click the key to enter it."
+        >
+          <FolderPlus className="size-4 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">New folder</span>
+        </li>
+      </ul>
+    </section>
+  )
+}
+
 /** Actions, workflows and navigation targets that can be dragged onto controls. */
 export function LibraryPanel({ groups }: { groups: TargetGroup[] }) {
   const hasItems = groups.some((g) => g.label !== "Navigation")
@@ -76,6 +112,7 @@ export function LibraryPanel({ groups }: { groups: TargetGroup[] }) {
             No actions or workflows yet. Create them in the Action Library.
           </p>
         )}
+        <NewFolderEntry />
         {groups.map((group) => (
           <section key={group.label} className="grid gap-1" aria-label={group.label}>
             <h3 className="text-xs font-medium text-muted-foreground">{group.label}</h3>
