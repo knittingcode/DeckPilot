@@ -1813,6 +1813,44 @@ mod first_party {
         assert_eq!(slots[0].user_origin.as_deref(), Some(setting));
     }
 
+    /// The aliases the Jira cut-over ships: the per-action `credential`
+    /// override is dropped when it names the module's credential, and
+    /// `jira.open` has none.
+    const JIRA: &[ActionAlias] = &[
+        jira_alias("jira.myself", "deckpilot.jira.myself", true),
+        jira_alias("jira.issue", "deckpilot.jira.issue", true),
+        jira_alias("jira.issues", "deckpilot.jira.issues", true),
+        jira_alias("jira.open", "deckpilot.jira.open", false),
+    ];
+    const _: () = alias::assert_valid(JIRA);
+
+    const fn jira_alias(
+        legacy: &'static str,
+        target: &'static str,
+        credential: bool,
+    ) -> ActionAlias {
+        server_alias("jira", "deckpilot.jira", legacy, target, credential)
+    }
+
+    const JIRA_MANIFEST: &str = include_str!("../../../plugins/first-party/jira/manifest.json");
+
+    /// `deckpilot.jira` reproduces every action of the built-in `jira`
+    /// module. Its settings mirror the module's but for the credential
+    /// (the plugin's slot `credential`) and the private-network switch
+    /// (the user's consent to a private site instead). Jira has no fixed
+    /// host: the site is a server the user enters, the plugin's one
+    /// user-origin slot, the credential is bound to it and pages open on
+    /// it; the plugin declares no host of its own.
+    #[test]
+    fn the_jira_plugin_honours_the_builtin_contract() {
+        let manifest = manifest(JIRA_MANIFEST);
+        assert_eq!(manifest.id.as_str(), "deckpilot.jira");
+        let module = jira::JiraModule::new();
+        honours_the_contract(JIRA, &manifest, &module);
+        mirrors_the_settings(&module, &manifest, &[jira::ALLOW_PRIVATE, jira::CREDENTIAL]);
+        entered_server(&manifest, jira::SITE_URL, "credential", &[]);
+    }
+
     const NOTIFICATIONS_MANIFEST: &str =
         include_str!("../../../plugins/first-party/notifications/manifest.json");
 
