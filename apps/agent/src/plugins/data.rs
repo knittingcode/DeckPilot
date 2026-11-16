@@ -325,6 +325,7 @@ pub fn settings(manifest: &Manifest, saved: BTreeMap<String, Value>) -> ipc::Plu
         values: saved,
         effective,
         missing,
+        origins: Vec::new(),
     }
 }
 
@@ -348,6 +349,7 @@ pub fn credential_slots(
                 label: slot.label.clone(),
                 description: slot.description.clone(),
                 hosts: slot.hosts.clone(),
+                user_origin: slot.user_origin.clone(),
                 schemes: slot
                     .schemes
                     .iter()

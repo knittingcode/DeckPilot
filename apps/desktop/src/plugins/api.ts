@@ -81,6 +81,19 @@ export interface PluginClient {
   setCredential(id: string, key: string, secret: string): Promise<PluginCredentialSlot[]>
   /** `deletePluginCredential`. */
   deleteCredential(id: string, key: string): Promise<PluginCredentialSlot[]>
+  /**
+   * `grantPluginUserOrigin`: consents to exactly the server `origin` that the
+   * origin setting holds; `privateNetwork` is the separate consent to reach
+   * it on a private network, never assumed.
+   */
+  grantUserOrigin(
+    id: string,
+    setting: string,
+    origin: string,
+    privateNetwork: boolean,
+  ): Promise<PluginSettings>
+  /** `revokePluginUserOrigin`. */
+  revokeUserOrigin(id: string, setting: string): Promise<PluginSettings>
   /** `listModuleMigrations`: the built-in modules moving to their first-party plugins. */
   listModuleMigrations(): Promise<ModuleMigration[]>
   /**

@@ -133,6 +133,15 @@ export function createTauriPluginClient(): PluginClient {
     listCredentials: listPluginCredentials,
     setCredential: setPluginCredential,
     deleteCredential: deletePluginCredential,
+    grantUserOrigin: (plugin, setting, origin, privateNetwork) =>
+      call<PluginSettings>("grant_plugin_user_origin", {
+        plugin,
+        setting,
+        origin,
+        privateNetwork,
+      }),
+    revokeUserOrigin: (plugin, setting) =>
+      call<PluginSettings>("revoke_plugin_user_origin", { plugin, setting }),
     invokeAction: (plugin, action, params) =>
       call<PluginActionOutcome>("invoke_plugin_action", { plugin, action, params }),
     listModuleMigrations: () => call<ModuleMigration[]>("list_module_migrations"),

@@ -275,10 +275,11 @@
             "kind": { "const": "network" },
             "hosts": {
               "type": "array",
-              "minItems": 1,
+              "minItems": 0,
               "maxItems": 16,
               "uniqueItems": true,
-              "items": { "$ref": "#/$defs/hostPattern" }
+              "items": { "$ref": "#/$defs/hostPattern" },
+              "description": "At least one host, unless userOrigins names a slot."
             },
             "methods": {
               "type": "array",
@@ -287,9 +288,20 @@
               "items": { "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"] }
             },
             "privateNetwork": { "type": "boolean", "default": false },
+            "userOrigins": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 4,
+              "items": { "$ref": "#/$defs/userOriginSlot" },
+              "description": "Origins the user enters in a text setting (a GitHub Enterprise server, a self-managed GitLab, a Jira site). Never granted at install: the user consents to the exact origin when they save it."
+            },
             "justification": { "$ref": "#/$defs/justification" }
           },
           "required": ["hosts"],
+          "anyOf": [
+            { "properties": { "hosts": { "minItems": 1 } } },
+            { "required": ["userOrigins"] }
+          ],
           "additionalProperties": false
         },
         {
@@ -595,21 +607,54 @@
         "deprecated": { "type": "boolean", "default": false }
       }
     },
+    "userOriginSlot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["setting"],
+      "properties": {
+        "setting": {
+          "$ref": "#/$defs/camelKey",
+          "description": "The key of a one-line text setting the user enters the origin into."
+        },
+        "methods": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"] },
+          "description": "A subset of the permission's methods; absent means all of them."
+        },
+        "pathPrefix": {
+          "type": "boolean",
+          "default": false,
+          "description": "The user may enter a path with the origin (https://ghe.example.com/api/v3); requests are limited to it."
+        },
+        "privateNetwork": {
+          "type": "boolean",
+          "default": false,
+          "description": "The user may enter a server on a private network; each such origin needs its own explicit consent. Loopback and link-local addresses are never reachable."
+        }
+      }
+    },
     "credential": {
       "type": "object",
       "additionalProperties": false,
       "required": ["key", "label", "hosts", "schemes"],
+      "anyOf": [{ "properties": { "hosts": { "minItems": 1 } } }, { "required": ["userOrigin"] }],
       "properties": {
         "key": { "$ref": "#/$defs/camelKey" },
         "label": { "type": "string", "minLength": 1, "maxLength": 48 },
         "description": { "type": "string", "maxLength": 300 },
         "hosts": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "maxItems": 8,
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/hostPattern" },
-          "description": "Subset of the network permission's hosts. The secret is sent nowhere else."
+          "description": "Subset of the network permission's hosts. The secret is sent nowhere else (besides the user origin). At least one host, unless userOrigin is set."
+        },
+        "userOrigin": {
+          "$ref": "#/$defs/camelKey",
+          "description": "The setting of a network.userOrigins slot: the secret is also sent to the origin the user entered there, once they consented to it."
         },
         "schemes": {
           "type": "array",

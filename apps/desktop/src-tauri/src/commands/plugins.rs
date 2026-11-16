@@ -461,6 +461,38 @@ pub async fn set_plugin_settings(
     plugin_settings(&state, Request::SetPluginSettings { plugin, values }).await
 }
 
+/// Consents to the server an origin setting holds (`grantPluginUserOrigin`);
+/// `private_network` only when the user ticked it.
+#[tauri::command]
+pub async fn grant_plugin_user_origin(
+    state: State<'_, AppState>,
+    plugin: String,
+    setting: String,
+    origin: String,
+    private_network: Option<bool>,
+) -> PluginResult<PluginSettings> {
+    plugin_settings(
+        &state,
+        Request::GrantPluginUserOrigin {
+            plugin,
+            setting,
+            origin,
+            private_network: private_network.unwrap_or(false),
+        },
+    )
+    .await
+}
+
+/// Revokes the consent to an origin setting's server (`revokePluginUserOrigin`).
+#[tauri::command]
+pub async fn revoke_plugin_user_origin(
+    state: State<'_, AppState>,
+    plugin: String,
+    setting: String,
+) -> PluginResult<PluginSettings> {
+    plugin_settings(&state, Request::RevokePluginUserOrigin { plugin, setting }).await
+}
+
 async fn plugin_credentials(
     state: &AppState,
     request: Request,

@@ -3311,6 +3311,15 @@ fn plugin_commands() -> Vec<(&'static str, Value)> {
             json!({ "plugin": "example.hello", "values": { "city": "berlin" } }),
         ),
         (
+            "grant_plugin_user_origin",
+            json!({ "plugin": "example.hello", "setting": "apiUrl",
+                "origin": "https://ghe.example.com", "privateNetwork": false }),
+        ),
+        (
+            "revoke_plugin_user_origin",
+            json!({ "plugin": "example.hello", "setting": "apiUrl" }),
+        ),
+        (
             "list_plugin_credentials",
             json!({ "plugin": "example.hello" }),
         ),

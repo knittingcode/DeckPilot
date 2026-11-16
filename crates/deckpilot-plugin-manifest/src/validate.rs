@@ -17,8 +17,9 @@ use crate::identity::{
     RESERVED_PUBLISHERS, is_camel_key, is_local_id, is_publisher_id, is_variable_segment,
 };
 use crate::model::{
-    Action, Credential, CredentialScheme, Effect, Manifest, Node, Parameter, ParameterKind,
-    ParameterValue, Permission, PermissionKind, ProfileScope, Setting, VariableScope,
+    Action, Credential, CredentialScheme, Effect, HttpMethod, Manifest, Node, Parameter,
+    ParameterKind, ParameterValue, Permission, PermissionKind, ProfileScope, Setting,
+    UserOriginSlot, VariableScope,
 };
 use crate::{MANIFEST_VERSION, path_rules};
 
@@ -194,7 +195,11 @@ impl Checker {
     }
 
     fn hosts(&mut self, path: &str, hosts: &[String], max: usize) {
-        self.count(path, hosts.len(), 1, max);
+        self.hosts_min(path, hosts, 1, max);
+    }
+
+    fn hosts_min(&mut self, path: &str, hosts: &[String], min: usize, max: usize) {
+        self.count(path, hosts.len(), min, max);
         for (index, host) in hosts.iter().enumerate() {
             self.host(&format!("{path}[{index}]"), host);
         }
@@ -604,14 +609,25 @@ fn permissions(c: &mut Checker, m: &Manifest) {
             200,
         );
         match permission {
-            Permission::Network { hosts, methods, .. } => {
-                c.hosts(&format!("{path}.hosts"), hosts, 16);
+            Permission::Network {
+                hosts,
+                methods,
+                user_origins,
+                ..
+            } => {
+                // Hosts may be empty when the user enters the origin (a
+                // self-managed server has no fixed host).
+                let min = usize::from(user_origins.as_ref().is_none_or(Vec::is_empty));
+                c.hosts_min(&format!("{path}.hosts"), hosts, min, 16);
                 if let Some(methods) = methods {
                     c.count(&format!("{path}.methods"), methods.len(), 1, usize::MAX);
                     c.unique(
                         &format!("{path}.methods"),
                         methods.iter().map(|x| format!("{x:?}")),
                     );
+                }
+                if let Some(slots) = user_origins {
+                    user_origin_slots(c, &format!("{path}.userOrigins"), slots, methods.as_deref());
                 }
             }
             Permission::Credentials { refs, .. } => {
@@ -667,6 +683,76 @@ fn permissions(c: &mut Checker, m: &Manifest) {
             Permission::Notifications { .. } => {}
         }
     }
+}
+
+/// Most user-origin slots one plugin may declare.
+pub const MAX_USER_ORIGINS: usize = 4;
+
+/// The fields of `network.userOrigins` that need no other part of the
+/// manifest.
+fn user_origin_slots(
+    c: &mut Checker,
+    path: &str,
+    slots: &[UserOriginSlot],
+    methods: Option<&[HttpMethod]>,
+) {
+    c.count(path, slots.len(), 1, MAX_USER_ORIGINS);
+    for (i, slot) in slots.iter().enumerate() {
+        let field = format!("{path}[{i}]");
+        camel_key(c, &format!("{field}.setting"), &slot.setting);
+        if let Some(own) = &slot.methods {
+            c.count(&format!("{field}.methods"), own.len(), 1, usize::MAX);
+            c.unique(
+                &format!("{field}.methods"),
+                own.iter().map(|x| format!("{x:?}")),
+            );
+            if let Some(allowed) = methods
+                && let Some(extra) = own.iter().find(|m| !allowed.contains(m))
+            {
+                c.error(
+                    format!("{field}.methods"),
+                    IssueCode::MissingPermission,
+                    format!(
+                        "`{}` is not one of the permission's methods",
+                        format!("{extra:?}").to_uppercase()
+                    ),
+                );
+            }
+        }
+    }
+    c.unique(path, slots.iter().map(|s| &s.setting));
+}
+
+/// Checks a user-origin setting's default: text a user could enter, an
+/// `https` URL of exactly a declared host (a default is part of the
+/// manifest and consented to at install, so it is never a host the user
+/// did not see), with a path only when the slot allows one.
+pub(crate) fn check_origin_default(
+    text: &str,
+    hosts: &[String],
+    path_prefix: bool,
+) -> Result<(), String> {
+    let rest = text
+        .strip_prefix("https://")
+        .ok_or("must start with https://")?;
+    let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    if authority.contains('@') {
+        return Err("must not contain a user name or password".into());
+    }
+    if text.contains(['?', '#']) {
+        return Err("must not have a query or fragment".into());
+    }
+    if !path.trim_end_matches('/').is_empty() && !path_prefix {
+        return Err("has a path, but the slot does not allow `pathPrefix`".into());
+    }
+    let authority = authority.strip_suffix(":443").unwrap_or(authority);
+    check_host(authority)?;
+    if authority.starts_with("*.") || !hosts.iter().any(|h| h == authority) {
+        return Err(format!(
+            "must name an exact host of the network permission's hosts (not `{authority}`)"
+        ));
+    }
+    Ok(())
 }
 
 /// `variables.read` entries (section 7, rule 10).
@@ -1100,6 +1186,92 @@ fn settings(c: &mut Checker, m: &Manifest) {
         }
     }
     c.unique("contributes.settings.fields", fields.iter().map(|s| &s.key));
+    user_origin_settings(c, m);
+}
+
+/// Each user-origin slot names a single-line `text` setting with a fitting
+/// default.
+fn user_origin_settings(c: &mut Checker, m: &Manifest) {
+    let found = m.permissions.iter().enumerate().find_map(|(i, p)| match p {
+        Permission::Network {
+            hosts,
+            user_origins: Some(slots),
+            ..
+        } => Some((i, hosts, slots)),
+        _ => None,
+    });
+    let Some((index, hosts, slots)) = found else {
+        return;
+    };
+    let fields = m.contributes.settings();
+    for (i, slot) in slots.iter().enumerate() {
+        let path = format!("permissions[{index}].userOrigins[{i}].setting");
+        let Some(position) = fields.iter().position(|f| f.key == slot.setting) else {
+            c.error(
+                path,
+                IssueCode::UnknownReference,
+                format!(
+                    "`{}` is not a setting in contributes.settings",
+                    slot.setting
+                ),
+            );
+            continue;
+        };
+        let setting = &fields[position];
+        match &setting.kind {
+            ParameterKind::Text {
+                multiline,
+                max_length,
+            } => {
+                if *multiline == Some(true) {
+                    c.error(
+                        &path,
+                        IssueCode::Conflict,
+                        format!(
+                            "the setting `{}` holds an origin, so it must be one line",
+                            setting.key
+                        ),
+                    );
+                }
+                if max_length.is_some_and(|max| max < 12) {
+                    c.error(
+                        &path,
+                        IssueCode::Range,
+                        format!(
+                            "the setting `{}` holds an origin, so its maxLength must be at least 12",
+                            setting.key
+                        ),
+                    );
+                }
+            }
+            _ => c.error(
+                &path,
+                IssueCode::Conflict,
+                format!(
+                    "the setting `{}` holds an origin, so it must be a text setting",
+                    setting.key
+                ),
+            ),
+        }
+        if let Some(ParameterValue::Text(text)) = &setting.default
+            && let Err(problem) = check_origin_default(text, hosts, slot.path_prefix())
+        {
+            c.error(
+                format!("contributes.settings.fields[{position}].default"),
+                IssueCode::InvalidDefault,
+                format!("the default origin `{text}` {problem}"),
+            );
+        }
+    }
+}
+
+/// The setting keys of the `network` permission's user-origin slots.
+fn user_origin_keys(m: &Manifest) -> Vec<&str> {
+    m.permissions
+        .iter()
+        .flat_map(Permission::user_origins)
+        .map(|slot| slot.setting.as_str())
+        .collect()
 }
 
 fn network_hosts(m: &Manifest) -> Option<&[String]> {
@@ -1119,9 +1291,22 @@ fn credentials(c: &mut Checker, m: &Manifest) {
             Permission::Credentials { refs, .. } => Some((i, refs.as_slice())),
             _ => None,
         });
+    let origin_keys = user_origin_keys(m);
     for (index, slot) in slots.iter().enumerate() {
         let path = format!("contributes.credentials[{index}]");
         credential_fields(c, &path, slot);
+        if let Some(setting) = &slot.user_origin
+            && !origin_keys.contains(&setting.as_str())
+        {
+            c.error(
+                format!("{path}.userOrigin"),
+                IssueCode::UnknownReference,
+                format!(
+                    "`{setting}` is not a user-origin slot of the `network` permission \
+                     (permissions[].userOrigins[].setting)"
+                ),
+            );
+        }
         if !refs.is_some_and(|(_, refs)| refs.contains(&slot.key)) {
             c.error(
                 format!("{path}.key"),
@@ -1164,7 +1349,8 @@ fn credential_fields(c: &mut Checker, path: &str, slot: &Credential) {
         slot.description.as_ref(),
         300,
     );
-    c.hosts(&format!("{path}.hosts"), &slot.hosts, 8);
+    let min = usize::from(slot.user_origin.is_none());
+    c.hosts_min(&format!("{path}.hosts"), &slot.hosts, min, 8);
     c.count(
         &format!("{path}.schemes"),
         slot.schemes.len(),

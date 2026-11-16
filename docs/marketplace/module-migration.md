@@ -759,6 +759,22 @@ per action instance would be needed ("consent on save of each URL"). That
 is possible, but it gives the plugin the authority the built-in has.
 **Defer.**
 
+*Status:* implemented ([permissions.md](sdk/permissions.md#user-entered-origins)).
+The slot is `network.userOrigins: [{ setting, methods?, pathPrefix?,
+privateNetwork? }]`, a declared grant of its own
+(`network:user-origin:<setting>`, medium tier, high with
+`privateNetwork`), and a credential slot binds to it with `userOrigin`
+(the design's `hostsFrom`). Saving the setting normalizes it; the user
+then allows exactly that origin (`grantPluginUserOrigin`), recorded per
+plugin and setting in plugins.db schema 4 (`plugin_user_origins`) with
+its path prefix, methods, credential slots and, as a separate explicit
+consent, the private network. The broker matches scheme, host, port and
+the path prefix exactly, on every redirect too; a private host (an IP
+literal of a private range or a local name) is refused without that
+consent, and the executor connects to private ranges (never loopback or
+link-local) only for it. A changed setting, a revocation and an
+uninstall end the consent. The `http` per-action variant stays deferred.
+
 ### G3 Private network (http, GHE or GitLab on a LAN, Jira Data Center)
 
 `GrantScope::PrivateNetwork` exists (`crates/deckpilot-plugin-store/src/grants.rs:111`),

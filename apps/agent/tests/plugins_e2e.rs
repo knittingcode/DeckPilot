@@ -35,8 +35,8 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use deckpilot_ipc::plugins::{
     PermissionStatus, PluginActionOutcome, PluginDetails, PluginEvent, PluginInstallSource,
-    PluginOperation, PluginRetention, PluginStage, PluginState, PluginUpdateOutcome,
-    RegistryFreshness, reason,
+    PluginOperation, PluginRetention, PluginSettings, PluginStage, PluginState,
+    PluginUpdateOutcome, PluginUserOrigin, RegistryFreshness, reason,
 };
 use deckpilot_ipc::{
     AgentClient, AgentPaths, ClientError, ClientKind, KeyMaterial, Request, Response,
@@ -59,6 +59,11 @@ const TWIN_SECRET: &str = "tok-77c1-twin-secret-value";
 /// The SDK test guest with `openUrl` for github.com and the example API.
 const OPENER: &str = "acme.sdk-open";
 const OPENER_SECRET: &str = "tok-51b8-opener-secret-value";
+/// The SDK test guest with an origin setting (G2): a server the user
+/// enters, with a path prefix and possibly on a private network, and a
+/// token bound to it.
+const ORIGIN: &str = "acme.sdk-origin";
+const ORIGIN_SECRET: &str = "tok-9d2e-origin-secret-value";
 const FUTURE: &str = "acme.future-weather";
 /// Hello Weather's module declared with far more actions, outputs and
 /// icon than one IPC message carries.
@@ -438,6 +443,32 @@ fn opener_manifest() -> Value {
     manifest
 }
 
+/// The SDK test guest as a plugin whose server the user enters (G2): the
+/// example API is fixed, the server in `serverUrl` (with a path prefix,
+/// possibly on a private network) is consented to when the user saves it,
+/// and the token goes only there.
+fn origin_manifest() -> Value {
+    let mut manifest = hello_manifest(ORIGIN, "1.0.0");
+    manifest["name"] = json!("SDK origin");
+    manifest["permissions"] = json!([
+        {"kind": "network", "hosts": ["api.example.com"], "methods": ["GET"],
+         "userOrigins": [{"setting": "serverUrl", "pathPrefix": true, "privateNetwork": true}],
+         "justification": "Talks to the example API and to your server."},
+        {"kind": "credentials", "refs": ["token"],
+         "justification": "Signs in to your server."}
+    ]);
+    manifest["contributes"]["actions"] = sdk_actions();
+    manifest["contributes"]["settings"] = json!({"fields": [
+        {"key": "serverUrl", "label": "Server URL", "required": false,
+         "kind": {"type": "text", "maxLength": 2048}, "portability": "machineSpecific"}
+    ]});
+    manifest["contributes"]["credentials"] = json!([{
+        "key": "token", "label": "Server token", "hosts": [], "userOrigin": "serverUrl",
+        "schemes": ["bearer"]
+    }]);
+    manifest
+}
+
 fn write_plugin_dir(dir: &Path, manifest: &Value, icon: Option<&[u8]>) {
     std::fs::create_dir_all(dir.join("assets")).unwrap();
     std::fs::write(
@@ -662,6 +693,7 @@ impl Registry {
         );
         registry.add(&data_manifest(TWIN, "SDK twin", None), &artifacts.sdk_test);
         registry.add(&opener_manifest(), &artifacts.sdk_test);
+        registry.add(&origin_manifest(), &artifacts.sdk_test);
         registry.add_with(&big_manifest(), &artifacts.hello, Some(&big_icon()));
         let mut future = hello_manifest(FUTURE, "1.0.0");
         future["engines"]["deckpilot"] = json!(">=9.0.0 <10.0.0");
@@ -698,6 +730,7 @@ impl Registry {
 // ---------------------------------------------------------------- agent
 
 /// Canned HTTP answers for the sample (the only network it uses).
+#[allow(clippy::too_many_lines)] // one list of routes
 fn canned_http(dir: &Path) -> PathBuf {
     let path = dir.join("http.json");
     let forecast = json!({
@@ -784,6 +817,32 @@ fn canned_http(dir: &Path) -> PathBuf {
                 ],
                 "body": "[]"
             },
+            // Servers a user enters (G2): a GitHub Enterprise API under
+            // /api/v3, with redirects within and out of its prefix.
+            {"url": "https://ghe.example.com/api/v3/user", "status": 200, "body": "{\"login\":\"octo\"}"},
+            {
+                "url": "https://ghe.example.com/api/v3/hop-in",
+                "status": 302,
+                "headers": [["location", "/api/v3/user"]]
+            },
+            {
+                "url": "https://ghe.example.com/api/v3/hop-up",
+                "status": 302,
+                "headers": [["location", "https://ghe.example.com/admin"]]
+            },
+            {
+                "url": "https://ghe.example.com/api/v3/hop-out",
+                "status": 302,
+                "headers": [["location", "https://collector.example.net/ghe"]]
+            },
+            {"url": "https://ghe.example.com/", "status": 200, "body": "{}"},
+            {"url": "https://ghe2.example.com/", "status": 200, "body": "{}"},
+            // A local name on the user's network, a public name that
+            // resolves to a private address, and one that resolves to
+            // this computer.
+            {"url": "https://ghe.internal/", "status": 200, "body": "{}"},
+            {"url": "https://lan.example.com/", "status": 200, "body": "{}", "resolvesTo": "10.0.0.5"},
+            {"url": "https://loop.example.com/", "status": 200, "body": "{}", "resolvesTo": "127.0.0.1"},
             // Network failures, as the network client reports them.
             {"url": "https://api.example.com/fail/dns", "status": 0, "fail": "dns-failed"},
             {"url": "https://api.example.com/fail/connect", "status": 0, "fail": "connection-failed"},
@@ -4155,5 +4214,391 @@ async fn pages_open_only_in_runs_the_user_started() {
         [page, page, page],
         "a scheduled run reached the opener"
     );
+    agent.stop().await;
+}
+
+// ------------------------------------------------- user-entered origins
+
+const ORIGIN_GRANTS: &[&str] = &[
+    "network:api.example.com",
+    "network:user-origin:serverUrl",
+    "credentials:token",
+];
+
+impl Agent {
+    async fn origin_settings(&self, request: Request) -> Result<PluginSettings, ClientError> {
+        match self.request(request).await? {
+            Response::PluginSettings { settings } => Ok(*settings),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    /// Saves `serverUrl` and returns its origin setting as the app sees it.
+    async fn set_server(&self, url: &str) -> PluginUserOrigin {
+        let settings = self
+            .origin_settings(Request::SetPluginSettings {
+                plugin: ORIGIN.into(),
+                values: BTreeMap::from([("serverUrl".to_owned(), json!(url))]),
+            })
+            .await
+            .unwrap();
+        settings.origins[0].clone()
+    }
+
+    async fn allow_server(
+        &self,
+        origin: &str,
+        private_network: bool,
+    ) -> Result<PluginUserOrigin, ClientError> {
+        let settings = self
+            .origin_settings(Request::GrantPluginUserOrigin {
+                plugin: ORIGIN.into(),
+                setting: "serverUrl".into(),
+                origin: origin.into(),
+                private_network,
+            })
+            .await?;
+        Ok(settings.origins[0].clone())
+    }
+
+    /// A request with the bound token (`cred-fetch`).
+    async fn with_token(&self, url: &str) -> BTreeMap<String, Value> {
+        self.run(ORIGIN, "cred-fetch", fetch_params(url, "bearer"))
+            .await
+    }
+}
+
+/// An origin the user enters (G2), through the real agent and host:
+/// nothing reaches it before the user consents to exactly it; then
+/// requests within its path prefix succeed with the bound token, and any
+/// other origin or path, a redirect off it, a changed setting, a revoked
+/// consent and a private network without its own consent are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // one scenario, step by step
+async fn a_server_the_user_enters_is_reached_only_with_its_own_consent() {
+    use deckpilot_ipc::plugins::UserOriginStatus as Status;
+    let registry = shared_registry();
+    let env = Env::new("plugins-e2e-origins");
+    let agent = Agent::started(&env, registry).await;
+    agent.install_enabled(ORIGIN, ORIGIN_GRANTS).await;
+    // The slot was consented to at install: a medium-tier grant of its own.
+    let details = agent.details(ORIGIN).await;
+    let slot = details
+        .permissions
+        .iter()
+        .find(|p| p.key == "network:user-origin:serverUrl")
+        .unwrap();
+    assert_eq!(slot.status, PermissionStatus::Granted);
+    assert_eq!(slot.scope["type"], "userOriginSlot", "{slot:?}");
+    assert_eq!(slot.scope["privateNetwork"], true, "{slot:?}");
+    agent
+        .set_secret(ORIGIN, "token", ORIGIN_SECRET)
+        .await
+        .unwrap();
+    let token = format!("\tauthorization: Bearer {ORIGIN_SECRET}");
+
+    // ---- nothing set: nothing reachable but the fixed host.
+    let settings = agent
+        .origin_settings(Request::GetPluginSettings {
+            plugin: ORIGIN.into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(settings.origins.len(), 1);
+    assert_eq!(settings.origins[0].status, Status::Unset);
+    assert_eq!(settings.origins[0].credentials, ["token"]);
+    let before = fetched(&env.http).len();
+    let refused = agent
+        .with_token("https://ghe.example.com/api/v3/user")
+        .await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    assert_eq!(
+        fetched(&env.http).len(),
+        before,
+        "a refused request went out"
+    );
+
+    // ---- the user enters the server: saved normalized, and waiting for
+    // consent. Nothing goes there yet.
+    let server = agent
+        .set_server("https://GHE.example.com:443/api/v3/")
+        .await;
+    assert_eq!(server.status, Status::NeedsConsent, "{server:?}");
+    assert_eq!(
+        server.origin.as_deref(),
+        Some("https://ghe.example.com/api/v3")
+    );
+    assert!(!server.private_host);
+    let seen = agent.run(ORIGIN, "settings", json!({})).await;
+    assert_eq!(
+        seen["settings"], r#"{"serverUrl":"https://ghe.example.com/api/v3"}"#,
+        "{seen:?}"
+    );
+    let refused = agent
+        .with_token("https://ghe.example.com/api/v3/user")
+        .await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    assert_eq!(
+        fetched(&env.http).len(),
+        before,
+        "a request went out before consent"
+    );
+    // Not an origin: refused when saved, the old value stays.
+    let invalid = agent
+        .request(Request::SetPluginSettings {
+            plugin: ORIGIN.into(),
+            values: BTreeMap::from([("serverUrl".to_owned(), json!("http://ghe.example.com"))]),
+        })
+        .await;
+    assert_eq!(reason_of(&invalid), reason::INVALID_DATA, "{invalid:?}");
+
+    // ---- consent names exactly what the setting holds.
+    for wrong in ["https://evil.example.com", "https://ghe.example.com"] {
+        let refused = agent.allow_server(wrong, false).await;
+        assert_eq!(
+            reason_of(&refused),
+            reason::INVALID_DATA,
+            "{wrong}: {refused:?}"
+        );
+    }
+    let granted = agent
+        .allow_server("https://ghe.example.com/api/v3", false)
+        .await
+        .unwrap();
+    assert_eq!(granted.status, Status::Granted, "{granted:?}");
+    assert!(!granted.private_network_granted);
+    let audit = agent.details(ORIGIN).await.audit;
+    assert!(
+        audit.iter().any(|a| a.op == "grant"
+            && a.target.as_deref() == Some("network:user-origin:serverUrl")
+            && a.reason.as_deref() == Some("https://ghe.example.com/api/v3")),
+        "{audit:?}"
+    );
+
+    // ---- within the prefix, with the bound token.
+    let got = agent
+        .with_token("https://ghe.example.com/api/v3/user")
+        .await;
+    assert_eq!(got["status"], 200, "{got:?}");
+    let wire = fetched(&env.http);
+    assert_eq!(
+        wire.last().unwrap(),
+        &format!("https://ghe.example.com/api/v3/user{token}")
+    );
+    // A redirect within the prefix keeps the token.
+    let got = agent
+        .with_token("https://ghe.example.com/api/v3/hop-in")
+        .await;
+    assert_eq!(got["status"], 200, "{got:?}");
+    assert_eq!(
+        fetched(&env.http).last().unwrap(),
+        &format!("https://ghe.example.com/api/v3/user{token}")
+    );
+
+    // ---- any other origin, port or path is refused, and so is the token
+    // on the fixed host (it is bound to the server only).
+    let before = fetched(&env.http).len();
+    for url in [
+        "https://ghe2.example.com/api/v3/user",
+        "https://ghe.example.com:8443/api/v3/user",
+        "https://ghe.example.com/admin",
+        "https://ghe.example.com/api/v30/user",
+        "https://x.ghe.example.com/api/v3/user",
+        "https://api.example.com/me",
+    ] {
+        let refused = agent.with_token(url).await;
+        assert_eq!(refused["error"], "NotPermitted", "{url}: {refused:?}");
+    }
+    assert_eq!(
+        fetched(&env.http).len(),
+        before,
+        "a refused request went out"
+    );
+    // The fixed host itself still works, without the token.
+    let fixed = agent
+        .run(
+            ORIGIN,
+            "headers",
+            json!({"url": "https://api.example.com/pages"}),
+        )
+        .await;
+    assert_eq!(fixed["status"], 200, "{fixed:?}");
+
+    // ---- redirects off the origin or out of the prefix are refused and
+    // never followed.
+    for hop in ["hop-out", "hop-up"] {
+        let before = fetched(&env.http).len();
+        let refused = agent
+            .with_token(&format!("https://ghe.example.com/api/v3/{hop}"))
+            .await;
+        assert_eq!(refused["error"], "NotPermitted", "{hop}: {refused:?}");
+        let wire = fetched(&env.http);
+        assert_eq!(wire.len(), before + 1, "{hop}: {wire:?}");
+        assert!(
+            !wire
+                .iter()
+                .any(|l| l.contains("collector.example.net/ghe")
+                    || l.contains("ghe.example.com/admin")),
+            "{hop}: {wire:?}"
+        );
+    }
+
+    // ---- a changed setting ends the consent at once; the new origin
+    // needs its own.
+    let changed = agent.set_server("https://ghe2.example.com/api/v3").await;
+    assert_eq!(changed.status, Status::NeedsConsent, "{changed:?}");
+    let audit = agent.details(ORIGIN).await.audit;
+    assert!(
+        audit.iter().any(|a| a.op == "revoke"
+            && a.reason.as_deref() == Some("https://ghe.example.com/api/v3: the setting changed")),
+        "{audit:?}"
+    );
+    let before = fetched(&env.http).len();
+    for url in [
+        "https://ghe.example.com/api/v3/user",
+        "https://ghe2.example.com/api/v3/user",
+    ] {
+        let refused = agent.with_token(url).await;
+        assert_eq!(refused["error"], "NotPermitted", "{url}: {refused:?}");
+    }
+    assert_eq!(fetched(&env.http).len(), before);
+    // Changing it back does not bring the old consent back.
+    let back = agent.set_server("https://ghe.example.com/api/v3").await;
+    assert_eq!(back.status, Status::NeedsConsent, "{back:?}");
+
+    // ---- a server on a private network needs its own explicit consent.
+    let lan = agent.set_server("https://ghe.internal/api/v3").await;
+    assert_eq!(lan.status, Status::NeedsConsent, "{lan:?}");
+    assert!(lan.private_host && lan.private_network_allowed, "{lan:?}");
+    let refused = agent
+        .allow_server("https://ghe.internal/api/v3", false)
+        .await;
+    assert_eq!(reason_of(&refused), reason::INVALID_DATA, "{refused:?}");
+    assert!(
+        message_of(&refused).contains("private network"),
+        "{refused:?}"
+    );
+    let refused = agent.with_token("https://ghe.internal/api/v3/user").await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    let granted = agent
+        .allow_server("https://ghe.internal/api/v3", true)
+        .await
+        .unwrap();
+    assert_eq!(granted.status, Status::Granted);
+    assert!(granted.private_network_granted);
+    let got = agent.with_token("https://ghe.internal/api/v3/user").await;
+    assert_eq!(got["status"], 200, "{got:?}");
+    assert_eq!(
+        fetched(&env.http).last().unwrap(),
+        &format!("https://ghe.internal/api/v3/user{token}")
+    );
+
+    // A public name that resolves to a private address: refused without
+    // the private-network consent, reached with it; this computer never.
+    agent.set_server("https://lan.example.com/api/v3").await;
+    agent
+        .allow_server("https://lan.example.com/api/v3", false)
+        .await
+        .unwrap();
+    // (`headers` reports the network kind; the address check is the
+    // same with or without the token.)
+    let blocked = agent
+        .run(
+            ORIGIN,
+            "headers",
+            json!({"url": "https://lan.example.com/api/v3/user"}),
+        )
+        .await;
+    assert_eq!(blocked["network"], "blocked-address", "{blocked:?}");
+    assert!(
+        !serde_json::to_string(&blocked)
+            .unwrap()
+            .contains("10.0.0.5"),
+        "{blocked:?}"
+    );
+    agent
+        .allow_server("https://lan.example.com/api/v3", true)
+        .await
+        .unwrap();
+    let got = agent
+        .with_token("https://lan.example.com/api/v3/user")
+        .await;
+    assert_eq!(got["status"], 200, "{got:?}");
+    agent.set_server("https://loop.example.com/api/v3").await;
+    agent
+        .allow_server("https://loop.example.com/api/v3", true)
+        .await
+        .unwrap();
+    // (`headers` reports the network kind; the address check is the
+    // same with or without the token.)
+    let blocked = agent
+        .run(
+            ORIGIN,
+            "headers",
+            json!({"url": "https://loop.example.com/api/v3/user"}),
+        )
+        .await;
+    assert_eq!(blocked["network"], "blocked-address", "{blocked:?}");
+
+    // ---- the user revokes it: refused on the very next call.
+    agent.set_server("https://ghe.example.com/api/v3").await;
+    agent
+        .allow_server("https://ghe.example.com/api/v3", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        agent
+            .with_token("https://ghe.example.com/api/v3/user")
+            .await["status"],
+        200
+    );
+    let revoked = agent
+        .origin_settings(Request::RevokePluginUserOrigin {
+            plugin: ORIGIN.into(),
+            setting: "serverUrl".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(revoked.origins[0].status, Status::NeedsConsent);
+    let before = fetched(&env.http).len();
+    let refused = agent
+        .with_token("https://ghe.example.com/api/v3/user")
+        .await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    assert_eq!(fetched(&env.http).len(), before);
+
+    // ---- revoking the slot itself: no consent can be given, none used.
+    agent
+        .allow_server("https://ghe.example.com/api/v3", false)
+        .await
+        .unwrap();
+    agent.revoke(ORIGIN, "network:user-origin:serverUrl").await;
+    let refused = agent
+        .with_token("https://ghe.example.com/api/v3/user")
+        .await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    let settings = agent
+        .origin_settings(Request::GetPluginSettings {
+            plugin: ORIGIN.into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(settings.origins[0].status, Status::SlotNotGranted);
+    // Granting the permission again does not bring the old consent back.
+    agent
+        .grant(ORIGIN, &["network:user-origin:serverUrl"])
+        .await;
+    let settings = agent
+        .origin_settings(Request::GetPluginSettings {
+            plugin: ORIGIN.into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(settings.origins[0].status, Status::NeedsConsent);
+    let refused = agent
+        .with_token("https://ghe.example.com/api/v3/user")
+        .await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+
     agent.stop().await;
 }

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use deckpilot_core::{CancelReason, CancellationToken, Secret};
 
 use crate::codes;
-use crate::policy::{self, NetworkPolicy};
+use crate::policy::{self, AddressPolicy};
 
 /// Most redirects followed.
 pub const MAX_REDIRECTS: u32 = 5;
@@ -66,7 +66,7 @@ pub type Failure = (&'static str, String);
 /// a runtime cannot be blocked on inside another, and would panic.
 pub fn send(
     request: Request,
-    network: &NetworkPolicy,
+    network: &dyn AddressPolicy,
     cancel: Option<&CancellationToken>,
 ) -> Result<Response, Failure> {
     if tokio::runtime::Handle::try_current().is_err() {
@@ -94,7 +94,7 @@ pub fn send(
 
 fn send_here(
     request: Request,
-    network: &NetworkPolicy,
+    network: &dyn AddressPolicy,
     cancel: Option<&CancellationToken>,
 ) -> Result<Response, Failure> {
     // The TLS stack's cryptography; a no-op once installed. Without it the
@@ -211,7 +211,7 @@ fn owned_failure(error: reqwest::Error) -> Failure {
 /// those addresses.
 async fn hop(
     request: &Request,
-    network: &NetworkPolicy,
+    network: &dyn AddressPolicy,
     url: &url::Url,
     method: &reqwest::Method,
     body: Option<&(String, &'static str)>,
@@ -339,7 +339,7 @@ async fn read(
 
 async fn run(
     request: Request,
-    network: &NetworkPolicy,
+    network: &dyn AddressPolicy,
     begun: Instant,
 ) -> Result<Response, Failure> {
     let original = request.url.clone();
@@ -451,6 +451,7 @@ fn http_date(value: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::NetworkPolicy;
 
     /// A server on 127.0.0.1 that answers one request with `200 ok`.
     fn one_answer() -> u16 {

@@ -198,6 +198,26 @@ pub const MIGRATIONS: &[&str] = &[
         decided_at INTEGER NOT NULL
     ) STRICT;
     ",
+    // 4: user-entered origins (`docs/marketplace/module-migration.md` §7
+    // G2): the user's consent to the exact origin they entered in an
+    // origin setting, one row per plugin and setting. Deleted with the
+    // plugin, when the user revokes it and when the setting changes. Never
+    // exported.
+    r"
+    CREATE TABLE plugin_user_origins (
+        plugin_id           TEXT NOT NULL REFERENCES plugins (plugin_id) ON DELETE CASCADE,
+        setting_key         TEXT NOT NULL,
+        origin              TEXT NOT NULL CHECK (substr(origin, 1, 8) = 'https://'),
+        path_prefix         TEXT CHECK (path_prefix IS NULL OR substr(path_prefix, 1, 1) = '/'),
+        methods_json        TEXT NOT NULL,
+        private_network     INTEGER NOT NULL CHECK (private_network IN (0, 1)),
+        credentials_json    TEXT NOT NULL,
+        decided_by          TEXT NOT NULL,
+        decided_at          INTEGER NOT NULL,
+        granted_for_version TEXT NOT NULL,
+        PRIMARY KEY (plugin_id, setting_key)
+    ) STRICT;
+    ",
 ];
 
 /// The raw 256-bit SQLCipher key of the plugin database, supplied by the
@@ -583,6 +603,8 @@ mod tests {
 
     /// The schema-2 build: this build's first two migrations only.
     const SCHEMA_2: &[&str] = &[MIGRATIONS[0], MIGRATIONS[1]];
+    /// The schema-3 build.
+    const SCHEMA_3: &[&str] = &[MIGRATIONS[0], MIGRATIONS[1], MIGRATIONS[2]];
 
     /// What a schema-2 build wrote: two plugins with versions, grants,
     /// storage, settings and an audit row.
@@ -624,7 +646,7 @@ mod tests {
         let key = StoreKey::from_bytes([10; 32]);
         schema_2_database(&path, &key);
 
-        let db = Database::open(&path, &key, DEFAULT_BUSY_TIMEOUT).unwrap();
+        let db = Database::open_as(&path, &key, DEFAULT_BUSY_TIMEOUT, SCHEMA_3).unwrap();
         assert_eq!(db.schema_version().unwrap(), 3);
         assert!(has_table(&db, "module_migrations"));
         assert!(has_table(&db, "plugin_tombstones"));
@@ -698,8 +720,9 @@ mod tests {
         let path = dir.path().join("plugins.db");
         let key = StoreKey::from_bytes([11; 32]);
         schema_2_database(&path, &key);
-        // Upgraded by this build, then closed (the WAL is checkpointed).
-        let db = Database::open(&path, &key, DEFAULT_BUSY_TIMEOUT).unwrap();
+        // Upgraded by a schema-3 build, then closed (the WAL is
+        // checkpointed).
+        let db = Database::open_as(&path, &key, DEFAULT_BUSY_TIMEOUT, SCHEMA_3).unwrap();
         db.connection()
             .execute(
                 "INSERT INTO plugin_tombstones (plugin_id, decision, decided_at)
@@ -724,11 +747,60 @@ mod tests {
         }
         assert_eq!(std::fs::read(&path).unwrap(), before, "the file changed");
 
-        // This build still opens it, unchanged.
-        let db = Database::open(&path, &key, DEFAULT_BUSY_TIMEOUT).unwrap();
+        // The schema-3 build still opens it, unchanged.
+        let db = Database::open_as(&path, &key, DEFAULT_BUSY_TIMEOUT, SCHEMA_3).unwrap();
         assert_eq!(db.schema_version().unwrap(), 3);
         assert_eq!(count(&db, "SELECT count(*) FROM plugin_tombstones"), 1);
         assert_eq!(count(&db, "SELECT count(*) FROM plugins"), 2);
+    }
+
+    #[cfg(feature = "sqlcipher")]
+    #[test]
+    fn a_schema_3_database_gains_user_origins_and_older_builds_refuse_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plugins.db");
+        let key = StoreKey::from_bytes([13; 32]);
+        schema_2_database(&path, &key);
+        drop(Database::open_as(&path, &key, DEFAULT_BUSY_TIMEOUT, SCHEMA_3).unwrap());
+
+        let db = Database::open(&path, &key, DEFAULT_BUSY_TIMEOUT).unwrap();
+        assert_eq!(db.schema_version().unwrap(), 4);
+        assert!(has_table(&db, "plugin_user_origins"));
+        assert_eq!(count(&db, "SELECT count(*) FROM plugins"), 2);
+        assert_eq!(count(&db, "SELECT count(*) FROM plugin_grants"), 1);
+        let insert = |origin: &str, prefix: Option<&str>| {
+            db.connection().execute(
+                "INSERT INTO plugin_user_origins (plugin_id, setting_key, origin, path_prefix,
+                     methods_json, private_network, credentials_json, decided_by, decided_at,
+                     granted_for_version)
+                 VALUES ('acme.one', 'apiUrl', ?1, ?2, '[\"GET\"]', 0, '[]', 'user', 1, '1.0.0')",
+                rusqlite::params![origin, prefix],
+            )
+        };
+        // Only https origins and absolute path prefixes.
+        assert!(insert("http://ghe.example.com", None).is_err());
+        assert!(insert("https://ghe.example.com", Some("api")).is_err());
+        insert("https://ghe.example.com", Some("/api/v3")).unwrap();
+        // Deleted with the plugin.
+        db.connection()
+            .execute("DELETE FROM plugins WHERE plugin_id = 'acme.one'", [])
+            .unwrap();
+        assert_eq!(count(&db, "SELECT count(*) FROM plugin_user_origins"), 0);
+        drop(db);
+
+        let before = std::fs::read(&path).unwrap();
+        let result = Database::open_as(&path, &key, DEFAULT_BUSY_TIMEOUT, SCHEMA_3);
+        assert!(
+            matches!(
+                result,
+                Err(StoreError::UnsupportedSchema {
+                    found: 4,
+                    supported: 3
+                })
+            ),
+            "{result:?}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before, "the file changed");
     }
 
     #[cfg(feature = "sqlcipher")]

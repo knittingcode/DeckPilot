@@ -40,11 +40,19 @@
       "hosts": ["api.example.org", "*.status.example.org", "example.org:8443"],
       "methods": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
       "privateNetwork": true,
+      "userOrigins": [
+        {
+          "setting": "serverUrl",
+          "methods": ["GET", "POST"],
+          "pathPrefix": true,
+          "privateNetwork": true
+        }
+      ],
       "justification": "Talks to the Example API and to hosts you add."
     },
     {
       "kind": "credentials",
-      "refs": ["token", "apiKey", "login"],
+      "refs": ["token", "apiKey", "login", "serverToken"],
       "justification": "Sends your Example credentials to the Example API only."
     },
     { "kind": "notifications", "justification": "Tells you when a check fails." },
@@ -259,6 +267,14 @@
           "required": false,
           "kind": { "type": "text" },
           "portability": "sensitive"
+        },
+        {
+          "key": "serverUrl",
+          "label": "Server URL",
+          "required": false,
+          "kind": { "type": "text", "maxLength": 2048 },
+          "default": { "type": "text", "value": "https://api.example.org/v2" },
+          "portability": "machineSpecific"
         }
       ]
     },
@@ -279,7 +295,14 @@
         "schemes": ["query"],
         "queryName": "api_key"
       },
-      { "key": "login", "label": "Login", "hosts": ["example.org:8443"], "schemes": ["basic"] }
+      { "key": "login", "label": "Login", "hosts": ["example.org:8443"], "schemes": ["basic"] },
+      {
+        "key": "serverToken",
+        "label": "Server token",
+        "hosts": [],
+        "userOrigin": "serverUrl",
+        "schemes": ["bearer"]
+      }
     ],
     "errorCodes": {
       "service-down": "The service did not answer.",

@@ -12,11 +12,21 @@ import type { ActionType } from "@/lib/types"
 
 export type HttpMethod = "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE"
 
+/** An origin setting of the `network` permission (G2). */
+export interface UserOriginSlot {
+  setting: string
+  methods?: HttpMethod[]
+  pathPrefix?: boolean
+  privateNetwork?: boolean
+}
+
 export interface NetworkPermission {
   kind: "network"
   hosts: string[]
   methods?: HttpMethod[]
   privateNetwork?: boolean
+  /** Servers the user enters in a setting; consented when saved. */
+  userOrigins?: UserOriginSlot[]
   justification: string
 }
 
@@ -296,6 +306,34 @@ export interface PluginSettings {
   effective: Record<string, PluginSettingValue>
   /** Required settings with neither a value nor a default. */
   missing?: string[]
+  /** Origin settings and their consent (absent from older agents). */
+  origins?: PluginUserOrigin[]
+}
+
+/** Where the consent of an origin setting stands. */
+export type UserOriginStatus =
+  "unset" | "invalid" | "declared" | "slotNotGranted" | "needsConsent" | "granted"
+
+/** One origin setting (G2): the server the user entered, and its consent. */
+export interface PluginUserOrigin {
+  setting: string
+  label: string
+  /** The slot's grant key, `network:user-origin:<setting>`. */
+  permission: string
+  status: UserOriginStatus
+  /** Normalized, with its path prefix; what a consent must name. */
+  origin?: string
+  problem?: string
+  /** The host itself is on a private network: consent needs `privateNetwork`. */
+  privateHost?: boolean
+  privateNetworkAllowed?: boolean
+  privateNetworkGranted?: boolean
+  pathPrefixAllowed?: boolean
+  methods: string[]
+  /** Credential slots whose secrets go there once allowed. */
+  credentials?: string[]
+  /** Seconds since the Unix epoch. */
+  grantedAt?: number
 }
 
 /** One credential slot and whether a secret is stored; never the secret. */
@@ -305,6 +343,8 @@ export interface PluginCredentialSlot {
   description?: string
   /** The only hosts the secret is ever sent to. */
   hosts: string[]
+  /** The origin setting whose server (once allowed) also gets it. */
+  userOrigin?: string
   /** `bearer`, `basic`, `header`, `query`. */
   schemes: string[]
   setupUrl?: string

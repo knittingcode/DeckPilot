@@ -619,6 +619,97 @@ impl PluginManager {
         })
     }
 
+    /// Records the user's consent to the origin they entered in an origin
+    /// setting (G2), replacing an earlier one for that setting. The active
+    /// version must declare the setting as a user-origin slot that allows
+    /// what the consent lists, and the slot itself must be granted
+    /// (`network:user-origin:<setting>`). Consent to a private network is
+    /// recorded only as part of this explicit consent, never derived.
+    pub fn grant_user_origin(
+        &mut self,
+        id: &PluginId,
+        consent: &crate::origins::UserOriginConsent,
+        decided_by: &str,
+    ) -> Result<()> {
+        let plugin = self.plugin(id)?;
+        let active = active_of(&plugin)?;
+        crate::origins::check(id, &active.manifest, consent)?;
+        let key = crate::origins::user_origin_key(&consent.setting);
+        let declared = active.grants();
+        let slot_granted = self.store.grants(id)?.iter().any(|row| {
+            row.key == key
+                && row.status == GrantStatus::Granted
+                && declared
+                    .get(&key)
+                    .is_some_and(|scope| row.scope.covers(scope))
+        });
+        if !slot_granted {
+            return Err(StoreError::ConsentRequired {
+                id: id.clone(),
+                missing: vec![key],
+            });
+        }
+        let version = active.version.to_string();
+        let shown = format!(
+            "{}{}",
+            consent.display(),
+            if consent.private_network {
+                " (private network)"
+            } else {
+                ""
+            }
+        );
+        self.tx(|tx, ctx| {
+            ensure_idle(tx, id)?;
+            crate::origins::upsert(
+                tx,
+                id,
+                &crate::origins::StoredUserOrigin {
+                    consent: consent.clone(),
+                    decided_by: decided_by.to_owned(),
+                    decided_at: ctx.now,
+                    granted_for_version: version.clone(),
+                },
+            )?;
+            ctx.audit(
+                tx,
+                id,
+                event(Some(&version), "grant", Some(&key), "granted", Some(&shown)),
+            )
+        })
+    }
+
+    /// Deletes the consent to the origin of one origin setting (G2): the
+    /// user revoked it, or the setting changed (`why`). Returns the origin
+    /// that was granted, if any.
+    pub fn revoke_user_origin(
+        &mut self,
+        id: &PluginId,
+        setting: &str,
+        why: &str,
+    ) -> Result<Option<String>> {
+        let version = self.plugin(id)?.active().map(|v| v.version.to_string());
+        let key = crate::origins::user_origin_key(setting);
+        self.tx(|tx, ctx| {
+            let Some(shown) = crate::origins::delete(tx, id, setting)? else {
+                return Ok(None);
+            };
+            let reason = format!("{shown}: {why}");
+            ctx.audit(
+                tx,
+                id,
+                event(
+                    version.as_deref(),
+                    "revoke",
+                    Some(&key),
+                    "revoked",
+                    Some(&reason),
+                ),
+            )?;
+            Ok(Some(shown))
+        })
+    }
+
     /// Forgets the refusals that `decided_by` recorded (revoked grants it
     /// decided), so those permissions are undecided again: a module
     /// migration asking again for what the user declined in its consent

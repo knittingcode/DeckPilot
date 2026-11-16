@@ -78,7 +78,10 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
   effective grants (declared ∩ granted, nothing unless enabled) after every
   change; a revocation applies to the next capability call. Wildcard hosts
   and `privateNetwork` are never passed to the broker (exact origins only);
-  `openUrl` is passed per exact host, like `network`.
+  `openUrl` is passed per exact host, like `network`. A server the user
+  entered in an origin setting (G2) is passed only while the user's consent
+  to exactly it (`plugin_user_origins`) matches what the setting holds and
+  its slot permission is granted ([permissions.md](sdk/permissions.md#user-entered-origins)).
 - **Execution.** Only in the host, through the supervisor: the active
   version's files are re-verified against their integrity record and the
   module re-validated before the host is spawned; the supervisor checks
@@ -496,8 +499,10 @@ older clients ignore.
 | `invokePluginAction` | `plugin`, `action`, `params: {name: bool \| number \| text \| list}` | `pluginActionResult { outcome: {status: "ok", message?, data} \| {status: "skipped"} \| {status: "failed", code, message?, retryable} }` (parameters that do not match the manifest: `failed`, `invalid-parameters`, before the host runs) |
 | `subscribePluginEvents` | `migrations?: bool` (omitted when false) | `ok`; then `pluginEvent` messages on this connection, `migrationChanged` ones only with `migrations: true` |
 | `listKnownPlugins` | — | `knownPlugins { plugins: [{id, name, publisher, namespace, lastVersion, installed, firstSeenAt, lastSeenAt}] }` |
-| `getPluginSettings` | `plugin` | `pluginSettings { settings: {plugin, fields, values, effective, missing?} }` |
-| `setPluginSettings` | `plugin`, `values: {key: value \| null}` (merged; `null` resets to the default) | `pluginSettings` (refused with `invalidData` unless every value fits its field) |
+| `getPluginSettings` | `plugin` | `pluginSettings { settings: {plugin, fields, values, effective, missing?, origins?} }`; `origins` lists the origin settings (G2): `{setting, label, permission, status: unset \| invalid \| declared \| slotNotGranted \| needsConsent \| granted, origin?, problem?, privateHost?, privateNetworkAllowed?, privateNetworkGranted?, pathPrefixAllowed?, methods, credentials?, grantedAt?}` |
+| `setPluginSettings` | `plugin`, `values: {key: value \| null}` (merged; `null` resets to the default) | `pluginSettings` (refused with `invalidData` unless every value fits its field; an origin setting is normalized, and a changed one ends the consent to its old server) |
+| `grantPluginUserOrigin` | `plugin`, `setting`, `origin` (exactly `origins[].origin`), `privateNetwork?: bool` (omitted when false) | `pluginSettings` (refused with `invalidData` for another origin than the setting holds, a declared host, or a private host without `privateNetwork`) |
+| `revokePluginUserOrigin` | `plugin`, `setting` | `pluginSettings` |
 | `listPluginCredentials` | `plugin` | `pluginCredentials { plugin, credentials: [{key, label, description?, hosts, schemes, setupUrl?, set, updatedAt?, granted}] }` |
 | `setPluginCredential` | `plugin`, `key`, `secret` (1 B to 16 KiB, no line break or NUL) | `pluginCredentials` (never the secret) |
 | `deletePluginCredential` | `plugin`, `key` | `pluginCredentials` |
@@ -649,7 +654,9 @@ in React state, browser storage or a log, and nothing can show it again.
 
 All of it lives in plugins.db (tables of schema 2; schema 3 adds the
 `bundled` source, `module_migrations` and `plugin_tombstones`,
-[module-migration.md §5.6](module-migration.md#56-the-migration)), keyed
+[module-migration.md §5.6](module-migration.md#56-the-migration); schema 4
+adds `plugin_user_origins`, the consents to servers the user entered, G2),
+keyed
 by plugin id. The id is
 always the agent's (the plugin whose host the supervisor spawned, through
 the broker session); no capability request names a plugin, so a plugin
@@ -862,7 +869,8 @@ Windows (not a required check).
   signing, OAuth and other uses beyond injection (design U-3) do not
   exist.
 - `privateNetwork` and wildcard hosts are still never granted, so a
-  credential slot can only name exact hosts.
+  credential slot can only name exact hosts, or a server the user entered
+  and allowed (G2, `userOrigin`).
 - The app checks only what it cannot send (a whole number that is not
   one, an empty or too long secret); every other rule is the agent's, and
   its message is shown under the field it names.
