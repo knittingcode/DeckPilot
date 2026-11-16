@@ -891,8 +891,13 @@ pub struct PluginCredentialSlot {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// The only hosts the secret is ever sent to.
+    /// The only hosts the secret is ever sent to (besides the server of
+    /// `user_origin`).
     pub hosts: Vec<String>,
+    /// The origin setting whose server also gets the secret, once the user
+    /// allowed that server (G2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_origin: Option<String>,
     /// `bearer`, `basic`, `header`, `query`.
     pub schemes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

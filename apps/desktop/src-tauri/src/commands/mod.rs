@@ -172,6 +172,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         plugins::list_known_plugins,
         plugins::get_plugin_settings,
         plugins::set_plugin_settings,
+        plugins::grant_plugin_user_origin,
+        plugins::revoke_plugin_user_origin,
         plugins::list_plugin_credentials,
         plugins::set_plugin_credential,
         plugins::delete_plugin_credential,

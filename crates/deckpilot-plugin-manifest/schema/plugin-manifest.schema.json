@@ -639,10 +639,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["key", "label", "hosts", "schemes"],
-      "anyOf": [
-        { "properties": { "hosts": { "minItems": 1 } } },
-        { "required": ["userOrigin"] }
-      ],
+      "anyOf": [{ "properties": { "hosts": { "minItems": 1 } } }, { "required": ["userOrigin"] }],
       "properties": {
         "key": { "$ref": "#/$defs/camelKey" },
         "label": { "type": "string", "minLength": 1, "maxLength": 48 },

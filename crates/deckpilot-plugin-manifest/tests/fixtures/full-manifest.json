@@ -41,7 +41,12 @@
       "methods": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
       "privateNetwork": true,
       "userOrigins": [
-        { "setting": "serverUrl", "methods": ["GET", "POST"], "pathPrefix": true, "privateNetwork": true }
+        {
+          "setting": "serverUrl",
+          "methods": ["GET", "POST"],
+          "pathPrefix": true,
+          "privateNetwork": true
+        }
       ],
       "justification": "Talks to the Example API and to hosts you add."
     },

@@ -627,12 +627,7 @@ fn permissions(c: &mut Checker, m: &Manifest) {
                     );
                 }
                 if let Some(slots) = user_origins {
-                    user_origin_slots(
-                        c,
-                        &format!("{path}.userOrigins"),
-                        slots,
-                        methods.as_deref(),
-                    );
+                    user_origin_slots(c, &format!("{path}.userOrigins"), slots, methods.as_deref());
                 }
             }
             Permission::Credentials { refs, .. } => {

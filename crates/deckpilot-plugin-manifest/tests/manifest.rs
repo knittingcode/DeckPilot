@@ -903,18 +903,33 @@ fn fixtures() -> Vec<Fixture> {
             "a user origin naming no setting",
             false,
             Invalid("permissions[0].userOrigins[0].setting", C::UnknownReference),
-            |v| set(v, "/permissions/0/userOrigins", json!([{ "setting": "serverUrl" }])),
+            |v| {
+                set(
+                    v,
+                    "/permissions/0/userOrigins",
+                    json!([{ "setting": "serverUrl" }]),
+                )
+            },
         ),
         mutate(
             "a user origin in a setting that is not text",
             false,
             Invalid("permissions[0].userOrigins[0].setting", C::Conflict),
-            |v| set(v, "/permissions/0/userOrigins", json!([{ "setting": "pollMinutes" }])),
+            |v| {
+                set(
+                    v,
+                    "/permissions/0/userOrigins",
+                    json!([{ "setting": "pollMinutes" }]),
+                )
+            },
         ),
         mutate(
             "a user origin with methods the permission lacks",
             false,
-            Invalid("permissions[0].userOrigins[0].methods", C::MissingPermission),
+            Invalid(
+                "permissions[0].userOrigins[0].methods",
+                C::MissingPermission,
+            ),
             |v| {
                 set(
                     v,
@@ -973,7 +988,13 @@ fn fixtures() -> Vec<Fixture> {
             "a credential bound to no user origin",
             false,
             Invalid("contributes.credentials[0].userOrigin", C::UnknownReference),
-            |v| set(v, "/contributes/credentials/0/userOrigin", json!("serverUrl")),
+            |v| {
+                set(
+                    v,
+                    "/contributes/credentials/0/userOrigin",
+                    json!("serverUrl"),
+                )
+            },
         ),
         mutate(
             "a credential without hosts or a user origin",

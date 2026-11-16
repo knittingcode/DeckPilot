@@ -349,6 +349,7 @@ pub fn credential_slots(
                 label: slot.label.clone(),
                 description: slot.description.clone(),
                 hosts: slot.hosts.clone(),
+                user_origin: slot.user_origin.clone(),
                 schemes: slot
                     .schemes
                     .iter()
