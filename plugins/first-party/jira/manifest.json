@@ -1,0 +1,278 @@
+{
+  "$schema": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
+  "id": "deckpilot.jira",
+  "name": "Jira",
+  "version": "0.1.0",
+  "publisher": {
+    "id": "deckpilot",
+    "name": "DeckPilot",
+    "url": "https://github.com/knittingcode/deckpilot"
+  },
+  "description": "Issues assigned to you, saved filters and single issues from Jira Cloud or Data Center. Read-only.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/knittingcode/deckpilot",
+    "directory": "plugins/first-party/jira"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["jira", "issues", "filters"],
+  "categories": ["developer-tools"],
+  "engines": { "deckpilot": ">=0.6.0 <1.0.0", "pluginApi": "^1.0", "sdk": "0.1.0" },
+  "runtime": { "kind": "wasm", "abi": 1 },
+  "entry": "src/lib.rs",
+  "icons": { "128": "assets/icon-128.png" },
+  "permissions": [
+    {
+      "kind": "network",
+      "hosts": [],
+      "methods": ["GET"],
+      "userOrigins": [{ "setting": "siteUrl", "pathPrefix": true, "privateNetwork": true }],
+      "justification": "Reads your user, issues and saved filters from the Jira site you enter. Only reads; never changes anything in Jira."
+    },
+    {
+      "kind": "credentials",
+      "refs": ["credential"],
+      "justification": "Sends your Jira credential to the Jira site you entered and allowed, and nowhere else, to read what your account may see."
+    },
+    {
+      "kind": "openUrl",
+      "hosts": [],
+      "userOrigins": ["siteUrl"],
+      "justification": "Opens an issue or another page of your Jira site in your browser when you run Open in Jira."
+    }
+  ],
+  "contributes": {
+    "actions": [
+      {
+        "id": "myself",
+        "name": "Current Jira user",
+        "description": "The account the credential belongs to; also checks that it works.",
+        "category": "Jira",
+        "parameters": [],
+        "node": {
+          "version": 1,
+          "icon": "user",
+          "outputs": [
+            { "key": "displayName", "label": "Name", "kind": "text", "always": true },
+            {
+              "key": "account",
+              "label": "Account id or user name",
+              "kind": "text",
+              "always": true
+            },
+            { "key": "timeZone", "label": "Time zone", "kind": "text", "always": false }
+          ],
+          "timeoutMs": 130000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "issue",
+        "name": "Jira issue",
+        "description": "An issue's summary, status, type, priority and assignee.",
+        "category": "Jira",
+        "parameters": [
+          {
+            "key": "issue",
+            "label": "Issue",
+            "description": "An issue key such as ABC-123.",
+            "required": true,
+            "kind": { "type": "text", "maxLength": 40 }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "file-text",
+          "outputs": [
+            { "key": "key", "label": "Key", "kind": "text", "always": true },
+            {
+              "key": "summary",
+              "label": "Summary",
+              "kind": "text",
+              "always": true,
+              "sensitive": true
+            },
+            { "key": "status", "label": "Status", "kind": "text", "always": true },
+            {
+              "key": "statusCategory",
+              "label": "Status category (todo, in-progress, done)",
+              "kind": "text",
+              "always": true
+            },
+            { "key": "type", "label": "Type", "kind": "text", "always": false },
+            { "key": "priority", "label": "Priority", "kind": "text", "always": false },
+            { "key": "assignee", "label": "Assignee", "kind": "text", "always": false },
+            { "key": "updated", "label": "Updated", "kind": "text", "always": false },
+            { "key": "url", "label": "Page", "kind": "url", "always": true }
+          ],
+          "timeoutMs": 130000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "issues",
+        "name": "Jira issues",
+        "description": "Counts and lists the issues assigned to you, or those of a saved filter.",
+        "category": "Jira",
+        "parameters": [
+          {
+            "key": "source",
+            "label": "Issues",
+            "description": "assigned-to-me: assigned to you; filter: a saved filter.",
+            "required": false,
+            "kind": { "type": "choice", "options": ["assigned-to-me", "filter"] },
+            "default": { "type": "choice", "value": "assigned-to-me" }
+          },
+          {
+            "key": "filterId",
+            "label": "Filter",
+            "description": "The saved filter's number (in its address, ?filter=12345).",
+            "required": false,
+            "kind": { "type": "integer", "min": 1 }
+          },
+          {
+            "key": "project",
+            "label": "Project",
+            "description": "Only issues of this project key, e.g. WEB. Empty: every project.",
+            "required": false,
+            "kind": { "type": "text", "maxLength": 255 }
+          },
+          {
+            "key": "includeDone",
+            "label": "Include done issues",
+            "description": "Off: only issues whose status is not in the Done category.",
+            "required": false,
+            "kind": { "type": "boolean" },
+            "default": { "type": "boolean", "value": false }
+          },
+          {
+            "key": "limit",
+            "label": "Listed",
+            "description": "At most this many issues in the list.",
+            "required": false,
+            "kind": { "type": "integer", "min": 1, "max": 100 },
+            "default": { "type": "integer", "value": 20 }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "list-checks",
+          "outputs": [
+            { "key": "count", "label": "Issues", "kind": "integer", "always": true },
+            { "key": "countExact", "label": "Count complete", "kind": "boolean", "always": true },
+            { "key": "listed", "label": "Listed", "kind": "integer", "always": true },
+            {
+              "key": "items",
+              "label": "Issues",
+              "kind": "text",
+              "always": true,
+              "sensitive": true
+            },
+            { "key": "truncated", "label": "List truncated", "kind": "boolean", "always": true },
+            { "key": "firstKey", "label": "First issue", "kind": "text", "always": false },
+            { "key": "firstUrl", "label": "First issue's page", "kind": "url", "always": false }
+          ],
+          "timeoutMs": 130000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "open",
+        "name": "Open in Jira",
+        "description": "Opens an issue or a Jira page in the browser.",
+        "category": "Jira",
+        "parameters": [
+          {
+            "key": "url",
+            "label": "Page",
+            "description": "An https page on the configured Jira site. Empty: the issue below.",
+            "required": false,
+            "kind": { "type": "text", "maxLength": 2048 }
+          },
+          {
+            "key": "issue",
+            "label": "Issue",
+            "description": "An issue key such as ABC-123.",
+            "required": false,
+            "kind": { "type": "text", "maxLength": 40 }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "link",
+          "outputs": [{ "key": "url", "label": "Opened", "kind": "url", "always": true }],
+          "timeoutMs": 15000,
+          "retrySafe": true,
+          "idempotent": false,
+          "cancellable": false,
+          "effect": "opens"
+        }
+      }
+    ],
+    "settings": {
+      "portabilityVersion": 1,
+      "fields": [
+        {
+          "key": "siteUrl",
+          "label": "Site",
+          "description": "e.g. https://your-team.atlassian.net, or your Data Center address. Only for this computer.",
+          "required": false,
+          "kind": { "type": "text", "maxLength": 512 },
+          "portability": "machineSpecific"
+        },
+        {
+          "key": "deployment",
+          "label": "Jira",
+          "description": "cloud: email:api-token as the credential; data-center: a personal access token.",
+          "required": true,
+          "kind": { "type": "choice", "options": ["cloud", "data-center"] },
+          "default": { "type": "choice", "value": "cloud" },
+          "portability": "machineSpecific"
+        },
+        {
+          "key": "timeoutSeconds",
+          "label": "Time limit (s)",
+          "description": "For all requests of one action.",
+          "required": true,
+          "kind": { "type": "integer", "min": 1, "max": 120 },
+          "default": { "type": "integer", "value": 20 },
+          "portability": "portable"
+        }
+      ]
+    },
+    "credentials": [
+      {
+        "key": "credential",
+        "label": "Jira credential",
+        "description": "Jira Cloud: your email, a colon and an API token (email:api-token). Data Center: a personal access token. Sent only to the Jira site you entered and allowed.",
+        "hosts": [],
+        "userOrigin": "siteUrl",
+        "schemes": ["basic", "bearer"],
+        "setupUrl": "https://id.atlassian.com/manage-profile/security/api-tokens"
+      }
+    ],
+    "errorCodes": {
+      "invalid-site-url": "The Jira site is not set, or not an https address.",
+      "invalid-issue-key": "The issue key is not like ABC-123.",
+      "invalid-project": "The project key is not like ABC.",
+      "unauthorized": "Jira refused the credential (401).",
+      "forbidden": "The account may not read this (403).",
+      "not-found": "Not found, or not visible to this account (404).",
+      "rate-limited": "Jira's rate limit is reached; the message says how long to wait.",
+      "jira-error": "Another error status from Jira, e.g. a filter that does not exist.",
+      "invalid-response": "The answer is not the JSON expected, or too large.",
+      "url-not-allowed": "The page to open is not an https page on the Jira site.",
+      "timed-out": "Jira did not answer within the time limit of the settings."
+    }
+  }
+}
