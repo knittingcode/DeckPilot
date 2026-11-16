@@ -1190,6 +1190,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "deckpilot-module-deck"
+version = "0.6.0-alpha.4"
+dependencies = [
+ "deckpilot-core",
+]
+
+[[package]]
 name = "deckpilot-module-docker"
 version = "0.6.0-alpha.4"
 dependencies = [
@@ -1306,6 +1313,7 @@ dependencies = [
  "base64 0.23.1",
  "deckpilot-core",
  "deckpilot-device",
+ "deckpilot-module-deck",
  "deckpilot-module-docker",
  "deckpilot-module-general",
  "deckpilot-module-git",

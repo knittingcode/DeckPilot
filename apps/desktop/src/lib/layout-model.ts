@@ -229,6 +229,19 @@ export function deletePage(layout: DeviceLayout, pageId: string): DeviceLayout {
   }
 }
 
+/**
+ * Makes a folder close by itself after one of its keys ran something
+ * (`LayoutPage.autoReturn`), or not. The field is left out when off, so a
+ * layout that never used it is saved as before.
+ */
+export function setAutoReturn(layout: DeviceLayout, pageId: string, on: boolean): DeviceLayout {
+  return mapPage(layout, pageId, (p) => {
+    const rest = { ...p }
+    delete rest.autoReturn
+    return on ? { ...rest, autoReturn: true } : rest
+  })
+}
+
 /** Whether making `parent` the folder of `page` would make a cycle. */
 function createsCycle(parents: Map<string, string>, page: string, parent: string): boolean {
   let current: string | undefined = parent
@@ -295,6 +308,29 @@ export function ancestors(layout: DeviceLayout, pageId: string): string[] {
     out.push(id)
   }
   return out
+}
+
+/**
+ * The pages in no folder, in layout order: the pages "Next page" and
+ * "Previous page" move along (`DeviceLayout::top_level_pages`).
+ */
+export function topLevelPages(layout: DeviceLayout): string[] {
+  const parents = pageParents(layout)
+  return layout.pages.map((p) => p.id).filter((id) => !parents.has(id))
+}
+
+/**
+ * Where the top-level page of `pageId` is among the layout's top-level
+ * pages (from 1) and how many there are: what `{page.number}` and
+ * `{page.count}` show on the device.
+ */
+export function pagePosition(
+  layout: DeviceLayout,
+  pageId: string,
+): { number: number; count: number } {
+  const pages = topLevelPages(layout)
+  const top = ancestors(layout, pageId).at(-1) ?? pageId
+  return { number: Math.max(pages.indexOf(top), 0) + 1, count: Math.max(pages.length, 1) }
 }
 
 /**

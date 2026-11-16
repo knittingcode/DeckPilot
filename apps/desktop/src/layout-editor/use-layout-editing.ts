@@ -1,7 +1,14 @@
 import { useState } from "react"
 import { toast } from "sonner"
 
-import { addPage, controlLabel, deletePage, page as findPage, renamePage } from "@/lib/layout-model"
+import {
+  addPage,
+  controlLabel,
+  deletePage,
+  page as findPage,
+  renamePage,
+  setAutoReturn,
+} from "@/lib/layout-model"
 import type { BindingTarget, ControlId, DeviceLayout, DeviceModel } from "@/lib/types"
 
 import { type KeyLookChange, applyAppearance } from "./appearance"
@@ -198,6 +205,9 @@ export function useLayoutEditing(model: DeviceModel, saved: DeviceLayout) {
     },
     renamePage: (name: string) => {
       change(renamePage(draft, pageId, name), `page-name:${pageId}`)
+    },
+    setAutoReturn: (on: boolean) => {
+      change(setAutoReturn(draft, pageId, on))
     },
     /**
      * Replaces the draft and its history with a layout stored by a page

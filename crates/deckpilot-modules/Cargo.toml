@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 deckpilot-core.workspace = true
+deckpilot-module-deck.workspace = true
 deckpilot-module-general.workspace = true
 deckpilot-module-projects.workspace = true
 deckpilot-module-system.workspace = true

@@ -529,6 +529,15 @@ impl ActionRegistry {
                 capability.description().to_lowercase()
             ));
         }
+        if let Some(allowed) = &entry.capabilities
+            && result.request.is_some()
+            && !allowed.contains(&Capability::DeckControl)
+        {
+            return ActionResult::failure(format!(
+                "the module providing `{action_type}` may not {}",
+                Capability::DeckControl.description().to_lowercase()
+            ));
+        }
         result
     }
 

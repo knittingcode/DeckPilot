@@ -4,6 +4,7 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 import { ancestors, page as findPage } from "@/lib/layout-model"
 import type { DeviceLayout } from "@/lib/types"
 
@@ -17,6 +18,8 @@ interface PageBarProps {
   onAdd: (name: string) => void
   onRename: (name: string) => void
   onDelete: () => void
+  /** Makes the open folder close after one of its keys ran something. */
+  onAutoReturn: (on: boolean) => void
 }
 
 /** Page tabs, the page indicator with back navigation, and page settings. */
@@ -29,11 +32,14 @@ export function PageBar({
   onAdd,
   onRename,
   onDelete,
+  onAutoReturn,
 }: PageBarProps) {
   const [newPage, setNewPage] = useState("")
   const current = findPage(draft, pageId)
   const position = draft.pages.findIndex((p) => p.id === pageId) + 1
   const isHome = pageId === draft.homePage
+  // Only a page inside a folder has somewhere to return to.
+  const inFolder = ancestors(draft, pageId).length > 0
   // How the page was reached, else where it is in the page tree.
   const route =
     trail.length > 0 ? [...trail, pageId] : [...ancestors(draft, pageId).reverse(), pageId]
@@ -140,6 +146,19 @@ export function PageBar({
           <Button variant="ghost" size="sm" onClick={onDelete}>
             <Trash2 /> Delete page
           </Button>
+          {inFolder && (
+            <label
+              className="flex items-center gap-2"
+              title="After a key of this folder ran an action or started a workflow, the device returns to the page the folder is on. Keys that open pages do not close it."
+            >
+              <Switch
+                aria-label="Close this folder after a key runs"
+                checked={current.autoReturn === true}
+                onCheckedChange={onAutoReturn}
+              />
+              Close after a key runs
+            </label>
+          )}
         </div>
       )}
     </div>
