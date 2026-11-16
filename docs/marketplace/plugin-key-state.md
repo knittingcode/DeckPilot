@@ -44,12 +44,14 @@ built for API 1.0 sends or receives changes, byte for byte.
   version as `incompatible` and does not install it (the existing check).
   A plugin that only benefits from an addition keeps `"^1.0"` and handles
   `unsupported-op`. The agent's `PLUGIN_API` becomes 1.1 and then 1.2.
-- **SDK.** `deckpilot_plugin_sdk::API_LEVEL` stays the level the SDK
-  implements (1.1, then 1.2). A plugin's own requirement is
-  `Plugin::api_level()`: 1.0 unless it declares more with
-  `Plugin::requires_api`, and at least 1.2 when an action has a state
-  handler. `testing::manifest_mismatches` compares the manifest's
-  `engines.pluginApi` with that, so existing plugins keep `"^1.0"`.
+- **SDK.** `deckpilot_plugin_sdk::API_LEVEL` stays 1.0, the level a
+  plugin needs by default, so existing plugins and their tests are
+  unchanged; `LATEST_API_LEVEL` is what the SDK implements (1.1, then
+  1.2). A plugin's own requirement is `Plugin::api_level()`: 1.0 unless
+  it declares more with `Plugin::requires_api`.
+  `testing::manifest_mismatches` compares the manifest's
+  `engines.pluginApi` with that. A plugin whose keys merely look better
+  with state keeps `"^1.0"`: on an older agent they stay static.
 
 ## 2. `time.now` (API 1.1)
 
@@ -128,8 +130,12 @@ agent reads untrusted bytes.
   `apps/agent/src/service/states.rs`): only for keys shown on a device,
   off the agent's task, cached, redrawn only on change. A plugin action
   becomes one more provider of that pipeline, so there is no second
-  scheduler, cache or drawing path, and the desktop preview shows the
-  state through the same `KeyFace`.
+  scheduler, cache or drawing path. The state travels in the same
+  `KeyFace` and is drawn by the same renderer (`deckpilot-render`) the
+  configuration app uses for its previews. Like the state of a built-in
+  module, it is shown on devices (physical and mock); the app's layout
+  preview draws keys without running anything, so it shows the static
+  face, for plugins and built-ins alike.
 
 State attached to results would need a store of last states per key, an
 answer for keys never pressed, and still a pull for time.
@@ -159,7 +165,7 @@ designed it.
 | `toggle` | boolean | mark along the top |
 | `accent` | `blue`, `green`, `amber`, `red`, `purple`, `teal`, `grey` | the key's background, from the agent's fixed palette (each with a text colour of sufficient contrast). The user's own key colours win |
 | `glyph` | one of the host's built-in glyphs (4.5) | a simple shape above the title; a key with an icon the user chose keeps it |
-| `badge` | 4 characters | a small label in the top right corner |
+| `badge` | 4 characters (ASCII) | a small label in the top left corner |
 | `series` | at most 32 integers 0 to 100 | a sparkline behind the texts |
 
 Unknown members, unknown names and values out of bounds make the whole
