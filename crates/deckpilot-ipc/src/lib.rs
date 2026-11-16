@@ -1,6 +1,8 @@
 //! Local IPC between the DeckPilot background agent and its clients.
 //!
 //! * [`paths`]: where the agent keeps its database, logs, lock and token.
+//! * [`instance`]: the agent's single-instance lock, and the probe with
+//!   which a client proves that a stopped agent released it.
 //! * [`endpoint`]: the per-user local socket (Unix domain socket or Windows
 //!   named pipe) and how it is secured.
 //! * [`protocol`]: versioned request, response and event types.
@@ -17,6 +19,7 @@
 pub mod client;
 pub mod endpoint;
 pub mod framing;
+pub mod instance;
 pub mod paths;
 pub mod plugins;
 pub mod protocol;

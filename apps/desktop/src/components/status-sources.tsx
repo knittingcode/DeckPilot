@@ -251,7 +251,10 @@ function AgentEvents({ agent }: { agent: AgentConnection | null }) {
       notifications.notify({
         key: "agent.compatibility",
         severity: "warning",
-        title: "Agent and app versions differ",
+        title:
+          compatibility.type === "otherDistribution"
+            ? "The agent belongs to another installation"
+            : "Agent and app versions differ",
         message: `Agent ${compatibility.agent}, app ${compatibility.app}.`,
       })
     }

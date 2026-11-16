@@ -1,0 +1,21 @@
+# expect: may not use the environment production-release
+name: Distribute
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  distribute-homebrew:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production-release
+    steps:
+      - name: Update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo hello

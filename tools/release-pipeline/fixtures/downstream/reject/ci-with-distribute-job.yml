@@ -1,0 +1,17 @@
+# expect: ci-with-distribute-job.yml: downstream job distribute-winget may not have contents: write (contents: write)
+name: CI with a distribution job
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  distribute-winget:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    environment: distribute-winget
+    steps:
+      - run: echo "the workflow's write token is inherited"

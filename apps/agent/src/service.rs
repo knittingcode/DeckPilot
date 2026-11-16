@@ -17,8 +17,8 @@ use deckpilot_device::{
     DeviceModel, ModelCatalog, mock::MockBackend,
 };
 use deckpilot_ipc::{
-    AgentEvent, AgentPaths, AgentStatus, DeviceInfo, ErrorCode, IpcError, LockReason,
-    PROTOCOL_VERSION, ProfileInfo, ProtectionMode, Request, Response, SecurityState,
+    AgentEvent, AgentPaths, AgentStatus, DeviceInfo, DistributionRecord, ErrorCode, IpcError,
+    LockReason, PROTOCOL_VERSION, ProfileInfo, ProtectionMode, Request, Response, SecurityState,
     ShutdownReason, token,
 };
 use deckpilot_keystore::KeyStore;
@@ -1613,6 +1613,7 @@ impl Agent {
             running_executions: Some(
                 u32::try_from(self.executions.running_count()).unwrap_or(u32::MAX),
             ),
+            distribution: Some(DistributionRecord::current()),
         }
     }
 
@@ -1730,7 +1731,7 @@ pub fn default_options(paths: AgentPaths, mock_models: &[DeviceModel], usb: bool
     if let Some(mock) = &mock {
         backend = backend.with(Box::new(mock.clone()));
     }
-    let autostart = match Autostart::for_current_exe() {
+    let autostart = match Autostart::for_current_exe(deckpilot_distribution::current()) {
         Ok(autostart) => {
             if let Err(error) = autostart.repair() {
                 warn!(%error, "cannot update the autostart entry");

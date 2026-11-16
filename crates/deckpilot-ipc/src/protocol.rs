@@ -77,6 +77,10 @@ use crate::work_session::{MAX_WORK_SESSION_LIST, WorkSessionSettings, WorkSessio
 /// machine-readable `reason`, which older clients ignore. The agent answers
 /// plugin requests only when built with plugins and with plugins enabled.
 /// Nothing older clients receive changes.
+///
+/// Without a new version: the status carries the agent's distribution
+/// record ([`AgentStatus::distribution`]), an optional field that older
+/// clients ignore and older agents leave out.
 pub const PROTOCOL_VERSION: u32 = 10;
 
 /// Most references one `previewReferences` may ask about.
@@ -1320,11 +1324,162 @@ pub struct AgentStatus {
     /// or ask before cancelling them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub running_executions: Option<u32>,
+    /// The agent build's distribution record (docs/distribution/README.md,
+    /// section 1): who delivered it, its version and target. The app
+    /// refuses to work with an agent of another channel (rule R6). `None`
+    /// from agents of DeckPilot 0.6.0-alpha.3 and earlier, which were all
+    /// GitHub builds. Older apps ignore the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distribution: Option<DistributionRecord>,
+}
+
+/// A build's distribution record as it crosses the IPC boundary.
+///
+/// Plain names rather than the enums of `deckpilot_distribution`, so that a
+/// status from a later agent with a channel or format this build does not
+/// know still deserializes; [`DistributionRecord::channel`] then returns
+/// `None` and the app treats the agent as one of another channel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionRecord {
+    /// `github`, `apt`, `mac_app_store`, ...
+    pub distribution_channel: String,
+    /// `github_release`, `external_package_manager`, `store_managed`, `none`.
+    pub update_provider: String,
+    /// `None` where the build cannot know it (a GitHub agent for Windows or
+    /// Linux; the bundler records the format in the app only).
+    #[serde(default)]
+    pub package_format: Option<String>,
+    /// `stable`, `beta` or `alpha`.
+    pub release_channel: String,
+    pub application_version: String,
+    /// `macos`, `windows` or `linux`.
+    pub platform: String,
+    /// `aarch64` or `x86_64`.
+    pub architecture: String,
+    /// A debug build's `DECKPILOT_DISTRIBUTION_OVERRIDE` is in effect.
+    #[serde(default)]
+    pub development_override: bool,
+}
+
+impl DistributionRecord {
+    /// The record of `distribution`.
+    pub fn of(distribution: &deckpilot_distribution::Distribution) -> Self {
+        Self {
+            distribution_channel: distribution.distribution_channel().name().to_owned(),
+            update_provider: distribution.update_provider().name().to_owned(),
+            package_format: distribution
+                .package_format()
+                .map(|format| format.name().to_owned()),
+            release_channel: distribution.release_channel().name().to_owned(),
+            application_version: distribution.application_version().to_owned(),
+            platform: distribution.platform().name().to_owned(),
+            architecture: distribution.architecture().name().to_owned(),
+            development_override: distribution.is_development_override(),
+        }
+    }
+
+    /// The record of this build (`deckpilot_distribution::current`).
+    pub fn current() -> Self {
+        Self::of(deckpilot_distribution::current())
+    }
+
+    /// The channel, if this build knows its name.
+    pub fn channel(&self) -> Option<deckpilot_distribution::DistributionChannel> {
+        self.distribution_channel.parse().ok()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A status as an agent of DeckPilot 0.6.0-alpha.3 sends it: every
+    /// field of that release, no distribution record.
+    const PREVIOUS_STATUS: &str = r#"{
+        "version": "0.6.0-alpha.3", "protocol": 10, "pid": 42, "startedAt": 1,
+        "dataDir": "/d", "logDir": "/d/logs", "endpoint": "/d/agent.sock",
+        "backend": "mock", "profiles": [], "activeProfile": null,
+        "activeProject": null, "devices": [], "brightness": 60,
+        "lastInputAt": null, "security": "unlocked", "protection": null,
+        "lockReason": null, "securityProblem": null,
+        "waitingForKeyStore": false, "screenLockDetection": false,
+        "runningExecutions": 0
+    }"#;
+
+    #[test]
+    fn the_distribution_record_is_optional_both_ways() {
+        // Fields an older app reads.
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct PreviousAgentStatus {
+            version: String,
+            running_executions: Option<u32>,
+            security: SecurityState,
+        }
+
+        // An older agent: no record.
+        let previous: AgentStatus = serde_json::from_str(PREVIOUS_STATUS).unwrap();
+        assert_eq!(previous.distribution, None);
+        // Without a record nothing is sent: older agents' status unchanged.
+        let json = serde_json::to_value(&previous).unwrap();
+        assert!(json.get("distribution").is_none(), "{json}");
+
+        // This agent: the record of its build.
+        let mut current = previous.clone();
+        current.distribution = Some(DistributionRecord::current());
+        let json = serde_json::to_value(&current).unwrap();
+        let record = &json["distribution"];
+        assert_eq!(
+            record["distributionChannel"],
+            deckpilot_distribution::current()
+                .distribution_channel()
+                .name()
+        );
+        assert_eq!(record["applicationVersion"], env!("CARGO_PKG_VERSION"));
+        let back: AgentStatus = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(back, current);
+        assert_eq!(
+            back.distribution.unwrap().channel(),
+            Some(deckpilot_distribution::current().distribution_channel())
+        );
+
+        // An older app reads the new status. Its type is this struct
+        // without the field, and serde skips fields a type does not
+        // declare as long as it does not deny unknown fields, which
+        // `AgentStatus` must never do: the previous fields alone, with the
+        // record present, read as before.
+        let mut without = json.clone();
+        without.as_object_mut().unwrap().remove("distribution");
+        assert_eq!(
+            serde_json::from_value::<AgentStatus>(without).unwrap(),
+            previous
+        );
+        let old: PreviousAgentStatus = serde_json::from_value(json).unwrap();
+        assert_eq!(old.version, previous.version);
+        assert_eq!(old.running_executions, Some(0));
+        assert_eq!(old.security, SecurityState::Unlocked);
+    }
+
+    #[test]
+    fn a_record_from_a_later_agent_with_unknown_names_still_deserializes() {
+        let mut json: serde_json::Value = serde_json::from_str(PREVIOUS_STATUS).unwrap();
+        json["distribution"] = serde_json::json!({
+            "distributionChannel": "snap",
+            "updateProvider": "store_managed",
+            "releaseChannel": "stable",
+            "applicationVersion": "9.0.0",
+            "platform": "linux",
+            "architecture": "riscv64",
+            "futureField": true
+        });
+        let status: AgentStatus = serde_json::from_value(json).unwrap();
+        let record = status.distribution.unwrap();
+        assert_eq!(record.distribution_channel, "snap");
+        assert_eq!(record.channel(), None);
+        assert_eq!(record.package_format, None);
+        assert!(!record.development_override);
+    }
 
     #[test]
     fn the_shutdown_reason_is_compatible_both_ways() {

@@ -299,6 +299,51 @@ mutate "signing without the environment" 'del jobs["build"]["environment"]' "job
 # shellcheck disable=SC2016 # a literal GitHub expression
 mutate "signing secrets in another job" 'jobs["verify"]["env"] = {"K": "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"}' "job verify uses signing secrets outside the environment"
 
+echo "== downstream distribution jobs never write the release"
+# check-workflow-gate.py --downstream (docs/distribution/README.md, 6.1):
+# this repository passes; every fixture under fixtures/downstream/reject
+# fails with the message its first line names, alone and among this
+# repository's workflows; every fixture under accept passes. Fixtures keep
+# their file names: a workflow named distribute* is downstream as a whole.
+downstream() { python3 -I "$here/check-workflow-gate.py" --downstream "$1" > "$work/downstream.log" 2>&1; }
+downstream "$root/.github/workflows" && ok "this repository: $(cat "$work/downstream.log")" || bad "downstream: $(cat "$work/downstream.log")"
+# downstream_dir <fixture> [with-repository]
+downstream_dir() {
+  rm -rf "$work/downstream" && mkdir -p "$work/downstream"
+  [ "${2-}" != with-repository ] || cp "$root"/.github/workflows/*.yml "$work/downstream/"
+  cp "$1" "$work/downstream/"
+}
+count=0
+for fixture in "$here"/fixtures/downstream/reject/*.yml; do
+  name=$(basename "$fixture" .yml)
+  expected=$(sed -n '1s/^# expect: //p' "$fixture")
+  [ -n "$expected" ] || {
+    bad "$name: no '# expect:' line"
+    continue
+  }
+  for mode in alone with-repository; do
+    downstream_dir "$fixture" "$mode"
+    if downstream "$work/downstream"; then
+      bad "downstream $name ($mode): passes"
+    elif grep -q -F -- "$expected" "$work/downstream.log"; then
+      ok "downstream $name ($mode) is caught"
+    else
+      bad "downstream $name ($mode): $(cat "$work/downstream.log")"
+    fi
+  done
+  count=$((count + 1))
+done
+[ "$count" -ge 15 ] && ok "$count downstream rejection fixtures" || bad "only $count downstream rejection fixtures"
+for fixture in "$here"/fixtures/downstream/accept/*.yml; do
+  name=$(basename "$fixture" .yml)
+  downstream_dir "$fixture" with-repository
+  if downstream "$work/downstream" && grep -q "none can write the release" "$work/downstream.log"; then
+    ok "downstream $name passes"
+  else
+    bad "downstream $name: $(cat "$work/downstream.log")"
+  fi
+done
+
 echo "== release updates keep the tag"
 # GitHub detaches a draft from its tag when an update omits tag_name
 # (v0.6.0-alpha.1): every release PATCH in release.yml sends it.

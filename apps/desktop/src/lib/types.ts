@@ -913,6 +913,21 @@ export interface AgentStatus {
   devices: DeviceInfo[]
   brightness: number
   lastInputAt: number | null
+  /** The agent build's distribution record; absent from 0.6.0-alpha.3 and older agents. */
+  distribution?: DistributionRecord
+}
+
+/** Who delivered a build, its version and target (docs/distribution/README.md, section 1). */
+export interface DistributionRecord {
+  /** `github`, `apt`, `mac_app_store`, ... */
+  distributionChannel: string
+  updateProvider: string
+  packageFormat?: string | null
+  releaseChannel: string
+  applicationVersion: string
+  platform: string
+  architecture: string
+  developmentOverride?: boolean
 }
 
 export type AgentCompatibility =
@@ -922,6 +937,8 @@ export type AgentCompatibility =
   | { type: "unknown"; agent: string; app: string }
   /** The agent is too old for any protocol this app speaks; replace it. */
   | { type: "updateRequired"; agent: string; app: string }
+  /** The agent came from another distribution channel; `agent` and `app` are channel names. */
+  | { type: "otherDistribution"; agent: string; app: string }
 
 /** What a connection to the agent can do, from its negotiated protocol. */
 export type AgentCapability =
