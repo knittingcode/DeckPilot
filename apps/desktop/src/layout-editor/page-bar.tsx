@@ -75,7 +75,7 @@ export function PageBar({
           <Input
             aria-label="New page name"
             className="h-8 w-32"
-            placeholder="New folder"
+            placeholder="New page"
             value={newPage}
             onChange={(e) => {
               setNewPage(e.target.value)

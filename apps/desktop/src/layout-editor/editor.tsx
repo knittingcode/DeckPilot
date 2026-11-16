@@ -51,10 +51,13 @@ import type {
 import { effectiveUsage } from "./appearance"
 import { AppearancePanel, type IconState } from "./appearance-panel"
 import { ControlMenu } from "./control-menu"
+import { DeletePageDialog } from "./delete-page-dialog"
 import {
   boundControls,
   folderOf,
+  isFree,
   orderedControls,
+  pageDeletion,
   parseControlKey,
   type DragSource,
 } from "./editing"
@@ -370,6 +373,7 @@ export function LayoutEditor({
                   selection={selection.controls}
                   focused={selection.focus}
                   onSelect={commands.select}
+                  onOpen={commands.openFolder}
                   onControlKeyDown={onControlKeyDown}
                   droppable
                   draggable
@@ -385,6 +389,7 @@ export function LayoutEditor({
                           const id = folderOf(draft, pageId, control)
                           return id ? findPage(draft, id)?.name : undefined
                         })(),
+                        canCreateFolder: isFree(draft, pageId, control),
                       }}
                       commands={{
                         onOpen: () => {
@@ -399,6 +404,9 @@ export function LayoutEditor({
                         openFolder: () => {
                           commands.openFolder(control)
                         },
+                        newFolder: () => {
+                          commands.newFolder(control)
+                        },
                       }}
                     >
                       {element}
@@ -411,8 +419,8 @@ export function LayoutEditor({
             )}
             {hasControls && bound.size === 0 && (
               <EmptyState title={isFolderPage ? "This folder is empty" : "This page is empty"}>
-                Drag an action or workflow from the library onto a control, or select a control and
-                choose in the inspector.
+                Drag an action, a workflow or “New folder” from the library onto a control, or
+                select a control and choose in the inspector.
               </EmptyState>
             )}
             {isFolderPage && !hasWayBack(draft, pageId) && (
@@ -480,6 +488,11 @@ export function LayoutEditor({
           }
         />
       </div>
+      <DeletePageDialog
+        deletion={editing.deleting ? pageDeletion(draft, editing.deleting) : null}
+        onCancel={commands.cancelDeletePage}
+        onConfirm={commands.confirmDeletePage}
+      />
     </DndContext>
   )
 }

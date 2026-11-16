@@ -255,8 +255,15 @@ describe("LayoutEditor", { timeout: 20_000 }, () => {
     await user.click(screen.getByRole("button", { name: "Back" }))
     expect(screen.getByRole("tab", { name: "Tools" })).toHaveAttribute("aria-selected", "true")
 
-    // Deleting "Tools" keeps "Git" in a folder that exists.
+    // Deleting "Tools" asks first, saying what goes with it, and keeps
+    // "Git" in a folder that exists.
     await user.click(screen.getByRole("button", { name: "Delete page" }))
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete “Tools”?" })
+    expect(dialog).toHaveTextContent(
+      "1 control on other pages that opens it will do nothing afterwards.",
+    )
+    expect(dialog).toHaveTextContent("The page inside it (“Git”) is kept and moves to “Home”.")
+    await user.click(within(dialog).getByRole("button", { name: "Delete page" }))
     await user.click(screen.getByRole("button", { name: /Save/ }))
     const [, saved] = saveLayout.mock.calls[0] as [string, DeviceLayout]
     expect(saved.pages.map((p) => [p.id, p.parent])).toEqual([
