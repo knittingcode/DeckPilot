@@ -569,10 +569,17 @@ impl Registry {
 
     /// Packages `manifest` with `module` and `icon` (the sample's without).
     fn package_with(&self, manifest: &Value, module: &[u8], icon: Option<&[u8]>) -> PathBuf {
+        // The registry is shared by tests that run in parallel, and several
+        // package the same plugin and version: every call gets a source
+        // directory and an output file of its own. Written twice, the same
+        // `module.wasm` fails on Windows while another test's packaging
+        // still has it open (error 32).
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let name = format!(
-            "{}-{}",
+            "{}-{}-{}",
             manifest["id"].as_str().unwrap(),
-            manifest["version"].as_str().unwrap()
+            manifest["version"].as_str().unwrap(),
+            CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         );
         let dir = self.keys.path().join("src").join(&name);
         write_plugin_dir(&dir, manifest, icon);
