@@ -125,7 +125,7 @@ component tests). Nothing here has physical evidence yet.
 | Feature | Status | Home | What exists | What is missing |
 | --- | --- | --- | --- | --- |
 | **Multi Action Switch** | missing | core | Stateful keys exist for the Work Session only | A key with two or more states, each with its own workflow, title and icon; see [5.7](#57-multi-action-switch) |
-| **Random Action** | missing | built-in module | — | See [5.8](#58-random-action) |
+| **Random Action** | verified (integration, simulated) | built-in module | `deck.random` (`feat/random-action`; `modules/deck/src/random.rs` tests, `deck.rs::a_random_key_runs_what_it_picked_as_a_key_would`, `modules/deck/candidates-field.test.tsx`) | — |
 | **Website** | verified (simulated) | built-in module (`system`) | `system.open-url`: `http`, `https`, `mailto` | — |
 | **Open** (file, folder) | verified (simulated) | built-in module (`system`) | `system.open-file`, `system.open-directory`, inside bound locations | — |
 | **Open Application** | verified (simulated), platform | built-in module (`system`) | `system.open-app` with a bound application and arguments | — |
@@ -390,12 +390,50 @@ It needs a representation that an older build can read (rule 1), so it is
 an action type whose parameters name the states, with the agent starting
 the runs through a deck request. Designed in detail with its pull request.
 
+**Not built yet.** The parts it needs and where they stand:
+
+- Starting a state's target: the `RunAction`/`RunWorkflow` deck requests
+  of the Random Action (5.8) already do this, as a key would.
+- States as parameters: a `lines` parameter like the Random Action's
+  candidates, one `action:<id>` or `workflow:<id>` per state, with the
+  title and icon of each state as further `lines` parameters of the same
+  length (an older build keeps them as text).
+- Advancing on success needs the run's outcome: immediate for an action;
+  for a workflow, the agent's `ExecutionFinished`, matched to the key that
+  started it. The state (per profile, page, control and gesture) goes in
+  `settings` (`switch.states`), so it survives a restart.
+- Showing the current state's title and icon on the key is live key state
+  (`button_state.rs`, `crates/deckpilot-render`), which the plugin key-state
+  work (#290–#295) is changing now. The switch is sequenced after it, so
+  that both use one representation of a key's state.
+
 ### 5.8 Random Action
 
 `deck.random`: a list of candidates (saved actions and workflows) with
 optional weights and "never the same twice in a row". Uniform by default.
 An empty list fails with `no-candidates` when saved and when run. The
 random source is injected into the handler, so tests are deterministic.
+
+As built (`feat/random-action`):
+
+- `candidates` is a `lines` parameter: one `action:<id>` or
+  `workflow:<id>` per line, optionally followed by a weight (1–100), at
+  most 32. The Action Library edits it as rows of the profile's actions
+  and workflows with a weight; a candidate that no longer exists stays in
+  its row as missing. It is required, so an empty list is refused when
+  saved; when run it fails with `no-candidates`, `invalid-candidate`,
+  `candidate-not-found` or `nested-random`.
+- The pick comes from the operating system's random source (`getrandom`,
+  already a dependency), without modulo bias; *never the same twice* is
+  remembered per list while the agent runs.
+- The handler only picks. It asks with a new deck request,
+  `RunAction { action }` or `RunWorkflow { workflow }`. From a key, the
+  agent runs the pick as that key's own binding would, for the same
+  device (`Runtime::run_picked`), so a picked *Next page* turns that
+  device's page and a picked workflow starts in the background. Run from
+  the app, the pick runs as from the app.
+- Picks do not nest: a candidate that is a Random Action is refused, so a
+  pick never recurses.
 
 ### 5.9 System actions
 
@@ -407,6 +445,23 @@ module; sequence the merges):
   desktop's close request where available, otherwise `SIGTERM`). Never
   `SIGKILL`/`TerminateProcess`. Fails with `not-running` when it is not
   running. Unsaved-changes dialogs stay the application's.
+
+**Not built yet; what is still to decide.** The workspace forbids
+`unsafe`, so each platform's request comes from a program or a
+dependency, and each choice needs the review this section asks for:
+
+| | Without new dependencies | With a dependency |
+| --- | --- | --- |
+| macOS | `/usr/bin/osascript` with a fixed script that takes the bound application's bundle identifier as an argument (`tell application id … to quit`); the identifier comes from the resource bound on this computer, never from the action. Sending Apple events asks the user once (Automation permission) | an Apple-event crate |
+| Windows | `taskkill.exe /PID <pid>` **without** `/F`, which posts `WM_CLOSE`; the process is the one `system.process-status` finds for the bound program | `windows` crate (`PostMessage`) |
+| Linux | `kill -TERM <pid>` (no shell, the pid from the process table) | `nix` |
+
+The program route reuses the System module's bounded command runner (no
+shell, argument list, time limit), so it adds no new power; the action is
+off until allowed on this computer like commands (`allowCommands`), since
+closing an application can lose its unsaved state when it does not ask.
+Which route, and whether closing shares `allowCommands` or gets its own
+switch, are decisions for that pull request.
 
 ### 5.10 Hotkey, Hotkey Switch and Text
 
@@ -445,7 +500,7 @@ request.
 - Sleep and wake: the agent blanks a device (brightness 0 and cleared
   keys) and restores it on the next press, which is swallowed. A sleep
   timer is a setting of this computer. Needs agent state and a status
-  field, so it comes with protocol 11.
+  field, so it comes with protocol 11. **Not built yet.**
 - Actions a device cannot do are listed as unavailable for it, with the
   reason, from its capability descriptor.
 
