@@ -391,6 +391,13 @@ impl PluginStore {
         load_grants(self.connection(), id)
     }
 
+    /// The origins the user entered and consented to (G2), one per origin
+    /// setting. What the broker may use of them is decided by the agent
+    /// against the current settings and manifest.
+    pub fn user_origins(&self, id: &PluginId) -> Result<Vec<crate::origins::StoredUserOrigin>> {
+        crate::origins::load(self.connection(), id)
+    }
+
     /// What the broker may allow right now: nothing unless the plugin is
     /// enabled; otherwise the declared grants of the active version that
     /// are granted with at least the declared scope (the intersection of
