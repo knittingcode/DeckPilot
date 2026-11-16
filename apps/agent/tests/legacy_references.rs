@@ -51,6 +51,10 @@ const FIXTURE: &str = concat!(
 const PASSWORD: &str = "deckpilot-dev";
 const SERIAL: &str = "LEGACY-1";
 
+/// Built-in modules added after the fixture was written, in the order the
+/// agent registers them. None of them has tables of its own.
+const NEWER_MODULES: [&str; 1] = ["deck"];
+
 /// The actions, in the order they are run, and their messages.
 const ACTIONS: [(&str, Message); 5] = [
     (
@@ -474,7 +478,18 @@ async fn observe(data: &Data) -> Value {
     agent.shutdown().await;
     let after = data.rows();
     for (table, rows) in &before {
-        assert_eq!(Some(rows), after.get(table), "rows of {table} changed");
+        let mut expected = rows.clone();
+        if table == "module_schemas" {
+            // The agent records the schema version of every built-in
+            // module, also of one without tables: a module added since
+            // the fixture was written gets its row, after the stored ones.
+            expected.extend(
+                NEWER_MODULES
+                    .iter()
+                    .map(|module| format!("Text({:?}) | Integer(0)", module.as_bytes())),
+            );
+        }
+        assert_eq!(Some(&expected), after.get(table), "rows of {table} changed");
     }
     assert_eq!(
         before.keys().collect::<Vec<_>>(),

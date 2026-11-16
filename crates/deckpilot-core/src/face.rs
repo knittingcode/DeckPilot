@@ -163,10 +163,45 @@ pub fn render_label(template: &str, profile: &str, project: Option<&Project>) ->
         .replace("{project.name}", name)
 }
 
+/// Where a device is among the top-level pages of its layout, for the
+/// `{page.…}` placeholders of key labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageLabel<'a> {
+    /// The position of the top-level page, from 1.
+    pub number: usize,
+    /// How many top-level pages the layout has.
+    pub count: usize,
+    /// The name of the page shown (a folder's own name inside a folder).
+    pub name: &'a str,
+}
+
+/// Expands `{page.number}`, `{page.count}` and `{page.name}` in the text
+/// of a key face.
+pub fn render_page_label(text: &str, page: PageLabel<'_>) -> String {
+    if !text.contains("{page.") {
+        return text.to_owned();
+    }
+    text.replace("{page.number}", &page.number.to_string())
+        .replace("{page.count}", &page.count.to_string())
+        .replace("{page.name}", page.name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ProjectKey;
+
+    #[test]
+    fn labels_show_the_page() {
+        let page = PageLabel {
+            number: 2,
+            count: 5,
+            name: "Media",
+        };
+        assert_eq!(render_page_label("{page.number}/{page.count}", page), "2/5");
+        assert_eq!(render_page_label("On {page.name}", page), "On Media");
+        assert_eq!(render_page_label("Plain {page}", page), "Plain {page}");
+    }
 
     #[test]
     fn labels_follow_the_active_project() {

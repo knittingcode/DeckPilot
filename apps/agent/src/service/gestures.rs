@@ -182,23 +182,35 @@ impl Agent {
             control,
             input,
         };
+        let shown = self.runtime.current_page(device);
         let outcome = self.runtime.handle_event(&event);
-        self.handle_outcome(device, control, RunOrigin::Key, outcome);
+        self.handle_outcome(device, control, RunOrigin::Key, shown, outcome);
     }
 
-    /// What a binding did, from a raw edge or a gesture: report an action,
-    /// start a workflow in the background, or drop the device's pending
-    /// gestures after it navigated.
+    /// What a binding did, from a raw edge or a gesture: report an action
+    /// (after applying what it asked of the agent), start a workflow in the
+    /// background, and drop the device's pending gestures when the page it
+    /// shows is no longer `shown`, the page the binding was on.
     fn handle_outcome(
         &mut self,
         device: &DeviceId,
         control: ControlId,
         origin: RunOrigin,
+        shown: Option<PageId>,
         outcome: Result<RuntimeOutcome, deckpilot_core::EngineError>,
     ) {
+        // An action that turned the page, or a folder that closed after
+        // its key ran: gestures recognized on the old page are dropped.
+        if self.runtime.current_page(device) != shown {
+            self.gestures
+                .engine
+                .cancel(device, GestureCancel::PageChanged);
+        }
         match outcome {
-            Ok(RuntimeOutcome::Action { action, result }) => {
-                self.report_action(action, &result);
+            Ok(RuntimeOutcome::Action { action, mut result }) => {
+                let name = self.action_name(action);
+                self.apply_deck_request(&mut result);
+                self.report_action_as(action, name, &result);
             }
             // A plugin's action: it runs on a thread of its own and is
             // reported when it finished.
@@ -254,7 +266,13 @@ impl Agent {
             self.run_stateful(fired, binding, *gesture);
             return;
         }
-        self.handle_outcome(&fired.device, fired.control, RunOrigin::Gesture, outcome);
+        self.handle_outcome(
+            &fired.device,
+            fired.control,
+            RunOrigin::Gesture,
+            fired.page,
+            outcome,
+        );
     }
 }
 

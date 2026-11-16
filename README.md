@@ -248,9 +248,9 @@ real configuration. `pnpm dev` runs the same session in the foreground. All comm
 
 Planned work is tracked in [docs/roadmap.md](docs/roadmap.md): drivers for more Stream Deck
 models, hardware testing on Windows and Linux, and Windows code signing. Cloud synchronization and
-telemetry are out of scope. A plugin marketplace is a design proposal
-([#191](https://github.com/knittingcode/deckpilot/pull/191)) with experimental feasibility work; it
-is not part of DeckPilot.
+telemetry are out of scope. A plugin marketplace is in experimental
+development on `main` ([docs/marketplace](docs/marketplace/agent-integration.md)); it is compiled out
+of release builds and is not part of any published release.
 
 ## Contributing
 

@@ -27,8 +27,8 @@ use deckpilot_core::{
     SettingScope,
 };
 use deckpilot_modules::{
-    builtin, docker, general, git, github, gitlab, http, jira, notifications, projects, system,
-    work_session, workspace,
+    builtin, deck, docker, general, git, github, gitlab, http, jira, notifications, projects,
+    system, work_session, workspace,
 };
 
 /// The planted secret: no result may ever contain it.
@@ -137,6 +137,7 @@ impl Report {
 fn modules(launcher: &Arc<RecordingLauncher>) -> Vec<Box<dyn FeatureModule>> {
     let opener: Arc<dyn Launcher> = launcher.clone();
     vec![
+        Box::new(deck::DeckModule::new()),
         Box::new(docker::DockerModule::new()),
         Box::new(general::GeneralModule::new()),
         Box::new(git::GitModule::with_launcher(opener.clone())),

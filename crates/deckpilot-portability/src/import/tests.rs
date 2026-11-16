@@ -334,6 +334,7 @@ fn module_settings_follow_the_portability_contract() {
     assert_eq!(
         summary.modules,
         [
+            "deck",
             "docker",
             "git",
             "github",
@@ -355,7 +356,9 @@ fn module_settings_follow_the_portability_contract() {
     assert_eq!(projects.config.text("somethingLocal"), None);
     let system = &stored[&ModuleId::new("system").unwrap()];
     assert_eq!(system.config.boolean("allowCommands"), Some(false));
-    assert_eq!(stored.len(), 11);
+    // One state per imported module of the list above.
+    assert_eq!(stored.len(), summary.modules.len());
+    assert_eq!(stored.len(), 12);
 }
 
 #[test]
