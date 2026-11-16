@@ -134,6 +134,7 @@ fn summaries_report_the_run_without_messages() {
     let progress = |_: Progress| {};
     let control = ExecutionControl::new(&token, &progress).with_summary(RunSummary {
         workflow: Some(workflow_id),
+        workflow_name: None,
         elapsed_ms: 12_300,
         succeeded: 3,
         failed: 1,

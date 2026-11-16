@@ -40,5 +40,7 @@ pub use value::{ActionOutcome, ParamValue, Params, ValidationError};
 /// `credentials.has` and `settings.get`; the optional export
 /// `dp_features` and, for a guest that reports
 /// [`guest::features::NETWORK_ERROR_KIND`] there, the `kind` of a failed
-/// `http.fetch` ([`capability::NetworkErrorKind`]).
+/// `http.fetch` ([`capability::NetworkErrorKind`]); the capability
+/// operation `run.context` ([`capability::RunContext`], G8), which only a
+/// guest that reads it sends.
 pub const ABI_VERSION: u32 = 1;

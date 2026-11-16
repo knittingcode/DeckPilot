@@ -681,7 +681,13 @@ impl Agent {
             } if self.security == SecurityState::Unlocked && self.runtime.runs_detached(action) => {
                 // Answered when the action finished on its own thread.
                 self.last_activity = self.now_seconds();
-                self.run_detached(action, None, None, Some(reply));
+                self.run_detached(
+                    action,
+                    None,
+                    None,
+                    deckpilot_core::RunOrigin::App,
+                    Some(reply),
+                );
                 Flow::Continue
             }
             #[cfg(feature = "test-hooks")]
@@ -1275,9 +1281,13 @@ impl Agent {
         action: ActionInstanceId,
         overrides: Option<deckpilot_core::ActionParameters>,
         device: Option<DeviceId>,
+        origin: deckpilot_core::RunOrigin,
         reply: Option<oneshot::Sender<Result<Response, IpcError>>>,
     ) {
-        let run = match self.runtime.detached_action(action, overrides, device) {
+        let run = match self
+            .runtime
+            .detached_action(action, overrides, device, origin)
+        {
             Ok(run) => run,
             Err(error) => {
                 warn!(%error, "the action could not start");
@@ -1754,10 +1764,30 @@ pub fn default_options(paths: AgentPaths, mock_models: &[DeviceModel], usb: bool
         key_store: security::system_key_store(),
         auto_lock_check: AUTO_LOCK_CHECK,
         cancel_grace: executions::CANCEL_GRACE,
-        clock: system_clock(),
+        clock: options_clock(),
         screen_lock: deckpilot_presence::screen_lock_monitor().map(Arc::from),
         notifier: Some(Arc::new(crate::notifications::SystemNotifier)),
     }
+}
+
+/// The agent's clock: the system's. Test only (feature `test-hooks`, never
+/// read by a release build): with `DECKPILOT_TEST_CLOCK_OFFSET` naming a
+/// file, the clock runs as many seconds ahead as the file says (read at
+/// every look at the clock), so an end-to-end test of a separate agent
+/// process can make a schedule due without waiting for it.
+fn options_clock() -> Clock {
+    #[cfg(feature = "test-hooks")]
+    if let Some(path) = std::env::var_os("DECKPILOT_TEST_CLOCK_OFFSET") {
+        let path = std::path::PathBuf::from(path);
+        return Arc::new(move || {
+            let ahead = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| text.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+            SystemTime::now() + Duration::from_secs(ahead)
+        });
+    }
+    system_clock()
 }
 
 /// Completes on Ctrl+C, and on SIGTERM on Unix.

@@ -146,7 +146,7 @@ two root keys with threshold 1). At minimum:
    and `registry-timestamp` (`main` only, the daily refresh). They are
    never secrets of `knittingcode/DeckPilot`.
 5. `roots.json` becomes the DeckPilot repository variable
-   `DECKPILOT_REGISTRY_ROOT_PUBKEYS`.
+   `DECKPILOT_REGISTRY_ROOT_PUBKEYS` ([below](#embedding-the-roots-in-a-release-build)).
 
 | Event (section 9.4) | Commands |
 | --- | --- |
@@ -154,7 +154,42 @@ two root keys with threshold 1). At minimum:
 | Index-key compromise | as above with `--seq-floor-reset` (`--seq-floor` the last legitimate seq); `lift-revocation` for revocations the attacker added; re-publish |
 | Timestamp-key compromise | as above for `--timestamp`; impact was limited to freezing |
 | Root rotation | `keyset rotate --root …`; `keyset sign` with the current roots and with the new roots |
-| Root loss or compromise | app release with new embedded roots (not this tool) |
+| Root loss or compromise | app release with new embedded roots (not this tool): replace `DECKPILOT_REGISTRY_ROOT_PUBKEYS` and release |
+
+## Embedding the roots in a release build
+
+The agent trusts the registry through a root role compiled into it:
+`DECKPILOT_REGISTRY_ROOT_PUBKEYS` at **build time**, read by this crate's
+`build.rs` (`src/roots.rs`, `roots::EMBEDDED`). Its value is the content
+of `roots.json` exactly as `keyset init` writes it and
+`knittingcode/deckpilot-plugins` commits it as `keys/roots.json`
+(`{"keys": [...], "threshold": n}`), or the absolute path of that file.
+The build checks it with the client's rules and fails on a malformed
+value (bad JSON, unknown field, 0 or more than 4 keys, a key that is not
+a minisign public key, a duplicate, a threshold of 0, above 4 or above
+the number of keys, an unreadable or relative path): never partial
+trust. Unset or empty, nothing is embedded and the agent uses no
+registry unless it is given `--plugin-registry-roots`.
+
+After the ceremony the owner:
+
+1. Checks the committed file locally:
+   `DECKPILOT_REGISTRY_ROOT_PUBKEYS="$(cat keys/roots.json)" cargo build --release -p deckpilot-agent --features plugins`.
+2. Creates the **repository variable** (not a secret; the keys are
+   public) `DECKPILOT_REGISTRY_ROOT_PUBKEYS` in `knittingcode/deckpilot`
+   with that content: `gh variable set DECKPILOT_REGISTRY_ROOT_PUBKEYS
+   --repo knittingcode/deckpilot < keys/roots.json`.
+3. Releases. `release.yml` passes the variable to the agent build only
+   when it is set; nothing else changes.
+
+A release build with embedded roots ignores `--plugin-registry-roots`
+and `DECKPILOT_PLUGIN_REGISTRY_ROOTS` (they override embedded roots in
+debug and `test-hooks` builds only); a release build without embedded
+roots still accepts them, for a self-hosted registry. The embedded roots
+are the anchor of the key set chain, so index, timestamp and root
+rotations signed as in the table above need no new app build. The
+precedence rules and their tests:
+[`docs/marketplace/agent-integration.md`](../../docs/marketplace/agent-integration.md#trusted-root-keys).
 
 ## Intended GitHub Actions flow (separate registry repository)
 

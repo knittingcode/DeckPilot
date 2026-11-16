@@ -55,10 +55,14 @@ impl MockHost {
         }
     }
 
-    /// Every request succeeds with `null` (an empty HTTP 200 for fetches).
+    /// Every request succeeds with `null` (an empty HTTP 200 for fetches,
+    /// a run started from the app for `run.context`).
     pub fn allow_all() -> Self {
         Self::new(|req| match req {
             CapabilityRequest::HttpFetch(_) => CallResult::Ok(serde_json::json!({"status": 200})),
+            CapabilityRequest::RunContext(_) => {
+                CallResult::Ok(serde_json::json!({"trigger": "app"}))
+            }
             _ => CallResult::Ok(serde_json::Value::Null),
         })
     }

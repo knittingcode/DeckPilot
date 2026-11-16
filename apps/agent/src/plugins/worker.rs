@@ -19,6 +19,7 @@ use std::time::Duration;
 use deckpilot_core::alias::LegacyRouting;
 use deckpilot_ipc::plugins::PluginEvent;
 use deckpilot_ipc::{AgentEvent, IpcError, Request, Response};
+use deckpilot_plugin_abi::capability::RunContext;
 use deckpilot_plugin_abi::{ActionOutcome, Params};
 use deckpilot_plugin_store::StoreKey;
 use deckpilot_plugin_supervisor::AbortSignal;
@@ -66,6 +67,8 @@ pub(super) enum Message {
         plugin: String,
         action: String,
         params: Params,
+        /// What started the run (G8).
+        run: RunContext,
         abort: AbortSignal,
         reply: mpsc::SyncSender<EngineReply>,
     },
@@ -84,13 +87,15 @@ pub(super) enum Message {
 pub(crate) struct Invoker(mpsc::Sender<Message>);
 
 impl Invoker {
-    /// Queues an invocation; `None` when the worker is gone. The answer
-    /// arrives on the returned channel; dropping it discards a late one.
+    /// Queues an invocation of a run that `run` describes; `None` when the
+    /// worker is gone. The answer arrives on the returned channel;
+    /// dropping it discards a late one.
     pub fn invoke(
         &self,
         plugin: String,
         action: String,
         params: Params,
+        run: RunContext,
         abort: AbortSignal,
     ) -> Option<Receiver<EngineReply>> {
         let (reply, answer) = mpsc::sync_channel(1);
@@ -99,6 +104,7 @@ impl Invoker {
                 plugin,
                 action,
                 params,
+                run,
                 abort,
                 reply,
             })
@@ -253,11 +259,12 @@ impl State {
                 plugin,
                 action,
                 params,
+                run,
                 abort,
                 reply,
             } => {
                 if let Some(service) = &mut self.service {
-                    service.invoke_for_engine(&plugin, &action, params, abort, reply);
+                    service.invoke_for_engine(&plugin, &action, params, run, abort, reply);
                 } else {
                     let error = self.unavailable();
                     let _ = reply.try_send(Err(EngineFailure {

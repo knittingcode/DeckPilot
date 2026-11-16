@@ -51,6 +51,10 @@ pub struct Invocation {
     pub workflow: Option<WorkflowId>,
     /// The run it belongs to.
     pub execution: Option<ExecutionId>,
+    /// What started the run (a key, a gesture, the app, a workflow and its
+    /// cause). `None` when the caller did not say: such a run counts as
+    /// not started by the user.
+    pub origin: Option<crate::RunOrigin>,
 }
 
 impl Invocation {
@@ -73,6 +77,15 @@ impl Invocation {
     #[must_use]
     pub fn with_execution(self, execution: Option<ExecutionId>) -> Self {
         Self { execution, ..self }
+    }
+
+    /// The same invocation, started by `origin`.
+    #[must_use]
+    pub fn with_origin(self, origin: crate::RunOrigin) -> Self {
+        Self {
+            origin: Some(origin),
+            ..self
+        }
     }
 
     /// The context of an action that runs now, with `project` as its

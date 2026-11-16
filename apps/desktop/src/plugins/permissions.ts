@@ -116,7 +116,7 @@ function describe(key: string, facts: Facts): Omit<Grant, "key" | "justification
         tier: "medium",
         title: `Open links to ${describeHost(target)} in your browser`,
         detail:
-          "Only https pages of this host, while one of its actions runs; at most one every 2 seconds.",
+          "Only https pages of this host, and only in an action you start (a key, a gesture or the app, or a workflow you start); never from a schedule, an event or startup. At most one every 2 seconds.",
       }
     case "background":
       return {
