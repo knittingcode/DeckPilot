@@ -623,6 +623,27 @@ pub enum Request {
     RetryModuleMigration {
         module: String,
     },
+    /// Consents to the exact origin an origin setting holds (G2): requests
+    /// to it, and the secrets of the credential slots bound to it.
+    /// `origin` must be what the setting holds now
+    /// ([`plugins::PluginUserOrigin::origin`]); `private_network` is the
+    /// separate consent to reach it on a private network, required for a
+    /// private host and never assumed. Answers `pluginSettings`. Since
+    /// protocol 10 (an older agent refuses it as an unknown request).
+    #[serde(rename_all = "camelCase")]
+    GrantPluginUserOrigin {
+        plugin: String,
+        setting: String,
+        origin: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        private_network: bool,
+    },
+    /// Revokes the consent to an origin setting's origin; its next request
+    /// is refused. Answers `pluginSettings`. Since protocol 10.
+    RevokePluginUserOrigin {
+        plugin: String,
+        setting: String,
+    },
 }
 
 impl Request {
@@ -670,7 +691,9 @@ impl Request {
             | Self::SetPluginCredential { .. }
             | Self::DeletePluginCredential { .. }
             | Self::RetryModuleMigration { .. }
-            | Self::DecideModuleMigration { .. } => plugins::check_request(self),
+            | Self::DecideModuleMigration { .. }
+            | Self::GrantPluginUserOrigin { .. }
+            | Self::RevokePluginUserOrigin { .. } => plugins::check_request(self),
             Self::InstallPlugin { source, consent } => {
                 source.check()?;
                 plugins::check_consent(consent)
@@ -1227,7 +1250,9 @@ impl Request {
             | Self::SetPluginSettings { .. }
             | Self::ListPluginCredentials { .. }
             | Self::SetPluginCredential { .. }
-            | Self::DeletePluginCredential { .. } => 10,
+            | Self::DeletePluginCredential { .. }
+            | Self::GrantPluginUserOrigin { .. }
+            | Self::RevokePluginUserOrigin { .. } => 10,
             Self::RunWorkflow { .. } | Self::PrepareForUpdate => 2,
             Self::GetStatus
             | Self::ListDevices
@@ -2397,6 +2422,62 @@ mod tests {
             serde_json::json!({"type": "migrationChanged", "module": "github",
                 "plugin": "deckpilot.github", "phase": "awaitingConsent"})
         );
+    }
+
+    #[test]
+    fn user_origin_requests_are_bounded() {
+        // User-entered origins (G2).
+        for (json, name) in [
+            (
+                serde_json::json!({"type": "grantPluginUserOrigin", "plugin": "acme.forge",
+                    "setting": "apiUrl", "origin": "https://ghe.example.com/api/v3"}),
+                "grantPluginUserOrigin",
+            ),
+            (
+                serde_json::json!({"type": "grantPluginUserOrigin", "plugin": "acme.forge",
+                    "setting": "apiUrl", "origin": "https://10.0.0.5",
+                    "privateNetwork": true}),
+                "grantPluginUserOrigin",
+            ),
+            (
+                serde_json::json!({"type": "revokePluginUserOrigin", "plugin": "acme.forge",
+                    "setting": "apiUrl"}),
+                "revokePluginUserOrigin",
+            ),
+        ] {
+            let request: Request = serde_json::from_value(json.clone()).unwrap();
+            assert_eq!(request.since_protocol(), 10, "{name}");
+            assert_eq!(request.name(), name);
+            request.validate().unwrap();
+            assert_eq!(serde_json::to_value(&request).unwrap(), json);
+        }
+        let grant = |setting: &str, origin: &str| {
+            Request::GrantPluginUserOrigin {
+                plugin: "acme.forge".into(),
+                setting: setting.into(),
+                origin: origin.into(),
+                private_network: false,
+            }
+            .validate()
+        };
+        assert!(grant("apiUrl", "").is_err());
+        assert!(grant("apiUrl", "https://ghe.example.com/a b").is_err());
+        assert!(grant("apiUrl", &format!("https://{}", "a".repeat(2048))).is_err());
+        assert!(grant("api url", "https://ghe.example.com").is_err());
+        assert!(grant("", "https://ghe.example.com").is_err());
+        // The private network is never assumed.
+        let parsed: Request = serde_json::from_value(serde_json::json!({
+            "type": "grantPluginUserOrigin", "plugin": "acme.forge", "setting": "apiUrl",
+            "origin": "https://10.0.0.5"
+        }))
+        .unwrap();
+        assert!(matches!(
+            parsed,
+            Request::GrantPluginUserOrigin {
+                private_network: false,
+                ..
+            }
+        ));
     }
 
     #[test]

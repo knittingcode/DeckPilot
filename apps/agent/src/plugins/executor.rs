@@ -6,7 +6,11 @@
 //!   URL the broker allowed, addresses resolved once, checked against the
 //!   private-network policy (loopback, private, link-local, metadata and
 //!   other non-public addresses refused) and pinned for the connection, no
-//!   proxy, a bounded body and a timeout. Redirects are never followed by
+//!   proxy, a bounded body and a timeout. Only a request the broker
+//!   allowed within a user-entered origin the user allowed on a private
+//!   network (G2, `AllowedFetch::private_network`) may also connect to
+//!   private ranges (RFC 1918, carrier NAT, unique local IPv6); loopback
+//!   and link-local stay refused for it too. Redirects are never followed by
 //!   the client: each one goes back to the broker
 //!   (`Session::authorize_redirect`), which re-checks the origin, method,
 //!   headers and hop count exactly like a new request. A request stops at
@@ -295,14 +299,67 @@ impl SendFailure {
     fn from_transport((code, message): (&str, String), fetch: &AllowedFetch) -> Self {
         let kind = NetworkErrorKind::from_code(code);
         let message = match kind {
+            Some(NetworkErrorKind::BlockedAddress) if fetch.private_network => format!(
+                "{} resolves to an address on this computer or a link-local or special \
+                 network, which plugins never reach",
+                fetch.origin
+            ),
             Some(NetworkErrorKind::BlockedAddress) => format!(
                 "{} resolves to an address on this computer or a private network, which \
-                 plugins never reach",
+                 plugins reach only for a server the user entered and allowed on a private \
+                 network",
                 fetch.origin
             ),
             _ => message,
         };
         Self { message, kind }
+    }
+}
+
+/// The addresses a request within a user origin the user allowed on a
+/// private network (G2) may connect to: public ones and private ranges
+/// (`check_private_network_addr`), never this computer or link-local. Every
+/// address the name resolves to must pass, and the client connects to
+/// exactly these, so DNS cannot swap in another one.
+pub(super) struct PrivateNetworkOrigin;
+
+impl deckpilot_net::policy::AddressPolicy for PrivateNetworkOrigin {
+    fn check(
+        &self,
+        host: &str,
+        addresses: &[std::net::IpAddr],
+    ) -> Result<(), (&'static str, String)> {
+        use deckpilot_net::codes;
+        if addresses.is_empty() {
+            return Err((codes::DNS_FAILED, format!("{host} did not resolve")));
+        }
+        match addresses
+            .iter()
+            .find(|a| deckpilot_plugin_broker::check_private_network_addr(**a).is_err())
+        {
+            Some(address) => Err((
+                codes::BLOCKED_ADDRESS,
+                format!("{host} is on this computer or a link-local network ({address})"),
+            )),
+            None => Ok(()),
+        }
+    }
+}
+
+/// The address check of one hop: public addresses only, unless the broker
+/// allowed it within a user origin on a private network.
+pub(super) fn address_policy(
+    fetch: &AllowedFetch,
+) -> Box<dyn deckpilot_net::policy::AddressPolicy> {
+    if fetch.private_network {
+        Box::new(PrivateNetworkOrigin)
+    } else {
+        // No `privateNetwork` grant of the G3 kind is implemented: every
+        // resolved address must be public.
+        Box::new(deckpilot_net::policy::NetworkPolicy {
+            allow_private: false,
+            private_hosts: Vec::new(),
+        })
     }
 }
 
@@ -341,7 +398,6 @@ fn network_send(
     interrupt: Option<&CallInterrupt>,
 ) -> Result<Exchange, SendFailure> {
     use deckpilot_net::client;
-    use deckpilot_net::policy::NetworkPolicy;
     let request = client::Request {
         method: method(fetch.method),
         url: fetch.url.clone(),
@@ -363,13 +419,10 @@ fn network_send(
         follow_redirects: false,
         max_bytes: MAX_BODY,
     };
-    // Private networks are never reachable for plugins (no per-plugin
-    // `privateNetwork` grant is implemented): every resolved address must
-    // be public, and the connection uses only the checked addresses.
-    let policy = NetworkPolicy {
-        allow_private: false,
-        private_hosts: Vec::new(),
-    };
+    // Public addresses only, unless the broker allowed this hop within a
+    // user origin the user allowed on a private network; the connection
+    // uses only the checked addresses.
+    let policy = address_policy(fetch);
     // The client stops at once when the token is cancelled (it drops the
     // connection); a watcher cancels it when the invocation is interrupted.
     let token = deckpilot_core::CancellationToken::new();
@@ -391,7 +444,7 @@ fn network_send(
                 warn!(%error, "a plugin request cannot be interrupted");
             }
         }
-        let response = client::send(request, &policy, Some(&token));
+        let response = client::send(request, policy.as_ref(), Some(&token));
         done.store(true, std::sync::atomic::Ordering::SeqCst);
         response
     });
@@ -1097,6 +1150,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_a_private_network_user_origin_reaches_private_addresses() {
+        let fetch = |private_network: bool| AllowedFetch {
+            url: url::Url::parse("https://ghe.example.com/api/v3").unwrap(),
+            origin: deckpilot_plugin_broker::Origin::parse_grant("https://ghe.example.com")
+                .unwrap(),
+            method: HttpMethod::Get,
+            headers: Vec::new(),
+            body: None,
+            auth: None,
+            private_network,
+        };
+        let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
+        let check = |private: bool, address: &str| {
+            address_policy(&fetch(private)).check("ghe.example.com", &[ip(address)])
+        };
+        for address in ["10.0.0.5", "192.168.1.2", "100.64.1.1", "fd00::5"] {
+            assert!(check(false, address).is_err(), "{address}");
+            check(true, address).unwrap();
+        }
+        check(false, "140.82.112.5").unwrap();
+        check(true, "140.82.112.5").unwrap();
+        for address in ["127.0.0.1", "::1", "169.254.169.254", "fe80::1", "0.0.0.0"] {
+            for private in [false, true] {
+                let (code, _) = check(private, address).unwrap_err();
+                assert_eq!(code, deckpilot_net::codes::BLOCKED_ADDRESS, "{address}");
+            }
+        }
+        // Every address must pass: one private address among public ones
+        // is refused without the consent.
+        assert!(
+            address_policy(&fetch(false))
+                .check("ghe.example.com", &[ip("140.82.112.5"), ip("10.0.0.5")])
+                .is_err()
+        );
+        // The message names the origin, never the address.
+        let failure =
+            SendFailure::from_transport(check(false, "10.0.0.5").unwrap_err(), &fetch(false));
+        assert!(!failure.message.contains("10.0.0.5"), "{}", failure.message);
+        assert!(failure.message.contains("allowed on a private network"));
+    }
+
+    #[test]
     fn network_failures_keep_the_transport_code_as_their_kind() {
         use deckpilot_net::codes;
         let fetch = AllowedFetch {
@@ -1107,6 +1202,7 @@ mod tests {
             headers: Vec::new(),
             body: None,
             auth: None,
+            private_network: false,
         };
         let failure = |code: &'static str, message: &str| {
             SendFailure::from_transport((code, message.to_owned()), &fetch)
@@ -1501,6 +1597,12 @@ pub(super) mod test_transport {
         /// network client would.
         #[serde(default)]
         fail: Option<String>,
+        /// The address the host "resolves" to: checked with the address
+        /// policy the real client would use for this hop
+        /// (`address_policy`), so a test sees a private address refused
+        /// or allowed exactly as on the network.
+        #[serde(default, rename = "resolvesTo")]
+        resolves_to: Option<std::net::IpAddr>,
     }
 
     #[derive(Debug)]
@@ -1562,6 +1664,12 @@ pub(super) mod test_transport {
                     return Err(SendFailure::other(super::INTERRUPTED));
                 }
                 std::thread::sleep(super::INTERRUPT_POLL);
+            }
+            if let Some(address) = route.resolves_to {
+                let host = fetch.url.host_str().unwrap_or_default();
+                if let Err(failure) = super::address_policy(fetch).check(host, &[address]) {
+                    return Err(SendFailure::from_transport(failure, fetch));
+                }
             }
             if let Some(code) = &route.fail {
                 // The message the client would give, with the address a

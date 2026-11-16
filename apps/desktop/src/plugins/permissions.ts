@@ -1,7 +1,8 @@
 // Plugin permissions in plain language.
 //
 // Grant keys are the agent's (`deckpilot-plugin-store` `GrantSet`):
-// `network:<host>`, `network:private-network`, `credentials:<ref>`,
+// `network:<host>`, `network:private-network`,
+// `network:user-origin:<setting>`, `credentials:<ref>`,
 // `notifications`, `profile`, `variables:<entry>`, `storage`,
 // `openUrl:<host>`, `background`, `device:state`, `device:icons`. A
 // consent names exactly these keys, so `grantsOf` must normalize a
@@ -29,6 +30,9 @@ export const TIERS: { tier: RiskTier; label: string; description: string }[] = [
 /** The key of the grant `privateNetwork: true` adds. */
 export const PRIVATE_NETWORK_KEY = "network:private-network"
 
+/** The prefix of an origin setting's grant key (G2). */
+export const USER_ORIGIN_PREFIX = "network:user-origin:"
+
 /** One grant the user consents to and can revoke. */
 export interface Grant {
   key: string
@@ -55,6 +59,8 @@ interface Facts {
   minIntervalSeconds?: number
   /** Notifications routed by the plugin's settings (`routing`). */
   routed?: boolean
+  pathPrefix?: boolean
+  privateNetwork?: boolean
 }
 
 /** Title, detail and tier of one grant key. */
@@ -64,6 +70,23 @@ function describe(key: string, facts: Facts): Omit<Grant, "key" | "justification
   const target = colon < 0 ? "" : key.slice(colon + 1)
   switch (kind) {
     case "network":
+      if (key.startsWith(USER_ORIGIN_PREFIX)) {
+        const setting = key.slice(USER_ORIGIN_PREFIX.length)
+        return {
+          tier: facts.privateNetwork ? "high" : "medium",
+          title: `Connect to a server you enter in its setting “${setting}”`,
+          detail: [
+            "None until you enter one: DeckPilot then asks you to allow exactly that server, and asks again whenever the setting changes.",
+            `HTTPS only. Methods: ${facts.methods?.length ? facts.methods.join(", ") : ALL_METHODS}.`,
+            facts.pathPrefix ? "You may limit it to a path (https://server/api)." : null,
+            facts.privateNetwork
+              ? "The server may be on your local network, only if you allow that for it separately."
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        }
+      }
       if (key === PRIVATE_NETWORK_KEY) {
         return {
           tier: "high",
@@ -166,6 +189,14 @@ export function grantsOf(permissions: ManifestPermission[]): Grant[] {
           )
         }
         if (permission.privateNetwork) add(PRIVATE_NETWORK_KEY, justification)
+        for (const slot of permission.userOrigins ?? []) {
+          const methods = slot.methods ?? permission.methods
+          add(`${USER_ORIGIN_PREFIX}${slot.setting}`, justification, {
+            ...(methods ? { methods } : {}),
+            pathPrefix: slot.pathPrefix === true,
+            privateNetwork: slot.privateNetwork === true,
+          })
+        }
         break
       case "credentials":
         for (const ref of permission.refs) add(`credentials:${ref}`, justification)
@@ -209,6 +240,8 @@ function scopeFacts(scope: unknown): Facts {
   if (read) facts.read = read
   if (typeof s.quotaKb === "number") facts.quotaKb = s.quotaKb
   if (typeof s.minIntervalSeconds === "number") facts.minIntervalSeconds = s.minIntervalSeconds
+  if (s.pathPrefix === true) facts.pathPrefix = true
+  if (s.privateNetwork === true) facts.privateNetwork = true
   return facts
 }
 

@@ -205,12 +205,20 @@ pub enum Permission {
     /// HTTPS to the listed hosts, with the listed methods.
     #[serde(rename_all = "camelCase")]
     Network {
+        /// May be empty only when `user_origins` names at least one slot.
         hosts: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         methods: Option<Vec<HttpMethod>>,
         /// Also hosts the user enters (high tier).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         private_network: Option<bool>,
+        /// Origins the user enters in a setting (G2,
+        /// `docs/marketplace/module-migration.md` §7): a GitHub Enterprise
+        /// server, a self-managed GitLab, a Jira site. Never granted at
+        /// install: the user consents to the exact origin they entered
+        /// when they save it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_origins: Option<Vec<UserOriginSlot>>,
         justification: String,
     },
     /// Secret slots, injected by the agent; never readable.
@@ -311,6 +319,41 @@ impl Manifest {
     }
 }
 
+/// A user-origin slot of the `network` permission: a `text` setting the
+/// user enters one origin into (`https://ghe.example.com`). The agent asks
+/// for consent to exactly that origin when the user saves it, and the
+/// grant ends when the setting changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UserOriginSlot {
+    /// The key of a `text` setting in `contributes.settings`.
+    pub setting: String,
+    /// A subset of the permission's methods; absent means all of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub methods: Option<Vec<HttpMethod>>,
+    /// Whether the user may enter a path prefix with the origin
+    /// (`https://ghe.example.com/api/v3`); requests are then limited to
+    /// that path and below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_prefix: Option<bool>,
+    /// Whether the user may enter a server on a private network (a LAN
+    /// address, a `.internal` name, or a name that resolves to a private
+    /// address). Each such origin needs its own explicit consent (high
+    /// tier); loopback and link-local addresses are never reachable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_network: Option<bool>,
+}
+
+impl UserOriginSlot {
+    pub fn path_prefix(&self) -> bool {
+        self.path_prefix == Some(true)
+    }
+
+    pub fn private_network(&self) -> bool {
+        self.private_network == Some(true)
+    }
+}
+
 /// The kind of a [`Permission`], without its scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PermissionKind {
@@ -354,6 +397,14 @@ impl Permission {
             Self::OpenUrl { .. } => PermissionKind::OpenUrl,
             Self::Background { .. } => PermissionKind::Background,
             Self::Device { .. } => PermissionKind::Device,
+        }
+    }
+
+    /// The user-origin slots of a `network` permission.
+    pub fn user_origins(&self) -> &[UserOriginSlot] {
+        match self {
+            Self::Network { user_origins, .. } => user_origins.as_deref().unwrap_or_default(),
+            _ => &[],
         }
     }
 
@@ -802,8 +853,14 @@ pub struct Credential {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// The only hosts the secret is ever sent to.
+    /// The only hosts the secret is ever sent to (besides the user origin
+    /// below). May be empty only with `user_origin`.
     pub hosts: Vec<String>,
+    /// The setting of a user-origin slot (G2): the secret is also sent to
+    /// the origin the user entered there, once they consented to it, and
+    /// nowhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_origin: Option<String>,
     pub schemes: Vec<CredentialScheme>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header_name: Option<String>,

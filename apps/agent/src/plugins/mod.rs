@@ -37,6 +37,8 @@ mod lane;
 #[cfg(feature = "plugins")]
 mod migration;
 #[cfg(feature = "plugins")]
+mod origins;
+#[cfg(feature = "plugins")]
 mod registry;
 #[cfg(feature = "plugins")]
 mod service;
@@ -222,6 +224,8 @@ pub(crate) fn is_plugin_request(request: &Request) -> bool {
             | Request::ListModuleMigrations
             | Request::DecideModuleMigration { .. }
             | Request::RetryModuleMigration { .. }
+            | Request::GrantPluginUserOrigin { .. }
+            | Request::RevokePluginUserOrigin { .. }
     )
 }
 

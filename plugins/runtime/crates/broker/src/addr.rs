@@ -27,6 +27,36 @@ pub enum BlockedAddr {
     Tunnel,
 }
 
+/// Allows globally routable unicast addresses and the private ranges a
+/// server on a private network uses (RFC 1918, carrier NAT `100.64/10`,
+/// unique local `fc00::/7`), for an origin the user entered and allowed on
+/// a private network (G2). This computer, link-local (including cloud
+/// metadata services), unspecified, multicast, broadcast, reserved,
+/// documentation and tunnel addresses stay refused.
+pub fn check_private_network_addr(ip: IpAddr) -> Result<(), BlockedAddr> {
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(IpAddr::V6(v6), IpAddr::V4),
+        v4 => v4,
+    };
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, _, _] = v4.octets();
+            let private = a == 10
+                || (a == 172 && (16..=31).contains(&b))
+                || (a == 192 && b == 168)
+                || (a == 100 && (64..=127).contains(&b));
+            if private { Ok(()) } else { check_v4(v4) }
+        }
+        IpAddr::V6(v6) => {
+            if (v6.segments()[0] & 0xfe00) == 0xfc00 {
+                Ok(())
+            } else {
+                check_v6(v6)
+            }
+        }
+    }
+}
+
 /// Allows only globally routable unicast addresses.
 pub fn check_connect_addr(ip: IpAddr) -> Result<(), BlockedAddr> {
     match ip {
@@ -164,6 +194,39 @@ mod tests {
             "100::1",
         ] {
             assert!(check_connect_addr(ip(s)).is_err(), "{s} must be blocked");
+        }
+    }
+
+    #[test]
+    fn a_private_network_origin_reaches_private_ranges_only() {
+        for s in [
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.1.1",
+            "100.64.0.1",
+            "fd12:3456::1",
+            "::ffff:10.1.2.3",
+            "1.1.1.1",
+            "2606:4700:4700::1111",
+        ] {
+            assert_eq!(check_private_network_addr(ip(s)), Ok(()), "{s}");
+        }
+        for s in [
+            "127.0.0.1",
+            "::1",
+            "::ffff:127.0.0.1",
+            "169.254.169.254",
+            "fe80::1",
+            "0.0.0.0",
+            "::",
+            "224.0.0.1",
+            "255.255.255.255",
+            "192.0.2.1",
+            "64:ff9b:1::1",
+            "64:ff9b::7f00:1",
+            "2002:c0a8:101::1",
+        ] {
+            assert!(check_private_network_addr(ip(s)).is_err(), "{s}");
         }
     }
 
