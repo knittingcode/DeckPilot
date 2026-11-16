@@ -82,8 +82,10 @@ pub struct Artifacts {
 pub fn artifacts(plugin: &Plugin) -> &'static Artifacts {
     static ARTIFACTS: Mutex<BTreeMap<&'static str, &'static Artifacts>> =
         Mutex::new(BTreeMap::new());
-    let mut built = ARTIFACTS.lock().unwrap_or_else(|e| e.into_inner());
-    *built.entry(plugin.package).or_insert_with(|| {
+    let mut built = ARTIFACTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    built.entry(plugin.package).or_insert_with(|| {
         let wasm = format!("{}.wasm", plugin.package.replace('-', "_"));
         let wasm_dir = std::env::var_os("DECKPILOT_E2E_WASM_DIR")
             .map(PathBuf::from)

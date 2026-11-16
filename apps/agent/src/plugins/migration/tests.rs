@@ -1099,6 +1099,7 @@ fn waiting(info: &ipc::ModuleMigrationInfo) -> Vec<&str> {
 /// plugin's origin setting and allowed only by the user's decision on its
 /// own item: never derived, never by another item's approval.
 #[test]
+#[allow(clippy::too_many_lines)] // one migration, step by step
 fn an_entered_server_is_carried_and_allowed_only_by_its_own_consent() {
     let env = Env::new();
     env.save_module(

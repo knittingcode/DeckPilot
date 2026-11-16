@@ -745,18 +745,12 @@ mod tests {
                     "deckpilot.github",
                     &[ParamRule::DropIfDefault("credential")],
                 ),
-                "gitlab" | "jira" if alias.legacy.ends_with(".open") => (
-                    if alias.module == "gitlab" {
-                        "deckpilot.gitlab"
-                    } else {
-                        "deckpilot.jira"
-                    },
-                    &[],
-                ),
+                "gitlab" if alias.legacy == "gitlab.open" => ("deckpilot.gitlab", &[]),
                 "gitlab" => (
                     "deckpilot.gitlab",
                     &[ParamRule::DropIfDefault("credential")],
                 ),
+                "jira" if alias.legacy == "jira.open" => ("deckpilot.jira", &[]),
                 "jira" => ("deckpilot.jira", &[ParamRule::DropIfDefault("credential")]),
                 "notifications" => ("deckpilot.notifications", &[]),
                 other => panic!("an unexpected block: {other}"),
