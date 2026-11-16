@@ -24,7 +24,7 @@ use deckpilot_plugin_broker::{ApprovedPermission, OriginError, UserOrigin};
 use deckpilot_plugin_manifest::{HttpMethod, Manifest, Permission, PermissionKind, UserOriginSlot};
 use deckpilot_plugin_store::{
     GrantKey, GrantScope, GrantStatus, StoredGrant, StoredUserOrigin, UserOriginConsent,
-    bound_credentials, declared_slot, user_origin_key,
+    bound_credentials, declared_slot, open_url_user_origin_key, user_origin_key,
 };
 use serde_json::Value;
 
@@ -234,12 +234,20 @@ pub fn approved(
                 .filter(|k| bound.contains(k) && granted_credentials.contains(k.as_str()))
                 .cloned()
                 .collect();
+            // Its pages may be opened while the manifest says so and the
+            // user granted that permission (`openUrl:user-origin:<setting>`).
+            let open_key = open_url_user_origin_key(&consent.setting);
+            let open_url = manifest.opens_user_origin(&consent.setting)
+                && effective
+                    .iter()
+                    .any(|(k, scope)| *k == open_key && *scope == GrantScope::OpenUrl);
             Some(ApprovedPermission::UserOrigin {
                 origin: origin.origin().to_string(),
                 path_prefix: origin.path_prefix().map(str::to_owned),
                 methods,
                 private_network,
                 credentials,
+                open_url,
             })
         })
         .collect()
@@ -344,6 +352,12 @@ pub fn infos(
                 methods: methods.into_iter().map(method_name).collect(),
                 credentials: bound_credentials(manifest, &slot.setting),
                 granted_at: None,
+                opens_pages: manifest.opens_user_origin(&slot.setting) && {
+                    let open_key = open_url_user_origin_key(&slot.setting);
+                    grants
+                        .iter()
+                        .any(|g| g.key == open_key && g.status == GrantStatus::Granted)
+                },
             };
             match current.remove(&slot.setting).unwrap_or(Current::Unset) {
                 Current::Unset => {}
@@ -538,6 +552,7 @@ mod tests {
                 .into(),
                 private_network: false,
                 credentials: ["token".to_owned()].into(),
+                open_url: false,
             }]
         );
         // The setting changed: nothing.
@@ -568,6 +583,68 @@ mod tests {
         let mut effective_narrow = effective(&narrower);
         effective_narrow.retain(|(k, _)| k.kind != PermissionKind::Credentials);
         assert_eq!(approved(&narrower, &lan, &effective_narrow, &rows).len(), 0);
+    }
+
+    /// [`ghe`] that also opens pages of the server in `apiUrl`.
+    fn ghe_with_pages() -> Manifest {
+        let mut m = serde_json::to_value(ghe()).unwrap();
+        m["permissions"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "kind": "openUrl", "hosts": ["github.com"], "userOrigins": ["apiUrl"],
+                "justification": "Opens pull requests on GitHub or your server."
+            }));
+        let manifest: Manifest = serde_json::from_value(m).unwrap();
+        manifest.validate().unwrap();
+        manifest
+    }
+
+    #[test]
+    fn pages_of_the_server_open_only_with_their_own_grant() {
+        let m = ghe_with_pages();
+        let values = saved("https://ghe.example.com/api/v3");
+        let c = consent(
+            &m,
+            &values,
+            "apiUrl",
+            "https://ghe.example.com/api/v3",
+            false,
+        )
+        .unwrap();
+        let rows = [row(c)];
+        let opens = |manifest: &Manifest, effective: &[(GrantKey, GrantScope)]| match &approved(
+            manifest, &values, effective, &rows,
+        )[..]
+        {
+            [ApprovedPermission::UserOrigin { open_url, .. }] => *open_url,
+            other => panic!("{other:?}"),
+        };
+        let all = effective(&m);
+        assert!(all.contains(&(open_url_user_origin_key("apiUrl"), GrantScope::OpenUrl)));
+        assert!(opens(&m, &all));
+        // The grant revoked: requests still go there, pages do not open.
+        let without: Vec<_> = all
+            .iter()
+            .filter(|(k, _)| *k != open_url_user_origin_key("apiUrl"))
+            .cloned()
+            .collect();
+        assert!(!opens(&m, &without));
+        // A manifest that does not ask for it never gets it, whatever is
+        // stored.
+        assert!(!opens(&ghe(), &all));
+        // The grant by itself reaches the broker as nothing: no server
+        // without the user's consent to exactly it.
+        assert_eq!(approved(&m, &values, &all, &[]).len(), 0);
+        let (passed, skipped) = super::super::convert::approved(&all);
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert!(
+            passed.0.iter().all(|p| !matches!(
+                p,
+                ApprovedPermission::OpenUrl { origin } if origin.contains("user-origin")
+            )),
+            "{passed:?}"
+        );
     }
 
     #[test]

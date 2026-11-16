@@ -767,6 +767,20 @@ broker denies it as `not-permitted` in a run a schedule, a lifecycle
 event, the agent's start or a work session started, and the consent text
 says so.
 
+*Status (P11):* pages of a server the user entered. `openUrl.hosts` are
+fixed names, so `gitlab.open` on a self-managed GitLab and every
+`jira.open` (Jira has no fixed host) had no grant to open with. The
+`openUrl` permission now takes `userOrigins`, the settings of G2 slots: a
+declared medium-tier grant per setting (`openUrl:user-origin:<setting>`)
+that opens nothing by itself, and lets `url.open` open `https` pages of
+exactly the server the user entered there and allowed (G2's per-origin
+consent, whose dialog says so). By server, not by the slot's path prefix (a
+GitLab's pages are beside its `/api/v4`, not under it); requests are
+unchanged. A private server only when it is the one the user allowed on a
+private network. No schema change in `plugins.db`: the grant is an
+ordinary row, and the broker's record of the consented server carries the
+flag ([permissions.md](sdk/permissions.md#pages-of-a-server-the-user-entered)).
+
 ### G2 User-entered origins (github GHE, gitlab self-managed, jira, http)
 
 Sketch: the manifest declares `network.userOrigins: { setting: "apiUrl",

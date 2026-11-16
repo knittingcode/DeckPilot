@@ -628,16 +628,23 @@ impl Session {
             // `openUrl` (design §5.2): the request URL goes through the
             // same strict parser as a fetch (https only, no userinfo, no
             // IP literal or local name, no control characters), and its
-            // exact origin must be granted. Audited by origin only.
+            // exact origin must be granted: a declared host, or a server
+            // the user entered and allowed whose pages may be opened (only
+            // such a server may be a private host). Audited by origin only.
             CapabilityRequest::OpenUrl(o) => {
-                let (url, origin) = match origin::parse_request_url(&o.url) {
+                let (url, origin) = match open_url_target(&grants, &o.url) {
                     Ok(v) => v,
                     Err(e) => return (Decision::Deny(DenyReason::Url(e)), None),
                 };
+                let granted = grants.open_url.contains(&origin)
+                    || grants
+                        .user_origins
+                        .iter()
+                        .any(|u| u.open_url && u.origin.origin() == &origin);
                 let d = if url.as_str().len() > deckpilot_plugin_abi::limits::MAX_OPEN_URL_LEN {
                     // Normalizing (punycode, percent-encoding) made it longer.
                     Decision::Deny(DenyReason::TooLarge)
-                } else if !grants.open_url.contains(&origin) {
+                } else if !granted {
                     Decision::Deny(DenyReason::OriginNotGranted)
                 } else if !context.is_some_and(RunContext::is_user_initiated) {
                     // Only in runs the user started (G8), checked before
@@ -790,6 +797,30 @@ fn request_url(grants: &Grants, text: &str) -> Result<(Url, Origin), OriginError
                 Ok((url, origin))
             } else {
                 Err(strict)
+            }
+        }
+        other => other,
+    }
+}
+
+/// The normalized URL and origin of a page to open: by the strict rules,
+/// or, for a host on a private network (an IP literal or a local name),
+/// only when it is exactly a server the user allowed on a private network
+/// and whose pages may be opened. Otherwise the strict error stands.
+fn open_url_target(grants: &Grants, text: &str) -> Result<(Url, Origin), OriginError> {
+    match origin::parse_request_url(text) {
+        Err(strict @ (OriginError::IpLiteralNotAllowed | OriginError::InvalidHost)) => {
+            let opens = |origin: &Origin| {
+                grants.user_origins.iter().any(|u| {
+                    u.open_url
+                        && u.private_network
+                        && u.origin.private_host()
+                        && u.origin.origin() == origin
+                })
+            };
+            match origin::parse_private_request_url(text) {
+                Ok((url, origin)) if opens(&origin) => Ok((url, origin)),
+                _ => Err(strict),
             }
         }
         other => other,
