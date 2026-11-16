@@ -54,11 +54,11 @@ use super::convert;
 use super::data;
 use super::engine::CatalogPlugin;
 use super::executor::{DataAccess, Executor, Opener, OwnVariables, SharedData, Transport};
-use super::lane::{Done, Ended, Job, Lane, LaneEnd, LaneError};
+use super::lane::{Done, Ended, Job, Lane, LaneEnd, LaneError, Reply, StateDone};
 use super::migration::LegacySnapshot;
 use super::registry::{Registry, download_error};
 use super::variables::PublishedVariables;
-use super::worker::{EngineFailure, EngineReply, Events};
+use super::worker::{EngineFailure, EngineReply, Events, StateReply};
 use super::{PluginSettings, platform, platform_problem};
 
 /// Who decides in the audit log.
@@ -67,9 +67,9 @@ const DECIDED_BY: &str = "user";
 /// action's declaration (refused by the agent, before the host).
 const INVALID_PARAMETERS: &str = "invalid-parameters";
 /// The plugin API level this agent provides: 1.1 adds `time.now` and
-/// `random.bytes` (`docs/marketplace/plugin-key-state.md`). A plugin whose
-/// manifest asks for a higher minor is `incompatible`.
-const PLUGIN_API: ApiLevel = ApiLevel::new(1, 1);
+/// `random.bytes`, 1.2 key state (`docs/marketplace/plugin-key-state.md`).
+/// A plugin whose manifest asks for a higher minor is `incompatible`.
+const PLUGIN_API: ApiLevel = ApiLevel::new(1, 2);
 /// Longest any invocation may take, whatever the manifest says.
 const MAX_INVOCATION: Duration = Duration::from_secs(600);
 /// Where the registry's verified state is kept (outside `plugins/`,
@@ -2033,7 +2033,7 @@ impl PluginService {
                 // Tried from the plugin's own page in the app (G8).
                 executor: executor.with_run(RunContext::direct(RunTrigger::Test)),
                 abort: AbortSignal::new(),
-                done,
+                reply: Reply::Action(done),
             }),
             Err(e) => done(Err(LaneError::Refused(e))),
         }
@@ -2104,7 +2104,66 @@ impl PluginService {
                 timeout,
                 executor: executor.with_run(run),
                 abort,
-                done,
+                reply: Reply::Action(done),
+            }),
+            Err(e) => done(Err(LaneError::Refused(e))),
+        }
+    }
+
+    /// The state of a key bound to a plugin action, for the engine's live
+    /// key states (`key_state.rs`). Prepared like an action of the engine
+    /// (enabled, granted, verdict, the declaration); asked only while the
+    /// plugin's lane is idle, with [`STATE_CALL_TIMEOUT`] of wall clock
+    /// and a run nobody started. The answer goes to `reply`; a failed
+    /// state call is not written to the plugin's failure log (a key
+    /// shows it), only a crash counts, in the supervisor.
+    ///
+    /// [`STATE_CALL_TIMEOUT`]: super::key_state::STATE_CALL_TIMEOUT
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the worker hands its message's parameters over; they are validated into new ones"
+    )]
+    pub fn key_state_for_engine(
+        &mut self,
+        plugin: &str,
+        action: &str,
+        params: Params,
+        abort: AbortSignal,
+        reply: std::sync::mpsc::SyncSender<StateReply>,
+    ) {
+        let fail = |e: &IpcError| EngineFailure {
+            code: engine_code(e.reason.as_deref()).to_owned(),
+            message: e.message.clone(),
+        };
+        let prepared = plugin_id(plugin).and_then(|id| self.prepare(&id, action, true));
+        let (record, prepared) = match prepared {
+            Ok(prepared) => prepared,
+            Err(e) => {
+                let _ = reply.try_send(Err(fail(&e)));
+                return;
+            }
+        };
+        let params = match data::normalize_params(&prepared.definition, &params) {
+            Ok(params) => params,
+            Err(message) => {
+                let _ = reply.try_send(Err(EngineFailure {
+                    code: INVALID_PARAMETERS.to_owned(),
+                    message,
+                }));
+                return;
+            }
+        };
+        let done: StateDone = Box::new(move |result| {
+            let _ = reply.try_send(result.map_err(|e| fail(&lane_error(&e))));
+        });
+        match self.lane(&record) {
+            Ok(lane) => lane.submit_idle(Job {
+                action: action.to_owned(),
+                params,
+                timeout: super::key_state::STATE_CALL_TIMEOUT,
+                executor: prepared.executor.with_run(RunContext::unknown()),
+                abort,
+                reply: Reply::State(done),
             }),
             Err(e) => done(Err(LaneError::Refused(e))),
         }
