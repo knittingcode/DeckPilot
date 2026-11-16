@@ -28,6 +28,12 @@ export interface CredentialsPermission {
 
 export interface NotificationsPermission {
   kind: "notifications"
+  /**
+   * Where the notifications go (G9): each member names one of the plugin's
+   * settings, which the agent reads when it shows one. Without it: the
+   * status bar only.
+   */
+  routing?: { desktop?: string; statusBar?: string; minimumSeverity?: string }
   justification: string
 }
 

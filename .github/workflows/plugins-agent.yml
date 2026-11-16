@@ -114,7 +114,7 @@ jobs:
         run: cargo build --locked -p deckpilot-plugin-host --bin deckpilot-plugin-host
       - name: Build the example plugins and the SDK test guest
         working-directory: plugins/runtime
-        run: cargo build --locked -p hello-weather -p hello-world -p developer-tools -p deckpilot-sdk-test-guest -p deckpilot-example-default -p deckpilot-legacy-fixture -p deckpilot-github --target wasm32-unknown-unknown --profile guest
+        run: cargo build --locked -p hello-weather -p hello-world -p developer-tools -p deckpilot-sdk-test-guest -p deckpilot-example-default -p deckpilot-legacy-fixture -p deckpilot-github -p deckpilot-notifications --target wasm32-unknown-unknown --profile guest
       - name: Plugin unit tests (incl. the registry over HTTPS)
         run: "cargo test -p deckpilot-agent --features plugins --lib --locked plugins::"
       - name: End to end
@@ -141,6 +141,13 @@ jobs:
       # canned GitHub answers: every action, the same results.
       - name: GitHub plugin parity end to end
         run: cargo test -p deckpilot-agent --features plugins --test plugins_github --locked -- --nocapture
+      # deckpilot.notifications, the first default-class plugin: parity
+      # with the built-in through the real agent, first launch on a fresh
+      # data directory, the user's uninstall and disable across restarts
+      # and upgrades, and an alpha.3 upgrade through the alias with an
+      # older build on the same data.
+      - name: Notifications plugin end to end
+        run: cargo test -p deckpilot-agent --features plugins --test plugins_notifications --locked -- --nocapture
       # The bundle layout as a release with DECKPILOT_RELEASE_PLUGINS=1
       # would build it, with the test fixture: built twice from clean
       # target directories (reproducible on this platform), the agent
@@ -154,7 +161,7 @@ jobs:
           # against an agent compiled with their pins.
           plugins/first-party/build.sh --out "$RUNNER_TEMP/bundle-release"
           jq -c '[.plugins[] | {id, class}]' "$RUNNER_TEMP/bundle-release/bundled/pins.json" | tr -d '\r' > "$RUNNER_TEMP/release-set.json"
-          echo '[{"id":"deckpilot.github","class":"migration"}]' | diff - "$RUNNER_TEMP/release-set.json"
+          echo '[{"id":"deckpilot.github","class":"migration"},{"id":"deckpilot.notifications","class":"default"}]' | diff - "$RUNNER_TEMP/release-set.json"
           for run in a b; do
             plugins/first-party/build.sh --test-fixtures --out "$RUNNER_TEMP/bundle-$run" --target-dir "$RUNNER_TEMP/first-party-$run"
           done

@@ -164,6 +164,21 @@ describe("permissions", () => {
     )
   })
 
+  it("says where routed notifications go, and keeps them low tier", () => {
+    const [plain] = grantsOf([{ kind: "notifications", justification: "Done." }])
+    const [routed] = grantsOf([
+      {
+        kind: "notifications",
+        routing: { desktop: "desktop", statusBar: "statusBar", minimumSeverity: "least" },
+        justification: "Shows what your workflows ask for.",
+      },
+    ])
+    expect(plain?.detail).toBe("Prefixed with the plugin's name.")
+    expect(routed?.key).toBe("notifications")
+    expect(routed?.tier).toBe("low")
+    expect(routed?.detail).toMatch(/desktop and in the status bar as you set it/)
+  })
+
   it("describes the agent's grants with the agent's tier", () => {
     const grant = grantOfInfo({
       key: "network:api.open-meteo.com",

@@ -48,11 +48,14 @@ fn the_manifest_is_valid() {
     );
 }
 
+/// What the plugin sent: title, body and severity.
+type Sent = (String, String, Option<NotifySeverity>);
+
 /// A stand-in agent: answers `notify` with `delivery` and `run.context`
 /// with `run`, and records the notifications.
 struct Agent {
     host: MockHost,
-    sent: Rc<RefCell<Vec<(String, String, Option<NotifySeverity>)>>>,
+    sent: Rc<RefCell<Vec<Sent>>>,
 }
 
 fn agent(delivery: CallResult, run: Value) -> Agent {
