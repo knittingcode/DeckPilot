@@ -42,15 +42,18 @@ Options:
                       A local plugin registry (site/v1 and releases/)
   --plugin-registry-url <https url>
                       A plugin registry served over https: the URL of its
-                      site (documents at <url>v1/...). Default, once
-                      --plugin-registry-roots is given:
+                      site (documents at <url>v1/...). Default, once there
+                      are root keys (built in or --plugin-registry-roots):
                       https://knittingcode.github.io/deckpilot-plugins/
   --plugin-registry-releases-url <https url>
                       Download packages from here instead of the release URL
                       the registry pins (they must still match the pins)
   --plugin-registry-roots <roots.json>
-                      The root keys the registry must be signed with. None
-                      is built in: without them no registry is used
+                      The root keys the registry must be signed with, for
+                      builds without built-in ones (self-hosted registries)
+                      and development: they override built-in root keys in
+                      debug and test builds only. Without any root keys no
+                      registry is used
   --version           Print the version
   --help              Print this help
 

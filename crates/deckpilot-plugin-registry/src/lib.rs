@@ -32,6 +32,9 @@ mod error;
 mod model;
 #[cfg(feature = "publish")]
 pub mod publish;
+pub mod roots;
+#[cfg(test)]
+mod roots_check;
 pub mod sig;
 mod state;
 
