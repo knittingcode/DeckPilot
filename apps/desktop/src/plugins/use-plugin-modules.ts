@@ -37,10 +37,13 @@ export function usePluginModules(agentKey: string): ModuleInfo[] {
       const current = ++generation
       // The names of uninstalled plugins only improve messages.
       const known = client.listKnownPlugins().catch(() => [])
+      // The legacy action types migrated modules keep; none from agents
+      // before module migrations.
+      const migrations = client.listModuleMigrations().catch(() => [])
       client.listPlugins().then(
         async (plugins) => {
-          const names = await known
-          if (active && current === generation) setModules(pluginModules(plugins, names))
+          const [names, moved] = await Promise.all([known, migrations])
+          if (active && current === generation) setModules(pluginModules(plugins, names, moved))
         },
         () => {
           if (active && current === generation) setModules(NONE)
@@ -52,7 +55,7 @@ export function usePluginModules(agentKey: string): ModuleInfo[] {
       if (!active) return
       load(client)
       stop = client.subscribe((event) => {
-        if (event.type === "changed") load(client)
+        if (event.type === "changed" || event.type === "migrationChanged") load(client)
       })
     }
     void start()

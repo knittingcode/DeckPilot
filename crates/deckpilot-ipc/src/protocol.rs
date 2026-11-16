@@ -448,9 +448,14 @@ pub enum Request {
         #[serde(default)]
         session: Option<WorkSessionId>,
     },
-    /// Starts pushing [`ServerMessage::PluginEvent`]s on this connection.
-    /// Since protocol 10.
-    SubscribePluginEvents,
+    /// Starts pushing [`ServerMessage::PluginEvent`]s on this connection;
+    /// with `migrations`, also [`plugins::PluginEvent::MigrationChanged`].
+    /// Since protocol 10 (`migrations` is optional and omitted when false,
+    /// so the request is the original one; an older agent ignores it).
+    SubscribePluginEvents {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        migrations: bool,
+    },
     /// Whether plugins can be used here, and why not. Answered whatever
     /// the plugin runtime's state. Since protocol 10.
     GetPluginRuntime,
@@ -567,6 +572,25 @@ pub enum Request {
         plugin: String,
         key: String,
     },
+    /// The built-in modules moving to their first-party plugins. Since
+    /// protocol 10.
+    ListModuleMigrations,
+    /// Approves and declines items a module migration waits for (grant
+    /// keys of [`plugins::MigrationConsentItem::key`]). Once every item is
+    /// approved the migration goes on; a declined item keeps the built-in
+    /// until Retry. Since protocol 10.
+    DecideModuleMigration {
+        module: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        approve: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        decline: Vec<String>,
+    },
+    /// Runs a failed migration again (resetting its attempts), or asks
+    /// again for what the user declined. Since protocol 10.
+    RetryModuleMigration {
+        module: String,
+    },
 }
 
 impl Request {
@@ -607,23 +631,11 @@ impl Request {
             | Self::UninstallPlugin { plugin, .. }
             | Self::GetPluginSettings { plugin }
             | Self::ListPluginCredentials { plugin } => plugins::check_text("plugin", plugin),
-            Self::SetPluginSettings { plugin, values } => {
-                plugins::check_text("plugin", plugin)?;
-                plugins::check_settings(values)
-            }
-            Self::SetPluginCredential {
-                plugin,
-                key,
-                secret,
-            } => {
-                plugins::check_text("plugin", plugin)?;
-                plugins::check_text("credential", key)?;
-                plugins::check_secret(secret)
-            }
-            Self::DeletePluginCredential { plugin, key } => {
-                plugins::check_text("plugin", plugin)?;
-                plugins::check_text("credential", key)
-            }
+            Self::SetPluginSettings { .. }
+            | Self::SetPluginCredential { .. }
+            | Self::DeletePluginCredential { .. }
+            | Self::RetryModuleMigration { .. }
+            | Self::DecideModuleMigration { .. } => plugins::check_request(self),
             Self::InstallPlugin { source, consent } => {
                 source.check()?;
                 plugins::check_consent(consent)
@@ -866,6 +878,15 @@ pub enum Response {
     PluginCredentials {
         plugin: String,
         credentials: Vec<plugins::PluginCredentialSlot>,
+    },
+    /// Answer to `listModuleMigrations`. Since protocol 10.
+    ModuleMigrations {
+        migrations: Vec<plugins::ModuleMigrationInfo>,
+    },
+    /// Answer to `decideModuleMigration` and `retryModuleMigration`: the
+    /// migration as it stands after the decision. Since protocol 10.
+    ModuleMigration {
+        migration: Box<plugins::ModuleMigrationInfo>,
     },
     Ok,
 }
@@ -1122,7 +1143,10 @@ impl Request {
             | Self::SaveWorkSessionSettings { .. }
             | Self::ResolveWorkSessionReview { .. }
             | Self::ClearWorkSessionNotices { .. } => 8,
-            Self::SubscribePluginEvents
+            Self::SubscribePluginEvents { .. }
+            | Self::ListModuleMigrations
+            | Self::DecideModuleMigration { .. }
+            | Self::RetryModuleMigration { .. }
             | Self::GetPluginRuntime
             | Self::ListPlugins
             | Self::GetPlugin { .. }
@@ -2112,7 +2136,10 @@ mod tests {
             assert_eq!(request.name(), name);
             request.validate().unwrap();
         }
-        assert_eq!(Request::SubscribePluginEvents.since_protocol(), 10);
+        assert_eq!(
+            Request::SubscribePluginEvents { migrations: false }.since_protocol(),
+            10
+        );
         let message = ServerMessage::PluginEvent {
             event: crate::plugins::PluginEvent::Progress {
                 plugin: "acme.x".into(),
@@ -2256,5 +2283,103 @@ mod tests {
         ] {
             assert_eq!(request.since_protocol(), 10);
         }
+    }
+
+    #[test]
+    fn subscribing_to_migration_events_is_additive() {
+        // The request an app before migration events sends, and what an
+        // app that does not ask for them still sends, are the original.
+        let plain = Request::SubscribePluginEvents { migrations: false };
+        assert_eq!(
+            serde_json::to_value(&plain).unwrap(),
+            serde_json::json!({"type": "subscribePluginEvents"})
+        );
+        let parsed: Request =
+            serde_json::from_value(serde_json::json!({"type": "subscribePluginEvents"})).unwrap();
+        assert_eq!(parsed, plain);
+        let with = Request::SubscribePluginEvents { migrations: true };
+        assert_eq!(
+            serde_json::to_value(&with).unwrap(),
+            serde_json::json!({"type": "subscribePluginEvents", "migrations": true})
+        );
+        assert_eq!(with.name(), "subscribePluginEvents");
+        assert_eq!(with.since_protocol(), 10);
+        // Only connections that asked receive migration events.
+        let event = crate::plugins::PluginEvent::MigrationChanged {
+            module: "github".into(),
+            plugin: "deckpilot.github".into(),
+            phase: crate::plugins::MigrationPhase::AwaitingConsent,
+        };
+        assert!(!event.delivered(false));
+        assert!(event.delivered(true));
+        let changed = crate::plugins::PluginEvent::Changed {
+            plugin: "acme.x".into(),
+            state: None,
+        };
+        assert!(changed.delivered(false));
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({"type": "migrationChanged", "module": "github",
+                "plugin": "deckpilot.github", "phase": "awaitingConsent"})
+        );
+    }
+
+    #[test]
+    fn module_migration_requests_are_bounded() {
+        for (json, name) in [
+            (
+                serde_json::json!({"type": "listModuleMigrations"}),
+                "listModuleMigrations",
+            ),
+            (
+                serde_json::json!({"type": "decideModuleMigration", "module": "github",
+                    "approve": ["credentials:token"], "decline": ["network:10.0.0.1"]}),
+                "decideModuleMigration",
+            ),
+            (
+                serde_json::json!({"type": "retryModuleMigration", "module": "github"}),
+                "retryModuleMigration",
+            ),
+        ] {
+            let request: Request = serde_json::from_value(json.clone()).unwrap();
+            assert_eq!(request.since_protocol(), 10, "{name}");
+            assert_eq!(request.name(), name);
+            request.validate().unwrap();
+            assert_eq!(serde_json::to_value(&request).unwrap(), json);
+        }
+        let decide = |module: &str, approve: &[&str], decline: &[&str]| {
+            Request::DecideModuleMigration {
+                module: module.into(),
+                approve: approve.iter().map(|s| (*s).to_owned()).collect(),
+                decline: decline.iter().map(|s| (*s).to_owned()).collect(),
+            }
+            .validate()
+        };
+        // Approving one item only is a decision too.
+        decide("github", &["credentials:token"], &[]).unwrap();
+        assert!(decide("github", &[], &[]).is_err(), "nothing decided");
+        assert!(
+            decide("github", &["credentials:token"], &["credentials:token"]).is_err(),
+            "both"
+        );
+        assert!(
+            decide("deckpilot.github", &["x"], &[]).is_err(),
+            "a plugin id"
+        );
+        assert!(decide("", &["x"], &[]).is_err());
+        assert!(decide(&"m".repeat(65), &["x"], &[]).is_err());
+        assert!(decide("github", &["has space"], &[]).is_err());
+        let many: Vec<String> = (0..=crate::plugins::MAX_MIGRATION_ITEMS)
+            .map(|i| format!("k{i}"))
+            .collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        assert!(decide("github", &many, &[]).is_err());
+        assert!(
+            Request::RetryModuleMigration {
+                module: "Git Hub".into()
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

@@ -241,11 +241,12 @@ impl State {
             Message::Rekey(old, new) => self.rekey(&old, &new),
             Message::Request(request, reply) => self.request(request, reply),
             Message::Migrate(snapshot) => {
-                if let Some(service) = &mut self.service
-                    && !self.migrated
-                {
+                if let Some(service) = &mut self.service {
+                    // The pass runs once per opening; every snapshot is
+                    // kept for the user's decisions.
+                    let first = !self.migrated;
                     self.migrated = true;
-                    service.migrate(&snapshot);
+                    service.migrate(*snapshot, first);
                 }
             }
             Message::Invoke {

@@ -494,7 +494,8 @@ async fn forward_plugin_events<R: Runtime>(
         Response::PluginRuntime { status } if status.available => {}
         _ => return Ok(()),
     }
-    client.subscribe_plugin_events().await?;
+    // With module migration events: this app shows the migration notice.
+    client.subscribe_plugin_events_with(true).await?;
     loop {
         let event = client.next_plugin_event().await?;
         let _ = app.emit(PLUGIN_EVENT, event);

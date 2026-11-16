@@ -14,8 +14,10 @@
 //! * the fixture API answers from canned responses
 //!   (`DECKPILOT_TEST_PLUGIN_HTTP`), which also log the token the plugin
 //!   sent;
-//! * the user's consent and Retry come from
-//!   `DECKPILOT_TEST_MIGRATION_DECISIONS` until the app has them (P7), and
+//! * the user's consent and Retry come through the app's requests
+//!   (`listModuleMigrations`, `decideModuleMigration`,
+//!   `retryModuleMigration`) and their events, or, to decide before a
+//!   start, from `DECKPILOT_TEST_MIGRATION_DECISIONS`;
 //!   `DECKPILOT_TEST_MIGRATION_EXIT` ends the agent after a step, as a
 //!   power cut would.
 #![cfg(feature = "plugins")]
@@ -31,7 +33,10 @@ use deckpilot_core::{
     ActionInstance, ActionInstanceId, ActionParameters, ActionResult, ActionStatus, ActionTypeId,
     CredentialId, ModuleId, ModuleSettings, ParameterValue, Profile, Secret,
 };
-use deckpilot_ipc::plugins::PluginState;
+use deckpilot_ipc::plugins::{
+    self as ipc, ConsentDecision, MigrationRoute, ModuleMigrationInfo, PluginEvent, PluginOrigin,
+    PluginState,
+};
 use deckpilot_ipc::{
     AgentClient, AgentPaths, ClientError, ClientKind, KeyMaterial, Request, Response,
 };
@@ -545,6 +550,94 @@ impl Agent {
         }
     }
 
+    async fn plugin_origin(&self) -> Option<PluginOrigin> {
+        match self.request(Request::ListPlugins).await {
+            Ok(Response::Plugins { plugins }) => plugins
+                .into_iter()
+                .find(|p| p.id == PLUGIN)
+                .map(|p| p.origin),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    /// The fixture module's migration, as the app lists it.
+    async fn listed(&self) -> ModuleMigrationInfo {
+        match self.request(Request::ListModuleMigrations).await {
+            Ok(Response::ModuleMigrations { migrations }) => {
+                let json = serde_json::to_string(&migrations).unwrap();
+                assert!(!json.contains(TOKEN), "a secret in {json}");
+                migrations
+                    .into_iter()
+                    .find(|m| m.module == MODULE)
+                    .unwrap_or_else(|| panic!("no migration of {MODULE} in {json}"))
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    /// Waits until the listed migration is in `phase`.
+    async fn wait_listed(&self, phase: ipc::MigrationPhase) -> ModuleMigrationInfo {
+        let deadline = Instant::now() + SETTLE;
+        loop {
+            let info = self.listed().await;
+            if info.phase == phase {
+                return info;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "not {phase:?}: {info:?}\n{}",
+                self.log()
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// `decideModuleMigration`; the answer, never with a secret.
+    async fn decide(
+        &self,
+        approve: &[&str],
+        decline: &[&str],
+    ) -> Result<ModuleMigrationInfo, ClientError> {
+        let answer = self
+            .request(Request::DecideModuleMigration {
+                module: MODULE.into(),
+                approve: approve.iter().map(|k| (*k).to_owned()).collect(),
+                decline: decline.iter().map(|k| (*k).to_owned()).collect(),
+            })
+            .await?;
+        match answer {
+            Response::ModuleMigration { migration } => {
+                assert!(!serde_json::to_string(&migration).unwrap().contains(TOKEN));
+                Ok(*migration)
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    /// `retryModuleMigration`.
+    async fn retry(&self) -> Result<ModuleMigrationInfo, ClientError> {
+        match self
+            .request(Request::RetryModuleMigration {
+                module: MODULE.into(),
+            })
+            .await?
+        {
+            Response::ModuleMigration { migration } => Ok(*migration),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    /// A connection subscribed to plugin events, with or without
+    /// migration events.
+    async fn events(&self, migrations: bool) -> AgentClient {
+        let mut client = self.client().await.expect("the agent answers");
+        client
+            .subscribe_plugin_events_with(migrations)
+            .await
+            .unwrap();
+        client
+    }
+
     /// Asks the agent to stop and waits for its exit.
     async fn stop(mut self) {
         let _ = self.request(Request::Shutdown).await;
@@ -560,7 +653,209 @@ impl Agent {
     }
 }
 
+/// Waits for the fixture module's migration event with `phase`.
+async fn wait_event(client: &mut AgentClient, phase: ipc::MigrationPhase) {
+    let deadline = Instant::now() + SETTLE;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let event = tokio::time::timeout(left, client.next_plugin_event())
+            .await
+            .unwrap_or_else(|_| panic!("no migration event with {phase:?}"))
+            .unwrap();
+        if let PluginEvent::MigrationChanged {
+            module,
+            plugin,
+            phase: now,
+        } = &event
+            && module == MODULE
+            && *now == phase
+        {
+            assert_eq!(plugin, PLUGIN);
+            return;
+        }
+    }
+}
+
+/// The plugin events a connection receives within `window`.
+async fn events_within(client: &mut AgentClient, window: Duration) -> Vec<PluginEvent> {
+    let deadline = Instant::now() + window;
+    let mut events = Vec::new();
+    while let Ok(Ok(event)) = tokio::time::timeout(
+        deadline.saturating_duration_since(Instant::now()),
+        client.next_plugin_event(),
+    )
+    .await
+    {
+        events.push(event);
+    }
+    events
+}
+
+fn reason_of(error: &ClientError) -> Option<&str> {
+    match error {
+        ClientError::Agent(error) => error.reason.as_deref(),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------- tests
+
+/// The app's consent dialog through the real requests: what waits is
+/// listed by name (the credential's id, never its secret), the plugin
+/// shows as bundled, approving the item imports the token and cuts over,
+/// and the change arrives as an event only on connections that asked for
+/// migration events.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_app_lists_and_approves_the_consent() {
+    let env = Env::new("plugins-migration-ipc-approve");
+    let agent = env.start(&Start::default()).await;
+    let waiting = agent
+        .wait_listed(ipc::MigrationPhase::AwaitingConsent)
+        .await;
+    assert_eq!(waiting.module_name, "Legacy Fixture");
+    assert_eq!(waiting.plugin, PLUGIN);
+    assert_eq!(waiting.plugin_name.as_deref(), Some("Legacy Fixture"));
+    assert_eq!(waiting.route, MigrationRoute::Builtin);
+    assert_eq!(waiting.max_attempts, 3);
+    assert!(!waiting.can_retry);
+    assert_eq!(
+        waiting.aliases,
+        [ipc::ModuleActionAlias {
+            legacy: ACTION.into(),
+            target: "deckpilot.legacy-fixture.whoami".into(),
+        }]
+    );
+    let [item] = waiting.consent.as_slice() else {
+        panic!("one item waits: {waiting:?}");
+    };
+    assert_eq!(item.key, "credentials:token");
+    assert_eq!(item.decision, ConsentDecision::Pending);
+    assert_eq!(item.permission.tier, ipc::PermissionTier::High);
+    assert_eq!(
+        item.import,
+        Some(ipc::CredentialImport {
+            setting: "credential".into(),
+            credential: CREDENTIAL.into(),
+            slot: "token".into(),
+            hosts: vec!["api.example.com".into()],
+        })
+    );
+    assert!(item.why.contains(CREDENTIAL), "{}", item.why);
+    assert_eq!(agent.plugin_origin().await, Some(PluginOrigin::Bundled));
+
+    let mut with = agent.events(true).await;
+    let mut without = agent.events(false).await;
+
+    // Only what waits can be decided, and Retry is for failed ones.
+    let refused = agent
+        .decide(&["network:api.example.com"], &[])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        reason_of(&refused),
+        Some("unknownPermission"),
+        "{refused:?}"
+    );
+    let refused = agent.retry().await.unwrap_err();
+    assert_eq!(reason_of(&refused), Some("invalidState"), "{refused:?}");
+    assert_eq!(
+        env.migration().unwrap().phase,
+        MigrationPhase::AwaitingConsent
+    );
+    assert_eq!(
+        env.plugin_store()
+            .credentials(&PluginId::parse(PLUGIN).unwrap())
+            .unwrap(),
+        []
+    );
+
+    let done = agent.decide(&["credentials:token"], &[]).await.unwrap();
+    assert_eq!(done.phase, ipc::MigrationPhase::CutOver, "{done:?}");
+    assert_eq!(done.route, MigrationRoute::Plugin);
+    assert_eq!(done.consent, []);
+    wait_event(&mut with, ipc::MigrationPhase::CutOver).await;
+    let plain = events_within(&mut without, Duration::from_secs(2)).await;
+    assert!(
+        plain
+            .iter()
+            .any(|e| matches!(e, PluginEvent::Changed { plugin, .. } if plugin == PLUGIN)),
+        "{plain:?}"
+    );
+    assert!(
+        !plain
+            .iter()
+            .any(|e| matches!(e, PluginEvent::MigrationChanged { .. })),
+        "{plain:?}"
+    );
+    let result = agent.wait_source(env.action, "plugin").await;
+    assert_eq!(result.message, "Hi, octo");
+    assert!(
+        env.http_log()
+            .contains(&format!("authorization: Bearer {TOKEN}")),
+        "{}",
+        env.http_log()
+    );
+    assert!(!agent.log().contains(TOKEN), "the token in the agent's log");
+    agent.stop().await;
+}
+
+/// The user declines the import: nothing is granted or copied, the
+/// built-in keeps serving across restarts without asking again, and Retry
+/// asks again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_declined_consent_keeps_the_builtin_until_retry() {
+    let env = Env::new("plugins-migration-ipc-decline");
+    let id = PluginId::parse(PLUGIN).unwrap();
+    let agent = env.start(&Start::default()).await;
+    agent
+        .wait_listed(ipc::MigrationPhase::AwaitingConsent)
+        .await;
+    let mut events = agent.events(true).await;
+    let declined = agent.decide(&[], &["credentials:token"]).await.unwrap();
+    assert_eq!(
+        declined.phase,
+        ipc::MigrationPhase::NotEligible,
+        "{declined:?}"
+    );
+    assert!(declined.can_retry);
+    assert!(
+        declined
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("you declined credentials:token")),
+        "{declined:?}"
+    );
+    assert_eq!(declined.consent.len(), 1);
+    assert_eq!(declined.consent[0].decision, ConsentDecision::Declined);
+    wait_event(&mut events, ipc::MigrationPhase::NotEligible).await;
+    let result = agent.wait_source(env.action, "builtin").await;
+    assert_eq!(result.data["who"], "token-holder");
+    assert_eq!(env.plugin_store().credentials(&id).unwrap(), []);
+    assert_eq!(agent.plugin_state().await, Some(PluginState::Disabled));
+    agent.stop().await;
+
+    // A restart does not ask again.
+    let agent = env.start(&Start::default()).await;
+    agent.wait_source(env.action, "builtin").await;
+    let info = agent.listed().await;
+    assert_eq!(info.phase, ipc::MigrationPhase::NotEligible, "{info:?}");
+    assert_eq!(info.consent[0].decision, ConsentDecision::Declined);
+
+    // Retry asks again; nothing was granted meanwhile.
+    let again = agent.retry().await.unwrap();
+    assert_eq!(
+        again.phase,
+        ipc::MigrationPhase::AwaitingConsent,
+        "{again:?}"
+    );
+    assert_eq!(again.consent[0].decision, ConsentDecision::Pending);
+    assert_eq!(env.plugin_store().credentials(&id).unwrap(), []);
+    let done = agent.decide(&["credentials:token"], &[]).await.unwrap();
+    assert_eq!(done.phase, ipc::MigrationPhase::CutOver, "{done:?}");
+    let result = agent.wait_source(env.action, "plugin").await;
+    assert_eq!(result.message, "Hi, octo");
+    agent.stop().await;
+}
 
 /// An alpha.3 configuration migrates: settings copied, grants derived per
 /// policy, the credential imported only after consent, and the legacy
@@ -727,14 +1022,26 @@ async fn a_failed_health_check_falls_back_and_retries_are_limited() {
     agent.stop().await;
     assert_eq!(env.migration().unwrap(), exhausted);
 
-    // …until the user presses Retry.
-    let agent = env
-        .start(&Start {
-            decisions: "retry:legacy-fixture",
-            ..Start::default()
-        })
-        .await;
-    env.wait_phase(&agent, MigrationPhase::CutOver).await;
+    // …until the user presses Retry in the app.
+    let agent = env.start(&Start::default()).await;
+    agent.wait_source(env.action, "builtin").await;
+    let failed = agent.listed().await;
+    assert_eq!(failed.phase, ipc::MigrationPhase::Failed, "{failed:?}");
+    assert_eq!((failed.attempts, failed.max_attempts), (3, 3));
+    assert!(failed.can_retry);
+    assert!(
+        failed
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.starts_with("health check:")),
+        "{failed:?}"
+    );
+    let mut events = agent.events(true).await;
+    // The consent was given before; Retry runs every step again.
+    let retried = agent.retry().await.unwrap();
+    assert_eq!(retried.phase, ipc::MigrationPhase::CutOver, "{retried:?}");
+    assert_eq!(retried.attempts, 0);
+    wait_event(&mut events, ipc::MigrationPhase::CutOver).await;
     let result = agent.wait_source(env.action, "plugin").await;
     assert_eq!(result.message, "Hi, octo");
     assert_eq!(env.migration().unwrap().attempts, 0);
@@ -816,6 +1123,14 @@ async fn the_users_disable_and_uninstall_are_respected() {
         .unwrap();
     let why = agent.wait_unavailable(env.action).await;
     assert!(why.contains("disabled"), "{why}");
+    // The app shows why the legacy actions are unavailable.
+    let info = agent.listed().await;
+    assert_eq!(info.route, MigrationRoute::PluginWithdrawn, "{info:?}");
+    assert_eq!(
+        info.route_reason.as_deref(),
+        Some("Legacy Fixture (deckpilot.legacy-fixture) was disabled by you")
+    );
+    assert!(!info.can_retry);
     agent.stop().await;
 
     let agent = env.start(&Start::default()).await;

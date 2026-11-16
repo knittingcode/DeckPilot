@@ -10,6 +10,7 @@ import type {
   ActionParamValue,
   AvailablePlugins,
   KnownPlugin,
+  ModuleMigration,
   PluginActionOutcome,
   PluginCredentialSlot,
   PluginDetails,
@@ -80,6 +81,19 @@ export interface PluginClient {
   setCredential(id: string, key: string, secret: string): Promise<PluginCredentialSlot[]>
   /** `deletePluginCredential`. */
   deleteCredential(id: string, key: string): Promise<PluginCredentialSlot[]>
+  /** `listModuleMigrations`: the built-in modules moving to their first-party plugins. */
+  listModuleMigrations(): Promise<ModuleMigration[]>
+  /**
+   * `decideModuleMigration`: the consent dialog, item by item (grant keys).
+   * Every item approved: the migration goes on; any declined: the built-in stays.
+   */
+  decideModuleMigration(
+    module: string,
+    approve: string[],
+    decline: string[],
+  ): Promise<ModuleMigration>
+  /** `retryModuleMigration`: a failed migration runs again; a declined one asks again. */
+  retryModuleMigration(module: string): Promise<ModuleMigration>
   /** A `.dpplugin` chosen in a native dialog; `null` when cancelled. */
   pickPackage(): Promise<string | null>
   /** Plugin events while subscribed; returns the unsubscribe function. */
@@ -116,6 +130,7 @@ export type PluginErrorReason =
   | "busy"
   | "invalidParameters"
   | "invalidData"
+  | "unknownMigration"
   | "failed"
 
 /** What each reason means, as a headline; the agent's message has the details. */
@@ -145,6 +160,7 @@ const TITLES: Partial<Record<string, string>> = {
   busy: "The plugin is busy",
   invalidParameters: "Invalid parameters",
   invalidData: "The values do not fit what the plugin declares",
+  unknownMigration: "No such module migration",
   failed: "The request failed",
 }
 

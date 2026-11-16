@@ -524,11 +524,47 @@ action registry is built. Details beyond the text above:
 - Routing: `Plugin` after the cut-over, `PluginWithdrawn` while the
   plugin has a tombstone, and `Builtin` for a bundled copy this agent does
   not pin (a build without the plugin) and in every other phase.
-- Until P7 adds the consent dialog and Retry, they are engine functions;
-  agent tests drive them through test hooks. The tests use a fixture
-  legacy module and alias (feature `test-hooks`, never in a release
-  build) and the fixture plugin
+- The tests use a fixture legacy module and alias (feature `test-hooks`,
+  never in a release build) and the fixture plugin
   `plugins/first-party/test-fixtures/legacy-fixture`.
+
+**As built (P7).** The app drives the consent and Retry through protocol
+10 requests of the `plugins` capability
+([agent-integration.md](agent-integration.md#module-migrations)):
+
+- `listModuleMigrations` lists every journaled migration: phase, reason,
+  attempts, the route of its legacy action types (`builtin`, `plugin`,
+  `pluginWithdrawn` with the reason), its aliases, and the consent items:
+  every permission it needs that is not granted, and every credential
+  import, by the stored credential's id, the built-in's setting, the
+  plugin's slot and the slot's hosts. Never a value.
+- `decideModuleMigration` approves and declines items one by one. An
+  approval is a grant decided by `user:migration:<module>`, the only
+  decision that imports a credential. A decline is a refusal decided the
+  same way: the module goes to `not_eligible` ("you declined …") and
+  stays there at every start, with the built-in serving, until the user
+  presses Retry. Low- and medium-tier grants stay derived as before;
+  credentials and the private network are never granted without an
+  approval.
+- `retryModuleMigration` runs a `failed` migration again (attempts reset)
+  and, for one the user declined, forgets those refusals
+  (`PluginManager::forget_declines`, which never grants anything) so the
+  dialog asks again.
+- `pluginEvent` `migrationChanged { module, plugin, phase }` reaches only
+  connections that subscribed with `subscribePluginEvents { migrations:
+  true }`, so an older app never receives an event it cannot read.
+- Bundled plugins report the origin `bundled`.
+- The app (`VITE_DECKPILOT_PLUGINS=1`) shows the notice and the consent
+  dialog in Settings › Plugins (`apps/desktop/src/plugins/migration*.tsx`).
+  Its editors (`lib/plugin-actions.ts`) show a legacy type of a module
+  routed to the plugin under the built-in module with the plugin's
+  definition, deprecated, so the picker offers the plugin's type only; a
+  module routed to its built-in is unchanged; a withdrawn plugin makes the
+  legacy type unavailable with the agent's reason. The app's own save
+  validation still uses the built-in's definition, which the contract
+  (§5.3) keeps compatible.
+- `DECKPILOT_TEST_MIGRATION_DECISIONS` stays for tests that decide before
+  an agent starts.
 
 ### 5.7 Keeping optional modules: bundled legacy implementations
 

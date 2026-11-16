@@ -126,7 +126,7 @@ export function storageText(usage: PluginStorageUsage): string {
 /**
  * The kinds of functionality the marketplace distinguishes, from data it
  * already has: the built-in modules (core functionality, not plugins),
- * plugins that ship with DeckPilot (none yet), optional plugins the user
+ * plugins that ship with DeckPilot (origin `bundled`), optional plugins the user
  * installed, and registry plugins that are not installed.
  */
 export interface PluginClasses {
@@ -137,14 +137,12 @@ export interface PluginClasses {
 }
 
 /**
- * The plugins that ship with DeckPilot as system plugins. None does yet
- * (protocol 10 has no such origin); when one does, this is where it is
- * recognized, and the screens show it apart from the optional plugins.
+ * Whether a plugin ships with DeckPilot (origin `bundled`: a first-party
+ * plugin checked against the pins compiled into the agent). The screens
+ * show these apart from the optional plugins the user installed.
  */
-export const BUNDLED_PLUGINS: ReadonlySet<string> = new Set<string>()
-
 export function isBundledPlugin(plugin: PluginDetails): boolean {
-  return BUNDLED_PLUGINS.has(plugin.summary.id)
+  return plugin.summary.origin.type === "bundled"
 }
 
 /** The longest secret the agent accepts (`MAX_PLUGIN_SECRET`), in UTF-8 bytes. */
