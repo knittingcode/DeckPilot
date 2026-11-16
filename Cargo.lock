@@ -925,7 +925,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 3.0.10",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1165,7 +1165,7 @@ dependencies = [
  "deckpilot-device",
  "deckpilot-distribution",
  "dirs 7.0.0",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "interprocess",
  "rustix",
  "serde",
@@ -1181,7 +1181,7 @@ name = "deckpilot-keystore"
 version = "0.6.0-alpha.4"
 dependencies = [
  "apple-native-keyring-store",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "keyring-core",
  "thiserror 2.0.21",
  "windows-native-keyring-store",
@@ -1502,7 +1502,7 @@ dependencies = [
  "deckpilot-core",
  "deckpilot-device",
  "deckpilot-keystore",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "rusqlite",
  "serde",
  "serde_json",
