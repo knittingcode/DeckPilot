@@ -728,12 +728,10 @@ async fn developer_tools_runs_with_only_its_grants() {
     assert_eq!(fetched(&agent.http).len(), requests);
 
     // ---- revoking the network grant. The credential slot names
-    // api.github.com, which then has no network grant, so the broker
-    // refuses the whole grant set (`CredentialOriginNotGranted`) and the
-    // plugin gets no grants at all until the network permission is granted
-    // again: fail closed, including the always-on settings and storage.
-    // No request goes out; the pure actions, which call nothing, still
-    // work.
+    // api.github.com, which then has no network grant: that slot is
+    // unusable (every call using it is refused as not permitted, and no
+    // secret can be injected), and nothing else changes. The settings and
+    // the storage keep working, the pure actions too; no request goes out.
     agent
         .request(Request::RevokePluginPermission {
             plugin: TOOLS.into(),
@@ -743,12 +741,27 @@ async fn developer_tools_runs_with_only_its_grants() {
         .unwrap();
     let (code, message) = agent.failed(TOOLS, "open-prs", json!({})).await;
     assert_eq!(code, "not-permitted", "{message}");
-    assert!(message.contains("settings.get"), "{message}");
-    let (code, _) = agent.failed(TOOLS, "last-values", json!({})).await;
-    assert_eq!(code, "not-permitted");
+    assert!(message.contains("credentials.has"), "{message}");
     assert!(
-        agent.log().contains("the broker refused the grants"),
-        "the agent did not log why the plugin has no grants"
+        !message.contains("settings.get"),
+        "the settings were refused too: {message}"
+    );
+    let (code, message) = agent.failed(TOOLS, "build-status", json!({})).await;
+    assert_eq!(code, "not-permitted", "{message}");
+    // Storage and settings: the plugin's own, still there.
+    let kept = agent.run(TOOLS, "last-values", json!({})).await;
+    assert_eq!(kept["openPrsRepo"], "acme/echo");
+    assert_eq!(kept["buildStatus"], "success");
+    assert!(kept["storageBytes"].as_i64().unwrap() > 0, "{kept:?}");
+    assert!(
+        agent
+            .log()
+            .contains("credential slot withheld from hosts without a network grant"),
+        "the agent did not log why the slot is unusable"
+    );
+    assert!(
+        !agent.log().contains("the broker refused the grants"),
+        "the broker refused the whole grant set"
     );
     assert_eq!(
         fetched(&agent.http).len(),
@@ -759,7 +772,7 @@ async fn developer_tools_runs_with_only_its_grants() {
         .run(TOOLS, "uuid-v5", json!({"name": "python.org"}))
         .await;
     assert_eq!(u["uuid"], "886313e1-3b8a-5372-9b90-0c9aee199e5d");
-    // Granted again: everything is back, on the very next call.
+    // Granted again: the slot is back, on the very next call.
     agent
         .request(Request::GrantPluginPermissions {
             plugin: TOOLS.into(),
@@ -769,6 +782,10 @@ async fn developer_tools_runs_with_only_its_grants() {
         .unwrap();
     assert_eq!(agent.run(TOOLS, "open-prs", json!({})).await["count"], 4);
     assert_eq!(fetched(&agent.http).len(), requests + 1);
+    assert_eq!(
+        fetched(&agent.http).last().unwrap(),
+        &format!("{SEARCH_URL}\tauthorization: Bearer {TOKEN}")
+    );
 
     // ---- the token is in no log and in no file as clear text. The agent
     // is stopped first: Windows does not let another process read a

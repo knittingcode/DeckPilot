@@ -311,10 +311,13 @@ impl Broker {
         Ok(())
     }
 
-    /// Revokes one origin. Effective on the next call.
+    /// Revokes one origin. Effective on the next call. A credential slot
+    /// that targets it is withheld from it too (and is unusable when it
+    /// had no other origin); every other grant stays.
     pub fn revoke_origin(&self, plugin: &PluginId, origin: &Origin) {
         self.update(plugin, |g| {
             g.network.remove(origin);
+            g.suspend_unreachable_credentials();
         });
     }
 

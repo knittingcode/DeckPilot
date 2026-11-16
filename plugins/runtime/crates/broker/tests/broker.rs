@@ -621,10 +621,6 @@ fn credential_grants_are_strict() {
             GrantError::EmptyCredential,
         ),
         (
-            r#""key":"token","origins":["https://other.example.com"],"schemes":["bearer"]"#,
-            GrantError::CredentialOriginNotGranted,
-        ),
-        (
             r#""key":"token","origins":["https://api.example.com"],"schemes":["bearer"],"value":"s3cret""#,
             GrantError::Malformed,
         ),
@@ -640,6 +636,183 @@ fn credential_grants_are_strict() {
             {{"kind":"credential","key":"t","origins":["https://api.example.com"],"schemes":["basic"]}}]"#
     );
     assert_eq!(derive(&twice), Err(GrantError::DuplicateCredential));
+    // A slot towards a host without a network grant is not an invalid
+    // record (the user may revoke the host at any time): the slot is
+    // unusable, nothing else is affected.
+    let unreachable = derive(&cred(
+        r#""key":"token","origins":["https://other.example.com"],"schemes":["bearer"]"#,
+    ))
+    .unwrap();
+    assert!(unreachable.credential("token").is_none());
+    assert_eq!(unreachable.origins().count(), 1);
+    assert_eq!(
+        unreachable.suspended_credentials()["token"]
+            .iter()
+            .map(Origin::to_string)
+            .collect::<Vec<_>>(),
+        ["https://other.example.com"]
+    );
+}
+
+/// The permissions of a plugin with two hosts, a credential slot towards
+/// the first, notifications and a larger storage quota.
+fn slot_and_more(network: &[&str]) -> String {
+    let mut items: Vec<String> = network
+        .iter()
+        .map(|o| format!(r#"{{"kind":"network","origin":"{o}","methods":["GET"]}}"#))
+        .collect();
+    items.push(
+        r#"{"kind":"credential","key":"token","origins":["https://api.example.com"],"schemes":["bearer"]}"#
+            .into(),
+    );
+    items.push(r#"{"kind":"notifications"}"#.into());
+    items.push(r#"{"kind":"storage","quotaKb":512}"#.into());
+    format!("[{}]", items.join(","))
+}
+
+fn notify() -> CapabilityRequest {
+    CapabilityRequest::Notify(Notify {
+        title: "t".into(),
+        body: "b".into(),
+        severity: None,
+    })
+}
+
+fn has(key: &str) -> CapabilityRequest {
+    CapabilityRequest::CredentialHas(CredentialRef {
+        credential: key.into(),
+    })
+}
+
+/// Everything but the slot whose host lost its network grant keeps
+/// working: settings, storage (with its granted quota), the other host,
+/// notifications. Asserted the same way whether the grants were set
+/// without the host (the agent re-deriving after a revoke) or the host was
+/// revoked on a running session.
+fn assert_only_the_slot_is_gone(f: &Fixture) {
+    let s = f.broker.session(f.plugin.clone());
+    // The slot: unusable for every call, never injected.
+    assert_eq!(
+        s.authorize(&has("token")).denial(),
+        Some(DenyReason::CredentialNotGranted)
+    );
+    for url in ["https://api.example.com/me", "https://cdn.example.com/me"] {
+        let d = s.authorize(&get_with(url, "token", AuthScheme::Bearer));
+        assert!(!d.is_allowed(), "{url}: {d:?}");
+        assert_eq!(
+            d.denial().map(DenyReason::call_error_code),
+            Some(CallErrorCode::NotPermitted),
+            "{url}"
+        );
+    }
+    // The host itself, without a credential: no network grant.
+    assert_eq!(
+        s.authorize(&get("https://api.example.com/")).denial(),
+        Some(DenyReason::OriginNotGranted)
+    );
+    // Everything else.
+    assert!(s.authorize(&get("https://cdn.example.com/")).is_allowed());
+    assert!(s.authorize(&notify()).is_allowed());
+    assert_eq!(
+        s.authorize(&CapabilityRequest::SettingsGet(NoArgs {})),
+        Decision::Allow(Allowed::SettingsGet)
+    );
+    let d = s.authorize(&storage_set("k"));
+    assert_eq!(quota_of(&d).bytes, 512 * 1024);
+    assert!(s.authorize(&log("still here")).is_allowed());
+}
+
+#[test]
+fn a_revoked_host_takes_only_its_credential_slot_with_it() {
+    let both = ["https://api.example.com", "https://cdn.example.com"];
+    // Re-derived without the host, as the agent does after a revoke.
+    let f = fixture(&slot_and_more(&both));
+    let s = f.broker.session(f.plugin.clone());
+    assert!(
+        s.authorize(&get_with(
+            "https://api.example.com/me",
+            "token",
+            AuthScheme::Bearer
+        ))
+        .is_allowed()
+    );
+    f.broker
+        .set_grants(
+            &f.plugin,
+            &ApprovedPermissions::from_json(&slot_and_more(&["https://cdn.example.com"])).unwrap(),
+        )
+        .unwrap();
+    assert_only_the_slot_is_gone(&f);
+    // Granted again: the slot is back on the next call.
+    f.broker
+        .set_grants(
+            &f.plugin,
+            &ApprovedPermissions::from_json(&slot_and_more(&both)).unwrap(),
+        )
+        .unwrap();
+    assert!(
+        s.authorize(&get_with(
+            "https://api.example.com/me",
+            "token",
+            AuthScheme::Bearer
+        ))
+        .is_allowed()
+    );
+    assert!(s.authorize(&has("token")).is_allowed());
+
+    // Revoked on the running grants: the same.
+    let f = fixture(&slot_and_more(&both));
+    f.broker.revoke_origin(
+        &f.plugin,
+        &Origin::parse_grant("https://api.example.com").unwrap(),
+    );
+    assert_only_the_slot_is_gone(&f);
+}
+
+#[test]
+fn a_slot_keeps_only_the_origins_that_still_have_a_network_grant() {
+    let f = fixture(
+        r#"[{"kind":"network","origin":"https://api.example.com","methods":["GET"]},
+            {"kind":"network","origin":"https://uploads.example.com","methods":["GET"]},
+            {"kind":"credential","key":"token","schemes":["bearer"],
+             "origins":["https://api.example.com","https://uploads.example.com"]}]"#,
+    );
+    let s = f.broker.session(f.plugin.clone());
+    f.broker.revoke_origin(
+        &f.plugin,
+        &Origin::parse_grant("https://uploads.example.com").unwrap(),
+    );
+    // Never towards the revoked host...
+    assert!(
+        !s.authorize(&get_with(
+            "https://uploads.example.com/x",
+            "token",
+            AuthScheme::Bearer
+        ))
+        .is_allowed()
+    );
+    // ...still towards the one the user kept.
+    assert!(s.authorize(&has("token")).is_allowed());
+    assert!(
+        s.authorize(&get_with(
+            "https://api.example.com/x",
+            "token",
+            AuthScheme::Bearer
+        ))
+        .is_allowed()
+    );
+    // A redirect from the kept host to the revoked one carries nothing.
+    let Decision::Allow(Allowed::Fetch(first)) = s.authorize(&get_with(
+        "https://api.example.com/x",
+        "token",
+        AuthScheme::Bearer,
+    )) else {
+        panic!("allowed above");
+    };
+    assert!(
+        !s.authorize_redirect(&first, "https://uploads.example.com/x", 1)
+            .is_allowed()
+    );
 }
 
 fn storage_set(key: &str) -> CapabilityRequest {

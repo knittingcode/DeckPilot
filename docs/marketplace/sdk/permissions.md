@@ -85,15 +85,17 @@ these, is denied.
   broker at the call.
 - **Revoke** (`revokePluginPermission`) applies to the next capability
   call. **Grant** (`grantPluginPermissions`) likewise.
-- **Credential slots depend on their hosts' network grants.** The broker
-  refuses a grant set in which a granted credential slot names a host
-  without a network grant (`GrantError::CredentialOriginNotGranted`), and
-  the agent then gives the plugin **no grants at all** ("the broker refused
-  the grants; the plugin gets none" in the agent log): revoking
-  `network:api.github.com` from Developer Tools denies its settings and
-  storage too, until the network permission is granted again (tested in
-  `apps/agent/tests/plugins_examples.rs`). This fails closed; it is
-  coarser than a revoke of one permission suggests.
+- **Credential slots depend on their hosts' network grants.** A secret
+  only ever travels to a host with a current network grant. When the user
+  revokes such a host, the broker withholds it from every credential slot
+  that names it (`Grants::suspended_credentials`; "credential slot
+  withheld from hosts without a network grant" in the agent log); a slot
+  left without hosts is not granted at all, so `credentials.has` and every
+  request using it fail with `not-permitted`. Nothing else changes: the
+  settings, the storage, the other hosts and the notifications keep
+  working, and the slot is back with the network grant (tested in
+  `plugins/runtime/crates/broker/tests/broker.rs` and, for Developer
+  Tools, in `apps/agent/tests/plugins_examples.rs`).
 - **Updates** that add or broaden a permission (`PermissionChanges`:
   `added`, `broadened`) are staged and need consent for the escalated keys
   (`approvePluginUpdate`); declining keeps the old version.

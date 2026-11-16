@@ -647,9 +647,9 @@ and runs every action through the real agent and host: Hello World
 enabled with no permission; Developer Tools with exactly its three grants,
 its settings, the token injected as a bearer only towards
 `api.github.com` (checked on the wire) and never in an answer, a log or a
-file, both variables resolved, storage read back, a revoke that removes
-the whole grant set (the credential slot's host lost its network grant)
-and a grant that restores it, and its `listPlugins`/`getPlugin` answers at
+file, both variables resolved, storage read back, a revoke of the
+credential slot's host that makes only that slot unusable (settings and
+storage keep working) and a grant that restores it, and its `listPlugins`/`getPlugin` answers at
 most half of the IPC message limit.
 `cargo test -p deckpilot-agent --features plugins --test plugins_registry_https`
 does the same over HTTPS: a local TLS server (`tests/support/https.rs`,

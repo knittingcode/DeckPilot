@@ -955,6 +955,20 @@ impl PluginService {
         if let Err(e) = self.broker.set_grants(&broker_id, &approved) {
             warn!(plugin = %id, error = %e, "the broker refused the grants; the plugin gets none");
             self.broker.remove_plugin(&broker_id);
+            return;
+        }
+        // A credential slot whose host lost its network grant is unusable
+        // (towards that host) until the grant is back; the rest stays.
+        if let Ok(grants) = deckpilot_plugin_broker::Grants::derive(&approved) {
+            for (slot, origins) in grants.suspended_credentials() {
+                let origins: Vec<String> = origins.iter().map(ToString::to_string).collect();
+                info!(
+                    plugin = %id,
+                    slot,
+                    ?origins,
+                    "credential slot withheld from hosts without a network grant"
+                );
+            }
         }
     }
 
