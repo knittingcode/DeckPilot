@@ -2350,28 +2350,7 @@ mod tests {
     }
 
     #[test]
-    fn module_migration_requests_are_bounded() {
-        for (json, name) in [
-            (
-                serde_json::json!({"type": "listModuleMigrations"}),
-                "listModuleMigrations",
-            ),
-            (
-                serde_json::json!({"type": "decideModuleMigration", "module": "github",
-                    "approve": ["credentials:token"], "decline": ["network:10.0.0.1"]}),
-                "decideModuleMigration",
-            ),
-            (
-                serde_json::json!({"type": "retryModuleMigration", "module": "github"}),
-                "retryModuleMigration",
-            ),
-        ] {
-            let request: Request = serde_json::from_value(json.clone()).unwrap();
-            assert_eq!(request.since_protocol(), 10, "{name}");
-            assert_eq!(request.name(), name);
-            request.validate().unwrap();
-            assert_eq!(serde_json::to_value(&request).unwrap(), json);
-        }
+    fn user_origin_requests_are_bounded() {
         // User-entered origins (G2).
         for (json, name) in [
             (
@@ -2424,6 +2403,31 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn module_migration_requests_are_bounded() {
+        for (json, name) in [
+            (
+                serde_json::json!({"type": "listModuleMigrations"}),
+                "listModuleMigrations",
+            ),
+            (
+                serde_json::json!({"type": "decideModuleMigration", "module": "github",
+                    "approve": ["credentials:token"], "decline": ["network:10.0.0.1"]}),
+                "decideModuleMigration",
+            ),
+            (
+                serde_json::json!({"type": "retryModuleMigration", "module": "github"}),
+                "retryModuleMigration",
+            ),
+        ] {
+            let request: Request = serde_json::from_value(json.clone()).unwrap();
+            assert_eq!(request.since_protocol(), 10, "{name}");
+            assert_eq!(request.name(), name);
+            request.validate().unwrap();
+            assert_eq!(serde_json::to_value(&request).unwrap(), json);
+        }
         let decide = |module: &str, approve: &[&str], decline: &[&str]| {
             Request::DecideModuleMigration {
                 module: module.into(),

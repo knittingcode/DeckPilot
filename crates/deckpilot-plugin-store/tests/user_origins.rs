@@ -93,7 +93,7 @@ fn an_origin_is_recorded_only_with_the_users_consent_within_the_slot() {
     let env = Env::new();
     let mut manager = env.open();
     install(&mut manager, false);
-    assert!(manager.store().user_origins(&id()).unwrap().is_empty());
+    assert_eq!(manager.store().user_origins(&id()).unwrap().len(), 0);
 
     let ok = consent("https://ghe.example.com");
     manager.grant_user_origin(&id(), &ok, "user").unwrap();
@@ -213,7 +213,7 @@ fn without_the_slot_grant_no_origin_is_recorded() {
             if missing == &[user_origin_key(SETTING)]),
         "{result:?}"
     );
-    assert!(manager.store().user_origins(&id()).unwrap().is_empty());
+    assert_eq!(manager.store().user_origins(&id()).unwrap().len(), 0);
 }
 
 #[test]
@@ -239,7 +239,7 @@ fn a_revocation_or_a_changed_setting_deletes_it_and_so_does_an_uninstall() {
             .as_deref(),
         Some("https://ghe2.example.com/api/v3")
     );
-    assert!(manager.store().user_origins(&id()).unwrap().is_empty());
+    assert_eq!(manager.store().user_origins(&id()).unwrap().len(), 0);
     let last = manager.store().audit(&id()).unwrap().pop().unwrap();
     assert_eq!(
         (last.op.as_str(), last.decision.as_str()),
@@ -262,7 +262,7 @@ fn a_revocation_or_a_changed_setting_deletes_it_and_so_does_an_uninstall() {
         .unwrap();
     manager.uninstall(&id()).unwrap();
     install(&mut manager, false);
-    assert!(manager.store().user_origins(&id()).unwrap().is_empty());
+    assert_eq!(manager.store().user_origins(&id()).unwrap().len(), 0);
 }
 
 #[test]

@@ -652,6 +652,7 @@ impl Registry {
 // ---------------------------------------------------------------- agent
 
 /// Canned HTTP answers for the sample (the only network it uses).
+#[allow(clippy::too_many_lines)] // one list of routes
 fn canned_http(dir: &Path) -> PathBuf {
     let path = dir.join("http.json");
     let forecast = json!({

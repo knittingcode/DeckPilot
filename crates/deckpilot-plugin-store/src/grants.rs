@@ -349,21 +349,10 @@ impl GrantSet {
                     user_origins,
                     ..
                 } => {
-                    for slot in user_origins.as_deref().unwrap_or_default() {
-                        let slot_methods = slot
-                            .methods
-                            .as_deref()
-                            .or(methods.as_deref())
-                            .map_or(ALL_METHODS.to_vec(), sorted);
-                        set.insert(
-                            crate::origins::user_origin_key(&slot.setting),
-                            GrantScope::UserOriginSlot {
-                                methods: slot_methods,
-                                path_prefix: slot.path_prefix(),
-                                private_network: slot.private_network(),
-                            },
-                        );
-                    }
+                    set.insert_user_origin_slots(
+                        user_origins.as_deref().unwrap_or_default(),
+                        methods.as_deref(),
+                    );
                     let methods = methods.as_deref().map_or(ALL_METHODS.to_vec(), sorted);
                     for host in hosts {
                         set.insert(
@@ -380,23 +369,7 @@ impl GrantSet {
                         );
                     }
                 }
-                Permission::Credentials { refs, .. } => {
-                    for reference in refs {
-                        let slot = manifest
-                            .contributes
-                            .credentials()
-                            .iter()
-                            .find(|slot| slot.key == *reference);
-                        set.insert(
-                            GrantKey::new(PermissionKind::Credentials, reference.clone()),
-                            GrantScope::Credential {
-                                hosts: slot.map(|s| sorted(&s.hosts)).unwrap_or_default(),
-                                schemes: slot.map(|s| sorted(&s.schemes)).unwrap_or_default(),
-                                user_origin: slot.and_then(|s| s.user_origin.clone()),
-                            },
-                        );
-                    }
-                }
+                Permission::Credentials { refs, .. } => set.insert_credentials(manifest, refs),
                 Permission::Notifications { .. } => set.insert(
                     GrantKey::new(PermissionKind::Notifications, ""),
                     GrantScope::Notifications,
@@ -453,6 +426,50 @@ impl GrantSet {
             }
         }
         set
+    }
+
+    /// One grant per credential ref, with the hosts, schemes and origin
+    /// setting of its slot.
+    fn insert_credentials(&mut self, manifest: &Manifest, refs: &[String]) {
+        for reference in refs {
+            let slot = manifest
+                .contributes
+                .credentials()
+                .iter()
+                .find(|slot| slot.key == *reference);
+            self.insert(
+                GrantKey::new(PermissionKind::Credentials, reference.clone()),
+                GrantScope::Credential {
+                    hosts: slot.map(|s| sorted(&s.hosts)).unwrap_or_default(),
+                    schemes: slot.map(|s| sorted(&s.schemes)).unwrap_or_default(),
+                    user_origin: slot.and_then(|s| s.user_origin.clone()),
+                },
+            );
+        }
+    }
+
+    /// One grant per origin setting of the `network` permission (G2), with
+    /// the slot's methods (or the permission's).
+    fn insert_user_origin_slots(
+        &mut self,
+        slots: &[deckpilot_plugin_manifest::UserOriginSlot],
+        methods: Option<&[HttpMethod]>,
+    ) {
+        for slot in slots {
+            let slot_methods = slot
+                .methods
+                .as_deref()
+                .or(methods)
+                .map_or(ALL_METHODS.to_vec(), sorted);
+            self.insert(
+                crate::origins::user_origin_key(&slot.setting),
+                GrantScope::UserOriginSlot {
+                    methods: slot_methods,
+                    path_prefix: slot.path_prefix(),
+                    private_network: slot.private_network(),
+                },
+            );
+        }
     }
 
     fn insert(&mut self, key: GrantKey, scope: GrantScope) {

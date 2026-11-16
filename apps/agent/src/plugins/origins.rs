@@ -122,7 +122,7 @@ fn declared(manifest: &Manifest, origin: &UserOrigin) -> bool {
         port => format!("{}:{port}", origin.origin().host()),
     };
     manifest.permissions.iter().any(|p| match p {
-        Permission::Network { hosts, .. } => hosts.iter().any(|h| *h == host),
+        Permission::Network { hosts, .. } => hosts.contains(&host),
         _ => false,
     })
 }
@@ -381,6 +381,10 @@ pub fn infos(
 mod tests {
     use super::*;
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the tests build the slot inline"
+    )]
     fn manifest(slot: Value) -> Manifest {
         let text = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -538,13 +542,13 @@ mod tests {
         );
         // The setting changed: nothing.
         let other = saved("https://ghe2.example.com/api/v3");
-        assert!(approved(&m, &other, &effective(&m), &rows).is_empty());
+        assert_eq!(approved(&m, &other, &effective(&m), &rows).len(), 0);
         // The slot grant is not effective: nothing.
         let without_slot: Vec<_> = effective(&m)
             .into_iter()
             .filter(|(k, _)| *k != user_origin_key("apiUrl"))
             .collect();
-        assert!(approved(&m, &values, &without_slot, &rows).is_empty());
+        assert_eq!(approved(&m, &values, &without_slot, &rows).len(), 0);
         // The credential grant is not effective: no secret goes there.
         let without_token: Vec<_> = effective(&m)
             .into_iter()
@@ -563,7 +567,7 @@ mod tests {
         let narrower = manifest(serde_json::json!({"setting": "apiUrl", "pathPrefix": true}));
         let mut effective_narrow = effective(&narrower);
         effective_narrow.retain(|(k, _)| k.kind != PermissionKind::Credentials);
-        assert!(approved(&narrower, &lan, &effective_narrow, &rows).is_empty());
+        assert_eq!(approved(&narrower, &lan, &effective_narrow, &rows).len(), 0);
     }
 
     #[test]
@@ -624,7 +628,10 @@ mod tests {
     fn changed_settings_are_found() {
         let m = ghe();
         let before = current(&m, &saved("https://ghe.example.com"));
-        assert!(changed(&before, &current(&m, &saved("https://GHE.example.com/"))).is_empty());
+        assert_eq!(
+            changed(&before, &current(&m, &saved("https://GHE.example.com/"))).len(),
+            0
+        );
         assert_eq!(
             changed(&before, &current(&m, &saved("https://ghe.example.com/api"))),
             ["apiUrl"]

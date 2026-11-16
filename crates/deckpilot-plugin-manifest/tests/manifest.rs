@@ -908,7 +908,7 @@ fn fixtures() -> Vec<Fixture> {
                     v,
                     "/permissions/0/userOrigins",
                     json!([{ "setting": "serverUrl" }]),
-                )
+                );
             },
         ),
         mutate(
@@ -920,7 +920,7 @@ fn fixtures() -> Vec<Fixture> {
                     v,
                     "/permissions/0/userOrigins",
                     json!([{ "setting": "pollMinutes" }]),
-                )
+                );
             },
         ),
         mutate(
@@ -993,7 +993,7 @@ fn fixtures() -> Vec<Fixture> {
                     v,
                     "/contributes/credentials/0/userOrigin",
                     json!("serverUrl"),
-                )
+                );
             },
         ),
         mutate(

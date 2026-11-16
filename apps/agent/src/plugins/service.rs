@@ -986,6 +986,50 @@ impl PluginService {
         super::origins::approved(&manifest, &saved, effective, &rows)
     }
 
+    /// Saves settings (merged, validated). A changed origin setting (G2)
+    /// ends the consent to its old origin at once.
+    fn set_settings(
+        &mut self,
+        id: &PluginId,
+        mut values: BTreeMap<String, serde_json::Value>,
+    ) -> Result<Response, IpcError> {
+        let manifest = self.active_manifest(id)?;
+        let saved = self
+            .manager
+            .store()
+            .settings(id)
+            .map_err(|e| store_error(&e))?;
+        // Origin settings (G2) are saved as the broker reads them.
+        super::origins::normalize(&manifest, &mut values)
+            .map_err(|e| error(ErrorCode::InvalidRequest, reason::INVALID_DATA, e))?;
+        let merged = data::merge_settings(&manifest, &saved, &values)
+            .map_err(|e| error(ErrorCode::InvalidRequest, reason::INVALID_DATA, e))?;
+        let before = super::origins::current(&manifest, &saved);
+        self.manager
+            .set_settings(id, &merged)
+            .map_err(|e| store_error(&e))?;
+        info!(plugin = %id, "plugin settings saved");
+        // A changed origin setting ends the consent to its old
+        // origin at once; the new one needs consent of its own.
+        let after = super::origins::current(&manifest, &merged);
+        let changed = super::origins::changed(&before, &after);
+        for setting in &changed {
+            if let Some(old) = self
+                .manager
+                .revoke_user_origin(id, setting, "the setting changed")
+                .map_err(|e| store_error(&e))?
+            {
+                info!(plugin = %id, %setting, origin = %old,
+                    "user origin revoked: the setting changed");
+            }
+        }
+        if !changed.is_empty() {
+            self.sync_grants(id);
+            self.changed(id);
+        }
+        self.settings(id)
+    }
+
     /// Consents to the origin an origin setting holds (G2): exactly that
     /// origin, a private network only when the request asks for it.
     fn grant_user_origin(
@@ -1151,43 +1195,8 @@ impl PluginService {
                 })
             }
             Request::GetPluginSettings { plugin } => self.settings(&plugin_id(&plugin)?),
-            Request::SetPluginSettings { plugin, mut values } => {
-                let id = plugin_id(&plugin)?;
-                let manifest = self.active_manifest(&id)?;
-                let saved = self
-                    .manager
-                    .store()
-                    .settings(&id)
-                    .map_err(|e| store_error(&e))?;
-                // Origin settings (G2) are saved as the broker reads them.
-                super::origins::normalize(&manifest, &mut values)
-                    .map_err(|e| error(ErrorCode::InvalidRequest, reason::INVALID_DATA, e))?;
-                let merged = data::merge_settings(&manifest, &saved, &values)
-                    .map_err(|e| error(ErrorCode::InvalidRequest, reason::INVALID_DATA, e))?;
-                let before = super::origins::current(&manifest, &saved);
-                self.manager
-                    .set_settings(&id, &merged)
-                    .map_err(|e| store_error(&e))?;
-                info!(plugin = %id, "plugin settings saved");
-                // A changed origin setting ends the consent to its old
-                // origin at once; the new one needs consent of its own.
-                let after = super::origins::current(&manifest, &merged);
-                let changed = super::origins::changed(&before, &after);
-                for setting in &changed {
-                    if let Some(old) = self
-                        .manager
-                        .revoke_user_origin(&id, setting, "the setting changed")
-                        .map_err(|e| store_error(&e))?
-                    {
-                        info!(plugin = %id, %setting, origin = %old,
-                            "user origin revoked: the setting changed");
-                    }
-                }
-                if !changed.is_empty() {
-                    self.sync_grants(&id);
-                    self.changed(&id);
-                }
-                self.settings(&id)
+            Request::SetPluginSettings { plugin, values } => {
+                self.set_settings(&plugin_id(&plugin)?, values)
             }
             Request::GrantPluginUserOrigin {
                 plugin,
