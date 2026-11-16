@@ -1058,6 +1058,8 @@ impl Executor {
             Allowed::VariableClear { id: Some(id) } => self.publish(plugin, id, None),
             Allowed::VariableClear { id: None } => self.clear(plugin),
             Allowed::OpenUrl { url, origin } => self.open_url(plugin, url, origin),
+            Allowed::TimeNow => super::ambient::now(),
+            Allowed::RandomBytes { length } => super::ambient::random(*length),
             Allowed::RunContext(context) => serde_json::to_value(context).map_or_else(
                 |e| CallResult::error(CallErrorCode::Failed, e.to_string()),
                 CallResult::Ok,
