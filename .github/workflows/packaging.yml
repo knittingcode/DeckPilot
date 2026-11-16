@@ -36,6 +36,7 @@ on:
       - apps/agent/**
       - packaging/**
       - tools/ci/**
+      - .github/scripts/verify-macos-app.sh
       - .github/workflows/packaging.yml
       - Cargo.lock
       - Cargo.toml
@@ -292,3 +293,8 @@ jobs:
           --config "$THROWAWAY_UPDATER_CONFIG"
       - name: Names, versions, layout, distribution record, disk image and updater signatures
         run: tools/ci/check-packages.sh macos
+      # The entitlement policy verify-macos-app.sh applies to the signed
+      # release (no entitlements, but exactly the plugin host's one on
+      # exactly the host), on fake bundles signed ad hoc.
+      - name: Entitlement policy (fake bundles)
+        run: tools/ci/test-check-macos-entitlements.sh "$RUNNER_TEMP/entitlements-test"
