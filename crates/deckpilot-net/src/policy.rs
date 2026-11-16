@@ -6,6 +6,21 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use crate::codes;
 
+/// Which resolved addresses a request may connect to. [`NetworkPolicy`]
+/// is the boundary of the built-in modules; the plugin broker's executor
+/// has its own for an origin the user entered on a private network (G2),
+/// which still refuses this computer and link-local addresses.
+pub trait AddressPolicy: Sync {
+    /// Checks every address `host` resolved to; all must be allowed.
+    fn check(&self, host: &str, addresses: &[IpAddr]) -> Result<(), (&'static str, String)>;
+}
+
+impl AddressPolicy for NetworkPolicy {
+    fn check(&self, host: &str, addresses: &[IpAddr]) -> Result<(), (&'static str, String)> {
+        NetworkPolicy::check(self, host, addresses)
+    }
+}
+
 /// The network boundary, from the module's machine-specific settings.
 #[derive(Debug, Clone, Default)]
 pub struct NetworkPolicy {

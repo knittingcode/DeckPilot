@@ -15,7 +15,7 @@ use deckpilot_plugin_abi::capability::{AuthScheme, is_credential_key};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::origin::{Origin, OriginError};
+use crate::origin::{Origin, OriginError, UserOrigin};
 
 /// Kinds that a plugin can never be granted in API 1.
 pub const NEVER_GRANTABLE: &[&str] = &[
@@ -64,6 +64,24 @@ pub enum ApprovedPermission {
     /// (design §5.2 `openUrl`). Independent of `network`: it gives no
     /// request to that origin, and a network grant gives no `openUrl`.
     OpenUrl { origin: String },
+    /// An origin the user entered in one of the plugin's origin settings
+    /// and consented to (G2): requests with the listed methods to exactly
+    /// that scheme, host and port, within `path_prefix` when there is one.
+    /// The secrets of the `credentials` slots (each granted on its own)
+    /// may be injected there. `private_network` is the user's separate
+    /// consent to reach it on a private network: without it a private
+    /// host is refused and every address must be public.
+    #[serde(rename_all = "camelCase")]
+    UserOrigin {
+        origin: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path_prefix: Option<String>,
+        methods: BTreeSet<HttpMethod>,
+        #[serde(default)]
+        private_network: bool,
+        #[serde(default)]
+        credentials: BTreeSet<String>,
+    },
 }
 
 /// Storage every plugin has without a `storage` grant (design §5.2).
@@ -126,6 +144,37 @@ pub struct Grants {
     pub(crate) storage_quota: Option<u64>,
     /// Origins whose URLs the plugin may open in the browser.
     pub(crate) open_url: BTreeSet<Origin>,
+    /// Origins the user entered and consented to (G2).
+    pub(crate) user_origins: Vec<UserOriginGrant>,
+}
+
+/// One granted user-entered origin (G2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserOriginGrant {
+    pub(crate) origin: UserOrigin,
+    pub(crate) methods: BTreeSet<HttpMethod>,
+    /// The user's consent to reach it on a private network.
+    pub(crate) private_network: bool,
+    /// Credential slots whose secrets may be injected there.
+    pub(crate) credentials: BTreeSet<String>,
+}
+
+impl UserOriginGrant {
+    pub fn origin(&self) -> &UserOrigin {
+        &self.origin
+    }
+
+    pub fn private_network(&self) -> bool {
+        self.private_network
+    }
+
+    pub fn methods(&self) -> impl Iterator<Item = HttpMethod> + '_ {
+        self.methods.iter().copied()
+    }
+
+    pub fn credentials(&self) -> impl Iterator<Item = &str> {
+        self.credentials.iter().map(String::as_str)
+    }
 }
 
 /// Where and how one credential slot may be injected.
@@ -150,6 +199,10 @@ pub const MAX_CREDENTIALS: usize = 8;
 
 /// Most origins one plugin may be granted.
 pub const MAX_ORIGINS: usize = 64;
+
+/// Most user-entered origins one plugin may be granted (one per origin
+/// setting; the manifest allows four).
+pub const MAX_USER_ORIGINS: usize = 8;
 
 impl Grants {
     /// Derives grants. Fails on the first invalid entry; never partial.
@@ -176,7 +229,9 @@ impl Grants {
                     if !is_credential_key(key) {
                         return Err(GrantError::CredentialKey);
                     }
-                    if origins.is_empty() || schemes.is_empty() {
+                    // A slot without fixed origins is valid only when a
+                    // user origin binds it (checked below).
+                    if schemes.is_empty() {
                         return Err(GrantError::EmptyCredential);
                     }
                     let mut slot = CredentialGrant {
@@ -195,6 +250,36 @@ impl Grants {
                     g.open_url
                         .insert(Origin::parse_grant(origin).map_err(GrantError::Origin)?);
                 }
+                ApprovedPermission::UserOrigin {
+                    origin,
+                    path_prefix,
+                    methods,
+                    private_network,
+                    credentials,
+                } => {
+                    if methods.is_empty() {
+                        return Err(GrantError::NoMethods);
+                    }
+                    // The record holds the normalized origin and prefix the
+                    // user consented to; it must read back as exactly that.
+                    let text = format!("{origin}{}", path_prefix.as_deref().unwrap_or(""));
+                    let parsed = UserOrigin::parse(&text).map_err(GrantError::Origin)?;
+                    if parsed.to_string() != text {
+                        return Err(GrantError::Origin(OriginError::NotAnOrigin));
+                    }
+                    if parsed.private_host() && !private_network {
+                        return Err(GrantError::PrivateNetworkNotGranted);
+                    }
+                    if credentials.iter().any(|k| !is_credential_key(k)) {
+                        return Err(GrantError::CredentialKey);
+                    }
+                    g.user_origins.push(UserOriginGrant {
+                        origin: parsed,
+                        methods: methods.clone(),
+                        private_network: *private_network,
+                        credentials: credentials.clone(),
+                    });
+                }
                 ApprovedPermission::Storage { quota_kb } => {
                     let bytes = quota_kb.saturating_mul(1024);
                     if bytes <= DEFAULT_STORAGE_QUOTA_BYTES || bytes > MAX_STORAGE_QUOTA_BYTES {
@@ -206,8 +291,23 @@ impl Grants {
                 }
             }
         }
-        if g.network.len() > MAX_ORIGINS || g.open_url.len() > MAX_ORIGINS {
+        if g.network.len() > MAX_ORIGINS
+            || g.open_url.len() > MAX_ORIGINS
+            || g.user_origins.len() > MAX_USER_ORIGINS
+        {
             return Err(GrantError::TooManyOrigins);
+        }
+        // A slot with no fixed origin exists only for its user origin.
+        let unbound = g.credentials.iter().any(|(key, slot)| {
+            slot.origins.is_empty() && !g.user_origins.iter().any(|u| u.credentials.contains(key))
+        });
+        if unbound {
+            return Err(GrantError::EmptyCredential);
+        }
+        // A user origin injects only slots that are granted themselves.
+        let granted: BTreeSet<String> = g.credentials.keys().cloned().collect();
+        for user in &mut g.user_origins {
+            user.credentials.retain(|key| granted.contains(key));
         }
         if g.credentials.len() > MAX_CREDENTIALS {
             return Err(GrantError::TooManyCredentials);
@@ -235,6 +335,11 @@ impl Grants {
     /// Origins whose URLs the plugin may open in the browser.
     pub fn open_url_origins(&self) -> impl Iterator<Item = &Origin> {
         self.open_url.iter()
+    }
+
+    /// The user-entered origins the plugin was granted (G2).
+    pub fn user_origins(&self) -> impl Iterator<Item = &UserOriginGrant> {
+        self.user_origins.iter()
     }
 
     pub fn notifications(&self) -> bool {
@@ -265,6 +370,9 @@ pub enum GrantError {
     CredentialOriginNotGranted,
     /// A storage quota outside 257 to 10,240 KiB, or granted twice.
     StorageQuota,
+    /// A user origin on a private network without the user's consent to
+    /// reach it there.
+    PrivateNetworkNotGranted,
 }
 
 impl fmt::Display for GrantError {
@@ -285,6 +393,9 @@ impl fmt::Display for GrantError {
                 f.write_str("credential origin has no network grant")
             }
             Self::StorageQuota => f.write_str("storage quota outside 257 to 10240 KiB"),
+            Self::PrivateNetworkNotGranted => {
+                f.write_str("user origin on a private network without consent")
+            }
         }
     }
 }

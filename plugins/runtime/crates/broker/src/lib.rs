@@ -33,12 +33,12 @@ use deckpilot_plugin_abi::{CallErrorCode, CapabilityRequest, HttpMethod, Network
 use serde_json::Value;
 use url::Url;
 
-pub use addr::{BlockedAddr, check_connect_addr};
+pub use addr::{BlockedAddr, check_connect_addr, check_private_network_addr};
 pub use audit::{AuditDecision, AuditRecord, AuditSink, MemoryAudit};
-pub use origin::{Origin, OriginError};
+pub use origin::{Origin, OriginError, UserOrigin};
 pub use permissions::{
     ApprovedPermission, ApprovedPermissions, CredentialGrant, DEFAULT_STORAGE_QUOTA_BYTES,
-    GrantError, Grants, MAX_STORAGE_KEYS, MAX_STORAGE_QUOTA_BYTES, StorageQuota,
+    GrantError, Grants, MAX_STORAGE_KEYS, MAX_STORAGE_QUOTA_BYTES, StorageQuota, UserOriginGrant,
 };
 pub use plugin_id::PluginId;
 pub use rate::{Clock, ManualClock, Rate, RateLimits, SystemClock};
@@ -87,6 +87,9 @@ pub enum DenyReason {
     /// The capability kind is not granted (or was revoked).
     NotGranted,
     OriginNotGranted,
+    /// The origin is a granted user origin, but the path is outside its
+    /// path prefix (G2).
+    PathNotGranted,
     MethodNotGranted,
     Url(OriginError),
     ForbiddenHeader,
@@ -140,6 +143,7 @@ impl fmt::Display for DenyReason {
             Self::UnknownPlugin => f.write_str("plugin has no grants"),
             Self::NotGranted => f.write_str("not granted"),
             Self::OriginNotGranted => f.write_str("origin not granted"),
+            Self::PathNotGranted => f.write_str("path outside the granted path prefix"),
             Self::MethodNotGranted => f.write_str("method not granted"),
             Self::Url(e) => write!(f, "url refused: {e}"),
             Self::ForbiddenHeader => f.write_str("header not allowed"),
@@ -177,6 +181,14 @@ pub struct AllowedFetch {
     /// The executor looks the secret up by `credential` (never from the
     /// plugin) and adds it as `scheme` prescribes.
     pub auth: Option<HttpAuth>,
+    /// The request is within a user origin (G2) the user allowed on a
+    /// private network: the network layer may then connect to private
+    /// ranges (RFC 1918, carrier NAT, unique local IPv6;
+    /// [`check_private_network_addr`]) besides public addresses. `false`
+    /// for every other request: only public addresses
+    /// ([`check_connect_addr`]). Loopback and link-local are never
+    /// reachable either way.
+    pub private_network: bool,
 }
 
 /// What the agent may carry out.
@@ -499,25 +511,30 @@ impl Session {
         }
         match request {
             CapabilityRequest::HttpFetch(f) => {
-                let (url, origin) = match origin::parse_request_url(&f.url) {
+                let (url, origin) = match request_url(&grants, &f.url) {
                     Ok(v) => v,
                     Err(e) => return (Decision::Deny(DenyReason::Url(e)), None),
                 };
-                let d = self
-                    .check_fetch(&grants, &url, &origin, f.method, &f.headers)
-                    .or_else(|| check_auth(&grants, &origin, f.auth.as_ref()));
+                let d = match self.check_fetch(&grants, &url, &origin, f.method, &f.headers) {
+                    Err(reason) => Err(reason),
+                    Ok(route) => match check_auth(&grants, &origin, &url, f.auth.as_ref()) {
+                        Some(reason) => Err(reason),
+                        None => Ok(route),
+                    },
+                };
                 let d = match d {
-                    Some(reason) => Decision::Deny(reason),
-                    None if !b.take(&self.plugin, RateClass::Http) => {
+                    Err(reason) => Decision::Deny(reason),
+                    Ok(_) if !b.take(&self.plugin, RateClass::Http) => {
                         Decision::Deny(DenyReason::RateLimited)
                     }
-                    None => Decision::Allow(Allowed::Fetch(AllowedFetch {
+                    Ok(route) => Decision::Allow(Allowed::Fetch(AllowedFetch {
                         url,
                         origin: origin.clone(),
                         method: f.method,
                         headers: f.headers.clone(),
                         body: f.body.clone(),
                         auth: f.auth.clone(),
+                        private_network: route.private_network,
                     })),
                 };
                 (d, Some(origin))
@@ -642,24 +659,22 @@ impl Session {
         }
     }
 
+    /// Whether a fetch may go to `url`: a network grant of its exact
+    /// origin, or a user origin (G2) of its exact origin whose path prefix
+    /// contains it, either with the method; and allowed headers.
     fn check_fetch(
         &self,
         grants: &Grants,
-        _url: &Url,
+        url: &Url,
         origin: &Origin,
         method: HttpMethod,
         headers: &[Header],
-    ) -> Option<DenyReason> {
-        let Some(methods) = grants.network.get(origin) else {
-            return Some(DenyReason::OriginNotGranted);
-        };
-        if !methods.contains(&method) {
-            return Some(DenyReason::MethodNotGranted);
-        }
+    ) -> Result<Route, DenyReason> {
+        let route = route(grants, url, origin, method)?;
         if headers.iter().any(|h| !header_allowed(h)) {
-            return Some(DenyReason::ForbiddenHeader);
+            return Err(DenyReason::ForbiddenHeader);
         }
-        None
+        Ok(route)
     }
 
     fn decide_redirect(
@@ -696,8 +711,10 @@ impl Session {
         }
         // Re-run the full request check on the absolute URL: a redirect to
         // http:, to an IP literal, to userinfo or to an origin that is not
-        // granted is denied exactly like a direct request.
-        let (url, origin) = match origin::parse_request_url(joined.as_str()) {
+        // granted (or outside a user origin's path prefix) is denied
+        // exactly like a direct request. Whether it may reach a private
+        // network is decided for the new URL alone.
+        let (url, origin) = match request_url(&grants, joined.as_str()) {
             Ok(v) => v,
             Err(e) => return (Decision::Deny(DenyReason::Url(e)), None),
         };
@@ -707,33 +724,125 @@ impl Session {
             if previous.auth.is_some() && origin != previous.origin {
                 Some(DenyReason::CredentialOriginNotAllowed)
             } else {
-                check_auth(&grants, &origin, previous.auth.as_ref())
+                check_auth(&grants, &origin, &url, previous.auth.as_ref())
             }
         };
-        let d = match self
+        let checked = self
             .check_fetch(&grants, &url, &origin, previous.method, &previous.headers)
-            .or_else(auth_check)
-        {
-            Some(r) => Decision::Deny(r),
-            None => Decision::Allow(Allowed::Fetch(AllowedFetch {
+            .and_then(|route| auth_check().map_or(Ok(route), Err));
+        let d = match checked {
+            Err(r) => Decision::Deny(r),
+            Ok(route) => Decision::Allow(Allowed::Fetch(AllowedFetch {
                 url,
                 origin: origin.clone(),
                 method: previous.method,
                 headers: previous.headers.clone(),
                 body: previous.body.clone(),
                 auth: previous.auth.clone(),
+                private_network: route.private_network,
             })),
         };
         (d, Some(origin))
     }
 }
 
-fn check_auth(grants: &Grants, origin: &Origin, auth: Option<&HttpAuth>) -> Option<DenyReason> {
+/// How an allowed fetch may be carried out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Route {
+    /// Within a user origin the user allowed on a private network.
+    private_network: bool,
+}
+
+/// The normalized URL and origin of a request: by the strict rules, or,
+/// for a host on a private network (an IP literal or a local name), only
+/// when a granted user origin may be on one. Otherwise the strict error
+/// stands, so nothing changes for a plugin without such a grant.
+fn request_url(grants: &Grants, text: &str) -> Result<(Url, Origin), OriginError> {
+    match origin::parse_request_url(text) {
+        Err(strict @ (OriginError::IpLiteralNotAllowed | OriginError::InvalidHost))
+            if grants
+                .user_origins
+                .iter()
+                .any(|u| u.private_network && u.origin.private_host()) =>
+        {
+            let (url, origin) = origin::parse_private_request_url(text).map_err(|_| strict)?;
+            let granted = grants
+                .user_origins
+                .iter()
+                .any(|u| u.private_network && u.origin.origin() == &origin);
+            if granted {
+                Ok((url, origin))
+            } else {
+                Err(strict)
+            }
+        }
+        other => other,
+    }
+}
+
+/// Which grant allows `method` to `url`. A fixed network grant of the
+/// origin goes first (public addresses only); then the user origins of
+/// that origin whose path prefix contains the URL.
+fn route(
+    grants: &Grants,
+    url: &Url,
+    origin: &Origin,
+    method: HttpMethod,
+) -> Result<Route, DenyReason> {
+    let mut reason = DenyReason::OriginNotGranted;
+    if let Some(methods) = grants.network.get(origin) {
+        if methods.contains(&method) {
+            return Ok(Route {
+                private_network: false,
+            });
+        }
+        reason = DenyReason::MethodNotGranted;
+    }
+    let mut found = None;
+    for user in grants
+        .user_origins
+        .iter()
+        .filter(|u| u.origin.origin() == origin)
+    {
+        if !user.origin.matches(origin, url) {
+            if reason == DenyReason::OriginNotGranted {
+                reason = DenyReason::PathNotGranted;
+            }
+            continue;
+        }
+        if !user.methods.contains(&method) {
+            reason = DenyReason::MethodNotGranted;
+            continue;
+        }
+        // A private host is reachable only with the private consent
+        // (never granted otherwise, `Grants::derive`).
+        let private_network = user.private_network;
+        found = Some(found.map_or(private_network, |p: bool| p || private_network));
+    }
+    found
+        .map(|private_network| Route { private_network })
+        .ok_or(reason)
+}
+
+fn check_auth(
+    grants: &Grants,
+    origin: &Origin,
+    url: &Url,
+    auth: Option<&HttpAuth>,
+) -> Option<DenyReason> {
     let auth = auth?;
     let Some(slot) = grants.credentials.get(&auth.credential) else {
         return Some(DenyReason::CredentialNotGranted);
     };
-    if !slot.origins.contains(origin) {
+    // Its fixed origins, or a user origin (with its path prefix) that the
+    // slot is bound to.
+    let bound = || {
+        grants
+            .user_origins
+            .iter()
+            .any(|u| u.credentials.contains(&auth.credential) && u.origin.matches(origin, url))
+    };
+    if !slot.origins.contains(origin) && !bound() {
         return Some(DenyReason::CredentialOriginNotAllowed);
     }
     if !slot.schemes.contains(&auth.scheme) {

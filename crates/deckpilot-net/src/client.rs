@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use deckpilot_core::{CancelReason, CancellationToken, Secret};
 
 use crate::codes;
-use crate::policy::{self, NetworkPolicy};
+use crate::policy::{self, AddressPolicy};
 
 /// Most redirects followed.
 pub const MAX_REDIRECTS: u32 = 5;
@@ -61,7 +61,7 @@ pub type Failure = (&'static str, String);
 /// returns at once when `cancel` is cancelled.
 pub fn send(
     request: Request,
-    network: &NetworkPolicy,
+    network: &dyn AddressPolicy,
     cancel: Option<&CancellationToken>,
 ) -> Result<Response, Failure> {
     // The TLS stack's cryptography; a no-op once installed. Without it the
@@ -178,7 +178,7 @@ fn owned_failure(error: reqwest::Error) -> Failure {
 /// those addresses.
 async fn hop(
     request: &Request,
-    network: &NetworkPolicy,
+    network: &dyn AddressPolicy,
     url: &url::Url,
     method: &reqwest::Method,
     body: Option<&(String, &'static str)>,
@@ -306,7 +306,7 @@ async fn read(
 
 async fn run(
     request: Request,
-    network: &NetworkPolicy,
+    network: &dyn AddressPolicy,
     begun: Instant,
 ) -> Result<Response, Failure> {
     let original = request.url.clone();
