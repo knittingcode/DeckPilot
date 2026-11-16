@@ -56,7 +56,11 @@ const _: () = deckpilot_core::alias::assert_valid(ALIASES);
 pub const PLAN: MigrationPlan = MigrationPlan {
     module: MODULE,
     credentials: &[("credential", "token")],
-    origin: Some(("apiUrl", DEFAULT_API_URL)),
+    origin: Some(super::OriginPlan {
+        setting: "apiUrl",
+        default: Some(DEFAULT_API_URL),
+        entered: false,
+    }),
     private_network: Some("allowPrivateHost"),
     open_url_hosts: &[],
 };
