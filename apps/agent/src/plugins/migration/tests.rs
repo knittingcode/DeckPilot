@@ -707,12 +707,43 @@ fn derived_grants_are_never_high_tier_and_never_overwrite() {
 #[test]
 fn the_snapshot_reads_nothing_without_aliases() {
     let env = Env::new();
-    let registry = deckpilot_modules::builtin(Os::current());
+    let registry = deckpilot_modules::builtin(Os::current()).with_aliases(&[]);
     assert!(
         LegacySnapshot::read(&env.config, &registry)
             .unwrap()
             .modules
             .is_empty()
+    );
+    // The shipped table: the notifications block (P10), with its plan,
+    // never used by this data and still eligible, because its plugin is
+    // of the `default` class (§4.3); a `migration`-class plugin is not.
+    let registry = deckpilot_modules::builtin(Os::current());
+    let shipped = LegacySnapshot::read(&env.config, &registry).unwrap();
+    let notifications = shipped
+        .modules
+        .iter()
+        .find(|m| m.module.as_str() == "notifications")
+        .unwrap_or_else(|| panic!("{shipped:?}"));
+    assert_eq!(notifications.plugin.as_str(), "deckpilot.notifications");
+    assert_eq!(notifications.aliases.len(), 2);
+    assert_eq!(notifications.plan, super::plan_for("notifications"));
+    assert!(notifications.credentials.is_empty());
+    assert_eq!(
+        (notifications.row.as_ref(), notifications.instances),
+        (None, 0)
+    );
+    if crate::plugins::execution_supported() {
+        assert_eq!(eligibility(notifications, true), None);
+    }
+    assert_eq!(
+        eligibility(notifications, false).as_deref(),
+        Some("the built-in module is not used on this computer")
+    );
+    let mut off = notifications.clone();
+    off.enabled = false;
+    assert_eq!(
+        eligibility(&off, true).as_deref(),
+        Some("the built-in module is disabled")
     );
     let snapshot = env.snapshot();
     let module = &snapshot.modules[0];

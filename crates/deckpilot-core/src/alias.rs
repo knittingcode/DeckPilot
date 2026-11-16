@@ -117,9 +117,37 @@ impl ActionAlias {
     }
 }
 
-/// Every alias. Empty until a module is cut over to its plugin; entries
-/// are never removed afterwards, also not when the built-in is.
-pub const ACTION_ALIASES: &[ActionAlias] = &[];
+/// Every alias, one block per module cut over to its plugin; entries are
+/// never removed afterwards, also not when the built-in is.
+///
+/// Listing a module here changes nothing by itself: the agent's migration
+/// journal decides the [`LegacyRouting`], so until a computer's migration
+/// of the module is cut over, and in every build without plugins, the
+/// legacy ids keep running the built-in.
+pub const ACTION_ALIASES: &[ActionAlias] = &[
+    // Notifications (P10): `deckpilot.notifications`
+    // (`plugins/first-party/notifications`), the first plugin of the
+    // default set; its contract checked by
+    // `crates/deckpilot-modules/tests/contracts.rs`. No parameter needs a
+    // translation.
+    notifications("notifications.show", "deckpilot.notifications.show"),
+    notifications(
+        "notifications.workflow-summary",
+        "deckpilot.notifications.workflow-summary",
+    ),
+];
+
+/// One alias of the `notifications` block.
+const fn notifications(legacy: &'static str, target: &'static str) -> ActionAlias {
+    ActionAlias {
+        legacy,
+        target,
+        module: "notifications",
+        plugin: "deckpilot.notifications",
+        since: "0.6.0",
+        params: &[],
+    }
+}
 
 const _: () = assert_valid(ACTION_ALIASES);
 
@@ -545,11 +573,33 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_table_is_empty_and_valid() {
-        assert_eq!(ACTION_ALIASES, &[]);
+    fn the_shipped_table_is_valid_and_has_the_notifications_block() {
         assert_eq!(validate(ACTION_ALIASES), Ok(()));
+        let notifications: Vec<&ActionAlias> = ACTION_ALIASES
+            .iter()
+            .filter(|a| a.module == "notifications")
+            .collect();
         assert_eq!(
-            alias_of(&ActionTypeId::new("github.pull-requests").unwrap()),
+            notifications
+                .iter()
+                .map(|a| (a.legacy, a.target))
+                .collect::<Vec<_>>(),
+            [
+                ("notifications.show", "deckpilot.notifications.show"),
+                (
+                    "notifications.workflow-summary",
+                    "deckpilot.notifications.workflow-summary"
+                ),
+            ]
+        );
+        for alias in notifications {
+            assert_eq!(alias.plugin, "deckpilot.notifications");
+            assert_eq!(alias.params, &[]);
+        }
+        let found = alias_of(&ActionTypeId::new("notifications.show").unwrap()).unwrap();
+        assert_eq!(found.target, "deckpilot.notifications.show");
+        assert_eq!(
+            alias_of(&ActionTypeId::new("gitlab.merge-requests").unwrap()),
             None
         );
     }
