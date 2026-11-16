@@ -254,6 +254,7 @@ const HEADERS_OUTPUTS: &[&str] = &[
 /// Every action of the SDK test guest (the supervisor checks that the
 /// manifest declares exactly these), with the parameters of those the
 /// data test calls.
+#[allow(clippy::too_many_lines)] // one table
 fn sdk_actions() -> Value {
     let text =
         |key: &str| json!({"key": key, "label": key, "required": true, "kind": {"type": "text"}});
@@ -281,7 +282,18 @@ fn sdk_actions() -> Value {
     let fetch = outputs(&["error", "detail", "status", "body", "headers"]);
     let has = outputs(&["error", "detail", "set"]);
     let settings = outputs(&["error", "detail", "settings"]);
-    let open = outputs(&["error", "detail", "opened"]);
+    let open = outputs(&["error", "detail", "opened", "userInitiated"]);
+    let run = outputs(&[
+        "error",
+        "detail",
+        "trigger",
+        "cause",
+        "userInitiated",
+        "workflow",
+        "succeeded",
+        "failed",
+        "failedNodes",
+    ]);
     let headers = outputs(HEADERS_OUTPUTS);
     let actions: Vec<Value> = [
         ("scale", vec![]),
@@ -328,6 +340,8 @@ fn sdk_actions() -> Value {
         ),
         ("headers", vec![text("url")]),
         ("get", vec![text("url")]),
+        ("run-context", vec![]),
+        ("open-if-user", vec![text("url")]),
     ]
     .into_iter()
     .map(|(id, parameters)| {
@@ -336,7 +350,8 @@ fn sdk_actions() -> Value {
             "cred-fetch" => &fetch,
             "cred-has" => &has,
             "settings" => &settings,
-            "open-url" => &open,
+            "open-url" | "open-if-user" => &open,
+            "run-context" => &run,
             "headers" | "get" => &headers,
             _ => &basic,
         };
@@ -790,6 +805,12 @@ impl Env {
         self.start_with(registry, &[], true)
     }
 
+    /// Where the test sets how many seconds the agent's clock runs ahead
+    /// (`DECKPILOT_TEST_CLOCK_OFFSET`).
+    fn clock_offset(&self) -> PathBuf {
+        self.dir.path().join("clock-offset.txt")
+    }
+
     fn start_with(&self, registry: &Registry, env: &[(&str, &str)], plugins: bool) -> Agent {
         self.start_with_host(registry, env, plugins.then(|| artifacts().host.as_path()))
     }
@@ -820,6 +841,7 @@ impl Env {
             .env("DECKPILOT_DATA_DIR", &self.paths.data_dir)
             .env("DECKPILOT_TEST_PLUGIN_HTTP", &self.http)
             .env("DECKPILOT_TEST_PLUGIN_OPEN_URL", self.opened())
+            .env("DECKPILOT_TEST_CLOCK_OFFSET", self.clock_offset())
             .env_remove("DECKPILOT_ENABLE_PLUGINS")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -3621,6 +3643,184 @@ async fn lifecycle_events_drive_actions_and_variables() {
     assert_eq!(
         agent.preview(profile.id, &[COUNT_VAR]).await,
         vec![unavailable]
+    );
+    agent.stop().await;
+}
+
+// ------------------------------------------------- run context (G8)
+
+/// A workflow `start → context → open`: what its run looks like to the
+/// plugin, then a page of github.com.
+fn context_workflow(
+    profile: &mut deckpilot_core::Profile,
+    name: &str,
+    (context, open): (
+        deckpilot_core::ActionInstanceId,
+        deckpilot_core::ActionInstanceId,
+    ),
+) -> deckpilot_core::WorkflowId {
+    let workflow = support::graph_workflow(
+        name,
+        support::graph(
+            &json!([
+                {"id": "start", "type": "trigger"},
+                {"id": "context", "type": "action", "action": context},
+                {"id": "open", "type": "action", "action": open},
+            ]),
+            &json!([{"from": "start", "to": "context"}, {"from": "context", "to": "open"}]),
+        ),
+    );
+    let id = workflow.id;
+    profile.workflows.push(workflow);
+    id
+}
+
+/// The finished runs of `workflow`, once there is one.
+async fn first_run(
+    agent: &Agent,
+    workflow: deckpilot_core::WorkflowId,
+) -> deckpilot_core::ExecutionRecord {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let Response::Executions { executions } = agent
+            .request(Request::ListExecutions {
+                workflow: Some(workflow),
+                limit: None,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("executions")
+        };
+        if let Some(run) = executions.first() {
+            return agent.finished(run.id).await;
+        }
+        assert!(Instant::now() < deadline, "the schedule did not fire");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn node_output<'a>(
+    record: &'a deckpilot_core::ExecutionRecord,
+    node: &str,
+) -> &'a BTreeMap<String, String> {
+    &record
+        .nodes
+        .iter()
+        .find(|n| n.node.as_str() == node)
+        .unwrap_or_else(|| panic!("node {node} ran: {record:#?}"))
+        .output
+}
+
+/// G8 through the real agent and host: what started a run reaches the
+/// plugin (`run.context`), with its own workflow run's summary in a
+/// workflow; and `url.open` opens a page only in runs the user started.
+/// A key press, `runAction` and a workflow started from the app reach the
+/// opener (a test hook); the same workflow started by its schedule (the
+/// agent's clock moved past it) is refused, and nothing reaches it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // one scenario, step by step
+async fn pages_open_only_in_runs_the_user_started() {
+    use deckpilot_core::{ActionStatus, ExecutionState, ExecutionTrigger, ParameterValue};
+    let registry = shared_registry();
+    let mut profile = deckpilot_core::Profile::new("Openers");
+    let page = "https://github.com/acme/app/pull/7";
+    let open = plugin_action(
+        &mut profile,
+        "Open PR",
+        &format!("{OPENER}.open-url"),
+        &[("url", ParameterValue::Text(page.into()))],
+    );
+    let context = plugin_action(
+        &mut profile,
+        "Run context",
+        &format!("{OPENER}.run-context"),
+        &[],
+    );
+    bind_keys(&mut profile, &[open]);
+    let by_hand = context_workflow(&mut profile, "By hand", (context, open));
+    let scheduled = context_workflow(&mut profile, "Every minute", (context, open));
+    profile
+        .workflows
+        .last_mut()
+        .unwrap()
+        .triggers
+        .push(deckpilot_core::WorkflowTrigger::schedule(
+            deckpilot_core::Schedule::Interval { minutes: 1 },
+        ));
+    let env = Env::with_profile("plugins-e2e-run-context", &profile);
+    let agent = Agent::started(&env, registry).await;
+    agent.install_enabled(OPENER, OPENER_GRANTS).await;
+
+    // ---- the plugin's own page ("Try it"): trigger `test`, and pages open.
+    let tried = agent.run(OPENER, "run-context", json!({})).await;
+    assert_eq!(tried["trigger"], "test", "{tried:?}");
+    assert_eq!(tried["userInitiated"], true);
+    assert_eq!(tried["cause"], "");
+
+    // ---- `runAction` from the app.
+    let ran = agent.run_action(context).await;
+    assert_eq!(ran.status, ActionStatus::Succeeded, "{ran:?}");
+    assert_eq!(ran.data["trigger"], "app", "{ran:?}");
+    assert_eq!(ran.data["userInitiated"], "true");
+    assert!(!ran.data.contains_key("workflow"), "{ran:?}");
+    let ran = agent.run_action(open).await;
+    assert_eq!(ran.data["opened"], "1", "{ran:?}");
+    assert_eq!(env.opened_urls(), [page]);
+
+    // ---- a key press.
+    tokio::time::sleep(Duration::from_millis(2_100)).await;
+    let device = agent.mock_device().await;
+    assert_eq!(
+        agent.press(&device, 0).await,
+        ("Open PR".to_owned(), ActionStatus::Succeeded)
+    );
+    assert_eq!(env.opened_urls(), [page, page]);
+
+    // ---- a workflow the user started: cause `user`, the run's summary.
+    tokio::time::sleep(Duration::from_millis(2_100)).await;
+    let run = agent.run_workflow(by_hand).await;
+    let record = agent.finished(run).await;
+    assert_eq!(
+        record.summary.state,
+        ExecutionState::Succeeded,
+        "{record:#?}"
+    );
+    let seen = node_output(&record, "context");
+    assert_eq!(seen["trigger"], "workflow", "{seen:?}");
+    assert_eq!(seen["cause"], "user");
+    assert_eq!(seen["userInitiated"], "true");
+    assert_eq!(seen["workflow"], "By hand");
+    assert_eq!(seen["failed"], "0");
+    assert_eq!(node_output(&record, "open")["opened"], "1", "{record:#?}");
+    assert_eq!(env.opened_urls(), [page, page, page]);
+
+    // ---- the same workflow by its schedule: the agent's clock moves past
+    // its first due time, and the run is refused the page.
+    tokio::time::sleep(Duration::from_millis(2_100)).await;
+    std::fs::write(env.clock_offset(), "61").unwrap();
+    let record = first_run(&agent, scheduled).await;
+    assert_eq!(
+        record.summary.trigger,
+        ExecutionTrigger::Schedule,
+        "{record:#?}"
+    );
+    let seen = node_output(&record, "context");
+    assert_eq!(seen["trigger"], "workflow", "{seen:?}");
+    assert_eq!(seen["cause"], "schedule");
+    assert_eq!(seen["userInitiated"], "false");
+    assert_eq!(seen["workflow"], "Every minute");
+    let refused = node_output(&record, "open");
+    assert_eq!(refused["opened"], "0", "{record:#?}");
+    assert_eq!(refused["error"], "NotPermitted", "{record:#?}");
+    assert!(
+        refused["detail"].contains("the user started"),
+        "{refused:?}"
+    );
+    assert_eq!(
+        env.opened_urls(),
+        [page, page, page],
+        "a scheduled run reached the opener"
     );
     agent.stop().await;
 }

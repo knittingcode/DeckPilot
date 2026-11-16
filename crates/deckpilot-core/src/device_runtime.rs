@@ -240,7 +240,7 @@ impl Runtime {
             Some(BindingTarget::Stateful(binding)) => {
                 Ok(RuntimeOutcome::StatefulRequested { binding, gesture })
             }
-            Some(target) => self.dispatch(device, target),
+            Some(target) => self.dispatch(device, target, crate::RunOrigin::Gesture),
         }
     }
 
@@ -381,11 +381,13 @@ impl Runtime {
 
     pub fn run_action(&mut self, action: ActionInstanceId) -> Result<ActionResult, EngineError> {
         let session = self.session.as_mut().ok_or(EngineError::NoActiveProfile)?;
-        self.engine.run_action(
+        // Run from the app (`runAction`).
+        self.engine.run_action_from(
             &session.profile,
             &self.machine,
             &mut session.projects,
             action,
+            &crate::resolution::Invocation::default().with_origin(crate::RunOrigin::App),
         )
     }
 
@@ -402,12 +404,14 @@ impl Runtime {
     /// Everything needed to run `action` of the active profile on another
     /// thread: the engine, and copies of the profile, the machine and the
     /// project context as they are now. `overrides` and `device` are a
-    /// key binding's, as for a press.
+    /// key binding's, as for a press; `origin` says what started it (a
+    /// key, a gesture, the app).
     pub fn detached_action(
         &self,
         action: ActionInstanceId,
         overrides: Option<ActionParameters>,
         device: Option<DeviceId>,
+        origin: crate::RunOrigin,
     ) -> Result<DetachedAction, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NoActiveProfile)?;
         if session.profile.action(action).is_none() {
@@ -420,10 +424,12 @@ impl Runtime {
             projects: session.projects.clone(),
             action,
             overrides: overrides.filter(|o| !o.is_empty()),
-            invocation: device.map_or_else(
-                crate::resolution::Invocation::default,
-                crate::resolution::Invocation::from_device,
-            ),
+            invocation: device
+                .map_or_else(
+                    crate::resolution::Invocation::default,
+                    crate::resolution::Invocation::from_device,
+                )
+                .with_origin(origin),
         })
     }
 
@@ -634,7 +640,7 @@ impl Runtime {
                 }
                 match target {
                     None => ignored("control is not bound"),
-                    Some(target) => self.dispatch(device, target),
+                    Some(target) => self.dispatch(device, target, crate::RunOrigin::Key),
                 }
             }
         }
@@ -644,6 +650,7 @@ impl Runtime {
         &mut self,
         device: &DeviceId,
         target: BindingTarget,
+        origin: crate::RunOrigin,
     ) -> Result<RuntimeOutcome, EngineError> {
         match target {
             BindingTarget::Action { action, overrides } => {
@@ -664,7 +671,7 @@ impl Runtime {
                     &mut session.projects,
                     action,
                     Some(&overrides),
-                    &crate::resolution::Invocation::from_device(device.clone()),
+                    &crate::resolution::Invocation::from_device(device.clone()).with_origin(origin),
                 )?;
                 Ok(RuntimeOutcome::Action { action, result })
             }
@@ -1043,7 +1050,7 @@ mod tests {
         };
         assert_eq!((action, from.clone()), (later_id, device()));
         let run = runtime
-            .detached_action(action, Some(overrides), Some(from))
+            .detached_action(action, Some(overrides), Some(from), crate::RunOrigin::Key)
             .unwrap();
         assert_eq!(run.name(), "Later");
         // Runs on another thread, from copies.
@@ -1054,7 +1061,7 @@ mod tests {
         assert!(result.is_success(), "{result:?}");
         assert_eq!(result.message, "later");
         assert!(matches!(
-            runtime.detached_action(ActionInstanceId::new(), None, None),
+            runtime.detached_action(ActionInstanceId::new(), None, None, crate::RunOrigin::App),
             Err(EngineError::UnknownAction(_))
         ));
         // Other keys still run in place.

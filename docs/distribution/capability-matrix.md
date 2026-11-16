@@ -4,7 +4,10 @@ Whether DeckPilot, as it is built today ([audit](audit.md)), can work in each
 distribution channel, and what would have to change. It is a planning
 document. **Nothing here claims that a store would accept DeckPilot**: no
 channel other than direct GitHub download has been tried, and store review
-outcomes cannot be known in advance.
+outcomes cannot be known in advance. Local experiments (PR G,
+[section 7](#7-experiments-pr-g)) settled some technical questions; they
+are cited as [E1], [E2] and so on, and they say nothing about review
+either.
 
 Verdicts:
 
@@ -13,12 +16,12 @@ Verdicts:
 | **Supported** | Works with today's design; the platform documents it, and for direct GitHub it has been shipped |
 | **Requires adaptation** | Possible according to the platform's documentation, but DeckPilot's code, packaging or configuration must change |
 | **Blocked** | The platform's documented rules or technical limits rule out today's design; a different design would be needed, and might still be refused |
-| **Unverified** | Not established: no document settles it and DeckPilot has not tested it. Needs a prototype (PR G) |
+| **Unverified** | Not established: no document settles it and DeckPilot has not tested it, or a prototype answered only part of it (the cell says which) |
 
 A verdict of Supported or Requires adaptation describes the platform's
 documented rules. It says nothing about DeckPilot passing review. Where a
 verdict rests on our reading of a rule rather than on the rule's wording,
-the cell says "reading". Sources are listed in [section 6](#6-sources) and
+the cell says "reading". Sources are listed in [section 8](#8-sources) and
 cited as [S1], [S2] and so on.
 
 Channels:
@@ -43,11 +46,11 @@ Short form; the reasons are in [section 2](#2-per-capability-detail).
 | App sandbox and entitlements | Supported | Supported | Supported | Supported | Requires adaptation | Requires adaptation | Supported (full trust) | Supported |
 | Separate background agent | Supported | Supported | Supported | Supported | Requires adaptation | Requires adaptation | Requires adaptation | Supported |
 | Autostart at login | Supported | Supported | Supported | Supported | Requires adaptation | Requires adaptation | Requires adaptation | Supported |
-| Raw USB HID (hidapi) | Supported | Supported | Supported | Supported | Requires adaptation | **Unverified** | **Unverified** | Supported |
+| Raw USB HID (hidapi) | Supported | Supported | Supported | Supported | Requires adaptation | **Unverified** for a Stream Deck; built-in HID devices open with `device.usb` [E1] | **Unverified** (experiment ready, not run [E5]) | Supported |
 | Tray / menu bar | Supported | Supported | Supported | Supported | Requires adaptation | Supported (reading) | Supported (reading) | Supported |
-| Spawning the plugin host | Requires adaptation | Requires adaptation | Requires adaptation | Requires adaptation | Requires adaptation | Requires adaptation | **Unverified** | Requires adaptation |
-| Plugin host's own OS sandbox | Supported (verified on CI runners, not bundled) | as GitHub | as GitHub | as GitHub | **Unverified** | **Blocked** as designed | **Unverified** | as GitHub |
-| JIT / executable memory (wasmtime) | Requires adaptation, done in the opt-in plugin packaging: `allow-unsigned-executable-memory` on the host only; Developer ID **Unverified** | as GitHub | Supported | Supported | Supported (reading) | Supported (reading), **Unverified** | Supported | Supported |
+| Spawning the plugin host | Requires adaptation | Requires adaptation | Requires adaptation | Requires adaptation | Requires adaptation | Requires adaptation (spawn and sandbox inheritance work [E2]) | **Unverified** | Requires adaptation |
+| Plugin host's own OS sandbox | Supported (verified on CI runners, not bundled) | as GitHub | as GitHub | as GitHub | **Unverified** | **Blocked** as designed (`sandbox_init` refused inside App Sandbox [E2]) | **Unverified** | as GitHub |
+| JIT / executable memory (wasmtime) | Requires adaptation, done in the opt-in plugin packaging: `allow-unsigned-executable-memory` (not `allow-jit` [E2]) on the host only; Developer ID **Unverified** | as GitHub | Supported | Supported | Supported (reading) | Requires adaptation: works in a sandboxed helper without the hardened runtime [E2]; review Unverified | Supported | Supported |
 | Downloaded plugin code | Supported | Supported | Supported | Supported | Supported (reading) | **Blocked** (policy risk) | **Unverified** (policy) | Unverified (policy) |
 | Credential store | Supported | Supported | Supported | Supported | Requires adaptation | Requires adaptation | Supported (reading), Unverified | Supported |
 | File system / data location | Supported | Supported | Supported | Supported | Requires adaptation | Requires adaptation | Requires adaptation | Supported |
@@ -149,18 +152,40 @@ Linux, SetupDi/HID on Windows).
   the first prototype in PR G. It may also need the Input Monitoring
   permission. If it fails, the Mac App Store is **Blocked** for DeckPilot,
   because the agent's whole job is talking to the device.
+  **Experiment [E1]** (macOS 27.2, arm64, ad hoc signatures, **no Stream
+  Deck attached**): inside the App Sandbox, hidapi 2.6.7 enumerates the
+  same 22 built-in HID interfaces with or without `device.usb`. Without
+  `device.usb` every open fails (`kIOReturnNotPermitted`). With it, the
+  sandboxed process opens exactly the interfaces an unsandboxed control
+  opens, exclusively (as the agent does) and shared, whether started by
+  LaunchServices or from a shell. Keyboard and pointer interfaces are
+  refused in every variant, sandboxed or not, which is the Input
+  Monitoring rule, not the sandbox. So the sandbox, with `device.usb`, is
+  not what would stop the agent; whether a Stream Deck behaves like the
+  opened vendor and headset interfaces or like the refused keyboard ones
+  is still **Unverified**. Next step: rerun [E1] with a Stream Deck
+  attached.
 - **MSIX (full trust).** The `humaninterfacedevice` capability gates the
   WinRT `Windows.Devices.HumanInterfaceDevice` API, which full-trust Win32
   code does not use [S13]. hidapi through SetupDi and `CreateFile` should
-  work as in an unpackaged process (reading). **Unverified.**
+  work as in an unpackaged process (reading). **Unverified.** A probe that
+  packages hidapi as a full-trust MSIX, installs it with a throwaway
+  certificate and compares packaged with unpackaged enumeration is ready
+  as the manual job `experiment-msix-hid` of `distribute.yml` [E5]. It
+  can only be dispatched once the workflow is on `main`, has not run, and
+  a hosted runner has no Stream Deck either.
 - **Flathub.** Flatpak has no hidraw device option. `--device=all` is the
   only way to reach `/dev/hidraw*` (`--device=usb` covers `/dev/bus/usb`
   only) [S16]. StreamController, a Stream Deck app on Flathub, ships with
   `--device=all` [S21]. Even then, the hidraw nodes are owned by root
   unless a **host** udev rule gives the user access. A Flatpak cannot
   install one, so users must install
-  `packaging/linux/70-deckpilot-streamdeck.rules` themselves.
+  `packaging/linux/70-deckpilot-streamdeck.rules` themselves
+  ([`packaging/flatpak/udev.md`](../../packaging/flatpak/udev.md)).
   **Requires adaptation** (permission, documentation, first-run check).
+  The manifest draft [E3] has never been built: `flatpak-builder` was not
+  available, so hidraw access from the Flatpak stays **Unverified**; the
+  exact steps are in `packaging/flatpak/README.md`.
 - **APT.** The `.deb` installs the udev rule, as the GitHub `.deb` does.
   **Supported.**
 - **AppImage.** No udev rule is installed (audit section 2). It works only
@@ -202,6 +227,12 @@ own sandbox can be applied inside each channel's sandbox.
   An alternative design runs the host as an XPC service with its own
   minimal App Sandbox entitlements (no network, no files, no USB).
   **Unverified**, and it would need a new sandbox report kind.
+  **Experiment [E2]:** a sandboxed `.app` spawned a helper with
+  `std::process::Command`; the helper (signed with `app-sandbox` and
+  `inherit`) ran in the parent's container and was denied files outside
+  it. The helper's `sandbox_init` with the host's deny-default profile
+  then failed with `EPERM` in every sandboxed variant, while the same call
+  succeeds outside the App Sandbox. "Blocked as designed" is confirmed.
 - **Flathub.** Flatpak's seccomp filter is a blocklist. It does not block
   `seccomp`, `prctl` or the Landlock syscalls, and bubblewrap already sets
   `no_new_privs` [S19]. Stacking the host's seccomp filter and Landlock
@@ -219,19 +250,22 @@ wasmtime 50 with Cranelift writes machine code and makes it executable
 - **Direct GitHub / Homebrew (macOS).** Notarization requires the hardened
   runtime, which forbids executable writable memory unless the binary has
   `com.apple.security.cs.allow-jit` (with `MAP_JIT`) [S3] or
-  `com.apple.security.cs.allow-unsigned-executable-memory`. wasmtime
-  50.0.1 maps its code with `mmap` and `mprotect`, never `MAP_JIT`: under
-  the hardened runtime the host is killed (`SIGKILL`) with no entitlement
-  and with `allow-jit`, and runs with `allow-unsigned-executable-memory`
-  (experiment E2, PR #263; `plugins/runtime/scripts/macos-hardened-runtime.sh`
-  on a stock Mac; GitHub's macOS runners do not enforce the rule). **Requires adaptation**, done in the opt-in plugin packaging
+  `com.apple.security.cs.allow-unsigned-executable-memory`. **Experiment
+  [E2]:** under the hardened runtime, wasmtime 50.0.1 with the host's
+  Cranelift settings is killed on its first call into compiled code
+  (`SIGKILL`, `CODESIGNING`, `Invalid Page`) with no entitlement **and
+  with `allow-jit`**: wasmtime maps code with `mmap` and `mprotect`, never
+  `MAP_JIT`. It runs with `allow-unsigned-executable-memory`. The real
+  host shows the same (`plugins/runtime/scripts/macos-hardened-runtime.sh`
+  on a stock Mac; GitHub's macOS runners do not enforce the rule).
+  **Requires adaptation**, done in the opt-in plugin packaging
   (`DECKPILOT_RELEASE_PLUGINS=1`): the host alone is signed with exactly
   that entitlement (`apps/desktop/src-tauri/entitlements/plugin-host.entitlements`),
   the app and the agent keep none, and `tools/ci/check-macos-entitlements.sh`
   (run by `verify-macos-app.sh`) allows exactly that on exactly
   `Contents/MacOS/deckpilot-plugin-host`. The host's own sandbox still
   applies under it. Verified with ad hoc signatures; a Developer ID signed
-  and notarized package with the host is **unverified**, and the release
+  and notarized package with the host is **Unverified**, and the release
   workflow does not package the host yet. Why not `allow-jit` (it would
   need a custom `MAP_JIT` loader in the host) and how it is applied:
   [marketplace/distribution.md](../marketplace/distribution.md#macos-the-plugin-hosts-entitlement).
@@ -239,7 +273,11 @@ wasmtime 50 with Cranelift writes machine code and makes it executable
   memory, at a performance cost that has not been measured.
 - **Mac App Store.** The hardened runtime is not required for App Store
   apps [S3]. Apple engineers state that the Mac App Store does not restrict
-  JIT [S7]. **Supported (reading), Unverified** for DeckPilot.
+  JIT [S7]. **Experiment [E2]:** in a helper that inherits the App Sandbox,
+  the JIT runs when the helper has no hardened runtime, or has it with
+  `allow-unsigned-executable-memory`; with the hardened runtime and only
+  `allow-jit` it is killed as above. **Requires adaptation** (sign the
+  helper accordingly); whether review accepts it is **Unverified**.
 - **MSIX full trust.** The `codeGeneration` capability only restricts
   AppContainer apps [S13]. **Supported.** The host inside its own
   AppContainer already runs Cranelift code in CI.
@@ -343,19 +381,29 @@ directory.
   the repository did not publish, and break `apt`'s view of the version.
   The APT variant **must not** self-update. **Blocked for self-update;
   ExternalPackageManager.**
+  **Version order [E4]:** the Tauri bundler writes the application version
+  verbatim into the package's `Version` (`tauri-bundler` 2.10.4,
+  `debian.rs`), and dpkg 1.22 orders `0.6.0 < 0.6.0-alpha.3` (it reads
+  `alpha.3` as a Debian revision), so `apt upgrade` would never move an
+  alpha user to the release. The APT variant must carry
+  `0.6.0~alpha.3` (dpkg: `0.6.0~alpha.3 < 0.6.0~beta.1 < 0.6.0~rc.1 <
+  0.6.0`). `tools/distribution/generate.py apt` refuses a package without
+  that form.
 
 ## 3. Store blockers, in order of severity
 
-1. **Mac App Store: raw HID from the sandbox is unverified** (2.4). If
-   hidapi cannot open the device in a sandboxed process, the channel is
-   out, whatever else is done.
+1. **Mac App Store: raw HID to a Stream Deck from the sandbox is
+   unverified** (2.4). [E1] shows that the App Sandbox with `device.usb`
+   denies nothing an unsandboxed process may open, but no Stream Deck was
+   attached. If a Stream Deck cannot be opened, the channel is out,
+   whatever else is done.
 2. **Mac App Store: user-installed plugin code** (2.10, Guidelines 2.4.5(iv),
    2.5.2, 4.7). This is a policy risk that a prototype cannot settle; only
    review can. Shipping the MAS build with plugins disabled is the only
    design without it.
 3. **Mac App Store: the plugin host's self-applied sandbox is impossible
-   inside App Sandbox** (2.6). This needs an XPC-service design and a new
-   sandbox report.
+   inside App Sandbox** (2.6, confirmed by [E2]). This needs an
+   XPC-service design and a new sandbox report.
 4. **Mac App Store: Keychain and data continuity** with existing GitHub
    installs (2.8, 2.9).
 5. **Flathub: hidraw needs `--device=all` and a host udev rule** (2.4). It
@@ -364,12 +412,20 @@ directory.
 6. **MSIX: AppContainer child from a packaged full-trust process, and
    hidapi under MSIX**, are unverified (2.4, 2.6). The Microsoft Store
    MSI listing avoids both but needs Authenticode.
-7. **APT: needs its own `.deb` build** so that the updater is off. The
-   GitHub `.deb` must never be republished to the repository as is (audit
-   G2).
+7. **APT: needs its own `.deb` build** so that the updater is off, and
+   with a Debian version (`X.Y.Z~alpha.N`, [E4]). The GitHub `.deb` must
+   never be republished to the repository as is (audit G2; the
+   `distribute-apt` dry run refuses it).
 8. **All stores: Windows Authenticode is not provisioned** (audit G11). It
    is required for the Microsoft Store MSI listing [S25] and strongly
    advisable for WinGet.
+9. **Direct GitHub and Homebrew (macOS): the plugin host needs
+   `allow-unsigned-executable-memory`** when it is bundled ([E2]);
+   `allow-jit` is not enough for wasmtime 50.
+10. **MSIX: pre-release versions.** An MSIX version is four numbers, and
+    for Store packages the fourth is reserved and must be 0 (Microsoft's
+    package version rules, reading; not tested). `X.Y.Z-alpha.N` has no
+    distinct MSIX version yet; the `distribute-msstore` dry run reports it.
 
 ## 4. Homebrew Cask and WinGet
 
@@ -408,7 +464,49 @@ and never in a job that can change the GitHub release.
 | Microsoft Store (MSIX) | The Store signs the package; the manifest's `Publisher` must equal the Partner Center publisher identity (reading of [S34]) | **Microsoft Partner Center** developer account, a reserved app name, and Partner Center API credentials (Entra ID app: tenant, client ID, secret) for automated submissions |
 | Microsoft Store (MSI listing) | **Authenticode** from a Microsoft Trusted Root Program CA, every PE file [S25] | Partner Center account as above |
 
-## 6. Sources
+## 6. Remaining blockers and credentials per channel (after PR G)
+
+Nothing below has been requested, created or submitted. "Credentials"
+names what a later, explicitly authorized step would need (section 5 has
+the detail). The dry-run job of each channel (`distribute.yml`) lists the
+same blockers in its `summary.json`.
+
+| Channel | Remaining technical blockers | Credentials needed (none exist) | Dry run |
+| --- | --- | --- | --- |
+| Homebrew Cask | None technical for stable releases; pre-releases need a separate cask (`deckpilot@alpha`/`@beta`) or none | GitHub token for a fork of `Homebrew/homebrew-cask` or an own tap | `distribute-homebrew`: cask with both DMG hashes |
+| WinGet | ProductCode read from the MSI (msitools); Authenticode advised | GitHub token for a fork of `microsoft/winget-pkgs`; Authenticode certificate (advised) | `distribute-winget`: three manifests, pre-releases as `knittingcode.DeckPilot.Prerelease` |
+| APT | The release does not build the `_apt.deb` variant yet; Debian version form [E4]; no repository host | Repository GPG key; host deploy credential | `distribute-apt`: refuses today's releases (no apt variant, R7); unsigned tree from a synthetic variant in the tests |
+| Flathub | Manifest never built [E3]; offline `cargo-sources.json`/`node-sources.json`; bundled plugins location; hidraw, tray, Secret Service, Background portal, nested Landlock+seccomp all Unverified | Write access to `flathub/io.github.knittingcode.deckpilot`; `io.github` app ID verification | `distribute-flathub`: manifest with tag and commit |
+| Mac App Store | Stream Deck in the sandbox [E1]; plugins off (policy); plugin host sandbox blocked as designed [E2]; agent as an `SMAppService` login item app; Keychain group and data migration | Apple Distribution and Mac Installer Distribution certificates; provisioning profiles for app and helper; App Store Connect app record and API key | `distribute-mas`: build plan and draft entitlements, no build |
+| Microsoft Store (MSIX) | hidapi in a package [E5]; AppContainer child from full trust; startup task; pre-release versions | Partner Center account, reserved name, publisher identity, API credentials (Entra ID app) | `distribute-msstore`: AppxManifest draft with placeholders |
+| Microsoft Store (MSI listing) | Authenticode from a Trusted Root CA on every PE file | Authenticode certificate; Partner Center account | `distribute-msstore`: versioned MSI URL and hash |
+
+## 7. Experiments (PR G)
+
+Run locally or prepared for CI; each directory has the exact commands,
+the raw outputs and what the experiment does not show. All signatures are
+ad hoc or throwaway, all identifiers are experiment identifiers, and
+nothing was installed permanently, published or submitted.
+
+- [E1] macOS App Sandbox and HID, 2026-11-16, macOS 27.2 (26B123),
+  arm64, no Stream Deck attached:
+  [`experiments/distribution/macos-sandbox-hid`](../../experiments/distribution/macos-sandbox-hid/README.md)
+  (reports in `results/`).
+- [E2] macOS plugin host under App Sandbox and the hardened runtime
+  (spawn, inheritance, wasmtime 50.0.1 JIT, `sandbox_init`), same machine:
+  [`experiments/distribution/macos-sandbox-plugin-host`](../../experiments/distribution/macos-sandbox-plugin-host/README.md)
+  (reports and a crash report excerpt in `results/`).
+- [E3] Flatpak manifest draft, not built (no `flatpak-builder`):
+  [`packaging/flatpak`](../../packaging/flatpak/README.md), with the steps
+  that would verify it.
+- [E4] Debian version order, `dpkg --compare-versions` (dpkg 1.22.22 in a
+  `debian:stable-slim` container without network), and the APT notes:
+  [`packaging/apt`](../../packaging/apt/README.md).
+- [E5] MSIX HID probe, prepared, **not run**:
+  [`experiments/distribution/msix-hid`](../../experiments/distribution/msix-hid/README.md),
+  dispatched as `distribute.yml` job `experiment-msix-hid`.
+
+## 8. Sources
 
 Retrieved 2026-11-15. Apple documentation pages are the machine-readable
 mirrors of the developer documentation.

@@ -229,6 +229,11 @@ impl Agent {
         let id = ExecutionId::new();
         let scope = definition.effective_project_scope(profile, engine.registry());
         let mut record = ExecutionRecord::start(id, definition, profile, trigger, self.now_ms());
+        // What its actions see as the run's origin (plugins: `run.context`,
+        // and whether `url.open` may open a page).
+        let origin = deckpilot_core::RunOrigin::Workflow {
+            cause: deckpilot_core::WorkflowCause::of(trigger, launch.detail.as_deref()),
+        };
         record.summary.trigger_detail = launch.detail;
         let profile = Arc::new(profile.clone());
         let context = self
@@ -249,6 +254,7 @@ impl Agent {
             self.runtime.machine().clone(),
             context,
             launch.inputs,
+            origin,
             cancel.clone(),
             self.handle.commands.clone(),
         )
@@ -672,6 +678,7 @@ fn spawn_run(
     machine: deckpilot_core::MachineConfig,
     mut context: ActiveProjectContext,
     inputs: std::collections::BTreeMap<String, String>,
+    origin: deckpilot_core::RunOrigin,
     cancel: CancellationToken,
     commands: tokio::sync::mpsc::UnboundedSender<Command>,
 ) -> std::io::Result<()> {
@@ -689,8 +696,9 @@ fn spawn_run(
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 // References of its actions see this run's id
                 // (`workflow.execution.id`).
-                let invocation =
-                    deckpilot_core::resolution::Invocation::default().with_execution(Some(id));
+                let invocation = deckpilot_core::resolution::Invocation::default()
+                    .with_execution(Some(id))
+                    .with_origin(origin);
                 engine.execute_workflow_as(
                     &profile,
                     &machine,

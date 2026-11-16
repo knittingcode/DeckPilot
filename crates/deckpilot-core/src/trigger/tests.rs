@@ -349,3 +349,58 @@ fn triggers_and_trigger_kinds_serialize_compatibly() {
     let read: crate::ExecutionRecord = serde_json::from_value(json).unwrap();
     assert_eq!(read.summary.trigger, ExecutionTrigger::Other);
 }
+
+/// What its actions see as a run's origin (G8): only runs a key, a gesture
+/// or the app started count as the user's.
+#[test]
+fn run_origins_name_who_started_the_run() {
+    use crate::{RunOrigin, WorkflowCause};
+    for (trigger, detail, cause) in [
+        (ExecutionTrigger::App, None, WorkflowCause::User),
+        (ExecutionTrigger::Device, None, WorkflowCause::User),
+        (
+            ExecutionTrigger::Schedule,
+            Some("every 1 min"),
+            WorkflowCause::Schedule,
+        ),
+        (
+            ExecutionTrigger::Lifecycle,
+            Some("agentStarted"),
+            WorkflowCause::Startup,
+        ),
+        (
+            ExecutionTrigger::Lifecycle,
+            Some("deviceConnected"),
+            WorkflowCause::Event,
+        ),
+        (ExecutionTrigger::Lifecycle, None, WorkflowCause::Event),
+        (
+            ExecutionTrigger::WorkSession,
+            None,
+            WorkflowCause::WorkSession,
+        ),
+        (ExecutionTrigger::Other, None, WorkflowCause::Other),
+    ] {
+        assert_eq!(WorkflowCause::of(trigger, detail), cause, "{trigger:?}");
+        assert_eq!(
+            RunOrigin::Workflow { cause }.is_user_initiated(),
+            cause == WorkflowCause::User,
+            "{cause:?}"
+        );
+    }
+    for origin in [
+        RunOrigin::Key,
+        RunOrigin::Gesture,
+        RunOrigin::App,
+        RunOrigin::Test,
+    ] {
+        assert!(origin.is_user_initiated(), "{origin:?}");
+    }
+    assert_eq!(
+        serde_json::to_value(RunOrigin::Workflow {
+            cause: WorkflowCause::Schedule
+        })
+        .unwrap(),
+        serde_json::json!({"type": "workflow", "cause": "schedule"})
+    );
+}

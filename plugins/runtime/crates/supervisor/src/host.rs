@@ -23,7 +23,7 @@ use deckpilot_plugin_abi::protocol::{
 };
 use deckpilot_plugin_abi::value::{validate_name, validate_params};
 use deckpilot_plugin_abi::{ABI_VERSION, ActionOutcome, CallErrorCode, CallResult, Params};
-use deckpilot_plugin_broker::{Allowed, Decision, PluginId, Session};
+use deckpilot_plugin_broker::{Allowed, Decision, PluginId, RunContext, Session};
 
 use crate::process::{HostProcess, HostStdin};
 
@@ -45,6 +45,14 @@ pub trait CapabilityExecutor {
     ) -> CallResult {
         let _ = interrupt;
         self.execute(plugin, allowed)
+    }
+
+    /// What started the invocation this executor serves (G8): the broker
+    /// allows `url.open` only when the user started it, and answers
+    /// `run.context` with it. The default, `None`, counts as not started
+    /// by the user.
+    fn run_context(&self) -> Option<&RunContext> {
+        None
     }
 }
 
@@ -599,8 +607,9 @@ impl PluginHost {
                     } else {
                         // Identity is the session bound to this process;
                         // grants are read now, so a permission revoked
-                        // while the invocation runs denies this call.
-                        match self.session.authorize(&request) {
+                        // while the invocation runs denies this call. The
+                        // run context is the executor's, never the guest's.
+                        match self.session.authorize_in(&request, executor.run_context()) {
                             Decision::Allow(allowed) => {
                                 let r = executor.execute_interruptible(
                                     self.session.plugin(),

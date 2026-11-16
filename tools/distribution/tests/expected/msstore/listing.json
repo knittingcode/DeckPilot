@@ -1,0 +1,12 @@
+{
+  "msi_listing": {
+    "package_url": "https://github.com/knittingcode/deckpilot/releases/download/v0.6.0-alpha.3/DeckPilot_0.6.0-alpha.3_x64_en-US.msi",
+    "sha256": "8af41571441e70b45d3e52af0d3d34b127111ae11471b36e98be872751495d8a",
+    "installer_parameters": "/quiet /norestart (Windows Installer, silent)",
+    "note": "the MSI/EXE listing is the github channel; the app keeps its signed self-update"
+  },
+  "msix": {
+    "version": "0.6.0.0",
+    "built": false
+  }
+}

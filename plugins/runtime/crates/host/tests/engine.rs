@@ -510,6 +510,10 @@ fn malformed_requests_get_errors_and_never_reach_the_handler() {
             CallErrorCode::BadRequest,
         ),
         (
+            r#"{"op":"run.context","args":{"workflow":"other"}}"#,
+            CallErrorCode::BadRequest,
+        ),
+        (
             r#"{"op":"url.launch","args":{"url":"file:///etc/passwd"}}"#,
             CallErrorCode::UnsupportedOp,
         ),

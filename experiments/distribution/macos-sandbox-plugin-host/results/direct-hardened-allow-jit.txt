@@ -1,0 +1,14 @@
+Identifier=direct-hardened-allow-jit-555549447b3cb900a80b3888ac98b3e86e4cbb6d
+Signature=adhoc
+entitlements:
+{
+  "com.apple.security.cs.allow-jit" => true
+}
+--- report
+child.label = direct-hardened-allow-jit
+child.pid = 24996
+child.app_sandbox_container_id = (not set)
+child.read_dir(~/Library/Preferences) = readable
+child.engine = ok
+experiments/distribution/macos-sandbox-plugin-host/run.sh: line 48: 24996 Killed: 9               "$@"
+exit status 137

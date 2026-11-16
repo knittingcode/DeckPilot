@@ -70,3 +70,9 @@ pub const MAX_STORAGE_VALUE: usize = 64 << 10;
 pub const MAX_VARIABLE_ID: usize = 100;
 /// Published variable value, serialized (design §5.2: 16 KiB).
 pub const MAX_VARIABLE_VALUE: usize = 16 << 10;
+/// Workflow name in a `run.context` reply (longer names are cut).
+pub const MAX_RUN_WORKFLOW_NAME: usize = 128;
+/// Failed node ids in a `run.context` reply (the first ones).
+pub const MAX_RUN_FAILED_NODES: usize = 32;
+/// One node id in a `run.context` reply.
+pub const MAX_RUN_NODE_ID: usize = 64;

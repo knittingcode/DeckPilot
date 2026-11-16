@@ -21,6 +21,10 @@ on:
       - crates/deckpilot-update/**
       # The packaging matrix release-meta.json's artifacts are checked against.
       - docs/distribution/targets.toml
+      # The downstream distribution tools (dry runs) and the Flatpak draft
+      # their flathub output is made from.
+      - tools/distribution/**
+      - packaging/flatpak/**
   workflow_dispatch:
 
 permissions:
@@ -58,7 +62,7 @@ jobs:
           node-version: 24
       - run: pnpm install --frozen-lockfile
       - name: shellcheck
-        run: shellcheck -x tools/release-pipeline/*.sh
+        run: shellcheck -x tools/release-pipeline/*.sh tools/distribution/*.sh
       # Application releases never ship plugin packages or registry
       # metadata (docs/marketplace/distribution.md): fast, so first.
       - name: Release separation (workflow check and its fixtures)
@@ -74,5 +78,9 @@ jobs:
         run: cargo test --locked -p deckpilot-dev -p deckpilot-update
       - name: Tag gate and workflow structure
         run: tools/release-pipeline/test.sh "$RUNNER_TEMP/release-pipeline"
+      # verify-release-input.sh against a stubbed gh, and every channel's
+      # dry-run output from a v0.6.0-alpha.3-shaped release.
+      - name: Downstream distribution tools (stubbed GitHub)
+        run: tools/distribution/test.sh "$RUNNER_TEMP/distribution"
       - name: The signing check's key-pair verification (throwaway keys)
         run: tools/release-pipeline/test-updater-key-pair.sh "$RUNNER_TEMP/updater-key-pair"
