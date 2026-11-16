@@ -131,7 +131,9 @@ Ok(Output::message("opened the pull request"))
 - Permission: `openUrl` for the URL's exact host
   ([permissions.md](permissions.md)): `openUrl:github.com` opens
   `https://github.com/...` on port 443, not `gist.github.com` or
-  `github.com:8443`.
+  `github.com:8443`. For a server the user entered in an origin setting
+  and allowed: `openUrl.userOrigins`
+  ([permissions.md](permissions.md#pages-of-a-server-the-user-entered)).
 - Only `https:` URLs without userinfo. Never `http:`, `file:`, `mailto:`,
   `javascript:`, `data:` or a custom scheme (`x-github-client:`,
   `vscode:`), which could start a program; never an IP address or a local
