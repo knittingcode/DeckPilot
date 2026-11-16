@@ -1782,43 +1782,7 @@ fn consent_items(
                 } => (hosts.clone(), user_origin.clone()),
                 _ => (Vec::new(), None),
             };
-            let why = match (import, scope.tier()) {
-                _ if ask.is_some() => format!(
-                    "The built-in {} talked to this server. The plugin may send requests there, \
-                     and the credential it gets, only with your consent to exactly this server; \
-                     nothing is sent before.",
-                    m.module
-                ),
-                (Some(c), _) => format!(
-                    "The built-in {} used your stored credential `{}`. The plugin gets a copy in \
-                     its slot `{}`, sent only to {}. The stored credential is kept.",
-                    m.module,
-                    c.id.as_ref().map(ToString::to_string).unwrap_or_default(),
-                    c.slot,
-                    match (hosts.is_empty(), &bound) {
-                        (true, None) => "the hosts the plugin declares".to_owned(),
-                        (true, Some(setting)) => format!("the server you allow in `{setting}`"),
-                        (false, None) => hosts.join(", "),
-                        (false, Some(setting)) => format!(
-                            "{} and the server you allow in `{setting}`",
-                            hosts.join(", ")
-                        ),
-                    }
-                ),
-                (None, Tier::High) if key.kind == PermissionKind::Credentials => format!(
-                    "The plugin's credential slot `{}`: credentials are never granted without \
-                     your consent. Nothing is imported.",
-                    key.key
-                ),
-                (None, Tier::High) => {
-                    "Private network access is never granted without your consent.".to_owned()
-                }
-                (None, _) => format!(
-                    "The built-in {} did not use this on this computer, so it is not granted \
-                     without your consent.",
-                    m.module
-                ),
-            };
+            let why = why_of(m, key, scope, import.copied(), ask.is_some());
             Some(ipc::MigrationConsentItem {
                 key: key.to_string(),
                 permission: super::convert::permission(manifest, key, scope, status),
@@ -1835,38 +1799,113 @@ fn consent_items(
             })
         })
         .collect();
-    // The private network, for each server that needs it: an item of its
-    // own, never part of another.
-    for ask in asks.iter().filter(|ask| ask.private) {
-        let key = private_item(&ask.setting);
-        let slot = deckpilot_plugin_store::user_origin_key(&ask.setting);
-        let declined = stored.iter().any(|g| {
-            g.key == slot && g.status == GrantStatus::Revoked && g.decided_by == consented
-        });
-        items.push(ipc::MigrationConsentItem {
-            key: key.to_string(),
-            permission: super::convert::permission(
-                manifest,
-                &key,
-                &deckpilot_plugin_store::GrantScope::PrivateNetwork,
-                ipc::PermissionStatus::NotGranted,
-            ),
-            import: None,
-            origin: Some(origin_of_ask(ask, true)),
-            why: format!(
-                "The built-in {} was allowed to reach this server on a private network. A \
-                 plugin reaches a private network only with your separate consent, for exactly \
-                 this server; this computer and link-local addresses are never reachable.",
-                m.module
-            ),
-            decision: if declined {
-                ipc::ConsentDecision::Declined
-            } else {
-                ipc::ConsentDecision::Pending
-            },
-        });
-    }
+    items.extend(private_items(m, manifest, &asks, &stored));
     items
+}
+
+/// Why the migration asks for `key`, in words.
+fn why_of(
+    m: &LegacyModule,
+    key: &GrantKey,
+    scope: &deckpilot_plugin_store::GrantScope,
+    import: Option<&legacy::LegacyCredential>,
+    server: bool,
+) -> String {
+    let (hosts, bound) = match scope {
+        deckpilot_plugin_store::GrantScope::Credential {
+            hosts, user_origin, ..
+        } => (hosts.clone(), user_origin.clone()),
+        _ => (Vec::new(), None),
+    };
+    match (import, scope.tier()) {
+        _ if server => format!(
+            "The built-in {} talked to this server. The plugin may send requests there, and \
+             the credential it gets, only with your consent to exactly this server; nothing is \
+             sent before.",
+            m.module
+        ),
+        (Some(c), _) => format!(
+            "The built-in {} used your stored credential `{}`. The plugin gets a copy in its \
+             slot `{}`, sent only to {}. The stored credential is kept.",
+            m.module,
+            c.id.as_ref().map(ToString::to_string).unwrap_or_default(),
+            c.slot,
+            match (hosts.is_empty(), &bound) {
+                (true, None) => "the hosts the plugin declares".to_owned(),
+                (true, Some(setting)) => format!("the server you allow in `{setting}`"),
+                (false, None) => hosts.join(", "),
+                (false, Some(setting)) => format!(
+                    "{} and the server you allow in `{setting}`",
+                    hosts.join(", ")
+                ),
+            }
+        ),
+        (None, Tier::High) if key.kind == PermissionKind::Credentials => format!(
+            "The plugin's credential slot `{}`: credentials are never granted without your \
+             consent. Nothing is imported.",
+            key.key
+        ),
+        // The origin slot without a server to allow now (the built-in
+        // talked to the plugin's declared host).
+        (None, _) if deckpilot_plugin_store::user_origin_setting(key).is_some() => format!(
+            "The plugin may ask you to allow a server you enter in its setting `{}` later. \
+             This allows no server now; each one is asked for when you enter it.",
+            deckpilot_plugin_store::user_origin_setting(key).unwrap_or_default()
+        ),
+        (None, Tier::High) => {
+            "Private network access is never granted without your consent.".to_owned()
+        }
+        (None, _) => format!(
+            "The built-in {} did not use this on this computer, so it is not granted without \
+             your consent.",
+            m.module
+        ),
+    }
+}
+
+/// The private network, for each server that needs it: an item of its
+/// own, never part of another. Declined when the user declined the
+/// server through it.
+fn private_items(
+    m: &LegacyModule,
+    manifest: &Manifest,
+    asks: &[OriginAsk],
+    stored: &[deckpilot_plugin_store::StoredGrant],
+) -> Vec<ipc::MigrationConsentItem> {
+    let consented = consented_by(&m.module);
+    asks.iter()
+        .filter(|ask| ask.private)
+        .map(|ask| {
+            let key = private_item(&ask.setting);
+            let slot = deckpilot_plugin_store::user_origin_key(&ask.setting);
+            let declined = stored.iter().any(|g| {
+                g.key == slot && g.status == GrantStatus::Revoked && g.decided_by == consented
+            });
+            ipc::MigrationConsentItem {
+                key: key.to_string(),
+                permission: super::convert::permission(
+                    manifest,
+                    &key,
+                    &deckpilot_plugin_store::GrantScope::PrivateNetwork,
+                    ipc::PermissionStatus::NotGranted,
+                ),
+                import: None,
+                origin: Some(origin_of_ask(ask, true)),
+                why: format!(
+                    "Reaching this server needs a private network: its address is private, or \
+                     the built-in {} was allowed private addresses for it. A plugin reaches a \
+                     private network only with your separate consent, for exactly this server; \
+                     this computer and link-local addresses are never reachable.",
+                    m.module
+                ),
+                decision: if declined {
+                    ipc::ConsentDecision::Declined
+                } else {
+                    ipc::ConsentDecision::Pending
+                },
+            }
+        })
+        .collect()
 }
 
 fn origin_of_ask(ask: &OriginAsk, private_network: bool) -> ipc::MigrationUserOrigin {
