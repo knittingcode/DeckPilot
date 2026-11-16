@@ -42,5 +42,7 @@ pub use value::{ActionOutcome, ParamValue, Params, ValidationError};
 /// [`guest::features::NETWORK_ERROR_KIND`] there, the `kind` of a failed
 /// `http.fetch` ([`capability::NetworkErrorKind`]); the capability
 /// operation `run.context` ([`capability::RunContext`], G8), which only a
-/// guest that reads it sends.
+/// guest that reads it sends; and, for a guest that reports
+/// [`guest::features::NOTIFY_DELIVERY`], where a `notify` was shown
+/// ([`capability::NotifyDelivery`], G9) instead of `null`.
 pub const ABI_VERSION: u32 = 1;

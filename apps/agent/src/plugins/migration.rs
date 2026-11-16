@@ -1,8 +1,18 @@
 //! The module migration engine (`docs/marketplace/module-migration.md`
-//! §5.5–§5.9): moves a built-in module with an alias block to its
-//! `migration`-class bundled first-party plugin, one journaled,
-//! idempotent step at a time, and decides the [`LegacyRouting`] the core
-//! routes the module's legacy action types with.
+//! §5.5–§5.9): moves a built-in module with an alias block to its bundled
+//! first-party plugin, one journaled, idempotent step at a time, and
+//! decides the [`LegacyRouting`] the core routes the module's legacy action
+//! types with.
+//!
+//! The plugin is bundled with class `migration` (installed here, only for
+//! a computer whose data uses the built-in) or `default` (seeded on every
+//! computer by `bundled.rs`, §4.3). A `default`-class plugin is the
+//! built-in's replacement everywhere, so it does not need the user's data
+//! to use the built-in: a fresh install, with nothing to migrate, cuts
+//! over at its first start, and an upgrade copies the built-in's settings
+//! first. A built-in the user turned off stays off: the seeded plugin is
+//! disabled once, when the module is first journaled (the enabled state is
+//! copied once, §5.5).
 //!
 //! # Where it runs
 //!
@@ -136,7 +146,7 @@ pub(crate) struct MigrationPlan {
 }
 
 /// Every plan, one per module of [`deckpilot_core::alias::ACTION_ALIASES`].
-pub(crate) const PLANS: &[MigrationPlan] = &[GITHUB];
+pub(crate) const PLANS: &[MigrationPlan] = &[GITHUB, NOTIFICATIONS];
 
 /// GitHub (P9) to `deckpilot.github`:
 ///
@@ -164,6 +174,20 @@ const GITHUB: MigrationPlan = MigrationPlan {
     )),
     private_network: Some(deckpilot_modules::github::ALLOW_PRIVATE),
     open_url_hosts: &["github.com"],
+};
+
+/// Notifications (P10) to `deckpilot.notifications`, class `default`:
+/// nothing the plan handles itself (no credential, origin, private network
+/// or web host). Its three settings, `desktop`, `statusBar` and
+/// `minimumSeverity`, are declared by the plugin with the same keys and
+/// copied one to one; the agent routes the plugin's notifications by them
+/// (the manifest's `notifications.routing`, G9).
+const NOTIFICATIONS: MigrationPlan = MigrationPlan {
+    module: deckpilot_modules::notifications::MODULE_ID,
+    credentials: &[],
+    origin: None,
+    private_network: None,
+    open_url_hosts: &[],
 };
 
 /// The plan of `module`, if it has one.
@@ -400,14 +424,16 @@ fn normalized(origin: &str) -> &str {
 }
 
 /// Why `m` cannot migrate on this computer, if it cannot (§5.6 step 1).
-fn eligibility(m: &LegacyModule) -> Option<String> {
+/// `default`: the plugin is of the bundled `default` class, which replaces
+/// the built-in whether or not the user's data uses it (§4.3, §5.8).
+fn eligibility(m: &LegacyModule, default: bool) -> Option<String> {
     if m.manifest.is_none() {
         return Some("the built-in module is not part of this app".into());
     }
     if !m.enabled {
         return Some("the built-in module is disabled".into());
     }
-    if m.row.is_none() && m.instances == 0 {
+    if !default && m.row.is_none() && m.instances == 0 {
         return Some("the built-in module is not used on this computer".into());
     }
     if !m.untranslatable.is_empty() {
@@ -538,14 +564,35 @@ impl Engine<'_> {
         }
     }
 
-    /// The `migration`-class pin of `m`'s plugin, if this app bundles it.
+    /// The pin of `m`'s plugin, of either class, if this app bundles it.
     fn pin(&self, m: &LegacyModule) -> Option<Pin> {
         self.bundle
             .pins
             .plugins
             .iter()
-            .find(|pin| pin.id == m.plugin && pin.class == BundleClass::Migration)
+            .find(|pin| pin.id == m.plugin)
             .cloned()
+    }
+
+    /// The user turned the built-in off: its `default`-class replacement,
+    /// which seeding enabled, is turned off too, once, when the module is
+    /// first journaled (the agent's own disable, no tombstone). The user
+    /// can turn the plugin on in Settings › Plugins; nothing here turns it
+    /// off again.
+    fn keep_off(&mut self, m: &LegacyModule) -> Step<()> {
+        if self.migration(m).is_some() {
+            return Ok(());
+        }
+        let record = self.manager.store().plugin(&m.plugin).map_err(failed)?;
+        if record
+            .is_some_and(|r| r.source == InstallSource::Bundled && r.state == PluginState::Enabled)
+        {
+            self.manager.disable(&m.plugin).map_err(failed)?;
+            self.touched.insert(m.plugin.clone());
+            info!(module = %m.module, plugin = %m.plugin,
+                "the built-in is disabled, so its replacement is disabled too");
+        }
+        Ok(())
     }
 
     /// Runs the steps of `m` that are due. `start`: the first pass after
@@ -582,7 +629,14 @@ impl Engine<'_> {
     }
 
     fn steps(&mut self, m: &LegacyModule) -> Step<()> {
-        if let Some(reason) = eligibility(m) {
+        let pin = self.pin(m);
+        let default = pin
+            .as_ref()
+            .is_some_and(|pin| pin.class == BundleClass::Default);
+        if let Some(reason) = eligibility(m, default) {
+            if default && !m.enabled {
+                self.keep_off(m)?;
+            }
             return Err(Stop::NotEligible(reason));
         }
         if let Some(tombstone) = self.manager.store().tombstone(&m.plugin).map_err(failed)? {
@@ -591,9 +645,8 @@ impl Engine<'_> {
                 m.plugin, tombstone.decision
             )));
         }
-        let pin = self
-            .pin(m)
-            .ok_or_else(|| Stop::NotEligible(format!("this app does not bundle {}", m.plugin)))?;
+        let pin =
+            pin.ok_or_else(|| Stop::NotEligible(format!("this app does not bundle {}", m.plugin)))?;
         self.advance(m, MigrationPhase::Pending, None, None)?;
         self.install(m, &pin)?;
         self.advance(m, MigrationPhase::Installed, None, None)?;
@@ -917,7 +970,10 @@ impl Engine<'_> {
             return Ok(());
         }
         // The built-in's settings changed after the migration.
-        if let Some(reason) = eligibility(m) {
+        let default = self
+            .pin(m)
+            .is_some_and(|pin| pin.class == BundleClass::Default);
+        if let Some(reason) = eligibility(m, default) {
             return Err(Stop::NotEligible(format!(
                 "{reason} (changed after the migration; the built-in serves again)"
             )));

@@ -6,11 +6,14 @@ release build and shipped **inside the installers** as app components
 `knittingcode/deckpilot-plugins` by pinned commit for registry updates;
 that is a separate step, not part of this directory.
 
-Experimental, like all of the plugin marketplace. One plugin is bundled:
+Experimental, like all of the plugin marketplace. Two plugins are bundled:
 `deckpilot.github` (class `migration`, [github/README.md](github/README.md)),
 to which a plugin-enabled agent routes the built-in `github.*` action
 types once a computer's migration is cut over
-(`docs/marketplace/module-migration.md` §6 and §9, P9). The published release
+(`docs/marketplace/module-migration.md` §6 and §9, P9), and
+`deckpilot.notifications` (class `default`, the first of the default set,
+[notifications/README.md](notifications/README.md)), seeded on every
+computer and routed through the alias block `notifications.*` (P10). The published release
 pipeline does not package plugins at all (see "Packaging" below).
 
 ## Layout
@@ -19,6 +22,7 @@ pipeline does not package plugins at all (see "Packaging" below).
 | --- | --- |
 | `bundled.json` | The plugins a release bundles: `{"path": "<dir>", "class": "default" \| "migration"}` |
 | `github/` | `deckpilot.github`, class `migration`: the replacement of the built-in `github` module, checked against it by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_github.rs` |
+| `notifications/` | `deckpilot.notifications`, class `default`: the replacement of the built-in `notifications` module, checked against it by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_notifications.rs` |
 | `<name>/` | One plugin: `Cargo.toml` (a member of the `plugins/runtime` workspace), `src/`, `manifest.json` (id `deckpilot.<name>`), `LICENSE` and its icons in `assets/` |
 | `build.sh` | Builds the listed plugins to wasm (`wasm32-unknown-unknown`, `guest` profile, reproducible on one platform) and stages them with their pins |
 | `test-fixtures/` | **Test fixtures, never shipped**: `example-default` (`deckpilot.example-default`, class `default`, one action, one low-tier permission), `legacy-fixture` (`deckpilot.legacy-fixture`, class `migration`: the replacement of the agent's fixture legacy module in the module migration tests, with a low-, a medium- and a high-tier permission) and their own `bundled.json`, used only with `build.sh --test-fixtures` |

@@ -158,6 +158,13 @@ required-features = ["plugins"]
 name = "plugins_migration"
 required-features = ["plugins"]
 
+# deckpilot.notifications, the first default-class bundled plugin:
+# parity with the built-in, first launch, tombstones and upgrades, through
+# a real agent process and the real plugin host.
+[[test]]
+name = "plugins_notifications"
+required-features = ["plugins"]
+
 # The registry over HTTPS (a local TLS server, a throwaway CA) through a
 # real agent process and the real plugin host.
 [[test]]

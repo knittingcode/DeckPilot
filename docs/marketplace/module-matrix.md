@@ -46,7 +46,7 @@ once the named gaps close). Gaps (G…) are defined in
 | `projects` | 9 actions (3 deprecated), 3 variables + 3 `ALIASES` | profile, `ContextEffect`, faces, machine and project resources; agent and app call its crate directly | yes | no | project-context write (never grantable) | `wrapAround`; module schema 1 adopting core tables | high / high | core |
 | `work-session` | 0 actions, 6 variables + 6 `ALIASES` | live session snapshot from the agent; page in the app | yes | no | work-session read/write (state is the agent's) | core schema 9 tables | high / high | core |
 | `system` | 6 actions | OS launcher, `run_process`, `sysinfo`, file checks, `PATH`, machine resources | launcher actions: yes | no | G12 resource launch, G11 process inspect, `process.exec` (refused) | `allowCommands` | high / high | core (launchers) + built-in (`run-command`, `process-status`) |
-| `notifications` | 2 actions | core notifier, run summary, workflow name | no | partly (`notify` exists without severity, routing or run summary) | G9 notify severity, G8 run summary | 3 portable settings | low / medium (widely used) | default plugin, after G8 and G9 |
+| `notifications` | 2 actions | core notifier, run summary, workflow name | no | yes since P10 (G8 run summary, G9 severity, routing and delivery) | G9 notify severity, G8 run summary | 3 portable settings | low / medium (widely used) | default plugin (P10: `deckpilot.notifications`) |
 | `workspace` | 3 actions | OS launcher, path checks and canonicalize, project resources; depends on the `system` crate | no | no | G12 resource launch | none | medium / medium | built-in (later with G12) |
 | `git` | 6 actions | `git` CLI with a curated environment, `is_dir`, launcher, 30 s button state | no | no | `process.exec` for `git` (refused), G7 button state | 3 settings | high / medium | built-in |
 | `docker` | 7 actions | `docker` CLI with TLS, config and SSH-agent variables, path checks, 30 s button state | no | no | `process.exec` for `docker` (refused), G7 | 5 settings, `allowStateChanges` | high / medium | built-in |
@@ -306,6 +306,16 @@ table, not the keychain).
 8. **Referenced ids.** Both, frequently as the last node of a workflow.
 9. **Complexity and risk.** Low and medium. **Default plugin** after G8 and
    G9.
+
+*Status (P10):* `plugins/first-party/notifications`
+(`deckpilot.notifications`) reproduces both actions with G8 (`run.context`)
+and G9 (severity; the routing by the plugin's settings `desktop`,
+`statusBar` and `minimumSeverity`, which the agent reads; the delivery
+reply); bundled with class `default` and routed through the alias block
+`notifications.*`. `critical` stays the plugin's decision on the delivery.
+No manifest-declared higher rate: 5 per minute, as for every plugin.
+Parity and the remaining differences:
+`plugins/first-party/notifications/README.md`.
 
 ### `workspace`
 

@@ -57,6 +57,8 @@ interface Facts {
   read?: string[]
   quotaKb?: number
   minIntervalSeconds?: number
+  /** Notifications routed by the plugin's settings (`routing`). */
+  routed?: boolean
   pathPrefix?: boolean
   privateNetwork?: boolean
 }
@@ -109,7 +111,9 @@ function describe(key: string, facts: Facts): Omit<Grant, "key" | "justification
       return {
         tier: "low",
         title: "Show notifications",
-        detail: "Prefixed with the plugin's name.",
+        detail: facts.routed
+          ? "Prefixed with the plugin's name. On the desktop and in the status bar as you set it in the plugin's settings."
+          : "Prefixed with the plugin's name.",
       }
     case "profile":
       return {
@@ -198,7 +202,7 @@ export function grantsOf(permissions: ManifestPermission[]): Grant[] {
         for (const ref of permission.refs) add(`credentials:${ref}`, justification)
         break
       case "notifications":
-        add("notifications", justification)
+        add("notifications", justification, permission.routing ? { routed: true } : {})
         break
       case "profile":
         add("profile", justification, { read: permission.read })

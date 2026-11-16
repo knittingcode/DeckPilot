@@ -649,11 +649,56 @@ fn network_kinds_reach_only_guests_that_read_them() {
     // A guest built with the SDK reads it, and `?` reports the built-in
     // modules' code.
     let mut sdk = load(SDK_TEST_GUEST);
-    assert_eq!(sdk.features(), features::NETWORK_ERROR_KIND);
+    assert_eq!(sdk.features(), features::ALL);
     let url = params(json!({"url": "https://api.example.com/"}));
     let o = sdk.invoke(1, "headers", &url).unwrap();
     assert_eq!(data(&o)["network"], ParamValue::String("dns-failed".into()));
     assert_eq!(data(&o)["error"], ParamValue::String("Failed".into()));
     let o = sdk.invoke(2, "get", &url).unwrap();
     assert_eq!(failed_code(&o), "dns-failed");
+}
+
+/// Where a notification was shown (G9) reaches only guests that report
+/// reading it; a guest without `dp_features` gets `null` for `notify`, byte
+/// for byte the reply it always got.
+#[test]
+fn notify_deliveries_reach_only_guests_that_read_them() {
+    use deckpilot_plugin_abi::capability::NotifyDelivery;
+    use deckpilot_plugin_test_fixtures::SDK_TEST_GUEST;
+
+    let delivery =
+        CallResult::Ok(serde_json::to_value(NotifyDelivery::shown(true, false)).unwrap());
+    let engine = PluginEngine::new().unwrap();
+    let load = |bytes: &[u8]| {
+        engine
+            .load(
+                bytes,
+                &GuestLimits::default(),
+                Box::new(FailsWith(delivery.clone())),
+            )
+            .unwrap()
+    };
+    let mut old = load(TEST_GUEST);
+    let notify = r#"{"op":"notify","args":{"title":"t","body":"b"}}"#;
+    let o = old
+        .invoke(1, "raw_request", &params(json!({"json": notify})))
+        .unwrap();
+    assert_eq!(
+        data(&o)["reply"],
+        ParamValue::String(r#"{"ok":null}"#.into())
+    );
+    // Any other operation's answer is passed on as it is.
+    let usage = r#"{"op":"storage.usage","args":{}}"#;
+    let o = old
+        .invoke(2, "raw_request", &params(json!({"json": usage})))
+        .unwrap();
+    assert_eq!(
+        data(&o)["reply"],
+        ParamValue::String(r#"{"ok":{"desktop":true,"shown":true,"statusBar":false}}"#.into())
+    );
+    let sdk = load(SDK_TEST_GUEST);
+    assert_ne!(
+        sdk.features() & deckpilot_plugin_abi::guest::features::NOTIFY_DELIVERY,
+        0
+    );
 }
