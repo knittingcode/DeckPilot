@@ -60,6 +60,9 @@ const TWIN_SECRET: &str = "tok-77c1-twin-secret-value";
 const OPENER: &str = "acme.sdk-open";
 const OPENER_SECRET: &str = "tok-51b8-opener-secret-value";
 const FUTURE: &str = "acme.future-weather";
+/// Hello Weather's module declared with far more actions, outputs and
+/// icon than one IPC message carries.
+const BIG: &str = "acme.big-weather";
 const REVOKED: &str = "acme.revoked-weather";
 const NETWORK: &str = "network:api.open-meteo.com";
 const STARTUP: Duration = Duration::from_secs(30);
@@ -435,7 +438,7 @@ fn opener_manifest() -> Value {
     manifest
 }
 
-fn write_plugin_dir(dir: &Path, manifest: &Value) {
+fn write_plugin_dir(dir: &Path, manifest: &Value, icon: Option<&[u8]>) {
     std::fs::create_dir_all(dir.join("assets")).unwrap();
     std::fs::write(
         dir.join("manifest.json"),
@@ -447,11 +450,76 @@ fn write_plugin_dir(dir: &Path, manifest: &Value) {
         dir.join("LICENSE"),
     )
     .unwrap();
-    std::fs::copy(
-        repo().join("plugins/examples/hello-weather/assets/icon-128.png"),
-        dir.join("assets/icon-128.png"),
-    )
-    .unwrap();
+    match icon {
+        Some(icon) => std::fs::write(dir.join("assets/icon-128.png"), icon).unwrap(),
+        None => {
+            std::fs::copy(
+                repo().join("plugins/examples/hello-weather/assets/icon-128.png"),
+                dir.join("assets/icon-128.png"),
+            )
+            .unwrap();
+        }
+    }
+}
+
+/// Actions and outputs of the large plugin: far more than one IPC message
+/// carries with their definitions.
+const BIG_ACTIONS: usize = 40;
+const BIG_OUTPUTS: usize = 20;
+/// The large plugin's icon: within the 256 KiB an icon may have, but its
+/// base64 alone is three times one IPC message.
+const BIG_ICON_BYTES: usize = 200 * 1024;
+
+/// Hello Weather's module with 40 actions of 20 outputs and three
+/// parameters each (the module itself has two; nothing here runs it), and
+/// a 200 KiB icon.
+fn big_manifest() -> Value {
+    let mut manifest = hello_manifest(BIG, "1.0.0");
+    manifest["name"] = json!("Big Weather");
+    let actions: Vec<Value> = (0..BIG_ACTIONS)
+        .map(|i| {
+            json!({
+                "id": format!("report-{i}"),
+                "name": format!("Weather report {i}"),
+                "description": "Reads one of many weather reports and returns every value \
+                    it has, each as an output of its own.",
+                "category": "Big Weather",
+                "parameters": [
+                    {"key": "city", "label": "City", "required": true,
+                     "kind": {"type": "choice", "options": ["berlin", "london", "tokyo"]}},
+                    {"key": "days", "label": "Days", "required": false,
+                     "kind": {"type": "integer", "min": 1, "max": 14}},
+                    {"key": "label", "label": "Label", "required": false,
+                     "kind": {"type": "text", "maxLength": 32}}
+                ],
+                "node": {
+                    "version": 1,
+                    "outputs": (0..BIG_OUTPUTS)
+                        .map(|o| json!({"key": format!("value{o}"),
+                            "label": format!("Reported value {o}"), "kind": "text"}))
+                        .collect::<Vec<_>>(),
+                    "effect": "readOnly"
+                }
+            })
+        })
+        .collect();
+    manifest["contributes"]["actions"] = json!(actions);
+    manifest
+}
+
+/// Hello Weather's PNG, padded after its end to 200 KiB (viewers ignore
+/// what follows `IEND`; the agent checks the signature and the hash).
+fn big_icon() -> Vec<u8> {
+    let mut icon =
+        std::fs::read(repo().join("plugins/examples/hello-weather/assets/icon-128.png")).unwrap();
+    let mut x: u32 = 0x2545_f491;
+    while icon.len() < BIG_ICON_BYTES {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        icon.push(x.to_le_bytes()[0]);
+    }
+    icon
 }
 
 impl Registry {
@@ -465,13 +533,18 @@ impl Registry {
 
     /// Packages `manifest` with `module` (the `package` command).
     fn package(&self, manifest: &Value, module: &[u8]) -> PathBuf {
+        self.package_with(manifest, module, None)
+    }
+
+    /// Packages `manifest` with `module` and `icon` (the sample's without).
+    fn package_with(&self, manifest: &Value, module: &[u8], icon: Option<&[u8]>) -> PathBuf {
         let name = format!(
             "{}-{}",
             manifest["id"].as_str().unwrap(),
             manifest["version"].as_str().unwrap()
         );
         let dir = self.keys.path().join("src").join(&name);
-        write_plugin_dir(&dir, manifest);
+        write_plugin_dir(&dir, manifest, icon);
         let wasm = dir.join("module.wasm");
         std::fs::write(&wasm, module).unwrap();
         let out = self.keys.path().join(format!("{name}.dpplugin"));
@@ -492,7 +565,11 @@ impl Registry {
     }
 
     fn add(&self, manifest: &Value, module: &[u8]) -> PathBuf {
-        let package = self.package(manifest, module);
+        self.add_with(manifest, module, None)
+    }
+
+    fn add_with(&self, manifest: &Value, module: &[u8], icon: Option<&[u8]>) -> PathBuf {
+        let package = self.package_with(manifest, module, icon);
         let id = manifest["id"].as_str().unwrap();
         let version = manifest["version"].as_str().unwrap();
         let detail = self.keys.path().join(format!("{id}.plugin.json"));
@@ -585,6 +662,7 @@ impl Registry {
         );
         registry.add(&data_manifest(TWIN, "SDK twin", None), &artifacts.sdk_test);
         registry.add(&opener_manifest(), &artifacts.sdk_test);
+        registry.add_with(&big_manifest(), &artifacts.hello, Some(&big_icon()));
         let mut future = hello_manifest(FUTURE, "1.0.0");
         future["engines"]["deckpilot"] = json!(">=9.0.0 <10.0.0");
         registry.add(&future, &artifacts.hello);
@@ -3644,6 +3722,261 @@ async fn lifecycle_events_drive_actions_and_variables() {
         agent.preview(profile.id, &[COUNT_VAR]).await,
         vec![unavailable]
     );
+    agent.stop().await;
+}
+
+// ------------------------------------------------- answers of any size
+
+/// The bytes of `response` as the agent frames it.
+fn wire_size(response: &Response) -> usize {
+    serde_json::to_vec(&deckpilot_ipc::ServerMessage::Response {
+        id: u64::MAX,
+        response: response.clone(),
+    })
+    .unwrap()
+    .len()
+}
+
+/// A plugin far larger than one IPC message (40 actions of 20 outputs,
+/// a 200 KiB icon): an app that pages lists it, shows it and edits its
+/// actions completely, and every answer it gets fits one message; an app
+/// that does not page (an older one) still gets working, shortened
+/// answers on a connection that stays open.
+#[allow(clippy::too_many_lines)] // Both kinds of app, every answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_plugin_larger_than_one_message_is_listed_shown_and_edited() {
+    use deckpilot_core::{ActionParameters, ParameterValue};
+    use deckpilot_ipc::framing::MAX_MESSAGE_BYTES;
+    use deckpilot_ipc::plugin_answers;
+    use deckpilot_ipc::plugins::{ICON_CHUNK_BYTES, feature};
+
+    let env = Env::new("plugins-e2e-big");
+    let agent = Agent::started(&env, shared_registry()).await;
+    // Installing and enabling answer with the plugin's details too: they
+    // do not fit either, and still arrive.
+    agent.install_enabled(BIG, &[NETWORK]).await;
+    agent.install(HELLO, Some("1.0.0")).await.unwrap();
+    let manifest = big_manifest();
+    let declared: Vec<&str> = manifest["contributes"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["id"].as_str().unwrap())
+        .collect();
+    let icon = big_icon();
+
+    // ---- an app that pages: the agent says it can.
+    let mut client = agent.client().await;
+    let Response::PluginRuntime { status } =
+        client.request(Request::GetPluginRuntime).await.unwrap()
+    else {
+        panic!("status")
+    };
+    assert!(status.has_feature(feature::PAGED_ANSWERS), "{status:?}");
+
+    // Listed: every action, each with its whole definition.
+    let plugins = plugin_answers::list_plugins(&mut client).await.unwrap();
+    let big = plugins.iter().find(|p| p.id == BIG).expect("listed");
+    assert_eq!(big.action_count, None);
+    assert_eq!(
+        big.actions
+            .iter()
+            .map(|a| a.action.as_str())
+            .collect::<Vec<_>>(),
+        declared
+    );
+    for action in &big.actions {
+        let definition = action.definition.as_ref().expect("a definition");
+        assert_eq!(
+            definition.node.outputs.len(),
+            BIG_OUTPUTS,
+            "{}",
+            action.action
+        );
+        assert_eq!(definition.parameters.len(), 3);
+        assert!(action.available, "{action:?}");
+    }
+    let hello = plugins.iter().find(|p| p.id == HELLO).expect("listed");
+    assert_eq!(hello.actions.len(), 2);
+    assert!(hello.actions.iter().all(|a| a.definition.is_some()));
+
+    // Shown: the same actions, the whole manifest, the icon.
+    let details = plugin_answers::plugin_details(&mut client, BIG)
+        .await
+        .unwrap();
+    assert_eq!(&details.summary.actions, &big.actions);
+    assert_eq!(
+        details.icon.as_deref(),
+        Some(
+            format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(&icon)
+            )
+            .as_str()
+        )
+    );
+    let shown = details.manifest["contributes"]["actions"]
+        .as_array()
+        .expect("the manifest's actions");
+    assert_eq!(
+        shown
+            .iter()
+            .map(|a| a["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        declared
+    );
+    assert_eq!(
+        shown[BIG_ACTIONS - 1]["node"]["outputs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        BIG_OUTPUTS
+    );
+    assert_eq!(
+        details.manifest["contributes"]["actions"][0]["parameters"],
+        manifest["contributes"]["actions"][0]["parameters"]
+    );
+
+    // Each part fits one message: pages of actions...
+    let mut from = 0;
+    let mut pages = 0;
+    loop {
+        let page = client
+            .request(Request::GetPluginActions {
+                plugin: BIG.into(),
+                from,
+            })
+            .await
+            .unwrap();
+        assert!(wire_size(&page) <= MAX_MESSAGE_BYTES);
+        pages += 1;
+        let Response::PluginActions { next, total, .. } = page else {
+            panic!("a page")
+        };
+        assert_eq!(total as usize, BIG_ACTIONS);
+        match next {
+            Some(next) => from = next,
+            None => break,
+        }
+    }
+    assert!(pages > 1, "{pages} page(s)");
+    // ...chunks of the icon...
+    let mut offset = 0;
+    let mut chunks = 0;
+    loop {
+        let chunk = client
+            .request(Request::GetPluginIcon {
+                plugin: BIG.into(),
+                offset,
+            })
+            .await
+            .unwrap();
+        assert!(wire_size(&chunk) <= MAX_MESSAGE_BYTES);
+        chunks += 1;
+        let Response::PluginIcon {
+            icon: Some(chunk), ..
+        } = chunk
+        else {
+            panic!("a chunk")
+        };
+        match chunk.next {
+            Some(next) => offset = next,
+            None => break,
+        }
+    }
+    assert_eq!(chunks, BIG_ICON_BYTES.div_ceil(ICON_CHUNK_BYTES));
+    // ...and the paged listing and details.
+    for request in [
+        Request::ListPluginsPaged,
+        Request::GetPluginPaged { plugin: BIG.into() },
+    ] {
+        let answer = client.request(request).await.unwrap();
+        assert!(wire_size(&answer) <= MAX_MESSAGE_BYTES / 4);
+    }
+    // A plugin without an icon of its own has the sample's.
+    assert!(
+        plugin_answers::plugin_icon(&mut client, HELLO)
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    // ---- edited: the last action's definition checks an instance as the
+    // agent checks an invocation.
+    let last = big.actions[BIG_ACTIONS - 1].definition.as_ref().unwrap();
+    let valid = ActionParameters::new()
+        .with("city", ParameterValue::Choice("tokyo".into()))
+        .with("days", ParameterValue::Integer(7));
+    assert!(last.normalize(&valid).is_ok());
+    let invalid = ActionParameters::new()
+        .with("city", ParameterValue::Choice("paris".into()))
+        .with("days", ParameterValue::Integer(30));
+    let problems = last.normalize(&invalid).unwrap_err();
+    assert_eq!(problems.len(), 2, "{problems:?}");
+    let refused = agent
+        .invoke(
+            BIG,
+            &format!("report-{}", BIG_ACTIONS - 1),
+            json!({"city": "paris", "days": 30}),
+        )
+        .await
+        .unwrap();
+    let PluginActionOutcome::Failed { code, .. } = refused else {
+        panic!("{refused:?}")
+    };
+    assert_eq!(code, "invalid-parameters");
+
+    // ---- an app that does not page (an older one): `listPlugins` and
+    // `getPlugin` as it always asked, on one connection.
+    let mut old = agent.client().await;
+    let listed = old.request(Request::ListPlugins).await.unwrap();
+    assert!(wire_size(&listed) <= MAX_MESSAGE_BYTES);
+    let Response::Plugins { plugins } = listed else {
+        panic!("plugins")
+    };
+    // The largest plugin lost its definitions (its actions are listed, the
+    // editors do not offer them); the small one kept them.
+    let big_old = plugins.iter().find(|p| p.id == BIG).unwrap();
+    assert_eq!(big_old.actions.len(), BIG_ACTIONS);
+    assert!(big_old.actions.iter().all(|a| a.definition.is_none()));
+    assert_eq!(big_old.action_count, None);
+    let hello_old = plugins.iter().find(|p| p.id == HELLO).unwrap();
+    assert!(hello_old.actions.iter().all(|a| a.definition.is_some()));
+    // The details: without the icon and what else did not fit.
+    let shown = old
+        .request(Request::GetPlugin { plugin: BIG.into() })
+        .await
+        .unwrap();
+    assert!(wire_size(&shown) <= MAX_MESSAGE_BYTES);
+    let Response::Plugin { plugin: shown } = shown else {
+        panic!("details")
+    };
+    assert_eq!(shown.icon, None);
+    assert_eq!(shown.summary.actions.len(), BIG_ACTIONS);
+    assert_eq!(shown.permissions.len(), 1);
+    // A change answers the same way, and the connection is still open.
+    let disabled = old
+        .request(Request::DisablePlugin { plugin: BIG.into() })
+        .await
+        .unwrap();
+    assert!(matches!(&disabled, Response::Plugin { plugin }
+        if plugin.summary.state == PluginState::Disabled));
+    assert!(matches!(
+        old.request(Request::GetPluginRuntime).await.unwrap(),
+        Response::PluginRuntime { .. }
+    ));
+    // A small plugin's details are complete as before.
+    let Response::Plugin { plugin: small } = old
+        .request(Request::GetPlugin {
+            plugin: HELLO.into(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("details")
+    };
+    assert!(small.icon.is_some());
+    assert!(small.summary.actions.iter().all(|a| a.definition.is_some()));
     agent.stop().await;
 }
 

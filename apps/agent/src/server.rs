@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use deckpilot_ipc::framing::{FrameError, read_message, write_message};
+use deckpilot_ipc::plugin_answers;
 use deckpilot_ipc::{
     AgentEvent, Capability, ClientKind, ClientMessage, ErrorCode, IpcError, MIN_PROTOCOL_VERSION,
     PROTOCOL_VERSION, Request, Response, ServerMessage, SharedStream, token,
@@ -76,8 +77,28 @@ impl Drop for DesktopGuard {
     }
 }
 
+/// Writes `message`; `false` when the connection is gone. A message larger
+/// than one frame is not written at all, so the connection is still
+/// aligned: an answer is shortened or refused in its place
+/// ([`plugin_answers::fit`]), an event is left out.
 async fn send(writer: &mut SharedStream, message: &ServerMessage) -> bool {
     match write_message(writer, message).await {
+        Ok(()) => true,
+        Err(FrameError::TooLarge) => {
+            if let Some(fitted) = plugin_answers::fit(message.clone()) {
+                warn!("an IPC answer was too large; it is sent shortened or refused");
+                written(write_message(writer, &fitted).await)
+            } else {
+                warn!("an IPC message was too large to send; it is left out");
+                true
+            }
+        }
+        result => written(result),
+    }
+}
+
+fn written(result: Result<(), FrameError>) -> bool {
+    match result {
         Ok(()) => true,
         Err(error) => {
             debug!(%error, "writing to an IPC client failed");

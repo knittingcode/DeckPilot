@@ -121,6 +121,43 @@ pub fn unavailable_with(record: &PluginRecord, stored: &[StoredGrant]) -> Option
     })
 }
 
+fn action_info(
+    m: &Manifest,
+    action: &deckpilot_plugin_manifest::Action,
+    reason: Option<&String>,
+) -> ipc::PluginActionInfo {
+    ipc::PluginActionInfo {
+        action: action.id.clone(),
+        action_type: format!("{}.{}", m.id, action.id),
+        name: action.name.clone(),
+        description: Some(action.description.clone()).filter(|d| !d.is_empty()),
+        available: reason.is_none(),
+        unavailable_reason: reason.cloned(),
+        definition: super::engine::action_type(&m.id.to_string(), action).ok(),
+    }
+}
+
+/// Every action of the active version as `getPluginActions` pages them:
+/// as in [`summary`], with each one's manifest entry.
+pub fn action_entries(
+    record: &PluginRecord,
+    stored: &[StoredGrant],
+) -> Vec<ipc::PluginActionEntry> {
+    let Some(m) = record.active().map(|v| &v.manifest) else {
+        return Vec::new();
+    };
+    let reason = unavailable_with(record, stored);
+    m.contributes
+        .actions()
+        .iter()
+        .map(|action| ipc::PluginActionEntry {
+            action: action_info(m, action, reason.as_ref()),
+            manifest: serde_json::to_value(action).ok(),
+            too_large: false,
+        })
+        .collect()
+}
+
 pub fn summary(record: &PluginRecord, stored: &[StoredGrant]) -> ipc::PluginSummary {
     let active = record.active();
     let manifest = active.map(|v| &v.manifest);
@@ -130,15 +167,7 @@ pub fn summary(record: &PluginRecord, stored: &[StoredGrant]) -> ipc::PluginSumm
             m.contributes
                 .actions()
                 .iter()
-                .map(|action| ipc::PluginActionInfo {
-                    action: action.id.clone(),
-                    action_type: format!("{}.{}", m.id, action.id),
-                    name: action.name.clone(),
-                    description: Some(action.description.clone()).filter(|d| !d.is_empty()),
-                    available: reason.is_none(),
-                    unavailable_reason: reason.clone(),
-                    definition: super::engine::action_type(&m.id.to_string(), action).ok(),
-                })
+                .map(|action| action_info(m, action, reason.as_ref()))
                 .collect()
         })
         .unwrap_or_default();
@@ -155,6 +184,7 @@ pub fn summary(record: &PluginRecord, stored: &[StoredGrant]) -> ipc::PluginSumm
         previous_version: record.previous().map(|v| v.version.to_string()),
         staged_version: record.staged().map(|v| v.version.to_string()),
         actions,
+        action_count: None,
         health: None,
     }
 }
@@ -232,15 +262,21 @@ pub fn details(
 /// The PNG signature.
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
 
+/// Whether `bytes` may be shown as a plugin's icon: a PNG of at most
+/// [`ipc::MAX_ICON_BYTES`] whose sha256 is `expected`.
+fn icon_ok(bytes: &[u8], expected: &Sha256Digest) -> bool {
+    use sha2::Digest as _;
+    if bytes.len() > ipc::MAX_ICON_BYTES || !bytes.starts_with(PNG) {
+        return false;
+    }
+    let digest: [u8; 32] = sha2::Sha256::digest(bytes).into();
+    digest == *expected.as_bytes()
+}
+
 /// `bytes` as a `data:` URL for [`ipc::PluginDetails::icon`]: only a PNG
 /// of at most [`ipc::MAX_ICON_BYTES`] whose sha256 is `expected`.
 pub fn icon_data(bytes: &[u8], expected: &Sha256Digest) -> Option<String> {
-    use sha2::Digest as _;
-    if bytes.len() > ipc::MAX_ICON_BYTES || !bytes.starts_with(PNG) {
-        return None;
-    }
-    let digest: [u8; 32] = sha2::Sha256::digest(bytes).into();
-    (digest == *expected.as_bytes()).then(|| {
+    icon_ok(bytes, expected).then(|| {
         format!(
             "data:image/png;base64,{}",
             base64::engine::general_purpose::STANDARD.encode(bytes)
@@ -248,10 +284,11 @@ pub fn icon_data(bytes: &[u8], expected: &Sha256Digest) -> Option<String> {
     })
 }
 
-/// The active version's 128 px icon (`icons.128` of its manifest), read
-/// from `dir` (its install directory) and checked against the hash its
-/// integrity record has for that file. Anything else gives no icon.
-pub fn icon(dir: &Path, record: &PluginRecord) -> Option<String> {
+/// The active version's 128 px icon file (`icons.128` of its manifest),
+/// read from `dir` (its install directory), and the hash its integrity
+/// record has for it. Anything but a regular file of at most
+/// [`ipc::MAX_ICON_BYTES`] gives none.
+fn icon_file(dir: &Path, record: &PluginRecord) -> Option<(Vec<u8>, Sha256Digest)> {
     let active = record.active()?;
     let relative = &active.manifest.icons.size128;
     let expected = active.integrity.files.get(relative)?;
@@ -260,7 +297,48 @@ pub fn icon(dir: &Path, record: &PluginRecord) -> Option<String> {
     if !meta.is_file() || meta.len() > ipc::MAX_ICON_BYTES as u64 {
         return None;
     }
-    icon_data(&std::fs::read(&path).ok()?, expected)
+    Some((std::fs::read(&path).ok()?, *expected))
+}
+
+/// The active version's 128 px icon as a `data:` URL, checked against
+/// the hash its integrity record has for that file. Anything else gives
+/// no icon.
+pub fn icon(dir: &Path, record: &PluginRecord) -> Option<String> {
+    let (bytes, expected) = icon_file(dir, record)?;
+    icon_data(&bytes, &expected)
+}
+
+/// The chunk of the icon [`icon`] gives that starts at `offset`
+/// (`getPluginIcon`), checked the same way on every request. `None`
+/// without an icon to show, or for an offset that is not a chunk's start.
+pub fn icon_chunk(dir: &Path, record: &PluginRecord, offset: u64) -> Option<ipc::PluginIconChunk> {
+    let (bytes, expected) = icon_file(dir, record)?;
+    icon_chunk_of(&bytes, &expected, offset)
+}
+
+/// The chunk of `bytes` at `offset` when [`icon_data`] would show them.
+pub fn icon_chunk_of(
+    bytes: &[u8],
+    expected: &Sha256Digest,
+    offset: u64,
+) -> Option<ipc::PluginIconChunk> {
+    if !icon_ok(bytes, expected) {
+        return None;
+    }
+    let start = usize::try_from(offset).ok()?;
+    if start % ipc::ICON_CHUNK_BYTES != 0 || start >= bytes.len() {
+        return None;
+    }
+    let end = (start + ipc::ICON_CHUNK_BYTES).min(bytes.len());
+    Some(ipc::PluginIconChunk {
+        media_type: "image/png".to_owned(),
+        size: bytes.len() as u64,
+        // Checked above: the file's own hash.
+        sha256: expected.to_string(),
+        offset,
+        data: base64::engine::general_purpose::STANDARD.encode(&bytes[start..end]),
+        next: (end < bytes.len()).then_some(end as u64),
+    })
 }
 
 /// Grant keys from a request's consent.
@@ -444,6 +522,44 @@ mod tests {
         // Too large.
         let large = [PNG, &vec![0; ipc::MAX_ICON_BYTES]].concat();
         assert_eq!(icon_data(&large, &digest(&large)), None);
+    }
+
+    #[test]
+    fn icon_chunks_join_into_the_icons_data_url() {
+        use sha2::Digest as _;
+        let digest = |bytes: &[u8]| Sha256Digest::from_bytes(sha2::Sha256::digest(bytes).into());
+        let png: Vec<u8> = [
+            PNG.to_vec(),
+            (0..200 * 1024_u32)
+                .map(|i| u8::try_from(i % 251).unwrap())
+                .collect(),
+        ]
+        .concat();
+        let expected = digest(&png);
+        let mut offset = 0;
+        let mut joined = String::new();
+        let mut chunks = 0;
+        loop {
+            let chunk = icon_chunk_of(&png, &expected, offset).unwrap();
+            assert_eq!(chunk.offset, offset);
+            assert_eq!(chunk.size, png.len() as u64);
+            assert_eq!(chunk.sha256, expected.to_string());
+            joined.push_str(&chunk.data);
+            chunks += 1;
+            match chunk.next {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+        assert_eq!(chunks, png.len().div_ceil(ipc::ICON_CHUNK_BYTES));
+        assert_eq!(
+            format!("data:image/png;base64,{joined}"),
+            icon_data(&png, &expected).unwrap()
+        );
+        // Only chunk starts, only the recorded file.
+        assert_eq!(icon_chunk_of(&png, &expected, 1), None);
+        assert_eq!(icon_chunk_of(&png, &expected, png.len() as u64), None);
+        assert_eq!(icon_chunk_of(&png, &digest(b"other"), 0), None);
     }
 
     #[test]

@@ -42,11 +42,12 @@ agent redacts it from anything the plugin gets back. Without a token the
 requests go out unauthenticated (public repositories, GitHub's lower rate
 limit).
 
-Revoking `network:api.github.com` also makes the broker refuse the
-credential slot that names that host, and with it the whole grant set:
-the plugin then has no grants (its settings and storage are denied too)
-until the network permission is granted again; the four utilities, which
-call nothing, keep working.
+Revoking `network:api.github.com` also makes the credential slot that
+names that host unusable: every call that uses it (`credentials.has`, a
+request with the token) is refused as `not-permitted`, and no secret can be
+injected, until the network permission is granted again. Everything else
+keeps working: the settings, the storage (`last-values`), the
+notifications grant and the four utilities.
 
 ## Settings, variables, storage
 
