@@ -214,9 +214,11 @@ jobs:
             exit 1
           fi
 
-  # The full installer checks of the Packaging workflow (Linux .deb and
-  # .rpm, Windows NSIS and MSI: names, versions, app, bundled agent, udev
-  # rule, updater signatures by a throwaway key) on the tagged commit,
+  # The full installer checks of the Packaging workflow (Linux .deb,
+  # AppImage and .rpm, Windows NSIS and MSI, macOS .app, updater archive and
+  # disk image: names, versions, layout, app, bundled agent, udev rule,
+  # distribution record and package format, updater signatures by a
+  # throwaway key) on the tagged commit,
   # before anything is signed: the draft and every later job need it. It
   # builds github.sha, which the gate checked is the tag's commit (RUN_SHA),
   # and gets no secret. Pre-releases build no .rpm and the MSI gets the
@@ -308,6 +310,12 @@ jobs:
       # Build provenance attestations for the release artifacts.
       id-token: write
       attestations: write
+    env:
+      # The distribution record compiled into the app and the agent
+      # (crates/deckpilot-distribution; github is also its default): these
+      # builds are the GitHub Releases channel. Checked in the built binary
+      # below ("Embedded distribution record").
+      DECKPILOT_DISTRIBUTION_CHANNEL: github
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -441,6 +449,36 @@ jobs:
           grep -q -F -a -- "$DECKPILOT_UPDATER_PUBKEY" "$binary" \
             || { echo "::error::$binary does not contain the configured updater public key"; exit 1; }
           echo "the configured updater public key is embedded in $binary"
+      # The distribution record compiled into the app must be this matrix
+      # entry's: channel github, this version, no development override
+      # (docs/distribution/README.md, section 2.2); the agent's too, once it
+      # links deckpilot-distribution. Read from the binaries, not run, so the
+      # cross-compiled x86_64 macOS build is checked the same way. The
+      # Packaging workflow checks the format the bundler patched into each
+      # package's copy; the verify job lists the record in release-meta.json.
+      - name: Embedded distribution record
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ needs.validate-tag.outputs.version }}
+        run: |
+          suffix=""; [ "${{ runner.os }}" = "Windows" ] && suffix=".exe"
+          release="target/${{ matrix.target }}/release"
+          tools/ci/check-packages.sh record "$release/deckpilot-desktop${suffix}" none > "$RUNNER_TEMP/record.txt"
+          tools/ci/check-packages.sh record "$release/deckpilot-agent${suffix}" none optional > /dev/null
+          field() { sed -n "s/^$1=//p" "$RUNNER_TEMP/record.txt"; }
+          mkdir -p "$RUNNER_TEMP/distribution"
+          jq -n --arg target "${{ matrix.target }}" --arg channel "$(field distribution_channel)" \
+            --arg format "$(field package_format)" --arg version "$(field application_version)" \
+            '{target: $target, distribution_channel: $channel, package_format: $format, application_version: $version}' \
+            > "$RUNNER_TEMP/distribution/${{ matrix.target }}.json"
+          cat "$RUNNER_TEMP/distribution/${{ matrix.target }}.json"
+      - name: Upload the distribution record
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: distribution-${{ matrix.target }}
+          path: ${{ runner.temp }}/distribution/${{ matrix.target }}.json
+          if-no-files-found: error
+          overwrite: true
       # The bundler notarizes and staples the app; the disk image is
       # notarized and stapled here and replaces the uploaded one.
       - name: Notarize and staple the disk image
@@ -636,8 +674,18 @@ jobs:
           pattern: signing-*
           merge-multiple: true
           path: ${{ runner.temp }}/signing
+      - name: Download the distribution records
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: distribution-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/distribution
       # Fails on a failed signing or notarization; records "unsigned"
-      # wherever a build carries no platform signature.
+      # wherever a build carries no platform signature. Lists the draft's
+      # files with their platform, format, distribution channel (from the
+      # builds' records), SHA-256 and size, checked against the packaging
+      # matrix (docs/distribution/targets.toml), as release-meta.json's
+      # artifacts for the downstream distribution jobs.
       - name: Signing record and release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -650,7 +698,8 @@ jobs:
           RELEASE_ID: ${{ needs.draft.outputs.release-id }}
         run: |
           printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
-          NOTES_FILE="$RUNNER_TEMP/notes.md" tools/release-pipeline/release-meta.sh \
+          NOTES_FILE="$RUNNER_TEMP/notes.md" ASSETS_DIR=release-files DISTRIBUTION_DIR="$RUNNER_TEMP/distribution" \
+            tools/release-pipeline/release-meta.sh \
             "$RUNNER_TEMP/signing" release-files/release-meta.json "$RUNNER_TEMP/release-notes.md"
           gh release upload "$TAG" release-files/release-meta.json --repo "$GITHUB_REPOSITORY" --clobber
           # tag_name every time: GitHub detaches a draft from its tag when an

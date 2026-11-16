@@ -1,0 +1,21 @@
+# expect: writes the release (curl
+name: Distribute
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  distribute-homebrew:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: distribute-homebrew
+    steps:
+      - name: Update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST --data-binary @x.deb "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$ID/assets?name=x.deb"

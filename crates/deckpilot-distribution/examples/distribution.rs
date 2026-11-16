@@ -1,6 +1,6 @@
-//! Prints the distribution record of the running build as `key=value`
-//! lines. `tests/release_build.rs` builds this in the release and debug
-//! profiles.
+//! Prints the distribution record of the running build, and the agent
+//! executable override it honours, as `key=value` lines.
+//! `tests/release_build.rs` builds this in the release and debug profiles.
 
 fn main() {
     let record = deckpilot_distribution::current();
@@ -17,4 +17,10 @@ fn main() {
     println!("platform={}", record.platform());
     println!("architecture={}", record.architecture());
     println!("development_override={}", record.is_development_override());
+    println!(
+        "agent_executable_override={}",
+        deckpilot_distribution::agent_executable_override()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    );
 }

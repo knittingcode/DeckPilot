@@ -363,6 +363,12 @@ async fn renders_layout_and_reports_status() {
     assert_eq!(active_key(&status), Some("SHOP"));
     assert_eq!(status.backend, "mock");
     assert_eq!(status.protocol, PROTOCOL_VERSION);
+    // The build's distribution record, for the app's channel check (R6).
+    let record = status.distribution.as_ref().expect("distribution record");
+    let own = deckpilot_distribution::current();
+    assert_eq!(record.channel(), Some(own.distribution_channel()));
+    assert_eq!(record.application_version, status.version);
+    assert_eq!(record.platform, own.platform().name());
     let device = &status.devices[0];
     assert_eq!(device.model_name, "Stream Deck MK.2");
     assert!(matches!(device.layout, LayoutStatus::Compatible { .. }));

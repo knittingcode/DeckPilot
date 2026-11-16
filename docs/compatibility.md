@@ -51,7 +51,17 @@ this page means that build.
 | agent newer | agent newer than the app | same, from the app's side; the app's own (older) agent must not be started against the newer database (it refuses it, see below) |
 | update required | agent below protocol 4 | nothing configurable; offers to replace the agent |
 | unknown | a version cannot be parsed | offers the restart |
+| other distribution | the agent was delivered by another distribution channel than the app, for example an APT agent next to a GitHub app (rule R6 of [distribution/README.md](distribution/README.md#5-cross-channel-rejection-rules)) | says which installation each belongs to; offers the restart, which replaces it with the agent of the app's own bundle. Checked before the version |
 | stopped | no agent | offers to start it; reconnects automatically when it runs again |
+
+The channel comes from the agent's distribution record, an optional
+`distribution` field in its status (`getStatus`, protocol 10 unchanged):
+the channel, update provider, package format where the build knows it,
+release channel, version, platform and architecture, all compiled into
+the agent. Older apps ignore the field; agents of 0.6.0-alpha.3 and
+earlier do not send it and were all GitHub builds, so the app treats them
+as such and checks only their version, as before. A channel name the app
+does not know counts as another channel.
 
 The app keeps a subscription to the agent and reconnects every 2 s after
 the agent stops or restarts; each reconnection negotiates again, so an
@@ -97,7 +107,8 @@ the development password, never a credential store.
 | App reopened | reuses the unlocked agent | `a_restarted_app_reuses_the_unlocked_agent_without_asking` |
 | Agent crash or stop during a run | runs marked interrupted on stop and on the next start | `runs_of_a_stopped_agent_are_recorded_as_interrupted` |
 | Agent restart from the app | refused while workflows run; with confirmation the runs are interrupted and recorded | `restarting_the_agent_never_ends_running_workflows_silently` |
-| App/agent update | installation waits while workflows run (automatic installation retries later; manual installation says why) | `InstallContext::agent_busy` from `runningExecutions`; policy tests |
+| App/agent update | installation waits while workflows run (automatic installation retries later; manual installation says why); the intent is recorded, the old agent's endpoint and instance lock are both gone before anything is installed, and the next start completes or reports the update ([updates.md](updates.md#recovery-after-an-interrupted-update)) | `InstallContext::agent_busy` from `runningExecutions`; policy tests; `updates_tests.rs` (`install`, `recovery`) |
+| Agent of another installation | refused (other distribution); the restart starts this app's agent only once the other one released the instance lock | `deckpilot-update` compatibility tests; `agent.rs` tests |
 | IPC endpoint conflicts | endpoint per data directory; bounded connect | `deckpilot-ipc` endpoint tests |
 | Incompatible pair | old agent refuses the newer database without changing it | matrix |
 | System restart, logout/login | agent started by autostart; database opens with the system key | manual (release validation); not automated |
