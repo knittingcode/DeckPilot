@@ -170,9 +170,9 @@ plugin's directory and module).
       methods you use).
 - [ ] Every own error code is declared; no panics on input.
 - [ ] Output keys are declared in `node.outputs`; texts stay under 16 KiB.
-- [ ] The `getPlugin` answer stays small: at most about 16 actions, 8
-      outputs and 8 parameters each, short descriptions
-      ([actions.md](actions.md#keep-the-definitions-small); the IPC limit
-      is 64 KiB per message).
+- [ ] Within the manifest's limits (64 actions, 32 parameters and 32
+      outputs each, a 256 KiB icon), with only the outputs an action
+      returns and short descriptions
+      ([actions.md](actions.md#how-large-a-plugin-may-be)).
 - [ ] `plugins/examples/build.sh` twice gives the same sha256.
 - [ ] `LICENSE` and a 128×128 PNG icon are present; `package` succeeds.

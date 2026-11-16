@@ -7,6 +7,9 @@
 //! | `getPluginRuntime` | `pluginRuntime` | whether plugins can be used here, and why not |
 //! | `listPlugins` | `plugins` | installed plugins |
 //! | `getPlugin` | `plugin` | one installed plugin: manifest, permissions with their grant state, actions, pending update, recent audit |
+//! | `listPluginsPaged` / `getPluginPaged` | `plugins` / `plugin` | the same without actions and icon (feature [`feature::PAGED_ANSWERS`]) |
+//! | `getPluginActions` | `pluginActions` | one page of a plugin's actions with their definitions (feature [`feature::PAGED_ANSWERS`]) |
+//! | `getPluginIcon` | `pluginIcon` | one chunk of a plugin's icon (feature [`feature::PAGED_ANSWERS`]) |
 //! | `listAvailablePlugins` | `availablePlugins` | the verified registry index with per-version permissions and compatibility (`refresh` re-reads the registry first) |
 //! | `installPlugin` | `plugin` | installs from the registry or from a package file (verified against the registry pins), in state `disabled`, granting `consent` |
 //! | `enablePlugin` | `plugin` | grants `consent`, then enables; every declared permission must be granted |
@@ -40,6 +43,18 @@
 //! [`reason::PLUGINS_UNAVAILABLE`]. Errors carry a machine-readable
 //! [`IpcError::reason`](crate::IpcError::reason) from [`reason`].
 //!
+//! An answer must fit one IPC message
+//! ([`MAX_MESSAGE_BYTES`](crate::framing::MAX_MESSAGE_BYTES)); a plugin's
+//! actions (each with its full definition) and its icon do not have to. An
+//! agent with [`feature::PAGED_ANSWERS`] in its runtime status answers
+//! `listPluginsPaged` and `getPluginPaged` without them, pages the actions
+//! with `getPluginActions` and chunks the icon with `getPluginIcon`
+//! ([`crate::plugin_answers`] has both sides). An answer that does not fit
+//! anyway (a client that does not page, such as an older app) is sent
+//! shortened (icon, then definitions, then the manifest's actions left
+//! out), and otherwise as an error with the reason
+//! [`reason::ANSWER_TOO_LARGE`]; the connection stays open.
+//!
 //! Every value is checked by the agent: identifiers are bounded and
 //! validated there. Only `setPluginCredential` carries a secret, from the
 //! app to the agent; no answer or event ever does.
@@ -60,6 +75,23 @@ pub const MAX_PLUGIN_TEXT: usize = 256;
 pub const MAX_PACKAGE_PATH: usize = 4096;
 /// Largest icon file [`PluginDetails::icon`] carries.
 pub const MAX_ICON_BYTES: usize = 256 * 1024;
+/// Icon bytes one `getPluginIcon` answer carries at most: a multiple of 3,
+/// so the base64 of consecutive chunks joins into the base64 of the file,
+/// and small enough that its base64 fits one IPC message.
+pub const ICON_CHUNK_BYTES: usize = 30 * 1024;
+/// Highest action index a `getPluginActions` may start from (manifests
+/// declare at most 64 actions).
+pub const MAX_ACTION_INDEX: u32 = 1024;
+
+/// What an agent can do beyond the plugin requests every protocol 10 agent
+/// has ([`PluginRuntimeStatus::features`]). A client uses a feature only
+/// when the agent lists it.
+pub mod feature {
+    /// `listPluginsPaged`, `getPluginPaged`, `getPluginActions` and
+    /// `getPluginIcon`: answers that fit one IPC message whatever the
+    /// plugin's number of actions and outputs and its icon's size.
+    pub const PAGED_ANSWERS: &str = "pagedAnswers";
+}
 
 /// Stable, machine-readable reasons of plugin errors
 /// ([`IpcError::reason`](crate::IpcError::reason)). The message explains
@@ -109,6 +141,10 @@ pub mod reason {
     pub const INVALID_DATA: &str = "invalidData";
     /// No migration of that module is known.
     pub const UNKNOWN_MIGRATION: &str = "unknownMigration";
+    /// The answer does not fit one IPC message, even shortened. Sent with
+    /// [`ErrorCode::Failed`](crate::ErrorCode::Failed), which every client
+    /// knows; the connection stays open.
+    pub const ANSWER_TOO_LARGE: &str = "answerTooLarge";
 }
 
 /// Most consent items one `decideModuleMigration` may decide.
@@ -149,6 +185,18 @@ pub struct PluginRuntimeStatus {
     /// The registry the agent installs from, once one is configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry: Option<RegistryStatus>,
+    /// What this agent can do beyond the original plugin requests
+    /// ([`feature`]). Additive: older agents leave it out, older clients
+    /// ignore it, and a client ignores names it does not know.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
+}
+
+impl PluginRuntimeStatus {
+    /// Whether the agent lists `feature` ([`feature`]).
+    pub fn has_feature(&self, feature: &str) -> bool {
+        self.features.iter().any(|f| f == feature)
+    }
 }
 
 /// The registry's verified state.
@@ -317,7 +365,13 @@ pub struct PluginSummary {
     /// A newer version waiting for consent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staged_version: Option<String>,
+    /// Empty in a paged answer (`listPluginsPaged`, `getPluginPaged`),
+    /// which has [`PluginSummary::action_count`] instead.
     pub actions: Vec<PluginActionInfo>,
+    /// In a paged answer only: how many actions the plugin has, which
+    /// `getPluginActions` pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_count: Option<u32>,
     /// What the agent saw of the plugin's host since it started: absent
     /// until an invocation failed, and from agents before the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -405,6 +459,43 @@ pub struct PluginDetails {
     /// before the field, and when plugins.db cannot be read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage: Option<PluginStorageUsage>,
+}
+
+/// One action of a `getPluginActions` page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginActionEntry {
+    /// As in a full [`PluginSummary::actions`], definition included.
+    pub action: PluginActionInfo,
+    /// The action's entry in the manifest (`contributes.actions[i]`), which
+    /// a paged [`PluginDetails::manifest`] leaves out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<serde_json::Value>,
+    /// The action alone does not fit one message: its definition and
+    /// manifest entry are left out (the editors then do not offer it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub too_large: bool,
+}
+
+/// One chunk of a plugin's icon (`getPluginIcon`): the active version's
+/// 128 px PNG, checked against its integrity record on every request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginIconChunk {
+    /// `image/png`.
+    pub media_type: String,
+    /// The whole file's size in bytes.
+    pub size: u64,
+    /// The whole file's sha256 (lowercase hex): the same in every chunk of
+    /// one file, so a client sees that it changed between chunks.
+    pub sha256: String,
+    /// Where this chunk starts in the file.
+    pub offset: u64,
+    /// The chunk's bytes, base64 (standard alphabet, padded).
+    pub data: String,
+    /// The offset of the next chunk; absent from the last one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<u64>,
 }
 
 /// A plugin's storage (`storage.*`): what it holds and its quota, the
@@ -788,6 +879,20 @@ pub(crate) fn check_request(request: &crate::Request) -> Result<(), String> {
         crate::Request::DeletePluginCredential { plugin, key } => {
             check_text("plugin", plugin)?;
             check_text("credential", key)
+        }
+        crate::Request::GetPluginActions { plugin, from } => {
+            check_text("plugin", plugin)?;
+            if *from > MAX_ACTION_INDEX {
+                return Err(format!("from must be at most {MAX_ACTION_INDEX}"));
+            }
+            Ok(())
+        }
+        crate::Request::GetPluginIcon { plugin, offset } => {
+            check_text("plugin", plugin)?;
+            if *offset > MAX_ICON_BYTES as u64 {
+                return Err(format!("offset must be at most {MAX_ICON_BYTES}"));
+            }
+            Ok(())
         }
         crate::Request::RetryModuleMigration { module } => check_module(module),
         crate::Request::GrantPluginUserOrigin {
@@ -1257,6 +1362,7 @@ mod tests {
                 .get("health")
                 .is_none()
         );
+        assert_eq!(summary.action_count, None);
         let sick = PluginSummary {
             health: Some(PluginHealth {
                 crashes: 2,

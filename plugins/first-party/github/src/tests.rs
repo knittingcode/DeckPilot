@@ -54,6 +54,8 @@ struct Agent {
     settings: Value,
     token: bool,
     answers: BTreeMap<String, Answer>,
+    /// URLs that get no answer, with the agent's network kind.
+    unreachable: BTreeMap<String, NetworkErrorKind>,
     fetched: Vec<String>,
     opened: Vec<String>,
 }
@@ -87,6 +89,13 @@ fn host(agent: &Shared) -> MockHost {
                     assert!(f.headers.iter().any(|h| h.name == name), "{name}");
                 }
                 agent.fetched.push(f.url.clone());
+                if let Some(kind) = agent.unreachable.get(&f.url) {
+                    return CallResult::error_with_kind(
+                        CallErrorCode::Failed,
+                        format!("{} (canned)", kind.code()),
+                        Some(*kind),
+                    );
+                }
                 let found = agent
                     .answers
                     .iter()
@@ -541,9 +550,60 @@ fn failures_have_the_builtins_codes() {
         failed(&out).1,
         "GitHub's rate limit is reached; try again in 30 s"
     );
-    // No answer at all: the agent's reason, retryable.
+    // No answer, and no network kind (an older agent, or no route): the
+    // agent's reason, retryable.
     let out = run(&agent, "repository", json!({"repository": "a/offline"}));
     assert_eq!(failed(&out).0, "request-failed");
+}
+
+/// A request the network fails reports the built-in's transport code
+/// (`deckpilot-net`'s), with its retryability, through the agent's
+/// network kind (ABI 1 `dp_features`).
+#[test]
+fn network_failures_report_the_builtins_codes() {
+    use deckpilot_plugin_sdk::NetworkErrorKind as K;
+    let agent = agent();
+    for (kind, code, retryable) in [
+        (K::DnsFailed, "dns-failed", true),
+        (K::ConnectionFailed, "connection-failed", true),
+        (K::TimedOut, "timed-out", true),
+        (K::TlsFailed, "tls-failed", false),
+        (K::TooManyRedirects, "too-many-redirects", false),
+        (K::InsecureRedirect, "insecure-redirect", false),
+        (K::BlockedAddress, "blocked-address", false),
+    ] {
+        agent.borrow_mut().unreachable =
+            BTreeMap::from([("https://api.github.com/repos/octo/site".to_owned(), kind)]);
+        let out = run(&agent, "repository", json!({"repository": "octo/site"}));
+        match &out {
+            ActionOutcome::Failed {
+                code: got,
+                retryable: r,
+                ..
+            } => {
+                assert_eq!(got, code);
+                assert_eq!(*r, retryable, "{code}");
+            }
+            other => panic!("{code}: {other:?}"),
+        }
+    }
+    // A kind added later is the agent's reason, as before.
+    agent.borrow_mut().unreachable = BTreeMap::from([(
+        "https://api.github.com/repos/octo/site".to_owned(),
+        K::Other,
+    )]);
+    let out = run(&agent, "repository", json!({"repository": "octo/site"}));
+    assert_eq!(failed(&out).0, "request-failed");
+}
+
+/// The module reads the network kind: `dp_features` reports it.
+#[test]
+fn the_module_opts_in_to_network_kinds() {
+    assert_ne!(
+        u64::try_from(dp_features()).unwrap()
+            & deckpilot_plugin_abi::guest::features::NETWORK_ERROR_KIND,
+        0
+    );
 }
 
 #[test]

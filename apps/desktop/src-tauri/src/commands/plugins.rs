@@ -22,7 +22,7 @@ use deckpilot_ipc::plugins::{
     PluginSettings, PluginSummary, PluginUpdateOutcome, RegistryStatus,
 };
 use deckpilot_ipc::{
-    AgentClient, Capability, ClientError, ClientKind, ErrorCode, Request, Response,
+    AgentClient, Capability, ClientError, ClientKind, ErrorCode, Request, Response, plugin_answers,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime, State, WebviewWindow};
@@ -123,11 +123,21 @@ impl From<ClientError> for PluginError {
 
 pub type PluginResult<T> = Result<T, PluginError>;
 
-/// Sends one plugin request over a connection of its own. Every request
-/// but `getPluginRuntime` is preceded by `getPluginRuntime` on the same
-/// connection and refused unless the agent reports plugins as available.
-async fn plugin_request(state: &AppState, request: Request) -> PluginResult<Response> {
-    let gated = !matches!(request, Request::GetPluginRuntime);
+/// A connection to an agent that answers plugin requests.
+struct Connection {
+    client: AgentClient,
+    /// The agent pages plugin answers ([`plugins::feature::PAGED_ANSWERS`]):
+    /// a plugin's actions and icon are read with requests of their own, so
+    /// any number of them fits ([`deckpilot_ipc::plugin_answers`]). An
+    /// agent without it answers in one message, which it shortens or
+    /// refuses when the answer does not fit.
+    paged: bool,
+}
+
+/// Opens a connection for plugin requests. Unless `gated` is false (only
+/// `getPluginRuntime` itself), it first asks `getPluginRuntime` and refuses
+/// unless the agent reports plugins as available.
+async fn connect(state: &AppState, gated: bool) -> PluginResult<Connection> {
     if gated && !state.is_unlocked() {
         return Err(PluginError::new(
             reason::LOCKED,
@@ -138,24 +148,62 @@ async fn plugin_request(state: &AppState, request: Request) -> PluginResult<Resp
     if !client.supports(Capability::Plugins) {
         return Err(PluginError::too_old(client.protocol()));
     }
+    let mut paged = false;
     if gated {
         match client.request(Request::GetPluginRuntime).await? {
-            Response::PluginRuntime { status } if status.available => {}
+            Response::PluginRuntime { status } if status.available => {
+                paged = status.has_feature(plugins::feature::PAGED_ANSWERS);
+            }
             Response::PluginRuntime { status } => return Err(PluginError::unavailable(&status)),
             other => return Err(PluginError::unexpected(&other)),
         }
     }
-    Ok(client.request(request).await?)
+    Ok(Connection { client, paged })
+}
+
+/// Sends one plugin request over a connection of its own. Every request
+/// but `getPluginRuntime` is preceded by `getPluginRuntime` on the same
+/// connection and refused unless the agent reports plugins as available.
+async fn plugin_request(state: &AppState, request: Request) -> PluginResult<Response> {
+    let gated = !matches!(request, Request::GetPluginRuntime);
+    let mut connection = connect(state, gated).await?;
+    Ok(connection.client.request(request).await?)
 }
 
 /// Every answer with one plugin's details also updates the action types
-/// the editors validate against ([`crate::plugin_actions`]).
+/// the editors validate against ([`crate::plugin_actions`]). With an agent
+/// that pages, the details are read in full after the request (a change
+/// answers with them too, possibly shortened to fit).
 async fn plugin_details(state: &AppState, request: Request) -> PluginResult<PluginDetails> {
-    match plugin_request(state, request).await? {
-        Response::Plugin { plugin } => {
-            state.plugin_actions().upsert(&plugin.summary);
-            Ok(*plugin)
+    let mut connection = connect(state, true).await?;
+    let details = if connection.paged {
+        let id = match request {
+            Request::GetPlugin { plugin } => plugin,
+            request => match connection.client.request(request).await? {
+                Response::Plugin { plugin } => plugin.summary.id,
+                other => return Err(PluginError::unexpected(&other)),
+            },
+        };
+        plugin_answers::plugin_details(&mut connection.client, &id).await?
+    } else {
+        match connection.client.request(request).await? {
+            Response::Plugin { plugin } => *plugin,
+            other => return Err(PluginError::unexpected(&other)),
         }
+    };
+    state.plugin_actions().upsert(&details.summary);
+    Ok(details)
+}
+
+/// The installed plugins, every action with its definition (paged when
+/// the agent pages).
+async fn installed_plugins(state: &AppState) -> PluginResult<Vec<PluginSummary>> {
+    let mut connection = connect(state, true).await?;
+    if connection.paged {
+        return Ok(plugin_answers::list_plugins(&mut connection.client).await?);
+    }
+    match connection.client.request(Request::ListPlugins).await? {
+        Response::Plugins { plugins } => Ok(plugins),
         other => Err(PluginError::unexpected(&other)),
     }
 }
@@ -198,11 +246,7 @@ pub async fn get_plugin_runtime(state: State<'_, AppState>) -> PluginResult<Plug
 /// cannot answer, no plugin action type is known until it can.
 #[tauri::command]
 pub async fn list_plugins(state: State<'_, AppState>) -> PluginResult<Vec<PluginSummary>> {
-    let answer = match plugin_request(&state, Request::ListPlugins).await {
-        Ok(Response::Plugins { plugins }) => Ok(plugins),
-        Ok(other) => Err(PluginError::unexpected(&other)),
-        Err(error) => Err(error),
-    };
+    let answer = installed_plugins(&state).await;
     match &answer {
         Ok(plugins) => state.plugin_actions().replace(plugins),
         Err(_) => state.plugin_actions().clear(),
@@ -668,6 +712,7 @@ mod tests {
             platform: "macos".into(),
             reason: Some("built without plugin support".into()),
             registry: None,
+            features: vec![],
         };
         let error = PluginError::unavailable(&status);
         assert_eq!(error.reason, "pluginsUnavailable");

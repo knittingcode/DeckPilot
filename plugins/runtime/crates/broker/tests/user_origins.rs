@@ -393,3 +393,157 @@ fn new_grants_replace_a_changed_user_origin_at_once() {
         Some(DenyReason::OriginNotGranted)
     );
 }
+
+fn has_token() -> CapabilityRequest {
+    CapabilityRequest::CredentialHas(deckpilot_plugin_abi::capability::CredentialRef {
+        credential: "token".into(),
+    })
+}
+
+/// Suspension (a slot is withheld from an origin the plugin cannot reach)
+/// composes with user origins: a slot bound only to a user origin is not
+/// suspended for lacking a declared-host grant.
+#[test]
+fn a_slot_bound_only_to_a_user_origin_is_not_suspended() {
+    let jira = r#"[
+        {"kind":"network","origin":"https://status.example.com","methods":["GET"]},
+        {"kind":"userOrigin","origin":"https://acme.atlassian.net","methods":["GET"],
+         "credentials":["token"]},
+        {"kind":"credential","key":"token","origins":[],"schemes":["bearer"]}
+    ]"#;
+    let g = derive(jira).unwrap();
+    assert!(g.credential("token").is_some());
+    assert_eq!(g.suspended_credentials().len(), 0);
+    let (broker, plugin) = granted(jira);
+    let s = broker.session(plugin.clone());
+    assert!(s.authorize(&has_token()).is_allowed());
+    assert!(
+        s.authorize(&get_with_token(
+            "https://acme.atlassian.net/rest/api/3/myself"
+        ))
+        .is_allowed()
+    );
+    // Revoking an unrelated declared host changes nothing for the slot.
+    broker.revoke_origin(
+        &plugin,
+        &Origin::parse_grant("https://status.example.com").unwrap(),
+    );
+    assert!(
+        s.authorize(&get_with_token(
+            "https://acme.atlassian.net/rest/api/3/myself"
+        ))
+        .is_allowed()
+    );
+    // The token still goes nowhere else.
+    assert!(
+        !s.authorize(&get_with_token("https://status.example.com/"))
+            .is_allowed()
+    );
+}
+
+/// The other direction: without the user-origin consent (missing, revoked
+/// or replaced by another origin) the slot bound to it is withheld.
+#[test]
+fn a_slot_is_withheld_when_its_user_origin_consent_is_gone() {
+    let myself = "https://acme.atlassian.net/rest/api/3/myself";
+    let jira = r#"[
+        {"kind":"userOrigin","origin":"https://acme.atlassian.net","methods":["GET"],
+         "credentials":["token"]},
+        {"kind":"credential","key":"token","origins":[],"schemes":["bearer"]}
+    ]"#;
+    let (broker, plugin) = granted(jira);
+    let s = broker.session(plugin.clone());
+    assert!(s.authorize(&has_token()).is_allowed());
+    // Revoked on a running session.
+    broker.revoke_user_origin(
+        &plugin,
+        &UserOrigin::parse("https://acme.atlassian.net").unwrap(),
+    );
+    assert_eq!(
+        s.authorize(&has_token()).denial(),
+        Some(DenyReason::CredentialNotGranted)
+    );
+    assert!(!s.authorize(&get_with_token(myself)).is_allowed());
+    // Stale: the consent is for another origin than the request's (the
+    // setting changed and the agent derived again with the new consent).
+    let (broker, plugin) = granted(&jira.replace("acme.atlassian.net", "other.atlassian.net"));
+    let s = broker.session(plugin);
+    assert!(!s.authorize(&get_with_token(myself)).is_allowed());
+    // Missing: a slot record with neither a fixed origin nor a consent
+    // that binds it is refused (the agent never passes one).
+    let unbound = jira.replace(r#""credentials":["token"]"#, r#""credentials":[]"#);
+    assert_eq!(derive(&unbound), Err(GrantError::EmptyCredential));
+    // A user origin never injects a slot that is not granted (revoked).
+    let (broker, plugin) = granted(jira);
+    let s = broker.session(plugin.clone());
+    broker.revoke_credential(&plugin, "token");
+    assert_eq!(
+        s.authorize(&get_with_token(myself)).denial(),
+        Some(DenyReason::CredentialNotGranted)
+    );
+    assert!(
+        s.authorize(&get("https://acme.atlassian.net/x"))
+            .is_allowed()
+    );
+}
+
+/// A slot with a declared host and a user origin: each destination stands
+/// or falls with its own grant.
+#[test]
+fn a_slot_with_a_declared_host_and_a_user_origin_keeps_each_on_its_own_grant() {
+    let api = "https://api.github.com/user";
+    let ghe = "https://ghe.example.com/api/v3/user";
+    // Both granted.
+    let (broker, plugin) = granted(GHE);
+    let s = broker.session(plugin.clone());
+    assert!(s.authorize(&get_with_token(api)).is_allowed());
+    assert!(s.authorize(&get_with_token(ghe)).is_allowed());
+    // The declared host is revoked: withheld there (suspended), kept for
+    // the user origin.
+    broker.revoke_origin(
+        &plugin,
+        &Origin::parse_grant("https://api.github.com").unwrap(),
+    );
+    assert!(!s.authorize(&get_with_token(api)).is_allowed());
+    assert!(s.authorize(&get_with_token(ghe)).is_allowed());
+    assert!(s.authorize(&has_token()).is_allowed());
+    // Then the user origin too: the slot is gone.
+    broker.revoke_user_origin(
+        &plugin,
+        &UserOrigin::parse("https://ghe.example.com/api/v3").unwrap(),
+    );
+    assert!(!s.authorize(&get_with_token(ghe)).is_allowed());
+    assert_eq!(
+        s.authorize(&has_token()).denial(),
+        Some(DenyReason::CredentialNotGranted)
+    );
+
+    // The same from derivation: no network grant for the declared host.
+    let without_host = GHE.replace(
+        r#"{"kind":"network","origin":"https://api.github.com","methods":["GET"]},"#,
+        "",
+    );
+    assert_ne!(without_host, GHE);
+    let g = derive(&without_host).unwrap();
+    assert_eq!(
+        g.suspended_credentials()["token"]
+            .iter()
+            .map(Origin::to_string)
+            .collect::<Vec<_>>(),
+        ["https://api.github.com"]
+    );
+    let (broker, plugin) = granted(&without_host);
+    let s = broker.session(plugin);
+    assert!(!s.authorize(&get_with_token(api)).is_allowed());
+    assert!(s.authorize(&get_with_token(ghe)).is_allowed());
+
+    // And no user-origin consent: only the declared host.
+    let without_consent = r#"[
+        {"kind":"network","origin":"https://api.github.com","methods":["GET"]},
+        {"kind":"credential","key":"token","origins":["https://api.github.com"],"schemes":["bearer"]}
+    ]"#;
+    let (broker, plugin) = granted(without_consent);
+    let s = broker.session(plugin);
+    assert!(s.authorize(&get_with_token(api)).is_allowed());
+    assert!(!s.authorize(&get_with_token(ghe)).is_allowed());
+}

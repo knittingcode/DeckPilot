@@ -144,6 +144,7 @@ export type PluginErrorReason =
   | "invalidParameters"
   | "invalidData"
   | "unknownMigration"
+  | "answerTooLarge"
   | "failed"
 
 /** What each reason means, as a headline; the agent's message has the details. */
@@ -174,6 +175,7 @@ const TITLES: Partial<Record<string, string>> = {
   invalidParameters: "Invalid parameters",
   invalidData: "The values do not fit what the plugin declares",
   unknownMigration: "No such module migration",
+  answerTooLarge: "The agent's answer is too large",
   failed: "The request failed",
 }
 
@@ -206,6 +208,8 @@ const HINTS: Partial<Record<string, string>> = {
   broken: "Its installed files no longer match their record; roll back or uninstall it.",
   alreadyInstalled: "Update it instead.",
   busy: "Wait for its running actions to finish, then try again.",
+  answerTooLarge:
+    "Part of it does not fit one message to the app, even in parts (for instance a plugin's very large settings); ask the plugin's publisher to shorten its manifest.",
 }
 
 /** A refusal of the marketplace, with what the user can do about it. */

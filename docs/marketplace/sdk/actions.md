@@ -163,26 +163,32 @@ fn json_format(_ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
 }
 ```
 
-## Keep the definitions small
+## How large a plugin may be
 
-Every action's full definition (parameters, kinds, outputs) travels in the
-agent's `listPlugins` and `getPlugin` answers, and `getPlugin` also
-carries the whole manifest and the icon. An IPC message is at most
-**64 KiB** (`deckpilot_ipc::framing::MAX_MESSAGE_BYTES`); an answer over it
-cannot be sent, and the app then cannot list or show the plugins (a test
-plugin with 18 actions of 20 outputs each went over). Until the IPC carries
-definitions in pages or on demand, keep a plugin's `getPlugin` answer under
-about half of that:
+The manifest's own limits are the real ones: up to **64 actions**, each
+with up to **32 parameters** and **32 outputs**, and a 128 px icon of up to
+**256 KiB**. The agent sends the app a plugin's actions (each with its full
+definition and manifest entry) in pages and its icon in chunks
+(`getPluginActions`, `getPluginIcon`; see
+[agent-integration.md](../agent-integration.md#answers-of-any-size)), so
+the 64 KiB of one IPC message (`deckpilot_ipc::framing::MAX_MESSAGE_BYTES`)
+no longer limits how many actions or outputs a plugin has:
+`apps/agent/tests/plugins_e2e.rs` lists, shows and edits a plugin with
+40 actions of 20 outputs and a 200 KiB icon.
 
-- at most about **16 actions**, and fewer when they have many outputs;
-- at most about **8 outputs** and **8 parameters** per action; declare only
-  the outputs an action really returns;
-- short labels and descriptions (the limits are 48 and 300 characters;
-  the descriptions are repeated in the manifest and in each definition);
-- choice options: a handful, not dozens;
-- an icon of a few KiB (it is sent base64-encoded).
+What must still fit one message:
 
-For scale: Developer Tools (7 actions, 1-8 outputs and 0-3 parameters
-each, a 1 KiB icon) answers `getPlugin` in about 20 KB and `listPlugins`
-in about 9 KB; `apps/agent/tests/plugins_examples.rs` fails if either
-exceeds 32 KiB.
+- **one action** with its definition and manifest entry. Only an action
+  with dozens of parameters that each list dozens of long choice options
+  comes near; such an action is listed without its definition, and the
+  editors do not offer it (the agent logs it).
+- **the rest of the manifest** (settings fields, credential slots,
+  variables, permissions) with the plugin's details. Within the manifest's
+  limits this needs very long descriptions or defaults to go over; the
+  app then shows the refusal `answerTooLarge`.
+
+Keep definitions lean anyway: declare only the outputs an action really
+returns, and keep labels and descriptions short (48 and 300 characters at
+most; the description is repeated in the manifest and in the definition).
+An app older than paged answers receives what fits one message: the icon,
+then the definitions of the largest plugins are left out of its answers.

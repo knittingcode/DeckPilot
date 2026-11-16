@@ -146,6 +146,11 @@ pub struct Grants {
     pub(crate) open_url: BTreeSet<Origin>,
     /// Origins the user entered and consented to (G2).
     pub(crate) user_origins: Vec<UserOriginGrant>,
+    /// Credential origins withheld because they have no network grant
+    /// (revoked after consent), by slot key. A slot left with no origin is
+    /// not in [`Grants::credentials`] at all: it is unusable until the
+    /// network grant is back.
+    pub(crate) suspended: BTreeMap<String, BTreeSet<Origin>>,
 }
 
 /// One granted user-entered origin (G2).
@@ -205,7 +210,10 @@ pub const MAX_ORIGINS: usize = 64;
 pub const MAX_USER_ORIGINS: usize = 8;
 
 impl Grants {
-    /// Derives grants. Fails on the first invalid entry; never partial.
+    /// Derives grants. Fails on the first invalid entry; never partial. A
+    /// credential origin that lacks a network grant is not invalid (the
+    /// user may revoke a host at any time): only that origin is withheld
+    /// from its slot ([`Grants::suspended_credentials`]).
     pub fn derive(approved: &ApprovedPermissions) -> Result<Self, GrantError> {
         let mut g = Grants::default();
         for p in &approved.0 {
@@ -297,31 +305,61 @@ impl Grants {
         {
             return Err(GrantError::TooManyOrigins);
         }
-        // A slot with no fixed origin exists only for its user origin.
+        // A slot with no fixed origin exists only for its user origin: a
+        // record without either is malformed (the agent passes such a slot
+        // only together with the consented user origin that binds it).
         let unbound = g.credentials.iter().any(|(key, slot)| {
             slot.origins.is_empty() && !g.user_origins.iter().any(|u| u.credentials.contains(key))
         });
         if unbound {
             return Err(GrantError::EmptyCredential);
         }
-        // A user origin injects only slots that are granted themselves.
-        let granted: BTreeSet<String> = g.credentials.keys().cloned().collect();
-        for user in &mut g.user_origins {
-            user.credentials.retain(|key| granted.contains(key));
-        }
         if g.credentials.len() > MAX_CREDENTIALS {
             return Err(GrantError::TooManyCredentials);
         }
-        // A secret may only travel to origins the plugin can reach at all.
-        let reachable = g
-            .credentials
-            .values()
-            .flat_map(|c| c.origins.iter())
-            .all(|o| g.network.contains_key(o));
-        if !reachable {
-            return Err(GrantError::CredentialOriginNotGranted);
-        }
+        g.suspend_unreachable_credentials();
         Ok(g)
+    }
+
+    /// A secret may only travel to origins the plugin can reach at all: a
+    /// credential origin without a network grant (the user revoked that
+    /// host after consenting to the slot) is withheld from its slot, and a
+    /// slot left without origins is removed, so every call using it is
+    /// denied as not granted. Everything else the plugin was granted stays
+    /// in force; the slot comes back with the network grant.
+    ///
+    /// A user-entered origin (G2) is reachable by its own consent, not by a
+    /// network grant of a declared host: a slot a granted user origin binds
+    /// stays for that origin even when it has no fixed origin left, and
+    /// is removed like any other once that user origin is gone too. A user
+    /// origin never injects a slot that is not granted itself.
+    pub(crate) fn suspend_unreachable_credentials(&mut self) {
+        let network = &self.network;
+        let suspended = &mut self.suspended;
+        let user_origins = &self.user_origins;
+        self.credentials.retain(|key, slot| {
+            let (kept, withheld): (BTreeSet<Origin>, BTreeSet<Origin>) =
+                std::mem::take(&mut slot.origins)
+                    .into_iter()
+                    .partition(|o| network.contains_key(o));
+            if !withheld.is_empty() {
+                suspended.entry(key.clone()).or_default().extend(withheld);
+            }
+            slot.origins = kept;
+            !slot.origins.is_empty() || user_origins.iter().any(|u| u.credentials.contains(key))
+        });
+        let granted = &self.credentials;
+        for user in &mut self.user_origins {
+            user.credentials.retain(|key| granted.contains_key(key));
+        }
+    }
+
+    /// Credential origins withheld from their slot because the plugin has
+    /// no network grant for them, by slot key. A slot whose every origin
+    /// is withheld is not granted at all ([`Grants::credential`] is
+    /// `None`).
+    pub fn suspended_credentials(&self) -> &BTreeMap<String, BTreeSet<Origin>> {
+        &self.suspended
     }
 
     pub fn credential(&self, key: &str) -> Option<&CredentialGrant> {
@@ -366,8 +404,6 @@ pub enum GrantError {
     EmptyCredential,
     DuplicateCredential,
     TooManyCredentials,
-    /// A credential slot names an origin without a network grant.
-    CredentialOriginNotGranted,
     /// A storage quota outside 257 to 10,240 KiB, or granted twice.
     StorageQuota,
     /// A user origin on a private network without the user's consent to
@@ -389,9 +425,6 @@ impl fmt::Display for GrantError {
             Self::EmptyCredential => f.write_str("credential without origins or schemes"),
             Self::DuplicateCredential => f.write_str("credential key granted twice"),
             Self::TooManyCredentials => f.write_str("too many credentials"),
-            Self::CredentialOriginNotGranted => {
-                f.write_str("credential origin has no network grant")
-            }
             Self::StorageQuota => f.write_str("storage quota outside 257 to 10240 KiB"),
             Self::PrivateNetworkNotGranted => {
                 f.write_str("user origin on a private network without consent")

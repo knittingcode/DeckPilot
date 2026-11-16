@@ -2,6 +2,14 @@
 // `src-tauri/src/commands/plugins.rs`. The commands refuse unless the
 // agent answers plugin requests; every refusal arrives as a `PluginError`
 // with the backend's `reason`.
+//
+// One IPC message to the agent carries at most 64 KiB, which a plugin
+// with many actions or a large icon does not fit. When the agent lists
+// the runtime feature `pagedAnswers`, the backend reads `listPlugins`,
+// `getPlugin` and every change's details in parts (`listPluginsPaged`,
+// `getPluginPaged`, `getPluginActions`, `getPluginIcon`) and returns them
+// whole, so the answers here are complete; an older agent answers in one
+// message, as it always did.
 
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"

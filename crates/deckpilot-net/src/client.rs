@@ -59,7 +59,40 @@ pub type Failure = (&'static str, String);
 
 /// Sends `request`. Blocks the calling thread (an action's own thread);
 /// returns at once when `cancel` is cancelled.
+///
+/// Called on a thread that drives an async runtime (the agent runs an
+/// action bound to a key, or one `runAction` started, on its service
+/// task), the request runs on a thread of its own while this one waits:
+/// a runtime cannot be blocked on inside another, and would panic.
 pub fn send(
+    request: Request,
+    network: &dyn AddressPolicy,
+    cancel: Option<&CancellationToken>,
+) -> Result<Response, Failure> {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return send_here(request, network, cancel);
+    }
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("deckpilot-net request".into())
+            .spawn_scoped(scope, || send_here(request, network, cancel))
+            .map_err(|e| {
+                (
+                    codes::REQUEST_FAILED,
+                    format!("could not start the request: {e}"),
+                )
+            })?
+            .join()
+            .unwrap_or_else(|_| {
+                Err((
+                    codes::REQUEST_FAILED,
+                    "the request failed inside DeckPilot".to_owned(),
+                ))
+            })
+    })
+}
+
+fn send_here(
     request: Request,
     network: &dyn AddressPolicy,
     cancel: Option<&CancellationToken>,
@@ -418,6 +451,72 @@ fn http_date(value: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::NetworkPolicy;
+
+    /// A server on 127.0.0.1 that answers one request with `200 ok`.
+    fn one_answer() -> u16 {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut seen = Vec::new();
+            let mut buffer = [0; 1024];
+            while !seen.ends_with(b"\r\n\r\n") {
+                let n = stream.read(&mut buffer).unwrap();
+                if n == 0 {
+                    break;
+                }
+                seen.extend_from_slice(&buffer[..n]);
+            }
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\
+                  Connection: close\r\n\r\nok",
+            );
+        });
+        port
+    }
+
+    fn get(port: u16) -> Result<Response, Failure> {
+        send(
+            Request {
+                method: reqwest::Method::GET,
+                url: url::Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap(),
+                headers: Vec::new(),
+                body: None,
+                auth: None,
+                timeout: Duration::from_secs(10),
+                follow_redirects: false,
+                max_bytes: 1024,
+            },
+            &NetworkPolicy {
+                allow_private: true,
+                private_hosts: Vec::new(),
+            },
+            None,
+        )
+    }
+
+    /// The agent runs an action bound to a key on its service task, a
+    /// task of its async runtime: a request from there must not try to
+    /// block on a runtime inside the runtime (a panic that ended the
+    /// agent).
+    #[test]
+    fn a_request_from_inside_a_runtime_is_sent() {
+        let port = one_answer();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let response = runtime.block_on(async { get(port) }).unwrap();
+        assert_eq!(
+            (response.status, response.body.as_slice()),
+            (200, &b"ok"[..])
+        );
+        // And from a plain thread, as before.
+        let response = get(one_answer()).unwrap();
+        assert_eq!(response.status, 200);
+    }
 
     #[test]
     fn retry_after_is_seconds_or_a_date() {

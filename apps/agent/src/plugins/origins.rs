@@ -624,6 +624,29 @@ mod tests {
         assert_eq!(none.status, ipc::UserOriginStatus::SlotNotGranted);
     }
 
+    /// The origin settings in a `pluginSettings` answer are bounded by the
+    /// manifest (at most four slots, each with a URL of bounded length, a
+    /// short label, six methods and eight credential keys) and never carry
+    /// what the user typed when it is not an origin, so they need no paging
+    /// (`deckpilot_ipc::plugin_answers`): the largest is a small part of
+    /// one message.
+    #[test]
+    fn the_origin_settings_of_an_answer_are_small() {
+        let m = ghe();
+        let longest = format!("https://ghe.example.com/{}", "a".repeat(480));
+        let one = serde_json::to_vec(&infos(&m, &saved(&longest), &[], &[])).unwrap();
+        assert!(one.len() < 2 * 1024, "{}", one.len());
+        // Text that is not an origin is described, never echoed.
+        let junk = "x".repeat(2_000);
+        let invalid = infos(&m, &saved(&junk), &[], &[]);
+        assert_eq!(invalid[0].status, ipc::UserOriginStatus::Invalid);
+        let invalid = serde_json::to_vec(&invalid).unwrap();
+        assert!(invalid.len() < 1024, "{}", invalid.len());
+        // A path prefix beyond the broker's bound is not an origin.
+        let long = format!("https://ghe.example.com/{}", "a".repeat(600));
+        assert!(normalize(&m, &mut saved(&long)).is_err());
+    }
+
     #[test]
     fn changed_settings_are_found() {
         let m = ghe();

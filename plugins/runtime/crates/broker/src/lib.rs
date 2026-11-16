@@ -337,10 +337,24 @@ impl Broker {
         Ok(())
     }
 
-    /// Revokes one origin. Effective on the next call.
+    /// Revokes one origin. Effective on the next call. A credential slot
+    /// that targets it is withheld from it too (and is unusable when it
+    /// had no other origin); every other grant stays.
     pub fn revoke_origin(&self, plugin: &PluginId, origin: &Origin) {
         self.update(plugin, |g| {
             g.network.remove(origin);
+            g.suspend_unreachable_credentials();
+        });
+    }
+
+    /// Revokes one user-entered origin (G2), as granted (origin and path
+    /// prefix). Effective on the next call. A credential slot that only
+    /// this origin bound is unusable afterwards; one with a fixed origin
+    /// keeps that origin.
+    pub fn revoke_user_origin(&self, plugin: &PluginId, origin: &UserOrigin) {
+        self.update(plugin, |g| {
+            g.user_origins.retain(|u| u.origin != *origin);
+            g.suspend_unreachable_credentials();
         });
     }
 
@@ -348,6 +362,8 @@ impl Broker {
     pub fn revoke_credential(&self, plugin: &PluginId, key: &str) {
         self.update(plugin, |g| {
             g.credentials.remove(key);
+            // No user origin injects it any more either.
+            g.suspend_unreachable_credentials();
         });
     }
 

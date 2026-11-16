@@ -228,7 +228,11 @@ versions are rejected and the connection is closed.
 
 Framing: one JSON object per line, at most 64 KiB. Malformed or unknown
 requests receive an `invalidRequest` error and the connection stays open;
-oversized messages close the connection.
+an oversized message from a client closes the connection. An answer of
+the agent's that does not fit is shortened or refused with the reason
+`answerTooLarge`, and an event that does not fit is left out; the
+connection stays open (plugin answers: `docs/marketplace/agent-integration.md`,
+"Answers of any size").
 
 ```jsonc
 // client → agent
