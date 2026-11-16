@@ -21,7 +21,8 @@
 //! | `uninstallPlugin` | `ok` | removes files, records, grants and storage; settings and credentials too unless `keep` says otherwise |
 //! | `invokePluginAction` | `pluginActionResult` | runs one action out of process (for testing and the UI); parameters are validated against the manifest first |
 //! | `listKnownPlugins` | `knownPlugins` | every plugin installed here at some point (`plugin_known`) |
-//! | `getPluginSettings` / `setPluginSettings` | `pluginSettings` | a plugin's settings fields and values, validated against the manifest |
+//! | `getPluginSettings` / `setPluginSettings` | `pluginSettings` | a plugin's settings fields and values, validated against the manifest; origin settings with their consent state ([`PluginUserOrigin`]) |
+//! | `grantPluginUserOrigin` / `revokePluginUserOrigin` | `pluginSettings` | consents to (or revokes) the exact origin the user entered in an origin setting, a private network only when asked for explicitly (G2) |
 //! | `listPluginCredentials` / `setPluginCredential` / `deletePluginCredential` | `pluginCredentials` | a plugin's credential slots and whether each has a secret; a secret goes in, never out ([`PluginSecret`]) |
 //! | `listModuleMigrations` | `moduleMigrations` | the built-in modules moving to their first-party plugins: phase, reason, attempts, routing, aliases and what waits for consent ([`ModuleMigrationInfo`]) |
 //! | `decideModuleMigration` | `moduleMigration` | approves or declines, item by item, what a migration waits for |
@@ -155,6 +156,8 @@ pub const MAX_MODULE_ID: usize = 64;
 pub const MAX_PLUGIN_SECRET: usize = 16 * 1024;
 /// Most settings values one `setPluginSettings` may pass.
 pub const MAX_SETTINGS_VALUES: usize = 64;
+/// Longest origin one `grantPluginUserOrigin` may name.
+pub const MAX_USER_ORIGIN: usize = 2048;
 
 /// Whether plugins can be used, and why not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -892,6 +895,28 @@ pub(crate) fn check_request(request: &crate::Request) -> Result<(), String> {
             Ok(())
         }
         crate::Request::RetryModuleMigration { module } => check_module(module),
+        crate::Request::GrantPluginUserOrigin {
+            plugin,
+            setting,
+            origin,
+            ..
+        } => {
+            check_text("plugin", plugin)?;
+            check_text("setting", setting)?;
+            if origin.is_empty() || origin.len() > MAX_USER_ORIGIN {
+                return Err(format!(
+                    "origin must be between 1 and {MAX_USER_ORIGIN} characters"
+                ));
+            }
+            if origin.chars().any(|c| c.is_control() || c.is_whitespace()) {
+                return Err("origin contains whitespace or control characters".into());
+            }
+            Ok(())
+        }
+        crate::Request::RevokePluginUserOrigin { plugin, setting } => {
+            check_text("plugin", plugin)?;
+            check_text("setting", setting)
+        }
         crate::Request::DecideModuleMigration {
             module,
             approve,
@@ -971,8 +996,13 @@ pub struct PluginCredentialSlot {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// The only hosts the secret is ever sent to.
+    /// The only hosts the secret is ever sent to (besides the server of
+    /// `user_origin`).
     pub hosts: Vec<String>,
+    /// The origin setting whose server also gets the secret, once the user
+    /// allowed that server (G2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_origin: Option<String>,
     /// `bearer`, `basic`, `header`, `query`.
     pub schemes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1020,6 +1050,77 @@ pub struct PluginSettings {
     /// Required settings with neither a value nor a default.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missing: Vec<String>,
+    /// The origin settings (G2): the origin each holds and whether the user
+    /// consented to it. Empty for a plugin without origin settings, and
+    /// from an agent that predates them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub origins: Vec<PluginUserOrigin>,
+}
+
+/// Where the consent of an origin setting stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UserOriginStatus {
+    /// The setting is empty: the plugin reaches no user origin.
+    Unset,
+    /// The setting holds something that is not an origin this slot takes
+    /// (see `problem`).
+    Invalid,
+    /// An exact host the plugin declares and was granted at install: no
+    /// further consent.
+    Declared,
+    /// The slot itself (`network:user-origin:<setting>`) is not granted.
+    SlotNotGranted,
+    /// Waits for the user's consent to this origin.
+    NeedsConsent,
+    /// The user consented to exactly this origin.
+    Granted,
+}
+
+/// One origin setting of a plugin (`permissions[].userOrigins`, G2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts the consent dialog shows"
+)]
+pub struct PluginUserOrigin {
+    /// The setting key.
+    pub setting: String,
+    /// The setting's label.
+    pub label: String,
+    /// The slot's grant key (`network:user-origin:<setting>`).
+    pub permission: String,
+    pub status: UserOriginStatus,
+    /// The origin the setting holds, normalized, with its path prefix
+    /// (`https://ghe.example.com/api/v3`). What `grantPluginUserOrigin`
+    /// must name. Absent while unset or invalid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    /// Why the value is not an origin this slot takes (`status: invalid`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
+    /// The host itself is on a private network (an IP literal or a local
+    /// name): consent needs `privateNetwork`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private_host: bool,
+    /// The slot lets the user allow a private network.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private_network_allowed: bool,
+    /// The user allowed this origin on a private network.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private_network_granted: bool,
+    /// The slot lets the user enter a path prefix.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub path_prefix_allowed: bool,
+    /// The methods requests to it may use.
+    pub methods: Vec<String>,
+    /// The credential slots whose secrets are sent there once consented.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credentials: Vec<String>,
+    /// When the user consented (seconds since the Unix epoch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granted_at: Option<i64>,
 }
 
 /// A plugin the agent installed at some point (`plugin_known`), installed

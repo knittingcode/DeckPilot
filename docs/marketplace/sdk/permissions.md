@@ -41,8 +41,8 @@ user grants and revokes.
 
 | Kind | Fields | Grant key | What it allows in ABI 1 |
 | --- | --- | --- | --- |
-| `network` | `hosts` (1-16 exact DNS names, optional `:port`), `methods` (`GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`; at least one), `privateNetwork` | `network:<host>` per host | `http.fetch` to `https://<host>` with a listed method. Exact origins only: **wildcard hosts (`*.example.com`) and `privateNetwork` validate but are never granted** by this version (they are not passed to the broker), so a request to them is denied. No IP literals, no `localhost`; every resolved address must be public |
-| `credentials` | `refs` (1-8 slot keys of `contributes.credentials`) | `credentials:<key>` per slot | `http.fetch` with `auth` naming the slot, only to the slot's `hosts` (each also a granted `network` host) and `schemes`; `credentials.has` for the slot |
+| `network` | `hosts` (1-16 exact DNS names, optional `:port`; may be empty with `userOrigins`), `methods` (`GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`; at least one), `privateNetwork`, `userOrigins` ([below](#user-entered-origins)) | `network:<host>` per host; `network:user-origin:<setting>` per origin setting | `http.fetch` to `https://<host>` with a listed method. Exact origins only: **wildcard hosts (`*.example.com`) and `privateNetwork` validate but are never granted** by this version (they are not passed to the broker), so a request to them is denied. No IP literals, no `localhost`; every resolved address must be public. A server the user enters in an origin setting is reached only once the user consented to exactly it ([below](#user-entered-origins)) |
+| `credentials` | `refs` (1-8 slot keys of `contributes.credentials`) | `credentials:<key>` per slot | `http.fetch` with `auth` naming the slot, only to the slot's `hosts` (each also a granted `network` host), or to the server of its `userOrigin` setting once the user allowed it, and in its `schemes`; `credentials.has` for the slot |
 | `notifications` | | `notifications` | `notify` |
 | `storage` | `quotaKb` (257-10,240) | `storage` | Raises the storage quota from 256 KiB to `quotaKb` KiB. Storage itself needs no permission |
 | `profile` | `read` (`profile`, `project`) | `profile` | Nothing yet: no ABI 1 capability reads the profile or project |
@@ -101,12 +101,70 @@ these, is denied.
   `added`, `broadened`) are staged and need consent for the escalated keys
   (`approvePluginUpdate`); declining keeps the old version.
 
+## User-entered origins
+
+A GitHub Enterprise server, a self-managed GitLab or a Jira site is a host
+only the user knows (G2, [module-migration.md §7](../module-migration.md#g2-user-entered-origins-github-ghe-gitlab-self-managed-jira-http)).
+The `network` permission declares where the user enters it:
+
+```json
+{ "kind": "network", "hosts": ["api.github.com"], "methods": ["GET", "POST"],
+  "userOrigins": [{ "setting": "apiUrl", "pathPrefix": true, "privateNetwork": true }],
+  "justification": "Reads pull requests from GitHub or your GitHub Enterprise server." }
+```
+
+| Slot field | Rule |
+| --- | --- |
+| `setting` | A one-line `text` setting of `contributes.settings` (`maxLength` at least 12 if set). A default must be an exact host of `hosts` (`https://api.github.com`), so it needs no consent of its own |
+| `methods` | Optional subset of the permission's `methods` |
+| `pathPrefix` | The user may enter a path (`https://ghe.example.com/api/v3`); requests are then limited to that path and below (`/api/v3`, `/api/v3/…`, never `/api/v30` or `/admin`) |
+| `privateNetwork` | The user may enter a server on a private network (a LAN address, a local name such as `ghe.internal`, or a name that resolves to a private address). Each such server needs its own explicit consent. `localhost`, loopback and link-local addresses (cloud metadata) are never reachable |
+
+At most 4 slots. A credential slot is bound to one with `"userOrigin":
+"apiUrl"` (its `hosts` may then be empty): its secret goes to the server
+the user allowed, within its path prefix, and nowhere else.
+
+How it is granted:
+
+1. **Install** shows the slot as its own permission,
+   `network:user-origin:apiUrl` (medium tier; high with `privateNetwork`):
+   the plugin may ask to reach a server the user enters. An update that
+   adds a slot, more methods, a path prefix or a private network, or binds
+   a credential to it, is an escalation.
+2. **Saving the setting** validates and normalizes it: `https` only, no
+   user name or password, no query or fragment, no wildcard, no `.`/`..`
+   segments or encoded slashes, a private host only if the slot allows it
+   (`invalidData` otherwise). The agent stores what the broker will parse
+   (`https://ghe.example.com/api/v3`), and that is what the plugin reads.
+3. **The user allows exactly that server** (`grantPluginUserOrigin`, the
+   Configure dialog), naming the normalized origin the setting holds; a
+   private network is a separate choice in the same consent, required for a
+   private host and never assumed. The consent is recorded per plugin and
+   setting with its origin, path prefix, methods, private network and
+   credential slots (plugins.db `plugin_user_origins`).
+4. **Changing the setting** ends the consent at once (the agent deletes it
+   and tells the broker), and so does `revokePluginUserOrigin`, revoking the
+   slot permission, or an uninstall. Changing the setting back asks again.
+
+The broker matches a request against the allowed server exactly (scheme,
+host, port, and the path prefix), re-checks every redirect the same way (a
+redirect out of the prefix or off the origin is refused; a credential never
+follows one off the origin), and the executor connects only to addresses it
+checked: public ones, plus the private ranges (RFC 1918, carrier NAT,
+unique local IPv6) for a server the user allowed on a private network.
+Every address a name resolves to must pass, and the connection uses
+exactly those, so DNS rebinding cannot swap one in. A server the plugin
+declares in `hosts` (the default) needs no consent of its own; there is no
+wildcard or unconsented user origin.
+
 ## What the broker checks for `http.fetch`
 
 `Session::authorize` (`crates/broker/src/lib.rs`) for every request:
 
 - `https` only; the origin (scheme, host, port) must be a granted
-  `network` origin and the method one of its methods;
+  `network` origin, or a server the user entered and allowed whose path
+  prefix contains the URL ([user-entered origins](#user-entered-origins)),
+  and the method one of its methods;
 - headers are tokens without CR, LF or NUL, and never `Host`,
   `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`,
   `Connection`, `Transfer-Encoding`, `Content-Length`, `Origin`, `Forwarded`,
@@ -116,7 +174,8 @@ these, is denied.
 - every redirect is re-authorized as a new request (`authorize_redirect`,
   at most 5), and a credential never follows a redirect to another origin;
 - the agent's executor connects only to public addresses it checked
-  (`check_connect_addr`).
+  (`check_connect_addr`), or also to private ranges for a server the user
+  allowed on a private network (`check_private_network_addr`).
 
 A denial reaches the plugin as `CapabilityErrorKind::NotPermitted`
 (`?` turns it into the shared code `not-permitted`) with a message that

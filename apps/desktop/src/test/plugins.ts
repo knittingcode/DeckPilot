@@ -739,6 +739,19 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
         return slotsOf(id)
       }),
     ),
+    // The test plugin has no origin settings.
+    grantUserOrigin: vi.fn((id: string, setting: string) =>
+      Promise.resolve().then(() => {
+        get(id)
+        return refuse("invalidData", `\`${setting}\` is not an origin setting of ${id}`)
+      }),
+    ),
+    revokeUserOrigin: vi.fn((id: string) =>
+      Promise.resolve().then(() => {
+        get(id)
+        return settingsOf(id)
+      }),
+    ),
     deleteCredential: vi.fn((id: string, key: string) =>
       Promise.resolve().then(() => {
         get(id)

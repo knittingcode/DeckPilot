@@ -52,6 +52,7 @@ import type {
   PluginSettingField,
   PluginSettings,
 } from "./types"
+import { UserOriginsSection } from "./user-origins"
 
 type Loaded<T> = { status: "loading" } | { status: "error"; error: PluginErrorText } | T
 
@@ -142,6 +143,20 @@ export function ConfigureDialog({
               />
             )}
           </section>
+        )}
+        {settings.status === "ready" && (settings.settings.origins ?? []).length > 0 && (
+          <UserOriginsSection
+            plugin={item.summary.name}
+            origins={settings.settings.origins ?? []}
+            grant={(setting, origin, privateNetwork) =>
+              client.grantUserOrigin(id, setting, origin, privateNetwork)
+            }
+            revoke={(setting) => client.revokeUserOrigin(id, setting)}
+            onSettings={(next) => {
+              setSettings({ status: "ready", settings: next })
+              onChanged()
+            }}
+          />
         )}
         {hasCredentials && (
           <section className="grid gap-3" aria-labelledby="configure-credentials">
@@ -588,7 +603,15 @@ function CredentialRow({
       </div>
       {slot.description && <p className="text-xs text-muted-foreground">{slot.description}</p>}
       <p className="text-xs text-muted-foreground">
-        Sent only to {slot.hosts.length > 0 ? slot.hosts.join(", ") : "no host"}
+        Sent only to{" "}
+        {slot.hosts.length > 0 || slot.userOrigin
+          ? [
+              ...slot.hosts,
+              ...(slot.userOrigin
+                ? [`the server in the setting “${slot.userOrigin}” once you allow it`]
+                : []),
+            ].join(", ")
+          : "no host"}
         {slot.schemes.length > 0 ? ` (${slot.schemes.join(", ")})` : ""}.
         {slot.set && slot.updatedAt !== undefined ? ` Stored ${formatTime(slot.updatedAt)}.` : ""}
       </p>

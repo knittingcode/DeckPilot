@@ -963,7 +963,9 @@ impl Agent {
             | Request::DeletePluginCredential { .. }
             | Request::ListModuleMigrations
             | Request::DecideModuleMigration { .. }
-            | Request::RetryModuleMigration { .. } => {
+            | Request::RetryModuleMigration { .. }
+            | Request::GrantPluginUserOrigin { .. }
+            | Request::RevokePluginUserOrigin { .. } => {
                 unreachable!("plugin requests are handled by handle_command")
             }
             Request::Unlock { .. }

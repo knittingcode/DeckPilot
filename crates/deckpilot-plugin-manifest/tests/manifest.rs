@@ -100,7 +100,15 @@ fn full_manifest_parses_and_validates() {
     let manifest = Manifest::parse_and_validate(FULL).unwrap();
     assert_eq!(manifest.permissions.len(), 9);
     assert_eq!(manifest.contributes.actions()[0].parameters.len(), 8);
-    assert_eq!(manifest.contributes.credentials().len(), 3);
+    assert_eq!(manifest.contributes.credentials().len(), 4);
+    let network = manifest.permission(PermissionKind::Network).unwrap();
+    let slot = &network.user_origins()[0];
+    assert_eq!(slot.setting, "serverUrl");
+    assert!(slot.path_prefix() && slot.private_network());
+    assert_eq!(
+        manifest.contributes.credentials()[3].user_origin.as_deref(),
+        Some("serverUrl")
+    );
     assert_eq!(
         manifest.review_warnings(),
         [] as [deckpilot_plugin_manifest::Issue; 0]
@@ -883,6 +891,116 @@ fn fixtures() -> Vec<Fixture> {
                     json!("Took too long."),
                 );
             },
+        ),
+        // User-entered origins (G2).
+        mutate(
+            "an empty network host list without user origins",
+            true,
+            Invalid("permissions[0].hosts", C::Count),
+            |v| set(v, "/permissions/0/hosts", json!([])),
+        ),
+        mutate(
+            "a user origin naming no setting",
+            false,
+            Invalid("permissions[0].userOrigins[0].setting", C::UnknownReference),
+            |v| {
+                set(
+                    v,
+                    "/permissions/0/userOrigins",
+                    json!([{ "setting": "serverUrl" }]),
+                );
+            },
+        ),
+        mutate(
+            "a user origin in a setting that is not text",
+            false,
+            Invalid("permissions[0].userOrigins[0].setting", C::Conflict),
+            |v| {
+                set(
+                    v,
+                    "/permissions/0/userOrigins",
+                    json!([{ "setting": "pollMinutes" }]),
+                );
+            },
+        ),
+        mutate(
+            "a user origin with methods the permission lacks",
+            false,
+            Invalid(
+                "permissions[0].userOrigins[0].methods",
+                C::MissingPermission,
+            ),
+            |v| {
+                set(
+                    v,
+                    "/permissions/0/userOrigins",
+                    json!([{ "setting": "defaultRepository", "methods": ["DELETE"] }]),
+                );
+            },
+        ),
+        mutate(
+            "an unknown field in a user origin",
+            true,
+            Structure("unknown field `wildcard`"),
+            |v| {
+                set(
+                    v,
+                    "/permissions/0/userOrigins",
+                    json!([{ "setting": "defaultRepository", "wildcard": true }]),
+                );
+            },
+        ),
+        mutate(
+            "a default origin that is not a declared host",
+            false,
+            Invalid("contributes.settings.fields[1].default", C::InvalidDefault),
+            |v| {
+                set(
+                    v,
+                    "/permissions/0/userOrigins",
+                    json!([{ "setting": "defaultRepository" }]),
+                );
+                set(
+                    v,
+                    "/contributes/settings/fields/1/default",
+                    json!({ "type": "text", "value": "https://ghe.example.com" }),
+                );
+            },
+        ),
+        mutate(
+            "a default origin with a path the slot does not allow",
+            false,
+            Invalid("contributes.settings.fields[1].default", C::InvalidDefault),
+            |v| {
+                set(
+                    v,
+                    "/permissions/0/userOrigins",
+                    json!([{ "setting": "defaultRepository" }]),
+                );
+                set(
+                    v,
+                    "/contributes/settings/fields/1/default",
+                    json!({ "type": "text", "value": "https://api.github.com/api/v3" }),
+                );
+            },
+        ),
+        mutate(
+            "a credential bound to no user origin",
+            false,
+            Invalid("contributes.credentials[0].userOrigin", C::UnknownReference),
+            |v| {
+                set(
+                    v,
+                    "/contributes/credentials/0/userOrigin",
+                    json!("serverUrl"),
+                );
+            },
+        ),
+        mutate(
+            "a credential without hosts or a user origin",
+            true,
+            Invalid("contributes.credentials[0].hosts", C::Count),
+            |v| set(v, "/contributes/credentials/0/hosts", json!([])),
         ),
         // Raw text fixtures.
         Fixture {

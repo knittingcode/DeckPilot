@@ -50,14 +50,69 @@ pub fn without_background() -> Vec<Value> {
 }
 
 fn manifest_json(id: &str, version: &str, permissions: &[Value]) -> Vec<u8> {
+    manifest_json_with(id, version, permissions, |_| {})
+}
+
+fn manifest_json_with(
+    id: &str,
+    version: &str,
+    permissions: &[Value],
+    edit: impl FnOnce(&mut Value),
+) -> Vec<u8> {
     let mut value: Value = serde_json::from_str(EXAMPLE).unwrap();
     value["id"] = Value::from(id);
     value["version"] = Value::from(version);
     value["publisher"]["id"] = Value::from(id.split('.').next().unwrap());
     value["permissions"] = Value::Array(permissions.to_vec());
+    edit(&mut value);
     let mut text = serde_json::to_string_pretty(&value).unwrap();
     text.push('\n');
     text.into_bytes()
+}
+
+/// A verified package of the fixture with its permissions, and the rest of
+/// the manifest changed by `edit`.
+pub fn package_edited(
+    version: &str,
+    permissions: &[Value],
+    edit: impl FnOnce(&mut Value),
+) -> VerifiedPackage {
+    let manifest = manifest_json_with(ID, version, permissions, edit);
+    let mut builder = PackageBuilder::new();
+    builder
+        .add("manifest.json", manifest)
+        .unwrap()
+        .add(
+            "plugin.wasm",
+            deckpilot_plugin_package::wasm::minimal_abi_module_with_note(&format!(
+                "{ID} {version}"
+            )),
+        )
+        .unwrap()
+        .add("LICENSE", b"MIT License\n".to_vec())
+        .unwrap()
+        .add("README.md", b"# GitHub PR Count\n".to_vec())
+        .unwrap()
+        .add("assets/icon-128.png", noise(300, 1))
+        .unwrap()
+        .add("assets/icon-32.png", noise(100, 2))
+        .unwrap()
+        .add("assets/keys/pr.png", noise(100, 3))
+        .unwrap();
+    let built = builder.build().unwrap();
+    let expected = ExpectedPackage {
+        id: built.manifest.id.clone(),
+        version: built.manifest.version.clone(),
+        package: built.integrity.package.clone(),
+        manifest_sha256: built.integrity.manifest_sha256,
+        permissions: Some(permissions.to_vec()),
+    };
+    verify_package(
+        &built.bytes,
+        &expected,
+        &deckpilot_plugin_package::Limits::default(),
+    )
+    .unwrap()
 }
 
 /// Deterministic incompressible bytes.

@@ -19,7 +19,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// The key of the `privateNetwork` grant (no host has a name without a dot).
 pub const PRIVATE_NETWORK_KEY: &str = "private-network";
 
-const ALL_METHODS: [HttpMethod; 6] = [
+pub(crate) const ALL_METHODS: [HttpMethod; 6] = [
     HttpMethod::Get,
     HttpMethod::Head,
     HttpMethod::Post,
@@ -109,10 +109,28 @@ pub enum GrantScope {
         methods: Vec<HttpMethod>,
     },
     PrivateNetwork,
-    /// A credential ref, with the hosts and schemes of its slot.
+    /// A user-origin slot of the `network` permission (G2), keyed
+    /// `network:user-origin:<setting>`: the plugin may ask the user for
+    /// consent to an origin they enter there, with these methods, a path
+    /// prefix (`path_prefix`) and a private network (`private_network`)
+    /// if the slot allows them. The origin itself is consented to when the
+    /// user saves it (`plugin_user_origins`).
+    #[serde(rename_all = "camelCase")]
+    UserOriginSlot {
+        methods: Vec<HttpMethod>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        path_prefix: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        private_network: bool,
+    },
+    /// A credential ref, with the hosts and schemes of its slot, and the
+    /// origin setting it is also sent to (G2).
+    #[serde(rename_all = "camelCase")]
     Credential {
         hosts: Vec<String>,
         schemes: Vec<CredentialScheme>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_origin: Option<String>,
     },
     Notifications,
     Profile {
@@ -146,11 +164,17 @@ pub enum Tier {
 impl GrantScope {
     pub fn tier(&self) -> Tier {
         match self {
-            Self::Credential { .. } | Self::PrivateNetwork => Tier::High,
+            Self::Credential { .. }
+            | Self::PrivateNetwork
+            | Self::UserOriginSlot {
+                private_network: true,
+                ..
+            } => Tier::High,
             Self::Notifications | Self::Storage { .. } | Self::DeviceState | Self::DeviceIcons => {
                 Tier::Low
             }
             Self::Host { .. }
+            | Self::UserOriginSlot { .. }
             | Self::Profile { .. }
             | Self::Variable
             | Self::OpenUrl
@@ -163,16 +187,33 @@ impl GrantScope {
         match (self, other) {
             (Self::Host { methods: old }, Self::Host { methods: new }) => is_subset(new, old),
             (
+                Self::UserOriginSlot {
+                    methods: old,
+                    path_prefix: old_path,
+                    private_network: old_private,
+                },
+                Self::UserOriginSlot {
+                    methods: new,
+                    path_prefix: new_path,
+                    private_network: new_private,
+                },
+            ) => is_subset(new, old) && (!new_path || *old_path) && (!new_private || *old_private),
+            (
                 Self::Credential {
                     hosts: old_hosts,
                     schemes: old_schemes,
+                    user_origin: old_origin,
                 },
                 Self::Credential {
                     hosts: new_hosts,
                     schemes: new_schemes,
+                    user_origin: new_origin,
                 },
             ) => {
-                is_subset(new_schemes, old_schemes)
+                // Bound to an origin setting it was not bound to before:
+                // the secret may go somewhere new.
+                (new_origin.is_none() || new_origin == old_origin)
+                    && is_subset(new_schemes, old_schemes)
                     && new_hosts
                         .iter()
                         .all(|host| old_hosts.iter().any(|old| host_covers(old, host)))
@@ -280,10 +321,11 @@ fn key_covers(old: &GrantKey, new: &GrantKey) -> bool {
     if old.kind != new.kind {
         return false;
     }
+    let special = |key: &GrantKey| {
+        key.key == PRIVATE_NETWORK_KEY || crate::origins::user_origin_setting(key).is_some()
+    };
     match old.kind {
-        PermissionKind::Network | PermissionKind::OpenUrl
-            if old.key != PRIVATE_NETWORK_KEY && new.key != PRIVATE_NETWORK_KEY =>
-        {
+        PermissionKind::Network | PermissionKind::OpenUrl if !special(old) && !special(new) => {
             host_covers(&old.key, &new.key)
         }
         PermissionKind::Variables => variable_covers(&old.key, &new.key),
@@ -304,8 +346,13 @@ impl GrantSet {
                     hosts,
                     methods,
                     private_network,
+                    user_origins,
                     ..
                 } => {
+                    set.insert_user_origin_slots(
+                        user_origins.as_deref().unwrap_or_default(),
+                        methods.as_deref(),
+                    );
                     let methods = methods.as_deref().map_or(ALL_METHODS.to_vec(), sorted);
                     for host in hosts {
                         set.insert(
@@ -322,22 +369,7 @@ impl GrantSet {
                         );
                     }
                 }
-                Permission::Credentials { refs, .. } => {
-                    for reference in refs {
-                        let slot = manifest
-                            .contributes
-                            .credentials()
-                            .iter()
-                            .find(|slot| slot.key == *reference);
-                        set.insert(
-                            GrantKey::new(PermissionKind::Credentials, reference.clone()),
-                            GrantScope::Credential {
-                                hosts: slot.map(|s| sorted(&s.hosts)).unwrap_or_default(),
-                                schemes: slot.map(|s| sorted(&s.schemes)).unwrap_or_default(),
-                            },
-                        );
-                    }
-                }
+                Permission::Credentials { refs, .. } => set.insert_credentials(manifest, refs),
                 Permission::Notifications { .. } => set.insert(
                     GrantKey::new(PermissionKind::Notifications, ""),
                     GrantScope::Notifications,
@@ -394,6 +426,50 @@ impl GrantSet {
             }
         }
         set
+    }
+
+    /// One grant per credential ref, with the hosts, schemes and origin
+    /// setting of its slot.
+    fn insert_credentials(&mut self, manifest: &Manifest, refs: &[String]) {
+        for reference in refs {
+            let slot = manifest
+                .contributes
+                .credentials()
+                .iter()
+                .find(|slot| slot.key == *reference);
+            self.insert(
+                GrantKey::new(PermissionKind::Credentials, reference.clone()),
+                GrantScope::Credential {
+                    hosts: slot.map(|s| sorted(&s.hosts)).unwrap_or_default(),
+                    schemes: slot.map(|s| sorted(&s.schemes)).unwrap_or_default(),
+                    user_origin: slot.and_then(|s| s.user_origin.clone()),
+                },
+            );
+        }
+    }
+
+    /// One grant per origin setting of the `network` permission (G2), with
+    /// the slot's methods (or the permission's).
+    fn insert_user_origin_slots(
+        &mut self,
+        slots: &[deckpilot_plugin_manifest::UserOriginSlot],
+        methods: Option<&[HttpMethod]>,
+    ) {
+        for slot in slots {
+            let slot_methods = slot
+                .methods
+                .as_deref()
+                .or(methods)
+                .map_or(ALL_METHODS.to_vec(), sorted);
+            self.insert(
+                crate::origins::user_origin_key(&slot.setting),
+                GrantScope::UserOriginSlot {
+                    methods: slot_methods,
+                    path_prefix: slot.path_prefix(),
+                    private_network: slot.private_network(),
+                },
+            );
+        }
     }
 
     fn insert(&mut self, key: GrantKey, scope: GrantScope) {
@@ -732,12 +808,36 @@ mod tests {
         let cred = |hosts: &[&str]| GrantScope::Credential {
             hosts: hosts.iter().map(|h| (*h).to_owned()).collect(),
             schemes: vec![CredentialScheme::Bearer],
+            user_origin: None,
         };
         assert!(cred(&["*.github.com"]).covers(&cred(&["api.github.com"])));
         assert!(
             !cred(&["api.github.com"]).covers(&cred(&["api.github.com", "uploads.github.com"]))
         );
         assert!(!GrantScope::Notifications.covers(&GrantScope::OpenUrl));
+        // A slot newly bound to an origin setting is a broader grant.
+        let bound = |setting: Option<&str>| GrantScope::Credential {
+            hosts: vec!["api.github.com".into()],
+            schemes: vec![CredentialScheme::Bearer],
+            user_origin: setting.map(str::to_owned),
+        };
+        assert!(!bound(None).covers(&bound(Some("apiUrl"))));
+        assert!(!bound(Some("apiUrl")).covers(&bound(Some("other"))));
+        assert!(bound(Some("apiUrl")).covers(&bound(Some("apiUrl"))));
+        assert!(bound(Some("apiUrl")).covers(&bound(None)));
+        // An origin slot: more methods, a path or a private network is
+        // broader.
+        let slot =
+            |methods: &[HttpMethod], path_prefix, private_network| GrantScope::UserOriginSlot {
+                methods: methods.to_vec(),
+                path_prefix,
+                private_network,
+            };
+        let narrow = slot(&[Get], false, false);
+        assert!(slot(&[Get, Post], true, true).covers(&narrow));
+        assert!(!narrow.covers(&slot(&[Get, Post], false, false)));
+        assert!(!narrow.covers(&slot(&[Get], true, false)));
+        assert!(!narrow.covers(&slot(&[Get], false, true)));
     }
 
     #[test]
@@ -746,11 +846,19 @@ mod tests {
         assert_eq!(
             GrantScope::Credential {
                 hosts: vec![],
-                schemes: vec![]
+                schemes: vec![],
+                user_origin: None,
             }
             .tier(),
             Tier::High
         );
+        let slot = |private_network| GrantScope::UserOriginSlot {
+            methods: vec![HttpMethod::Get],
+            path_prefix: false,
+            private_network,
+        };
+        assert_eq!(slot(false).tier(), Tier::Medium);
+        assert_eq!(slot(true).tier(), Tier::High);
         assert_eq!(GrantScope::Notifications.tier(), Tier::Low);
         assert_eq!(GrantScope::Variable.tier(), Tier::Medium);
     }
@@ -810,6 +918,7 @@ mod tests {
                 GrantScope::Credential {
                     hosts: vec!["api.github.com".into()],
                     schemes: vec![CredentialScheme::Bearer],
+                    user_origin: None,
                 },
             ), // added, high
         ]);

@@ -79,6 +79,7 @@ mod failpoint;
 mod grants;
 mod layout;
 mod manager;
+mod origins;
 mod recover;
 mod state;
 mod store;
@@ -103,6 +104,10 @@ pub use layout::{DATABASE_FILE, Layout, PLUGINS_DIR};
 pub use manager::{
     Clock, ManagerOptions, NoHooks, PluginHooks, PluginManager, UpdateOutcome, VerdictChange,
     VerdictSource,
+};
+pub use origins::{
+    MAX_USER_ORIGIN_LEN, StoredUserOrigin, USER_ORIGIN_KEY_PREFIX, UserOriginConsent,
+    bound_credentials, declared_slot, user_origin_key, user_origin_setting,
 };
 pub use recover::{Inconsistency, RecoveryReport};
 pub use state::{MigrationPhase, PluginState, TombstoneDecision};
