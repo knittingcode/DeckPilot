@@ -9,7 +9,9 @@ use deckpilot_plugin_abi::capability::{
     VariablePublish,
 };
 use deckpilot_plugin_abi::limits::MAX_HOST_CALLS_PER_INVOCATION;
-use deckpilot_plugin_abi::{CallError, CallErrorCode, CallResult, CapabilityRequest, HttpMethod};
+use deckpilot_plugin_abi::{
+    CallError, CallErrorCode, CallResult, CapabilityRequest, HttpMethod, NetworkErrorKind,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -89,6 +91,7 @@ impl<'a> Context<'a> {
                     "more than {MAX_HOST_CALLS_PER_INVOCATION} capability calls in one invocation"
                 ),
                 target: None,
+                network: None,
             });
         }
         self.calls += 1;
@@ -201,6 +204,7 @@ impl<'a> Context<'a> {
             kind: CapabilityErrorKind::MalformedReply,
             detail: "the reply is not an HTTP response".into(),
             target,
+            network: None,
         })?;
         Ok(Response {
             status: r.status,
@@ -404,6 +408,7 @@ impl<'a> Context<'a> {
             kind: CapabilityErrorKind::BadRequest,
             detail: "the value does not serialize to JSON".into(),
             target: None,
+            network: None,
         })?;
         self.call(
             "storage.set",
@@ -461,6 +466,7 @@ impl<'a> Context<'a> {
             kind: CapabilityErrorKind::BadRequest,
             detail: "the value does not serialize to JSON".into(),
             target: None,
+            network: None,
         })?;
         self.call(
             "variables.publish",
@@ -613,6 +619,7 @@ fn malformed(op: &'static str, expected: &str) -> CapabilityError {
         kind: CapabilityErrorKind::MalformedReply,
         detail: format!("the reply is not {expected}"),
         target: None,
+        network: None,
     }
 }
 
@@ -971,6 +978,7 @@ pub struct CapabilityError {
     kind: CapabilityErrorKind,
     detail: String,
     target: Option<String>,
+    network: Option<NetworkErrorKind>,
 }
 
 impl CapabilityError {
@@ -988,6 +996,7 @@ impl CapabilityError {
             kind,
             detail: e.message,
             target: None,
+            network: e.kind,
         }
     }
 
@@ -1017,6 +1026,30 @@ impl CapabilityError {
 
     pub fn is_denied(&self) -> bool {
         self.kind == CapabilityErrorKind::NotPermitted
+    }
+
+    /// What went wrong on the network, for an `http.fetch` that failed
+    /// there or whose redirect was refused (`dns-failed`, `tls-failed`,
+    /// `too-many-redirects`, ...: [`NetworkErrorKind::code`] is the
+    /// built-in modules' code). `None` for every other failure, and from a
+    /// host that predates it.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::{CallErrorCode, CallResult, NetworkErrorKind};
+    ///
+    /// let mut host = MockHost::new(|_| {
+    ///     CallResult::error_with_kind(
+    ///         CallErrorCode::Failed,
+    ///         "api.example.com could not be resolved",
+    ///         Some(NetworkErrorKind::DnsFailed),
+    ///     )
+    /// });
+    /// let e = host.context().http_get("https://api.example.com/x").unwrap_err();
+    /// assert_eq!(e.network_kind(), Some(NetworkErrorKind::DnsFailed));
+    /// ```
+    pub fn network_kind(&self) -> Option<NetworkErrorKind> {
+        self.network
     }
 }
 
@@ -1085,12 +1118,24 @@ impl fmt::Display for CapabilityError {
 
 impl std::error::Error for CapabilityError {}
 
-/// `?` in a handler: a denial becomes `not-permitted`, a rate limit
-/// `throttled` (retryable), anything else `request-failed` or
-/// `unsupported`. The message is the full explanation above.
+/// `?` in a handler: a fetch that failed on the network becomes the
+/// built-in modules' code for its [`NetworkErrorKind`] (`dns-failed`,
+/// `connection-failed`, `timed-out` retryable; `tls-failed`,
+/// `too-many-redirects`, `insecure-redirect`, `blocked-address` not), a
+/// denial `not-permitted`, a rate limit `throttled` (retryable), anything
+/// else `request-failed` or `unsupported`. The message is the full
+/// explanation above.
 impl From<CapabilityError> for PluginError {
     fn from(e: CapabilityError) -> Self {
         let msg = e.to_string();
+        if let Some(network) = e.network.filter(|k| *k != NetworkErrorKind::Other) {
+            let error = PluginError::new(network.code(), msg);
+            return if network.is_transient() {
+                error.retryable()
+            } else {
+                error
+            };
+        }
         match e.kind {
             CapabilityErrorKind::NotPermitted => PluginError::new(codes::NOT_PERMITTED, msg),
             CapabilityErrorKind::Throttled => PluginError::new(codes::THROTTLED, msg).retryable(),
@@ -1130,6 +1175,7 @@ mod tests {
             CallError {
                 code: CallErrorCode::NotPermitted,
                 message: "origin not granted".into(),
+                kind: None,
             },
         )
         .with_target(Some("https://evil.net".into()));
@@ -1148,10 +1194,77 @@ mod tests {
             CallError {
                 code: CallErrorCode::Throttled,
                 message: "rate limited".into(),
+                kind: None,
             },
         ));
         assert_eq!(t.code(), codes::THROTTLED);
         assert!(t.is_retryable());
+    }
+
+    #[test]
+    fn network_failures_keep_the_built_in_codes() {
+        let failed = |kind| {
+            CapabilityError::from_call(
+                "http.fetch",
+                CallError {
+                    code: CallErrorCode::Failed,
+                    message: "the failure".into(),
+                    kind,
+                },
+            )
+            .with_target(Some("https://api.example.com".into()))
+        };
+        for (kind, code, retryable) in [
+            (NetworkErrorKind::DnsFailed, "dns-failed", true),
+            (
+                NetworkErrorKind::ConnectionFailed,
+                "connection-failed",
+                true,
+            ),
+            (NetworkErrorKind::TimedOut, "timed-out", true),
+            (NetworkErrorKind::TlsFailed, "tls-failed", false),
+            (
+                NetworkErrorKind::TooManyRedirects,
+                "too-many-redirects",
+                false,
+            ),
+            (
+                NetworkErrorKind::InsecureRedirect,
+                "insecure-redirect",
+                false,
+            ),
+            (NetworkErrorKind::BlockedAddress, "blocked-address", false),
+        ] {
+            let e = failed(Some(kind));
+            assert_eq!(e.network_kind(), Some(kind));
+            assert_eq!(e.kind(), CapabilityErrorKind::Failed);
+            let p = PluginError::from(e);
+            assert_eq!(p.code(), code);
+            assert_eq!(p.is_retryable(), retryable, "{code}");
+            assert!(
+                p.message()
+                    .contains("http.fetch to https://api.example.com failed (the failure)")
+            );
+        }
+        // From a host that sends no kind, or one this SDK does not know:
+        // as before.
+        for kind in [None, Some(NetworkErrorKind::Other)] {
+            let p = PluginError::from(failed(kind));
+            assert_eq!(p.code(), codes::REQUEST_FAILED);
+            assert!(p.is_retryable());
+        }
+        // A refused redirect keeps its kind with the broker's code.
+        let refused = CapabilityError::from_call(
+            "http.fetch",
+            CallError {
+                code: CallErrorCode::NotPermitted,
+                message: "a redirect was refused by the permission broker (too many redirects)"
+                    .into(),
+                kind: Some(NetworkErrorKind::TooManyRedirects),
+            },
+        );
+        assert!(refused.is_denied());
+        assert_eq!(PluginError::from(refused).code(), "too-many-redirects");
     }
 
     #[test]
@@ -1162,6 +1275,7 @@ mod tests {
                 CallError {
                     code: CallErrorCode::NotPermitted,
                     message: "plugin has no grants".into(),
+                    kind: None,
                 },
             )
             .to_string()

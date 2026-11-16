@@ -28,6 +28,30 @@ Every wrapper returns `Result<_, CapabilityError>`. `kind()` is a
 | `Unavailable` | `unavailable` | No secret stored for a slot; a call during `init`/`shutdown`; an interrupted call; native code without a host | `request-failed` (retryable) |
 | `MalformedReply` | | The reply did not have the expected shape | `request-failed` |
 
+An `http.fetch` that failed on the network, or whose redirect the broker
+refused for a reason the built-in modules' transport has a code for, also
+has a `network_kind()`, a `NetworkErrorKind`. `?` then reports that code
+instead of `request-failed` or `not-permitted`, the same code as the
+built-in module the plugin replaces:
+
+| `NetworkErrorKind` | Code | Retryable |
+| --- | --- | --- |
+| `DnsFailed` | `dns-failed` | yes |
+| `ConnectionFailed` | `connection-failed` | yes |
+| `TimedOut` | `timed-out` | yes |
+| `TlsFailed` | `tls-failed` | no |
+| `TooManyRedirects` (a refused redirect) | `too-many-redirects` | no |
+| `InsecureRedirect` (a refused redirect to `http:`) | `insecure-redirect` | no |
+| `BlockedAddress` (the host resolves to a private address) | `blocked-address` | no |
+
+The kind is only a name: never a host, an address or where a redirect
+led. A guest gets it only if it exports `dp_features` with
+`NETWORK_ERROR_KIND` (every module built with this SDK does); for other
+guests the host leaves it out, so modules built before it read the reply
+exactly as before. An older agent sends no kind: `network_kind()` is
+`None` and `?` reports `request-failed` as before. `timed-out` is not a
+shared code: declare it in `errorCodes` if your plugin can report it.
+
 `op()`, `detail()` (the host's reason), `target()` (the request's origin,
 never path or query) and `is_denied()` let a plugin react; `Display`
 explains a denial and names the permission to declare. Map errors to your

@@ -12,8 +12,8 @@
 //! * it exports `memory` (its single, non-shared, 32-bit memory),
 //!   `dp_abi_version: () -> i32`, `dp_alloc: (i32) -> i32` and
 //!   `dp_invoke: (i32, i32) -> i64`; the optional `dp_describe: () -> i64`,
-//!   `dp_init: () -> i32` and `dp_shutdown: () -> ()` must have exactly
-//!   these types when present;
+//!   `dp_init: () -> i32`, `dp_shutdown: () -> ()` and
+//!   `dp_features: () -> i64` must have exactly these types when present;
 //! * it has at most one table and is at most [`MAX_MODULE_BYTES`].
 //!
 //! A start function is allowed: the plugin host runs it under the same
@@ -47,10 +47,11 @@ const REQUIRED_EXPORTS: [(&str, Signature); 3] = [
 ];
 
 /// Exports a module may have (compatible additions within ABI 1).
-const OPTIONAL_EXPORTS: [(&str, Signature); 3] = [
+const OPTIONAL_EXPORTS: [(&str, Signature); 4] = [
     ("dp_describe", Signature(&[], &[ValType::I64])),
     ("dp_init", Signature(&[], &[ValType::I32])),
     ("dp_shutdown", Signature(&[], &[])),
+    ("dp_features", Signature(&[], &[ValType::I64])),
 ];
 
 const HOST_CALL: Signature = Signature(&[ValType::I32, ValType::I32], &[ValType::I64]);

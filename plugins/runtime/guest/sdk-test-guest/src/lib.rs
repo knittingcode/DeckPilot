@@ -83,6 +83,9 @@ fn plugin() -> Plugin {
                 .param(Param::integer("times").min(1.0).max(10.0).default(1)),
         )
         .action(Action::new("headers", headers).param(Param::text("url").required()))
+        // A plain GET whose failure goes through `?`: the code a plugin
+        // reports without handling the error itself.
+        .action(Action::new("get", get).param(Param::text("url").required()))
 }
 
 /// A server that answers late (canned in the agent's tests).
@@ -179,9 +182,19 @@ fn storage(ctx: &mut Context<'_>, _: &Args<'_>) -> ActionResult {
 
 /// A capability error as data, so the test sees its kind and detail.
 fn refused(e: &CapabilityError) -> Output {
-    Output::ok()
+    let out = Output::ok()
         .with("error", format!("{:?}", e.kind()))
-        .with("detail", e.detail())
+        .with("detail", e.detail());
+    match e.network_kind() {
+        Some(kind) => out.with("network", kind.code()),
+        None => out,
+    }
+}
+
+fn get(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
+    let url: String = args.get("url")?;
+    let r = ctx.http_get(url)?;
+    Ok(Output::ok().with("status", r.status))
 }
 
 fn store_put(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {

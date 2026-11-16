@@ -471,6 +471,95 @@ pub enum CallResult {
 pub struct CallError {
     pub code: CallErrorCode,
     pub message: String,
+    /// What went wrong on the network, for a failed `http.fetch`
+    /// (compatible addition within ABI 1). Only a guest that reports
+    /// [`features::NETWORK_ERROR_KIND`](crate::guest::features::NETWORK_ERROR_KIND)
+    /// from [`EXPORT_FEATURES`](crate::guest::EXPORT_FEATURES) ever
+    /// receives it: the host removes it for every other guest, whose
+    /// `CallError` refuses unknown fields ([`CallResult::for_features`]).
+    /// It is only the kind: never a host name, an address, a URL or
+    /// anything else of the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<NetworkErrorKind>,
+}
+
+/// Why a brokered `http.fetch` failed on the network, as the built-in
+/// modules' transport (`deckpilot-net`) names it: the serialized names are
+/// its error codes, so a plugin can report the same code as the built-in
+/// module it replaces ([`NetworkErrorKind::code`]).
+///
+/// A kind added later reaches a guest built before it as
+/// [`NetworkErrorKind::Other`], never as a malformed reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NetworkErrorKind {
+    /// The host name could not be resolved.
+    DnsFailed,
+    /// No connection could be made (refused, reset, unreachable).
+    ConnectionFailed,
+    /// The certificate or the TLS handshake was refused.
+    TlsFailed,
+    /// No answer within the time limit.
+    TimedOut,
+    /// More redirects than one fetch may follow.
+    TooManyRedirects,
+    /// A redirect from https to plain http.
+    InsecureRedirect,
+    /// The host resolves to an address on this computer or a private
+    /// network, which plugins never reach.
+    BlockedAddress,
+    /// A kind this guest does not know yet.
+    #[serde(other)]
+    Other,
+}
+
+impl NetworkErrorKind {
+    /// Every kind but [`NetworkErrorKind::Other`].
+    pub const ALL: [Self; 7] = [
+        Self::DnsFailed,
+        Self::ConnectionFailed,
+        Self::TlsFailed,
+        Self::TimedOut,
+        Self::TooManyRedirects,
+        Self::InsecureRedirect,
+        Self::BlockedAddress,
+    ];
+
+    /// The built-in modules' error code for this kind, e.g. `dns-failed`
+    /// (`request-failed` for [`NetworkErrorKind::Other`]).
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::DnsFailed => "dns-failed",
+            Self::ConnectionFailed => "connection-failed",
+            Self::TlsFailed => "tls-failed",
+            Self::TimedOut => "timed-out",
+            Self::TooManyRedirects => "too-many-redirects",
+            Self::InsecureRedirect => "insecure-redirect",
+            Self::BlockedAddress => "blocked-address",
+            Self::Other => "request-failed",
+        }
+    }
+
+    /// The kind of a transport error code; `None` for a code that is not a
+    /// network failure a plugin is told about.
+    pub fn from_code(code: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.code() == code)
+    }
+
+    /// Whether trying again later may help (no answer, no connection, a
+    /// name that did not resolve), unlike a refusal a retry meets again.
+    pub const fn is_transient(self) -> bool {
+        matches!(
+            self,
+            Self::DnsFailed | Self::ConnectionFailed | Self::TimedOut | Self::Other
+        )
+    }
+}
+
+impl fmt::Display for NetworkErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.code())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -495,13 +584,124 @@ impl CallResult {
         Self::Error(CallError {
             code,
             message: message.into(),
+            kind: None,
         })
+    }
+
+    /// An error with the network kind of a failed fetch (`None`: none).
+    pub fn error_with_kind(
+        code: CallErrorCode,
+        message: impl Into<String>,
+        kind: Option<NetworkErrorKind>,
+    ) -> Self {
+        Self::Error(CallError {
+            code,
+            message: message.into(),
+            kind,
+        })
+    }
+
+    /// The reply as a guest that reports `features` (from `dp_features`;
+    /// 0 without it) can read it: an error's `kind` only with
+    /// [`features::NETWORK_ERROR_KIND`](crate::guest::features::NETWORK_ERROR_KIND).
+    #[must_use]
+    pub fn for_features(self, features: u64) -> Self {
+        match self {
+            Self::Error(mut error)
+                if features & crate::guest::features::NETWORK_ERROR_KIND == 0 =>
+            {
+                error.kind = None;
+                Self::Error(error)
+            }
+            other => other,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_kinds_are_an_optional_compatible_addition() {
+        // Without a kind: exactly the shape guests built before it read.
+        let plain = CallResult::error(CallErrorCode::Failed, "no route");
+        assert_eq!(
+            serde_json::to_string(&plain).unwrap(),
+            r#"{"error":{"code":"failed","message":"no route"}}"#
+        );
+        let parsed: CallResult =
+            serde_json::from_str(r#"{"error":{"code":"failed","message":"x"}}"#).unwrap();
+        assert!(matches!(
+            parsed,
+            CallResult::Error(CallError { kind: None, .. })
+        ));
+
+        // With one: the transport's code, and nothing else.
+        for kind in NetworkErrorKind::ALL {
+            let r = CallResult::error_with_kind(CallErrorCode::Failed, "m", Some(kind));
+            let json = serde_json::to_string(&r).unwrap();
+            assert_eq!(
+                json,
+                format!(
+                    r#"{{"error":{{"code":"failed","message":"m","kind":"{}"}}}}"#,
+                    kind.code()
+                )
+            );
+            assert_eq!(serde_json::from_str::<CallResult>(&json).unwrap(), r);
+            assert_eq!(NetworkErrorKind::from_code(kind.code()), Some(kind));
+            assert_eq!(kind.to_string(), kind.code());
+        }
+        for code in ["request-failed", "cancelled", "invalid-url", "other", ""] {
+            assert_eq!(NetworkErrorKind::from_code(code), None, "{code}");
+        }
+
+        // A kind added later is `other` for this guest, not a malformed
+        // reply; and a kind is a closed name, never free text.
+        let later: CallResult = serde_json::from_str(
+            r#"{"error":{"code":"failed","message":"m","kind":"quic-failed"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            later,
+            CallResult::Error(CallError {
+                kind: Some(NetworkErrorKind::Other),
+                ..
+            })
+        ));
+        assert_eq!(NetworkErrorKind::Other.code(), "request-failed");
+        assert!(
+            serde_json::from_str::<CallResult>(
+                r#"{"error":{"code":"failed","message":"m","kind":{"host":"10.0.0.1"}}}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn guests_without_the_feature_never_see_a_kind() {
+        let r = CallResult::error_with_kind(
+            CallErrorCode::Failed,
+            "m",
+            Some(NetworkErrorKind::DnsFailed),
+        );
+        assert_eq!(
+            serde_json::to_string(&r.clone().for_features(0)).unwrap(),
+            r#"{"error":{"code":"failed","message":"m"}}"#
+        );
+        assert_eq!(
+            r.clone()
+                .for_features(crate::guest::features::NETWORK_ERROR_KIND),
+            r
+        );
+        // Bits this crate does not define change nothing.
+        assert_eq!(
+            serde_json::to_string(&r.clone().for_features(1 << 40)).unwrap(),
+            r#"{"error":{"code":"failed","message":"m"}}"#
+        );
+        let ok = CallResult::Ok(Value::Null);
+        assert_eq!(ok.clone().for_features(0), ok);
+    }
 
     fn parse(json: &str) -> Result<CapabilityRequest, serde_json::Error> {
         serde_json::from_str(json)

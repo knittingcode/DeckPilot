@@ -248,6 +248,7 @@ const HEADERS_OUTPUTS: &[&str] = &[
     "total",
     "etag",
     "cookie",
+    "network",
 ];
 
 /// Every action of the SDK test guest (the supervisor checks that the
@@ -326,6 +327,7 @@ fn sdk_actions() -> Value {
             ],
         ),
         ("headers", vec![text("url")]),
+        ("get", vec![text("url")]),
     ]
     .into_iter()
     .map(|(id, parameters)| {
@@ -335,7 +337,7 @@ fn sdk_actions() -> Value {
             "cred-has" => &has,
             "settings" => &settings,
             "open-url" => &open,
-            "headers" => &headers,
+            "headers" | "get" => &headers,
             _ => &basic,
         };
         json!({
@@ -688,6 +690,22 @@ fn canned_http(dir: &Path) -> PathBuf {
                     ["set-cookie", format!("token={OPENER_SECRET}")]
                 ],
                 "body": "[]"
+            },
+            // Network failures, as the network client reports them.
+            {"url": "https://api.example.com/fail/dns", "status": 0, "fail": "dns-failed"},
+            {"url": "https://api.example.com/fail/connect", "status": 0, "fail": "connection-failed"},
+            {"url": "https://api.example.com/fail/tls", "status": 0, "fail": "tls-failed"},
+            {"url": "https://api.example.com/fail/blocked", "status": 0, "fail": "blocked-address"},
+            // Redirects the transport of the built-in modules refuses too.
+            {
+                "url": "https://api.example.com/fail/insecure",
+                "status": 302,
+                "headers": [["location", "http://plain.example.net/secret-path"]]
+            },
+            {
+                "url": "https://api.example.com/fail/loop",
+                "status": 302,
+                "headers": [["location", "https://api.example.com/fail/loop"]]
             }
         ]))
         .unwrap(),
@@ -2989,6 +3007,40 @@ async fn plugins_open_granted_pages_and_read_allowlisted_headers() {
             !seen.to_ascii_lowercase().contains(hidden),
             "{hidden}: {seen}"
         );
+    }
+
+    // ---- a fetch that fails on the network says how, with the codes of
+    // the built-in modules; the plugin learns the kind, never an address
+    // or where a refused redirect led.
+    for (path, kind, retryable) in [
+        ("dns", "dns-failed", true),
+        ("connect", "connection-failed", true),
+        ("tls", "tls-failed", false),
+        ("blocked", "blocked-address", false),
+        ("insecure", "insecure-redirect", false),
+        ("loop", "too-many-redirects", false),
+    ] {
+        let url = format!("https://api.example.com/fail/{path}");
+        let got = agent.run(OPENER, "headers", json!({"url": url})).await;
+        assert_eq!(got["network"], kind, "{path}: {got:?}");
+        let outcome = agent
+            .invoke(OPENER, "get", json!({"url": url}))
+            .await
+            .unwrap();
+        let PluginActionOutcome::Failed {
+            code,
+            message,
+            retryable: again,
+        } = outcome
+        else {
+            panic!("{path}: {outcome:?}");
+        };
+        assert_eq!(code, kind, "{path}: {message:?}");
+        assert_eq!(again, retryable, "{path}");
+        let shown = format!("{got:?} {message:?}");
+        for hidden in ["10.1.2.3", "plain.example.net", "secret-path", "Settings"] {
+            assert!(!shown.contains(hidden), "{path}: {hidden} in {shown}");
+        }
     }
 
     // ---- an injected secret never comes back in a header, in any form.

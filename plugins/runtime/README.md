@@ -51,6 +51,11 @@ unchanged byte for byte (tested in `crates/abi` and `crates/host/tests/lifecycle
   `host_call` inside them gets `unavailable` locally. A host that predates
   them never calls them, and the SDK then runs init before the first
   invocation.
+- Optional guest export `dp_features` (a bit set of the additions to
+  replies the module reads). With `NETWORK_ERROR_KIND`, a failed
+  `http.fetch` carries its network kind (`dns-failed`, `tls-failed`, ...,
+  never a host or an address); the host removes it from the replies of
+  every other module, whose `CallError` refuses unknown fields.
 - `loaded` carries the validated descriptor; `HostConfig::expect_actions`
   makes the supervisor refuse a module whose action ids differ from the
   manifest's (design §6.1).

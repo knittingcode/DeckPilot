@@ -13,8 +13,9 @@ use std::time::Duration;
 
 use deckpilot_plugin_abi::describe::PluginDescriptor;
 use deckpilot_plugin_abi::guest::{
-    EXPORT_ABI_VERSION, EXPORT_ALLOC, EXPORT_DESCRIBE, EXPORT_INIT, EXPORT_INVOKE, EXPORT_MEMORY,
-    EXPORT_SHUTDOWN, IMPORT_HOST_CALL, IMPORT_MODULE, InvokeInput, pack, unpack,
+    EXPORT_ABI_VERSION, EXPORT_ALLOC, EXPORT_DESCRIBE, EXPORT_FEATURES, EXPORT_INIT, EXPORT_INVOKE,
+    EXPORT_MEMORY, EXPORT_SHUTDOWN, IMPORT_HOST_CALL, IMPORT_MODULE, InvokeInput, features, pack,
+    unpack,
 };
 use deckpilot_plugin_abi::limits::{
     MAX_DESCRIPTOR, MAX_GUEST_INPUT, MAX_GUEST_OUTPUT, MAX_HOST_CALL_REPLY, MAX_HOST_CALL_REQUEST,
@@ -164,9 +165,13 @@ struct HostState {
     invocation_id: u64,
     calls_this_invocation: u32,
     next_call_id: u64,
-    /// Inside `dp_describe`, `dp_init` or `dp_shutdown`: host calls get a
-    /// local `unavailable` reply and never reach the supervisor.
+    /// Inside `dp_features`, `dp_describe`, `dp_init` or `dp_shutdown`:
+    /// host calls get a local `unavailable` reply and never reach the
+    /// supervisor.
     in_lifecycle: bool,
+    /// What the guest reported from `dp_features` (0 without it): replies
+    /// carry only the additions it reads ([`CallResult::for_features`]).
+    features: u64,
 }
 
 /// The wasmtime engine plus the epoch ticker thread. Create it **before**
@@ -239,6 +244,7 @@ impl PluginEngine {
             calls_this_invocation: 0,
             next_call_id: 0,
             in_lifecycle: false,
+            features: 0,
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|s| &mut s.limits);
@@ -276,6 +282,7 @@ impl PluginEngine {
         }
 
         // Optional exports (compatible additions within ABI 1).
+        let features = optional_func::<(), i64>(&instance, &mut store, EXPORT_FEATURES)?;
         let describe = optional_func::<(), i64>(&instance, &mut store, EXPORT_DESCRIBE)?;
         let init = optional_func::<(), i32>(&instance, &mut store, EXPORT_INIT)?;
         let shutdown = optional_func::<(), ()>(&instance, &mut store, EXPORT_SHUTDOWN)?;
@@ -289,6 +296,11 @@ impl PluginEngine {
             descriptor: None,
             limits,
         };
+        if let Some(features) = features {
+            let reported = plugin.lifecycle(|store| features.call(store, ()))?;
+            // Only what this host knows; a guest may report more.
+            plugin.store.data_mut().features = (reported as u64) & features::ALL;
+        }
         if let Some(describe) = describe {
             let packed = plugin.lifecycle(|store| describe.call(store, ()))?;
             plugin.descriptor = Some(plugin.read_descriptor(packed as u64)?);
@@ -393,6 +405,12 @@ impl fmt::Debug for LoadedPlugin {
 impl LoadedPlugin {
     pub fn limits(&self) -> EffectiveLimits {
         self.limits
+    }
+
+    /// The [`features`] the module reported from `dp_features` that this
+    /// host knows (0 without the export).
+    pub fn features(&self) -> u64 {
+        self.store.data().features
     }
 
     /// What the module's `dp_describe` returned (validated), if it has one.
@@ -591,6 +609,8 @@ fn host_call(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) -> wasmtime:
         }
         Err(reply) => reply,
     };
+    // A guest built before an addition refuses it as an unknown field.
+    let reply = reply.for_features(caller.data().features);
     let mut bytes = serde_json::to_vec(&reply).unwrap_or_default();
     if bytes.len() > MAX_HOST_CALL_REPLY {
         bytes = serde_json::to_vec(&CallResult::error(CallErrorCode::Failed, "reply too large"))

@@ -35,7 +35,7 @@ deckpilot_plugin_sdk::plugin!(plugin);
   function or a non-capturing closure).
 - `plugin!(build_fn)` generates the guest ABI 1 exports
   (`dp_abi_version`, `dp_alloc`, `dp_invoke`, `dp_describe`, `dp_init`,
-  `dp_shutdown`). Use it once, at the root of the `cdylib` crate. The
+  `dp_shutdown`, `dp_features`). Use it once, at the root of the `cdylib` crate. The
   plugin is built on first use and kept for the life of the module. The
   plugin crate needs no `unsafe` of its own; use `#![deny(unsafe_code)]`
   (not `forbid`: the macro's export attributes need an `allow`).

@@ -620,9 +620,11 @@ impl PluginHost {
                                     bound_reply(r)
                                 }
                             }
-                            Decision::Deny(reason) => {
-                                CallResult::error(reason.call_error_code(), reason.to_string())
-                            }
+                            Decision::Deny(reason) => CallResult::error_with_kind(
+                                reason.call_error_code(),
+                                reason.to_string(),
+                                reason.network_kind(),
+                            ),
                         }
                     };
                     let reply = ToHost::Reply {
