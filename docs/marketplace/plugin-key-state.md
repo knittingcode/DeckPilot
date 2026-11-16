@@ -13,7 +13,7 @@ three narrow capabilities, each reviewed on its own:
 | --- | --- | --- | --- |
 | 1.1 | `time.now` | none (always allowed while the plugin is enabled) | "time and randomness" |
 | 1.1 | `random.bytes` | none (always allowed while the plugin is enabled) | "time and randomness" |
-| 1.2 | key state: the optional export `dp_state` | `device` with `state: true` (low tier) | "key state" |
+| 1.2 | key state: the optional export `dp_state` | `device` with `state: true` (low tier) | "key state": the renderer's marks, the runtime and SDK, the agent |
 
 Not added, on purpose: pixels, fonts, HTML or SVG from a plugin; timers
 and background work; animation; any knowledge of devices, keys or their
@@ -204,8 +204,15 @@ read-only by construction, which is also why the manifest requires
 fetched by an action and read from storage here.
 
 Permission: the existing `device` kind with `state: true`
-(`device:state`, low tier). Not declared, not granted or revoked: no
-state call is made and the key stays static.
+(`device:state`, low tier; the broker's `keyState`). Not declared, not
+granted or revoked: the broker refuses before the host is asked, and the
+key stays static.
+
+The manifest's rule that `state` needs an action whose `node.effect` is
+`readOnly` (the default) is kept. It dates from a design in which the
+action itself was polled; with a state call that only reads it may no
+longer be needed, so that an action that `modifies` could show state too.
+That is an open question (section 7), not decided here.
 
 ### 4.5 Glyphs
 
@@ -224,8 +231,8 @@ Per plugin unless stated.
 | What | Bound | When exceeded |
 | --- | --- | --- |
 | Refresh interval | at least 5 s, at most 24 h | clamped |
-| State calls at a time | 1 per plugin, in the plugin's one host process and lane, so it also never overlaps an action; they share the agent's 4 provider slots with built-in modules, longest waiting first | the next key waits its turn |
-| Waiting in the lane | a state call is not queued behind more than the running invocation | answered `busy`; tried again at the next interval |
+| State calls at a time | 1 per plugin, in the plugin's one host process and lane, so it also never overlaps an action; they share the agent's 4 provider slots with built-in modules, longest waiting first | the plugin's next key waits its turn, at most 6 s, then keeps what it showed |
+| Waiting in the lane | a state call is never queued behind a running or waiting action | the key keeps what it showed; tried again at the next interval |
 | One state call | 2 s wall clock, 250 ms CPU between host calls, a tenth of an action's fuel, 8 capability calls, 4 KiB of output | the call fails; past the wall clock the host process is stopped (counts for the crash-loop breaker) |
 | Failures in a row (error, timeout, invalid, crash) | 3 for a key: no call for 5 s, doubling up to 5 min | the key shows the static face with the error mark ("unavailable") |
 | Crashes | the existing breaker: 5 in 10 min disable the plugin | all its keys are static |
@@ -242,8 +249,8 @@ at worst), and a state call never fills the action queue.
 | --- | --- |
 | Device or control without a display | nothing; no state call is made |
 | Plugins off, plugin disabled, quarantined, uninstalled, unsupported platform (Windows: plugins do not run) | the static face |
-| `device:state` not granted or revoked | the static face |
-| Module without `dp_state`, or an agent older than API 1.2 | the static face |
+| `device:state` not granted or revoked | the static face (asked again after 30 s) |
+| Module without `dp_state`, an action without a state handler, or an agent older than API 1.2 | the static face |
 | Error, timeout, invalid or oversized state | the static face with the error mark; back-off |
 | First state pending | the static face with the loading mark |
 
@@ -259,6 +266,8 @@ at worst), and a state call never fills the action queue.
   countdown between pulls); a plugin never drives frames.
 - **Device facts** (`supports.device`, grid size) for games.
 
+- **State for actions that are not `readOnly`** (section 4.4).
+
 ## 6. What a malicious plugin can do with all of it
 
 Learn the time and the UTC offset; draw bounded text, one of 16 shapes,
@@ -269,3 +278,22 @@ dialog (keys only, the user's bindings only), spend device bandwidth
 (the agent redraws only on change, at most once per 5 s per key), block
 the agent's task or other plugins, or reach anything from a state call
 that it could not already read.
+
+## 7. Open questions for the owner
+
+1. **`state` on an action that `opens` or `modifies`.** The manifest
+   refuses it today ("button state needs a readOnly action"). A state
+   call cannot change anything whatever the action does, so the rule
+   could go; an agent below API 1.2 would then refuse such a manifest,
+   which a plugin would have to declare with `"pluginApi": "^1.2"`.
+2. **The floor of 5 s.** Enough for minutes and data from the network; a
+   seconds countdown on a key would need a host-drawn countdown between
+   pulls (animation, section 5) rather than a lower floor.
+3. **The palette and the glyph set.** Seven colours and 16 shapes are a
+   first cut; adding a name is a change of the renderer, the ABI and the
+   SDK together.
+4. **The UTC offset without consent** (section 2): the one new fact about
+   the user that every enabled plugin can read.
+5. **Live state in the configuration app.** The layout preview draws
+   static faces for built-in modules and plugins alike; showing live
+   state there needs the agent to send faces to the app.
