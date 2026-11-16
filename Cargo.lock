@@ -1318,6 +1318,7 @@ dependencies = [
  "deckpilot-module-system",
  "deckpilot-module-work-session",
  "deckpilot-module-workspace",
+ "deckpilot-plugin-manifest",
  "rustls",
  "serde_json",
  "url",

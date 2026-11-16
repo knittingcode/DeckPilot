@@ -1,0 +1,36 @@
+# deckpilot.github: the first-party GitHub plugin, the replacement of the
+# built-in `github` module (docs/marketplace/module-migration.md §6, P8).
+# Bundled with class `migration` (plugins/first-party/bundled.json); not
+# routed until the cut-over (P9).
+#
+# A member of the plugins/runtime workspace (shared Cargo.lock and the
+# `guest` profile), built for wasm32-unknown-unknown; the rlib crate type
+# lets its native unit tests run with plain `cargo test`.
+[package]
+name = "deckpilot-github"
+description = "DeckPilot's first-party GitHub plugin: read-only pull requests, reviews and checks"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+publish = false
+workspace = "../../runtime"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+deckpilot-plugin-sdk.workspace = true
+serde_json.workspace = true
+# URL encoding without a URL parser: the `url` crate's IDNA tables would
+# more than double the module (src/urls.rs).
+form_urlencoded = "1.2.2"
+percent-encoding = "2.3.2"
+
+[dev-dependencies]
+jsonschema.workspace = true
+# The built-in module's URL handling, to compare src/urls.rs with.
+url.workspace = true
+
+[lints]
+workspace = true
