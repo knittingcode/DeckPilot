@@ -4251,6 +4251,21 @@ async fn a_server_the_user_enters_is_reached_only_with_its_own_consent() {
         .await
         .unwrap();
     assert_eq!(settings.origins[0].status, Status::SlotNotGranted);
+    // Granting the permission again does not bring the old consent back.
+    agent
+        .grant(ORIGIN, &["network:user-origin:serverUrl"])
+        .await;
+    let settings = agent
+        .origin_settings(Request::GetPluginSettings {
+            plugin: ORIGIN.into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(settings.origins[0].status, Status::NeedsConsent);
+    let refused = agent
+        .with_token("https://ghe.example.com/api/v3/user")
+        .await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
 
     agent.stop().await;
 }

@@ -1498,6 +1498,13 @@ impl PluginService {
         self.manager
             .revoke(id, &key, DECIDED_BY)
             .map_err(|e| store_error(&e))?;
+        // Revoking an origin setting's permission (G2) also ends the
+        // consent to its server: granting it again asks again.
+        if let Some(setting) = deckpilot_plugin_store::user_origin_setting(&key) {
+            self.manager
+                .revoke_user_origin(id, setting, "its permission was revoked")
+                .map_err(|e| store_error(&e))?;
+        }
         self.sync_grants(id);
         self.changed(id);
         self.details(id)
@@ -1676,7 +1683,30 @@ impl PluginService {
     /// The running module changed: its host is restarted on demand.
     fn after_version_change(&mut self, id: &PluginId) {
         self.stop_host(id);
+        self.forget_undeclared_origins(id);
         self.sync_grants(id);
+    }
+
+    /// Deletes the consents to servers the user entered (G2) whose origin
+    /// setting the active version no longer declares: a later version that
+    /// declares it again asks again, never revives an old consent.
+    fn forget_undeclared_origins(&mut self, id: &PluginId) {
+        let Ok(manifest) = self.active_manifest(id) else {
+            return;
+        };
+        let rows = self.manager.store().user_origins(id).unwrap_or_default();
+        for row in rows {
+            let setting = &row.consent.setting;
+            if deckpilot_plugin_store::declared_slot(&manifest, setting).is_none()
+                && let Err(e) = self.manager.revoke_user_origin(
+                    id,
+                    setting,
+                    "the version no longer declares the setting",
+                )
+            {
+                warn!(plugin = %id, %setting, error = %e, "a user origin could not be forgotten");
+            }
+        }
     }
 
     fn active_manifest(&self, id: &PluginId) -> Result<Manifest, IpcError> {
