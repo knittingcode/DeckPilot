@@ -401,6 +401,16 @@ async fn a_protocol_9_agent_is_never_asked_about_plugins() {
         Request::GetPluginRuntime,
         Request::ListPlugins,
         Request::GetPlugin { plugin: plugin() },
+        Request::ListPluginsPaged,
+        Request::GetPluginPaged { plugin: plugin() },
+        Request::GetPluginActions {
+            plugin: plugin(),
+            from: 0,
+        },
+        Request::GetPluginIcon {
+            plugin: plugin(),
+            offset: 0,
+        },
         Request::ListAvailablePlugins { refresh: true },
         Request::InstallPlugin {
             source: PluginInstallSource::Registry {

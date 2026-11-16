@@ -195,6 +195,10 @@ pub(crate) fn is_plugin_request(request: &Request) -> bool {
         Request::GetPluginRuntime
             | Request::ListPlugins
             | Request::GetPlugin { .. }
+            | Request::ListPluginsPaged
+            | Request::GetPluginPaged { .. }
+            | Request::GetPluginActions { .. }
+            | Request::GetPluginIcon { .. }
             | Request::ListAvailablePlugins { .. }
             | Request::InstallPlugin { .. }
             | Request::EnablePlugin { .. }
@@ -255,7 +259,16 @@ fn idle_status(settings: &PluginSettings) -> PluginRuntimeStatus {
         platform: platform().to_owned(),
         reason: Some(unavailable_reason(settings)),
         registry: None,
+        // Nothing beyond the refusal: no plugin request is answered.
+        features: Vec::new(),
     }
+}
+
+/// What the plugin worker can do beyond the original plugin requests
+/// (`PluginRuntimeStatus::features`).
+#[cfg(feature = "plugins")]
+pub(crate) fn features() -> Vec<String> {
+    vec![deckpilot_ipc::plugins::feature::PAGED_ANSWERS.to_owned()]
 }
 
 type Reply = oneshot::Sender<Result<Response, IpcError>>;

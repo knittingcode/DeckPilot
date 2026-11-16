@@ -11,8 +11,10 @@
 //!   `test-hooks`), never to the real GitHub API; the canned transport logs
 //!   what would have gone on the wire, injected credentials included, so
 //!   the test sees exactly what the broker let out;
-//! * the plugin answers (`listPlugins`, `getPlugin`) must stay well below
-//!   the IPC message limit (`MAX_MESSAGE_BYTES`, 64 KiB).
+//! * the plugin answers (`listPlugins`, `getPlugin`) stay well below the
+//!   IPC message limit (`MAX_MESSAGE_BYTES`, 64 KiB), so that even an app
+//!   that does not read them in pages gets the examples whole (larger
+//!   plugins: `plugins_e2e`, `a_plugin_larger_than_one_message_…`).
 #![cfg(feature = "plugins")]
 
 mod support;

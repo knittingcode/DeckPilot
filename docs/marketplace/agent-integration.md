@@ -385,9 +385,13 @@ older clients ignore.
 
 | Request (`type`) | Fields | Answer |
 | --- | --- | --- |
-| `getPluginRuntime` | — | `pluginRuntime { status }`: `available`, `built`, `enabled`, `executionSupported`, `platform`, `reason`, `registry { source, freshness, seq, staleReason?, expires?, offline? }` (answered even when plugins are off) |
+| `getPluginRuntime` | — | `pluginRuntime { status }`: `available`, `built`, `enabled`, `executionSupported`, `platform`, `reason`, `registry { source, freshness, seq, staleReason?, expires?, offline? }`, `features?: [name]` (answered even when plugins are off) |
 | `listPlugins` | — | `plugins { plugins: [PluginSummary] }` (each action with its `definition`; `health` once an invocation failed) |
 | `getPlugin` | `plugin` | `plugin { plugin: PluginDetails }` (with `icon` when the installed icon checks out) |
+| `listPluginsPaged` | — | `plugins`, each summary without `actions` and with `actionCount` (feature `pagedAnswers`, [below](#answers-of-any-size)) |
+| `getPluginPaged` | `plugin` | `plugin` without actions (in the summary and the manifest) and icon (feature `pagedAnswers`) |
+| `getPluginActions` | `plugin`, `from?` (index, default 0) | `pluginActions { plugin, version, total, actions: [{action, manifest?, tooLarge?}], next? }` (feature `pagedAnswers`) |
+| `getPluginIcon` | `plugin`, `offset?` (default 0) | `pluginIcon { plugin, icon?: {mediaType, size, sha256, offset, data, next?} }` (feature `pagedAnswers`) |
 | `listAvailablePlugins` | `refresh` | `availablePlugins { registry, plugins: [AvailablePlugin] }` (versions newest first, permissions, `withdrawn`, `incompatible`, `deckpilot`, `platforms`, `publishedAt`; per plugin `description`, `categories`, `publisherInfo`, `license`, `homepage`, `sourceRepository`, `deprecated`) |
 | `installPlugin` | `source: {type: "registry", plugin, version?} \| {type: "file", path}`, `consent: [key]` | `plugin` (state `disabled`) |
 | `enablePlugin` | `plugin`, `consent: [key]` | `plugin` (grants `consent` first; all declared permissions must be granted) |
@@ -461,7 +465,42 @@ Reasons: `pluginsUnavailable`, `platformUnsupported`, `locked`,
 `storeUnavailable`, `notInstalled`, `alreadyInstalled`, `unknownPlugin`,
 `consentRequired`, `unknownPermission`, `registryUnavailable`, `revoked`,
 `incompatible`, `invalidPackage`, `unsupportedRuntime`, `invalidState`,
-`notEnabled`, `hostFailed`, `broken`, `invalidData`, `unknownMigration`.
+`notEnabled`, `hostFailed`, `broken`, `invalidData`, `unknownMigration`,
+`answerTooLarge`.
+
+### Answers of any size
+
+One IPC message is at most 64 KiB (`framing::MAX_MESSAGE_BYTES`). A
+plugin's answer grows with its actions (each with its full definition and
+manifest entry) and its icon (up to 256 KiB, base64 in the answer): 18
+actions of 20 outputs, or an icon over about 48 KiB, did not fit, and the
+agent, unable to write the answer, closed the connection (the app saw the
+agent as gone). Since then (`crates/deckpilot-ipc/src/plugin_answers.rs`):
+
+- An agent that lists `pagedAnswers` in `PluginRuntimeStatus.features`
+  answers `listPluginsPaged` and `getPluginPaged` without actions and
+  icon, pages the actions with `getPluginActions` (as many as fit, from
+  index `from`; the manifest's order; `version` and `total` let a reader
+  start over when the plugin changed between pages) and chunks the icon
+  with `getPluginIcon` (30 KiB per chunk, checked against the integrity
+  record on every request; a multiple of 3 bytes, so the chunks' base64
+  joins into the file's). An action too large for a message alone comes
+  without its definition and manifest entry (`tooLarge`).
+- The app's backend (`commands/plugins.rs`) uses them whenever the agent
+  lists the feature: `plugin_answers::list_plugins`, `plugin_details` and
+  `plugin_icon` put the answers back together exactly as `listPlugins` and
+  `getPlugin` have them, so the frontend, the editors and
+  `plugin_actions.rs` see every action of every plugin. After a change
+  that answers with details (install, enable, grant, …) it reads them
+  again in full.
+- An answer that does not fit (a client that does not page, such as an
+  older app) is shortened by the agent before it is sent
+  (`plugin_answers::fit`): the icon goes first, then the definitions of
+  the largest plugins' actions (the editors do not offer those, as for an
+  action whose definition does not convert), then the manifest's actions.
+  What still does not fit is refused with `failed` and the reason
+  `answerTooLarge`; an event that does not fit is left out. Either way
+  the connection stays open.
 
 ### Module migrations
 
@@ -624,7 +663,12 @@ answer is never published. A mid-run revoke: the second request of
 `two-fetches` is denied and never goes out. Lifecycle: `changed` events
 for install, enable, quarantine (the test's own registry copy revokes the
 version) and uninstall, with actions and variables following, and a host
-crash that keeps the plugin enabled. Plugin data (`plugin_data_is_isolated_bounded_revocable_and_secret`,
+crash that keeps the plugin enabled. Answers of any size
+(`a_plugin_larger_than_one_message_is_listed_shown_and_edited`): a plugin
+of 40 actions with 20 outputs each and a 200 KiB icon, listed, shown and
+edited in full through paged answers that each fit one message, and the
+same agent's shortened `listPlugins`, `getPlugin` and change answers for
+an app that does not page, on a connection that stays open. Plugin data (`plugin_data_is_isolated_bounded_revocable_and_secret`,
 the SDK test guest as two plugins, one with a 512 KiB storage grant):
 storage isolation between them, the default and the granted quota, a
 revoked `storage` grant on the very next write, credential slots without
@@ -649,8 +693,9 @@ its settings, the token injected as a bearer only towards
 `api.github.com` (checked on the wire) and never in an answer, a log or a
 file, both variables resolved, storage read back, a revoke of the
 credential slot's host that makes only that slot unusable (settings and
-storage keep working) and a grant that restores it, and its `listPlugins`/`getPlugin` answers at
-most half of the IPC message limit.
+storage keep working) and a grant that restores it, and its
+`listPlugins`/`getPlugin` answers at most half of the IPC message limit
+(so an app that does not page gets them whole).
 `cargo test -p deckpilot-agent --features plugins --test plugins_registry_https`
 does the same over HTTPS: a local TLS server (`tests/support/https.rs`,
 rustls with a throwaway CA from rcgen that only the agent under test

@@ -10,6 +10,8 @@
 //! * [`client`]: an async client used by the configuration app.
 //! * [`work_session`]: the work session shapes of protocol 8.
 //! * [`plugins`]: the plugin shapes of protocol 10.
+//! * [`plugin_answers`]: plugin answers that fit one message (lazy
+//!   listings, pages, icon chunks), on both sides.
 //!
 //! Every connection starts with a `hello` carrying the protocol version and a
 //! random token that the agent writes to a file readable only by the current
@@ -21,6 +23,7 @@ pub mod endpoint;
 pub mod framing;
 pub mod instance;
 pub mod paths;
+pub mod plugin_answers;
 pub mod plugins;
 pub mod protocol;
 pub mod stream;

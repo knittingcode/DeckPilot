@@ -933,6 +933,10 @@ impl Agent {
             Request::GetPluginRuntime
             | Request::ListPlugins
             | Request::GetPlugin { .. }
+            | Request::ListPluginsPaged
+            | Request::GetPluginPaged { .. }
+            | Request::GetPluginActions { .. }
+            | Request::GetPluginIcon { .. }
             | Request::ListAvailablePlugins { .. }
             | Request::InstallPlugin { .. }
             | Request::EnablePlugin { .. }

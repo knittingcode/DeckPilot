@@ -234,9 +234,10 @@ impl Grants {
         let network = &self.network;
         let suspended = &mut self.suspended;
         self.credentials.retain(|key, slot| {
-            let (kept, withheld): (BTreeSet<Origin>, BTreeSet<Origin>) = std::mem::take(&mut slot.origins)
-                .into_iter()
-                .partition(|o| network.contains_key(o));
+            let (kept, withheld): (BTreeSet<Origin>, BTreeSet<Origin>) =
+                std::mem::take(&mut slot.origins)
+                    .into_iter()
+                    .partition(|o| network.contains_key(o));
             if !withheld.is_empty() {
                 suspended.entry(key.clone()).or_default().extend(withheld);
             }
