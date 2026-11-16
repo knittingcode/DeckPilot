@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- DRAFT AppStream metadata for the Flatpak draft (README.md). Screenshots,
+     the release list and the content rating are still to be written before
+     any submission. -->
+<component type="desktop-application">
+  <id>io.github.knittingcode.deckpilot</id>
+  <name>DeckPilot</name>
+  <summary>Stream Deck management</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <developer id="io.github.knittingcode">
+    <name>knittingcode</name>
+  </developer>
+  <description>
+    <p>
+      DeckPilot configures Elgato Stream Deck devices and runs their actions
+      from a background agent.
+    </p>
+    <p>
+      Access to the device needs a udev rule on the host system, which a
+      Flatpak cannot install.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.knittingcode.deckpilot.desktop</launchable>
+  <url type="homepage">https://github.com/knittingcode/deckpilot</url>
+  <url type="bugtracker">https://github.com/knittingcode/deckpilot/issues</url>
+  <provides>
+    <!-- Elgato Stream Deck MK.2 -->
+    <modalias>usb:v0FD9p0080d*</modalias>
+  </provides>
+  <releases>
+    <!-- Filled in per release before a submission. -->
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

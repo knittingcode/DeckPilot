@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, RwLock};
 
+pub use deckpilot_plugin_abi::capability::RunContext;
 use deckpilot_plugin_abi::capability::{Header, HttpAuth, LogLevel, NotifySeverity};
 use deckpilot_plugin_abi::{CallErrorCode, CapabilityRequest, HttpMethod, NetworkErrorKind};
 use serde_json::Value;
@@ -103,6 +104,11 @@ pub enum DenyReason {
     CredentialOriginNotAllowed,
     /// The credential slot may not be sent in this scheme.
     CredentialSchemeNotAllowed,
+    /// The operation is allowed only in a run the user started directly
+    /// (a key, a gesture, the app, or a workflow the user started), and
+    /// this one was not: a schedule, an event, the agent's start, a work
+    /// session, or a run nobody said anything about (`url.open`, G8).
+    NotUserInitiated,
 }
 
 impl DenyReason {
@@ -148,6 +154,10 @@ impl fmt::Display for DenyReason {
             Self::CredentialSchemeNotAllowed => {
                 f.write_str("credential may not be sent in this scheme")
             }
+            Self::NotUserInitiated => f.write_str(
+                "pages open only in an action the user started (a key, a gesture or the app), \
+                 not in one a schedule, an event or the agent's start ran",
+            ),
         }
     }
 }
@@ -232,6 +242,10 @@ pub enum Allowed {
         url: Url,
         origin: Origin,
     },
+    /// The invocation's run context (G8): what the caller handed to
+    /// [`Session::authorize_in`], within the ABI's bounds, or
+    /// [`RunContext::unknown`]. The executor returns exactly this.
+    RunContext(RunContext),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -430,9 +444,25 @@ impl Session {
         &self.plugin
     }
 
-    /// The single decision point for capability requests.
+    /// The single decision point for capability requests, for a call
+    /// whose run nobody described: like [`Session::authorize_in`] with no
+    /// run context, so an operation only the user's own runs may use
+    /// (`url.open`) is denied.
     pub fn authorize(&self, request: &CapabilityRequest) -> Decision {
-        let (decision, target) = self.decide(request);
+        self.authorize_in(request, None)
+    }
+
+    /// The single decision point for capability requests of an invocation
+    /// whose run `context` describes (G8): `url.open` is allowed only when
+    /// the user started the run ([`RunContext::is_user_initiated`]), and
+    /// `run.context` answers `context`. `None` counts as not started by
+    /// the user.
+    pub fn authorize_in(
+        &self,
+        request: &CapabilityRequest,
+        context: Option<&RunContext>,
+    ) -> Decision {
+        let (decision, target) = self.decide(request, context);
         self.broker
             .audit(&self.plugin, request.op(), target.as_ref(), &decision);
         decision
@@ -452,7 +482,11 @@ impl Session {
         decision
     }
 
-    fn decide(&self, request: &CapabilityRequest) -> (Decision, Option<Origin>) {
+    fn decide(
+        &self,
+        request: &CapabilityRequest,
+        context: Option<&RunContext>,
+    ) -> (Decision, Option<Origin>) {
         let b = &self.broker;
         let Some(grants) = b.grants(&self.plugin) else {
             return (Decision::Deny(DenyReason::UnknownPlugin), None);
@@ -550,6 +584,14 @@ impl Session {
                 (d, None)
             }
             CapabilityRequest::SettingsGet(_) => (Decision::Allow(Allowed::SettingsGet), None),
+            // The invocation's own run only (G8), always allowed.
+            CapabilityRequest::RunContext(_) => {
+                let context = context.cloned().unwrap_or_else(RunContext::unknown);
+                (
+                    Decision::Allow(Allowed::RunContext(context.bounded())),
+                    None,
+                )
+            }
             // `openUrl` (design §5.2): the request URL goes through the
             // same strict parser as a fetch (https only, no userinfo, no
             // IP literal or local name, no control characters), and its
@@ -564,6 +606,10 @@ impl Session {
                     Decision::Deny(DenyReason::TooLarge)
                 } else if !grants.open_url.contains(&origin) {
                     Decision::Deny(DenyReason::OriginNotGranted)
+                } else if !context.is_some_and(RunContext::is_user_initiated) {
+                    // Only in runs the user started (G8), checked before
+                    // the rate limits so a refused call uses none.
+                    Decision::Deny(DenyReason::NotUserInitiated)
                 } else if !b.take(&self.plugin, RateClass::OpenUrl)
                     || !b.take(&self.plugin, RateClass::OpenUrlWindow)
                 {

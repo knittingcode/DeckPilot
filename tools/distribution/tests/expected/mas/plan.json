@@ -1,0 +1,16 @@
+{
+  "commit": "b0b23de9bd1183352cffc059a373d0ba3f550841",
+  "tag": "v0.6.0-alpha.3",
+  "build": {
+    "env": {
+      "DECKPILOT_DISTRIBUTION_CHANNEL": "mac_app_store",
+      "DECKPILOT_PACKAGE_FORMAT": "mas_pkg"
+    },
+    "cargo_features": "--no-default-features (no self-update)",
+    "updater_pubkey": null,
+    "agent": "Contents/Library/LoginItems/DeckPilot Agent.app (bundle id io.github.knittingcode.deckpilot.agent), registered with SMAppService",
+    "plugin_host": "not shipped",
+    "signing": "Apple Distribution; the .pkg with Mac Installer Distribution",
+    "upload": "App Store Connect, never submitted for review by the job"
+  }
+}

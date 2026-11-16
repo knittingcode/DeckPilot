@@ -1,0 +1,10 @@
+Package: deck-pilot
+Version: 0.6.0~alpha.3
+Architecture: amd64
+Installed-Size: 1
+Maintainer: knittingcode
+Priority: optional
+Description: Stream Deck management
+Filename: pool/main/d/deck-pilot/DeckPilot_0.6.0-alpha.3_amd64_apt.deb
+Size: 20672
+SHA256: 609958063d081f6f787d7d1a72547bbd557dd779fa900bc75b804e4359ad41a9

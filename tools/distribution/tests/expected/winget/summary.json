@@ -1,0 +1,16 @@
+{
+  "channel": "winget",
+  "tag": "v0.6.0-alpha.3",
+  "commit": "b0b23de9bd1183352cffc059a373d0ba3f550841",
+  "dry_run": true,
+  "published": false,
+  "outputs": [
+    "manifests/k/knittingcode/DeckPilot/Prerelease/0.6.0-alpha.3/knittingcode.DeckPilot.Prerelease.installer.yaml",
+    "manifests/k/knittingcode/DeckPilot/Prerelease/0.6.0-alpha.3/knittingcode.DeckPilot.Prerelease.locale.en-US.yaml",
+    "manifests/k/knittingcode/DeckPilot/Prerelease/0.6.0-alpha.3/knittingcode.DeckPilot.Prerelease.yaml"
+  ],
+  "blockers": [
+    "a GitHub token for a fork of microsoft/winget-pkgs (not provisioned)",
+    "Windows Authenticode signing is not provisioned (audit G11); advised against SmartScreen and scanner false positives"
+  ]
+}

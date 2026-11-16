@@ -563,6 +563,7 @@ const KNOWN_OPS: &[&str] = &[
     "variables.publish",
     "variables.clear",
     "url.open",
+    "run.context",
 ];
 
 fn abi_error(msg: &str) -> wasmtime::Error {

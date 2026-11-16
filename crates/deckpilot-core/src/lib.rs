@@ -65,7 +65,7 @@ pub use credentials::{
 pub use device_runtime::{DetachedAction, LayoutStatus, Runtime, RuntimeOutcome, page_faces};
 pub use execution::{
     ActionResult, ActionStatus, CapabilityDenied, ContextEffect, ExecutionContext,
-    ExecutionControl, Progress, RunSummary,
+    ExecutionControl, Progress, RunOrigin, RunSummary, WorkflowCause,
 };
 pub use face::{FaceStyle, KeyFace, render_label};
 pub use history::{

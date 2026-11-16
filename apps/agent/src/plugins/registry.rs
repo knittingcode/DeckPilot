@@ -1,7 +1,6 @@
 //! The registry the agent installs from, read through a
-//! [`RegistrySource`] and verified by `RegistryClient` against root keys
-//! given separately (`--plugin-registry-roots`; they stand for the roots a
-//! release build will embed, which do not exist yet):
+//! [`RegistrySource`] and verified by `RegistryClient` against trusted
+//! root keys:
 //!
 //! - a local directory laid out as the publishing tool writes it
 //!   (`site/v1/` for the signed documents, `releases/` for the packages),
@@ -10,11 +9,15 @@
 //!   `--plugin-registry-url <https URL of site/>`, with packages from the
 //!   pinned release URL or `--plugin-registry-releases-url`.
 //!
-//! No root key is embedded (production root keys are an owner decision,
-//! design U-10, not yet taken): without `--plugin-registry-roots` nothing
-//! is fetched and the registry reports "not configured". With roots and no
-//! other registry named, the official site [`DEFAULT_REGISTRY_URL`] is
-//! used.
+//! The root keys are embedded at build time
+//! (`DECKPILOT_REGISTRY_ROOT_PUBKEYS`, `deckpilot_plugin_registry::roots`)
+//! or given as a `roots.json` at run time (`--plugin-registry-roots`). A
+//! configured file overrides embedded roots only in debug and `test-hooks`
+//! builds; a release build with embedded roots ignores it (and says so in
+//! the log). Without either, nothing is fetched and the registry reports
+//! "not configured" (every build today: no roots are embedded yet). With
+//! roots and no other registry named, the official site
+//! [`DEFAULT_REGISTRY_URL`] is used.
 //!
 //! The verified state (trust state and index cache) is kept in
 //! `<data dir>/plugin-registry/` by the crate's `FileTrustStore`, and the
@@ -30,20 +33,21 @@ use deckpilot_ipc::plugins::{RegistryFreshness, RegistryStaleReason, RegistrySta
 use deckpilot_ipc::{ErrorCode, IpcError};
 use deckpilot_plugin_manifest::{PackageDigest, PluginId};
 use deckpilot_plugin_package::sha256;
+use deckpilot_plugin_registry::roots::{self, RootsChoice, RootsSource};
 use deckpilot_plugin_registry::{
     DOWNLOAD_PREFIX, FetchError, FileRef, FileTrustStore, Freshness, MAX_DETAIL_BYTES,
-    PluginDetail, Policy, Refresh, RegistryClient, RegistryError, RegistrySource, Role,
-    StaleReason, write_atomic,
+    PluginDetail, Policy, Refresh, RegistryClient, RegistryError, RegistrySource, StaleReason,
+    write_atomic,
 };
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::PluginSettings;
 use super::fetch::{DownloadError, HttpsConfig, HttpsSource, TlsRoots};
 
 /// The official registry site (GitHub Pages of `knittingcode/deckpilot-plugins`,
-/// documents under `v1/`). Used only when trusted root keys are configured
-/// (`--plugin-registry-roots`) and no other registry is named: production
-/// root keys are not approved yet, so none is embedded.
+/// documents under `v1/`). Used only when there are trusted root keys
+/// (embedded, or `--plugin-registry-roots`) and no other registry is
+/// named.
 pub const DEFAULT_REGISTRY_URL: &str = "https://knittingcode.github.io/deckpilot-plugins/";
 
 /// Largest package read (the package limit).
@@ -159,31 +163,47 @@ impl std::fmt::Debug for Registry {
     }
 }
 
-fn open_client(roots: &Path, state_dir: &Path) -> Result<RegistryClient<FileTrustStore>, String> {
-    let roots: Role = std::fs::read(roots)
-        .map_err(|e| format!("the registry root keys {}: {e}", roots.display()))
-        .and_then(|bytes| {
-            serde_json::from_slice(&bytes)
-                .map_err(|e| format!("the registry root keys are malformed: {e}"))
-        })?;
+fn open_client(
+    roots: &RootsSource,
+    state_dir: &Path,
+) -> Result<RegistryClient<FileTrustStore>, String> {
+    let roots = roots.load()?;
     RegistryClient::open(roots, FileTrustStore::new(state_dir), Policy::default())
         .map_err(|e| format!("the registry state cannot be read: {e}"))
 }
 
 impl Registry {
     /// The registry `settings` configure, with its verified state in
-    /// `state_dir`: `Ok(None)` when none is configured.
-    ///
-    /// Trusted root keys are required: no key is embedded and none is ever
-    /// taken from the network. Without them nothing is fetched (`Ok(None)`
-    /// when no registry is named either). With roots and neither a
-    /// directory nor a URL, the official site [`DEFAULT_REGISTRY_URL`] is
-    /// used.
+    /// `state_dir`: `Ok(None)` when none is configured. The root keys are
+    /// this build's ([`roots::choose`]): embedded, or the configured
+    /// `roots.json` where that may override them.
     pub fn from_settings(
         settings: &PluginSettings,
         state_dir: &Path,
     ) -> Result<Option<Self>, String> {
-        let Some(roots) = settings.registry_roots.as_deref() else {
+        let choice = roots::choose(settings.registry_roots.as_deref());
+        Self::from_choice(settings, &choice, state_dir)
+    }
+
+    /// [`Registry::from_settings`] with the roots already chosen.
+    ///
+    /// Trusted root keys are required, and none is ever taken from the
+    /// network. Without them nothing is fetched (`Ok(None)` when no
+    /// registry is named either). With roots and neither a directory nor a
+    /// URL, the official site [`DEFAULT_REGISTRY_URL`] is used.
+    pub fn from_choice(
+        settings: &PluginSettings,
+        choice: &RootsChoice,
+        state_dir: &Path,
+    ) -> Result<Option<Self>, String> {
+        if let Some(ignored) = &choice.ignored {
+            warn!(
+                roots = %ignored.display(),
+                "this build embeds the registry root keys; --plugin-registry-roots \
+                 (DECKPILOT_PLUGIN_REGISTRY_ROOTS) is for development builds and is ignored"
+            );
+        }
+        let Some(roots) = choice.source.as_ref() else {
             return if settings.registry.is_some() || settings.registry_url.is_some() {
                 Err(
                     "the plugin registry has no trusted root keys (--plugin-registry-roots); \
@@ -194,6 +214,7 @@ impl Registry {
                 Ok(None)
             };
         };
+        info!(roots = %roots.describe(), "registry root keys");
         match (&settings.registry, &settings.registry_url) {
             (Some(_), Some(_)) => Err("both a local plugin registry (--plugin-registry) and a \
                  registry URL (--plugin-registry-url) are configured; give one"
@@ -212,7 +233,7 @@ impl Registry {
 
     /// Opens the registry in `dir` with the root role in `roots`, keeping
     /// the verified state in `state_dir`.
-    pub fn open(dir: &Path, roots: &Path, state_dir: &Path) -> Result<Self, String> {
+    pub fn open(dir: &Path, roots: &RootsSource, state_dir: &Path) -> Result<Self, String> {
         Ok(Self {
             name: format!("local:{}", dir.display()),
             source: Source::Directory {
@@ -228,7 +249,11 @@ impl Registry {
     }
 
     /// Opens the registry served at `config.site`.
-    pub fn open_https(config: HttpsConfig, roots: &Path, state_dir: &Path) -> Result<Self, String> {
+    pub fn open_https(
+        config: HttpsConfig,
+        roots: &RootsSource,
+        state_dir: &Path,
+    ) -> Result<Self, String> {
         let source = HttpsSource::new(config)?;
         Ok(Self {
             name: source.name(),
@@ -412,28 +437,30 @@ mod tests {
         }
     }
 
+    /// As in a build without embedded roots.
+    fn unembedded(settings: &PluginSettings, dir: &Path) -> Result<Option<Registry>, String> {
+        let choice = roots::choose_from(None, false, settings.registry_roots.as_deref());
+        Registry::from_choice(settings, &choice, dir)
+    }
+
     #[test]
     fn a_registry_needs_exactly_one_source_and_roots() {
         let dir = std::env::temp_dir();
         let none = PluginSettings::default();
-        assert!(Registry::from_settings(&none, &dir).unwrap().is_none());
+        assert!(unembedded(&none, &dir).unwrap().is_none());
         let both = PluginSettings {
             registry: Some(dir.clone()),
             registry_url: Some("https://registry.example/".into()),
             registry_roots: Some(dir.join("roots.json")),
             ..PluginSettings::default()
         };
-        assert!(
-            Registry::from_settings(&both, &dir)
-                .unwrap_err()
-                .contains("give one")
-        );
+        assert!(unembedded(&both, &dir).unwrap_err().contains("give one"));
         let no_roots = PluginSettings {
             registry_url: Some("https://registry.example/".into()),
             ..PluginSettings::default()
         };
         assert!(
-            Registry::from_settings(&no_roots, &dir)
+            unembedded(&no_roots, &dir)
                 .unwrap_err()
                 .contains("--plugin-registry-roots")
         );
@@ -442,10 +469,6 @@ mod tests {
             registry_roots: Some(dir.join("roots.json")),
             ..PluginSettings::default()
         };
-        assert!(
-            Registry::from_settings(&plain_http, &dir)
-                .unwrap_err()
-                .contains("https")
-        );
+        assert!(unembedded(&plain_http, &dir).unwrap_err().contains("https"));
     }
 }

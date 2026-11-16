@@ -1,0 +1,19 @@
+{
+  "channel": "mas",
+  "tag": "v0.6.0-alpha.3",
+  "commit": "b0b23de9bd1183352cffc059a373d0ba3f550841",
+  "dry_run": true,
+  "published": false,
+  "outputs": [
+    "agent.entitlements",
+    "app.entitlements",
+    "plan.json"
+  ],
+  "blockers": [
+    "a Stream Deck has not been opened from the App Sandbox (experiments/distribution/macos-sandbox-hid: built-in HID devices only)",
+    "user-installed plugin code (App Review Guidelines 2.4.5(iv), 2.5.2, 4.7): policy risk, plugins off",
+    "the plugin host's own Seatbelt profile is refused inside the App Sandbox (experiments/distribution/macos-sandbox-plugin-host)",
+    "the agent as an SMAppService login item app bundle is not built",
+    "Apple Distribution and Mac Installer Distribution certificates, provisioning profiles, an App Store Connect app record and API key (not provisioned)"
+  ]
+}

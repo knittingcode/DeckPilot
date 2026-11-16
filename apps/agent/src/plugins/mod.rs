@@ -91,9 +91,11 @@ pub struct PluginSettings {
     /// <file>`), instead of the release URL the registry pins. The bytes
     /// must still be the pinned ones.
     pub registry_releases_url: Option<String>,
-    /// The registry's root role (`roots.json`). It stands for the roots a
-    /// release build will embed (none exist yet); it must not come from
-    /// the registry itself.
+    /// The registry's root role (`roots.json`), for builds without embedded
+    /// roots (`DECKPILOT_REGISTRY_ROOT_PUBKEYS` at build time) and for
+    /// development: it overrides embedded roots in debug and `test-hooks`
+    /// builds only (`deckpilot_plugin_registry::roots::choose`). It must
+    /// not come from the registry itself.
     pub registry_roots: Option<PathBuf>,
 }
 

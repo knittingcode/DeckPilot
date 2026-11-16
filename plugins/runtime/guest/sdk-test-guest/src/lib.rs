@@ -83,6 +83,9 @@ fn plugin() -> Plugin {
                 .param(Param::integer("times").min(1.0).max(10.0).default(1)),
         )
         .action(Action::new("headers", headers).param(Param::text("url").required()))
+        // What started the run (G8), and `url.open` only when the user did.
+        .action(Action::new("run-context", run_context))
+        .action(Action::new("open-if-user", open_if_user).param(Param::text("url").required()))
         // A plain GET whose failure goes through `?`: the code a plugin
         // reports without handling the error itself.
         .action(Action::new("get", get).param(Param::text("url").required()))
@@ -302,6 +305,54 @@ fn open_url(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
         opened += 1;
     }
     Ok(Output::ok().with("opened", opened))
+}
+
+/// The invocation's run context, flattened into outputs.
+fn run_context(ctx: &mut Context<'_>, _: &Args<'_>) -> ActionResult {
+    let run = match ctx.run_context() {
+        Ok(run) => run,
+        Err(e) => return Ok(refused(&e)),
+    };
+    let trigger = match run.trigger {
+        RunTrigger::Key => "key",
+        RunTrigger::Gesture => "gesture",
+        RunTrigger::App => "app",
+        RunTrigger::Workflow => "workflow",
+        RunTrigger::Test => "test",
+        RunTrigger::Other => "other",
+    };
+    let cause = match run.cause {
+        None => "",
+        Some(RunCause::User) => "user",
+        Some(RunCause::Schedule) => "schedule",
+        Some(RunCause::Event) => "event",
+        Some(RunCause::Startup) => "startup",
+        Some(RunCause::WorkSession) => "workSession",
+        Some(RunCause::Other) => "other",
+    };
+    let mut out = Output::ok()
+        .with("trigger", trigger)
+        .with("cause", cause)
+        .with("userInitiated", run.is_user_initiated());
+    if let Some(summary) = &run.run {
+        out = out
+            .with("workflow", summary.workflow.clone().unwrap_or_default())
+            .with("succeeded", i64::from(summary.succeeded))
+            .with("failed", i64::from(summary.failed))
+            .with("failedNodes", summary.failed_nodes.join(","));
+    }
+    Ok(out)
+}
+
+/// Opens `url` when the user started the run; otherwise says why not
+/// without asking (and tries anyway, to show the agent refuses it).
+fn open_if_user(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
+    let url: String = args.get("url")?;
+    let user = ctx.run_context().is_ok_and(|r| r.is_user_initiated());
+    match ctx.open_url(url.as_str()) {
+        Ok(()) => Ok(Output::ok().with("opened", 1).with("userInitiated", user)),
+        Err(e) => Ok(refused(&e).with("opened", 0).with("userInitiated", user)),
+    }
 }
 
 /// What a paginated, rate-limited API tells the plugin in its headers.

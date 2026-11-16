@@ -290,8 +290,9 @@ package. Things to try:
 - **Tampering.** Change a byte of `$REG/site/v1/index/<seq>.json` or of a
   release asset: refused (`IndexMismatch`, `invalidPackage`).
 
-Without `--plugin-registry-roots` the agent fetches nothing and reports
-that no registry is configured; with roots but without a URL or a
+Without `--plugin-registry-roots` (and without roots embedded at build
+time, `DECKPILOT_REGISTRY_ROOT_PUBKEYS`, which no build sets yet) the
+agent fetches nothing and reports that no registry is configured; with roots but without a URL or a
 directory it uses the official site (`https://knittingcode.github.io/deckpilot-plugins/`),
 which only verifies against its production roots (not issued yet).
 

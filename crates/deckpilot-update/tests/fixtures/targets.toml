@@ -388,7 +388,10 @@ usb_hid = "unverified"
 tray = "supported"
 plugin_host_spawn = "adaptation"
 plugin_host_sandbox = "blocked"
-jit = "unverified"
+# A sandboxed helper runs wasmtime's JIT without the hardened runtime, or
+# with allow-unsigned-executable-memory (capability matrix, [E2]); review
+# acceptance is not known.
+jit = "adaptation"
 downloaded_code = "blocked"
 credential_store = "adaptation"
 filesystem = "adaptation"

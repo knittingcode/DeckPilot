@@ -1,0 +1,21 @@
+[package]
+name = "macos-sandbox-plugin-host"
+description = "Feasibility probe: can an App Sandbox process spawn a helper that runs wasmtime JIT code and applies its own Seatbelt profile?"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+
+# Not a member of any DeckPilot workspace: an experiment with its own lock
+# file, built only by run.sh (docs/distribution/README.md, PR G).
+[workspace]
+
+[dependencies]
+# The plugin host's engine: same version and features as
+# plugins/runtime/Cargo.toml.
+wasmtime = { version = "=50.0.1", default-features = false, features = ["cranelift", "runtime", "std"] }
+libc = "0.2.191"
+
+[profile.release]
+debug = false
+strip = true

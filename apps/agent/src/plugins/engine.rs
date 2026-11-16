@@ -26,6 +26,10 @@ use deckpilot_core::{
     ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, ExecutionContext,
     FeatureModule, ModuleId, ModuleManifest, ParameterValue, Portability,
 };
+use deckpilot_core::{RunOrigin, WorkflowCause};
+use deckpilot_plugin_abi::capability::{
+    RunCause, RunContext, RunSummary as AbiRunSummary, RunTrigger,
+};
 use deckpilot_plugin_abi::{ActionOutcome, ParamValue, Params};
 use deckpilot_plugin_manifest::Action;
 use deckpilot_plugin_supervisor::AbortSignal;
@@ -228,6 +232,7 @@ impl PluginActionHandler {
             self.plugin.clone(),
             self.action.clone(),
             params,
+            run_context(context),
             abort.clone(),
         ) else {
             return ActionResult::error(
@@ -316,6 +321,45 @@ impl ActionHandler for PluginActionHandler {
     fn runs_detached(&self) -> bool {
         true
     }
+}
+
+/// What started the run of `context` and how its workflow run is going,
+/// as the plugin may read it (`run.context`, G8): the invocation's own run
+/// only, the workflow's name, counts and failed node ids. A run whose
+/// origin nobody gave is `other`, which counts as not started by the user.
+fn run_context(context: &ExecutionContext<'_>) -> RunContext {
+    let summary = context.run_summary().map(|summary| AbiRunSummary {
+        workflow: summary.workflow_name.clone(),
+        elapsed_ms: summary.elapsed_ms,
+        succeeded: summary.succeeded,
+        failed: summary.failed,
+        skipped: summary.skipped,
+        cancelled: summary.cancelled,
+        failed_nodes: summary.failed_nodes.clone(),
+    });
+    let direct = |trigger| RunContext {
+        run: summary.clone(),
+        ..RunContext::direct(trigger)
+    };
+    match context.origin() {
+        Some(RunOrigin::Key) => direct(RunTrigger::Key),
+        Some(RunOrigin::Gesture) => direct(RunTrigger::Gesture),
+        Some(RunOrigin::App) => direct(RunTrigger::App),
+        Some(RunOrigin::Test) => direct(RunTrigger::Test),
+        Some(RunOrigin::Workflow { cause }) => RunContext::workflow(
+            match cause {
+                WorkflowCause::User => RunCause::User,
+                WorkflowCause::Schedule => RunCause::Schedule,
+                WorkflowCause::Event => RunCause::Event,
+                WorkflowCause::Startup => RunCause::Startup,
+                WorkflowCause::WorkSession => RunCause::WorkSession,
+                WorkflowCause::Other => RunCause::Other,
+            },
+            summary,
+        ),
+        None => direct(RunTrigger::Other),
+    }
+    .bounded()
 }
 
 /// Resolved parameters as ABI 1 values. Plugins see texts, integers and
@@ -407,6 +451,58 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn the_run_context_names_the_origin_and_the_own_run_only() {
+        use deckpilot_core::{CancellationToken, ExecutionControl, MachineConfig, Profile};
+        let profile = Profile::new("P");
+        let machine = MachineConfig::new(deckpilot_core::Os::Linux);
+        let base = ExecutionContext::new(&profile, None, &machine);
+        assert_eq!(run_context(&base), RunContext::direct(RunTrigger::Other));
+        assert!(!run_context(&base).is_user_initiated());
+        for (origin, trigger) in [
+            (RunOrigin::Key, RunTrigger::Key),
+            (RunOrigin::Gesture, RunTrigger::Gesture),
+            (RunOrigin::App, RunTrigger::App),
+            (RunOrigin::Test, RunTrigger::Test),
+        ] {
+            let context = run_context(&base.with_origin(Some(origin)));
+            assert_eq!(context, RunContext::direct(trigger));
+            assert!(context.is_user_initiated(), "{origin:?}");
+        }
+        let token = CancellationToken::new();
+        let progress = |_: deckpilot_core::Progress| {};
+        let control =
+            ExecutionControl::new(&token, &progress).with_summary(deckpilot_core::RunSummary {
+                workflow: Some(deckpilot_core::WorkflowId::new()),
+                workflow_name: Some("Nightly".into()),
+                elapsed_ms: 900,
+                succeeded: 2,
+                failed: 1,
+                skipped: 0,
+                cancelled: 0,
+                failed_nodes: vec!["deploy".into()],
+            });
+        let scheduled = base
+            .with_control(&control)
+            .with_origin(Some(RunOrigin::Workflow {
+                cause: WorkflowCause::Schedule,
+            }));
+        let context = run_context(&scheduled);
+        assert_eq!(context.trigger, RunTrigger::Workflow);
+        assert_eq!(context.cause, Some(RunCause::Schedule));
+        assert!(!context.is_user_initiated());
+        let run = context.run.unwrap();
+        assert_eq!(run.workflow.as_deref(), Some("Nightly"));
+        assert_eq!((run.succeeded, run.failed), (2, 1));
+        assert_eq!(run.failed_nodes, ["deploy"]);
+        let by_user = run_context(&base.with_control(&control).with_origin(Some(
+            RunOrigin::Workflow {
+                cause: WorkflowCause::User,
+            },
+        )));
+        assert!(by_user.is_user_initiated());
     }
 
     #[test]
