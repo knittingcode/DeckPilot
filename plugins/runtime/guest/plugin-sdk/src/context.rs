@@ -8,7 +8,7 @@ use deckpilot_plugin_abi::capability::{
     VariablePublish,
 };
 pub use deckpilot_plugin_abi::capability::{
-    RunCause, RunContext, RunSummary, RunTrigger, StorageUsage,
+    NotifyDelivery, RunCause, RunContext, RunSummary, RunTrigger, StorageUsage,
 };
 use deckpilot_plugin_abi::limits::MAX_HOST_CALLS_PER_INVOCATION;
 use deckpilot_plugin_abi::{
@@ -239,6 +239,7 @@ impl<'a> Context<'a> {
         body: impl Into<String>,
     ) -> Result<(), CapabilityError> {
         self.send_notification(title.into(), body.into(), None)
+            .map(drop)
     }
 
     /// [`Context::notify`] with a severity (`Info`, `Success`, `Warning`,
@@ -265,6 +266,47 @@ impl<'a> Context<'a> {
         body: impl Into<String>,
     ) -> Result<(), CapabilityError> {
         self.send_notification(title.into(), body.into(), Some(severity))
+            .map(drop)
+    }
+
+    /// [`Context::notify_with`], answered with where the notification was
+    /// shown ([`NotifyDelivery`], G9): on the desktop, in the status bar,
+    /// or nowhere and why (`shown` false, `reason` set). Where it goes is
+    /// the agent's decision: the routing the manifest's `notifications`
+    /// permission declares, set by the user in the plugin's settings
+    /// (desktop, status bar, the least severity shown), and without one
+    /// the status bar only. A notification that could not be shown is
+    /// `Ok`; not granted and the rate limit are errors as for
+    /// [`Context::notify`]. `Ok(None)`: an agent that predates deliveries
+    /// answered without saying where.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::{CallResult, NotifySeverity};
+    ///
+    /// let mut host = MockHost::new(|_| CallResult::Ok(serde_json::json!({
+    ///     "shown": false, "reason": "the app is not open and desktop notifications are off"
+    /// })));
+    /// let mut ctx = host.context();
+    /// let delivery = ctx
+    ///     .notify_delivered(NotifySeverity::Success, "Deployed", "main is live")
+    ///     .unwrap()
+    ///     .unwrap();
+    /// assert!(!delivery.shown);
+    /// assert!(delivery.reason.unwrap().contains("not open"));
+    /// ```
+    pub fn notify_delivered(
+        &mut self,
+        severity: NotifySeverity,
+        title: impl Into<String>,
+        body: impl Into<String>,
+    ) -> Result<Option<NotifyDelivery>, CapabilityError> {
+        match self.send_notification(title.into(), body.into(), Some(severity))? {
+            Value::Null => Ok(None),
+            reply => serde_json::from_value(reply)
+                .map(Some)
+                .map_err(|_| malformed("notify", "a notification delivery")),
+        }
     }
 
     fn send_notification(
@@ -272,7 +314,7 @@ impl<'a> Context<'a> {
         title: String,
         body: String,
         severity: Option<NotifySeverity>,
-    ) -> Result<(), CapabilityError> {
+    ) -> Result<Value, CapabilityError> {
         self.call(
             "notify",
             &CapabilityRequest::Notify(Notify {
@@ -281,7 +323,6 @@ impl<'a> Context<'a> {
                 severity,
             }),
         )
-        .map(drop)
     }
 
     /// Opens an https URL in the user's browser (op `url.open`). Needs an

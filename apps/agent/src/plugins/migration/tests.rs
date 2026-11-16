@@ -714,12 +714,18 @@ fn the_snapshot_reads_nothing_without_aliases() {
             .modules
             .is_empty()
     );
-    // The shipped table: GitHub's block, with its plan.
+    // The shipped table: GitHub's block, with its plan, ...
     let registry = deckpilot_modules::builtin(Os::current());
     let shipped = LegacySnapshot::read(&env.config, &registry).unwrap();
-    let [github] = shipped.modules.as_slice() else {
-        panic!("{shipped:?}");
-    };
+    assert_eq!(
+        shipped
+            .modules
+            .iter()
+            .map(|m| m.module.as_str())
+            .collect::<Vec<_>>(),
+        ["github", "notifications"]
+    );
+    let github = &shipped.modules[0];
     assert_eq!(github.module.as_str(), "github");
     assert_eq!(github.plugin.as_str(), "deckpilot.github");
     assert_eq!(github.aliases.len(), 6);
@@ -730,6 +736,35 @@ fn the_snapshot_reads_nothing_without_aliases() {
         github.credentials[0].id.as_ref().map(CredentialId::as_str),
         Some("github.token"),
         "the module's default credential"
+    );
+    // ... and the notifications block (P10), with its plan,
+    // never used by this data and still eligible, because its plugin is
+    // of the `default` class (§4.3); a `migration`-class plugin is not.
+    let notifications = shipped
+        .modules
+        .iter()
+        .find(|m| m.module.as_str() == "notifications")
+        .unwrap_or_else(|| panic!("{shipped:?}"));
+    assert_eq!(notifications.plugin.as_str(), "deckpilot.notifications");
+    assert_eq!(notifications.aliases.len(), 2);
+    assert_eq!(notifications.plan, super::plan_for("notifications"));
+    assert!(notifications.credentials.is_empty());
+    assert_eq!(
+        (notifications.row.as_ref(), notifications.instances),
+        (None, 0)
+    );
+    if crate::plugins::execution_supported() {
+        assert_eq!(eligibility(notifications, true), None);
+    }
+    assert_eq!(
+        eligibility(notifications, false).as_deref(),
+        Some("the built-in module is not used on this computer")
+    );
+    let mut off = notifications.clone();
+    off.enabled = false;
+    assert_eq!(
+        eligibility(&off, true).as_deref(),
+        Some("the built-in module is disabled")
     );
     let snapshot = env.snapshot();
     let module = &snapshot.modules[0];
@@ -781,11 +816,13 @@ fn the_github_plan_keeps_enterprise_private_hosts_and_overrides_on_the_builtin()
         let mut registry = deckpilot_modules::builtin(Os::current());
         registry.apply_states(&store.module_states().unwrap());
         let snapshot = LegacySnapshot::read(&store, &registry).unwrap();
-        let [module] = snapshot.modules.as_slice() else {
-            panic!("{snapshot:?}");
-        };
+        let module = snapshot
+            .modules
+            .iter()
+            .find(|m| m.module.as_str() == "github")
+            .unwrap_or_else(|| panic!("{snapshot:?}"));
         assert_eq!(module.plan, plan_for("github"));
-        eligibility(module)
+        eligibility(module, false)
     }
     let text = |s: &str| ParameterValue::Text(s.into());
     let eligible = |reason: Option<String>| {

@@ -1572,6 +1572,117 @@ mod first_party {
         assert_eq!(slots, ["token"]);
     }
 
+    const NOTIFICATIONS_MANIFEST: &str =
+        include_str!("../../../plugins/first-party/notifications/manifest.json");
+
+    /// `deckpilot.notifications` (P10, the first plugin of the default
+    /// set) reproduces both actions of the built-in `notifications`
+    /// module, from the shipped alias block: §5.3's rules hold, and beyond
+    /// them the definitions are identical but for the documented
+    /// differences of [`expected`]. No variables on either side; the
+    /// settings are the module's, key for key, and the manifest's
+    /// `notifications` permission routes by exactly them (G9). The only
+    /// permission is the low-tier `notifications`, so seeding enables it
+    /// (§4.2).
+    #[test]
+    fn the_notifications_plugin_honours_the_builtin_contract() {
+        let manifest = manifest(NOTIFICATIONS_MANIFEST);
+        assert_eq!(manifest.id.as_str(), "deckpilot.notifications");
+        let module = notifications::NotificationsModule::new();
+        let builtin = builtin_types(&module);
+        let aliases: Vec<&ActionAlias> = ACTION_ALIASES
+            .iter()
+            .filter(|a| a.module == notifications::MODULE_ID)
+            .collect();
+        assert_eq!(
+            aliases.iter().map(|a| a.legacy).collect::<BTreeSet<_>>(),
+            builtin.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            "every built-in action has its alias"
+        );
+        let plugin: BTreeMap<String, ActionType> = manifest
+            .contributes
+            .actions()
+            .iter()
+            .map(|a| {
+                let t = plugin_type(manifest.id.as_str(), a);
+                (t.id.to_string(), t)
+            })
+            .collect();
+        assert_eq!(
+            aliases.iter().map(|a| a.target).collect::<BTreeSet<_>>(),
+            plugin.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            "every plugin action is the target of an alias"
+        );
+        let mut problems = Vec::new();
+        for alias in &aliases {
+            assert_eq!(alias.plugin, "deckpilot.notifications");
+            assert_eq!(alias.params, &[], "nothing needs a translation");
+            let old = &builtin[alias.legacy];
+            let new = &plugin[alias.target];
+            for problem in alias::incompatibilities(alias, old, new) {
+                problems.push(format!("{}: {problem}", alias.legacy));
+            }
+            if *new != expected(alias, old) {
+                problems.push(format!(
+                    "{}: the definitions differ beyond the documented differences\n  \
+                     built-in (as expected of the plugin): {}\n  plugin: {}",
+                    alias.legacy,
+                    serde_json::to_string(&expected(alias, old)).unwrap(),
+                    serde_json::to_string(new).unwrap()
+                ));
+            }
+        }
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+        assert_eq!(module.manifest().variables.len(), 0);
+        assert_eq!(manifest.contributes.variables().len(), 0);
+
+        // The settings: the module's, key for key, kind, default and
+        // portability.
+        let config = &module.manifest().config;
+        let scopes = &module.manifest().portability.settings;
+        let declared = manifest.contributes.settings();
+        assert_eq!(
+            declared.iter().map(|s| s.key.as_str()).collect::<Vec<_>>(),
+            config.iter().map(|c| c.key.as_str()).collect::<Vec<_>>()
+        );
+        for setting in declared {
+            let spec = core_spec(serde_json::to_value(setting).unwrap());
+            let old = config.iter().find(|c| c.key == spec.key).unwrap();
+            assert_eq!(spec, *old, "{}", spec.key);
+            let portable = matches!(
+                setting.portability,
+                Some(deckpilot_plugin_manifest::Portability::Portable)
+            );
+            assert_eq!(
+                portable,
+                scopes[&spec.key] == SettingScope::Portable,
+                "{}",
+                spec.key
+            );
+        }
+        // Routed by the agent through exactly these settings.
+        let routing = manifest
+            .notification_routing()
+            .expect("the notifications permission routes");
+        assert_eq!(
+            routing.members(),
+            [
+                ("desktop", notifications::DESKTOP),
+                ("statusBar", notifications::STATUS_BAR),
+                ("minimumSeverity", notifications::MINIMUM_SEVERITY),
+            ]
+        );
+        // One permission, the low-tier `notifications`, and nothing else.
+        assert_eq!(
+            manifest
+                .permissions
+                .iter()
+                .map(deckpilot_plugin_manifest::Permission::kind)
+                .collect::<Vec<_>>(),
+            [deckpilot_plugin_manifest::PermissionKind::Notifications]
+        );
+    }
+
     /// The comparison finds what it claims to find.
     #[test]
     fn the_github_contract_check_finds_differences() {

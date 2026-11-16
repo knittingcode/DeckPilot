@@ -607,6 +607,26 @@ the configuration app's status bar.
 
 Capabilities: read profile (for the workflow's name), show notifications.
 
+**A plugin by default (builds with plugins only).** In a build with the
+experimental plugin marketplace enabled, notifications come from the
+bundled first-party plugin `deckpilot.notifications`
+([its README](../plugins/first-party/notifications/README.md),
+[module-migration.md](marketplace/module-migration.md) §4). It is part of
+the default set: installed and enabled at the first start, offline, with
+its one permission (show notifications), on a new computer and on an
+upgrade alike. Nothing you saved changes: keys, workflow nodes and actions
+keep their `notifications.*` types and run in the plugin, with the same
+parameters, outputs and messages; your settings below are copied to the
+plugin's (Settings › Plugins › Notifications), where you change them from
+then on. Its notifications are titled "Notifications: …", at most 64
+characters of title and 300 of text reach the desktop, and at most 5 are
+shown per minute (more are dropped, and the node goes on unless it is
+critical). If you turned this module off, the plugin starts off too. If
+you disable or uninstall the plugin, it stays so across restarts and
+updates, and the `notifications.*` actions are unavailable rather than
+silently run by this module. Release builds have plugins off: there, and
+in an older app on the same data, this module runs them as before.
+
 Settings (portable): **Desktop notifications** (on), **Status bar** (on),
 **Show from** (`minimumSeverity`: info, success, warning, error; info).
 

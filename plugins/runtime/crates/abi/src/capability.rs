@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::limits::{
     MAX_BODY_LEN, MAX_CREDENTIAL_KEY, MAX_HEADER_LEN, MAX_HEADERS, MAX_LOG_LEN, MAX_NOTIFY_BODY,
-    MAX_NOTIFY_TITLE, MAX_OPEN_URL_LEN, MAX_RUN_FAILED_NODES, MAX_RUN_NODE_ID,
+    MAX_NOTIFY_REASON, MAX_NOTIFY_TITLE, MAX_OPEN_URL_LEN, MAX_RUN_FAILED_NODES, MAX_RUN_NODE_ID,
     MAX_RUN_WORKFLOW_NAME, MAX_STORAGE_KEY, MAX_STORAGE_VALUE, MAX_URL_LEN, MAX_VARIABLE_ID,
     MAX_VARIABLE_VALUE,
 };
@@ -422,6 +422,52 @@ pub enum NotifySeverity {
     Error,
 }
 
+/// The `ok` value of `notify` for a guest that reports
+/// [`NOTIFY_DELIVERY`](crate::guest::features::NOTIFY_DELIVERY) (G9):
+/// where the agent showed the notification, or why it showed it nowhere.
+/// Any other guest gets `null`, as before. A notification that could not
+/// be shown is still an `ok` reply (the request was fine); not granted
+/// and the rate limit stay errors.
+///
+/// Unknown fields are **ignored** (host to guest only), so the agent can
+/// add to it within ABI 1.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotifyDelivery {
+    /// Shown somewhere: on the desktop, in the status bar or both.
+    pub shown: bool,
+    /// Shown as a notification of the operating system.
+    #[serde(default)]
+    pub desktop: bool,
+    /// Shown in the status bar of an open DeckPilot window.
+    #[serde(default)]
+    pub status_bar: bool,
+    /// Why it was not shown, in words for the user (never set when shown).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl NotifyDelivery {
+    /// Shown where `desktop` and `status_bar` say (at least one).
+    pub fn shown(desktop: bool, status_bar: bool) -> Self {
+        Self {
+            shown: desktop || status_bar,
+            desktop,
+            status_bar,
+            reason: None,
+        }
+    }
+
+    /// Shown nowhere, because of `reason` (cut to
+    /// [`MAX_NOTIFY_REASON`] characters).
+    pub fn not_shown(reason: &str) -> Self {
+        Self {
+            reason: Some(cut(reason, MAX_NOTIFY_REASON)),
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LogLevel {
@@ -769,6 +815,22 @@ impl CallResult {
             {
                 error.kind = None;
                 Self::Error(error)
+            }
+            other => other,
+        }
+    }
+
+    /// [`CallResult::for_features`] for a reply to the operation `op`:
+    /// also, a `notify` is answered `null` unless the guest reports
+    /// [`NOTIFY_DELIVERY`](crate::guest::features::NOTIFY_DELIVERY), which
+    /// is exactly what guests built before it received.
+    #[must_use]
+    pub fn for_op(self, op: &str, features: u64) -> Self {
+        match self.for_features(features) {
+            Self::Ok(_)
+                if op == "notify" && features & crate::guest::features::NOTIFY_DELIVERY == 0 =>
+            {
+                Self::Ok(Value::Null)
             }
             other => other,
         }
@@ -1277,6 +1339,41 @@ mod tests {
         ] {
             assert!(parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn notify_deliveries_reach_only_guests_that_read_them() {
+        use crate::guest::features::{NETWORK_ERROR_KIND, NOTIFY_DELIVERY};
+        let shown = NotifyDelivery::shown(true, false);
+        assert_eq!(
+            serde_json::to_string(&shown).unwrap(),
+            r#"{"shown":true,"desktop":true,"statusBar":false}"#
+        );
+        let nowhere = NotifyDelivery::not_shown(&"x".repeat(500));
+        assert!(!nowhere.shown && !nowhere.desktop && !nowhere.status_bar);
+        assert_eq!(
+            nowhere.reason.as_deref().map(str::len),
+            Some(MAX_NOTIFY_REASON)
+        );
+        // Additions later are ignored; `shown` is required.
+        let later: NotifyDelivery =
+            serde_json::from_str(r#"{"shown":true,"statusBar":true,"sound":"ping"}"#).unwrap();
+        assert_eq!(later, NotifyDelivery::shown(false, true));
+        assert!(serde_json::from_str::<NotifyDelivery>(r#"{"desktop":true}"#).is_err());
+
+        let reply = || CallResult::Ok(serde_json::to_value(&shown).unwrap());
+        // A guest built before it: `null`, byte for byte the old reply.
+        for features in [0, NETWORK_ERROR_KIND] {
+            assert_eq!(
+                serde_json::to_string(&reply().for_op("notify", features)).unwrap(),
+                r#"{"ok":null}"#
+            );
+        }
+        assert_eq!(reply().for_op("notify", NOTIFY_DELIVERY), reply());
+        // Other operations and errors are untouched.
+        assert_eq!(reply().for_op("settings.get", 0), reply());
+        let throttled = CallResult::error(CallErrorCode::Throttled, "5 per minute");
+        assert_eq!(throttled.clone().for_op("notify", 0), throttled);
     }
 
     #[test]

@@ -374,6 +374,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "deckpilot-notifications"
+version = "0.1.0"
+dependencies = [
+ "deckpilot-plugin-sdk",
+ "jsonschema",
+ "serde_json",
+]
+
+[[package]]
 name = "deckpilot-plugin-abi"
 version = "0.1.0"
 dependencies = [

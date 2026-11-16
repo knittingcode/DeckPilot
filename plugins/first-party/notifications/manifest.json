@@ -1,0 +1,182 @@
+{
+  "$schema": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
+  "id": "deckpilot.notifications",
+  "name": "Notifications",
+  "version": "0.1.0",
+  "publisher": {
+    "id": "deckpilot",
+    "name": "DeckPilot",
+    "url": "https://github.com/knittingcode/deckpilot"
+  },
+  "description": "Notifications from workflows on the desktop and in the status bar, and a summary of how a workflow went.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/knittingcode/deckpilot",
+    "directory": "plugins/first-party/notifications"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["notifications", "workflows", "summary"],
+  "categories": ["productivity"],
+  "engines": { "deckpilot": ">=0.6.0 <1.0.0", "pluginApi": "^1.0", "sdk": "0.1.0" },
+  "runtime": { "kind": "wasm", "abi": 1 },
+  "entry": "src/lib.rs",
+  "icons": { "128": "assets/icon-128.png" },
+  "permissions": [
+    {
+      "kind": "notifications",
+      "routing": {
+        "desktop": "desktop",
+        "statusBar": "statusBar",
+        "minimumSeverity": "minimumSeverity"
+      },
+      "justification": "Shows the notifications and run summaries your workflows ask for, where you choose in this plugin's settings."
+    }
+  ],
+  "contributes": {
+    "actions": [
+      {
+        "id": "show",
+        "name": "Show notification",
+        "description": "Shows a notification with a title, text and severity. Text can include outputs of earlier nodes; it is shown as plain text.",
+        "category": "Notifications",
+        "parameters": [
+          {
+            "key": "title",
+            "label": "Title",
+            "description": "Plain text, one line.",
+            "required": true,
+            "kind": { "type": "text", "multiline": false, "maxLength": 100 }
+          },
+          {
+            "key": "body",
+            "label": "Text",
+            "description": "Plain text; no HTML.",
+            "required": false,
+            "kind": { "type": "text", "multiline": true, "maxLength": 500 }
+          },
+          {
+            "key": "severity",
+            "label": "Severity",
+            "description": "How it looks; less severe ones than “Show from” in the settings are not shown.",
+            "required": false,
+            "kind": { "type": "choice", "options": ["info", "success", "warning", "error"] },
+            "default": { "type": "choice", "value": "info" }
+          },
+          {
+            "key": "critical",
+            "label": "Critical",
+            "description": "Fail the node when the notification cannot be shown. Off: the workflow goes on.",
+            "required": false,
+            "kind": { "type": "boolean" },
+            "default": { "type": "boolean", "value": false }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "bell",
+          "outputs": [
+            { "key": "shown", "label": "Shown", "kind": "boolean", "always": true },
+            { "key": "desktop", "label": "On the desktop", "kind": "boolean", "always": true },
+            { "key": "statusBar", "label": "In the status bar", "kind": "boolean", "always": true },
+            { "key": "reason", "label": "Why not shown", "kind": "text", "always": false }
+          ],
+          "timeoutMs": 20000,
+          "retrySafe": true,
+          "idempotent": false,
+          "cancellable": true,
+          "effect": "opens"
+        }
+      },
+      {
+        "id": "workflow-summary",
+        "name": "Workflow summary",
+        "description": "Shows how the workflow went so far: how many steps succeeded, failed or were skipped, which failed, and how long it took. Success or error severity follows the result.",
+        "category": "Notifications",
+        "parameters": [
+          {
+            "key": "title",
+            "label": "Title",
+            "description": "Empty: the workflow's name.",
+            "required": false,
+            "kind": { "type": "text", "multiline": false, "maxLength": 100 }
+          },
+          {
+            "key": "details",
+            "label": "Details",
+            "description": "Lines added below the summary, e.g. with outputs of earlier nodes.",
+            "required": false,
+            "kind": { "type": "text", "multiline": true, "maxLength": 400 }
+          },
+          {
+            "key": "onlyOnFailure",
+            "label": "Only when something failed",
+            "description": "Shows nothing when no step failed so far.",
+            "required": false,
+            "kind": { "type": "boolean" },
+            "default": { "type": "boolean", "value": false }
+          },
+          {
+            "key": "critical",
+            "label": "Critical",
+            "description": "Fail the node when the notification cannot be shown. Off: the workflow goes on.",
+            "required": false,
+            "kind": { "type": "boolean" },
+            "default": { "type": "boolean", "value": false }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "list-checks",
+          "outputs": [
+            { "key": "shown", "label": "Shown", "kind": "boolean", "always": true },
+            { "key": "desktop", "label": "On the desktop", "kind": "boolean", "always": true },
+            { "key": "statusBar", "label": "In the status bar", "kind": "boolean", "always": true },
+            { "key": "reason", "label": "Why not shown", "kind": "text", "always": false },
+            { "key": "summary", "label": "Summary", "kind": "text", "always": true }
+          ],
+          "timeoutMs": 20000,
+          "retrySafe": true,
+          "idempotent": false,
+          "cancellable": true,
+          "effect": "opens"
+        }
+      }
+    ],
+    "settings": {
+      "portabilityVersion": 1,
+      "fields": [
+        {
+          "key": "desktop",
+          "label": "Desktop notifications",
+          "description": "Shows them as notifications of the operating system. macOS and Windows may ask whether to allow them.",
+          "required": true,
+          "kind": { "type": "boolean" },
+          "default": { "type": "boolean", "value": true },
+          "portability": "portable"
+        },
+        {
+          "key": "statusBar",
+          "label": "Status bar",
+          "description": "Also lists them in the status bar while DeckPilot is open.",
+          "required": true,
+          "kind": { "type": "boolean" },
+          "default": { "type": "boolean", "value": true },
+          "portability": "portable"
+        },
+        {
+          "key": "minimumSeverity",
+          "label": "Show from",
+          "description": "Less important notifications are not shown; their nodes still succeed.",
+          "required": true,
+          "kind": { "type": "choice", "options": ["info", "success", "warning", "error"] },
+          "default": { "type": "choice", "value": "info" },
+          "portability": "portable"
+        }
+      ]
+    },
+    "errorCodes": {
+      "notification-not-shown": "A critical notification could not be shown."
+    }
+  }
+}

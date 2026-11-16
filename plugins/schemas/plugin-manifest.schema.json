@@ -322,6 +322,17 @@
         {
           "properties": {
             "kind": { "const": "notifications" },
+            "routing": {
+              "description": "Where the notifications go, as the user sets it in the plugin's settings: each member names one of contributes.settings, which the agent reads when it shows a notification. Without it: the status bar only.",
+              "type": "object",
+              "minProperties": 1,
+              "properties": {
+                "desktop": { "$ref": "#/$defs/camelKey" },
+                "statusBar": { "$ref": "#/$defs/camelKey" },
+                "minimumSeverity": { "$ref": "#/$defs/camelKey" }
+              },
+              "additionalProperties": false
+            },
             "justification": { "$ref": "#/$defs/justification" }
           },
           "additionalProperties": false

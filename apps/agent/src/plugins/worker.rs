@@ -36,12 +36,14 @@ use super::variables::PublishedVariables;
 /// How long stopping waits for the worker (hosts get a grace period each).
 const STOP_WAIT: Duration = Duration::from_secs(10);
 
-/// Where the plugin runtime reports: agent events (notifications) and
-/// plugin events (progress, state).
+/// Where the plugin runtime reports: agent events, plugin events
+/// (progress, state), and the agent's notifier for plugin notifications
+/// (the status bar of open app windows and the desktop).
 #[derive(Debug, Clone)]
 pub(crate) struct Events {
     pub agent: broadcast::Sender<AgentEvent>,
     pub plugins: broadcast::Sender<PluginEvent>,
+    pub notifier: Arc<dyn deckpilot_core::notify::Notifier>,
 }
 
 /// Why an engine invocation produced no outcome: a stable code for the

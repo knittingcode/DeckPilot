@@ -144,6 +144,16 @@ pub const ACTION_ALIASES: &[ActionAlias] = &[
     ),
     github("github.checks", "deckpilot.github.checks", true),
     github("github.open", "deckpilot.github.open", false),
+    // Notifications (P10): `deckpilot.notifications`
+    // (`plugins/first-party/notifications`), the first plugin of the
+    // default set; its contract checked by
+    // `crates/deckpilot-modules/tests/contracts.rs`. No parameter needs a
+    // translation.
+    notifications("notifications.show", "deckpilot.notifications.show"),
+    notifications(
+        "notifications.workflow-summary",
+        "deckpilot.notifications.workflow-summary",
+    ),
 ];
 
 /// One alias of the `github` block.
@@ -159,6 +169,18 @@ const fn github(legacy: &'static str, target: &'static str, credential: bool) ->
         } else {
             &[]
         },
+    }
+}
+
+/// One alias of the `notifications` block.
+const fn notifications(legacy: &'static str, target: &'static str) -> ActionAlias {
+    ActionAlias {
+        legacy,
+        target,
+        module: "notifications",
+        plugin: "deckpilot.notifications",
+        since: "0.6.0",
+        params: &[],
     }
 }
 
@@ -585,9 +607,10 @@ mod tests {
         validate(entries).map_err(|e| e.reason)
     }
 
-    /// The shipped table: GitHub's block (P9), nothing else.
+    /// The shipped table: GitHub's block (P9) and the notifications
+    /// block (P10), nothing else.
     #[test]
-    fn the_shipped_table_is_the_github_block() {
+    fn the_shipped_table_is_the_github_and_notifications_blocks() {
         assert_eq!(validate(ACTION_ALIASES), Ok(()));
         let legacy: Vec<&str> = ACTION_ALIASES.iter().map(|a| a.legacy).collect();
         assert_eq!(
@@ -599,19 +622,27 @@ mod tests {
                 "github.review-requests",
                 "github.checks",
                 "github.open",
+                "notifications.show",
+                "notifications.workflow-summary",
             ]
         );
         for alias in ACTION_ALIASES {
-            assert_eq!((alias.module, alias.plugin), ("github", "deckpilot.github"));
-            let credential: &[ParamRule] = if alias.legacy == "github.open" {
-                &[]
-            } else {
-                &[ParamRule::DropIfDefault("credential")]
+            let (plugin, params): (&str, &[ParamRule]) = match alias.module {
+                "github" if alias.legacy == "github.open" => ("deckpilot.github", &[]),
+                "github" => (
+                    "deckpilot.github",
+                    &[ParamRule::DropIfDefault("credential")],
+                ),
+                "notifications" => ("deckpilot.notifications", &[]),
+                other => panic!("an unexpected block: {other}"),
             };
-            assert_eq!(alias.params, credential, "{}", alias.legacy);
+            assert_eq!(alias.plugin, plugin, "{}", alias.legacy);
+            assert_eq!(alias.params, params, "{}", alias.legacy);
         }
         let found = alias_of(&ActionTypeId::new("github.pull-requests").unwrap()).unwrap();
         assert_eq!(found.target, "deckpilot.github.pull-requests");
+        let found = alias_of(&ActionTypeId::new("notifications.show").unwrap()).unwrap();
+        assert_eq!(found.target, "deckpilot.notifications.show");
         assert_eq!(
             alias_of(&ActionTypeId::new("gitlab.merge-requests").unwrap()),
             None

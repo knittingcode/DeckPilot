@@ -594,6 +594,7 @@ fn host_call(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) -> wasmtime:
         .ok_or_else(|| abi_error("host_call request out of bounds"))?
         .to_vec();
 
+    let mut op = "";
     let reply = match parse_request(&request) {
         // No invocation to relay for: answered here, never sent upstream.
         _ if caller.data().in_lifecycle => CallResult::error(
@@ -601,6 +602,7 @@ fn host_call(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) -> wasmtime:
             "capabilities are not available during dp_describe, dp_init or dp_shutdown",
         ),
         Ok(req) => {
+            op = req.op();
             let s = caller.data_mut();
             s.next_call_id += 1;
             let (inv, call) = (s.invocation_id, s.next_call_id);
@@ -611,7 +613,7 @@ fn host_call(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) -> wasmtime:
         Err(reply) => reply,
     };
     // A guest built before an addition refuses it as an unknown field.
-    let reply = reply.for_features(caller.data().features);
+    let reply = reply.for_op(op, caller.data().features);
     let mut bytes = serde_json::to_vec(&reply).unwrap_or_default();
     if bytes.len() > MAX_HOST_CALL_REPLY {
         bytes = serde_json::to_vec(&CallResult::error(CallErrorCode::Failed, "reply too large"))

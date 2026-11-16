@@ -251,7 +251,8 @@ fn show_definition() -> ActionType {
                     ParameterKind::Choice {
                         options: SEVERITIES.iter().map(|s| (*s).to_owned()).collect(),
                     },
-                    "",
+                    "How it looks; less severe ones than “Show from” in the settings are not \
+                     shown.",
                 )
             },
             critical(),
@@ -291,7 +292,7 @@ fn summary_definition() -> ActionType {
                     "onlyOnFailure",
                     "Only when something failed",
                     ParameterKind::Boolean,
-                    "",
+                    "Shows nothing when no step failed so far.",
                 )
             },
             critical(),
