@@ -715,6 +715,7 @@ impl Engine {
                 device: services.device.cloned(),
                 workflow: Some(workflow),
                 execution: services.execution,
+                origin: None,
             },
         )
     }
@@ -833,6 +834,7 @@ impl Engine {
             services,
             summary: std::sync::Mutex::new(crate::RunSummary {
                 workflow: Some(workflow),
+                workflow_name: Some(definition.name.clone()),
                 ..crate::RunSummary::default()
             }),
             started: std::time::Instant::now(),
@@ -889,7 +891,8 @@ impl Engine {
         };
         let base = ExecutionContext::new(profile, project, machine)
             .with_dependencies(dependencies, &resolution)
-            .with_notifier(self.notifier.as_ref());
+            .with_notifier(self.notifier.as_ref())
+            .with_origin(invocation.origin);
         let Some(handler) = self.registry.handler(&instance.action_type) else {
             return Ok(self
                 .registry

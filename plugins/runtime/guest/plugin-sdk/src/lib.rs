@@ -97,8 +97,8 @@ pub mod testing;
 
 pub use args::{Args, FromArg};
 pub use context::{
-    CapabilityError, CapabilityErrorKind, Context, MAX_LOG_LEN, Request, Response, SecretHandle,
-    Settings, StorageUsage,
+    CapabilityError, CapabilityErrorKind, Context, MAX_LOG_LEN, Request, Response, RunCause,
+    RunContext, RunSummary, RunTrigger, SecretHandle, Settings, StorageUsage,
 };
 pub use definition::{Action, DefinitionError, Handler, Param, Plugin};
 pub use output::{ActionResult, IntoValue, Output, PluginError, codes};
@@ -145,8 +145,8 @@ pub mod prelude {
     pub use crate::{
         Action, ActionOutcome, ActionResult, Args, AuthScheme, CapabilityError,
         CapabilityErrorKind, Context, HttpMethod, LogLevel, NetworkErrorKind, NotifySeverity,
-        Output, Param, Plugin, PluginError, Request, Response, SecretHandle, Settings,
-        StorageUsage, codes,
+        Output, Param, Plugin, PluginError, Request, Response, RunCause, RunContext, RunTrigger,
+        SecretHandle, Settings, StorageUsage, codes,
     };
 }
 

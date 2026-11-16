@@ -34,8 +34,14 @@
 //! * `url.open`: exactly the normalized https URL the broker allowed for a
 //!   granted origin, re-checked here, opened with the operating system's
 //!   handler through the core launcher (`launch::plan(OpenTarget::Url)`,
-//!   no shell), at most [`MAX_OPENS_PER_INVOCATION`] times per invocation.
+//!   no shell), at most [`MAX_OPENS_PER_INVOCATION`] times per invocation,
+//!   and only in a run the user started (a key, a gesture, the app, a
+//!   workflow the user started): the broker refuses it in any other run,
+//!   and the executor checks its own run context again before opening.
 //!   Only the origin is logged, never the path or query.
+//! * `run.context` (G8): what started the invocation's run and, for a
+//!   workflow node, how the run is going ([`RunContext`]); the context the
+//!   agent handed this executor, never anything the guest said.
 //! * Network failures: the transport's code for what went wrong (DNS,
 //!   connection, TLS, time limit, a blocked address) travels to the guest
 //!   as the error's network kind
@@ -56,7 +62,8 @@ use std::sync::{Arc, Mutex};
 use deckpilot_core::notify::{Notification, Severity};
 use deckpilot_ipc::AgentEvent;
 use deckpilot_plugin_abi::capability::{
-    AuthScheme, Header, HttpResponse, LogLevel, NotifySeverity, StorageUsage, is_response_header,
+    AuthScheme, Header, HttpResponse, LogLevel, NotifySeverity, RunContext, StorageUsage,
+    is_response_header,
 };
 use deckpilot_plugin_abi::limits::{MAX_HEADER_LEN, MAX_HEADERS};
 use deckpilot_plugin_abi::{CallErrorCode, CallResult, HttpMethod, NetworkErrorKind};
@@ -423,6 +430,9 @@ pub(super) struct Executor {
     opener: Opener,
     /// URLs this invocation opened (an executor serves one invocation).
     opened: std::sync::atomic::AtomicU32,
+    /// What started the invocation's run (G8); unknown until the caller
+    /// says, which counts as not started by the user.
+    run: RunContext,
 }
 
 impl std::fmt::Debug for Executor {
@@ -451,7 +461,14 @@ impl Executor {
             access: None,
             opener,
             opened: std::sync::atomic::AtomicU32::new(0),
+            run: RunContext::unknown(),
         }
+    }
+
+    /// The executor of an invocation whose run `run` describes.
+    pub fn with_run(mut self, run: RunContext) -> Self {
+        self.run = run.bounded();
+        self
     }
 
     /// Opens a URL the broker allowed, in the user's browser.
@@ -464,6 +481,16 @@ impl Executor {
         if !openable(url, origin) {
             warn!(plugin = %plugin, origin = %origin, "a plugin URL was refused before opening");
             return CallResult::error(CallErrorCode::NotPermitted, "the URL cannot be opened");
+        }
+        // The broker allows it only in runs the user started; checked
+        // again here, so nothing but such a run reaches the launcher.
+        if !self.run.is_user_initiated() {
+            warn!(plugin = %plugin, origin = %origin, trigger = ?self.run.trigger,
+                cause = ?self.run.cause, "a plugin page was refused: the user did not start the run");
+            return CallResult::error(
+                CallErrorCode::NotPermitted,
+                deckpilot_plugin_broker::DenyReason::NotUserInitiated.to_string(),
+            );
         }
         let opened = self
             .opened
@@ -819,6 +846,10 @@ impl CapabilityExecutor for Executor {
     ) -> CallResult {
         self.run(plugin, allowed, Some(interrupt))
     }
+
+    fn run_context(&self) -> Option<&RunContext> {
+        Some(&self.run)
+    }
 }
 
 impl Executor {
@@ -834,6 +865,10 @@ impl Executor {
             Allowed::VariableClear { id: Some(id) } => self.publish(plugin, id, None),
             Allowed::VariableClear { id: None } => self.clear(plugin),
             Allowed::OpenUrl { url, origin } => self.open_url(plugin, url, origin),
+            Allowed::RunContext(context) => serde_json::to_value(context).map_or_else(
+                |e| CallResult::error(CallErrorCode::Failed, e.to_string()),
+                CallResult::Ok,
+            ),
             Allowed::Notify {
                 title,
                 body,
@@ -1108,7 +1143,10 @@ mod tests {
                 declared: Vec::new(),
             },
             Opener::Recorded(Arc::new(record.clone())),
-        );
+        )
+        .with_run(RunContext::direct(
+            deckpilot_plugin_abi::capability::RunTrigger::Key,
+        ));
         let plugin = PluginId::new("acme.test").unwrap();
         let origin = deckpilot_plugin_broker::Origin::parse_grant("https://github.com").unwrap();
         let url = url::Url::parse("https://github.com/acme/app?token=x").unwrap();
@@ -1130,6 +1168,148 @@ mod tests {
         let lines = std::fs::read_to_string(&record).unwrap();
         assert_eq!(lines.lines().count(), MAX_OPENS_PER_INVOCATION as usize);
         assert!(lines.lines().all(|l| l == url.as_str()), "{lines}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// G8: pages open from key presses and the app; scheduled, event,
+    /// startup and unknown runs are refused by the broker (with the
+    /// executor's context) and again by the executor itself, and nothing
+    /// reaches the opener. `run.context` answers the executor's context.
+    #[cfg(feature = "test-hooks")]
+    #[test]
+    #[allow(clippy::too_many_lines)] // one scenario, step by step
+    fn pages_open_only_in_runs_the_user_started() {
+        use deckpilot_plugin_abi::CapabilityRequest;
+        use deckpilot_plugin_abi::capability::{NoArgs, OpenUrl, RunCause, RunTrigger};
+        use deckpilot_plugin_supervisor::CapabilityExecutor as _;
+        let dir = std::env::temp_dir().join(format!("dp-run-context-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = dir.join("opened.txt");
+        let _ = std::fs::remove_file(&record);
+        let clock = deckpilot_plugin_broker::ManualClock::default();
+        let broker = Broker::new(
+            Arc::new(deckpilot_plugin_broker::MemoryAudit::new(100)),
+            Arc::new(clock.clone()),
+            deckpilot_plugin_broker::RateLimits::default(),
+        );
+        let plugin = PluginId::new("acme.test").unwrap();
+        broker
+            .set_grants(
+                &plugin,
+                &deckpilot_plugin_broker::ApprovedPermissions::from_json(
+                    r#"[{"kind":"openUrl","origin":"https://github.com"}]"#,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let executor = |run: RunContext| {
+            let (events, _) = broadcast::channel(4);
+            Executor::new(
+                broker.clone(),
+                "Test".into(),
+                events,
+                Transport::Network,
+                OwnVariables {
+                    store: PublishedVariables::default(),
+                    namespace: "plugins.acme.test".into(),
+                    generation: 0,
+                    declared: Vec::new(),
+                },
+                Opener::Recorded(Arc::new(record.clone())),
+            )
+            .with_run(run)
+        };
+        let session = broker.session(plugin.clone());
+        let page = "https://github.com/acme/app/pull/7";
+        let open = CapabilityRequest::OpenUrl(OpenUrl { url: page.into() });
+        // What the supervisor does with each call: the broker decides with
+        // the executor's context, the executor carries it out.
+        let call = |executor: &mut Executor, request: &CapabilityRequest| {
+            clock.advance(std::time::Duration::from_secs(3));
+            match session.authorize_in(request, executor.run_context()) {
+                deckpilot_plugin_broker::Decision::Allow(allowed) => {
+                    executor.execute(&plugin, &allowed)
+                }
+                deckpilot_plugin_broker::Decision::Deny(reason) => {
+                    CallResult::error(reason.call_error_code(), reason.to_string())
+                }
+            }
+        };
+        let opened = || {
+            std::fs::read_to_string(&record)
+                .unwrap_or_default()
+                .lines()
+                .count()
+        };
+        for allowed in [
+            RunContext::direct(RunTrigger::Key),
+            RunContext::direct(RunTrigger::App),
+            RunContext::direct(RunTrigger::Gesture),
+            RunContext::workflow(RunCause::User, None),
+        ] {
+            let before = opened();
+            let result = call(&mut executor(allowed.clone()), &open);
+            assert_eq!(result, CallResult::Ok(Value::Null), "{allowed:?}");
+            assert_eq!(opened(), before + 1, "{allowed:?}");
+        }
+        let before = opened();
+        for denied in [
+            RunContext::workflow(RunCause::Schedule, None),
+            RunContext::workflow(RunCause::Event, None),
+            RunContext::workflow(RunCause::Startup, None),
+            RunContext::workflow(RunCause::WorkSession, None),
+            RunContext::unknown(),
+        ] {
+            let mut executor = executor(denied.clone());
+            let CallResult::Error(e) = call(&mut executor, &open) else {
+                panic!("{denied:?}")
+            };
+            assert_eq!(e.code, CallErrorCode::NotPermitted, "{denied:?}");
+            assert!(e.message.contains("the user started"), "{}", e.message);
+            // Even with an `Allowed` in hand, the executor refuses.
+            let url = url::Url::parse(page).unwrap();
+            let origin =
+                deckpilot_plugin_broker::Origin::parse_grant("https://github.com").unwrap();
+            let CallResult::Error(e) = executor.open_url(&plugin, &url, &origin) else {
+                panic!("{denied:?}")
+            };
+            assert_eq!(e.code, CallErrorCode::NotPermitted);
+        }
+        assert_eq!(opened(), before, "a refused page reached the opener");
+        // An executor without a context is not the user's either.
+        let (events, _) = broadcast::channel(4);
+        let bare = Executor::new(
+            broker.clone(),
+            "Test".into(),
+            events,
+            Transport::Network,
+            OwnVariables {
+                store: PublishedVariables::default(),
+                namespace: "plugins.acme.test".into(),
+                generation: 0,
+                declared: Vec::new(),
+            },
+            Opener::Recorded(Arc::new(record.clone())),
+        );
+        assert!(!bare.run_context().unwrap().is_user_initiated());
+
+        // `run.context`: exactly the executor's context.
+        let run = deckpilot_plugin_abi::capability::RunSummary {
+            workflow: Some("Nightly".into()),
+            succeeded: 2,
+            failed: 1,
+            failed_nodes: vec!["deploy".into()],
+            ..Default::default()
+        };
+        let context = RunContext::workflow(RunCause::Schedule, Some(run));
+        let answer = call(
+            &mut executor(context.clone()),
+            &CapabilityRequest::RunContext(NoArgs {}),
+        );
+        assert_eq!(
+            answer,
+            CallResult::Ok(serde_json::to_value(&context).unwrap())
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

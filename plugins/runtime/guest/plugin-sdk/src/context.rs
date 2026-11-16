@@ -2,11 +2,13 @@
 
 use std::fmt;
 
-pub use deckpilot_plugin_abi::capability::StorageUsage;
 use deckpilot_plugin_abi::capability::{
     AuthScheme, CredentialRef, Header, HttpAuth, HttpFetch, HttpResponse, Log, LogLevel, NoArgs,
     Notify, NotifySeverity, OpenUrl, StorageKey, StoragePrefix, StorageSet, VariableClear,
     VariablePublish,
+};
+pub use deckpilot_plugin_abi::capability::{
+    RunCause, RunContext, RunSummary, RunTrigger, StorageUsage,
 };
 use deckpilot_plugin_abi::limits::MAX_HOST_CALLS_PER_INVOCATION;
 use deckpilot_plugin_abi::{
@@ -291,8 +293,12 @@ impl<'a> Context<'a> {
     /// name. At most 2,048 bytes; 1 per 2 seconds and 20 per 10 minutes
     /// (then [`CapabilityErrorKind::Throttled`]), and at most 3 in one
     /// invocation. The agent records the URL's origin, never its path or
-    /// query. Open URLs only in actions the user starts on purpose (an
-    /// "Open pull request" key), not on every run of a workflow.
+    /// query. Pages open only in a run the user started: a key press, a
+    /// gesture, the app (the editor, the Action Library or the plugin's
+    /// page), or a workflow the user started that way. In a run a
+    /// schedule, an event, the agent's start or a work session started,
+    /// the call is denied ([`CapabilityErrorKind::NotPermitted`]); check
+    /// [`Context::run_context`] first to report it better.
     ///
     /// ```
     /// use deckpilot_plugin_sdk::testing::MockHost;
@@ -610,6 +616,40 @@ impl<'a> Context<'a> {
             Value::Object(map) => Ok(Settings(map)),
             _ => Err(malformed("settings.get", "an object of settings")),
         }
+    }
+
+    /// What started this invocation's run (op `run.context`, always
+    /// granted): a key press, a gesture, the app, the plugin's own page,
+    /// or a workflow and what started that run ([`RunCause`]). For a node
+    /// of a workflow graph it also says how the run is going so far
+    /// ([`RunSummary`]: the workflow's name, how many nodes succeeded,
+    /// failed, were skipped or cancelled, and which failed). Only the
+    /// invocation's own run: never another workflow, plugin or a secret.
+    /// [`RunContext::is_user_initiated`] tells whether
+    /// [`Context::open_url`] is allowed. An agent older than this
+    /// operation refuses it; treat that as unknown.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::{CallResult, RunCause, RunTrigger};
+    ///
+    /// let mut host = MockHost::new(|_| CallResult::Ok(serde_json::json!({
+    ///     "trigger": "workflow", "cause": "schedule",
+    ///     "run": {"workflow": "Nightly", "succeeded": 4, "failed": 1,
+    ///             "failedNodes": ["deploy"]}
+    /// })));
+    /// let mut ctx = host.context();
+    /// let run = ctx.run_context().unwrap();
+    /// assert_eq!(run.trigger, RunTrigger::Workflow);
+    /// assert_eq!(run.cause, Some(RunCause::Schedule));
+    /// assert!(!run.is_user_initiated()); // no `open_url` here
+    /// let summary = run.run.unwrap();
+    /// assert!(summary.has_failed());
+    /// assert_eq!(summary.failed_nodes, ["deploy"]);
+    /// ```
+    pub fn run_context(&mut self) -> Result<RunContext, CapabilityError> {
+        let v = self.call("run.context", &CapabilityRequest::RunContext(NoArgs {}))?;
+        serde_json::from_value(v).map_err(|_| malformed("run.context", "a run context"))
     }
 }
 

@@ -190,4 +190,21 @@ describe("permissions", () => {
       }).title,
     ).toBe("Store up to 512 KB of its own data")
   })
+
+  it("says that pages open only in actions the user starts", () => {
+    const [grant] = grantsOf([
+      { kind: "openUrl", hosts: ["github.com"], justification: "Opens pull requests." },
+    ])
+    expect(grant).toMatchObject({
+      key: "openUrl:github.com",
+      tier: "medium",
+      title: "Open links to https://github.com in your browser",
+    })
+    // What the broker enforces (G8): https pages of this host, only in a
+    // run the user started, never a scheduled, event or startup run.
+    expect(grant.detail).toContain("Only https pages of this host")
+    expect(grant.detail).toContain("only in an action you start (a key, a gesture or the app")
+    expect(grant.detail).toContain("never from a schedule, an event or startup")
+    expect(grant.detail).toContain("At most one every 2 seconds.")
+  })
 })

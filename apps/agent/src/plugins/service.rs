@@ -24,6 +24,7 @@ use deckpilot_ipc::plugins::{
     PluginUpdateOutcome, reason,
 };
 use deckpilot_ipc::{ErrorCode, IpcError, Request, Response};
+use deckpilot_plugin_abi::capability::{RunContext, RunTrigger};
 use deckpilot_plugin_abi::protocol::{Enforcement, SandboxReport};
 use deckpilot_plugin_abi::{ActionOutcome, Params};
 use deckpilot_plugin_broker::{
@@ -1812,7 +1813,8 @@ impl PluginService {
                 action: action.to_owned(),
                 params,
                 timeout,
-                executor,
+                // Tried from the plugin's own page in the app (G8).
+                executor: executor.with_run(RunContext::direct(RunTrigger::Test)),
                 abort: AbortSignal::new(),
                 done,
             }),
@@ -1821,8 +1823,9 @@ impl PluginService {
     }
 
     /// A plugin action from the workflow engine (a key, `runAction`, a
-    /// workflow node). The answer goes to `reply`; a caller that gave up
-    /// has dropped its end, and the answer is discarded.
+    /// workflow node), of the run `run` describes. The answer goes to
+    /// `reply`; a caller that gave up has dropped its end, and the answer
+    /// is discarded.
     #[expect(
         clippy::needless_pass_by_value,
         reason = "the worker hands its message's parameters over; they are validated into new ones"
@@ -1832,6 +1835,7 @@ impl PluginService {
         plugin: &str,
         action: &str,
         params: Params,
+        run: RunContext,
         abort: AbortSignal,
         reply: std::sync::mpsc::SyncSender<EngineReply>,
     ) {
@@ -1881,7 +1885,7 @@ impl PluginService {
                 action: action.to_owned(),
                 params,
                 timeout,
-                executor,
+                executor: executor.with_run(run),
                 abort,
                 done,
             }),

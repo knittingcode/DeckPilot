@@ -96,8 +96,19 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
   https URL the broker allowed for a granted `openUrl` origin, re-checked
   (https, no userinfo, the origin's host and port), opened through the
   core launcher (`launch::plan(OpenTarget::Url)`, no shell), at most 3 per
-  invocation, logged by origin only; agent tests record it instead
-  (`DECKPILOT_TEST_PLUGIN_OPEN_URL`, feature `test-hooks`).
+  invocation, only in a run the user started, logged by origin only;
+  agent tests record it instead (`DECKPILOT_TEST_PLUGIN_OPEN_URL`, feature
+  `test-hooks`). The run context (G8) comes from the engine: a key press
+  and a gesture (`RuntimeOutcome::ActionRequested` from the raw edge or
+  the gesture), `runAction` (`app`), `invokePluginAction` (`test`) and a
+  workflow node (`workflow`, with the run's `ExecutionTrigger` as its
+  cause: `app` and `device` are `user`, then `schedule`, `event`,
+  `startup` for `agentStarted`, `workSession`) travel as the core's
+  `RunOrigin` in the `Invocation` to `ExecutionContext::origin`; the
+  plugin's action handler turns it, with the run's `RunSummary`, into the
+  ABI's `RunContext` for the executor (`engine.rs`, `worker.rs`,
+  `service.rs`). The broker decides `url.open` with it and the executor
+  answers `run.context` from it.
   `notify` becomes an agent notification titled with the plugin's
   name; `log` goes to the agent log; `variables.publish` and
   `variables.clear` go to the plugin's own variables (below). Storage,
