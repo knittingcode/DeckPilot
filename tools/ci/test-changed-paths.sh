@@ -39,6 +39,10 @@ expect "dev_tools=false keystore=false packaging=true release_manifest=false" ap
 expect "dev_tools=false keystore=false packaging=true release_manifest=false" apps/desktop/src-tauri/tauri.conf.json
 expect "dev_tools=false keystore=false packaging=true release_manifest=false" Cargo.lock
 expect "dev_tools=false keystore=false packaging=true release_manifest=false" packaging/linux/70-deckpilot-streamdeck.rules
+# The plugin host's entitlement and the check that enforces it.
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" apps/desktop/src-tauri/entitlements/plugin-host.entitlements
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" apps/desktop/src-tauri/tauri.plugins.macos.conf.json
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" .github/scripts/verify-macos-app.sh
 # The distribution record the package checks read from the binaries.
 expect "dev_tools=false keystore=false packaging=true release_manifest=false" crates/deckpilot-distribution/src/lib.rs
 expect "dev_tools=false keystore=true packaging=false release_manifest=false" crates/deckpilot-keystore/src/lib.rs

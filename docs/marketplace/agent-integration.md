@@ -775,6 +775,15 @@ Windows (not a required check).
 
 ## Not done
 
+- On macOS a package with the host (`DECKPILOT_RELEASE_PLUGINS=1`) and a
+  signing identity signs the host with the hardened runtime and its one
+  entitlement, `com.apple.security.cs.allow-unsigned-executable-memory`,
+  which wasmtime's executable memory needs; the app and the agent keep
+  none ([distribution contract](distribution.md#macos-the-plugin-hosts-entitlement)).
+  Verified with ad hoc signatures (`plugins/runtime/scripts/macos-hardened-runtime.sh`
+  and a local package); a Developer ID signed and notarized package with
+  the host has not been built, and the published release workflow does not
+  package the host yet.
 - The registry trust state lives in a file, not in the encrypted database
   ([why](#trust-state-stays-a-file)).
 - No production root keys and no default trust yet: builds can embed root
