@@ -26,6 +26,18 @@ const PAGES_SETTING: &str = "navigation.pages";
 /// The profile to switch to does not exist (any more).
 const PROFILE_NOT_FOUND: &str = "profile-not-found";
 
+/// The brightness could not be saved.
+const BRIGHTNESS_NOT_SAVED: &str = "brightness-not-saved";
+
+/// The brightness after a request: `set` as it is, else `current` moved by
+/// `step`; always within 0-100.
+fn brightness_after(current: u8, set: Option<u8>, step: i8) -> u8 {
+    match set {
+        Some(level) => level.min(100),
+        None => u8::try_from((i16::from(current) + i16::from(step)).clamp(0, 100)).unwrap_or(100),
+    }
+}
+
 /// One entry of [`PAGES_SETTING`], a JSON list: a profile, a device and
 /// the top-level page the device shows in that profile.
 type SavedPage = (ProfileId, DeviceId, PageId);
@@ -74,12 +86,16 @@ impl Agent {
     pub(super) fn apply_deck_request(&mut self, result: &mut ActionResult) {
         // A page request belongs to a device and was applied by the
         // runtime; one that is left had no device.
-        let Some(DeckRequest::SwitchProfile {
-            target,
-            wrap_around,
-        }) = result.request.take().map(|request| *request)
-        else {
-            return;
+        let (target, wrap_around) = match result.request.take().map(|request| *request) {
+            Some(DeckRequest::SwitchProfile {
+                target,
+                wrap_around,
+            }) => (target, wrap_around),
+            Some(DeckRequest::Brightness { set, step }) => {
+                self.apply_brightness(set, step, result);
+                return;
+            }
+            _ => return,
         };
         let profiles = self.profiles();
         let active = self.runtime.profile().map(|profile| profile.id);
@@ -107,6 +123,20 @@ impl Agent {
                 );
             }
         }
+    }
+
+    /// Sets the display brightness as the `setBrightness` request does: the
+    /// setting is saved and sent to every device that has a brightness.
+    fn apply_brightness(&mut self, set: Option<u8>, step: i8, result: &mut ActionResult) {
+        let level = brightness_after(self.brightness, set, step);
+        if level != self.brightness
+            && let Err(error) = self.set_brightness(level)
+        {
+            *result = ActionResult::error(BRIGHTNESS_NOT_SAVED, error.message);
+            return;
+        }
+        result.message = format!("brightness {level} %");
+        result.data.insert("brightness".into(), level.to_string());
     }
 
     /// Hands the pages saved by an earlier run to the runtime. Called after
@@ -220,6 +250,16 @@ mod tests {
             Some("Only")
         );
         assert_eq!(name(pick(&[], None, ProfileTarget::Next, true)), None);
+    }
+
+    #[test]
+    fn brightness_is_set_or_stepped_within_its_range() {
+        assert_eq!(brightness_after(60, Some(25), 0), 25);
+        assert_eq!(brightness_after(60, Some(200), 0), 100);
+        assert_eq!(brightness_after(60, None, 10), 70);
+        assert_eq!(brightness_after(95, None, 10), 100);
+        assert_eq!(brightness_after(5, None, -10), 0);
+        assert_eq!(brightness_after(60, None, -25), 35);
     }
 
     #[test]

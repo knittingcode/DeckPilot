@@ -182,6 +182,8 @@ CHANGELOG.md.
   fold, and it offers the actions that need no settings (*Next page*,
   *Switch profile* and the like) directly: dropped on a key, the action is
   created, or the one that exists is reused.
+- *Brightness* on a key: set the display brightness of the devices to a
+  level, or step it brighter or dimmer.
 - Single click, double click and long press of a key are slots in the
   layout editor: drag an action, a workflow or a page onto one to set or
   replace what the gesture does, and remove it with one click.
