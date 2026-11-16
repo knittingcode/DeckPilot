@@ -49,19 +49,25 @@
 //! 1. **Eligibility.** The built-in is compiled in and enabled, the user's
 //!    data uses it (a saved `modules` row or a stored instance), no stored
 //!    value needs a translation the alias cannot make, its origin is the
-//!    plugin's default and it does not allow private hosts, and plugins
-//!    can run here. A tombstone (the user removed or disabled the plugin)
-//!    and a bundle without the plugin are reasons too.
+//!    plugin's default or (for a plugin that takes one, [`OriginPlan`]) a
+//!    server the user entered that a plugin can reach, it allows private
+//!    hosts only for such a server, and plugins can run here. A tombstone
+//!    (the user removed or disabled the plugin) and a bundle without the
+//!    plugin are reasons too.
 //! 2. **Install** the pinned bundled copy (pins plus the macOS code seal,
 //!    `bundled.rs`), or keep a copy that is not older, and record the
 //!    derived grants (below).
 //! 3. **Settings.** Copy the built-in's saved settings that the plugin
-//!    declares, only if the plugin has none yet, and record the source
+//!    declares, and the server the user entered into the plugin's origin
+//!    setting, only if the plugin has none yet, and record the source
 //!    digest. The `modules` row is never changed.
 //! 4. **Consent.** Anything not derived waits for the user
-//!    (`awaiting_consent`): high-tier permissions always, and the import
-//!    of a stored credential always. With the consent, the secret is
-//!    copied into the plugin's empty slot; the `credentials` row stays.
+//!    (`awaiting_consent`): high-tier permissions always, the import of a
+//!    stored credential always, and a server the user entered always
+//!    (with its private network as a separate item). With the consent,
+//!    the secret is copied into the plugin's empty slot (the
+//!    `credentials` row stays) and the consent to exactly that server is
+//!    recorded.
 //! 5. **Health check** (enabled, files match the pins, every alias target
 //!    declared and compatible with the built-in, required settings set),
 //!    then **cut over**: the routing becomes `Plugin`.
@@ -69,13 +75,20 @@
 //! # Consent
 //!
 //! Low-tier permissions, and medium-tier ones the built-in demonstrably
-//! used on this computer (its configured origin for `network`, its web
-//! hosts for `openUrl`), are granted as `derived`, decided by
-//! `migration:<module>`. High-tier permissions (credentials, the private
-//! network) are never derived, and a stored credential is imported only
-//! when the user granted its slot through the migration's consent
-//! (decided by `user:migration:<module>`); a grant made for other reasons
-//! does not import anything.
+//! used on this computer (its default origin for `network` and its web
+//! hosts for `openUrl`, when that is what it talked to), are granted as
+//! `derived`, decided by `migration:<module>`. High-tier permissions
+//! (credentials, the private network) are never derived, and a stored
+//! credential is imported only when the user granted its slot through the
+//! migration's consent (decided by `user:migration:<module>`); a grant
+//! made for other reasons does not import anything.
+//!
+//! A server the user entered in the built-in (a self-managed GitLab, a
+//! Jira site) is never derived either, although the built-in used it: the
+//! consent to a user-entered origin (G2) is the user's, to exactly that
+//! server. It is an item of the same dialog, recorded only by the
+//! decision that names it; reaching it on a private network is one more
+//! item, and the server is allowed only with both.
 //!
 //! The app asks with `decideModuleMigration`, item by item ([`decide`],
 //! [`infos`] lists the items). A declined item is a refusal decided by

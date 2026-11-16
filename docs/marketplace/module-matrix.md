@@ -489,8 +489,10 @@ remaining differences: `plugins/first-party/github/README.md`.
 reproduces the six actions for GitLab.com and for a self-managed GitLab
 the user enters (G2, with its path and, by its own consent, a private
 network), with the credential slot `token` (`PRIVATE-TOKEN`) and pages of
-50; bundled with class `migration`, not routed yet. Parity and the
-remaining differences: `plugins/first-party/gitlab/README.md`.
+50; bundled with class `migration` and routed by the `gitlab.*` alias
+block once a computer's migration is cut over (the server the user had
+entered is asked for). Parity and the remaining differences:
+`plugins/first-party/gitlab/README.md`.
 
 ### `jira`
 
@@ -515,8 +517,10 @@ remaining differences: `plugins/first-party/gitlab/README.md`.
 *Status (P11):* `plugins/first-party/jira` (`deckpilot.jira`) reproduces
 the four actions for the Jira Cloud site or Data Center the user enters
 (G2; no host of its own), with the credential slot `credential` (Basic or
-Bearer by `deployment`); bundled with class `migration`, not routed yet.
-Parity and the remaining differences: `plugins/first-party/jira/README.md`.
+Bearer by `deployment`); bundled with class `migration` and routed by the
+`jira.*` alias block once a computer's migration is cut over (the site is
+asked for). Parity and the remaining differences:
+`plugins/first-party/jira/README.md`.
 
 ## Audit of 2026-11-16: where the migration stands
 
@@ -530,6 +534,8 @@ decisions stay in [module-migration.md](module-migration.md).
 | --- | --- | --- | --- | --- |
 | `github` | `deckpilot.github` 0.1.0 | `migration` | `github.*` → `deckpilot.github.*` (6 actions) | #253, #260 |
 | `notifications` | `deckpilot.notifications` | `default` | `notifications.*` → `deckpilot.notifications.*` (2 actions) | #265 |
+| `gitlab` | `deckpilot.gitlab` 0.1.0 | `migration` | `gitlab.*` → `deckpilot.gitlab.*` (6 actions) | P11, after this audit |
+| `jira` | `deckpilot.jira` 0.1.0 | `migration` | `jira.*` → `deckpilot.jira.*` (4 actions) | P11, after this audit |
 
 Released builds still have plugins off (`plugins` cargo feature,
 `--enable-plugins`, `VITE_DECKPILOT_PLUGINS=1`), so every built-in is what

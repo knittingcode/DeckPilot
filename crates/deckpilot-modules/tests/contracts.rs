@@ -1602,7 +1602,7 @@ mod first_party {
     /// (`alias::incompatibilities`); only a `credential` override is
     /// translated; and beyond that the definitions are identical but for
     /// the documented differences of [`expected`]. No variables on either
-    /// side.
+    /// side. And `ACTION_ALIASES` ships exactly this block.
     fn honours_the_contract(
         aliases: &[ActionAlias],
         manifest: &Manifest,
@@ -1673,6 +1673,19 @@ mod first_party {
         assert!(problems.is_empty(), "{}", problems.join("\n"));
         assert_eq!(module.manifest().variables.len(), 0);
         assert_eq!(manifest.contributes.variables().len(), 0);
+
+        // The cut-over ships exactly these aliases.
+        let name = module.manifest().id.to_string();
+        let shipped: Vec<&ActionAlias> =
+            ACTION_ALIASES.iter().filter(|a| a.module == name).collect();
+        assert_eq!(shipped.len(), aliases.len(), "the shipped {name} block");
+        for alias in aliases {
+            let found = shipped
+                .iter()
+                .find(|a| a.legacy == alias.legacy)
+                .unwrap_or_else(|| panic!("{} has no alias", alias.legacy));
+            assert_eq!(**found, *alias, "{}", alias.legacy);
+        }
     }
 
     /// The plugin's settings are the module's, key for key, with the same
@@ -1713,7 +1726,9 @@ mod first_party {
         assert_eq!(left, not_kept);
     }
 
-    /// The aliases the GitLab cut-over ships: as GitHub's, the per-action
+    /// The aliases the GitLab cut-over (P11) added to `ACTION_ALIASES`,
+    /// written out again so a change to the shipped block shows here: as
+    /// GitHub's, the per-action
     /// `credential` override is dropped when it names the module's
     /// credential, and `gitlab.open` has none.
     const GITLAB: &[ActionAlias] = &[
@@ -1813,7 +1828,8 @@ mod first_party {
         assert_eq!(slots[0].user_origin.as_deref(), Some(setting));
     }
 
-    /// The aliases the Jira cut-over ships: the per-action `credential`
+    /// The aliases the Jira cut-over (P11) added to `ACTION_ALIASES`,
+    /// written out again: the per-action `credential`
     /// override is dropped when it names the module's credential, and
     /// `jira.open` has none.
     const JIRA: &[ActionAlias] = &[
