@@ -739,8 +739,7 @@ fn decide_items(approve: &[&str], decline: &[&str]) -> Decision {
 }
 
 /// The consent dialog item by item: the app lists what waits (by name,
-/// never the secret), a decline keeps the built-in across starts and
-/// grants nothing, Retry asks again, and the approval cuts over.
+/// never the secret), and only what waits can be decided.
 #[test]
 fn consent_is_decided_item_by_item() {
     let env = Env::new();
@@ -797,6 +796,17 @@ fn consent_is_decided_item_by_item() {
         ),
         Err(Refusal::Unknown(_))
     ));
+}
+
+/// A decline keeps the built-in across starts and grants nothing, Retry
+/// asks again, and the approval cuts over.
+#[test]
+fn a_decline_holds_until_retry() {
+    let env = Env::new();
+    let bundle = env.bundle();
+    let snapshot = env.snapshot();
+    let mut manager = env.open();
+    start(&mut manager, &bundle, &snapshot);
 
     // Declined: nothing granted or imported, the built-in stays, at every
     // start.
