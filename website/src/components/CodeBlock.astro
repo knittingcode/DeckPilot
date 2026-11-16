@@ -1,0 +1,31 @@
+---
+/**
+ * CodeBlock: syntax-highlighted code (Shiki, both themes) in a frame with
+ * a title and a copy button. Code fences in Markdown are styled by `.prose
+ * pre` and get their copy button from scripts/ui.ts.
+ */
+import { Code } from 'astro:components';
+import { Copy } from '@lucide/astro';
+import type { BundledLanguage } from 'shiki';
+import { t, type Lang } from '@/i18n';
+
+type Props = { code: string; lang: BundledLanguage | 'text'; title?: string; locale: Lang; class?: string };
+const { code, lang, title, locale, class: extra } = Astro.props;
+const dict = t(locale);
+---
+
+<div class:list={['code-block', extra]}>
+  <div class="code-block-head">
+    <span>{title ?? lang}</span>
+    <button type="button" class="code-copy" data-copy data-copied={dict.a11y.copied} data-failed={dict.a11y.copyFailed}>
+      <Copy aria-hidden="true" />
+      <span data-copy-label aria-live="polite">{dict.a11y.copyCode}</span>
+    </button>
+  </div>
+  <Code
+    code={code}
+    lang={lang}
+    themes={{ light: 'github-light-high-contrast', dark: 'github-dark-default' }}
+    defaultColor={false}
+  />
+</div>

@@ -1,0 +1,23 @@
+---
+/** ErrorState: something failed or does not exist. Same anatomy as EmptyState. */
+import { CircleAlert } from '@lucide/astro';
+
+type Props = { title: string; headingLevel?: 1 | 2 | 3; class?: string; id?: string; live?: boolean };
+const { title, headingLevel = 2, class: extra, id, live = false } = Astro.props;
+const Heading = `h${headingLevel}` as 'h2';
+---
+
+<div class:list={['state', 'state-error', extra]} id={id} role={live ? 'alert' : undefined}>
+  <div class="state-icon" aria-hidden="true">
+    <slot name="icon"><CircleAlert /></slot>
+  </div>
+  <Heading class="state-title">{title}</Heading>
+  <p class="state-text"><slot /></p>
+  {
+    Astro.slots.has('actions') && (
+      <div class="state-actions">
+        <slot name="actions" />
+      </div>
+    )
+  }
+</div>

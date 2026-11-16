@@ -107,7 +107,8 @@ pub use manager::{
 };
 pub use origins::{
     MAX_USER_ORIGIN_LEN, StoredUserOrigin, USER_ORIGIN_KEY_PREFIX, UserOriginConsent,
-    bound_credentials, declared_slot, user_origin_key, user_origin_setting,
+    bound_credentials, declared_slot, open_url_user_origin_key, open_url_user_origin_setting,
+    user_origin_key, user_origin_setting,
 };
 pub use recover::{Inconsistency, RecoveryReport};
 pub use state::{MigrationPhase, PluginState, TombstoneDecision};

@@ -142,7 +142,8 @@ pub enum GrantScope {
     Storage {
         quota_kb: u64,
     },
-    /// An `openUrl` host.
+    /// An `openUrl` host, or (keyed `openUrl:user-origin:<setting>`) the
+    /// server the user entered in an origin setting and allowed.
     OpenUrl,
     #[serde(rename_all = "camelCase")]
     Background {
@@ -322,7 +323,9 @@ fn key_covers(old: &GrantKey, new: &GrantKey) -> bool {
         return false;
     }
     let special = |key: &GrantKey| {
-        key.key == PRIVATE_NETWORK_KEY || crate::origins::user_origin_setting(key).is_some()
+        key.key == PRIVATE_NETWORK_KEY
+            || crate::origins::user_origin_setting(key).is_some()
+            || crate::origins::open_url_user_origin_setting(key).is_some()
     };
     match old.kind {
         PermissionKind::Network | PermissionKind::OpenUrl if !special(old) && !special(new) => {
@@ -396,6 +399,15 @@ impl GrantSet {
                     for host in hosts {
                         set.insert(
                             GrantKey::new(PermissionKind::OpenUrl, host.clone()),
+                            GrantScope::OpenUrl,
+                        );
+                    }
+                    // Pages on a server the user enters: one grant per
+                    // origin setting, which follows the consent to the
+                    // exact server (`plugin_user_origins`).
+                    for setting in permission.open_url_user_origins() {
+                        set.insert(
+                            crate::origins::open_url_user_origin_key(setting),
                             GrantScope::OpenUrl,
                         );
                     }
