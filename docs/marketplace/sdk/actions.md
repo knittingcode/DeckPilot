@@ -195,18 +195,46 @@ key's static face with an error mark.
 - **Parameters** are the key's, checked like an action's. Keys that show
   different things (the cells of a board) differ by a parameter.
 - **Manifest**: the action entry declares `"state": { "refresh":
-  "onEvents" | "every", "intervalSeconds": n }` (with `effect:
-  "readOnly"`), and the plugin the `device` permission with `"state":
-  true` ([permissions.md](permissions.md)). The module's descriptor does
+  "onEvents" | "every", "intervalSeconds": n }`, and the plugin the
+  `device` permission with `"state": true`
+  ([permissions.md](permissions.md)). The manifest's rule that `state`
+  needs an action whose `node.effect` is `readOnly` (the default) still
+  holds: an action that `opens` or `modifies` cannot declare state in
+  this version. The module's descriptor does
   not change, and a plugin whose keys merely look better with state keeps
   `"pluginApi": "^1.0"`: an older agent never calls the handler.
 - **Testing**: `MockHost::key_state(&plugin, "focus", json!({}))` returns
   the `StateOutcome`.
 
-**Who asks, and when.** The runtime and the SDK implement the state call;
-the agent asking for it for keys shown on a device is a separate change
-(`docs/marketplace/plugin-key-state.md`, section 4). Until an agent
-provides plugin API 1.2, keys of plugin actions are static.
+**Who asks, and when.** The agent (plugin API 1.2), through the pipeline
+of its built-in live key states, for a key that is **shown on a device
+now**:
+
+- when the key appears, and after something happened in DeckPilot (a key
+  press, a finished action or workflow, a project switch, a reload). A
+  plugin's own action is therefore followed by a fresh state; a plugin
+  cannot ask for a redraw itself;
+- with `"refresh": "every"`: again each `intervalSeconds`;
+- never more often than every **5 seconds** for the same key, whatever
+  the manifest says, and only when the state changed is anything sent to
+  the device.
+
+One state call of a plugin runs at a time; its keys take turns. While the
+plugin runs an action its keys keep what they showed. A state call has
+2 s of wall clock.
+
+| Situation | The key shows |
+| --- | --- |
+| A valid state | the plugin's description |
+| First state pending | the static face with the loading mark |
+| `Err`, an invalid state, a time-out, a crash | the static face with the error mark; after 3 in a row the key is asked again only after 5 s, 10 s … 5 min |
+| `device:state` not granted or revoked, no state handler | the static face, without a mark |
+| Plugin disabled, uninstalled, stopped by the crash-loop breaker, or plugins off | what any unavailable action shows; no state call |
+| A control without a display, an agent below API 1.2 | no state call |
+
+The configuration app's layout preview runs no providers (for built-in
+modules either), so it shows the static face; devices, physical and
+simulated, show the state.
 
 ## A complete handler
 

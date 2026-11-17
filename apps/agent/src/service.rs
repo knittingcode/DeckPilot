@@ -1573,6 +1573,7 @@ impl Agent {
                     .frame(&face, spec.width, spec.height, &self.icons)
             });
             updates.push((control, frame));
+            states::record_face(device, control, &face);
             session.rendered.insert(control, face);
         }
         session.io.set_images(updates);
