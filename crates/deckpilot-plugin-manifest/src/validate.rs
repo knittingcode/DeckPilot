@@ -194,10 +194,6 @@ impl Checker {
         }
     }
 
-    fn hosts(&mut self, path: &str, hosts: &[String], max: usize) {
-        self.hosts_min(path, hosts, 1, max);
-    }
-
     fn hosts_min(&mut self, path: &str, hosts: &[String], min: usize, max: usize) {
         self.count(path, hosts.len(), min, max);
         for (index, host) in hosts.iter().enumerate() {
@@ -665,7 +661,7 @@ fn permissions(c: &mut Checker, m: &Manifest) {
                     );
                 }
             }
-            Permission::OpenUrl { hosts, .. } => c.hosts(&format!("{path}.hosts"), hosts, 16),
+            Permission::OpenUrl { .. } => open_url(c, &path, permission, m),
             Permission::Background {
                 min_interval_seconds,
                 ..
@@ -740,6 +736,44 @@ fn notification_routing(
             );
         }
     }
+}
+
+/// `openUrl`: its hosts (none needed when the pages are on a server the
+/// user enters), and `userOrigins`, each naming a user-origin slot of the
+/// `network` permission, so the pages opened are on a server the user
+/// entered and allowed, never on one only this permission names.
+fn open_url(c: &mut Checker, path: &str, permission: &Permission, m: &Manifest) {
+    let Permission::OpenUrl {
+        hosts,
+        user_origins,
+        ..
+    } = permission
+    else {
+        return;
+    };
+    let min = usize::from(user_origins.as_ref().is_none_or(Vec::is_empty));
+    c.hosts_min(&format!("{path}.hosts"), hosts, min, 16);
+    let Some(settings) = user_origins else {
+        return;
+    };
+    let path = format!("{path}.userOrigins");
+    c.count(&path, settings.len(), 1, MAX_USER_ORIGINS);
+    let slots = user_origin_keys(m);
+    for (i, setting) in settings.iter().enumerate() {
+        let field = format!("{path}[{i}]");
+        camel_key(c, &field, setting);
+        if !slots.contains(&setting.as_str()) {
+            c.error(
+                field,
+                IssueCode::UnknownReference,
+                format!(
+                    "`{setting}` is not a user-origin slot of the `network` permission \
+                     (permissions[].userOrigins[].setting)"
+                ),
+            );
+        }
+    }
+    c.unique(&path, settings);
 }
 
 /// Most user-origin slots one plugin may declare.

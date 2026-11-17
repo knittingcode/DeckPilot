@@ -1121,6 +1121,12 @@ pub struct PluginUserOrigin {
     /// When the user consented (seconds since the Unix epoch).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub granted_at: Option<i64>,
+    /// The plugin may also open pages of this server in the browser
+    /// (`openUrl.userOrigins`, and its permission is granted): any https
+    /// page of the same host and port, whatever the path. Additive: older
+    /// agents leave it out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub opens_pages: bool,
 }
 
 /// A plugin the agent installed at some point (`plugin_known`), installed

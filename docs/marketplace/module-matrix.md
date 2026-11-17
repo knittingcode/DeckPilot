@@ -485,6 +485,13 @@ remaining differences: `plugins/first-party/github/README.md`.
 8. **Referenced ids.** All six.
 9. **Complexity and risk.** Medium and low. **Plugin**, after G2 and G6.
 
+*Status (P11):* `plugins/first-party/gitlab` (`deckpilot.gitlab`)
+reproduces the six actions for GitLab.com and for a self-managed GitLab
+the user enters (G2, with its path and, by its own consent, a private
+network), with the credential slot `token` (`PRIVATE-TOKEN`) and pages of
+50; bundled with class `migration`, not routed yet. Parity and the
+remaining differences: `plugins/first-party/gitlab/README.md`.
+
 ### `jira`
 
 1. **Actions.** `jira.myself`, `.issue`, `.issues` (fixed JQL templates only,
@@ -504,3 +511,83 @@ remaining differences: `plugins/first-party/github/README.md`.
    `credential` (default `jira.token`), `timeoutSeconds`, `allowPrivateHost`.
 8. **Referenced ids.** All four.
 9. **Complexity and risk.** Medium and low. **Plugin**, after G2.
+
+## Audit of 2026-11-16: where the migration stands
+
+Taken on `origin/main` at `dc1a8a2e` and `knittingcode/deckpilot-plugins`
+at `829a885`, before GitLab and Jira (P11). It records what exists; the
+decisions stay in [module-migration.md](module-migration.md).
+
+### What is done
+
+| Module | Plugin | Class | Routed by | PRs |
+| --- | --- | --- | --- | --- |
+| `github` | `deckpilot.github` 0.1.0 | `migration` | `github.*` → `deckpilot.github.*` (6 actions) | #253, #260 |
+| `notifications` | `deckpilot.notifications` | `default` | `notifications.*` → `deckpilot.notifications.*` (2 actions) | #265 |
+
+Released builds still have plugins off (`plugins` cargo feature,
+`--enable-plugins`, `VITE_DECKPILOT_PLUGINS=1`), so every built-in is what
+runs for 0.6.0-alpha.3 users. No built-in was removed.
+
+### What a plugin can use now
+
+| Area | State |
+| --- | --- |
+| SDK | One guest SDK, `plugins/runtime/guest/plugin-sdk` (ABI 1, `wasm32-unknown-unknown`); documented in [sdk/](sdk/README.md). No second API |
+| Capabilities | `http.fetch` (exact `https` origins, credential handles: bearer, basic, header, query), `url.open` (G1), `notify` with severity, routing and delivery (G9), `run.context` (G8), `storage.*`, `settings.get`, `credentials.has`, `variables.publish/clear`, `log` |
+| User-entered origins | G2 (#266): `network.userOrigins`, per-origin consent, bound credentials, private network as a separate consent. Pages of such a server: `openUrl.userOrigins` (this change) |
+| Limits | 15 s per fetch, 512 KiB per response, 32 KiB per request body, at most 32 response headers from an allowlist (4 KiB each), 60 fetches per minute, 256 host calls per invocation, 16 KiB per output text, 192 KiB of output; pages: 1 per 2 s, 20 per 10 minutes, 3 per invocation |
+| Not offered | G3 as a general grant (only through a consented user origin), G4 larger limits, G5 `credentialSlot` parameters, G7 button state and timers, G10 sleep, G11, G12; never: process execution (G13), file system (G14), project-context and work-session writes (G15, G16) |
+| Package format | `<id>-<version>.dpplugin`, signed; verified by `crates/deckpilot-plugin-package` and the registry client ([artifact-contract.md](artifact-contract.md)). Bundled plugins are unpacked app components trusted by sha256 pins compiled into the agent, plus the macOS code seal (owner's decision of 2026-11-15) |
+| Registry | `knittingcode/deckpilot-plugins`: schemas (`plugin-manifest`, `registry-index`, `registry-keyset`, `registry-plugin`, `registry-timestamp`, and the inputs `build-recipe`, `plugin-info`), one example entry (`acme.hello-weather`), no production keys. A plugin is submitted as `plugins/<path>/source.json` (a repository and a pinned commit) with `build.json`; the registry's CI builds it |
+| Aliases | `ACTION_ALIASES` (`crates/deckpilot-core/src/alias.rs`): the two blocks above. Stored profiles keep the legacy ids |
+
+### Where first-party sources live
+
+The approved arrangement ("sources in both repositories") is one source of
+truth and a pinned reference, not two copies: the source of every
+`deckpilot.*` plugin is in this repository under `plugins/first-party/`,
+built into the bundle by `plugins/first-party/build.sh`; the registry
+receives a `source.json` that names this repository at a pinned commit, and
+its CI builds the independently installable package from exactly that
+commit ([`plugins/first-party/README.md`](../../plugins/first-party/README.md),
+module-migration.md B5). Nothing is copied by hand, so the two cannot
+drift; what must be checked is that the registry's build of the pinned
+commit and the bundle's build give the same `plugin.wasm` (both are
+reproducible on one platform with the pinned toolchain).
+
+Not possible yet, and not changed here:
+
+- **B6.** The registry tooling refuses the reserved publisher `deckpilot`
+  in submissions (`deckpilot-plugins` #6), and the agent installs a
+  `deckpilot.*` id only from the application bundle
+  (`FIRST_PARTY_PUBLISHER`, `crates/deckpilot-plugin-store/src/store.rs`).
+  Both are deliberate (§4.4): they stay until the registry can prove the
+  `deckpilot` publisher, which needs the owner's registry keys (B1).
+- **B1.** No production registry keys exist (U-10, U-12). Packages can be
+  built and verified with disposable test keys in tests and CI only.
+
+### The order asked for, against the approved scope
+
+The mission's order is GitHub, GitLab, Jira, HTTP, Git, Docker, Projects,
+Workspace, Work Session, with System and General audited separately. The
+approved scope (module-migration.md §1, §3, §7; owner's decision of
+2026-11-15, "as proposed") agrees for the first three and disagrees for
+the rest:
+
+| Module | Approved verdict | Why it cannot simply follow | Options |
+| --- | --- | --- | --- |
+| `gitlab`, `jira` | plugin | nothing, since G2 and `openUrl.userOrigins` | proceed (P11) |
+| `http` | actions built-in; transport already in the core (`deckpilot-net`) | the user types a URL per action, also `localhost` and plain `http`; any stored credential per action; 10 MiB and 300 s. A plugin would need "any origin the user enters, per action" and credential selection, which makes the broker a pass-through with the built-in's authority (§6) | (a) keep built-in (approved); (b) design per-action origin consent (G2's deferred variant), G4 limits and G5 slots first, each its own decision |
+| `git`, `docker` | built-in | their job is running `git` and `docker`: process execution with the user's SSH agent and, for Docker, root-equivalent access (G13, refused) | (a) keep built-in (approved); (b) a design note for a narrow host-side `git.status`-style capability, which keeps the risky code in the host and isolates only formatting |
+| `projects`, `work-session` | core | they own core state: `ContextEffect`s, the profile model, three core tables, the agent's session state machine (G15, G16: never grantable) | keep in the core (approved); nothing to migrate |
+| `workspace` | built-in, later with G12 | launches programs on bound machine resources: G12 is high tier and not in API 1 | (a) keep built-in (approved); (b) design G12 as its own decision |
+| `system`, `general` | core (launchers, `wait`, `log`); `run-command` and `process-status` built-in | process execution and the engine's own nodes | keep (approved) |
+
+So after GitLab and Jira, nothing further can move without a new host
+capability that the approved scope either refuses (process execution) or
+has not designed (per-action origins, resource launch). None is invented
+here. The essential core the mission lists (devices, agent lifecycle,
+profiles, layouts, the workflow engine, the plugin runtime and broker, the
+Marketplace client, encrypted storage, updates) is untouched by every
+migration so far.

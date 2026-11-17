@@ -13,9 +13,9 @@ use serde_json::Value;
 
 use crate::limits::{
     MAX_BODY_LEN, MAX_CREDENTIAL_KEY, MAX_HEADER_LEN, MAX_HEADERS, MAX_LOG_LEN, MAX_NOTIFY_BODY,
-    MAX_NOTIFY_REASON, MAX_NOTIFY_TITLE, MAX_OPEN_URL_LEN, MAX_RUN_FAILED_NODES, MAX_RUN_NODE_ID,
-    MAX_RUN_WORKFLOW_NAME, MAX_STORAGE_KEY, MAX_STORAGE_VALUE, MAX_URL_LEN, MAX_VARIABLE_ID,
-    MAX_VARIABLE_VALUE,
+    MAX_NOTIFY_REASON, MAX_NOTIFY_TITLE, MAX_OPEN_URL_LEN, MAX_RANDOM_BYTES, MAX_RUN_FAILED_NODES,
+    MAX_RUN_NODE_ID, MAX_RUN_WORKFLOW_NAME, MAX_STORAGE_KEY, MAX_STORAGE_VALUE, MAX_URL_LEN,
+    MAX_UTC_OFFSET_MINUTES, MAX_VARIABLE_ID, MAX_VARIABLE_VALUE,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -74,6 +74,76 @@ pub enum CapabilityRequest {
     /// agent that predates it refuses the unknown op.
     #[serde(rename = "run.context")]
     RunContext(NoArgs),
+    /// The agent's wall clock and the local UTC offset ([`Timestamp`]).
+    /// Always allowed, rate limited. Added compatibly within ABI 1
+    /// (plugin API 1.1): a guest built before it never sends it; a host
+    /// or agent that predates it refuses the unknown op.
+    #[serde(rename = "time.now")]
+    TimeNow(NoArgs),
+    /// Bytes from the agent's CSPRNG ([`RandomReply`]), at most
+    /// [`MAX_RANDOM_BYTES`] per call. Always allowed, rate limited by
+    /// bytes. Added compatibly within ABI 1 (plugin API 1.1).
+    #[serde(rename = "random.bytes")]
+    RandomBytes(RandomBytes),
+}
+
+/// The `ok` value of `time.now`. Unknown fields are **ignored** (host to
+/// guest only), so the agent can add to it within ABI 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Timestamp {
+    /// Milliseconds since the Unix epoch (UTC), from the agent's wall
+    /// clock. Not monotonic: it follows the system clock.
+    pub unix_ms: u64,
+    /// The local UTC offset at that instant in minutes, east positive,
+    /// within ±[`MAX_UTC_OFFSET_MINUTES`]. No time zone name and no rules.
+    #[serde(default)]
+    pub utc_offset_minutes: i32,
+}
+
+impl Timestamp {
+    /// A timestamp with its offset brought within
+    /// ±[`MAX_UTC_OFFSET_MINUTES`].
+    pub fn new(unix_ms: u64, utc_offset_minutes: i32) -> Self {
+        Self {
+            unix_ms,
+            utc_offset_minutes: utc_offset_minutes
+                .clamp(-MAX_UTC_OFFSET_MINUTES, MAX_UTC_OFFSET_MINUTES),
+        }
+    }
+}
+
+/// How many random bytes to return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RandomBytes {
+    /// 1 to [`MAX_RANDOM_BYTES`].
+    pub length: u32,
+}
+
+/// The `ok` value of `random.bytes`. Unknown fields are **ignored** (host
+/// to guest only).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RandomReply {
+    /// The bytes, base64 (standard alphabet, padded).
+    pub bytes: String,
+}
+
+impl RandomReply {
+    pub fn new(bytes: &[u8]) -> Self {
+        use base64::Engine as _;
+        Self {
+            bytes: base64::engine::general_purpose::STANDARD.encode(bytes),
+        }
+    }
+
+    /// The bytes; `None` when the text is not base64.
+    pub fn decode(&self) -> Option<Vec<u8>> {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .decode(self.bytes.as_bytes())
+            .ok()
+    }
 }
 
 /// The `ok` value of `run.context` (G8). Unknown fields are **ignored**
@@ -546,6 +616,8 @@ impl CapabilityRequest {
             Self::VariablesClear(_) => "variables.clear",
             Self::OpenUrl(_) => "url.open",
             Self::RunContext(_) => "run.context",
+            Self::TimeNow(_) => "time.now",
+            Self::RandomBytes(_) => "random.bytes",
         }
     }
 
@@ -609,7 +681,15 @@ impl CapabilityRequest {
                     return Err(RequestError::TooLarge("credential"));
                 }
             }
-            Self::StorageUsage(_) | Self::SettingsGet(_) | Self::RunContext(_) => {}
+            Self::StorageUsage(_)
+            | Self::SettingsGet(_)
+            | Self::RunContext(_)
+            | Self::TimeNow(_) => {}
+            Self::RandomBytes(r) => {
+                if r.length == 0 || r.length as usize > MAX_RANDOM_BYTES {
+                    return Err(RequestError::TooLarge("length"));
+                }
+            }
             Self::VariablesPublish(p) => {
                 if !is_variable_id(&p.id) {
                     return Err(RequestError::TooLarge("variable"));
@@ -924,6 +1004,68 @@ mod tests {
 
     fn parse(json: &str) -> Result<CapabilityRequest, serde_json::Error> {
         serde_json::from_str(json)
+    }
+
+    #[test]
+    fn time_and_random_are_compatible_additions() {
+        let json = r#"{"op":"time.now","args":{}}"#;
+        let r = parse(json).unwrap();
+        assert_eq!(r, CapabilityRequest::TimeNow(NoArgs {}));
+        assert_eq!(r.op(), "time.now");
+        r.validate().unwrap();
+        assert_eq!(serde_json::to_string(&r).unwrap(), json);
+        for bad in [
+            r#"{"op":"time.now","args":{"zone":"Europe/Warsaw"}}"#,
+            r#"{"op":"time.now","args":{"plugin":"other"}}"#,
+            r#"{"op":"time.now"}"#,
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+        let now = Timestamp::new(1_794_838_800_123, 60);
+        let json = serde_json::to_string(&now).unwrap();
+        assert_eq!(json, r#"{"unixMs":1794838800123,"utcOffsetMinutes":60}"#);
+        assert_eq!(serde_json::from_str::<Timestamp>(&json).unwrap(), now);
+        // The offset is bounded; a field added later is ignored.
+        assert_eq!(Timestamp::new(0, 9_999).utc_offset_minutes, 1_440);
+        assert_eq!(Timestamp::new(0, -9_999).utc_offset_minutes, -1_440);
+        let later: Timestamp =
+            serde_json::from_str(r#"{"unixMs":5,"utcOffsetMinutes":-300,"monotonicMs":1}"#)
+                .unwrap();
+        assert_eq!(later, Timestamp::new(5, -300));
+
+        let json = r#"{"op":"random.bytes","args":{"length":16}}"#;
+        let r = parse(json).unwrap();
+        assert_eq!(
+            r,
+            CapabilityRequest::RandomBytes(RandomBytes { length: 16 })
+        );
+        assert_eq!(r.op(), "random.bytes");
+        r.validate().unwrap();
+        assert_eq!(serde_json::to_string(&r).unwrap(), json);
+        for length in [1, MAX_RANDOM_BYTES as u32] {
+            CapabilityRequest::RandomBytes(RandomBytes { length })
+                .validate()
+                .unwrap();
+        }
+        for length in [0, MAX_RANDOM_BYTES as u32 + 1, u32::MAX] {
+            assert_eq!(
+                CapabilityRequest::RandomBytes(RandomBytes { length }).validate(),
+                Err(RequestError::TooLarge("length")),
+                "{length}"
+            );
+        }
+        for bad in [
+            r#"{"op":"random.bytes","args":{}}"#,
+            r#"{"op":"random.bytes","args":{"length":-1}}"#,
+            r#"{"op":"random.bytes","args":{"length":8,"seed":1}}"#,
+            r#"{"op":"random.bytes","args":{"length":"8"}}"#,
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+        let reply = RandomReply::new(&[0, 1, 254, 255]);
+        assert_eq!(reply.bytes, "AAH+/w==");
+        assert_eq!(reply.decode().unwrap(), [0, 1, 254, 255]);
+        assert_eq!(RandomReply { bytes: "?".into() }.decode(), None);
     }
 
     #[test]

@@ -1,0 +1,40 @@
+---
+/**
+ * Deck: the hero illustration, a 5 by 3 key grid like the Stream Deck MK.2
+ * that DeckPilot supports. It is a drawing, not a picture of the app or of
+ * a configured device: the glyphs stand for kinds of built-in actions
+ * (projects, editor, Git, containers, HTTP, notifications, Work Session,
+ * workflows). Decorative, hidden from assistive technology.
+ */
+import { AppWindow, Bell, Container, FolderOpen, GitBranch, GitPullRequest, Globe, Play, RefreshCw, SquareTerminal, Timer, Workflow, CodeXml, Activity, Layers } from '@lucide/astro';
+
+const keys = [
+  { icon: RefreshCw, state: 'soft' },
+  { icon: CodeXml },
+  { icon: GitBranch },
+  { icon: GitPullRequest },
+  { icon: Container },
+  { icon: AppWindow },
+  { icon: Workflow, state: 'lit' },
+  { icon: SquareTerminal },
+  { icon: Globe },
+  { icon: Activity },
+  { icon: FolderOpen },
+  { icon: Layers },
+  { icon: Play, state: 'soft' },
+  { icon: Bell },
+  { icon: Timer },
+] as const;
+---
+
+<div class="deck" aria-hidden="true">
+  <div class="deck-grid">
+    {
+      keys.map((key) => (
+        <div class:list={['deck-key', 'state' in key && `is-${key.state}`]}>
+          <key.icon />
+        </div>
+      ))
+    }
+  </div>
+</div>

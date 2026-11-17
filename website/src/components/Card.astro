@@ -1,0 +1,34 @@
+---
+/**
+ * Card: a bordered surface. With `href` the whole card is one link (the
+ * title is the link; a pseudo-element stretches it over the card).
+ */
+type Props = {
+  title?: string;
+  href?: string;
+  external?: boolean;
+  as?: 'div' | 'li' | 'article';
+  headingLevel?: 2 | 3 | 4;
+  class?: string;
+};
+const { title, href, external = false, as: Tag = 'div', headingLevel = 3, class: extra } = Astro.props;
+const Heading = `h${headingLevel}` as 'h3';
+---
+
+<Tag class:list={['card', href && 'card-link', extra]}>
+  <slot name="icon" />
+  {
+    title && (
+      <Heading class="card-title">
+        {href ? (
+          <a class="card-cover" href={href} rel={external ? 'noopener' : undefined}>
+            {title}
+          </a>
+        ) : (
+          title
+        )}
+      </Heading>
+    )
+  }
+  <slot />
+</Tag>

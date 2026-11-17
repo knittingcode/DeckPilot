@@ -412,3 +412,139 @@ fn run_context_answers_the_invocations_own_run() {
         Some(DenyReason::UnknownPlugin)
     );
 }
+
+/// A GitLab under a path, entered by the user: requests are limited to its
+/// API path; its pages may be opened when the consent says so.
+fn user_server(origin: &str, private_network: bool, open_url: bool) -> String {
+    format!(
+        r#"[{{"kind":"userOrigin","origin":"{origin}","pathPrefix":"/gitlab/api/v4",
+             "methods":["GET"],"privateNetwork":{private_network},"openUrl":{open_url}}}]"#
+    )
+}
+
+#[test]
+fn pages_of_a_server_the_user_allowed_are_opened_by_origin() {
+    let f = fixture(&user_server("https://code.example.com", false, true));
+    let s = f.broker.session(f.plugin.clone());
+    // Its pages are not under its API's path: the grant is by origin, as
+    // for a declared host.
+    let d = s.by_key(&open(
+        "https://code.example.com/gitlab/group/app/-/merge_requests/7",
+    ));
+    let Decision::Allow(Allowed::OpenUrl { url, origin }) = d else {
+        panic!("{d:?}")
+    };
+    assert_eq!(
+        url.as_str(),
+        "https://code.example.com/gitlab/group/app/-/merge_requests/7"
+    );
+    assert_eq!(origin.to_string(), "https://code.example.com");
+    // Nothing but exactly that scheme, host and port.
+    for url in [
+        "https://code.example.com:8443/gitlab/",
+        "https://x.code.example.com/gitlab/",
+        "https://code.example.com.evil.example.net/",
+        "https://evil.example.net/gitlab/",
+        "http://code.example.com/gitlab/",
+        "https://user@code.example.com/gitlab/",
+    ] {
+        f.clock.advance(Duration::from_secs(3));
+        assert!(s.by_key(&open(url)).denial().is_some(), "{url}");
+    }
+    // It gives no request outside the path the user allowed.
+    let d = s.authorize(&CapabilityRequest::HttpFetch(HttpFetch {
+        method: HttpMethod::Get,
+        url: "https://code.example.com/gitlab/group/app".into(),
+        headers: vec![],
+        body: None,
+        auth: None,
+    }));
+    assert_eq!(d.denial(), Some(DenyReason::PathNotGranted));
+    // Only in a run the user started, like every `url.open`.
+    f.clock.advance(Duration::from_secs(3));
+    let scheduled = RunContext::workflow(RunCause::Schedule, None);
+    let d = s.authorize_in(&open("https://code.example.com/gitlab/"), Some(&scheduled));
+    assert_eq!(d.denial(), Some(DenyReason::NotUserInitiated));
+}
+
+#[test]
+fn a_user_server_without_the_open_grant_opens_nothing() {
+    // The consent to send requests there does not open pages by itself.
+    let f = fixture(&user_server("https://code.example.com", false, false));
+    let s = f.broker.session(f.plugin.clone());
+    for url in [
+        "https://code.example.com/gitlab/",
+        "https://code.example.com/gitlab/api/v4/user",
+    ] {
+        assert_eq!(
+            s.by_key(&open(url)).denial(),
+            Some(DenyReason::OriginNotGranted),
+            "{url}"
+        );
+    }
+    // An older record without the field: the same.
+    let f =
+        fixture(r#"[{"kind":"userOrigin","origin":"https://code.example.com","methods":["GET"]}]"#);
+    let s = f.broker.session(f.plugin.clone());
+    assert_eq!(
+        s.by_key(&open("https://code.example.com/")).denial(),
+        Some(DenyReason::OriginNotGranted)
+    );
+}
+
+#[test]
+fn a_private_server_is_opened_only_when_it_is_the_one_the_user_allowed() {
+    for host in ["https://gitlab.internal", "https://10.0.0.5"] {
+        let f = fixture(&user_server(host, true, true));
+        let s = f.broker.session(f.plugin.clone());
+        let d = s.by_key(&open(&format!("{host}/gitlab/group/app")));
+        assert!(
+            matches!(d, Decision::Allow(Allowed::OpenUrl { .. })),
+            "{host}: {d:?}"
+        );
+        // Another private host, this computer and link-local stay refused
+        // by the strict parser, as for a plugin without user origins.
+        for url in [
+            "https://other.internal/",
+            "https://10.0.0.6/",
+            "https://localhost/",
+            "https://127.0.0.1/",
+            "https://169.254.169.254/",
+        ] {
+            f.clock.advance(Duration::from_secs(3));
+            assert!(
+                matches!(s.by_key(&open(url)).denial(), Some(DenyReason::Url(_))),
+                "{host}: {url}"
+            );
+        }
+        // The same server without the open grant: still the strict error.
+        let f = fixture(&user_server(host, true, false));
+        let s = f.broker.session(f.plugin.clone());
+        assert!(
+            matches!(
+                s.by_key(&open(&format!("{host}/gitlab/"))).denial(),
+                Some(DenyReason::Url(_))
+            ),
+            "{host}"
+        );
+    }
+}
+
+#[test]
+fn revoking_the_user_server_ends_opening_its_pages() {
+    let f = fixture(&user_server("https://code.example.com", false, true));
+    let s = f.broker.session(f.plugin.clone());
+    assert!(matches!(
+        s.by_key(&open("https://code.example.com/gitlab/")),
+        Decision::Allow(_)
+    ));
+    f.broker.revoke_user_origin(
+        &f.plugin,
+        &UserOrigin::parse("https://code.example.com/gitlab/api/v4").unwrap(),
+    );
+    f.clock.advance(Duration::from_secs(3));
+    assert_eq!(
+        s.by_key(&open("https://code.example.com/gitlab/")).denial(),
+        Some(DenyReason::OriginNotGranted)
+    );
+}

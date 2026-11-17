@@ -85,7 +85,8 @@
 //! | Number | Value | Meaning |
 //! | --- | --- | --- |
 //! | [`SDK_VERSION`] | this crate's semver | breaking Rust API changes bump the major (the minor while 0.x) |
-//! | [`API_LEVEL`] | 1.0 | plugin API level (design §6.5) this SDK implements |
+//! | [`API_LEVEL`] | 1.0 | plugin API level (design §6.5) a plugin needs by default |
+//! | [`LATEST_API_LEVEL`] | 1.1 | highest plugin API level this SDK implements |
 //! | [`ABI_VERSION`] | 1 | guest ABI; checked at compile time |
 #![deny(unsafe_code)]
 
@@ -97,8 +98,9 @@ pub mod testing;
 
 pub use args::{Args, FromArg};
 pub use context::{
-    CapabilityError, CapabilityErrorKind, Context, MAX_LOG_LEN, NotifyDelivery, Request, Response,
-    RunCause, RunContext, RunSummary, RunTrigger, SecretHandle, Settings, StorageUsage,
+    CapabilityError, CapabilityErrorKind, Context, MAX_LOG_LEN, MAX_RANDOM_BYTES, NotifyDelivery,
+    Now, Request, Response, RunCause, RunContext, RunSummary, RunTrigger, SecretHandle, Settings,
+    StorageUsage,
 };
 pub use definition::{Action, DefinitionError, Handler, Param, Plugin};
 pub use output::{ActionResult, IntoValue, Output, PluginError, codes};
@@ -136,16 +138,23 @@ impl std::fmt::Display for ApiLevel {
     }
 }
 
-/// The plugin API level this SDK implements. A manifest built with this
-/// SDK declares `"engines": { "pluginApi": "^1.0" }`.
+/// The plugin API level a plugin built with this SDK needs unless it
+/// says otherwise: every agent with plugins provides it, and its manifest
+/// declares `"engines": { "pluginApi": "^1.0" }`. A plugin that cannot
+/// work without a later addition raises its own level with
+/// [`Plugin::requires_api`] (see [`Plugin::api_level`]).
 pub const API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 0 };
+
+/// The highest plugin API level this SDK implements: 1.1 adds
+/// [`Context::now`] and [`Context::random_bytes`].
+pub const LATEST_API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 1 };
 
 /// Everything a plugin usually needs.
 pub mod prelude {
     pub use crate::{
         Action, ActionOutcome, ActionResult, Args, AuthScheme, CapabilityError,
         CapabilityErrorKind, Context, HttpMethod, LogLevel, NetworkErrorKind, NotifyDelivery,
-        NotifySeverity, Output, Param, Plugin, PluginError, Request, Response, RunCause,
+        NotifySeverity, Now, Output, Param, Plugin, PluginError, Request, Response, RunCause,
         RunContext, RunTrigger, SecretHandle, Settings, StorageUsage, codes,
     };
 }

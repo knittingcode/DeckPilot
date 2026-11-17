@@ -88,6 +88,45 @@ fn the_slot_is_a_declared_grant_of_its_own_tier() {
     }
 }
 
+/// `openUrl.userOrigins`: a declared grant of its own, medium tier, that
+/// an update adding it must ask for.
+#[test]
+fn opening_pages_of_the_entered_server_is_a_declared_grant_of_its_own() {
+    let with_pages = || {
+        let mut permissions = permissions(false);
+        permissions.push(json!({
+            "kind": "openUrl", "hosts": [], "userOrigins": [SETTING],
+            "justification": "Opens pages of your server in the browser."
+        }));
+        permissions
+    };
+    let key = deckpilot_plugin_store::open_url_user_origin_key(SETTING);
+    assert_eq!(key.to_string(), format!("openUrl:user-origin:{SETTING}"));
+    assert_eq!(
+        deckpilot_plugin_store::open_url_user_origin_setting(&key),
+        Some(SETTING)
+    );
+    // Not the slot's own grant: revoking it never ends the consent to the
+    // server.
+    assert_eq!(deckpilot_plugin_store::user_origin_setting(&key), None);
+
+    let env = Env::new();
+    let mut manager = env.open();
+    install(&mut manager, false);
+    let update = package_edited("1.1.0", &with_pages(), bind_token);
+    let declared = grants_of(&update);
+    assert_eq!(declared.get(&key), Some(&GrantScope::OpenUrl));
+    assert_eq!(GrantScope::OpenUrl.tier(), Tier::Medium);
+    // Adding it in an update is an escalation the user is asked about.
+    let outcome = manager.update(&update, &InstallSource::Sideload).unwrap();
+    let UpdateOutcome::AwaitingConsent { diff, .. } = outcome else {
+        panic!("{outcome:?}")
+    };
+    assert_eq!(diff.added.len(), 1, "{diff:?}");
+    assert_eq!(diff.added[0].key, key);
+    assert_eq!(diff.highest_tier(), Some(Tier::Medium));
+}
+
 #[test]
 fn an_origin_is_recorded_only_with_the_users_consent_within_the_slot() {
     let env = Env::new();

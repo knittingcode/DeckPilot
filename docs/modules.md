@@ -392,6 +392,10 @@ pub struct ButtonState {
     pub indicator: Option<Indicator>, // ok | warning | error | running | unknown | loading
     pub progress: Option<u8>,      // 0–100, bar along the bottom edge
     pub toggle: Option<bool>,      // on/off mark along the top edge
+    pub accent: Option<Accent>,    // background: blue | green | amber | red | purple | teal | grey
+    pub glyph: Option<Glyph>,      // a shape above the title, from a closed set of 16
+    pub badge: Option<String>,     // at most 4 characters, top left corner
+    pub series: Option<Vec<u8>>,   // 2 to 32 values 0–100, a line behind the texts
 }
 
 pub enum RefreshPolicy {
@@ -405,8 +409,13 @@ pub struct StateError { pub code: String, pub message: String }
 **Who decides what.** The module decides *what* the state is; the core
 decides *when* it is asked and *how* it looks. The renderer only knows
 `ButtonState` and draws the indicator as a dot in the top-right corner, a
-ring while loading, the progress bar and the toggle mark. It knows nothing
-about Git, Docker or any other module.
+ring while loading, the progress bar and the toggle mark; the accent as the
+key's background from a fixed palette, the glyph as a vector shape at the
+key's resolution, the badge on a small plate and the series as a line
+(`crates/deckpilot-render/src/marks.rs`). A state carries no pixels, fonts
+or markup. What the user chose for the key wins: its background over the
+accent, its icon over the glyph. The renderer knows nothing about Git,
+Docker or any other module.
 
 **When providers run.** The agent asks for a key's state only while the key
 is shown on a device, off the device loop, on its own threads:
@@ -482,7 +491,8 @@ Docker module tests). The agent's scheduler is tested with explicit times
 in `apps/agent/src/service/states.rs`.
 
 **Previewing states in the app.** `KeyFace` carries `indicator`,
-`progress` and `toggle` as optional fields (omitted when unset), so stored
+`progress`, `toggle`, `accent`, `glyph`, `badge` and `series` as
+optional fields (omitted when unset), so stored
 data and the IPC protocol are unchanged. The configuration app does not
 run providers; a preview would apply a sample `ButtonState` to a face with
 `KeyFace::with_state`.
