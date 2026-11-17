@@ -13,7 +13,7 @@ notarization and packaging, since deleted; they were never made public and
 are not offered by the updater. The versions before 0.5.0 were never
 released either. 0.6.0 is the first version intended for publication.
 
-## [0.6.0] - Unreleased
+## [0.6.0] - 2026-11-17
 
 The first public release. It also includes the changes of the
 unreleased versions 0.1.0 to 0.5.0, which are recorded in the project's
