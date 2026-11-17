@@ -1,4 +1,6 @@
-import { useState } from "react"
+import { useDndMonitor, useDroppable } from "@dnd-kit/core"
+import { ListOrdered, X } from "lucide-react"
+import { useState, type ReactNode } from "react"
 
 import { ParameterField } from "@/components/parameter-field"
 import {
@@ -45,6 +47,7 @@ import type {
   ParameterValue,
   Profile,
 } from "@/lib/types"
+import { cn } from "@/lib/utils"
 import { setOverride } from "@/lib/workflow-model"
 
 import {
@@ -54,11 +57,13 @@ import {
   clickTiming,
   convertToGestures,
   gestureBinding,
+  gestureSlotId,
   keyMode,
   keyTimings,
   needsConversion,
   setGesture,
   setKeyTiming,
+  slotGesture,
   timingError,
   updateBinding,
   type ClickTiming,
@@ -109,6 +114,71 @@ export interface GestureEditorProps {
   issues: string[]
   /** Commits a change; `group` merges consecutive edits into one undo step. */
   onChange: (layout: DeviceLayout, group?: string) => void
+  /**
+   * Makes each gesture a slot that takes what is dragged onto it (inside
+   * the layout editor's drag and drop). It turns what was dropped into the
+   * target to assign, creating an action for an action type if needed;
+   * `null`: it cannot be put on a gesture.
+   */
+  resolveDrop?: (dragged: unknown) => Promise<BindingTarget | null> | BindingTarget | null
+  /**
+   * Opens the steps of a step workflow (a Multi Action) a gesture runs;
+   * without it, no "Edit steps" is offered.
+   */
+  onEditWorkflow?: (workflow: string) => void
+}
+
+/**
+ * Listens for drops on the gesture slots of `control`. A component of its
+ * own, because the listener only exists inside a drag-and-drop context.
+ */
+function SlotDrops({
+  control,
+  resolve,
+  onDrop,
+}: {
+  control: ControlId
+  resolve: NonNullable<GestureEditorProps["resolveDrop"]>
+  onDrop: (gesture: Gesture, target: BindingTarget) => void
+}) {
+  useDndMonitor({
+    onDragEnd: (event) => {
+      const gesture = slotGesture(control, event.over?.id)
+      if (!gesture) return
+      void Promise.resolve(resolve(event.active.data.current)).then((target) => {
+        if (target) onDrop(gesture, target)
+      })
+    },
+  })
+  return null
+}
+
+/** One gesture's slot: a drop target around its row. */
+function Slot({
+  id,
+  filled,
+  droppable,
+  children,
+}: {
+  id: string
+  filled: boolean
+  droppable: boolean
+  children: ReactNode
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id, disabled: !droppable })
+  return (
+    <div
+      ref={setNodeRef}
+      data-gesture-slot={filled ? "filled" : "empty"}
+      className={cn(
+        "rounded-md border p-2",
+        !filled && "border-dashed",
+        isOver && "ring-2 ring-emerald-400",
+      )}
+    >
+      {children}
+    </div>
+  )
 }
 
 interface PendingConversion {
@@ -171,10 +241,14 @@ export function GestureEditor(props: GestureEditorProps) {
         </p>
       </div>
 
+      {props.resolveDrop && (
+        <SlotDrops control={control} resolve={props.resolveDrop} onDrop={assign} />
+      )}
       {GESTURES.map((gesture) => (
         <GestureRow
           key={gesture}
           {...props}
+          slot={gestureSlotId(control, gesture)}
           gesture={gesture}
           label={
             gesture === "click" && mode !== "gesture"
@@ -336,7 +410,12 @@ function GestureRow({
   onToggleOverrides,
   onAssign,
   onChange,
+  slot,
+  resolveDrop,
+  onEditWorkflow,
 }: GestureEditorProps & {
+  /** The id of the row's drop target. */
+  slot: string
   gesture: Gesture
   label: string
   id: string
@@ -351,6 +430,11 @@ function GestureRow({
   const type = action ? types.find((t) => t.id === action.actionType) : undefined
   const overrides = target?.type === "action" ? (target.overrides ?? {}) : {}
   const overrideCount = Object.keys(overrides).length
+  // A step workflow is edited from the key; a graph in the workflow builder.
+  const steps =
+    target?.type === "workflow"
+      ? profile.workflows.find((w) => w.id === target.workflow && !w.graph)
+      : undefined
 
   const setOverrides = (next: ActionParameters) => {
     if (!binding || binding.target.type !== "action") return
@@ -362,103 +446,139 @@ function GestureRow({
     onChange(updateBinding(draft, pageId, { ...binding, target: updated }), `${id}-overrides`)
   }
 
+  const droppable = resolveDrop !== undefined
   return (
-    <div className="grid gap-2" role="group" aria-labelledby={`${id}-label`}>
-      <Label id={`${id}-label`} htmlFor={id}>
-        {label}
-      </Label>
-      <TargetSelect
-        id={id}
-        groups={[...groups, ...(gestureGroups ?? [])]}
-        encode={encode}
-        value={target}
-        onValueChange={(value) => {
-          onAssign(decode(value))
-        }}
-      />
-      <UnavailableNote
-        reason={
-          binding
-            ? unavailableIn([...groups, ...(gestureGroups ?? [])], encode(binding.target))
-            : undefined
-        }
-      />
-      {binding && (
-        <Input
-          aria-label={`Label for ${label}`}
-          placeholder="Label (optional)"
-          maxLength={32}
-          value={binding.label ?? ""}
-          onChange={(e) => {
-            onChange(
-              updateBinding(draft, pageId, { ...binding, label: e.target.value || null }),
-              `${id}-label`,
-            )
+    <Slot id={slot} filled={binding !== undefined} droppable={droppable}>
+      <div className="grid gap-2" role="group" aria-labelledby={`${id}-label`}>
+        <div className="flex items-center gap-2">
+          <Label id={`${id}-label`} htmlFor={id} className="flex-1">
+            {label}
+          </Label>
+          {binding && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6"
+              aria-label={`Remove ${label}`}
+              title={`Remove what ${label.toLowerCase()} does`}
+              onClick={() => {
+                onAssign(null)
+              }}
+            >
+              <X />
+            </Button>
+          )}
+        </div>
+        {!binding && droppable && (
+          <p className="text-xs text-muted-foreground">
+            Drop an action, a workflow or a page here, or choose:
+          </p>
+        )}
+        <TargetSelect
+          id={id}
+          groups={[...groups, ...(gestureGroups ?? [])]}
+          encode={encode}
+          value={target}
+          onValueChange={(value) => {
+            onAssign(decode(value))
           }}
         />
-      )}
-      {action && type && type.parameters.length > 0 && (
-        <>
+        <UnavailableNote
+          reason={
+            binding
+              ? unavailableIn([...groups, ...(gestureGroups ?? [])], encode(binding.target))
+              : undefined
+          }
+        />
+        {binding && (
+          <Input
+            aria-label={`Label for ${label}`}
+            placeholder="Label (optional)"
+            maxLength={32}
+            value={binding.label ?? ""}
+            onChange={(e) => {
+              onChange(
+                updateBinding(draft, pageId, { ...binding, label: e.target.value || null }),
+                `${id}-label`,
+              )
+            }}
+          />
+        )}
+        {steps && onEditWorkflow && (
           <Button
-            variant="link"
+            variant="outline"
             size="sm"
-            className="h-auto w-fit p-0"
-            aria-expanded={overridesOpen}
-            aria-controls={`${id}-overrides`}
-            onClick={onToggleOverrides}
+            className="w-fit"
+            onClick={() => {
+              onEditWorkflow(steps.id)
+            }}
           >
-            {overridesOpen
-              ? "Hide parameters"
-              : overrideCount > 0
-                ? `Parameters for this gesture (${overrideCount} overridden)`
-                : "Override parameters for this gesture"}
+            <ListOrdered /> Edit steps ({steps.steps.length})
           </Button>
-          {overridesOpen && (
-            <div id={`${id}-overrides`} className="grid gap-2">
-              <p className="text-xs text-muted-foreground">
-                Overrides apply to this {GESTURE_LABELS[gesture].toLowerCase()} only; “{action.name}
-                ” itself stays unchanged.
-              </p>
-              {type.parameters.map((spec) => {
-                const value: ParameterValue | undefined = overrides[spec.key]
-                return (
-                  <div key={spec.key} className="grid gap-2 rounded-md border border-dashed p-2">
-                    <label className="flex items-center gap-2 text-sm">
-                      <Checkbox
-                        checked={value !== undefined}
-                        onCheckedChange={(checked) => {
-                          setOverrides(
-                            setOverride(
-                              overrides,
-                              spec.key,
-                              checked === true
-                                ? (action.parameters[spec.key] ?? initialValue(spec))
-                                : undefined,
-                            ),
-                          )
-                        }}
-                      />
-                      Override “{spec.label}”
-                    </label>
-                    {value !== undefined && (
-                      <ParameterField
-                        spec={spec}
-                        value={value}
-                        projects={profile.projects}
-                        actionType={action.actionType}
-                        onChange={(next) => {
-                          setOverrides(setOverride(overrides, spec.key, next))
-                        }}
-                      />
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </>
-      )}
-    </div>
+        )}
+        {action && type && type.parameters.length > 0 && (
+          <>
+            <Button
+              variant="link"
+              size="sm"
+              className="h-auto w-fit p-0"
+              aria-expanded={overridesOpen}
+              aria-controls={`${id}-overrides`}
+              onClick={onToggleOverrides}
+            >
+              {overridesOpen
+                ? "Hide parameters"
+                : overrideCount > 0
+                  ? `Parameters for this gesture (${overrideCount} overridden)`
+                  : "Override parameters for this gesture"}
+            </Button>
+            {overridesOpen && (
+              <div id={`${id}-overrides`} className="grid gap-2">
+                <p className="text-xs text-muted-foreground">
+                  Overrides apply to this {GESTURE_LABELS[gesture].toLowerCase()} only; “
+                  {action.name}” itself stays unchanged.
+                </p>
+                {type.parameters.map((spec) => {
+                  const value: ParameterValue | undefined = overrides[spec.key]
+                  return (
+                    <div key={spec.key} className="grid gap-2 rounded-md border border-dashed p-2">
+                      <label className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={value !== undefined}
+                          onCheckedChange={(checked) => {
+                            setOverrides(
+                              setOverride(
+                                overrides,
+                                spec.key,
+                                checked === true
+                                  ? (action.parameters[spec.key] ?? initialValue(spec))
+                                  : undefined,
+                              ),
+                            )
+                          }}
+                        />
+                        Override “{spec.label}”
+                      </label>
+                      {value !== undefined && (
+                        <ParameterField
+                          spec={spec}
+                          value={value}
+                          projects={profile.projects}
+                          actionType={action.actionType}
+                          onChange={(next) => {
+                            setOverrides(setOverride(overrides, spec.key, next))
+                          }}
+                        />
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </Slot>
   )
 }
 

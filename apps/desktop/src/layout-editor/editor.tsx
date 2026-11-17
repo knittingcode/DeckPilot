@@ -15,6 +15,13 @@ import { EmptyState, ErrorNotice } from "@/components/page"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -40,15 +47,19 @@ import {
   triggerLabel,
 } from "@/lib/layout-model"
 import { DEFAULT_TIMINGS } from "@/components/gesture-editor/model"
+import { isStepWorkflow, newMultiAction } from "@/lib/multi-action"
+import { StepEditor } from "@/pages/workflow-steps"
 import type {
   ActionInstance,
   ActionType,
+  BindingTarget,
   ControlId,
   DeviceLayout,
   DeviceModel,
   GestureTimings,
   KeyFace,
   ProfileView,
+  Workflow,
 } from "@/lib/types"
 
 import { effectiveUsage } from "./appearance"
@@ -168,7 +179,7 @@ export function LayoutEditor({
   const [previewProject, setPreviewProject] = useState<string | null>(view.activeProjectId)
   const [errors, setErrors] = useState<string[]>([])
   const dirty = JSON.stringify(draft) !== JSON.stringify(editing.baseline)
-  const { workflows, projects } = view.profile
+  const { projects } = view.profile
   // Actions created by dropping a type from the catalog, until the
   // reloaded profile has them: they are named, drawn and reused at once.
   const [created, setCreated] = useState<ActionInstance[]>([])
@@ -179,6 +190,18 @@ export function LayoutEditor({
     ],
     [view.profile.actions, created],
   )
+  // Multi Actions created here, likewise until the reloaded profile has them.
+  const [createdWorkflows, setCreatedWorkflows] = useState<Workflow[]>([])
+  const workflows = useMemo(
+    () => [
+      ...view.profile.workflows,
+      ...createdWorkflows.filter((c) => !view.profile.workflows.some((w) => w.id === c.id)),
+    ],
+    [view.profile.workflows, createdWorkflows],
+  )
+  // The Multi Action whose steps are open.
+  const [stepsOf, setStepsOf] = useState<string | null>(null)
+  const openSteps = workflows.find((w) => w.id === stepsOf)
   const profile = useMemo(() => ({ actions, workflows, projects }), [actions, workflows, projects])
   const library = useIcons(profileId)
   const gestureContext = useGestureContext()
@@ -203,14 +226,14 @@ export function LayoutEditor({
   const catalog = useMemo(() => catalogGroups(modules), [modules])
 
   /**
-   * Puts an action of `typeId` on `control`: the profile's action that is
+   * The action a dropped type stands for: the profile's action that is
    * exactly a new one of the type, else a new action with the type's
    * default settings, saved to the profile at once (a key can only run a
-   * saved action). The key itself is part of the draft as usual.
+   * saved action). What it is put on is part of the draft as usual.
    */
-  const placeType = async (typeId: string, control: ControlId) => {
+  const actionOfType = async (typeId: string): Promise<BindingTarget | null> => {
     const type = catalog.flatMap((g) => g.entries).find((e) => e.type.id === typeId)?.type
-    if (!type) return
+    if (!type) return null
     try {
       let action = existingDefault(actions, type)
       if (!action) {
@@ -219,10 +242,59 @@ export function LayoutEditor({
         setCreated((current) => [...current, made])
         refresh()
       }
-      commands.drop({ type: "target", target: { type: "action", action: action.id } }, control)
+      return { type: "action", action: action.id }
     } catch (e) {
       toast.error(`“${type.name}” could not be added`, { description: errorMessage(e) })
+      return null
     }
+  }
+
+  const placeType = async (typeId: string, control: ControlId) => {
+    const target = await actionOfType(typeId)
+    if (target) commands.drop({ type: "target", target }, control)
+  }
+
+  /**
+   * A new, empty Multi Action: a step workflow saved to the profile at
+   * once (a key can only run a saved workflow), whose steps then open.
+   */
+  const multiAction = async (): Promise<BindingTarget | null> => {
+    try {
+      const fresh = newMultiAction(workflows)
+      const saved = await api.saveWorkflow(profileId, fresh)
+      const workflow: Workflow = { ...fresh, id: saved.id }
+      setCreatedWorkflows((current) => [...current, workflow])
+      refresh()
+      setStepsOf(workflow.id)
+      return { type: "workflow", workflow: workflow.id }
+    } catch (e) {
+      toast.error("The Multi Action could not be created", { description: errorMessage(e) })
+      return null
+    }
+  }
+
+  const placeMultiAction = async (control: ControlId) => {
+    const target = await multiAction()
+    if (target) commands.drop({ type: "target", target }, control)
+  }
+
+  /**
+   * What a gesture's slot takes from the library: an action, a workflow
+   * or a page as it is, an action type as its action. Keys and "New
+   * folder" belong on keys.
+   */
+  const resolveSlotDrop = async (dragged: unknown): Promise<BindingTarget | null> => {
+    const source = dragged as DragSource | undefined
+    if (source?.type === "actionType") return actionOfType(source.actionType)
+    if (source?.type === "newMultiAction") return multiAction()
+    if (source?.type === "target") {
+      const opensItself = source.target.type === "openPage" && source.target.page === pageId
+      if (!opensItself) return source.target
+    }
+    toast.error("A gesture takes an action, a workflow or another page", {
+      description: "Drag one from the library onto the gesture.",
+    })
+    return null
   }
 
   useEffect(() => {
@@ -286,6 +358,7 @@ export function LayoutEditor({
     const target = event.over ? parseControlKey(String(event.over.id)) : null
     if (!source || !target) return
     if (source.type === "actionType") void placeType(source.actionType, target)
+    else if (source.type === "newMultiAction") void placeMultiAction(target)
     else commands.drop(source, target)
   }
 
@@ -329,7 +402,7 @@ export function LayoutEditor({
   return (
     <DndContext sensors={sensors} onDragEnd={onDragEnd}>
       <div className="grid gap-4 xl:grid-cols-[14rem_1fr] 2xl:grid-cols-[16rem_1fr_20rem]">
-        <LibraryPanel groups={groups} catalog={catalog} />
+        <LibraryPanel groups={groups} catalog={catalog} multiAction />
 
         <Card>
           <CardHeader className="gap-3">
@@ -519,6 +592,8 @@ export function LayoutEditor({
             if (selection.focus) commands.openFolder(selection.focus)
           }}
           onClose={commands.clearSelection}
+          resolveDrop={resolveSlotDrop}
+          onEditWorkflow={setStepsOf}
           appearance={
             selected.length > 0 ? (
               <AppearancePanel
@@ -538,6 +613,37 @@ export function LayoutEditor({
         onCancel={commands.cancelDeletePage}
         onConfirm={commands.confirmDeletePage}
       />
+      <Dialog
+        open={isStepWorkflow(openSteps)}
+        onOpenChange={(open) => {
+          if (!open) setStepsOf(null)
+        }}
+      >
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Multi Action</DialogTitle>
+            <DialogDescription>
+              The steps run in order in the agent when the key is pressed. A delay waits between two
+              steps; a running Multi Action can be cancelled from the status bar.
+            </DialogDescription>
+          </DialogHeader>
+          {isStepWorkflow(openSteps) && (
+            <StepEditor
+              key={openSteps.id}
+              view={{ ...view, profile: { ...view.profile, actions, workflows } }}
+              types={gestureContext.types}
+              profileId={profileId}
+              initial={openSteps}
+              isNew={false}
+              embedded
+              onChanged={() => {
+                refresh()
+                setStepsOf(null)
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </DndContext>
   )
 }

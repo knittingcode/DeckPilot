@@ -649,7 +649,10 @@ impl Runtime {
         let (forward, wrap_around) = match result.deck_request() {
             Some(crate::DeckRequest::NextPage { wrap_around }) => (true, wrap_around),
             Some(crate::DeckRequest::PreviousPage { wrap_around }) => (false, wrap_around),
-            Some(crate::DeckRequest::SwitchProfile { .. }) | None => return,
+            Some(
+                crate::DeckRequest::SwitchProfile { .. } | crate::DeckRequest::Brightness { .. },
+            )
+            | None => return,
         };
         result.request = None;
         let target = self

@@ -53,8 +53,10 @@ and nothing is added to the Action Library automatically.
 | `deck.next-page` / `deck.previous-page` | `wrapAround` (default on) | shows the next or previous page of the layout on the device whose key ran it; outputs `pageId`, `pageName` when it moved |
 | `deck.page-indicator` | — | nothing when pressed; its key shows the page as `2/5` |
 | `deck.switch-profile` | `target` (`next` \| `previous` \| `profile`, default `next`), `profile` (a profile id), `wrapAround` (default on) | makes another profile the active one; outputs `profileId`, `profileName` when it switched |
+| `deck.brightness` | `change` (`set` \| `brighter` \| `dimmer`, default `set`), `level` (0–100), `step` (1–100, default 10) | sets the display brightness of the devices or steps it, within 0–100; output `brightness` |
 | `general.log` | `message` | the rendered message |
 | `general.wait` | `seconds` (1–300) | waits; output `waitedMs`; stops at once when cancelled (the reference workflow node) |
+| `general.delay` | `milliseconds` (10–300000, default 500) | waits; output `waitedMs`; stops at once when cancelled. The delay row of a Multi Action's step list: the step sets its own `milliseconds` as an override |
 | `projects.cycle` | `direction` (`next` \| `previous`, default `next`) | switches along the project order (respects `wrapAround`) |
 | `projects.select` | `project_id` (optional) | with a project: selects it; without: reports the current project and changes nothing |
 | `projects.current` | — | reports the current project: `projectId`, `projectKey`, `projectName`, `profileId` |
@@ -82,6 +84,7 @@ through only for a module with the capability `DeckControl`.
 | ------- | ---------- | ------ |
 | `NextPage`, `PreviousPage` | the device runtime (`Runtime::dispatch`) | moves the device whose key ran the action |
 | `SwitchProfile` | the agent (`apps/agent/src/service/deck.rs`) | activates a profile through the path of `setActiveProfile` |
+| `Brightness` | the agent | changes the brightness setting through the path of `setBrightness` |
 
 A request never leaves the process: it is not serialized with the result,
 so it is in no IPC answer, event or execution history, and a plugin (whose
@@ -91,8 +94,8 @@ becomes of its request:
 | Run from | Page request | Profile switch |
 | -------- | ------------ | -------------- |
 | a key or a gesture | applied to that device | applied |
-| the app ("Run", IPC `runAction`) | fails with `no-device`: no device asked | applied |
-| a workflow step or node | fails with `not-from-a-key` | fails with `not-from-a-key` |
+| the app ("Run", IPC `runAction`) | fails with `no-device`: no device asked | applied (brightness too) |
+| a workflow step or node | fails with `not-from-a-key` | fails with `not-from-a-key` (brightness too) |
 
 An action never reports a success that did nothing.
 
@@ -119,6 +122,12 @@ profile that is active, or stepping past the end without `wrapAround`,
 changes nothing and succeeds. A profile that no longer exists fails with
 `profile-not-found`; the action editor lists the profiles that exist and
 marks a stored one that was deleted.
+
+**Brightness.** There is one brightness for all devices, the setting of
+the app's Devices page (`device_brightness`): the action changes that
+setting, so the app shows the new level, it is kept across restarts, and
+it reaches only devices whose model has a brightness. A step stops at 0
+and 100.
 
 ### Cycling projects
 

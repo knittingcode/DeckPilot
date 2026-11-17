@@ -86,7 +86,7 @@
 //! | --- | --- | --- |
 //! | [`SDK_VERSION`] | this crate's semver | breaking Rust API changes bump the major (the minor while 0.x) |
 //! | [`API_LEVEL`] | 1.0 | plugin API level (design §6.5) a plugin needs by default |
-//! | [`LATEST_API_LEVEL`] | 1.1 | highest plugin API level this SDK implements |
+//! | [`LATEST_API_LEVEL`] | 1.2 | highest plugin API level this SDK implements |
 //! | [`ABI_VERSION`] | 1 | guest ABI; checked at compile time |
 #![deny(unsafe_code)]
 
@@ -102,11 +102,15 @@ pub use context::{
     Now, Request, Response, RunCause, RunContext, RunSummary, RunTrigger, SecretHandle, Settings,
     StorageUsage,
 };
-pub use definition::{Action, DefinitionError, Handler, Param, Plugin};
+pub use definition::{Action, DefinitionError, Handler, Param, Plugin, StateHandler};
 pub use output::{ActionResult, IntoValue, Output, PluginError, codes};
 
 pub use deckpilot_plugin_abi::capability::{AuthScheme, Header, LogLevel, NotifySeverity};
 pub use deckpilot_plugin_abi::describe::{ParamKind, PluginDescriptor};
+pub use deckpilot_plugin_abi::state::{
+    KeyState, StateAccent as Accent, StateFailure, StateGlyph as Glyph,
+    StateIndicator as Indicator, StateOutcome,
+};
 pub use deckpilot_plugin_abi::{
     ActionOutcome, CallErrorCode, CallResult, CapabilityRequest, HttpMethod, NetworkErrorKind,
     ParamValue, Params,
@@ -146,16 +150,18 @@ impl std::fmt::Display for ApiLevel {
 pub const API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 0 };
 
 /// The highest plugin API level this SDK implements: 1.1 adds
-/// [`Context::now`] and [`Context::random_bytes`].
-pub const LATEST_API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 1 };
+/// [`Context::now`] and [`Context::random_bytes`], 1.2 key state
+/// ([`Action::state`]).
+pub const LATEST_API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 2 };
 
 /// Everything a plugin usually needs.
 pub mod prelude {
     pub use crate::{
-        Action, ActionOutcome, ActionResult, Args, AuthScheme, CapabilityError,
-        CapabilityErrorKind, Context, HttpMethod, LogLevel, NetworkErrorKind, NotifyDelivery,
-        NotifySeverity, Now, Output, Param, Plugin, PluginError, Request, Response, RunCause,
-        RunContext, RunTrigger, SecretHandle, Settings, StorageUsage, codes,
+        Accent, Action, ActionOutcome, ActionResult, Args, AuthScheme, CapabilityError,
+        CapabilityErrorKind, Context, Glyph, HttpMethod, Indicator, KeyState, LogLevel,
+        NetworkErrorKind, NotifyDelivery, NotifySeverity, Now, Output, Param, Plugin, PluginError,
+        Request, Response, RunCause, RunContext, RunTrigger, SecretHandle, Settings, StateOutcome,
+        StorageUsage, codes,
     };
 }
 
@@ -208,6 +214,13 @@ macro_rules! plugin {
         pub extern "C" fn dp_features() -> i64 {
             $crate::__rt::FEATURES as i64
         }
+
+        #[allow(unsafe_code)]
+        #[unsafe(no_mangle)]
+        pub extern "C" fn dp_state(ptr: i32, len: i32) -> i64 {
+            // SAFETY: the host passes a buffer it obtained from dp_alloc.
+            unsafe { $crate::__rt::key_state($crate::__rt::registered($build), ptr, len) }
+        }
     };
 }
 
@@ -250,6 +263,24 @@ pub mod __rt {
             Err(_) => ActionOutcome::failed(
                 codes::INVALID_PARAMETERS,
                 "the invocation input did not parse",
+            ),
+        };
+        raw::publish_output(serde_json::to_vec(&outcome).unwrap_or_default())
+    }
+
+    /// Body of `dp_state`.
+    ///
+    /// # Safety
+    /// `ptr`/`len` must describe a buffer obtained from [`alloc`].
+    #[allow(unsafe_code)]
+    pub unsafe fn key_state(plugin: &Plugin, ptr: i32, len: i32) -> i64 {
+        // SAFETY: forwarded contract.
+        let input = unsafe { raw::take_input(ptr, len) };
+        let outcome = match serde_json::from_slice::<InvokeInput>(&input) {
+            Ok(i) => plugin.key_state(&mut WasmTransport, &i.action, &i.params),
+            Err(_) => crate::StateOutcome::failed(
+                codes::INVALID_PARAMETERS,
+                "the state input did not parse",
             ),
         };
         raw::publish_output(serde_json::to_vec(&outcome).unwrap_or_default())

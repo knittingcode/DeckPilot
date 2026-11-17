@@ -40,6 +40,20 @@ pub const NEXT_PAGE: &str = "deck.next-page";
 pub const PREVIOUS_PAGE: &str = "deck.previous-page";
 pub const PAGE_INDICATOR: &str = "deck.page-indicator";
 pub const SWITCH_PROFILE: &str = "deck.switch-profile";
+pub const BRIGHTNESS: &str = "deck.brightness";
+
+/// Parameter of *Brightness*: what to do ([`CHANGES`]).
+pub const CHANGE: &str = "change";
+/// Parameter of *Brightness*: the level for [`CHANGE_SET`], in percent.
+pub const LEVEL: &str = "level";
+/// Parameter of *Brightness*: how far brighter and dimmer move, in
+/// percentage points.
+pub const STEP: &str = "step";
+pub const CHANGE_SET: &str = "set";
+pub const CHANGE_BRIGHTER: &str = "brighter";
+pub const CHANGE_DIMMER: &str = "dimmer";
+/// The values of [`CHANGE`].
+pub const CHANGES: [&str; 3] = [CHANGE_SET, CHANGE_BRIGHTER, CHANGE_DIMMER];
 
 /// Parameter of the page actions and of *Switch profile*: past either end,
 /// continue at the other one.
@@ -109,6 +123,13 @@ pub fn switch_profile_id() -> ActionTypeId {
     type_id(SWITCH_PROFILE)
 }
 
+/// # Panics
+///
+/// Never: the identifier is a valid constant.
+pub fn brightness_id() -> ActionTypeId {
+    type_id(BRIGHTNESS)
+}
+
 #[derive(Debug)]
 pub struct DeckModule {
     manifest: ModuleManifest,
@@ -160,6 +181,7 @@ impl FeatureModule for DeckModule {
             Box::new(TurnPage::previous()),
             Box::new(PageIndicator::new()),
             Box::new(SwitchProfile::new()),
+            Box::new(Brightness::new()),
         ]
     }
 }
@@ -460,6 +482,113 @@ impl ActionHandler for SwitchProfile {
     }
 }
 
+/// `deck.brightness`: sets the display brightness of the devices, or makes
+/// them brighter or dimmer by a step. It is the setting of the app's
+/// Devices page; devices without a brightness are left alone.
+#[derive(Debug)]
+pub struct Brightness(ActionType);
+
+impl Brightness {
+    pub fn new() -> Self {
+        let percent = |key: &str, label: &str, description: &str, min, default| ParameterSpec {
+            key: key.into(),
+            label: label.into(),
+            description: Some(description.into()),
+            kind: ParameterKind::Integer {
+                min: Some(min),
+                max: Some(100),
+            },
+            required: true,
+            default: Some(ParameterValue::Integer(default)),
+        };
+        Self(ActionType {
+            id: brightness_id(),
+            name: "Brightness".into(),
+            description: "Sets the display brightness of the connected devices to a level, or \
+                          makes them brighter or dimmer by a step."
+                .into(),
+            category: "Device".into(),
+            parameters: vec![
+                ParameterSpec {
+                    key: CHANGE.into(),
+                    label: "Change".into(),
+                    description: Some(
+                        "Set a level, or step brighter or dimmer from the current one.".into(),
+                    ),
+                    kind: ParameterKind::Choice {
+                        options: CHANGES.iter().map(|&c| c.to_owned()).collect(),
+                    },
+                    required: true,
+                    default: Some(ParameterValue::Choice(CHANGE_SET.into())),
+                },
+                percent(
+                    LEVEL,
+                    "Level (%)",
+                    "Used when setting a level. 0 is dark.",
+                    0,
+                    100,
+                ),
+                percent(
+                    STEP,
+                    "Step (%)",
+                    "Used for brighter and dimmer; the brightness stays within 0 to 100.",
+                    1,
+                    10,
+                ),
+            ],
+            requires_project: false,
+            deprecated: false,
+            // Changes a setting of this computer. The output is set by the
+            // agent when it applied the change.
+            node: NodeSpec {
+                icon: Some("monitor".into()),
+                outputs: vec![output("brightness", "Brightness (%)")],
+                timeout_ms: 5_000,
+                effect: ActionEffect::Modifies,
+                ..NodeSpec::default()
+            },
+        })
+    }
+}
+
+impl Default for Brightness {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ActionHandler for Brightness {
+    fn definition(&self) -> &ActionType {
+        &self.0
+    }
+
+    fn execute(
+        &self,
+        parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> ActionResult {
+        if let Err(denied) = context.permit(Capability::DeckControl) {
+            return denied.into();
+        }
+        let percent = |key: &str, fallback: i64| {
+            u8::try_from(parameters.integer(key).unwrap_or(fallback).clamp(0, 100)).unwrap_or(100)
+        };
+        let step = i8::try_from(percent(STEP, 10)).unwrap_or(100);
+        let request = match parameters.text(CHANGE).unwrap_or(CHANGE_SET) {
+            CHANGE_BRIGHTER => DeckRequest::Brightness { set: None, step },
+            CHANGE_DIMMER => DeckRequest::Brightness {
+                set: None,
+                step: -step,
+            },
+            _ => DeckRequest::Brightness {
+                set: Some(percent(LEVEL, 100)),
+                step: 0,
+            },
+        };
+        ActionResult::success("brightness").with_request(request)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,7 +622,13 @@ mod tests {
             .collect();
         assert_eq!(
             ids,
-            [NEXT_PAGE, PREVIOUS_PAGE, PAGE_INDICATOR, SWITCH_PROFILE]
+            [
+                NEXT_PAGE,
+                PREVIOUS_PAGE,
+                PAGE_INDICATOR,
+                SWITCH_PROFILE,
+                BRIGHTNESS
+            ]
         );
         assert!(ids.iter().all(|id| id.starts_with("deck.")));
         assert_eq!(module.manifest().capabilities, [Capability::DeckControl]);
@@ -591,6 +726,60 @@ mod tests {
                 target: ProfileTarget::Profile(id),
                 wrap_around: true,
             })
+        );
+    }
+
+    #[test]
+    fn brightness_asks_for_a_level_or_a_step() {
+        let brightness = Brightness::new();
+        let change = |change: &str| {
+            ActionParameters::new().with(CHANGE, ParameterValue::Choice(change.into()))
+        };
+        // The default: full brightness.
+        assert_eq!(
+            run(&brightness, &ActionParameters::new(), &granted()).deck_request(),
+            Some(DeckRequest::Brightness {
+                set: Some(100),
+                step: 0
+            })
+        );
+        assert_eq!(
+            run(
+                &brightness,
+                &change(CHANGE_SET).with(LEVEL, ParameterValue::Integer(35)),
+                &granted()
+            )
+            .deck_request(),
+            Some(DeckRequest::Brightness {
+                set: Some(35),
+                step: 0
+            })
+        );
+        assert_eq!(
+            run(&brightness, &change(CHANGE_BRIGHTER), &granted()).deck_request(),
+            Some(DeckRequest::Brightness {
+                set: None,
+                step: 10
+            })
+        );
+        assert_eq!(
+            run(
+                &brightness,
+                &change(CHANGE_DIMMER).with(STEP, ParameterValue::Integer(25)),
+                &granted()
+            )
+            .deck_request(),
+            Some(DeckRequest::Brightness {
+                set: None,
+                step: -25
+            })
+        );
+        // Levels outside 0-100 are refused when the action is saved.
+        assert!(
+            brightness
+                .definition()
+                .normalize(&change(CHANGE_SET).with(LEVEL, ParameterValue::Integer(101)))
+                .is_err()
         );
     }
 

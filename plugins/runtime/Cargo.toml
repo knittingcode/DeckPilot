@@ -24,6 +24,7 @@ members = [
     # fixture of the bundling tests (plugins/first-party/README.md).
     "../first-party/github",
     "../first-party/gitlab",
+    "../first-party/jira",
     "../first-party/notifications",
     "../first-party/support",
     "../first-party/test-fixtures/example-default",
@@ -46,6 +47,7 @@ default-members = [
     "../examples/developer-tools",
     "../first-party/github",
     "../first-party/gitlab",
+    "../first-party/jira",
     "../first-party/notifications",
     "../first-party/support",
     "../first-party/test-fixtures/example-default",
@@ -73,7 +75,7 @@ deckpilot-plugin-test-fixtures = { path = "crates/test-fixtures" }
 wasmtime = { version = "=50.0.1", default-features = false, features = ["cranelift", "runtime", "std"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-base64 = "0.22.1"
+base64 = "0.23.1"
 url = "2.5.8"
 libc = "0.2.191"
 landlock = "0.4.7"

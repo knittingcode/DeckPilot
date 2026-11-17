@@ -17,6 +17,19 @@ import type {
 
 export const GESTURES: Gesture[] = ["click", "doubleClick", "longPress"]
 
+/**
+ * The id of a gesture's slot among the layout editor's drop targets: what
+ * is dropped there becomes what the gesture does.
+ */
+export function gestureSlotId(control: ControlId, gesture: Gesture): string {
+  return `gesture-slot:${control.kind}:${control.index}:${gesture}`
+}
+
+/** The gesture of the slot `id` of `control`, if it is one of its slots. */
+export function slotGesture(control: ControlId, id: unknown): Gesture | null {
+  return GESTURES.find((gesture) => gestureSlotId(control, gesture) === id) ?? null
+}
+
 export const GESTURE_LABELS: Record<Gesture, string> = {
   click: "Single click",
   doubleClick: "Double click",

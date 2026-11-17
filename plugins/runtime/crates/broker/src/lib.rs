@@ -112,6 +112,9 @@ pub enum DenyReason {
     /// this one was not: a schedule, an event, the agent's start, a work
     /// session, or a run nobody said anything about (`url.open`, G8).
     NotUserInitiated,
+    /// The operation is not available while a key's state is read: a
+    /// state call only reads (plugin API 1.2).
+    NotInStateCall,
 }
 
 impl DenyReason {
@@ -158,6 +161,7 @@ impl fmt::Display for DenyReason {
             Self::CredentialSchemeNotAllowed => {
                 f.write_str("credential may not be sent in this scheme")
             }
+            Self::NotInStateCall => f.write_str("not available while a key's state is read"),
             Self::NotUserInitiated => f.write_str(
                 "pages open only in an action the user started (a key, a gesture or the app), \
                  not in one a schedule, an event or the agent's start ran",
@@ -389,6 +393,11 @@ impl Broker {
         self.update(plugin, |g| g.notifications = false);
     }
 
+    /// Revokes reporting key state. Effective on the next state call.
+    pub fn revoke_key_state(&self, plugin: &PluginId) {
+        self.update(plugin, |g| g.key_state = false);
+    }
+
     /// Revokes everything; the plugin is unknown afterwards (only the
     /// always-on capabilities are denied too).
     pub fn remove_plugin(&self, plugin: &PluginId) {
@@ -452,6 +461,23 @@ impl Broker {
             .take_n(rate, now, n)
     }
 
+    /// An audit record for a decision without an [`Allowed`] value.
+    fn audit_verdict(&self, plugin: &PluginId, op: &'static str, denied: Option<DenyReason>) {
+        let seq = {
+            let mut s = self.inner.seq.lock().unwrap_or_else(|e| e.into_inner());
+            *s += 1;
+            *s
+        };
+        self.inner.audit.record(AuditRecord {
+            seq,
+            at_ms: self.inner.clock.wall_ms(),
+            plugin: plugin.clone(),
+            op,
+            target: None,
+            decision: denied.map_or(AuditDecision::Allowed, AuditDecision::Denied),
+        });
+    }
+
     fn audit(
         &self,
         plugin: &PluginId,
@@ -511,6 +537,38 @@ impl Session {
         let (decision, target) = self.decide(request, context);
         self.broker
             .audit(&self.plugin, request.op(), target.as_ref(), &decision);
+        decision
+    }
+
+    /// Whether the agent may ask this plugin for the state of a key now
+    /// (plugin API 1.2): the plugin has grants and `keyState` is one of
+    /// them. Read per call, so a revoked grant stops the next state call.
+    /// Audited as `key.state`.
+    pub fn authorize_key_state(&self) -> Result<(), DenyReason> {
+        let verdict = match self.broker.grants(&self.plugin) {
+            None => Err(DenyReason::UnknownPlugin),
+            Some(grants) if !grants.key_state => Err(DenyReason::NotGranted),
+            Some(_) => Ok(()),
+        };
+        self.broker
+            .audit_verdict(&self.plugin, "key.state", verdict.err());
+        verdict
+    }
+
+    /// The decision point for a capability request made **inside a state
+    /// call**: only the operations of
+    /// [`allowed_in_state`](deckpilot_plugin_abi::state::allowed_in_state)
+    /// (reading the plugin's own storage and settings, the time, a log
+    /// line), each still subject to its own grants and rate limits.
+    /// Everything else is denied with [`DenyReason::NotInStateCall`]
+    /// before any rate limit, and audited.
+    pub fn authorize_state(&self, request: &CapabilityRequest) -> Decision {
+        if deckpilot_plugin_abi::state::allowed_in_state(request) {
+            return self.authorize_in(request, None);
+        }
+        let decision = Decision::Deny(DenyReason::NotInStateCall);
+        self.broker
+            .audit(&self.plugin, request.op(), None, &decision);
         decision
     }
 

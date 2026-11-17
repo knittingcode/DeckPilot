@@ -55,6 +55,8 @@ pub(crate) struct EngineFailure {
 }
 
 pub(super) type EngineReply = Result<ActionOutcome, EngineFailure>;
+/// The answer to a state call for the engine.
+pub(super) type StateReply = Result<deckpilot_plugin_abi::StateOutcome, EngineFailure>;
 
 pub(super) enum Message {
     Open(StoreKey),
@@ -74,6 +76,14 @@ pub(super) enum Message {
         abort: AbortSignal,
         reply: mpsc::SyncSender<EngineReply>,
     },
+    /// The state of a key bound to a plugin action (`dp_state`).
+    KeyState {
+        plugin: String,
+        action: String,
+        params: Params,
+        abort: AbortSignal,
+        reply: mpsc::SyncSender<StateReply>,
+    },
     /// A lane ended by itself (crash loop, weak sandbox, panic).
     LaneEnded {
         plugin: String,
@@ -86,7 +96,7 @@ pub(super) enum Message {
 /// Hands engine invocations to the worker. Cheap to clone; held by every
 /// plugin action handler.
 #[derive(Debug, Clone)]
-pub(crate) struct Invoker(mpsc::Sender<Message>);
+pub(crate) struct Invoker(mpsc::Sender<Message>, super::key_state::StateBook);
 
 impl Invoker {
     /// Queues an invocation of a run that `run` describes; `None` when the
@@ -113,6 +123,34 @@ impl Invoker {
             .ok()?;
         Some(answer)
     }
+
+    /// Queues a state call for a key bound to `action` with `params`;
+    /// `None` when the worker is gone. Refused at once (`plugin-busy`)
+    /// while the plugin runs or waits for anything else.
+    pub fn key_state(
+        &self,
+        plugin: String,
+        action: String,
+        params: Params,
+        abort: AbortSignal,
+    ) -> Option<Receiver<StateReply>> {
+        let (reply, answer) = mpsc::sync_channel(1);
+        self.0
+            .send(Message::KeyState {
+                plugin,
+                action,
+                params,
+                abort,
+                reply,
+            })
+            .ok()?;
+        Some(answer)
+    }
+
+    /// What the agent remembers about plugin key states between calls.
+    pub fn book(&self) -> &super::key_state::StateBook {
+        &self.1
+    }
 }
 
 /// Called after the installed plugins changed (on the worker thread).
@@ -125,6 +163,8 @@ pub(super) struct PluginWorker {
     catalog: Arc<Mutex<Vec<CatalogPlugin>>>,
     routing: Arc<Mutex<LegacyRouting>>,
     values: PublishedVariables,
+    /// Plugin key states between calls, shared with every invoker.
+    book: super::key_state::StateBook,
 }
 
 struct State {
@@ -275,6 +315,23 @@ impl State {
                     }));
                 }
             }
+            Message::KeyState {
+                plugin,
+                action,
+                params,
+                abort,
+                reply,
+            } => {
+                if let Some(service) = &mut self.service {
+                    service.key_state_for_engine(&plugin, &action, params, abort, reply);
+                } else {
+                    let error = self.unavailable();
+                    let _ = reply.try_send(Err(EngineFailure {
+                        code: "plugin-unavailable".into(),
+                        message: error.message,
+                    }));
+                }
+            }
             Message::LaneEnded { plugin, lane, why } => {
                 if let Some(service) = &mut self.service {
                     service.lane_ended(&plugin, lane, why);
@@ -358,7 +415,8 @@ impl PluginWorker {
                     if matches!(message, Message::Stop) {
                         break;
                     }
-                    let checks = !matches!(message, Message::Invoke { .. });
+                    let checks =
+                        !matches!(message, Message::Invoke { .. } | Message::KeyState { .. });
                     // A panic in the plugin backend (store, broker,
                     // registry) is logged and answered by dropping the
                     // reply; it never reaches the agent.
@@ -380,6 +438,7 @@ impl PluginWorker {
             catalog,
             routing,
             values,
+            book: super::key_state::StateBook::default(),
         }
     }
 
@@ -409,7 +468,7 @@ impl PluginWorker {
     }
 
     pub fn invoker(&self) -> Invoker {
-        Invoker(self.tx.clone())
+        Invoker(self.tx.clone(), self.book.clone())
     }
 
     /// The installed plugins, as last published.

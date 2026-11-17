@@ -744,6 +744,30 @@ plan come with its cut-over.
 - `plugins/first-party/support` holds what the plugins for a user-entered
   server share (URLs without the `url` crate, the `Date`-based time limit).
 
+*As built (P11, the Jira plugin):* `plugins/first-party/jira`
+(`deckpilot.jira`, class `migration`) reproduces all four actions of the
+built-in `jira` module; no variables on either side. Built and pinned,
+**not routed** until its cut-over.
+
+- Jira has no fixed host, so the plugin declares none: the site is its one
+  user-entered origin (`siteUrl`, with its path, possibly on a private
+  network), the credential slot `credential` is bound to it and has no
+  host of its own, and pages open on it. Until the user allowed the site
+  nothing is sent and every reading fails with `not-permitted`, saying
+  where to allow it.
+- `deployment` chooses REST API 3 with Basic (Cloud, `email:api-token`) or
+  REST API 2 with Bearer (Data Center); the searches are the built-in's
+  fixed templates.
+- `contracts.rs` (`first_party`) checks the manifest;
+  `apps/agent/tests/plugins_jira.rs` runs every action against the
+  built-in on Cloud and on a Data Center under a path, with identical
+  results **and identical requests** (the plugin's canned answers are
+  exactly what the built-in asked for).
+- One difference is new: the built-in checks that a Cloud credential is
+  `email:api-token` before it sends anything; a plugin never sees its
+  secret, so Jira's 401 says so instead. All differences:
+  [`plugins/first-party/jira/README.md`](../../plugins/first-party/jira/README.md).
+
 `notifications` follows as the first `default`-class bundled plugin. It is
 the one that proves seeding, tombstones and first launch.
 

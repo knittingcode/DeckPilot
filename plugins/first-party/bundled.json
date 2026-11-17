@@ -3,6 +3,7 @@
   "plugins": [
     { "path": "github", "class": "migration" },
     { "path": "gitlab", "class": "migration" },
+    { "path": "jira", "class": "migration" },
     { "path": "notifications", "class": "default" }
   ]
 }

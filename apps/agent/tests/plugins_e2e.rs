@@ -58,6 +58,8 @@ const SECRET: &str = "tok-3f9a-data-secret-value";
 const TWIN_SECRET: &str = "tok-77c1-twin-secret-value";
 /// The SDK test guest with `openUrl` for github.com and the example API.
 const OPENER: &str = "acme.sdk-open";
+/// The SDK test guest as a plugin whose keys show state (plugin API 1.2).
+const BOARD: &str = "acme.sdk-board";
 const OPENER_SECRET: &str = "tok-51b8-opener-secret-value";
 /// The SDK test guest with an origin setting (G2): a server the user
 /// enters, with a path prefix and possibly on a private network, and a
@@ -274,7 +276,7 @@ fn sdk_actions() -> Value {
             .map(|key| json!({"key": key, "label": key, "kind": "text"}))
             .collect()
     };
-    let basic = outputs(&["inits", "refused", "status", "first", "second"]);
+    let basic = outputs(&["inits", "refused", "status", "first", "second", "count"]);
     let store = outputs(&[
         "error",
         "detail",
@@ -376,6 +378,12 @@ fn sdk_actions() -> Value {
             vec![json!({"key": "sides", "label": "Sides", "required": false,
                 "kind": {"type": "integer", "min": 1}})],
         ),
+        ("counter", vec![]),
+        (
+            "probe",
+            vec![json!({"key": "mode", "label": "Mode", "required": false,
+                "kind": {"type": "text"}})],
+        ),
     ]
     .into_iter()
     .map(|(id, parameters)| {
@@ -467,6 +475,27 @@ fn opener_manifest() -> Value {
         "key": "token", "label": "API token", "hosts": ["api.example.com"],
         "schemes": ["bearer", "query"], "queryName": "api_key"
     }]);
+    manifest
+}
+
+/// The SDK test guest with key state: `counter` and `probe` declare
+/// `state` (every second, which the agent raises to its floor), and the
+/// plugin asks for `device:state`. It needs plugin API 1.2.
+fn board_manifest() -> Value {
+    let mut manifest = hello_manifest(BOARD, "1.0.0");
+    manifest["name"] = json!("SDK board");
+    manifest["engines"]["pluginApi"] = json!("^1.2");
+    manifest["permissions"] = json!([
+        {"kind": "device", "state": true,
+         "justification": "Shows the counter and the probes on their keys."}
+    ]);
+    let mut actions = sdk_actions();
+    for action in actions.as_array_mut().unwrap() {
+        if action["id"] == "counter" || action["id"] == "probe" {
+            action["state"] = json!({"refresh": "every", "intervalSeconds": 1});
+        }
+    }
+    manifest["contributes"]["actions"] = actions;
     manifest
 }
 
@@ -729,6 +758,7 @@ impl Registry {
         );
         registry.add(&data_manifest(TWIN, "SDK twin", None), &artifacts.sdk_test);
         registry.add(&opener_manifest(), &artifacts.sdk_test);
+        registry.add(&board_manifest(), &artifacts.sdk_test);
         registry.add(&origin_manifest(), &artifacts.sdk_test);
         registry.add_with(&big_manifest(), &artifacts.hello, Some(&big_icon()));
         let mut future = hello_manifest(FUTURE, "1.0.0");
@@ -4833,6 +4863,201 @@ async fn plugins_read_the_clock_and_random_bytes_within_their_budget() {
     assert!((40..100).contains(&answered), "{drained:?}");
     // The clock has its own limit and still answers.
     assert!(agent.run(OPENER, "clock", json!({})).await["unixMs"].is_i64());
+
+    agent.stop().await;
+}
+
+// ------------------------------------------------------------- key state
+
+/// What the agent sent to the simulated device, from the test hook
+/// `DECKPILOT_TEST_KEY_FACES`: the last face of every key.
+fn shown_faces(log: &Path) -> BTreeMap<u64, Value> {
+    let mut faces = BTreeMap::new();
+    for line in std::fs::read_to_string(log).unwrap_or_default().lines() {
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(index) = entry["control"]["index"].as_u64() {
+            faces.insert(index, entry["face"].clone());
+        }
+    }
+    faces
+}
+
+/// Waits until key `index` shows a face `matches` accepts; returns it.
+async fn key_shows(
+    log: &Path,
+    index: u64,
+    within: Duration,
+    what: &str,
+    matches: impl Fn(&Value) -> bool,
+) -> Value {
+    let deadline = Instant::now() + within;
+    loop {
+        let face = shown_faces(log).remove(&index).unwrap_or(Value::Null);
+        if matches(&face) {
+            return face;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "key {index} never showed {what}; it shows {face}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Plugin key state (plugin API 1.2) through the real agent, sandboxed
+/// host and a simulated device: what a plugin describes is what its keys
+/// show, drawn through the pipeline of built-in key states; a state call
+/// only reads; a key press still runs at once; a plugin without the grant
+/// leaves its keys as the user designed them; and a state handler that
+/// stops returning marks its key, then gets the plugin disabled by the
+/// crash-loop breaker, which leaves every key of it static.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // one scenario, step by step
+async fn plugin_keys_show_the_state_the_plugin_describes() {
+    use deckpilot_core::{ActionStatus, ParameterValue};
+    let registry = shared_registry();
+    let mut profile = deckpilot_core::Profile::new("Board");
+    let probe = |profile: &mut deckpilot_core::Profile, mode: &str| {
+        plugin_action(
+            profile,
+            &format!("Probe {mode}"),
+            &format!("{BOARD}.probe"),
+            &[("mode", ParameterValue::Text(mode.into()))],
+        )
+    };
+    let counter = plugin_action(&mut profile, "Counter", &format!("{BOARD}.counter"), &[]);
+    let (write, flood, armed) = (
+        probe(&mut profile, "write"),
+        probe(&mut profile, "flood"),
+        probe(&mut profile, "armed"),
+    );
+    // An action without `state` in the manifest: never asked.
+    let plain = plugin_action(&mut profile, "Clock", &format!("{BOARD}.clock"), &[]);
+    bind_keys(&mut profile, &[counter, write, flood, armed, plain]);
+    let env = Env::with_profile("plugins-e2e-key-state", &profile);
+    let log = env.dir.path().join("faces.jsonl");
+    let agent = env.start_with(
+        registry,
+        &[("DECKPILOT_TEST_KEY_FACES", log.to_str().unwrap())],
+        true,
+    );
+    agent.unlock().await;
+    let device = agent.mock_device().await;
+    let slow = Duration::from_secs(40);
+
+    // ---- not installed yet: the keys as the user named them, no marks.
+    let face = key_shows(&log, 0, slow, "its name", |f| f["title"] == "Counter").await;
+    assert_eq!(face.get("glyph"), None, "{face}");
+
+    // ---- installed and granted: the plugin's description is on the key.
+    agent.install_enabled(BOARD, &["device:state"]).await;
+    let face = key_shows(&log, 0, slow, "the count", |f| f["title"] == "0").await;
+    assert_eq!(face["detail"], "clicks", "{face}");
+    assert_eq!(face["indicator"], "unknown");
+    assert_eq!(face["glyph"], "star");
+    assert_eq!(face["accent"], "grey");
+    assert_eq!(face["badge"], "0");
+    assert_eq!(face["toggle"], false);
+    assert_eq!(face["progress"], 0);
+
+    // ---- a state call reads and nothing else; at most 8 capability calls.
+    key_shows(&log, 1, slow, "the refusal", |f| {
+        f["title"] == "NotPermitted"
+    })
+    .await;
+    key_shows(&log, 2, slow, "eight answers", |f| f["title"] == "8").await;
+    key_shows(&log, 3, slow, "a calm probe", |f| f["title"] == "calm").await;
+    // ---- no `state` in the manifest: static, never asked.
+    let face = shown_faces(&log).remove(&4).unwrap();
+    assert_eq!(face["title"], "Clock", "{face}");
+    assert_eq!(face.get("indicator"), None, "{face}");
+
+    // ---- a key press runs at once (a fresh host after the spinning
+    // one), and the key follows without the plugin asking for a redraw.
+    let pressed = Instant::now();
+    assert_eq!(
+        agent.press(&device, 0).await,
+        ("Counter".to_owned(), ActionStatus::Succeeded)
+    );
+    assert!(
+        pressed.elapsed() < Duration::from_secs(15),
+        "{:?}",
+        pressed.elapsed()
+    );
+    let face = key_shows(&log, 0, slow, "one click", |f| f["title"] == "1").await;
+    assert_eq!(face["accent"], "green", "{face}");
+    assert_eq!(face["toggle"], true);
+    assert_eq!(face["progress"], 10);
+    assert_eq!(face["series"], json!([0, 10]));
+    assert_eq!(face["indicator"], "ok");
+    // The write a state call tried (`count = 1000`) never happened.
+    assert_eq!(agent.run(BOARD, "counter", json!({})).await["count"], 2);
+
+    // ---- never more often than the floor of 5 s for the same key,
+    // whatever the manifest asks for (every second).
+    let before = std::fs::read_to_string(&log).unwrap().lines().count();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let lines = std::fs::read_to_string(&log).unwrap();
+    let redraws = lines
+        .lines()
+        .skip(before)
+        .filter(|line| line.contains(r#""index":0"#))
+        .count();
+    assert!(redraws <= 1, "key 0 was redrawn {redraws} times in 3 s");
+
+    // ---- revoked: the key falls back to how the user designed it.
+    agent.revoke(BOARD, "device:state").await;
+    let face = key_shows(&log, 0, slow, "its name again", |f| f["title"] == "Counter").await;
+    for mark in [
+        "glyph",
+        "accent",
+        "badge",
+        "series",
+        "indicator",
+        "progress",
+    ] {
+        assert_eq!(face.get(mark), None, "{mark}: {face}");
+    }
+    agent.grant(BOARD, &["device:state"]).await;
+    key_shows(&log, 0, slow, "the count again", |f| f["title"] == "2").await;
+
+    // ---- a state handler that stops returning. Its key keeps its name
+    // and gets the error mark; the host is stopped each time, and a key
+    // press still runs, on a fresh host.
+    agent
+        .run(BOARD, "store-put", json!({"key": "armed", "value": "spin"}))
+        .await;
+    let face = key_shows(&log, 3, slow, "the error mark", |f| {
+        f["indicator"] == "error"
+    })
+    .await;
+    assert_eq!(face["title"], "Probe armed", "{face}");
+    assert_eq!(face.get("glyph"), None, "{face}");
+    let pressed = Instant::now();
+    let (name, _) = agent.press(&device, 0).await;
+    assert_eq!(name, "Counter");
+    assert!(
+        pressed.elapsed() < Duration::from_secs(15),
+        "{:?}",
+        pressed.elapsed()
+    );
+    // It keeps failing, so the crash-loop breaker disables the plugin:
+    // every key of it is back to its name, without any state, and the
+    // agent goes on.
+    let face = key_shows(
+        &log,
+        0,
+        Duration::from_secs(90),
+        "its name once disabled",
+        |f| f["title"] == "Counter" && f.get("glyph").is_none() && f.get("accent").is_none(),
+    )
+    .await;
+    assert_eq!(face.get("badge"), None, "{face}");
+    let face = shown_faces(&log).remove(&3).unwrap();
+    assert_eq!(face["title"], "Probe armed", "{face}");
+    assert!(agent.request(Request::GetStatus).await.is_ok());
 
     agent.stop().await;
 }

@@ -35,7 +35,7 @@ deckpilot_plugin_sdk::plugin!(plugin);
   function or a non-capturing closure).
 - `plugin!(build_fn)` generates the guest ABI 1 exports
   (`dp_abi_version`, `dp_alloc`, `dp_invoke`, `dp_describe`, `dp_init`,
-  `dp_shutdown`, `dp_features`). Use it once, at the root of the `cdylib` crate. The
+  `dp_shutdown`, `dp_features`, `dp_state`). Use it once, at the root of the `cdylib` crate. The
   plugin is built on first use and kept for the life of the module. The
   plugin crate needs no `unsafe` of its own; use `#![deny(unsafe_code)]`
   (not `forbid`: the macro's export attributes need an `allow`).
@@ -139,6 +139,102 @@ How the result reaches the user:
 - Keys, `runAction` and workflow nodes: an `ActionResult` of the engine;
   success uses the message or "<action name> finished", outputs become
   texts (`engine.rs`), a failure carries the code and message.
+
+## Key state
+
+What a key bound to an action shows can follow the plugin (plugin API
+1.2). **The plugin describes, the agent draws**: a state handler returns a
+small typed `KeyState`, and the agent's renderer draws it at the device's
+resolution. There are no pixels, fonts or markup, and a plugin learns
+nothing about devices or keys.
+
+```rust
+fn shown(ctx: &mut Context<'_>, args: &Args<'_>) -> Result<KeyState, PluginError> {
+    let until = ctx.storage_get_as::<u64>("focusUntil")?.unwrap_or(0);
+    let left = until.saturating_sub(ctx.now()?.unix_ms) / 1000;
+    if left == 0 {
+        return Ok(KeyState::new().label("Focus").glyph(Glyph::Play));
+    }
+    Ok(KeyState::new()
+        .label(format!("{}:{:02}", left / 60, left % 60))
+        .detail("Focus")
+        .accent(Accent::Green)
+        .glyph(Glyph::Timer)
+        .progress(u8::try_from(100 - left * 100 / 1500).unwrap_or(0)))
+}
+
+Action::new("focus", focus).state(shown)
+```
+
+| `KeyState` member | Bound | Drawn as |
+| --- | --- | --- |
+| `label`, `detail` | 32 characters each, no control characters | the key's title and second line |
+| `indicator` | `Indicator::{Ok, Warning, Error, Running, Unknown}` | a mark in the top right corner |
+| `progress` | 0 to 100 | a bar along the bottom |
+| `toggle` | `bool` | a mark along the top |
+| `accent` | `Accent::{Blue, Green, Amber, Red, Purple, Teal, Grey}` | the key's background; the user's own colours win |
+| `glyph` | `Glyph::{Check, Cross, Play, Pause, Stop, Timer, Bell, Up, Down, Dot, Circle, Square, Diamond, Triangle, Star, Heart}` | a shape above the title; the user's own icon wins |
+| `badge` | 4 characters | a small label in the top left corner |
+| `series` | at most 32 values 0 to 100, oldest first | a line behind the texts |
+
+Every member is optional; `KeyState::new()` leaves the key as the user
+designed it. A state out of bounds is replaced by the failure
+`invalid-state` before it leaves the plugin. `Err(PluginError)` shows the
+key's static face with an error mark.
+
+- **A state handler only reads.** Inside it `storage_get`,
+  `storage_keys`, `settings`, `now` and the log answer; everything else
+  (`fetch`, `notify`, `open_url`, `storage_set`, `storage_delete`,
+  `publish_variable`, `random_bytes`, `run_context`…) is `NotPermitted`,
+  whatever the plugin is granted. Do the work in the action, store what
+  the key should show, and read it here.
+- **Budgets.** At most 8 capability calls (then `Throttled`), 4 KiB of
+  output, a tenth of an action's fuel, 250 ms of CPU between host calls.
+  A handler that panics or never returns ends the host process, like an
+  action that does, and counts for the crash-loop breaker.
+- **Parameters** are the key's, checked like an action's. Keys that show
+  different things (the cells of a board) differ by a parameter.
+- **Manifest**: the action entry declares `"state": { "refresh":
+  "onEvents" | "every", "intervalSeconds": n }`, and the plugin the
+  `device` permission with `"state": true`
+  ([permissions.md](permissions.md)). The manifest's rule that `state`
+  needs an action whose `node.effect` is `readOnly` (the default) still
+  holds: an action that `opens` or `modifies` cannot declare state in
+  this version. The module's descriptor does
+  not change, and a plugin whose keys merely look better with state keeps
+  `"pluginApi": "^1.0"`: an older agent never calls the handler.
+- **Testing**: `MockHost::key_state(&plugin, "focus", json!({}))` returns
+  the `StateOutcome`.
+
+**Who asks, and when.** The agent (plugin API 1.2), through the pipeline
+of its built-in live key states, for a key that is **shown on a device
+now**:
+
+- when the key appears, and after something happened in DeckPilot (a key
+  press, a finished action or workflow, a project switch, a reload). A
+  plugin's own action is therefore followed by a fresh state; a plugin
+  cannot ask for a redraw itself;
+- with `"refresh": "every"`: again each `intervalSeconds`;
+- never more often than every **5 seconds** for the same key, whatever
+  the manifest says, and only when the state changed is anything sent to
+  the device.
+
+One state call of a plugin runs at a time; its keys take turns. While the
+plugin runs an action its keys keep what they showed. A state call has
+2 s of wall clock.
+
+| Situation | The key shows |
+| --- | --- |
+| A valid state | the plugin's description |
+| First state pending | the static face with the loading mark |
+| `Err`, an invalid state, a time-out, a crash | the static face with the error mark; after 3 in a row the key is asked again only after 5 s, 10 s … 5 min |
+| `device:state` not granted or revoked, no state handler | the static face, without a mark |
+| Plugin disabled, uninstalled, stopped by the crash-loop breaker, or plugins off | what any unavailable action shows; no state call |
+| A control without a display, an agent below API 1.2 | no state call |
+
+The configuration app's layout preview runs no providers (for built-in
+modules either), so it shows the static face; devices, physical and
+simulated, show the state.
 
 ## A complete handler
 

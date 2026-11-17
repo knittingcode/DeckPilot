@@ -6,7 +6,10 @@
 //! 2. supervisor → `load` (module bytes and limits; the only large frame)
 //! 3. host → `loaded`, or `fatal` and exit
 //! 4. any number of: supervisor → `invoke`; host → `call` / supervisor →
-//!    `reply` (zero or more, strictly alternating); host → `result`
+//!    `reply` (zero or more, strictly alternating); host → `result`.
+//!    Or, for the state of a key (plugin API 1.2, a compatible addition:
+//!    a supervisor that predates it never sends it): supervisor → `state`;
+//!    `call` / `reply` as above; host → `stateResult`
 //! 5. supervisor → `shutdown`, or the supervisor closes the channel
 //!
 //! Every message is checked against this order; anything else is a protocol
@@ -17,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::capability::{CallResult, CapabilityRequest};
 use crate::describe::PluginDescriptor;
+use crate::state::StateOutcome;
 use crate::value::{ActionOutcome, Params};
 
 /// Version of this protocol, sent in `ready`.
@@ -36,6 +40,15 @@ pub enum ToHost {
     },
     #[serde(rename_all = "camelCase")]
     Invoke {
+        invocation_id: u64,
+        action: String,
+        #[serde(default)]
+        params: Params,
+    },
+    /// Asks for the state of a key bound to `action` with `params`
+    /// (`dp_state`). Shares the invocation ids of `invoke`.
+    #[serde(rename_all = "camelCase")]
+    State {
         invocation_id: u64,
         action: String,
         #[serde(default)]
@@ -82,6 +95,12 @@ pub enum ToSupervisor {
     Result {
         invocation_id: u64,
         outcome: ActionOutcome,
+    },
+    /// The answer to `state`.
+    #[serde(rename_all = "camelCase")]
+    StateResult {
+        invocation_id: u64,
+        outcome: StateOutcome,
     },
     /// Sent (best effort) right before the host exits with a non-zero code.
     Fatal { reason: FatalReason, detail: String },

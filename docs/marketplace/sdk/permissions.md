@@ -49,7 +49,7 @@ user grants and revokes.
 | `variables` | `read` (variable ids of other owners, a final `.*` allowed) | `variables:<entry>` | Nothing yet: ABI 1 has no capability to read variables. Own variables need no permission |
 | `openUrl` | `hosts` (1-16 exact DNS names, optional `:port`; may be empty with `userOrigins`), `userOrigins` (settings of the `network` permission's origin slots, [below](#pages-of-a-server-the-user-entered)) | `openUrl:<host>` per host; `openUrl:user-origin:<setting>` per origin setting | `url.open` ([`Context::open_url`](capabilities.md#open-url)) for `https://<host>` URLs: no other scheme, no userinfo, at most 2,048 bytes, 1 per 2 s and 20 per 10 minutes, 3 per invocation, and only in a run the user started (a key, a gesture, the app, or a workflow the user started; never a schedule, a lifecycle event, the agent's start or a work session). Exact hosts only: **wildcard hosts validate but are never granted**. It gives no `network` access to the host, and `network` gives no `openUrl` |
 | `background` | `minIntervalSeconds` (15-86,400) | `background` | Nothing yet: no background work or timers in ABI 1 |
-| `device` | `state`, `icons` (booleans) | `device:state`, `device:icons` | Nothing yet |
+| `device` | `state`, `icons` (booleans) | `device:state`, `device:icons` | `device:state` (low tier): the agent asks the plugin what the keys bound to its own actions show ([key state](actions.md#key-state), plugin API 1.2): a typed description the agent draws, never pixels, and nothing of a device reaches the plugin. Without it the keys are static. `device:icons`: nothing yet |
 
 ### Notification routing
 

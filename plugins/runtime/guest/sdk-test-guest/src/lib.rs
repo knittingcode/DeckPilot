@@ -94,6 +94,14 @@ fn plugin() -> Plugin {
                 .param(Param::integer("times").min(1.0).max(200.0).default(1)),
         )
         .action(Action::new("dice", dice).param(Param::integer("sides").min(1.0).default(6)))
+        // Key state (plugin API 1.2): a counter whose key shows it, and a
+        // key whose state handler misbehaves as `mode` says.
+        .action(Action::new("counter", counter).state(counter_state))
+        .action(
+            Action::new("probe", probe)
+                .param(Param::text("mode").default("ok"))
+                .state(probe_state),
+        )
         // A plain GET whose failure goes through `?`: the code a plugin
         // reports without handling the error itself.
         .action(Action::new("get", get).param(Param::text("url").required()))
@@ -296,6 +304,90 @@ fn dice(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
         Ok(n) => Ok(Output::ok().with("roll", i64::try_from(n + 1).unwrap_or(i64::MAX))),
         Err(e) => Ok(refused(&e)),
     }
+}
+
+fn counter(ctx: &mut Context<'_>, _: &Args<'_>) -> ActionResult {
+    let count = ctx.storage_get_as::<i64>("count")?.unwrap_or(0) + 1;
+    ctx.storage_set("count", count)?;
+    Ok(Output::ok().with("count", count))
+}
+
+/// The counter on its key: the count, how full a round of ten is, and the
+/// last counts as a series.
+fn counter_state(ctx: &mut Context<'_>, _: &Args<'_>) -> Result<KeyState, PluginError> {
+    let count = ctx.storage_get_as::<i64>("count")?.unwrap_or(0);
+    let step = u8::try_from(count.rem_euclid(10)).unwrap_or(0);
+    let series: Vec<u8> = (0..=step).map(|i| i * 10).collect();
+    Ok(KeyState::new()
+        .label(format!("{count}"))
+        .detail("clicks")
+        .indicator(if count == 0 {
+            Indicator::Unknown
+        } else {
+            Indicator::Ok
+        })
+        .progress(step * 10)
+        .toggle(count % 2 == 1)
+        .accent(if count % 2 == 1 {
+            Accent::Green
+        } else {
+            Accent::Grey
+        })
+        .glyph(Glyph::Star)
+        .badge(format!("{}", count % 10_000))
+        .series(series))
+}
+
+fn probe(_: &mut Context<'_>, _: &Args<'_>) -> ActionResult {
+    Ok(Output::ok())
+}
+
+/// A state handler that does what `mode` says: the things a state call
+/// may not do report how they were refused in the label.
+fn probe_state(ctx: &mut Context<'_>, args: &Args<'_>) -> Result<KeyState, PluginError> {
+    let mode: String = args.get("mode")?;
+    let refusal = |result: Result<(), CapabilityError>| match result {
+        Ok(()) => "allowed".to_owned(),
+        Err(e) => format!("{:?}", e.kind()),
+    };
+    let label = match mode.as_str() {
+        "ok" => "ok".to_owned(),
+        "clock" => match ctx.now() {
+            Ok(now) if now.unix_ms > 1_600_000_000_000 => "clock".to_owned(),
+            Ok(_) => "epoch".to_owned(),
+            Err(e) => format!("{:?}", e.kind()),
+        },
+        "settings" => refusal(ctx.settings().map(|_| ())),
+        "keys" => refusal(ctx.storage_keys(None).map(|_| ())),
+        "fetch" => refusal(ctx.http_get(FAST_URL).map(|_| ())),
+        "write" => refusal(ctx.storage_set("count", 1_000)),
+        "delete" => refusal(ctx.storage_delete("count")),
+        "notify" => refusal(ctx.notify("State", "from a state call")),
+        "random" => refusal(ctx.random_bytes(8).map(|_| ())),
+        "open" => refusal(ctx.open_url("https://github.com/acme/app")),
+        "publish" => refusal(ctx.publish_variable("count", 1)),
+        // More capability calls than a state call gets: how many answered.
+        "flood" => {
+            let answered = (0..40).filter(|_| ctx.storage_get("count").is_ok()).count();
+            format!("{answered}")
+        }
+        // Well behaved until an action stores how to misbehave.
+        "armed" => match ctx.storage_get_as::<String>("armed")?.as_deref() {
+            Some("spin") => loop {
+                core::hint::black_box(0);
+            },
+            Some("panic") => panic!("an armed state handler panicked"),
+            _ => "calm".to_owned(),
+        },
+        "error" => return Err(PluginError::new("not-configured", "Choose a city")),
+        "long" => "x".repeat(200),
+        "panic" => panic!("a state handler panicked"),
+        "spin" => loop {
+            core::hint::black_box(0);
+        },
+        other => format!("mode {other}"),
+    };
+    Ok(KeyState::new().label(label))
 }
 
 fn store_usage(ctx: &mut Context<'_>, _: &Args<'_>) -> ActionResult {

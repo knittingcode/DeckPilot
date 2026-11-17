@@ -14,7 +14,18 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { ArrowDown, ArrowUp, Copy, GripVertical, Play, Plus, Save, Trash2, X } from "lucide-react"
+import {
+  ArrowDown,
+  ArrowUp,
+  Copy,
+  GripVertical,
+  Play,
+  Plus,
+  Save,
+  Timer,
+  Trash2,
+  X,
+} from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
@@ -45,7 +56,24 @@ import { useActionModules, useAppContext } from "@/lib/app-context"
 import { pluginActionUnavailable } from "@/lib/plugin-actions"
 import { ActionIcon } from "@/components/action-icon"
 import { initialValue } from "@/lib/parameters"
-import type { ActionType, ProfileView, StepCondition, Workflow, WorkflowStep } from "@/lib/types"
+import type {
+  ActionInstance,
+  ActionType,
+  ProfileView,
+  StepCondition,
+  Workflow,
+  WorkflowStep,
+} from "@/lib/types"
+import { existingDefault, newAction } from "@/layout-editor/catalog"
+import {
+  DELAY_TYPE,
+  MAX_DELAY_MS,
+  MIN_DELAY_MS,
+  delayAction,
+  delayMilliseconds,
+  delayStep,
+  withDelay,
+} from "@/lib/multi-action"
 
 const NO_EXECUTIONS = new ExecutionStore()
 import { cn } from "@/lib/utils"
@@ -77,7 +105,12 @@ function parseCondition(value: string): StepCondition {
   return { type: "always" }
 }
 
-/** The step list of a workflow without a graph. */
+/**
+ * The step list of a workflow without a graph. `embedded`: opened from a
+ * key in the layout editor (a Multi Action), with its own Run button
+ * instead of the titlebar's, and without duplicate, delete and the usage
+ * list, which belong to the Workflows page.
+ */
 export function StepEditor({
   view,
   types,
@@ -85,6 +118,7 @@ export function StepEditor({
   initial,
   isNew,
   onChanged,
+  embedded = false,
 }: {
   view: ProfileView
   types: ActionType[]
@@ -92,18 +126,25 @@ export function StepEditor({
   initial: Workflow
   isNew: boolean
   onChanged: (id?: string) => void
+  embedded?: boolean
 }) {
-  const { profiles, agent } = useAppContext()
+  const { profiles, agent, refresh } = useAppContext()
   const [workflow, setWorkflow] = useState<Workflow>(initial)
   const [addAction, setAddAction] = useState("")
   const [errors, setErrors] = useState<string[]>([])
+  // The delay action "Add delay" created, until the reloaded profile has it.
+  const [created, setCreated] = useState<ActionInstance[]>([])
   const executions = useExecutions()
   const runs = useSnapshot(executions ?? NO_EXECUTIONS)
   // The newest run of this workflow, wherever it was started.
   const lastRun = ExecutionStore.ofProfile(runs, profileId).find((r) => r.workflow === workflow.id)
   const running = lastRun?.state === "running"
   const [starting, setStarting] = useState(false)
-  const actions = view.profile.actions
+  const actions = [
+    ...view.profile.actions,
+    ...created.filter((c) => !view.profile.actions.some((a) => a.id === c.id)),
+  ]
+  const delayType = types.find((t) => t.id === DELAY_TYPE)
   const modules = useActionModules()
   const actionIds = new Set(actions.map((a) => a.id))
   const dirty = JSON.stringify(workflow) !== JSON.stringify(initial)
@@ -117,36 +158,56 @@ export function StepEditor({
   })
   const canRun = runBlocked === null
   const usages = view.workflowUsages[workflow.id] ?? []
+  // Runs in the agent in the background; progress and the result arrive as
+  // execution events (status bar, below).
+  const run = () => {
+    setStarting(true)
+    api
+      .startWorkflow(profileId, workflow.id)
+      .then((execution) => executions?.apply({ type: "executionStarted", execution }))
+      .catch((e: unknown) => {
+        toast.error(errorMessage(e))
+      })
+      .finally(() => {
+        setStarting(false)
+      })
+  }
   // Runs the saved workflow of the editor; shown in the titlebar.
   useTitlebar({
-    actions: isNew
-      ? []
-      : [
-          {
-            id: "workflows.run",
-            label: "Run workflow",
-            icon: Play,
-            placement: "primary",
-            disabled: !canRun || running || starting,
-            busy: running || starting,
-            hint: runBlocked ?? `Run “${initial.name}”`,
-            // Runs in the agent in the background; progress and the
-            // result arrive as execution events (status bar, below).
-            onSelect: () => {
-              setStarting(true)
-              api
-                .startWorkflow(profileId, workflow.id)
-                .then((execution) => executions?.apply({ type: "executionStarted", execution }))
-                .catch((e: unknown) => {
-                  toast.error(errorMessage(e))
-                })
-                .finally(() => {
-                  setStarting(false)
-                })
+    actions:
+      isNew || embedded
+        ? []
+        : [
+            {
+              id: "workflows.run",
+              label: "Run workflow",
+              icon: Play,
+              placement: "primary",
+              disabled: !canRun || running || starting,
+              busy: running || starting,
+              hint: runBlocked ?? `Run “${initial.name}”`,
+              onSelect: run,
             },
-          },
-        ],
+          ],
   })
+
+  /** Adds a delay row, with the profile's default delay action or a new one. */
+  const addDelay = async () => {
+    if (!delayType) return
+    try {
+      let action = existingDefault(actions, delayType)
+      if (!action) {
+        action = await api.createAction(profileId, newAction(actions, delayType))
+        const made = action
+        setCreated((current) => [...current, made])
+        refresh()
+      }
+      const id = action.id
+      setWorkflow((w) => ({ ...w, steps: [...w.steps, delayStep(id)] }))
+    } catch (e) {
+      toastFailure("The delay was not added", e)
+    }
+  }
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -223,6 +284,7 @@ export function StepEditor({
                     count={workflow.steps.length}
                     step={step}
                     view={view}
+                    actions={actions}
                     types={types}
                     onChange={(change) => {
                       setWorkflow(updateStep(workflow, index, change))
@@ -271,6 +333,11 @@ export function StepEditor({
             >
               <Plus /> Add step
             </Button>
+            {delayType && (
+              <Button variant="outline" onClick={() => void addDelay()}>
+                <Timer /> Add delay
+              </Button>
+            )}
           </div>
         </div>
 
@@ -278,7 +345,17 @@ export function StepEditor({
           <Button onClick={() => void save()} disabled={!dirty && !isNew}>
             <Save /> Save
           </Button>
-          {!isNew && (
+          {embedded && !isNew && (
+            <Button
+              variant="outline"
+              disabled={!canRun || running || starting}
+              title={runBlocked ?? `Run “${initial.name}”`}
+              onClick={run}
+            >
+              <Play /> Run
+            </Button>
+          )}
+          {!isNew && !embedded && (
             <>
               <Button
                 variant="outline"
@@ -337,7 +414,7 @@ export function StepEditor({
             </ol>
           </div>
         )}
-        {!isNew && usages.length > 0 && (
+        {!isNew && !embedded && usages.length > 0 && (
           <div className="grid gap-1">
             <h3 className="text-sm font-medium">Used in</h3>
             <UsageList usages={usages} />
@@ -354,6 +431,7 @@ function SortableStep({
   count,
   step,
   view,
+  actions,
   types,
   onChange,
   onMove,
@@ -364,6 +442,8 @@ function SortableStep({
   count: number
   step: WorkflowStep
   view: ProfileView
+  /** The profile's actions, with those created since it was read. */
+  actions: ActionInstance[]
   types: ActionType[]
   onChange: (change: Partial<WorkflowStep>) => void
   onMove: (to: number) => void
@@ -373,10 +453,13 @@ function SortableStep({
     id,
   })
   const [showParameters, setShowParameters] = useState(Object.keys(step.overrides ?? {}).length > 0)
-  const action = view.profile.actions.find((a) => a.id === step.action)
+  const action = actions.find((a) => a.id === step.action)
   const type = types.find((t) => t.id === action?.actionType)
   const modules = useActionModules()
   const unavailable = action ? pluginActionUnavailable(modules, action.actionType) : null
+  // A delay row: only its duration is edited; the step keeps whatever else
+  // it has.
+  const delay = delayAction(step, actions)
 
   return (
     <li
@@ -398,24 +481,36 @@ function SortableStep({
           <GripVertical className="size-4" />
         </button>
         <span className="w-5 text-sm text-muted-foreground tabular-nums">{index + 1}.</span>
-        <ActionIcon name={action?.icon} className="size-4" />
-        <Select
-          value={step.action}
-          onValueChange={(value) => {
-            onChange({ action: value, overrides: {} })
-          }}
-        >
-          <SelectTrigger className="w-64" aria-label={`Action of step ${index + 1}`}>
-            <SelectValue placeholder="Missing action" />
-          </SelectTrigger>
-          <SelectContent>
-            {view.profile.actions.map((a) => (
-              <SelectItem key={a.id} value={a.id}>
-                {a.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {delay ? (
+          <DelayField
+            index={index}
+            ms={delayMilliseconds(step, delay)}
+            onChange={(ms) => {
+              onChange({ overrides: withDelay(step, ms).overrides })
+            }}
+          />
+        ) : (
+          <>
+            <ActionIcon name={action?.icon} className="size-4" />
+            <Select
+              value={step.action}
+              onValueChange={(value) => {
+                onChange({ action: value, overrides: {} })
+              }}
+            >
+              <SelectTrigger className="w-64" aria-label={`Action of step ${index + 1}`}>
+                <SelectValue placeholder="Missing action" />
+              </SelectTrigger>
+              <SelectContent>
+                {actions.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </>
+        )}
         <div className="flex-1" />
         <Button
           variant="ghost"
@@ -454,45 +549,49 @@ function SortableStep({
           can.
         </p>
       )}
-      <div className="grid gap-2 sm:grid-cols-2">
-        <Select
-          value={conditionValue(step.condition)}
-          onValueChange={(value) => {
-            onChange({ condition: parseCondition(value) })
-          }}
-        >
-          <SelectTrigger aria-label={`Condition of step ${index + 1}`} className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {CONDITIONS.filter((c) => conditionAllowed(parseCondition(c.value), index)).map((c) => (
-              <SelectItem key={c.value} value={c.value}>
-                {c.label}
-              </SelectItem>
-            ))}
-            {view.profile.projects.map((project) => (
-              <SelectItem key={project.id} value={`project:${project.id}`}>
-                While {project.key} is active
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select
-          value={step.onFailure}
-          onValueChange={(value) => {
-            onChange({ onFailure: value as WorkflowStep["onFailure"] })
-          }}
-        >
-          <SelectTrigger aria-label={`On failure of step ${index + 1}`} className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="stop">On failure: stop the workflow</SelectItem>
-            <SelectItem value="continue">On failure: continue</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      {type && type.parameters.length > 0 && (
+      {!delay && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Select
+            value={conditionValue(step.condition)}
+            onValueChange={(value) => {
+              onChange({ condition: parseCondition(value) })
+            }}
+          >
+            <SelectTrigger aria-label={`Condition of step ${index + 1}`} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {CONDITIONS.filter((c) => conditionAllowed(parseCondition(c.value), index)).map(
+                (c) => (
+                  <SelectItem key={c.value} value={c.value}>
+                    {c.label}
+                  </SelectItem>
+                ),
+              )}
+              {view.profile.projects.map((project) => (
+                <SelectItem key={project.id} value={`project:${project.id}`}>
+                  While {project.key} is active
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={step.onFailure}
+            onValueChange={(value) => {
+              onChange({ onFailure: value as WorkflowStep["onFailure"] })
+            }}
+          >
+            <SelectTrigger aria-label={`On failure of step ${index + 1}`} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="stop">On failure: stop the workflow</SelectItem>
+              <SelectItem value="continue">On failure: continue</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+      {!delay && type && type.parameters.length > 0 && (
         <div className="grid gap-2">
           <Button
             variant="link"
@@ -543,5 +642,45 @@ function SortableStep({
         </div>
       )}
     </li>
+  )
+}
+
+/** The duration of a delay row, in milliseconds. */
+function DelayField({
+  index,
+  ms,
+  onChange,
+}: {
+  index: number
+  ms: number
+  onChange: (ms: number) => void
+}) {
+  // The typed text, so that the field can be cleared to type a new number;
+  // the step takes it once it is a number.
+  const [text, setText] = useState(String(ms))
+  return (
+    <label className="flex items-center gap-2 text-sm">
+      <Timer className="size-4" aria-hidden />
+      <span>Delay</span>
+      <Input
+        type="number"
+        inputMode="numeric"
+        className="h-8 w-28"
+        min={MIN_DELAY_MS}
+        max={MAX_DELAY_MS}
+        step={50}
+        aria-label={`Delay of step ${index + 1} in milliseconds`}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value)
+          const value = Number.parseInt(e.target.value, 10)
+          if (Number.isFinite(value)) onChange(value)
+        }}
+        onBlur={() => {
+          setText(String(ms))
+        }}
+      />
+      <span className="text-muted-foreground">ms</span>
+    </label>
   )
 }

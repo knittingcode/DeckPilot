@@ -23,18 +23,21 @@ use std::time::{Duration, Instant};
 use deckpilot_core::graph::{MAX_TIMEOUT_MS, NodeSpec};
 use deckpilot_core::variables::{VariableSource, module_namespace};
 use deckpilot_core::{
-    ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, ExecutionContext,
-    FeatureModule, ModuleId, ModuleManifest, ParameterValue, Portability,
+    ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, ButtonState,
+    ExecutionContext, FeatureModule, ModuleId, ModuleManifest, ParameterValue, Portability,
+    RefreshPolicy, StateError,
 };
 use deckpilot_core::{RunOrigin, WorkflowCause};
 use deckpilot_plugin_abi::capability::{
     RunCause, RunContext, RunSummary as AbiRunSummary, RunTrigger,
 };
-use deckpilot_plugin_abi::{ActionOutcome, ParamValue, Params};
+use deckpilot_plugin_abi::state::{STATE_NOT_PERMITTED, STATE_UNSUPPORTED};
+use deckpilot_plugin_abi::{ActionOutcome, ParamValue, Params, StateOutcome};
 use deckpilot_plugin_manifest::Action;
 use deckpilot_plugin_supervisor::AbortSignal;
 use tracing::warn;
 
+use super::key_state::{Asked, KeyId, Turn};
 use super::variables::{PluginVariableSource, PublishedVariables, declarations};
 use super::worker::{EngineFailure, Invoker};
 
@@ -46,6 +49,8 @@ const POLL: Duration = Duration::from_millis(25);
 /// On top of the action's time limit: queueing behind other invocations
 /// of the same plugin, starting the host.
 const QUEUE_MARGIN: Duration = Duration::from_secs(30);
+/// On top of a state call's time limit: starting the host.
+const STATE_MARGIN: Duration = Duration::from_secs(8);
 
 /// An installed plugin as the engine sees it, from the plugin store.
 #[derive(Debug, Clone, PartialEq)]
@@ -85,6 +90,12 @@ impl PluginModule {
         values: PublishedVariables,
     ) -> Option<Self> {
         let id = ModuleId::new(plugin.id.clone()).ok()?;
+        // A plugin that stopped running (disabled, updated, uninstalled)
+        // starts afresh when it runs again: no remembered state, no
+        // back-off.
+        if plugin.unavailable.is_some() {
+            invoker.book().forget(&plugin.id);
+        }
         let namespace = module_namespace(&id);
         let variables = declarations(&namespace, &plugin.variables);
         let source = (!variables.is_empty()).then(|| {
@@ -124,12 +135,17 @@ impl FeatureModule for PluginModule {
     }
 
     fn action_handlers(&self, _config: &ActionParameters) -> Vec<Box<dyn ActionHandler>> {
+        // Keys of a plugin whose actions cannot run show no state: they
+        // fall back to how the user designed them.
+        let runs = self.plugin.unavailable.is_none();
         self.plugin
             .actions
             .iter()
             .filter_map(|action| {
                 match PluginActionHandler::new(&self.plugin.id, action, self.invoker.clone()) {
-                    Ok(handler) => Some(Box::new(handler) as Box<dyn ActionHandler>),
+                    Ok(handler) => {
+                        Some(Box::new(handler.with_state(action, runs)) as Box<dyn ActionHandler>)
+                    }
                     Err(problem) => {
                         warn!(plugin = %self.plugin.id, action = %action.id, %problem,
                             "a plugin action cannot be offered");
@@ -207,6 +223,10 @@ pub(crate) struct PluginActionHandler {
     outputs: BTreeSet<String>,
     timeout: Duration,
     invoker: Invoker,
+    /// How often keys bound to the action are asked for their state;
+    /// `None`: never (no `state` in the manifest, or the plugin's actions
+    /// cannot run).
+    state: Option<RefreshPolicy>,
 }
 
 impl PluginActionHandler {
@@ -219,7 +239,108 @@ impl PluginActionHandler {
             plugin: plugin.to_owned(),
             action: action.id.clone(),
             invoker,
+            state: None,
         })
+    }
+
+    /// With the action's `state` from the manifest, while the plugin's
+    /// actions run (`runs`).
+    fn with_state(mut self, action: &Action, runs: bool) -> Self {
+        self.state = action
+            .state
+            .as_ref()
+            .filter(|_| runs)
+            .map(super::key_state::policy);
+        self
+    }
+
+    /// The state of a key bound to this action with `parameters`, within
+    /// the budgets of `key_state.rs`. Runs on a provider thread of the
+    /// agent's live key states, never on the agent's task.
+    fn key_state(
+        &self,
+        parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> Result<ButtonState, StateError> {
+        let params =
+            params(parameters).map_err(|problem| StateError::new("invalid-parameters", problem))?;
+        let key = KeyId {
+            plugin: self.plugin.clone(),
+            action: self.action.clone(),
+            params: serde_json::to_string(&params).unwrap_or_default(),
+        };
+        let book = self.invoker.book();
+        // The plugin's keys take turns; state calls are short, so the
+        // turn comes soon, or the key keeps what it showed.
+        let patience = Instant::now() + super::key_state::TURN_WAIT;
+        loop {
+            match book.begin(&key, Instant::now()) {
+                Turn::Ask => break,
+                Turn::Paused(shown) => return shown,
+                Turn::Busy(shown) => {
+                    if context.is_cancelled() || Instant::now() >= patience {
+                        return shown;
+                    }
+                    std::thread::sleep(POLL);
+                }
+            }
+        }
+        // The turn is always given back, whatever happens while asking.
+        let asked =
+            catch_unwind(AssertUnwindSafe(|| self.ask(params, context))).unwrap_or_else(|_| {
+                Asked::Failed(StateError::new(
+                    "plugin-host-failed",
+                    "the key's state could not be read",
+                ))
+            });
+        book.finish(&key, asked, Instant::now())
+    }
+
+    fn ask(&self, params: Params, context: &ExecutionContext<'_>) -> Asked {
+        let failed = |code: &str, message: &str| Asked::Failed(StateError::new(code, message));
+        let abort = AbortSignal::new();
+        let Some(answer) = self.invoker.key_state(
+            self.plugin.clone(),
+            self.action.clone(),
+            params,
+            abort.clone(),
+        ) else {
+            return Asked::Quiet;
+        };
+        // The call's own limit, and room for a host that has to start.
+        let deadline = Instant::now() + super::key_state::STATE_CALL_TIMEOUT + STATE_MARGIN;
+        loop {
+            match answer.recv_timeout(POLL) {
+                Ok(Ok(StateOutcome::Ok(state))) => {
+                    return Asked::State(super::key_state::button_state(state));
+                }
+                // Not granted, or nothing to report for this action: the
+                // key stays as the user designed it.
+                Ok(Ok(StateOutcome::Error(failure)))
+                    if failure.code == STATE_NOT_PERMITTED || failure.code == STATE_UNSUPPORTED =>
+                {
+                    return Asked::Quiet;
+                }
+                Ok(Ok(StateOutcome::Error(failure))) => {
+                    return failed(&failure.code, &failure.message);
+                }
+                Ok(Err(EngineFailure { code, .. })) if code == "plugin-busy" => {
+                    return Asked::Busy;
+                }
+                Ok(Err(EngineFailure { code, message })) => return failed(&code, &message),
+                Err(RecvTimeoutError::Disconnected) => {
+                    return failed("plugin-host-failed", "the plugin worker stopped");
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    if context.is_cancelled() || Instant::now() >= deadline {
+                        // The lane stops the call; its late answer is
+                        // dropped with the channel.
+                        abort.abort();
+                        return failed("timeout", "the key's state took too long");
+                    }
+                }
+            }
+        }
     }
 
     fn run(&self, parameters: &ActionParameters, context: &ExecutionContext<'_>) -> ActionResult {
@@ -320,6 +441,18 @@ impl ActionHandler for PluginActionHandler {
     /// Always: the plugin runs in its host process, possibly for minutes.
     fn runs_detached(&self) -> bool {
         true
+    }
+
+    fn state_policy(&self, _parameters: &ActionParameters) -> Option<RefreshPolicy> {
+        self.state
+    }
+
+    fn button_state(
+        &self,
+        parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> Result<ButtonState, StateError> {
+        self.key_state(parameters, context)
     }
 }
 
