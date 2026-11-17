@@ -324,7 +324,7 @@ export const en = {
       items: [
         {
           q: 'Is DeckPilot ready for everyday use?',
-          a: 'Not yet. DeckPilot is in early development: what is published is a pre-release, and there is no stable release. It has been used with real hardware on macOS only. Keep an encrypted export of your configuration.',
+          a: 'DeckPilot now has stable releases, and the download page offers the latest one. It is still young: it has been used with real hardware on macOS only, and the Windows and Linux builds are not code-signed. Keep an encrypted export of your configuration.',
         },
         {
           q: 'Which Stream Deck models work?',
@@ -522,7 +522,7 @@ export const en = {
     pagination: 'Previous and next page',
     statusTitle: 'About this documentation',
     status:
-      'DeckPilot is a pre-release, and it changes quickly. These pages describe the application as its source code stood at the commit below; names in the interface may differ slightly in the version you have installed.',
+      'DeckPilot changes quickly. These pages describe the application as its source code stood at the commit below; names in the interface may differ slightly in the version you have installed.',
     uiLanguage: 'The application’s interface is in English; names of screens and buttons are written here as they appear in it.',
     verified: 'Checked against DeckPilot’s source at commit {commit}.',
     source: 'Technical documentation in the repository',
