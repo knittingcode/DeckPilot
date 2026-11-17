@@ -193,6 +193,9 @@ CHANGELOG.md.
   agent with progress, cancellation and history, and appears on the
   Workflows page too; *Edit steps* on a key opens any step workflow it
   runs. Workflows saved by earlier versions are read and kept unchanged.
+- *Random action* on a key: runs one of several saved actions or
+  workflows, picked at random, optionally with weights and never the same
+  twice in a row. The pick runs as its own key would.
 
 ### Fixed
 

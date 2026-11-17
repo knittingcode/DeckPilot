@@ -209,8 +209,17 @@ impl Agent {
         match outcome {
             Ok(RuntimeOutcome::Action { action, mut result }) => {
                 let name = self.action_name(action);
+                // A Random Action's pick runs as the key's own binding
+                // would, for this device; picks do not nest.
+                let picked = super::deck::take_pick(&mut result);
                 self.apply_deck_request(&mut result);
                 self.report_action_as(action, name, &result);
+                if let Some(target) = picked {
+                    let shown = self.runtime.current_page(device);
+                    let outcome = self.runtime.run_picked(device, target, origin);
+                    self.handle_outcome(device, control, origin, shown, outcome);
+                    return;
+                }
             }
             // A plugin's action: it runs on a thread of its own and is
             // reported when it finished.

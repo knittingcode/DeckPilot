@@ -54,6 +54,7 @@ and nothing is added to the Action Library automatically.
 | `deck.page-indicator` | — | nothing when pressed; its key shows the page as `2/5` |
 | `deck.switch-profile` | `target` (`next` \| `previous` \| `profile`, default `next`), `profile` (a profile id), `wrapAround` (default on) | makes another profile the active one; outputs `profileId`, `profileName` when it switched |
 | `deck.brightness` | `change` (`set` \| `brighter` \| `dimmer`, default `set`), `level` (0–100), `step` (1–100, default 10) | sets the display brightness of the devices or steps it, within 0–100; output `brightness` |
+| `deck.random` | `candidates` (one `action:<id>` or `workflow:<id>` per line, optional weight 1–100, at most 32), `noRepeat` (default off) | picks one candidate at random (the operating system's random source, weighted) and runs it as a key bound to it would; output `picked`. Fails with `no-candidates`, `invalid-candidate`, `candidate-not-found` or `nested-random` (a candidate that is a Random Action itself) |
 | `general.log` | `message` | the rendered message |
 | `general.wait` | `seconds` (1–300) | waits; output `waitedMs`; stops at once when cancelled (the reference workflow node) |
 | `general.delay` | `milliseconds` (10–300000, default 500) | waits; output `waitedMs`; stops at once when cancelled. The delay row of a Multi Action's step list: the step sets its own `milliseconds` as an override |

@@ -780,3 +780,93 @@ async fn a_configuration_from_before_behaves_as_before_and_is_not_rewritten() {
         .pop();
     assert_eq!(without, alpha3_document());
 }
+
+/// A Random Action over `candidates` (lines of `action:<id>` or
+/// `workflow:<id>`), added to `profile`.
+fn random(profile: &mut Profile, name: &str, candidates: &str) -> BindingTarget {
+    action(
+        profile,
+        name,
+        deck::random_id(),
+        &ActionParameters::new().with(
+            deck::random::CANDIDATES,
+            ParameterValue::Text(candidates.into()),
+        ),
+    )
+}
+
+fn instance(target: &BindingTarget) -> ActionInstanceId {
+    match target {
+        BindingTarget::Action { action, .. } => *action,
+        other => panic!("not an action: {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_random_key_runs_what_it_picked_as_a_key_would() {
+    let dir = TempDir::new("deckpilot-deck-random");
+    let mut work = Profile::new("Work");
+    let picked = instance(&log(&mut work, "Picked"));
+    let workflow = support::waiting_workflow("Build", 10);
+    let workflow_id = workflow.id;
+    work.workflows.push(workflow);
+    let one_action = random(&mut work, "Dice", &format!("action:{picked}"));
+    let one_workflow = random(&mut work, "Coin", &format!("workflow:{workflow_id}"));
+    let dice = instance(&one_action);
+    let nested = random(&mut work, "Nested", &format!("action:{dice}"));
+    let mut layout = DeviceLayout::new("Main", models::stream_deck_mk2().id);
+    layout.pages[0].bindings.extend([
+        press(0, one_action),
+        press(1, one_workflow),
+        press(2, nested),
+    ]);
+    work.layouts.push(layout);
+    let (paths, db_key) = support::data_dir(&dir, &work, &[]);
+    let mock = MockBackend::new();
+    let device = mock.plug(&models::stream_deck_mk2(), "MK2-A");
+    let agent = TestAgent::start_unlocked(&paths, &db_key, &mock, None).await;
+    connected(&agent, &device).await;
+    let mut events = agent.events().await;
+
+    // The pick is reported, then what it picked runs.
+    mock.tap(&device, key(0));
+    assert_eq!(
+        completed(&mut events).await,
+        ("Dice".to_owned(), ActionStatus::Succeeded)
+    );
+    assert_eq!(
+        completed(&mut events).await,
+        ("Picked".to_owned(), ActionStatus::Succeeded)
+    );
+
+    // A workflow it picked starts in the background, as its key would.
+    mock.tap(&device, key(1));
+    let started = loop {
+        let event = tokio::time::timeout(TIMEOUT, events.next_event())
+            .await
+            .expect("an event in time")
+            .unwrap();
+        if let AgentEvent::ExecutionStarted { execution } = event {
+            break execution;
+        }
+    };
+    assert_eq!(started.workflow, workflow_id);
+    assert_eq!(started.trigger, deckpilot_core::ExecutionTrigger::Device);
+
+    // Picks do not nest: a Random Action over another one fails and runs
+    // nothing.
+    mock.tap(&device, key(2));
+    assert_eq!(
+        completed(&mut events).await,
+        ("Nested".to_owned(), ActionStatus::Failed)
+    );
+
+    // From the app, the pick runs as from the app.
+    let result = run(&agent, dice).await;
+    assert!(result.is_success(), "{}", result.message);
+    assert_eq!(
+        completed(&mut events).await,
+        ("Picked".to_owned(), ActionStatus::Succeeded)
+    );
+    agent.shutdown().await;
+}

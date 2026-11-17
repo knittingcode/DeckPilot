@@ -20,6 +20,9 @@
 //!   previous one in the order profiles are listed. The agent has one
 //!   active profile: every device follows.
 //!
+//! - **Random action.** Runs one of several saved actions or workflows,
+//!   picked at random (see [`random`]).
+//!
 //! These actions run from a key or from the app. As a workflow node they
 //! fail with `not-from-a-key`: nothing applies a request there.
 //!
@@ -41,6 +44,9 @@ pub const PREVIOUS_PAGE: &str = "deck.previous-page";
 pub const PAGE_INDICATOR: &str = "deck.page-indicator";
 pub const SWITCH_PROFILE: &str = "deck.switch-profile";
 pub const BRIGHTNESS: &str = "deck.brightness";
+pub const RANDOM: &str = "deck.random";
+
+pub mod random;
 
 /// Parameter of *Brightness*: what to do ([`CHANGES`]).
 pub const CHANGE: &str = "change";
@@ -91,7 +97,7 @@ pub fn module_id() -> ModuleId {
     ModuleId::new(MODULE_ID).expect("the module id is valid")
 }
 
-fn type_id(id: &str) -> ActionTypeId {
+pub(crate) fn type_id(id: &str) -> ActionTypeId {
     ActionTypeId::new(id).expect("the action type id is valid")
 }
 
@@ -130,6 +136,10 @@ pub fn brightness_id() -> ActionTypeId {
     type_id(BRIGHTNESS)
 }
 
+pub fn random_id() -> ActionTypeId {
+    type_id(RANDOM)
+}
+
 #[derive(Debug)]
 pub struct DeckModule {
     manifest: ModuleManifest,
@@ -147,7 +157,8 @@ impl DeckModule {
                     .into(),
                 platforms: Vec::new(),
                 pages: Vec::new(),
-                capabilities: vec![Capability::DeckControl],
+                // Reading the profile: the candidates of a Random Action.
+                capabilities: vec![Capability::DeckControl, Capability::ProfileRead],
                 config: Vec::new(),
                 dependencies: Vec::new(),
                 enabled_by_default: true,
@@ -182,6 +193,7 @@ impl FeatureModule for DeckModule {
             Box::new(PageIndicator::new()),
             Box::new(SwitchProfile::new()),
             Box::new(Brightness::new()),
+            Box::new(random::RandomAction::new()),
         ]
     }
 }
@@ -210,7 +222,7 @@ fn view_node(icon: &str, outputs: Vec<OutputSpec>) -> NodeSpec {
     }
 }
 
-fn output(key: &str, label: &str) -> OutputSpec {
+pub(crate) fn output(key: &str, label: &str) -> OutputSpec {
     OutputSpec {
         key: key.into(),
         label: label.into(),
@@ -627,11 +639,15 @@ mod tests {
                 PREVIOUS_PAGE,
                 PAGE_INDICATOR,
                 SWITCH_PROFILE,
-                BRIGHTNESS
+                BRIGHTNESS,
+                RANDOM
             ]
         );
         assert!(ids.iter().all(|id| id.starts_with("deck.")));
-        assert_eq!(module.manifest().capabilities, [Capability::DeckControl]);
+        assert_eq!(
+            module.manifest().capabilities,
+            [Capability::DeckControl, Capability::ProfileRead]
+        );
     }
 
     #[test]
@@ -657,7 +673,19 @@ mod tests {
     fn nothing_is_asked_without_the_capability() {
         let nothing = BTreeSet::new();
         for handler in DeckModule::new().action_handlers(&ActionParameters::new()) {
-            let result = run(handler.as_ref(), &ActionParameters::new(), &nothing);
+            // A Random Action needs something to pick from to be run at all.
+            let parameters = if handler.definition().id.as_str() == RANDOM {
+                ActionParameters::new().with(
+                    random::CANDIDATES,
+                    ParameterValue::Text(format!(
+                        "action:{}",
+                        deckpilot_core::ActionInstanceId::new()
+                    )),
+                )
+            } else {
+                ActionParameters::new()
+            };
+            let result = run(handler.as_ref(), &parameters, &nothing);
             assert!(!result.is_success(), "{}", handler.definition().id);
             assert_eq!(result.code.as_deref(), Some("not-permitted"));
             assert!(result.request.is_none());

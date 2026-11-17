@@ -12,7 +12,9 @@
 //!   runtime after a restart. It is runtime state of this computer: not
 //!   part of a profile, never exported.
 
-use deckpilot_core::{ActionResult, DeckRequest, PageId, ProfileId, ProfileTarget};
+use deckpilot_core::{
+    ActionResult, BindingTarget, DeckRequest, ExecutionTrigger, PageId, ProfileId, ProfileTarget,
+};
 use deckpilot_device::DeviceId;
 use deckpilot_ipc::ProfileInfo;
 use deckpilot_storage::ConfigStore;
@@ -28,6 +30,8 @@ const PROFILE_NOT_FOUND: &str = "profile-not-found";
 
 /// The brightness could not be saved.
 const BRIGHTNESS_NOT_SAVED: &str = "brightness-not-saved";
+/// What a Random Action picked could not be run or started.
+const PICK_NOT_RUN: &str = "pick-not-run";
 
 /// The brightness after a request: `set` as it is, else `current` moved by
 /// `step`; always within 0-100.
@@ -79,6 +83,17 @@ fn pick(
     Ok(next.and_then(|index| profiles.get(index)))
 }
 
+/// Takes a Random Action's pick out of `result`: what a key runs next.
+pub(super) fn take_pick(result: &mut ActionResult) -> Option<BindingTarget> {
+    let target = match result.deck_request()? {
+        DeckRequest::RunAction { action } => BindingTarget::action(action),
+        DeckRequest::RunWorkflow { workflow } => BindingTarget::Workflow { workflow },
+        _ => return None,
+    };
+    result.request = None;
+    Some(target)
+}
+
 impl Agent {
     /// Applies the request the device runtime left in `result` (a profile
     /// switch) and takes it out. A request that cannot be applied makes the
@@ -93,6 +108,26 @@ impl Agent {
             }) => (target, wrap_around),
             Some(DeckRequest::Brightness { set, step }) => {
                 self.apply_brightness(set, step, result);
+                return;
+            }
+            // A Random Action run from the app: its pick runs as if run
+            // from the app too. From a key, the key's handling takes the
+            // pick first (`take_pick`).
+            Some(DeckRequest::RunWorkflow { workflow }) => {
+                if let Err(error) = self.start_execution(workflow, ExecutionTrigger::App) {
+                    *result = ActionResult::error(PICK_NOT_RUN, error.message);
+                }
+                return;
+            }
+            Some(DeckRequest::RunAction { action }) => {
+                match self.runtime.run_action(action) {
+                    Ok(mut picked) => {
+                        let name = self.action_name(action);
+                        self.apply_deck_request(&mut picked);
+                        self.report_action_as(action, name, &picked);
+                    }
+                    Err(error) => *result = ActionResult::error(PICK_NOT_RUN, error.to_string()),
+                }
                 return;
             }
             _ => return,
