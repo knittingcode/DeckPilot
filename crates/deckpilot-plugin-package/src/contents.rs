@@ -103,12 +103,18 @@ pub(crate) fn check_artifact(
 }
 
 /// Parses and validates `manifest.json` (schema rules and the cross-field
-/// rules of section 7).
-pub(crate) fn parse_manifest(files: &Files) -> Result<Manifest, PackageError> {
+/// rules of section 7). `first_party` applies
+/// [`Manifest::validate_first_party`] instead of [`Manifest::validate`]:
+/// the publisher must then be `deckpilot`, and every other reserved
+/// publisher stays refused.
+pub(crate) fn parse_manifest(files: &Files, first_party: bool) -> Result<Manifest, PackageError> {
     let manifest = Manifest::from_slice(&files[MANIFEST])?;
-    manifest
-        .validate()
-        .map_err(deckpilot_plugin_manifest::ManifestError::from)?;
+    if first_party {
+        manifest.validate_first_party()
+    } else {
+        manifest.validate()
+    }
+    .map_err(deckpilot_plugin_manifest::ManifestError::from)?;
     Ok(manifest)
 }
 

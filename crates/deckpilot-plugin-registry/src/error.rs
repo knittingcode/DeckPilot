@@ -112,6 +112,11 @@ pub enum InstallError {
         version: Version,
         reason: String,
     },
+    /// A `deckpilot.*` plugin from a registry that may not serve it: the
+    /// root-signed key set does not authorize the `deckpilot` namespace, or
+    /// the index does not list `deckpilot` as a verified publisher.
+    #[error("{id} is a DeckPilot first-party plugin, which this registry may not serve: {reason}")]
+    FirstPartyNotAuthorized { id: PluginId, reason: String },
     #[error("{id} {version} cannot run here: {}", list(.reasons))]
     Incompatible {
         id: PluginId,

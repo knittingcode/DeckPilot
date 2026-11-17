@@ -139,6 +139,29 @@ feature the library has no signing code and no extra dependencies.
    from the embedded roots (trust on first use); a corrupt or unknown-format
    state is an error, never a silent reset. The product should keep the
    state in the encrypted database (section 12.4).
+9. **First-party plugins from a registry (B6).** The reserved publisher
+   `deckpilot` is installable from a registry only when the offline root
+   role authorizes it: the key set gains an optional
+   `"first_party": {"namespaces": ["deckpilot"]}`, covered by the root
+   signatures like the rest of `keys/<n>.json`. Any other namespace in it
+   makes the key set invalid; absent means no authorization, and key sets
+   without it verify as before. `resolve_install` marks the pins of a
+   `deckpilot.*` plugin first-party (`ExpectedPackage::first_party`, so
+   `verify_package` applies `Manifest::validate_first_party`) only when
+   the current key set authorizes `deckpilot` **and** the verified index
+   lists the publisher `deckpilot` with `verified: true`; otherwise it
+   refuses with `InstallError::FirstPartyNotAuthorized`. The online index
+   key alone cannot open the namespace (an earlier sketch,
+   `deckpilot-plugins` `docs/plugin-factory.md`, relied on the index's
+   publisher record only). A later key set without the field withdraws
+   the authorization for new installs and updates; installed copies keep
+   running unless a `disable` revocation stops them (`installed_verdict`
+   counts revocations only). Every other reserved publisher stays refused
+   by the package reader whatever the pins say. The agent additionally
+   never takes the plugins it bundles from a registry
+   (`deckpilot_plugin_bundled::is_bundled_id`). Like every key set field,
+   `first_party` is unknown to a client that predates it, which then
+   refuses the key set: it belongs in the first production key set.
 
 Publisher keys (U-2) were an optional extension in the spike and are not
 part of #191's schemas; they are not implemented here.
@@ -158,7 +181,8 @@ A security error never replaces the stored state.
 
 `schema/registry-*.schema.json` are byte-identical to
 `docs/marketplace/schemas/` on `docs/plugin-marketplace-design` at
-`a55c021`. No defect was found, so none was changed. They refer to the
+`a55c021`, except that `registry-keyset.schema.json` adds the optional
+`first_party` object (decision 9). They refer to the
 manifest schema by `$id`; the tests resolve it to
 `deckpilot_plugin_manifest::SCHEMA_JSON`.
 

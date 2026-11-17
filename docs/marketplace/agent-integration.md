@@ -74,6 +74,25 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
   `plugin.wasm` check), then the store's journaled install. A crash at any
   step is completed or undone by `PluginManager::recover` at the next
   start.
+- **First-party (`deckpilot.*`) plugins from a registry** (B6). Refused
+  unless the registry's current key set, signed by its offline root role,
+  authorizes the namespace (`"first_party": {"namespaces": ["deckpilot"]}`)
+  and its verified index lists the publisher `deckpilot` as verified:
+  `resolve_install` then marks the pins first-party
+  (`ExpectedPackage::first_party`) and `verify_package` applies
+  `Manifest::validate_first_party` (every other reserved publisher stays
+  refused). Otherwise the install or update fails with `invalidPackage`
+  before any download. The pins of a local file are never marked: a file
+  may not use a `deckpilot.*` id at all. The plugins the agent bundles
+  (`deckpilot_plugin_bundled::is_bundled_id`: `deckpilot.github`,
+  `deckpilot.gitlab`, `deckpilot.jira`, `deckpilot.notifications` and
+  whatever the compiled pins name) and the never-assigned
+  `RESERVED_MODULE_IDS` are refused from every registry (`invalidPackage`,
+  in `pins`), so the pinned digests stay the only source of a bundled
+  plugin. A later key set without the authorization refuses new installs
+  and updates; installed copies keep running unless the registry revokes
+  them. Details: `crates/deckpilot-plugin-registry/PUBLISHING.md`
+  ("First-party plugins").
 - **Grants.** Stored per permission key in plugins.db. The broker gets the
   effective grants (declared ∩ granted, nothing unless enabled) after every
   change; a revocation applies to the next capability call. Wildcard hosts
@@ -876,7 +895,12 @@ offline from the cache (browsing, the installed plugin runs, installs
 fail), a lost index cache (stale, `indexUnavailable`), back online; a
 frozen registry (expired timestamp: nothing trusted), one that expires
 while the agent runs (stale, `expired`, installs refused until re-signed);
-and an agent without root keys, which fetches nothing. The unit tests in
+an agent without root keys, which fetches nothing; and a `deckpilot.*`
+plugin (B6), refused while the `deckpilot` publisher is unverified,
+installed once it is verified under a key set that authorizes the
+namespace, refused for a bundled id (`deckpilot.github`) without any
+download, and refused for an update after a key set withdraws the
+authorization (the installed version stays). The unit tests in
 `plugins/fetch/tests.rs` (`cargo test -p deckpilot-agent --features plugins
 --lib plugins::`) cover the source with the client directly and a
 controlled clock: verification, offline then stale, reachable but expired,

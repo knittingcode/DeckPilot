@@ -165,15 +165,18 @@ impl Manifest {
         }
     }
 
-    /// [`Manifest::validate`] for a first-party plugin shipped inside the
-    /// application bundle (`docs/marketplace/module-migration.md` §4.4):
-    /// the same rules, except that the publisher must be DeckPilot's own
+    /// [`Manifest::validate`] for a first-party plugin: shipped inside the
+    /// application bundle (`docs/marketplace/module-migration.md` §4.4) or
+    /// served by a registry authorized for it (B6): the same rules, except
+    /// that the publisher must be DeckPilot's own
     /// ([`FIRST_PARTY_PUBLISHER`]), which [`Manifest::validate`] refuses as
     /// reserved. Every other reserved publisher stays refused.
     ///
     /// Only for manifests whose bytes the caller has already matched
-    /// against digests it trusts (the pins compiled into the agent): this
-    /// says nothing about where a manifest came from.
+    /// against digests it trusts (the pins compiled into the agent, or
+    /// registry pins the client marked first-party because the root-signed
+    /// key set authorizes `deckpilot`): this says nothing about where a
+    /// manifest came from.
     pub fn validate_first_party(&self) -> Result<(), ValidationErrors> {
         let mut errors = validate::check(self).errors;
         if self.publisher.id == FIRST_PARTY_PUBLISHER {

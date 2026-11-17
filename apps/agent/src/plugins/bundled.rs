@@ -20,8 +20,11 @@
 //!   disabled until the user consents in the normal dialog; one with
 //!   low-tier permissions only is enabled once, right after it is first
 //!   installed, and never again by seeding.
-//! * **Never backwards.** A copy from another source (a registry update) or
-//!   a newer version is left alone; only an older `bundled` copy is updated.
+//! * **Never backwards.** A copy from another source or a newer version is
+//!   left alone; only an older `bundled` copy is updated. A registry never
+//!   serves a bundled id (`deckpilot_plugin_bundled::is_bundled_id`, refused
+//!   before any download) and a file or development copy may not use a
+//!   `deckpilot.*` id, so the rule is a safeguard.
 //! * **`default` class only.** `migration`-class plugins are installed by
 //!   the migration engine, never here.
 

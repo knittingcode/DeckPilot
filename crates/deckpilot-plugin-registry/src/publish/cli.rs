@@ -36,17 +36,23 @@ DECKPILOT_REGISTRY_KEY_PASSWORD; never printed.
   keys generate --role root|index|timestamp --out FILE [--no-password]
       Local and test keys only; production keys come from the key ceremony.
   keyset init --root PUB [--root PUB] [--root-threshold N] --index PUB --timestamp PUB
-              [--seq-floor N]
+              [--seq-floor N] [--first-party]
   keyset rotate [--root PUB]... [--root-threshold N] [--index PUB] [--timestamp PUB]
-                [--seq-floor N] [--seq-floor-reset]
+                [--seq-floor N] [--seq-floor-reset] [--first-party | --no-first-party]
+      --first-party authorizes the reserved namespace deckpilot (first_party in
+      the root-signed key set); --no-first-party withdraws it.
   keyset sign --key FILE [--version N]
-  package --plugin-dir DIR --module FILE.wasm --out FILE.dpplugin
+  package --plugin-dir DIR --module FILE.wasm --out FILE.dpplugin [--first-party]
       Builds a package: manifest.json, LICENSE and the files the manifest names
-      from DIR, the module as plugin.wasm (plugin ABI 1, checked).
+      from DIR, the module as plugin.wasm (plugin ABI 1, checked). A deckpilot.*
+      plugin needs --first-party.
   publisher --namespace NS --github-id N --login LOGIN [--display-name NAME] [--verified]
+            [--first-party]                           (--first-party: namespace deckpilot)
   add-version --package FILE.dpplugin [--plugin-detail plugin.json]
               --source-repository OWNER/NAME --tag TAG --commit SHA [--source-path PATH]
-              --builder VERSION [--attestation URL]
+              --builder VERSION [--attestation URL] [--first-party]
+      A deckpilot.* package needs --first-party, a key set authorizing deckpilot
+      and a verified deckpilot publisher.
   yank --id ID --version V --reason TEXT [--advisory URL]
   revoke --id ID --versions V[,V...]|* --action disable|yank --reason TEXT [--advisory URL]
   lift-revocation --id ID [--versions V[,V...]|*]    (only after --seq-floor-reset)
@@ -287,6 +293,8 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
         "seq-floor-reset",
         "verified",
         "require-packages",
+        "first-party",
+        "no-first-party",
     ];
     let opts = Opts::parse(rest, &flags)?;
     let ws = opts.workspace()?;
@@ -296,8 +304,9 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
             let dir = PathBuf::from(opts.required("plugin-dir")?);
             let module = PathBuf::from(opts.required("module")?);
             let out = PathBuf::from(opts.required("out")?);
+            let first_party = opts.flag("first-party");
             opts.finish()?;
-            let built = super::pack::package(&dir, &module)?;
+            let built = super::pack::package(&dir, &module, first_party)?;
             std::fs::write(&out, &built.bytes)
                 .map_err(|e| PublishError(format!("{}: {e}", out.display())))?;
             format!(
@@ -353,9 +362,17 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
             let timestamp = role_of(&opts, "timestamp")?
                 .ok_or_else(|| PublishError("--timestamp is required".into()))?;
             let seq_floor = opts.parsed("seq-floor")?.unwrap_or(0);
+            let first_party = opts.flag("first-party");
             opts.finish()?;
-            keyset::init(&ws, &root, index, timestamp, seq_floor)?;
-            "wrote roots.json and site/v1/keys/1.json; sign it with `keyset sign`".to_owned()
+            keyset::init(&ws, &root, index, timestamp, seq_floor, first_party)?;
+            format!(
+                "wrote roots.json and site/v1/keys/1.json{}; sign it with `keyset sign`",
+                if first_party {
+                    " (authorizes the first-party namespace deckpilot)"
+                } else {
+                    ""
+                }
+            )
         }
         "keyset rotate" => {
             let rotation = Rotation {
@@ -365,16 +382,27 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
                 timestamp: role_of(&opts, "timestamp")?,
                 seq_floor: opts.parsed("seq-floor")?,
                 seq_floor_reset: opts.flag("seq-floor-reset"),
+                first_party: match (opts.flag("first-party"), opts.flag("no-first-party")) {
+                    (true, true) => return fail("give either --first-party or --no-first-party"),
+                    (true, false) => Some(true),
+                    (false, true) => Some(false),
+                    (false, false) => None,
+                },
             };
             opts.finish()?;
             let keyset = keyset::rotate(&ws, rotation)?;
             format!(
-                "wrote site/v1/keys/{}.json (seq_floor {}{}); sign it with the current roots \
+                "wrote site/v1/keys/{}.json (seq_floor {}{}{}); sign it with the current roots \
                  and, if they change, the new roots",
                 keyset.version,
                 keyset.seq_floor,
                 if keyset.seq_floor_reset {
                     ", reset"
+                } else {
+                    ""
+                },
+                if keyset.authorizes_first_party() {
+                    ", first-party namespace deckpilot authorized"
                 } else {
                     ""
                 }
@@ -396,9 +424,10 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
                 display_name: opts.value("display-name")?,
                 verified: opts.flag("verified"),
             };
+            let first_party = opts.flag("first-party");
             opts.finish()?;
             let message = format!("publisher {} ({})", entry.namespace, entry.login);
-            catalog::publisher(&ws, &entry)?;
+            catalog::publisher(&ws, &entry, first_party)?;
             message
         }
         "add-version" => {
@@ -421,8 +450,9 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
                 attestation: opts.value("attestation")?,
                 published_at: opts.now()?,
             };
+            let first_party = opts.flag("first-party");
             opts.finish()?;
-            let (entry, added) = catalog::add_version(&ws, &package, info, new)?;
+            let (entry, added) = catalog::add_version(&ws, &package, info, new, first_party)?;
             format!(
                 "{} {}: sha256 {}, {} bytes{}",
                 entry.package.url.rsplit('/').next().unwrap_or_default(),

@@ -25,11 +25,14 @@ pub const GZIP_OS_UNKNOWN: u8 = 255;
 ///
 /// [`PackageBuilder::build`] refuses anything the reader would refuse: bad
 /// or colliding paths, oversized files, a missing or invalid manifest, files
-/// the manifest does not name, or names it lacks.
+/// the manifest does not name, or names it lacks. The manifest is checked
+/// with the third-party rules unless [`PackageBuilder::first_party`] was
+/// called.
 #[derive(Debug, Clone, Default)]
 pub struct PackageBuilder {
     files: Files,
     limits: Limits,
+    first_party: bool,
 }
 
 /// A built package and the integrity record the registry would pin for it.
@@ -50,7 +53,19 @@ impl PackageBuilder {
         Self {
             files: Files::new(),
             limits,
+            first_party: false,
         }
+    }
+
+    /// Checks the manifest with the first-party rules
+    /// ([`Manifest::validate_first_party`]): a `deckpilot.*` plugin, for
+    /// the registry's first-party releases. A client installs such a
+    /// package only from a registry whose root-signed key set authorizes
+    /// the `deckpilot` namespace; every other reserved publisher stays
+    /// refused.
+    pub fn first_party(&mut self) -> &mut Self {
+        self.first_party = true;
+        self
     }
 
     /// Adds a file. The path must follow the package path rules and must
@@ -78,7 +93,7 @@ impl PackageBuilder {
     /// Validates the contents and writes the archive.
     pub fn build(&self) -> Result<BuiltPackage, PackageError> {
         contents::check_shape(&self.files, &self.limits)?;
-        let manifest = contents::parse_manifest(&self.files)?;
+        let manifest = contents::parse_manifest(&self.files, self.first_party)?;
         contents::check_artifact(&self.files, &manifest, &self.limits)?;
         let bytes = encode(&self.files)?;
         let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);

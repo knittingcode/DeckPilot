@@ -22,6 +22,20 @@
       "type": "boolean",
       "default": false,
       "description": "Recovery from an index-key compromise that inflated seq: clients replace their stored seq with seq_floor."
+    },
+    "first_party": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespaces"],
+      "description": "The reserved first-party namespaces this registry may serve, authorized by the root role. Only deckpilot can be authorized. Absent: none; a client refuses deckpilot.* plugins from this registry. Clients also require the index to list deckpilot as a verified publisher, and never take the plugins the application bundles from a registry.",
+      "properties": {
+        "namespaces": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": { "const": "deckpilot" }
+        }
+      }
     }
   },
   "$defs": {

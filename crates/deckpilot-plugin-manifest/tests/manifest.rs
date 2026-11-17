@@ -1442,7 +1442,7 @@ fn only_the_first_party_rules_accept_the_deckpilot_publisher() {
 
     // Every other reserved publisher stays reserved, and a third-party
     // manifest is not first-party.
-    for publisher in ["knittingcode", "github", "core"] {
+    for publisher in ["knittingcode", "test", "github", "core"] {
         let errors = with_publisher(publisher)
             .validate_first_party()
             .unwrap_err();

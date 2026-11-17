@@ -19,8 +19,10 @@ fn read(path: &Path) -> Result<Vec<u8>> {
 }
 
 /// Builds the package of the plugin in `plugin_dir` with `module` as its
-/// executable artifact.
-pub fn package(plugin_dir: &Path, module: &Path) -> Result<BuiltPackage> {
+/// executable artifact. `first_party` checks the manifest with the
+/// first-party rules (a `deckpilot.*` plugin, `--first-party`); without it
+/// the reserved publisher `deckpilot` is refused like every other.
+pub fn package(plugin_dir: &Path, module: &Path, first_party: bool) -> Result<BuiltPackage> {
     let manifest_bytes = read(&plugin_dir.join(MANIFEST))?;
     let manifest = Manifest::from_slice(&manifest_bytes)
         .map_err(|e| PublishError(format!("{MANIFEST}: {e}")))?;
@@ -36,6 +38,15 @@ pub fn package(plugin_dir: &Path, module: &Path) -> Result<BuiltPackage> {
     add(&mut builder, ARTIFACT, read(module)?)?;
     for file in manifest.referenced_files() {
         add(&mut builder, file, read(&plugin_dir.join(file))?)?;
+    }
+    if first_party {
+        if manifest.id.publisher() != deckpilot_plugin_manifest::FIRST_PARTY_PUBLISHER {
+            return Err(PublishError(format!(
+                "--first-party is for deckpilot.* plugins, not {}",
+                manifest.id
+            )));
+        }
+        builder.first_party();
     }
     builder.build().map_err(|e| PublishError(e.to_string()))
 }

@@ -4,7 +4,9 @@
 use std::fmt;
 
 use chrono::{DateTime, TimeDelta, Utc};
-use deckpilot_plugin_manifest::{HostEnvironment, Incompatibility, PackageDigest, PluginId};
+use deckpilot_plugin_manifest::{
+    FIRST_PARTY_PUBLISHER, HostEnvironment, Incompatibility, PackageDigest, PluginId,
+};
 use deckpilot_plugin_package::{ExpectedPackage, sha256};
 use semver::Version;
 
@@ -749,10 +751,60 @@ impl<S: TrustStore> RegistryClient<S> {
         }
     }
 
+    /// Whether the newest verified key set (signed by the offline root
+    /// role) authorizes this registry to serve the reserved first-party
+    /// namespace `deckpilot` ([`crate::FirstParty`]).
+    pub fn first_party_authorized(&self) -> bool {
+        self.state
+            .keyset
+            .as_ref()
+            .is_some_and(Keyset::authorizes_first_party)
+    }
+
+    /// Whether `id` is installed with the first-party manifest rules
+    /// ([`ExpectedPackage::first_party`]). `false` for every publisher but
+    /// `deckpilot`, whose reserved status the package reader then enforces
+    /// as before. A `deckpilot.*` id needs both:
+    ///
+    /// * the current key set authorizes `deckpilot` (the offline root role
+    ///   decided this registry may serve it; a later key set without the
+    ///   authorization revokes it for every new install and update);
+    /// * the verified index lists the publisher `deckpilot` with
+    ///   `verified: true`.
+    ///
+    /// The index key alone can do neither.
+    fn first_party(&self, index: &Index, id: &PluginId) -> Result<bool, InstallError> {
+        if id.publisher() != FIRST_PARTY_PUBLISHER {
+            return Ok(false);
+        }
+        let refuse = |reason: &str| InstallError::FirstPartyNotAuthorized {
+            id: id.clone(),
+            reason: reason.to_owned(),
+        };
+        if !self.first_party_authorized() {
+            return Err(refuse(&format!(
+                "its root-signed key set does not authorize the `{FIRST_PARTY_PUBLISHER}` namespace"
+            )));
+        }
+        if !index
+            .publishers
+            .iter()
+            .any(|p| p.namespace == FIRST_PARTY_PUBLISHER && p.verified)
+        {
+            return Err(refuse(&format!(
+                "its index does not list `{FIRST_PARTY_PUBLISHER}` as a verified publisher"
+            )));
+        }
+        Ok(true)
+    }
+
     /// Eligibility of `id` `version` for install or update (section 12.3
-    /// steps 1 and 2): fresh registry, app new enough for the index, not
-    /// revoked or yanked, compatible with `host` (if given), and the pins
-    /// the downloaded package must match.
+    /// steps 1 and 2): fresh registry, app new enough for the index, a
+    /// first-party (`deckpilot.*`) id only when the key set and the index
+    /// allow it, not revoked or yanked, compatible with `host` (if given),
+    /// and the pins the downloaded package must match. The pins mark a
+    /// first-party plugin ([`ExpectedPackage::first_party`]); nothing else
+    /// sets that mark.
     pub fn resolve_install(
         &self,
         id: &PluginId,
@@ -773,6 +825,7 @@ impl<S: TrustStore> RegistryClient<S> {
         let entry = index
             .plugin(id)
             .ok_or_else(|| InstallError::UnknownPlugin(id.clone()))?;
+        let first_party = self.first_party(index, id)?;
         let mut matching = index.revocations.iter().filter(|r| r.matches(id, version));
         if let Some(revocation) = matching
             .clone()
@@ -852,6 +905,7 @@ impl<S: TrustStore> RegistryClient<S> {
                 },
                 manifest_sha256: entry_version.manifest_sha256,
                 permissions: Some(entry_version.permissions.clone()),
+                first_party,
             },
             permissions: entry_version.permissions.clone(),
             deprecated: entry.deprecated.clone(),
@@ -860,6 +914,12 @@ impl<S: TrustStore> RegistryClient<S> {
 
     /// What to do with an installed version, from the stored revocations
     /// (section 13.5): at every start, online or not, stale or not.
+    ///
+    /// Only revocations count. A later key set that drops the first-party
+    /// authorization refuses new installs and updates of `deckpilot.*`
+    /// ([`RegistryClient::resolve_install`]) but leaves installed copies
+    /// running, as a yank would; stopping them takes a `disable`
+    /// revocation, which the index key can publish at once.
     pub fn installed_verdict(&self, id: &PluginId, version: &Version) -> InstalledVerdict {
         let mut matching = self
             .state

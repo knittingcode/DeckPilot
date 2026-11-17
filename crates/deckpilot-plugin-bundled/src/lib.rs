@@ -76,6 +76,28 @@ pub fn is_allowed_file(path: &str) -> bool {
 /// The publisher of every bundled plugin.
 pub const FIRST_PARTY_PUBLISHER: &str = deckpilot_plugin_manifest::FIRST_PARTY_PUBLISHER;
 
+/// The ids of the first-party plugins the application bundles
+/// (`plugins/first-party/bundled.json`, checked by this crate's tests).
+///
+/// They come only from the bundle, verified against [`EMBEDDED_PINS`]: a
+/// registry never serves them, even one whose key set authorizes the
+/// `deckpilot` namespace, so the pinned-digest trust stays their only
+/// source. Fixed in the code, not read from the pins, because every build
+/// without `DECKPILOT_BUNDLED_PINS` pins nothing and would refuse nothing;
+/// [`is_bundled_id`] also covers whatever the pins of a build name.
+pub const BUNDLED_PLUGIN_IDS: &[&str] = &[
+    "deckpilot.github",
+    "deckpilot.gitlab",
+    "deckpilot.jira",
+    "deckpilot.notifications",
+];
+
+/// Whether `id` is a bundled plugin: in [`BUNDLED_PLUGIN_IDS`] or pinned
+/// by `pins` (whatever version).
+pub fn is_bundled_id(id: &PluginId, pins: &Pins) -> bool {
+    BUNDLED_PLUGIN_IDS.contains(&id.as_str()) || pins.get(id).is_some()
+}
+
 /// The pins compiled into this build (`DECKPILOT_BUNDLED_PINS` at build
 /// time; empty without it). `deckpilot-agent --print-bundled-pins` prints
 /// these bytes, so the release check can compare them with the bundle.

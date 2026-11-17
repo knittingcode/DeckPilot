@@ -129,6 +129,7 @@ fn manifest(id: &str, version: &str) -> Value {
     .unwrap();
     manifest["id"] = json!(id);
     manifest["version"] = json!(version);
+    manifest["publisher"]["id"] = json!(id.split('.').next().unwrap());
     manifest
 }
 
@@ -168,6 +169,15 @@ impl Registry {
     }
 
     fn add(&self, id: &str, version: &str) {
+        self.add_with(id, version, &[]);
+    }
+
+    /// A `deckpilot.*` version, with the publishing tool's explicit option.
+    fn add_first_party(&self, id: &str, version: &str) {
+        self.add_with(id, version, &["--first-party"]);
+    }
+
+    fn add_with(&self, id: &str, version: &str, extra: &[&str]) {
         let manifest = manifest(id, version);
         let name = format!("{id}-{version}");
         let src = self.keys().join("src").join(&name);
@@ -187,15 +197,22 @@ impl Registry {
         let wasm = src.join("module.wasm");
         std::fs::write(&wasm, &artifacts().hello).unwrap();
         let package = self.keys().join(format!("{name}.dpplugin"));
-        self.run(&[
+        let (src, wasm, out) = (
+            src.display().to_string(),
+            wasm.display().to_string(),
+            package.display().to_string(),
+        );
+        let mut args = vec![
             "package",
             "--plugin-dir",
-            &src.display().to_string(),
+            &src,
             "--module",
-            &wasm.display().to_string(),
+            &wasm,
             "--out",
-            &package.display().to_string(),
-        ]);
+            &out,
+        ];
+        args.extend_from_slice(extra);
+        self.run(&args);
         let detail = self.keys().join(format!("{id}.plugin.json"));
         std::fs::write(
             &detail,
@@ -212,21 +229,62 @@ impl Registry {
             .unwrap(),
         )
         .unwrap();
-        self.run(&[
+        let (detail, tag, commit) = (
+            detail.display().to_string(),
+            format!("v{version}"),
+            "1".repeat(40),
+        );
+        let mut args = vec![
             "add-version",
             "--package",
-            &package.display().to_string(),
+            &out,
             "--plugin-detail",
-            &detail.display().to_string(),
+            &detail,
             "--source-repository",
             "acme/plugins",
             "--tag",
-            &format!("v{version}"),
+            &tag,
             "--commit",
-            &"1".repeat(40),
+            &commit,
             "--builder",
             "1.0.0",
+        ];
+        args.extend_from_slice(extra);
+        self.run(&args);
+    }
+
+    /// The `deckpilot` publisher record (the index key's say), verified or
+    /// not.
+    fn first_party_publisher(&self, verified: bool) {
+        let mut args = vec![
+            "publisher",
+            "--namespace",
+            "deckpilot",
+            "--github-id",
+            "4242",
+            "--login",
+            "knittingcode",
+            "--first-party",
+        ];
+        if verified {
+            args.push("--verified");
+        }
+        self.run(&args);
+    }
+
+    /// A root-signed key set that authorizes the `deckpilot` namespace, or
+    /// withdraws the authorization.
+    fn authorize_first_party(&self, authorized: bool) {
+        self.run(&[
+            "keyset",
+            "rotate",
+            if authorized {
+                "--first-party"
+            } else {
+                "--no-first-party"
+            },
         ]);
+        self.run(&["keyset", "sign", "--key", &self.key("root.key")]);
     }
 
     /// Index, its signature and a timestamp (signed now, valid 7 days).
@@ -897,5 +955,83 @@ async fn without_root_keys_nothing_is_fetched() {
     let refused = agent.install(HELLO, "1.0.0").await;
     assert_eq!(reason_of(&refused), reason::REGISTRY, "{refused:?}");
     assert!(server.log().is_empty(), "{:?}", server.log());
+    agent.stop().await;
+}
+
+const FIRST_PARTY: &str = "deckpilot.hello-weather";
+/// A plugin the agent bundles; the registry lists it anyway.
+const BUNDLED: &str = "deckpilot.github";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // one flow, step by step
+async fn first_party_plugins_need_the_root_authorization_and_a_verified_publisher() {
+    let registry = Registry::create();
+    // Key set 2 (root-signed) authorizes `deckpilot`; the publisher record
+    // is verified while the versions are added, then the index key's
+    // record says unverified.
+    registry.authorize_first_party(true);
+    registry.first_party_publisher(true);
+    registry.add_first_party(FIRST_PARTY, "1.0.0");
+    registry.add_first_party(FIRST_PARTY, "1.1.0");
+    registry.add_first_party(BUNDLED, "1.0.0");
+    registry.first_party_publisher(false);
+    registry.publish();
+    let server = HttpsServer::start(&registry.work());
+    let env = Env::new("plugins-https-first-party");
+    let agent = env.started(&registry, &server).await;
+    let Response::AvailablePlugins { plugins, .. } = agent.available(true).await.unwrap() else {
+        panic!("available")
+    };
+    assert!(plugins.iter().any(|p| p.id == FIRST_PARTY), "{plugins:?}");
+
+    // An unverified `deckpilot` publisher: refused before any download.
+    let refused = agent.install(FIRST_PARTY, "1.0.0").await;
+    assert_eq!(reason_of(&refused), reason::INVALID_PACKAGE, "{refused:?}");
+    assert!(
+        message_of(&refused).contains("verified publisher"),
+        "{refused:?}"
+    );
+    let release = Registry::release_path(FIRST_PARTY, "1.0.0");
+    assert!(!server.log().contains(&release), "{:?}", server.log());
+
+    // Verified, under the authorizing key set: installed from the
+    // registry with the first-party rules.
+    registry.first_party_publisher(true);
+    registry.publish();
+    let Response::Plugin { plugin } = agent.install(FIRST_PARTY, "1.0.0").await.unwrap() else {
+        panic!("installed")
+    };
+    assert_eq!(plugin.summary.version, "1.0.0");
+    assert!(server.log().contains(&release), "{:?}", server.log());
+    assert_eq!(agent.installed().await, vec![FIRST_PARTY.to_owned()]);
+
+    // A plugin the agent bundles: never from a registry, authorized or not.
+    let refused = agent.install(BUNDLED, "1.0.0").await;
+    assert_eq!(reason_of(&refused), reason::INVALID_PACKAGE, "{refused:?}");
+    assert!(message_of(&refused).contains("bundled"), "{refused:?}");
+    let bundled_release = Registry::release_path(BUNDLED, "1.0.0");
+    assert!(
+        !server.log().contains(&bundled_release),
+        "{:?}",
+        server.log()
+    );
+
+    // Key set 3 withdraws the authorization: the update is refused before
+    // any download, and the installed version stays.
+    registry.authorize_first_party(false);
+    registry.publish();
+    let refused = agent
+        .request(Request::UpdatePlugin {
+            plugin: FIRST_PARTY.into(),
+            version: Some("1.1.0".into()),
+            consent: vec![],
+        })
+        .await;
+    assert_eq!(reason_of(&refused), reason::INVALID_PACKAGE, "{refused:?}");
+    assert!(message_of(&refused).contains("key set"), "{refused:?}");
+    let update = Registry::release_path(FIRST_PARTY, "1.1.0");
+    assert!(!server.log().contains(&update), "{:?}", server.log());
+    assert_eq!(agent.state(FIRST_PARTY).await.0, "1.0.0");
+    assert_eq!(agent.runtime().await.registry.unwrap().seq, Some(4));
     agent.stop().await;
 }

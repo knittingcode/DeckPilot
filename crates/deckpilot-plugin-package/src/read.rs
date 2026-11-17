@@ -27,6 +27,19 @@ pub struct ExpectedPackage {
     /// value. `None` skips the comparison (development sideloading, where
     /// the dialog is built from this manifest).
     pub permissions: Option<Vec<serde_json::Value>>,
+    /// Whether the manifest is checked with the first-party rules
+    /// ([`Manifest::validate_first_party`]: publisher `deckpilot`, which
+    /// [`Manifest::validate`] refuses as reserved) instead of the
+    /// third-party ones. Every other reserved publisher stays refused
+    /// either way.
+    ///
+    /// Only the registry client sets this
+    /// (`deckpilot_plugin_registry::RegistryClient::resolve_install`), and
+    /// only for a `deckpilot.*` id when the verified, root-signed key set
+    /// authorizes the `deckpilot` namespace and the verified index lists
+    /// `deckpilot` as a verified publisher. Every other caller (files,
+    /// development sideloading, tools) leaves it `false`.
+    pub first_party: bool,
 }
 
 /// A package whose bytes matched the pinned digest and whose contents
@@ -68,8 +81,9 @@ fn to_usize(value: u64) -> Result<usize, PackageError> {
 /// Order: size limit, size equal to the pinned size, sha256 equal to the
 /// pinned digest; only then is anything decompressed. After reading:
 /// `manifest.json` against the pinned `manifest_sha256` (before it is
-/// parsed), the manifest's rules, its id and version against the pins, its
-/// permissions against the consent, and the package file rules.
+/// parsed), the manifest's rules (the first-party rules if
+/// [`ExpectedPackage::first_party`]), its id and version against the pins,
+/// its permissions against the consent, and the package file rules.
 pub fn verify_package(
     bytes: &[u8],
     expected: &ExpectedPackage,
@@ -105,7 +119,7 @@ pub fn verify_package(
             actual: manifest_digest,
         });
     }
-    let manifest = contents::parse_manifest(&files)?;
+    let manifest = contents::parse_manifest(&files, expected.first_party)?;
     if manifest.id != expected.id || manifest.version != expected.version {
         return Err(PackageError::WrongPlugin {
             expected: format!("{}@{}", expected.id, expected.version),
