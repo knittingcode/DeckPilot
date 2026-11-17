@@ -818,7 +818,20 @@ Earlier tags were never published: `v0.6.0-alpha.2` (`13cabe6`,
 passed stage A, but its *Publish and verify* deployment was cancelled when
 the required reviewers were removed; `v0.6.0-alpha.1` failed in stage A.
 
-Still untested: an update between two published releases (alpha.3 to the
-next pre-release) is the test of installation through the updater (see
-[updates.md](updates.md)); the first stable release will be the first on
-the stable channel (`latest.json`).
+**`v0.6.0` is published**, the first stable release
+(`5aa71a8`, [run 44099788378](https://github.com/knittingcode/deckpilot/actions/runs/44099788378)):
+published on 2026-11-17 as the **latest** release, not a pre-release,
+immutable, with 19 assets including the `.rpm` and `latest.json`, the
+first manifest of the stable channel. After publication, the release API
+and `/releases/latest` named `v0.6.0`; every asset matched `SHA256SUMS`
+and its build provenance attestation; `deckpilot-dev verify-release`
+verified the manifest and the 11 updater signatures; both macOS disk
+images and apps were Developer ID signed (team `PUB9L83UMZ`), notarized,
+stapled and accepted by Gatekeeper. Windows and Linux builds are not
+code-signed. Installations on the pre-release channel are offered 0.6.0
+as the newest release ([updates.md](updates.md)).
+
+Still untested: an update between two published releases on a real
+installation (see [updates.md](updates.md)), and the *Update continuity*
+workflow on `v0.6.0`, which needs an approved `production-release`
+deployment.

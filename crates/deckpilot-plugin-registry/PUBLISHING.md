@@ -4,7 +4,7 @@
 > [`knittingcode/deckpilot-plugins`](https://github.com/knittingcode/deckpilot-plugins)
 > exists, with its workflows and its Pages site
 > (<https://knittingcode.github.io/deckpilot-plugins/>). Its environments
-> `registry-publish` and `registry-timestamp`, their secrets and every
+> `registry-release` and `registry-timestamp`, their secrets and every
 > production key are still pending the owner's approval of the trust
 > configuration, so no signed registry is published. This tool has been
 > used only with throwaway keys in tests.
@@ -191,8 +191,8 @@ two root keys with threshold 1). At minimum:
    backup) and never reach GitHub.
 4. In `knittingcode/deckpilot-plugins`, the index key and its password
    become the `REGISTRY_INDEX_KEY(_PASSWORD)` secrets of the
-   `registry-publish` environment (tags `*--v*`), and the timestamp key the
-   `REGISTRY_TIMESTAMP_KEY(_PASSWORD)` secrets of both `registry-publish`
+   `registry-release` environment (tags `*--v*`), and the timestamp key the
+   `REGISTRY_TIMESTAMP_KEY(_PASSWORD)` secrets of both `registry-release`
    and `registry-timestamp` (`main` only, the daily refresh). They are
    never secrets of `knittingcode/DeckPilot`.
 5. `roots.json` becomes the DeckPilot repository variable
@@ -277,7 +277,7 @@ Runs for a release tag the owner creates (`<plugin-id>--v<version>`, or
 | --- | --- | --- | --- |
 | `resolve` | — | none | the tag names a reviewed commit on `main` and a recorded version |
 | `build` (untrusted, `contents: read`) | — | none | rebuilds every recorded package from its pinned source; plugin build scripts run only here |
-| `sign` | `registry-publish` | index and timestamp keys | builds nothing; `tools/publish-site.sh index` re-checks each package's sha256 and size against the reviewed pins, signs the index and the timestamp, and runs `verify-site` as an existing client |
+| `sign` | `registry-release` | index and timestamp keys | builds nothing; `tools/publish-site.sh index` re-checks each package's sha256 and size against the reviewed pins, signs the index and the timestamp, and runs `verify-site` as an existing client |
 | `release` (`contents: write`) | — | none | uploads the verified package to the GitHub Release of the tag (never creates a tag) |
 | `deploy` | `github-pages` | none | the landing page plus the signed `site/v1` |
 | `verify-published` | — | none | fetch the live site anonymously, `verify-site` on it |
