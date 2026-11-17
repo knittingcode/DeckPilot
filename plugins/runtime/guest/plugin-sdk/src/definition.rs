@@ -9,6 +9,7 @@ use deckpilot_plugin_abi::describe::{
     ActionDescriptor, MAX_ACTIONS, MAX_OPTION_LEN, MAX_OPTIONS, MAX_PARAMS, ParamDescriptor,
     ParamKind, PluginDescriptor,
 };
+use deckpilot_plugin_abi::state::{KeyState, STATE_UNSUPPORTED, StateOutcome};
 use deckpilot_plugin_abi::{ActionOutcome, ParamValue, Params};
 
 use crate::args::{Args, normalize};
@@ -19,6 +20,12 @@ use crate::{API_LEVEL, ApiLevel, LATEST_API_LEVEL, SDK_NAME, SDK_VERSION};
 /// An action handler. Plain functions and non-capturing closures coerce to
 /// it.
 pub type Handler = fn(&mut Context<'_>, &Args<'_>) -> ActionResult;
+
+/// A state handler ([`Action::state`]): what a key bound to the action
+/// shows, for the key's parameters. It only reads: of the capabilities,
+/// `storage_get`, `storage_keys`, `settings`, `now` and the log answer
+/// inside it; every other one is refused.
+pub type StateHandler = fn(&mut Context<'_>, &Args<'_>) -> Result<KeyState, PluginError>;
 
 /// The init hook: no capabilities (there is no invocation yet).
 pub type InitHook = fn() -> Result<(), PluginError>;
@@ -176,6 +183,40 @@ impl Plugin {
         }
     }
 
+    /// One state call (`dp_state`): init (if not done), find the action
+    /// and its state handler, check the parameters, run the handler, check
+    /// the state's bounds.
+    pub(crate) fn key_state(
+        &self,
+        transport: &mut dyn Transport,
+        action: &str,
+        params: &Params,
+    ) -> StateOutcome {
+        if self.validate().is_err() || self.ensure_init().is_err() {
+            return StateOutcome::failed(codes::PLUGIN_ERROR, "the plugin could not start");
+        }
+        let Some((a, handler)) = self.find(action).and_then(|a| Some((a, a.state?))) else {
+            return StateOutcome::failed(
+                STATE_UNSUPPORTED,
+                format!("`{}` reports no key state", truncate(action, 64)),
+            );
+        };
+        let args = match normalize(a, params) {
+            Ok(args) => args,
+            Err(_) => {
+                return StateOutcome::failed(
+                    codes::INVALID_PARAMETERS,
+                    "the key's parameters are not valid",
+                );
+            }
+        };
+        let mut ctx = Context::new(transport);
+        match handler(&mut ctx, &args) {
+            Ok(state) => StateOutcome::Ok(state).checked(),
+            Err(e) => StateOutcome::failed(e.code(), e.message()),
+        }
+    }
+
     /// One invocation: init (if not done), find the action, check the
     /// parameters, run the handler, check the result.
     pub(crate) fn run(
@@ -224,6 +265,7 @@ pub struct Action {
     id: String,
     params: Vec<Param>,
     handler: Handler,
+    state: Option<StateHandler>,
 }
 
 impl fmt::Debug for Action {
@@ -242,7 +284,61 @@ impl Action {
             id: id.into(),
             params: Vec::new(),
             handler,
+            state: None,
         }
+    }
+
+    /// What a key bound to this action shows (plugin API 1.2): the agent
+    /// calls `handler` for a key that is on a device now, with the key's
+    /// parameters, after something happened in DeckPilot and at the
+    /// interval the manifest asks for, and draws the [`KeyState`] it
+    /// returns. The plugin describes; the agent draws.
+    ///
+    /// The manifest entry needs `"state": { "refresh": "onEvents" | "every",
+    /// "intervalSeconds": n }` (at least 5 s apart for a plugin) and the
+    /// plugin the `device` permission with `"state": true`. A state call
+    /// has 2 s, at most 8 capability calls and only reads (see
+    /// [`StateHandler`]); fetch in the action and store what the key
+    /// should show. On an agent older than API 1.2 the handler is never
+    /// called and the key stays as the user designed it.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::prelude::*;
+    /// use deckpilot_plugin_sdk::CallResult;
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    ///
+    /// fn toggle(ctx: &mut Context<'_>, _: &Args<'_>) -> ActionResult {
+    ///     let on = ctx.storage_get_as::<bool>("on")?.unwrap_or(false);
+    ///     ctx.storage_set("on", !on)?;
+    ///     Ok(Output::ok())
+    /// }
+    ///
+    /// fn shown(ctx: &mut Context<'_>, _: &Args<'_>) -> Result<KeyState, PluginError> {
+    ///     let on = ctx.storage_get_as::<bool>("on")?.unwrap_or(false);
+    ///     Ok(KeyState::new()
+    ///         .label(if on { "Focus" } else { "Idle" })
+    ///         .toggle(on)
+    ///         .accent(if on { Accent::Green } else { Accent::Grey })
+    ///         .glyph(if on { Glyph::Timer } else { Glyph::Pause }))
+    /// }
+    ///
+    /// let plugin = Plugin::new("acme.focus", "1.0.0")
+    ///     .action(Action::new("toggle", toggle).state(shown));
+    /// let mut host = MockHost::new(|_| CallResult::Ok(serde_json::json!(true)));
+    /// let StateOutcome::Ok(state) = host.key_state(&plugin, "toggle", serde_json::json!({}))
+    /// else { panic!() };
+    /// assert_eq!(state.label.as_deref(), Some("Focus"));
+    /// assert_eq!(state.toggle, Some(true));
+    /// ```
+    #[must_use]
+    pub fn state(mut self, handler: StateHandler) -> Self {
+        self.state = Some(handler);
+        self
+    }
+
+    /// Whether the action has a state handler.
+    pub fn has_state(&self) -> bool {
+        self.state.is_some()
     }
 
     pub fn param(mut self, p: Param) -> Self {

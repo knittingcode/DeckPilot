@@ -343,4 +343,36 @@ mod tests {
         );
         assert_eq!(p("long enough").validate_new(&p("long enough")), Ok(()));
     }
+
+    /// Known answers, recorded with argon2 0.5.3 and the reference
+    /// implementation (libargon2 through argon2-cffi's `hash_secret_raw`):
+    /// the derivation must stay byte-identical across argon2 releases, or
+    /// every existing database, vault and export archive becomes
+    /// unreadable. The second case uses the production cost
+    /// (`KdfParams::generate`).
+    #[test]
+    fn derivation_matches_recorded_keys() {
+        let salt: [u8; SALT_LEN] = std::array::from_fn(|i| u8::try_from(i).unwrap());
+        let params = |memory_kib, iterations| KdfParams {
+            algorithm: "argon2id".into(),
+            version: 0x13,
+            memory_kib,
+            iterations,
+            parallelism: DEFAULT_PARALLELISM,
+            salt: BASE64.encode(salt),
+        };
+        let password = Password::new("deckpilot known answer");
+        let cheapest = params(MIN_MEMORY_KIB, 1).derive(&password).unwrap();
+        let production = params(DEFAULT_MEMORY_KIB, DEFAULT_ITERATIONS)
+            .derive(&password)
+            .unwrap();
+        assert_eq!(
+            cheapest.to_hex().as_str(),
+            "c49c75e61b61f5ea18096fb948a61c5eea8210560ed16b4eeae2184b9c1530bf"
+        );
+        assert_eq!(
+            production.to_hex().as_str(),
+            "9e5556e5ccdff4c241122f489c8ed89650c188e06a4bc3ca310ad29757698e15"
+        );
+    }
 }

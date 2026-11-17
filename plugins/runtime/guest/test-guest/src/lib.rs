@@ -10,6 +10,36 @@ use deckpilot_plugin_guest::{
 
 export_plugin!(handle);
 
+/// `dp_state` on the raw ABI: output no SDK would produce, by action name.
+#[unsafe(no_mangle)]
+pub extern "C" fn dp_state(ptr: i32, len: i32) -> i64 {
+    // SAFETY: the host passes a buffer it obtained from dp_alloc.
+    let input = unsafe { deckpilot_plugin_guest::__rt::take_input(ptr, len) };
+    let action = serde_json::from_slice::<serde_json::Value>(&input)
+        .ok()
+        .and_then(|v| v["action"].as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let output: Vec<u8> = match action.as_str() {
+        "state-ok" => br#"{"ok":{"label":"raw","progress":50}}"#.to_vec(),
+        // Larger than a state may be, though valid JSON.
+        "state-big" => {
+            let mut bytes = br#"{"ok":{"label":"raw"}}"#.to_vec();
+            bytes.resize(5 << 10, b' ');
+            bytes
+        }
+        "state-garbage" => vec![0xff; 64],
+        "state-pixels" => br#"{"ok":{"label":"raw","pixels":"iVBORw0KGgo="}}"#.to_vec(),
+        "state-glyph" => br#"{"ok":{"glyph":"skull"}}"#.to_vec(),
+        "state-series" => {
+            format!(r#"{{"ok":{{"series":[{}]}}}}"#, vec!["1"; 100].join(",")).into_bytes()
+        }
+        // A pointer past the end of memory.
+        "state-wild" => return ((u32::MAX as i64) << 32) | 16,
+        _ => br#"{"error":{"code":"unsupported","message":"no state"}}"#.to_vec(),
+    };
+    deckpilot_plugin_guest::__rt::publish_output(output)
+}
+
 static mut COUNTER: i64 = 0;
 
 fn int(params: &Params, key: &str) -> i64 {

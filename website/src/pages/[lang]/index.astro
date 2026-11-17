@@ -86,7 +86,7 @@ const openSourceCards = [
 <Base lang={lang} title={h.title} description={h.description}>
   <!-- Hero -->
   <section class="hero" aria-labelledby="hero-title">
-    <div class="container grid items-center gap-14 py-16 md:py-24 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16 lg:py-28">
+    <div class="container grid items-center gap-14 py-16 md:py-24 lg:grid-cols-[1.2fr_0.8fr] lg:gap-16 lg:py-28">
       <div>
         <p class="mb-6">
           <a class:list={['badge', primary?.prerelease === false ? 'badge-accent' : 'badge-warning', 'no-underline']} href={page(lang, 'download')} data-release-badge>
@@ -94,7 +94,15 @@ const openSourceCards = [
             {statusBadge}
           </a>
         </p>
-        <h1 class="hero-title" id="hero-title">{h.hero.headline}</h1>
+        <h1 class="hero-title" id="hero-title">
+          {/* One sentence per line where there is room; each wraps inside itself on small screens. */}
+          {h.hero.headline.split(/(?<=\.)\s+/).map((sentence, i) => (
+            <>
+              {i > 0 && ' '}
+              <span class="inline-block">{sentence}</span>
+            </>
+          ))}
+        </h1>
         <p class="hero-lead">{h.hero.lead}</p>
         <div class="mt-9 flex flex-wrap gap-3">
           <Button href={page(lang, 'download')}>{h.hero.download}<ArrowRight aria-hidden="true" /></Button>

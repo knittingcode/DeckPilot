@@ -311,6 +311,15 @@ above.
   that (same type, default settings, no label of its own) is reused, so
   the same type on five keys is one action. Types that need a value (a
   URL, an application) are created in the Action Library.
+- In the inspector of a key or pressable dial, single click, double click
+  and long press are three slots. Each takes what is dragged onto it from
+  the library (an action, a workflow, a page, or an action type, whose
+  action is created as above), replacing what it held; a slot is emptied
+  with its remove button, and the list in the slot does the same by
+  keyboard. "New folder" and other keys are refused there. A drop that
+  makes a key tell gestures apart asks before the single click starts to
+  wait, as choosing from the list does
+  ([gestures](gestures-and-work-session.md#22-key-modes)).
 
 ### Key appearance
 
