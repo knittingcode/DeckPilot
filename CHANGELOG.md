@@ -13,6 +13,55 @@ notarization and packaging, since deleted; they were never made public and
 are not offered by the updater. The versions before 0.5.0 were never
 released either. 0.6.0 is the first version intended for publication.
 
+## [Unreleased]
+
+### Added
+
+- The plugin Marketplace. Settings › Extensions › Plugins lists the
+  plugins of DeckPilot's plugin registry
+  (<https://knittingcode.github.io/deckpilot-plugins/>): browse and search
+  them, read each plugin's description, version and the permissions it
+  asks for, and install it after agreeing to those permissions. Installed
+  plugins can be enabled and disabled, configured, bound to keys like any
+  other action, updated (with a new consent when an update asks for more),
+  rolled back and uninstalled, with or without their settings.
+- Plugins run as WebAssembly in a separate, sandboxed plugin host, now
+  part of every installer (signed and notarized on macOS, with one
+  entitlement, for executable memory). A plugin gets only what it declares
+  and you granted: the network hosts it names, notifications, its keys and
+  its own storage. It never reaches files, other programs or your stored
+  credentials directly.
+- The registry is checked on every refresh against its root keys, which
+  are built into DeckPilot: its signed key set, index and timestamp, and
+  every package by its size and SHA-256. A stale, rolled-back or tampered
+  registry is refused, and plugins that are already installed keep
+  working. Only a registry whose root-signed key set allows it may serve
+  DeckPilot's own `deckpilot.*` plugins, and the plugins built into
+  DeckPilot can never be replaced from a registry.
+- The first Marketplace plugins, by DeckPilot: Air Quality (Polish air
+  quality stations, data from GIOŚ), Markets (ECB euro reference rates,
+  via Frankfurter), Pomodoro, Break & Hydration, and Memory (a game on your
+  keys).
+
+### Changed
+
+- The GitHub, GitLab and Jira integrations and notifications now run as
+  plugins bundled with DeckPilot. On the first start after the update,
+  each configured integration moves to its plugin: its settings are
+  copied, and a stored token or a server on a private network is used by
+  the plugin only after you agree. The built-in integration keeps working
+  until the move is complete, and again whenever the plugin fails.
+  Configurations the plugin cannot serve yet, such as GitHub Enterprise,
+  stay on the built-in integration.
+- Plugins are on by default. Start the agent with `--disable-plugins`, or
+  set `DECKPILOT_ENABLE_PLUGINS=0`, to turn them off; the built-in
+  integrations then run as before.
+- Updating from 0.6.0 does not change the configuration database: plugin
+  state is kept in a separate encrypted database, created after you
+  unlock DeckPilot. 0.6.0 can still open the same data, without the
+  plugins' changes and without credentials entered only into a plugin
+  (docs/marketplace/module-migration.md, "Rollback and downgrade").
+
 ## [0.6.0] - 2026-11-17
 
 The first public release. It also includes the changes of the
