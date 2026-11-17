@@ -63,7 +63,7 @@ At most 64 actions (`MAX_ACTIONS`). Each:
 | `parameters` | yes | ≤ 32 (`MAX_PARAMS`); see [actions.md](actions.md#parameters) |
 | `node` | no | Workflow node contract: `version` (≥ 1), `icon` (`[a-z0-9-]{1,64}`), `outputs` (≤ 32), `timeoutMs` (1,000-600,000, default 30,000: the invocation's wall-clock limit), `retrySafe`, `idempotent`, `effect` (`readOnly`, `opens`, `modifies`; a warning when `modifies` is `retrySafe`). `cancellable` is accepted; the agent treats every plugin action as cancellable. There is no `changesContext` |
 | `requiresProject`, `deprecated`, `replacedBy` | no | `replacedBy` names another action of this plugin and needs `deprecated: true` |
-| `state` | no | Key state refresh (`onEvents` or `every` with `intervalSeconds` 1-86,400; needs `effect: readOnly`). From plugin API 1.2 the agent asks the action's state handler for keys shown on a device ([actions.md](actions.md#key-state)), never more often than every 5 s; it needs the `device` permission with `state: true`. An agent below 1.2 accepts it and asks nothing |
+| `state` | no | Key state refresh (`onEvents` or `every` with `intervalSeconds` 1-86,400), on an action of any `effect`: the state call is separate from the action and only reads. From plugin API 1.2 the agent asks the action's state handler for keys shown on a device ([actions.md](actions.md#key-state)), never more often than every 5 s; it needs the `device` permission with `state: true`. An agent below 1.2 accepts it and asks nothing |
 | `device` | no | `{ "requires": [...] }`. Accepted, not used |
 
 ### Outputs (`node.outputs[]`)

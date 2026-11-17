@@ -199,8 +199,8 @@ Inside `dp_state` the broker allows only `storage.get`, `storage.keys`,
 `settings.get`, `time.now` and `log` (`Session::authorize_state`; every
 other operation: `not-permitted`, audited). A state call cannot reach the
 network, notify, open a page, write storage or publish variables: it is
-read-only by construction, which is also why the manifest requires
-`effect: readOnly` for an action with `state`. Data from the network is
+read-only by construction, whatever the action itself does (its
+`effect`). Data from the network is
 fetched by an action and read from storage here.
 
 Permission: the existing `device` kind with `state: true`
@@ -208,11 +208,13 @@ Permission: the existing `device` kind with `state: true`
 granted or revoked: the broker refuses before the host is asked, and the
 key stays static.
 
-The manifest's rule that `state` needs an action whose `node.effect` is
-`readOnly` (the default) is kept. It dates from a design in which the
-action itself was polled; with a state call that only reads it may no
-longer be needed, so that an action that `modifies` could show state too.
-That is an open question (section 7), not decided here.
+An action of any `node.effect` may declare `state`. The rule that it
+must be `readOnly` dates from a design in which the action itself was
+polled; the state call is a separate export in which only reads are
+answered, so what the action does no longer matters to what a state call
+may do. (Until this was decided, the manifest refused `state` on an action
+that `opens` or `modifies`; such a plugin declares `"pluginApi": "^1.2"`
+so that older agents, which still refuse it, do not install it.)
 
 ### 4.5 Glyphs
 
@@ -281,11 +283,8 @@ that it could not already read.
 
 ## 7. Open questions for the owner
 
-1. **`state` on an action that `opens` or `modifies`.** The manifest
-   refuses it today ("button state needs a readOnly action"). A state
-   call cannot change anything whatever the action does, so the rule
-   could go; an agent below API 1.2 would then refuse such a manifest,
-   which a plugin would have to declare with `"pluginApi": "^1.2"`.
+1. **`state` on an action that `opens` or `modifies`**: allowed, pending
+   the owner's review of the change that allows it (section 4.4).
 2. **The floor of 5 s.** Enough for minutes and data from the network; a
    seconds countdown on a key would need a host-drawn countdown between
    pulls (animation, section 5) rather than a lower floor.

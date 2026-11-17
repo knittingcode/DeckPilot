@@ -478,8 +478,9 @@ fn opener_manifest() -> Value {
     manifest
 }
 
-/// The SDK test guest with key state: `counter` and `probe` declare
-/// `state` (every second, which the agent raises to its floor), and the
+/// The SDK test guest with key state: `counter` (which `modifies`) and
+/// `probe` declare `state` (every second, which the agent raises to its
+/// floor), and the
 /// plugin asks for `device:state`. It needs plugin API 1.2.
 fn board_manifest() -> Value {
     let mut manifest = hello_manifest(BOARD, "1.0.0");
@@ -493,6 +494,11 @@ fn board_manifest() -> Value {
     for action in actions.as_array_mut().unwrap() {
         if action["id"] == "counter" || action["id"] == "probe" {
             action["state"] = json!({"refresh": "every", "intervalSeconds": 1});
+        }
+        // The counter writes its count: an action that modifies shows
+        // state too, since the state call only reads.
+        if action["id"] == "counter" {
+            action["node"]["effect"] = json!("modifies");
         }
     }
     manifest["contributes"]["actions"] = actions;

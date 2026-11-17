@@ -197,10 +197,11 @@ key's static face with an error mark.
 - **Manifest**: the action entry declares `"state": { "refresh":
   "onEvents" | "every", "intervalSeconds": n }`, and the plugin the
   `device` permission with `"state": true`
-  ([permissions.md](permissions.md)). The manifest's rule that `state`
-  needs an action whose `node.effect` is `readOnly` (the default) still
-  holds: an action that `opens` or `modifies` cannot declare state in
-  this version. The module's descriptor does
+  ([permissions.md](permissions.md)). The action may have any
+  `node.effect`: a card that flips on a press (`modifies`) shows its card
+  through the state handler, which only reads. An agent whose manifest
+  check predates this refuses `state` on an action that is not
+  `readOnly`; declare `"pluginApi": "^1.2"` for such a plugin. The module's descriptor does
   not change, and a plugin whose keys merely look better with state keeps
   `"pluginApi": "^1.0"`: an older agent never calls the handler.
 - **Testing**: `MockHost::key_state(&plugin, "focus", json!({}))` returns

@@ -591,6 +591,7 @@
         "node": { "$ref": "#/$defs/node" },
         "state": {
           "type": "object",
+          "description": "Key state (plugin API 1.2): how often the agent asks the action's state handler (dp_state) what a key bound to it shows. An action of any effect may declare it: the state call is separate from the action and may only read the plugin's own storage and settings, the time and log. It needs the device permission with state: true.",
           "additionalProperties": false,
           "required": ["refresh", "intervalSeconds"],
           "properties": {

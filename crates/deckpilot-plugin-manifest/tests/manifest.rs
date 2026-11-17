@@ -95,6 +95,39 @@ fn example_manifest_parses_and_validates() {
     );
 }
 
+/// Key state may sit on an action of any effect: the state call is a
+/// separate export that only reads (plugin API 1.2), so what the action
+/// does is no reason to refuse it. Both the Rust rules and the schema
+/// accept it, with no review warning.
+#[test]
+fn state_is_allowed_on_an_action_of_any_effect() {
+    let validator = schema();
+    for effect in ["readOnly", "opens", "modifies"] {
+        let mut v = example();
+        set(&mut v, "/contributes/actions/0/node/effect", json!(effect));
+        set(
+            &mut v,
+            "/contributes/actions/0/node/retrySafe",
+            json!(false),
+        );
+        let text = serde_json::to_string(&v).unwrap();
+        let manifest =
+            Manifest::parse_and_validate(&text).unwrap_or_else(|e| panic!("{effect}: {e}"));
+        let action = &manifest.contributes.actions()[0];
+        assert!(action.state.is_some(), "{effect}");
+        assert_eq!(
+            manifest.review_warnings(),
+            [] as [deckpilot_plugin_manifest::Issue; 0],
+            "{effect}"
+        );
+        assert_eq!(
+            schema_errors(&validator, &v),
+            Vec::<String>::new(),
+            "{effect}"
+        );
+    }
+}
+
 /// G9: a `notifications` permission may name the settings the agent
 /// routes the plugin's notifications by; without `routing` it is the
 /// permission it always was.
@@ -564,12 +597,6 @@ fn fixtures() -> Vec<Fixture> {
             false,
             Invalid("contributes.actions[0].replacedBy", C::Conflict),
             |v| set(v, "/contributes/actions/0/replacedBy", json!("pr-count")),
-        ),
-        mutate(
-            "state on a modifying action",
-            false,
-            Invalid("contributes.actions[0].state", C::Conflict),
-            |v| set(v, "/contributes/actions/0/node/effect", json!("modifies")),
         ),
         mutate(
             "requiresProject without profile permission",

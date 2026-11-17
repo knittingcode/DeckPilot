@@ -1128,18 +1128,11 @@ fn actions(c: &mut Checker, m: &Manifest) {
                 1,
                 86_400,
             );
-            // Rule 6.
-            if action
-                .node
-                .as_ref()
-                .is_some_and(|n| n.effect() != Effect::ReadOnly)
-            {
-                c.error(
-                    format!("{path}.state"),
-                    IssueCode::Conflict,
-                    "button state needs a readOnly action (node.effect)",
-                );
-            }
+            // Formerly rule 6 (`state` only on a readOnly action). Key state
+            // is not the action: the agent calls the module's separate
+            // `dp_state` export, in which the broker answers reads only
+            // (`Session::authorize_state`), so an action of any effect may
+            // show state (docs/marketplace/plugin-key-state.md, 4.4).
         }
         if let Some(requires) = action.device.as_ref().and_then(|d| d.requires.as_ref()) {
             c.unique(
