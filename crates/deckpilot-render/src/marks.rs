@@ -8,7 +8,6 @@
 
 use deckpilot_core::{Accent, Glyph};
 use deckpilot_device::Frame;
-use font8x8::legacy::BASIC_LEGACY;
 
 /// The background of an accent: dark enough for a light title.
 pub(crate) fn accent_color(accent: Accent) -> [u8; 3] {
@@ -222,12 +221,7 @@ pub(crate) fn draw_badge(frame: &mut Frame, badge: &str, below: u32, text: [u8; 
         }
     }
     for (index, ch) in badge.chars().take(4).enumerate() {
-        let Some(rows) = BASIC_LEGACY
-            .get(ch as usize)
-            .or(BASIC_LEGACY.get(usize::from(b'?')))
-        else {
-            continue;
-        };
+        let rows = crate::glyphs::glyph(ch);
         let x = x0 + 1 + u32::try_from(index).unwrap_or(0) * CELL * scale;
         for (row, bits) in rows.iter().enumerate() {
             let row = u32::try_from(row).unwrap_or(0);

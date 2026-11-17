@@ -196,6 +196,11 @@ CHANGELOG.md.
 
 ### Fixed
 
+- Key labels keep their accented letters: Polish (ą ć ę ł ń ó ś ź ż and
+  their capitals) and the rest of Latin-1 and Latin Extended-A, `°`, `€`,
+  and typographic quotes and dashes are drawn on the device instead of
+  `?` (“Mgła”, “12°C”). Characters the key font still lacks are `?`, as
+  before.
 - Dragging one key onto another in the layout editor moves or swaps the
   keys again; it did nothing.
 - HTTP, GitHub, GitLab and Jira actions run from a key or with *Run* in

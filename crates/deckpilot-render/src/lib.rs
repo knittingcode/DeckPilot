@@ -5,6 +5,7 @@
 //! (previews), so both draw exactly the same.
 
 mod face;
+mod glyphs;
 pub mod icons;
 mod marks;
 

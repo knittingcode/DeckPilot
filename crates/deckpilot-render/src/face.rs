@@ -1,8 +1,9 @@
 //! Renders [`KeyFace`]s into device-independent [`Frame`]s.
 //!
 //! The renderer only needs the target size, so the same code serves any key
-//! or display size. Text uses a built-in 8 x 8 bitmap font (ASCII, and `…`);
-//! other characters are shown as `?`.
+//! or display size. Text uses a built-in 8 x 8 bitmap font (see `glyphs`: ASCII,
+//! Latin-1, Latin Extended-A such as Polish letters, `…`, `€` and typographic
+//! quotes and dashes); other characters are shown as `?`.
 //!
 //! Live state is drawn as marks that do not depend on any module: an
 //! indicator dot in the top-right corner, a progress bar along the bottom
@@ -24,14 +25,11 @@ use std::collections::{HashMap, VecDeque};
 
 use deckpilot_core::{FaceStyle, FontSize, Indicator, KeyAppearance, KeyFace, TitleAlign};
 use deckpilot_device::Frame;
-use font8x8::legacy::BASIC_LEGACY;
 
 use crate::icons::{self, Icons};
 use crate::marks;
 
 const GLYPH: u32 = 8;
-/// `…` in one cell (the font is ASCII only), e.g. for "Checking…".
-const ELLIPSIS: [u8; 8] = [0, 0, 0, 0, 0, 0xDB, 0xDB, 0];
 const WHITE: [u8; 3] = [240, 240, 240];
 const MUTED: [u8; 3] = [160, 160, 170];
 const ACCENT: [u8; 3] = [56, 189, 248];
@@ -402,14 +400,8 @@ fn draw_centered_at(
     let width = u32::try_from(text.chars().count()).unwrap_or(0) * GLYPH * scale;
     let mut x = frame.width().saturating_sub(width) / 2 + offset;
     for ch in text.chars() {
-        let glyph = if ch == '…' {
-            Some(&ELLIPSIS)
-        } else {
-            BASIC_LEGACY
-                .get(ch as usize)
-                .or(BASIC_LEGACY.get(usize::from(b'?')))
-        };
-        if let Some(rows) = glyph {
+        {
+            let rows = crate::glyphs::glyph(ch);
             for (row, bits) in rows.iter().enumerate() {
                 for column in 0..GLYPH {
                     if bits & (1 << column) != 0 {
@@ -454,6 +446,42 @@ mod tests {
                 assert!(lit(&frame, background(FaceStyle::Action)) > 20);
             }
         }
+    }
+
+    #[test]
+    fn polish_labels_keep_their_letters() {
+        let key = |title: &str, detail: &str| {
+            render(
+                &KeyFace::new(FaceStyle::Action, title).with_detail(detail),
+                72,
+                72,
+            )
+            .rgb()
+            .to_vec()
+        };
+        // Diacritics are drawn, not replaced or dropped.
+        assert_ne!(key("Mgła", "12°C"), key("Mgla", "12 C"));
+        assert_ne!(key("Mgła", "12°C"), key("Mg?a", "12?C"));
+        assert_ne!(key("Żółć", ""), key("Zolc", ""));
+        assert_ne!(key("ŻÓŁĆ", ""), key("ZOLC", ""));
+        for word in ["Zażółć", "gęślą", "jaźń", "ĄĆĘŁŃÓŚŹŻ", "ąćęłńóśźż"]
+        {
+            assert_ne!(
+                key(word, ""),
+                key(&"?".repeat(word.chars().count()), ""),
+                "{word}"
+            );
+        }
+        // Each letter takes one cell, so labels are laid out as before.
+        let title = |text: &str| render(&KeyFace::new(FaceStyle::Action, text), 72, 72);
+        let ink = |frame: &Frame| {
+            (0..frame.width())
+                .filter(|x| (0..frame.height()).any(|y| frame.pixel(*x, y) != frame.pixel(0, 0)))
+                .count()
+        };
+        assert!(ink(&title("Łódź")) <= ink(&title("WWWW")));
+        // What the font still lacks is a question mark, as before.
+        assert_eq!(key("中", ""), key("?", ""));
     }
 
     #[test]
