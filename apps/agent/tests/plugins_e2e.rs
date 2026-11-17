@@ -1,7 +1,8 @@
 //! The plugin marketplace backend end to end (feature `plugins`):
 //!
-//! * the real agent executable (`--enable-plugins`), driven over IPC
-//!   protocol 10 like the configuration app;
+//! * the real agent executable, plugins on without a switch as in every
+//!   build with the feature, driven over IPC protocol 10 like the
+//!   configuration app;
 //! * the real `deckpilot-plugin-host` and the sample plugin
 //!   (`plugins/examples/hello-weather`), both built from `plugins/runtime`
 //!   by this test (or taken from `DECKPILOT_E2E_PLUGIN_HOST` and
@@ -1018,12 +1019,31 @@ impl Env {
         self.start_with_host(registry, env, plugins.then(|| artifacts().host.as_path()))
     }
 
-    /// Starts the agent; with `host`, plugins are enabled and run in it.
+    /// Starts the agent; with `host`, plugins are on (no switch: the
+    /// default of a build with the feature) and run in it, without it they
+    /// are off (`--disable-plugins`).
     fn start_with_host(
         &self,
         registry: &Registry,
         env: &[(&str, &str)],
         host: Option<&Path>,
+    ) -> Agent {
+        let switches: &[&str] = if host.is_some() {
+            &[]
+        } else {
+            &["--disable-plugins"]
+        };
+        self.start_switched(registry, env, host, switches)
+    }
+
+    /// Starts the agent with these plugin `switches` and `env`; with
+    /// `host`, also the test registry and the host plugins run in.
+    fn start_switched(
+        &self,
+        registry: &Registry,
+        env: &[(&str, &str)],
+        host: Option<&Path>,
+        switches: &[&str],
     ) -> Agent {
         let log = std::fs::File::create(self.dir.path().join(format!(
             "agent-{}.log",
@@ -1046,12 +1066,12 @@ impl Env {
             .env("DECKPILOT_TEST_PLUGIN_OPEN_URL", self.opened())
             .env("DECKPILOT_TEST_CLOCK_OFFSET", self.clock_offset())
             .env_remove("DECKPILOT_ENABLE_PLUGINS")
+            .args(switches)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(log);
         if let Some(host) = host {
             command
-                .arg("--enable-plugins")
                 .arg("--plugin-registry")
                 .arg(registry.work.path())
                 .arg("--plugin-registry-roots")
@@ -2124,7 +2144,7 @@ async fn plugins_db_needs_the_key_derived_from_the_configuration_key() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn without_enable_plugins_nothing_is_available() {
+async fn with_plugins_disabled_nothing_is_available() {
     let registry = shared_registry();
     let env = Env::new("plugins-e2e-off");
     let agent = env.start_with(registry, &[], false);
@@ -2146,6 +2166,69 @@ async fn without_enable_plugins_nothing_is_available() {
         !env.plugins_dir().exists(),
         "nothing is created without plugins"
     );
+}
+
+/// Plugin switches on the command line, the environment, and whether
+/// plugins are on with them.
+type SwitchCase = (
+    &'static [&'static str],
+    &'static [(&'static str, &'static str)],
+    bool,
+);
+
+/// A build with the feature answers plugin requests without any switch, as
+/// the configuration app and the login item start it. `--disable-plugins`
+/// or `DECKPILOT_ENABLE_PLUGINS=0` turn plugins off, `1` and
+/// `--enable-plugins` (still accepted) on; the command line wins over the
+/// variable, and the last switch over an earlier one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugins_are_on_unless_turned_off() {
+    const VAR: &str = "DECKPILOT_ENABLE_PLUGINS";
+    let registry = shared_registry();
+    let host = Some(artifacts().host.as_path());
+    let cases: [SwitchCase; 8] = [
+        (&[], &[], true),
+        (&["--enable-plugins"], &[], true),
+        (&["--disable-plugins"], &[], false),
+        (&[], &[(VAR, "0")], false),
+        (&[], &[(VAR, "1")], true),
+        (&["--enable-plugins"], &[(VAR, "0")], true),
+        (&["--disable-plugins"], &[(VAR, "1")], false),
+        (&["--enable-plugins", "--disable-plugins"], &[], false),
+    ];
+    for (switches, vars, on) in cases {
+        let case = format!("{switches:?} {vars:?}");
+        let env = Env::new("plugins-e2e-switch");
+        let agent = env.start_switched(registry, vars, host, switches);
+        agent.unlock().await;
+        let Response::PluginRuntime { status } =
+            agent.request(Request::GetPluginRuntime).await.unwrap()
+        else {
+            panic!("status")
+        };
+        assert!(status.built, "{case}: {status:?}");
+        assert_eq!(
+            (status.enabled, status.available),
+            (on, on),
+            "{case}: {status:?}"
+        );
+        let listed = agent.request(Request::ListPlugins).await;
+        if on {
+            assert!(listed.is_ok(), "{case}: {listed:?}");
+        } else {
+            assert_eq!(
+                reason_of(&listed),
+                reason::PLUGINS_UNAVAILABLE,
+                "{case}: {listed:?}"
+            );
+        }
+        agent.stop().await;
+        assert_eq!(
+            env.plugins_dir().join("plugins.db").exists(),
+            on,
+            "{case}: plugins.db only with plugins on"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

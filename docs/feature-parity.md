@@ -36,7 +36,7 @@ screenshots were available for this audit.
 | optional plugin | A plugin the user installs |
 
 The plugin system is experimental and off in released builds (cargo feature
-`plugins`, `--enable-plugins`, `VITE_DECKPILOT_PLUGINS=1`), and its sandbox
+`plugins`, `VITE_DECKPILOT_PLUGINS=1`), and its sandbox
 has no process, file system, input injection, audio or device capability
 (`docs/marketplace/module-migration.md`, G13–G16). Nothing in this document
 is a plugin today, and nothing here adds a capability to the plugin broker.

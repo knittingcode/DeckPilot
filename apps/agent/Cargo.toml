@@ -32,9 +32,10 @@ required-features = ["plugins", "test-hooks"]
 test-hooks = ["deckpilot-core/test-hooks", "deckpilot-plugin-registry?/test-hooks"]
 # Experimental plugin marketplace backend (docs/marketplace/): the plugin
 # store, registry client, package verification, supervisor and broker, and
-# IPC protocol 10's plugin requests. Off by default: release builds contain
-# none of it (`tests/plugins_feature.rs` checks the dependency tree), and
-# even with it plugins stay off until `--enable-plugins`. Plugins run only
+# IPC protocol 10's plugin requests. Not a default feature: a build without
+# it contains none of this (`tests/plugins_feature.rs` checks the
+# dependency tree). In a build with it plugins are on unless the agent is started with
+# `--disable-plugins` (or DECKPILOT_ENABLE_PLUGINS=0). Plugins run only
 # in the separate, sandboxed `deckpilot-plugin-host` (plugins/runtime),
 # never in the agent.
 plugins = [

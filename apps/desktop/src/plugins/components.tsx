@@ -103,7 +103,7 @@ export function ExperimentalNotice() {
 const RUNTIME_TITLES: Record<Exclude<RuntimeAvailability["kind"], "ready">, string> = {
   platformUnsupported: "Plugins cannot run on this platform",
   notBuilt: "Plugins are not available: the agent was built without plugin support",
-  notEnabled: "Plugins are not available: they are not enabled in the agent",
+  notEnabled: "Plugins are not available: they are turned off in the agent",
   unavailable: "Plugins are not available right now",
   agentNotRunning: "Plugins are not available: the agent is not running",
   agentTooOld: "Plugins are not available: the running agent is too old",
@@ -113,7 +113,7 @@ const RUNTIME_HINTS: Record<Exclude<RuntimeAvailability["kind"], "ready">, strin
   platformUnsupported:
     "Plugins can be installed and inspected here, but not enabled or run: the plugin sandbox is only verified on macOS, Linux and Windows.",
   notBuilt: "Plugins need an agent built with the `plugins` cargo feature.",
-  notEnabled: "Start the agent with --enable-plugins (or DECKPILOT_ENABLE_PLUGINS=1).",
+  notEnabled: "Start the agent without --disable-plugins (and without DECKPILOT_ENABLE_PLUGINS=0).",
   unavailable: "Unlock DeckPilot, or check the agent's log.",
   agentNotRunning: "Start it in Settings › Background Agent.",
   agentTooOld: "Restart it in Settings › Background Agent so that the agent of this release runs.",

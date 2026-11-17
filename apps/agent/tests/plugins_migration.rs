@@ -137,7 +137,7 @@ fn artifacts() -> &'static Artifacts {
 struct Start {
     /// `DECKPILOT_TEST_MIGRATION_DECISIONS`.
     decisions: &'static str,
-    /// Plugins off (`--enable-plugins` not given): as an older build.
+    /// Plugins off (`--disable-plugins`): as an older build.
     plugins_off: bool,
     /// No pins and no bundle: a build without the plugin.
     unbundled: bool,
@@ -317,8 +317,9 @@ impl Env {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(log);
-        if !start.plugins_off {
-            command.arg("--enable-plugins");
+        // Plugins are on without a switch in a build with the feature.
+        if start.plugins_off {
+            command.arg("--disable-plugins");
         }
         if start.unbundled {
             command.env("DECKPILOT_TEST_BUNDLED_PINS", self.empty_pins_file());

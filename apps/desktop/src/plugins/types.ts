@@ -125,7 +125,7 @@ export interface PluginRuntimeStatus {
   available: boolean
   /** The agent was built with the `plugins` feature. */
   built: boolean
-  /** The agent was started with `--enable-plugins`. */
+  /** Plugins are on (the default with the `plugins` feature; off with `--disable-plugins`). */
   enabled: boolean
   /** The host sandbox is verified here (macOS, Linux, Windows): plugins may run. */
   executionSupported: boolean

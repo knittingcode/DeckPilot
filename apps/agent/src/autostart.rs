@@ -215,6 +215,30 @@ mod tests {
     }
 
     #[test]
+    fn the_login_item_starts_the_agent_with_plugins_on_in_a_plugins_build() {
+        // Neither entry passes a plugin switch (the AppImage passes on
+        // nothing after RUN_AGENT_ARG), so the build's default applies:
+        // plugins on with the `plugins` feature, off without it.
+        for (exe, appimage) in [
+            ("/usr/bin/deckpilot-agent", None),
+            (
+                "/tmp/.mount_DeckPiAbC123/usr/bin/deckpilot-agent",
+                Some(PathBuf::from("/home/u/Apps/DeckPilot.AppImage")),
+            ),
+        ] {
+            let (_, args) = command(Path::new(exe), appimage);
+            let mut settings = crate::plugins::PluginSettings {
+                enabled: crate::plugins::ENABLED_BY_DEFAULT,
+                ..crate::plugins::PluginSettings::default()
+            };
+            for arg in args.iter().filter(|a| *a != RUN_AGENT_ARG) {
+                assert!(!settings.apply_switch(arg), "{exe}: {args:?}");
+            }
+            assert_eq!(settings.enabled, cfg!(feature = "plugins"), "{exe}");
+        }
+    }
+
+    #[test]
     fn an_agent_in_an_appimage_is_started_through_the_appimage_file() {
         let (program, args) = command(
             Path::new("/tmp/.mount_DeckPiAbC123/usr/bin/deckpilot-agent"),

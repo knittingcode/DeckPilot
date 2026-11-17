@@ -16,7 +16,7 @@ DeckPilot background agent
 
 Usage:
   deckpilot-agent [--headless] [--mock-devices [<models>]] [--no-usb] [--log-level <level>]
-                  [--enable-plugins] [--plugin-host <path>] [--bundled-plugins <dir>]
+                  [--disable-plugins] [--plugin-host <path>] [--bundled-plugins <dir>]
                   [--plugin-registry <dir> | --plugin-registry-url <https url>]
                   [--plugin-registry-releases-url <https url>]
                   [--plugin-registry-roots <roots.json>]
@@ -30,8 +30,11 @@ Options:
   --no-usb            Do not open USB devices, e.g. for tests with simulated
                       devices while a Stream Deck is plugged in
   --log-level <level> error, warn, info (default), debug or trace
-  --enable-plugins    Answer plugin requests (experimental; only in builds with
-                      the `plugins` feature)
+  --disable-plugins   Do not answer plugin requests and leave the plugins/
+                      directory alone. Builds with the `plugins` feature
+                      answer them by default; builds without it never do
+  --enable-plugins    Answer plugin requests (the default of builds with the
+                      `plugins` feature; overrides DECKPILOT_ENABLE_PLUGINS=0)
   --plugin-host <path>
                       The plugin host executable (default: next to the agent,
                       where the installers put it)
@@ -60,8 +63,10 @@ Options:
 Environment:
   DECKPILOT_DATA_DIR    Use a different data directory
   DECKPILOT_DESKTOP_BIN Path of the configuration app executable
-  DECKPILOT_ENABLE_PLUGINS=1, DECKPILOT_PLUGIN_HOST, DECKPILOT_BUNDLED_PLUGINS,
-  DECKPILOT_PLUGIN_REGISTRY,
+  DECKPILOT_ENABLE_PLUGINS
+                        0 like --disable-plugins, 1 like --enable-plugins
+                        (the command line wins)
+  DECKPILOT_PLUGIN_HOST, DECKPILOT_BUNDLED_PLUGINS, DECKPILOT_PLUGIN_REGISTRY,
   DECKPILOT_PLUGIN_REGISTRY_URL, DECKPILOT_PLUGIN_REGISTRY_RELEASES_URL,
   DECKPILOT_PLUGIN_REGISTRY_ROOTS
                         Like the plugin options";
@@ -138,7 +143,7 @@ fn parse_args() -> Result<Result<Args, String>, ExitCode> {
         match arg.as_str() {
             "--headless" => parsed.headless = true,
             "--no-usb" => parsed.usb = false,
-            "--enable-plugins" => parsed.plugins.enabled = true,
+            switch if parsed.plugins.apply_switch(switch) => {}
             "--plugin-host" => match path(&mut args, "--plugin-host") {
                 Ok(p) => parsed.plugins.host = Some(p),
                 Err(message) => return Ok(Err(message)),

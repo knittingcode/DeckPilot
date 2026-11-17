@@ -270,7 +270,7 @@ describe("plugin errors", () => {
     ],
     [
       "pluginsUnavailable",
-      "Plugins need an agent built with the `plugins` feature and started with --enable-plugins.",
+      "Plugins need an agent built with the `plugins` feature and not started with --disable-plugins.",
     ],
     [
       "platformUnsupported",
