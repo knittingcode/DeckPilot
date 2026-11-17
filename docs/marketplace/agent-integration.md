@@ -475,6 +475,36 @@ the agent nothing and behaves as before.
   types available now (`withPluginTypes`), so they appear as soon as the
   app has read the plugins, without reopening the editor.
 
+## Key state of plugin actions
+
+A plugin action whose manifest entry has `state` is one more provider of
+the agent's live key states (`apps/agent/src/service/states.rs`, the
+pipeline of built-in modules): `PluginActionHandler` implements
+`state_policy` and `button_state`, so the scheduler, the cache, the
+redraw-on-change comparison and the renderer are the existing ones. The
+plugin's part runs in its sandboxed host (`dp_state`); the agent maps the
+typed `KeyState` to `ButtonState` member by member and never decodes
+anything of a plugin as an image
+(`apps/agent/src/plugins/key_state.rs`, design:
+[plugin-key-state.md](plugin-key-state.md)).
+
+| Budget | Where |
+| --- | --- |
+| A key is asked at most every 5 s, only while shown on a device | `key_state::policy`, `states.rs` |
+| One state call per plugin at a time; a key waits at most 6 s for its turn, then keeps what it showed | `StateBook::begin`, `TURN_WAIT` |
+| No state call queues behind a running or waiting action; a key press finds at most one state call ahead of it | `Lane::submit_idle` |
+| 2 s of wall clock per call (then the host is stopped, a crash for the breaker), 8 capability calls, reads only | `STATE_CALL_TIMEOUT`, the supervisor and the broker (`plugins/runtime/README.md`) |
+| 3 failures in a row for a key: asked again after 5 s, doubling to 5 min, the static face with the error mark meanwhile | `StateBook::finish` |
+| Not granted (`device:state`) or no state handler: the static face without a mark, asked again after 30 s | `Asked::Quiet` |
+| A plugin whose actions cannot run has no state policy: its keys are static, and what was remembered about them is dropped | `PluginActionHandler::with_state`, `StateBook::forget` |
+
+Nothing on the agent's task waits for a plugin: `button_state` runs on a
+provider thread (at most 4, shared with built-in modules, the longest
+waiting key first) and waits for the plugin's lane with a time limit.
+State calls are not written to the plugin's failure log; a crash counts
+in the supervisor as any other. The test hook `DECKPILOT_TEST_KEY_FACES`
+(feature `test-hooks`) records every face sent to a device.
+
 ## IPC (protocol 10, capability `plugins`)
 
 Types: `crates/deckpilot-ipc/src/plugins.rs`. Every request below has

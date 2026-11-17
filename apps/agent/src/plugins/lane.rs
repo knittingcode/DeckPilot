@@ -12,12 +12,13 @@
 
 use std::collections::BTreeSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use deckpilot_plugin_abi::{ActionOutcome, Params};
+use deckpilot_plugin_abi::{ActionOutcome, Params, StateOutcome};
 use deckpilot_plugin_supervisor::{AbortSignal, HostError, Supervisor, SupervisorError};
 use tracing::{info, warn};
 
@@ -50,6 +51,25 @@ pub(super) enum LaneError {
 
 /// Called with the outcome on the lane's thread.
 pub(super) type Done = Box<dyn FnOnce(Result<ActionOutcome, LaneError>) + Send>;
+/// Called with a key's state on the lane's thread.
+pub(super) type StateDone = Box<dyn FnOnce(Result<StateOutcome, LaneError>) + Send>;
+
+/// What a job asks the plugin for, and who hears the answer.
+pub(super) enum Reply {
+    /// One run of the action (`dp_invoke`).
+    Action(Done),
+    /// The state of a key bound to the action (`dp_state`).
+    State(StateDone),
+}
+
+impl Reply {
+    fn fail(self, error: LaneError) {
+        match self {
+            Self::Action(done) => done(Err(error)),
+            Self::State(done) => done(Err(error)),
+        }
+    }
+}
 
 pub(super) struct Job {
     pub action: String,
@@ -57,7 +77,7 @@ pub(super) struct Job {
     pub timeout: Duration,
     pub executor: Executor,
     pub abort: AbortSignal,
-    pub done: Done,
+    pub reply: Reply,
 }
 
 /// Why a lane ended by itself; the worker updates the plugin's state.
@@ -82,6 +102,8 @@ pub(super) struct Lane {
     current: Arc<Mutex<Option<AbortSignal>>>,
     stopping: AbortSignal,
     thread: Option<JoinHandle<()>>,
+    /// Jobs queued or running.
+    pending: Arc<AtomicUsize>,
 }
 
 impl std::fmt::Debug for Lane {
@@ -97,12 +119,18 @@ impl Lane {
         let (tx, rx) = mpsc::sync_channel::<Job>(QUEUE);
         let current = Arc::new(Mutex::new(None));
         let stopping = AbortSignal::new();
+        let pending = Arc::new(AtomicUsize::new(0));
         let thread = {
             let current = current.clone();
             let stopping = stopping.clone();
+            let pending = pending.clone();
             std::thread::Builder::new()
                 .name(format!("plugin {plugin}"))
-                .spawn(move || run(&plugin, id, supervisor, &rx, &current, &stopping, &ended))
+                .spawn(move || {
+                    run(
+                        &plugin, id, supervisor, &rx, &current, &stopping, &ended, &pending,
+                    );
+                })
                 .map_err(|error| warn!(%error, "the plugin lane could not start"))
                 .ok()
         };
@@ -112,6 +140,7 @@ impl Lane {
             current,
             stopping,
             thread,
+            pending,
         }
     }
 
@@ -123,13 +152,28 @@ impl Lane {
     /// queue is full or the lane ended.
     pub fn submit(&self, job: Job) {
         let Some(tx) = &self.tx else {
-            (job.done)(Err(LaneError::Stopped));
+            job.reply.fail(LaneError::Stopped);
             return;
         };
-        match tx.try_send(job) {
-            Ok(()) => {}
-            Err(TrySendError::Full(job)) => (job.done)(Err(LaneError::Busy)),
-            Err(TrySendError::Disconnected(job)) => (job.done)(Err(LaneError::Stopped)),
+        self.pending.fetch_add(1, Ordering::SeqCst);
+        let refused = match tx.try_send(job) {
+            Ok(()) => return,
+            Err(TrySendError::Full(job)) => (job, LaneError::Busy),
+            Err(TrySendError::Disconnected(job)) => (job, LaneError::Stopped),
+        };
+        self.pending.fetch_sub(1, Ordering::SeqCst);
+        refused.0.reply.fail(refused.1);
+    }
+
+    /// [`Lane::submit`] only while nothing is queued or running; otherwise
+    /// `job` is refused at once as [`LaneError::Busy`]. For key state: it
+    /// never waits behind an action and never fills the queue of key
+    /// presses (a press may find one state call ahead of it, no more).
+    pub fn submit_idle(&self, job: Job) {
+        if self.pending.load(Ordering::SeqCst) == 0 {
+            self.submit(job);
+        } else {
+            job.reply.fail(LaneError::Busy);
         }
     }
 
@@ -168,6 +212,10 @@ impl Drop for Lane {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the lane's thread borrows each of its owner's handles"
+)]
 fn run(
     plugin: &str,
     id: u64,
@@ -176,15 +224,18 @@ fn run(
     current: &Mutex<Option<AbortSignal>>,
     stopping: &AbortSignal,
     ended: &Ended,
+    pending: &AtomicUsize,
 ) {
     let mut end = None;
     while let Ok(job) = rx.recv() {
+        // Counted until its answer was given.
+        let _counted = Counted(pending);
         if end.is_some() || stopping.is_aborted() {
-            (job.done)(Err(LaneError::Stopped));
+            job.reply.fail(LaneError::Stopped);
             continue;
         }
         if job.abort.is_aborted() {
-            (job.done)(Err(LaneError::Aborted));
+            job.reply.fail(LaneError::Aborted);
             continue;
         }
         let Job {
@@ -193,7 +244,7 @@ fn run(
             timeout,
             mut executor,
             abort,
-            done,
+            reply,
         } = job;
         if let Ok(mut slot) = current.lock() {
             *slot = Some(abort.clone());
@@ -202,42 +253,83 @@ fn run(
         if stopping.is_aborted() {
             abort.abort();
         }
-        let outcome = catch_unwind(AssertUnwindSafe(|| {
-            supervisor.invoke_abortable(&action, &params, timeout, &mut executor, Some(&abort))
-        }));
+        // The same supervisor, sandbox and breaker for both; a state call
+        // only reads (the broker's `authorize_state`).
+        let answer = match reply {
+            Reply::Action(done) => {
+                let outcome = catch_unwind(AssertUnwindSafe(|| {
+                    supervisor.invoke_abortable(
+                        &action,
+                        &params,
+                        timeout,
+                        &mut executor,
+                        Some(&abort),
+                    )
+                }));
+                let result = settle(plugin, &action, outcome, &abort, &mut end);
+                Box::new(move || done(result)) as Box<dyn FnOnce()>
+            }
+            Reply::State(done) => {
+                let outcome = catch_unwind(AssertUnwindSafe(|| {
+                    supervisor.key_state(&action, &params, timeout, &mut executor, Some(&abort))
+                }));
+                let result = settle(plugin, &action, outcome, &abort, &mut end);
+                Box::new(move || done(result)) as Box<dyn FnOnce()>
+            }
+        };
         if let Ok(mut slot) = current.lock() {
             *slot = None;
         }
-        let result = match outcome {
-            // An answer to an aborted invocation (cancelled, or its plugin
-            // stopped meanwhile) is late: never applied.
-            Ok(Ok(_)) if abort.is_aborted() => Err(LaneError::Aborted),
-            Ok(Ok(outcome)) => Ok(outcome),
-            Ok(Err(e)) => {
-                match &e {
-                    SupervisorError::Disabled => end = Some(LaneEnd::CrashLoop),
-                    SupervisorError::Host(HostError::SandboxMissing(_)) => {
-                        end = Some(LaneEnd::WeakSandbox);
-                    }
-                    _ => {}
-                }
-                Err(LaneError::Supervisor(e))
-            }
-            Err(_) => {
-                warn!(plugin, action, "a plugin invocation panicked in the agent");
-                end = Some(LaneEnd::Panicked);
-                Err(LaneError::Panicked)
-            }
-        };
         // The worker hears of the end first, so a request that follows
         // the answer sees the plugin's new state.
         if let Some(why) = end {
             ended(plugin, id, why);
         }
-        done(result);
+        answer();
     }
     let status = supervisor.shutdown();
     info!(plugin, ?status, "plugin host stopped");
+}
+
+/// One job less is pending when this is dropped.
+struct Counted<'a>(&'a AtomicUsize);
+
+impl Drop for Counted<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// What the lane answers for what the supervisor (or a panic in the
+/// broker or the executor) returned; `end` is set when the lane must end.
+fn settle<T>(
+    plugin: &str,
+    action: &str,
+    outcome: std::thread::Result<Result<T, SupervisorError>>,
+    abort: &AbortSignal,
+    end: &mut Option<LaneEnd>,
+) -> Result<T, LaneError> {
+    match outcome {
+        // An answer to an aborted invocation (cancelled, or its plugin
+        // stopped meanwhile) is late: never applied.
+        Ok(Ok(_)) if abort.is_aborted() => Err(LaneError::Aborted),
+        Ok(Ok(outcome)) => Ok(outcome),
+        Ok(Err(e)) => {
+            match &e {
+                SupervisorError::Disabled => *end = Some(LaneEnd::CrashLoop),
+                SupervisorError::Host(HostError::SandboxMissing(_)) => {
+                    *end = Some(LaneEnd::WeakSandbox);
+                }
+                _ => {}
+            }
+            Err(LaneError::Supervisor(e))
+        }
+        Err(_) => {
+            warn!(plugin, action, "a plugin invocation panicked in the agent");
+            *end = Some(LaneEnd::Panicked);
+            Err(LaneError::Panicked)
+        }
+    }
 }
 
 /// The outputs an outcome may carry: those the action declares.

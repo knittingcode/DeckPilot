@@ -1,5 +1,13 @@
 import { useDraggable } from "@dnd-kit/core"
-import { ArrowLeft, ChevronDown, ChevronRight, Folder, FolderPlus, ListOrdered } from "lucide-react"
+import {
+  ArrowLeft,
+  ChevronDown,
+  ChevronRight,
+  Folder,
+  FolderPlus,
+  ListOrdered,
+  ListPlus,
+} from "lucide-react"
 import { useState, type ReactNode } from "react"
 
 import { ActionIcon } from "@/components/action-icon"
@@ -90,6 +98,34 @@ function NewFolderEntry() {
   )
 }
 
+/** The id of the "Multi Action" entry among the editor's draggables. */
+export const NEW_MULTI_ACTION_DRAG_ID = "library:new-multi-action"
+
+/**
+ * "Multi Action": dropped on a control or a gesture, it creates an empty
+ * step workflow, binds it and opens its steps.
+ */
+function NewMultiActionEntry() {
+  const source: DragSource = { type: "newMultiAction" }
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: NEW_MULTI_ACTION_DRAG_ID,
+    data: source,
+  })
+  return (
+    <li
+      ref={setNodeRef}
+      className={cn(ENTRY, "border-dashed", isDragging && "opacity-60")}
+      {...attributes}
+      {...listeners}
+      aria-label="Drag Multi Action onto a control"
+      title="Runs several actions in order, with delays between them. Drop it on a key, then add its steps."
+    >
+      <ListPlus className="size-4 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">Multi Action</span>
+    </li>
+  )
+}
+
 /**
  * An action type: dropped on a control, an action of it with its default
  * settings is created (or the one that exists is reused) and bound.
@@ -162,10 +198,13 @@ const matches = (text: string, needle: string) => text.toLowerCase().includes(ne
 export function LibraryPanel({
   groups,
   catalog = [],
+  multiAction = false,
 }: {
   groups: TargetGroup[]
   /** Action types that can be placed directly; see `catalogGroups`. */
   catalog?: CatalogGroup[]
+  /** Offers "Multi Action", which puts a new step workflow on a key. */
+  multiAction?: boolean
 }) {
   const [query, setQuery] = useState("")
   const [closed, setClosed] = useState<Set<string>>(new Set())
@@ -179,6 +218,8 @@ export function LibraryPanel({
     .filter((group) => group.options.length > 0 || (group.label === "Navigation" && !searching))
   const types = filterCatalog(catalog, query)
   const folder = !searching || matches("new folder folders navigation", needle)
+  const multi =
+    multiAction && (!searching || matches("new multi action sequence steps workflow", needle))
   const hasItems = groups.some((g) => g.label !== "Navigation")
   // A search shows what it found, whatever is folded.
   const isOpen = (id: string) => searching || !closed.has(id)
@@ -190,7 +231,7 @@ export function LibraryPanel({
       return next
     })
   }
-  const nothing = searching && shown.length === 0 && types.length === 0 && !folder
+  const nothing = searching && shown.length === 0 && types.length === 0 && !folder && !multi
 
   return (
     <Card className="h-fit xl:row-span-2 2xl:row-span-1">
@@ -253,6 +294,18 @@ export function LibraryPanel({
                 ?.options.map((option) => (
                   <LibraryEntry key={option.value} option={option} />
                 ))}
+            </Section>
+          )}
+          {multi && (
+            <Section
+              label="New: Sequence"
+              count={1}
+              open={isOpen("New: Sequence")}
+              onToggle={() => {
+                toggle("New: Sequence")
+              }}
+            >
+              <NewMultiActionEntry />
             </Section>
           )}
           {types.map((group) => {

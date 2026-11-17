@@ -405,6 +405,31 @@ impl Agent {
     }
 }
 
+/// Records what a control of a device is about to show, for agent tests
+/// (feature `test-hooks`, never in a release build): with
+/// `DECKPILOT_TEST_KEY_FACES` naming a file, every face sent to a device is
+/// appended to it as a JSON line (`device`, `control`, `face`), so an
+/// end-to-end test of a separate agent process sees live key states.
+#[cfg(feature = "test-hooks")]
+pub(super) fn record_face(device: &DeviceId, control: ControlId, face: &KeyFace) {
+    use std::io::Write as _;
+    let Some(path) = std::env::var_os("DECKPILOT_TEST_KEY_FACES").filter(|p| !p.is_empty()) else {
+        return;
+    };
+    let line = serde_json::json!({ "device": device, "control": control, "face": face });
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+/// Nothing outside tests.
+#[cfg(not(feature = "test-hooks"))]
+pub(super) fn record_face(_device: &DeviceId, _control: ControlId, _face: &KeyFace) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

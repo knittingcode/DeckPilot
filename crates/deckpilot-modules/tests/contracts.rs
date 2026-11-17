@@ -56,6 +56,11 @@ const KNOWN: &[(&str, &str, &str)] = &[
         "waiting needs no capability",
     ),
     (
+        "general.delay",
+        "run-denied-succeeds",
+        "waiting needs no capability",
+    ),
+    (
         "system.process-status",
         "action-cancellable",
         "reads the process list in-process; it starts no program and has nothing to cancel",

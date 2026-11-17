@@ -525,6 +525,10 @@ pub enum DeckRequest {
         target: ProfileTarget,
         wrap_around: bool,
     },
+    /// Changes the display brightness of the devices, the setting the app
+    /// changes too. `set`: to that level (0-100); otherwise by `step`
+    /// percentage points up or down, staying within 0-100.
+    Brightness { set: Option<u8>, step: i8 },
 }
 
 impl DeckRequest {
@@ -533,7 +537,7 @@ impl DeckRequest {
     pub fn needs_device(self) -> bool {
         match self {
             Self::NextPage { .. } | Self::PreviousPage { .. } => true,
-            Self::SwitchProfile { .. } => false,
+            Self::SwitchProfile { .. } | Self::Brightness { .. } => false,
         }
     }
 }

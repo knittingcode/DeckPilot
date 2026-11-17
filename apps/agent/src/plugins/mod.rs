@@ -35,6 +35,8 @@ mod fetch;
 #[cfg(feature = "plugins")]
 pub mod key;
 #[cfg(feature = "plugins")]
+mod key_state;
+#[cfg(feature = "plugins")]
 mod lane;
 #[cfg(feature = "plugins")]
 mod migration;
