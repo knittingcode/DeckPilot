@@ -56,12 +56,22 @@ impl MockHost {
     }
 
     /// Every request succeeds with `null` (an empty HTTP 200 for fetches,
-    /// a run started from the app for `run.context`).
+    /// a run started from the app for `run.context`, the Unix epoch in
+    /// UTC for `time.now`, zero bytes for `random.bytes`: use
+    /// [`MockHost::new`] for a time or bytes of your choice).
     pub fn allow_all() -> Self {
         Self::new(|req| match req {
             CapabilityRequest::HttpFetch(_) => CallResult::Ok(serde_json::json!({"status": 200})),
             CapabilityRequest::RunContext(_) => {
                 CallResult::Ok(serde_json::json!({"trigger": "app"}))
+            }
+            CapabilityRequest::TimeNow(_) => {
+                CallResult::Ok(serde_json::json!({"unixMs": 0, "utcOffsetMinutes": 0}))
+            }
+            CapabilityRequest::RandomBytes(r) => {
+                let zeros = vec![0; r.length as usize];
+                let reply = deckpilot_plugin_abi::capability::RandomReply::new(&zeros);
+                CallResult::Ok(serde_json::to_value(reply).unwrap_or_default())
             }
             _ => CallResult::Ok(serde_json::Value::Null),
         })
@@ -178,7 +188,7 @@ pub fn manifest_mismatches(plugin: &Plugin, manifest: &serde_json::Value) -> Vec
     differ(
         "engines.pluginApi".into(),
         &manifest["engines"]["pluginApi"],
-        &json!(format!("^{}", crate::API_LEVEL)),
+        &json!(format!("^{}", plugin.api_level())),
     );
     if let Some(sdk) = manifest["engines"].get("sdk") {
         differ("engines.sdk".into(), sdk, &json!(crate::SDK_VERSION));

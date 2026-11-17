@@ -280,6 +280,38 @@ App commands (Tauri):
 `save_layout` accepts `parent` and `explicitTree` and refuses the errors
 above.
 
+**In the layout editor** (`apps/desktop/src/layout-editor/`):
+
+- *New folder*, dragged from the library onto an empty control or chosen
+  in the control's menu, creates a page stored inside the open page
+  (`parent`), named "Folder" ("Folder 2", … so that no two pages share a
+  name), and binds the control to open it, as one undo step. A control
+  that already does something is never overwritten: the drop is refused
+  and the menu entry is disabled. Folders can be created inside folders;
+  the page id is new and nothing refers to a page by its position.
+- A double-click on a control that opens a folder (or Shift+Enter, or the
+  menu) enters it; Back and the page location return.
+- Dragging a control onto another one moves its bindings, labels, look and
+  gesture timings; onto a control that does something, the two swap.
+- *Delete page* asks first and says what goes with the page: its own
+  controls, the controls on other pages that open it (they are cleared),
+  and the pages inside it, which are kept and move to its folder. The
+  deletion is part of the draft and can be undone until the layout is
+  saved.
+- A folder's title and icon are the label and look of the control that
+  opens it.
+- The library is one searchable list with groups that fold: the profile's
+  actions and workflows, navigation (pages, Back, *New folder*) and, under
+  "New: <category>", the action types that need no settings (every
+  required parameter has a default), from enabled built-in modules:
+  *Next page*, *Previous page*, *Page indicator*, *Switch profile* and the
+  like. Dropping a type on a control creates an action of it with the
+  type's defaults, saved to the profile at once (a control can only run a
+  saved action), and binds it; a profile's action that already is exactly
+  that (same type, default settings, no label of its own) is reused, so
+  the same type on five keys is one action. Types that need a value (a
+  URL, an application) are created in the Action Library.
+
 ### Key appearance
 
 `ControlBinding.appearance` is optional, and so is every field in it; unset

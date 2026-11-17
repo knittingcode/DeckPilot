@@ -1573,6 +1573,247 @@ mod first_party {
         assert_eq!(slots, ["token"]);
     }
 
+    /// An alias of a module whose plugin talks to a server the user
+    /// enters (`gitlab`, `jira`): as [`github_alias`].
+    const fn server_alias(
+        module: &'static str,
+        plugin: &'static str,
+        legacy: &'static str,
+        target: &'static str,
+        credential: bool,
+    ) -> ActionAlias {
+        ActionAlias {
+            legacy,
+            target,
+            module,
+            plugin,
+            since: "0.6.0",
+            params: if credential {
+                &[ParamRule::DropIfDefault("credential")]
+            } else {
+                &[]
+            },
+        }
+    }
+
+    /// What [`the_github_plugin_honours_the_builtin_contract`] checks of
+    /// the actions and variables, for any module and the aliases its
+    /// cut-over will ship: every built-in action has its alias and every
+    /// plugin action is the target of one; §5.3's rules hold
+    /// (`alias::incompatibilities`); only a `credential` override is
+    /// translated; and beyond that the definitions are identical but for
+    /// the documented differences of [`expected`]. No variables on either
+    /// side.
+    fn honours_the_contract(
+        aliases: &[ActionAlias],
+        manifest: &Manifest,
+        module: &dyn FeatureModule,
+    ) {
+        let builtin = builtin_types(module);
+        let legacy: BTreeSet<&str> = aliases.iter().map(|a| a.legacy).collect();
+        assert_eq!(
+            legacy,
+            builtin.keys().map(String::as_str).collect::<BTreeSet<_>>()
+        );
+        let plugin: BTreeMap<String, ActionType> = manifest
+            .contributes
+            .actions()
+            .iter()
+            .map(|a| {
+                let t = plugin_type(manifest.id.as_str(), a);
+                (t.id.to_string(), t)
+            })
+            .collect();
+        assert_eq!(
+            aliases.iter().map(|a| a.target).collect::<BTreeSet<_>>(),
+            plugin.keys().map(String::as_str).collect::<BTreeSet<_>>()
+        );
+        let mut problems = Vec::new();
+        for alias in aliases {
+            assert_eq!(alias.plugin, manifest.id.as_str());
+            assert_eq!(alias.module, module.manifest().id.as_str());
+            let old = &builtin[alias.legacy];
+            let new = &plugin[alias.target];
+            for problem in alias::incompatibilities(alias, old, new) {
+                problems.push(format!("{}: {problem}", alias.legacy));
+            }
+            for rule in alias.params {
+                let spec = old.parameters.iter().find(|p| p.key == rule.key());
+                assert!(
+                    matches!(
+                        spec,
+                        Some(ParameterSpec {
+                            kind: ParameterKind::Credential,
+                            ..
+                        })
+                    ),
+                    "{}: the rule for `{}` names no credential parameter",
+                    alias.legacy,
+                    rule.key()
+                );
+            }
+            // No credential parameter of the built-in is left untranslated.
+            for parameter in &old.parameters {
+                assert!(
+                    parameter.kind != ParameterKind::Credential || alias.translates(&parameter.key),
+                    "{}: `{}` is not translated",
+                    alias.legacy,
+                    parameter.key
+                );
+            }
+            if *new != expected(alias, old) {
+                problems.push(format!(
+                    "{}: the definitions differ beyond the documented differences\n  \
+                     built-in (as expected of the plugin): {}\n  plugin: {}",
+                    alias.legacy,
+                    serde_json::to_string(&expected(alias, old)).unwrap(),
+                    serde_json::to_string(new).unwrap()
+                ));
+            }
+        }
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+        assert_eq!(module.manifest().variables.len(), 0);
+        assert_eq!(manifest.contributes.variables().len(), 0);
+    }
+
+    /// The plugin's settings are the module's, key for key, with the same
+    /// kind, default, `required` and portability, except `not_kept` (the
+    /// module's settings the plugin has another form for), in order.
+    fn mirrors_the_settings(module: &dyn FeatureModule, manifest: &Manifest, not_kept: &[&str]) {
+        let config = &module.manifest().config;
+        let scopes = &module.manifest().portability.settings;
+        let mut kept = Vec::new();
+        for setting in manifest.contributes.settings() {
+            let spec = core_spec(serde_json::to_value(setting).unwrap());
+            let old = config
+                .iter()
+                .find(|c| c.key == spec.key)
+                .unwrap_or_else(|| panic!("setting `{}` is not the module's", spec.key));
+            assert_eq!(spec.kind, old.kind, "{}", spec.key);
+            assert_eq!(spec.default, old.default, "{}", spec.key);
+            assert_eq!(spec.required, old.required, "{}", spec.key);
+            assert_eq!(spec.label, old.label, "{}", spec.key);
+            let portable = matches!(
+                setting.portability,
+                Some(deckpilot_plugin_manifest::Portability::Portable)
+            );
+            assert_eq!(
+                portable,
+                scopes[&spec.key] == SettingScope::Portable,
+                "{}",
+                spec.key
+            );
+            kept.push(spec.key);
+        }
+        let mut left: Vec<&str> = config
+            .iter()
+            .map(|c| c.key.as_str())
+            .filter(|k| !kept.iter().any(|kept| kept == k))
+            .collect();
+        left.sort_unstable();
+        assert_eq!(left, not_kept);
+    }
+
+    /// The aliases the GitLab cut-over ships: as GitHub's, the per-action
+    /// `credential` override is dropped when it names the module's
+    /// credential, and `gitlab.open` has none.
+    const GITLAB: &[ActionAlias] = &[
+        gitlab_alias("gitlab.current-user", "deckpilot.gitlab.current-user", true),
+        gitlab_alias("gitlab.project", "deckpilot.gitlab.project", true),
+        gitlab_alias(
+            "gitlab.merge-requests",
+            "deckpilot.gitlab.merge-requests",
+            true,
+        ),
+        gitlab_alias(
+            "gitlab.review-requests",
+            "deckpilot.gitlab.review-requests",
+            true,
+        ),
+        gitlab_alias("gitlab.pipeline", "deckpilot.gitlab.pipeline", true),
+        gitlab_alias("gitlab.open", "deckpilot.gitlab.open", false),
+    ];
+    const _: () = alias::assert_valid(GITLAB);
+
+    const fn gitlab_alias(
+        legacy: &'static str,
+        target: &'static str,
+        credential: bool,
+    ) -> ActionAlias {
+        server_alias("gitlab", "deckpilot.gitlab", legacy, target, credential)
+    }
+
+    const GITLAB_MANIFEST: &str = include_str!("../../../plugins/first-party/gitlab/manifest.json");
+
+    /// `deckpilot.gitlab` reproduces every action of the built-in `gitlab`
+    /// module. Its settings mirror the module's but for the credential
+    /// (the plugin's slot `token`) and the private-network switch (the
+    /// user's consent to a private server, per server, instead). The API
+    /// URL is a server the user enters: its setting is the plugin's one
+    /// user-origin slot, the token is bound to it, and pages open on it.
+    #[test]
+    fn the_gitlab_plugin_honours_the_builtin_contract() {
+        let manifest = manifest(GITLAB_MANIFEST);
+        assert_eq!(manifest.id.as_str(), "deckpilot.gitlab");
+        let module = gitlab::GitlabModule::new();
+        honours_the_contract(GITLAB, &manifest, &module);
+        mirrors_the_settings(
+            &module,
+            &manifest,
+            &[gitlab::ALLOW_PRIVATE, gitlab::CREDENTIAL],
+        );
+        entered_server(&manifest, gitlab::API_URL, "token", &["gitlab.com"]);
+    }
+
+    /// The plugin reaches only `hosts` and the server the user enters in
+    /// `setting` (with a path, possibly on a private network, each with
+    /// the user's own consent), reads only (`GET`), sends its one
+    /// credential `slot` only there, and opens pages only there.
+    fn entered_server(manifest: &Manifest, setting: &str, slot: &str, hosts: &[&str]) {
+        use deckpilot_plugin_manifest::{HttpMethod, Permission};
+        let hosts: Vec<String> = hosts.iter().map(|h| (*h).to_owned()).collect();
+        assert_eq!(
+            manifest.permissions.len(),
+            3,
+            "network, credentials, openUrl"
+        );
+        for permission in &manifest.permissions {
+            match permission {
+                Permission::Network {
+                    hosts: declared,
+                    methods,
+                    private_network,
+                    user_origins,
+                    ..
+                } => {
+                    assert_eq!(*declared, hosts);
+                    assert_eq!(methods.as_deref(), Some(&[HttpMethod::Get][..]));
+                    assert_eq!(*private_network, None);
+                    let slots = user_origins.as_deref().unwrap_or_default();
+                    assert_eq!(slots.len(), 1);
+                    assert_eq!(slots[0].setting, setting);
+                    assert_eq!(slots[0].methods, None);
+                    assert!(slots[0].path_prefix() && slots[0].private_network());
+                }
+                Permission::Credentials { refs, .. } => assert_eq!(refs, &[slot.to_owned()]),
+                Permission::OpenUrl {
+                    hosts: declared,
+                    user_origins,
+                    ..
+                } => {
+                    assert_eq!(*declared, hosts);
+                    assert_eq!(user_origins.as_deref(), Some(&[setting.to_owned()][..]));
+                }
+                other => panic!("an unexpected permission: {other:?}"),
+            }
+        }
+        let slots = manifest.contributes.credentials();
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0].key, slot);
+        assert_eq!(slots[0].hosts, hosts);
+        assert_eq!(slots[0].user_origin.as_deref(), Some(setting));
+    }
+
     const NOTIFICATIONS_MANIFEST: &str =
         include_str!("../../../plugins/first-party/notifications/manifest.json");
 

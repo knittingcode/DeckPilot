@@ -8,6 +8,7 @@ import {
 } from "@dnd-kit/core"
 import { Redo2, RotateCcw, Save, Undo2 } from "lucide-react"
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react"
+import { toast } from "sonner"
 
 import { DeviceCanvas } from "@/components/device-canvas"
 import { EmptyState, ErrorNotice } from "@/components/page"
@@ -40,6 +41,7 @@ import {
 } from "@/lib/layout-model"
 import { DEFAULT_TIMINGS } from "@/components/gesture-editor/model"
 import type {
+  ActionInstance,
   ActionType,
   ControlId,
   DeviceLayout,
@@ -51,11 +53,15 @@ import type {
 
 import { effectiveUsage } from "./appearance"
 import { AppearancePanel, type IconState } from "./appearance-panel"
+import { catalogGroups, existingDefault, newAction } from "./catalog"
 import { ControlMenu } from "./control-menu"
+import { DeletePageDialog } from "./delete-page-dialog"
 import {
   boundControls,
   folderOf,
+  isFree,
   orderedControls,
+  pageDeletion,
   parseControlKey,
   type DragSource,
 } from "./editing"
@@ -162,7 +168,18 @@ export function LayoutEditor({
   const [previewProject, setPreviewProject] = useState<string | null>(view.activeProjectId)
   const [errors, setErrors] = useState<string[]>([])
   const dirty = JSON.stringify(draft) !== JSON.stringify(editing.baseline)
-  const { actions, workflows, projects } = view.profile
+  const { workflows, projects } = view.profile
+  // Actions created by dropping a type from the catalog, until the
+  // reloaded profile has them: they are named, drawn and reused at once.
+  const [created, setCreated] = useState<ActionInstance[]>([])
+  const actions = useMemo(
+    () => [
+      ...view.profile.actions,
+      ...created.filter((c) => !view.profile.actions.some((a) => a.id === c.id)),
+    ],
+    [view.profile.actions, created],
+  )
+  const profile = useMemo(() => ({ actions, workflows, projects }), [actions, workflows, projects])
   const library = useIcons(profileId)
   const gestureContext = useGestureContext()
   const { faces, images } = usePreviewFaces(
@@ -178,12 +195,35 @@ export function LayoutEditor({
   }
   const modules = useActionModules()
   const groups = useMemo(
-    () =>
-      targetGroups(view.profile, draft, pageId, (type) => pluginActionUnavailable(modules, type)),
-    [view.profile, draft, pageId, modules],
+    () => targetGroups(profile, draft, pageId, (type) => pluginActionUnavailable(modules, type)),
+    [profile, draft, pageId, modules],
   )
   const bound = boundControls(draft, pageId)
   const controls = orderedControls(model)
+  const catalog = useMemo(() => catalogGroups(modules), [modules])
+
+  /**
+   * Puts an action of `typeId` on `control`: the profile's action that is
+   * exactly a new one of the type, else a new action with the type's
+   * default settings, saved to the profile at once (a key can only run a
+   * saved action). The key itself is part of the draft as usual.
+   */
+  const placeType = async (typeId: string, control: ControlId) => {
+    const type = catalog.flatMap((g) => g.entries).find((e) => e.type.id === typeId)?.type
+    if (!type) return
+    try {
+      let action = existingDefault(actions, type)
+      if (!action) {
+        action = await api.createAction(profileId, newAction(actions, type))
+        const made = action
+        setCreated((current) => [...current, made])
+        refresh()
+      }
+      commands.drop({ type: "target", target: { type: "action", action: action.id } }, control)
+    } catch (e) {
+      toast.error(`“${type.name}” could not be added`, { description: errorMessage(e) })
+    }
+  }
 
   useEffect(() => {
     onDirtyChange(dirty)
@@ -244,7 +284,9 @@ export function LayoutEditor({
   const onDragEnd = (event: DragEndEvent) => {
     const source = event.active.data.current as DragSource | undefined
     const target = event.over ? parseControlKey(String(event.over.id)) : null
-    if (source && target) commands.drop(source, target)
+    if (!source || !target) return
+    if (source.type === "actionType") void placeType(source.actionType, target)
+    else commands.drop(source, target)
   }
 
   const onControlKeyDown = (event: KeyboardEvent<HTMLButtonElement>, control: ControlId) => {
@@ -287,7 +329,7 @@ export function LayoutEditor({
   return (
     <DndContext sensors={sensors} onDragEnd={onDragEnd}>
       <div className="grid gap-4 xl:grid-cols-[14rem_1fr] 2xl:grid-cols-[16rem_1fr_20rem]">
-        <LibraryPanel groups={groups} />
+        <LibraryPanel groups={groups} catalog={catalog} />
 
         <Card>
           <CardHeader className="gap-3">
@@ -376,6 +418,7 @@ export function LayoutEditor({
                   selection={selection.controls}
                   focused={selection.focus}
                   onSelect={commands.select}
+                  onOpen={commands.openFolder}
                   onControlKeyDown={onControlKeyDown}
                   droppable
                   draggable
@@ -391,6 +434,7 @@ export function LayoutEditor({
                           const id = folderOf(draft, pageId, control)
                           return id ? findPage(draft, id)?.name : undefined
                         })(),
+                        canCreateFolder: isFree(draft, pageId, control),
                       }}
                       commands={{
                         onOpen: () => {
@@ -405,6 +449,9 @@ export function LayoutEditor({
                         openFolder: () => {
                           commands.openFolder(control)
                         },
+                        newFolder: () => {
+                          commands.newFolder(control)
+                        },
                       }}
                     >
                       {element}
@@ -417,8 +464,8 @@ export function LayoutEditor({
             )}
             {hasControls && bound.size === 0 && (
               <EmptyState title={isFolderPage ? "This folder is empty" : "This page is empty"}>
-                Drag an action or workflow from the library onto a control, or select a control and
-                choose in the inspector.
+                Drag an action, a workflow or “New folder” from the library onto a control, or
+                select a control and choose in the inspector.
               </EmptyState>
             )}
             {isFolderPage && !hasWayBack(draft, pageId) && (
@@ -462,7 +509,7 @@ export function LayoutEditor({
           focus={selection.focus}
           groups={groups}
           folder={folder}
-          profile={view.profile}
+          profile={profile}
           types={gestureContext.types}
           gestureDefaults={gestureContext.defaults}
           issues={errors}
@@ -486,6 +533,11 @@ export function LayoutEditor({
           }
         />
       </div>
+      <DeletePageDialog
+        deletion={editing.deleting ? pageDeletion(draft, editing.deleting) : null}
+        onCancel={commands.cancelDeletePage}
+        onConfirm={commands.confirmDeletePage}
+      />
     </DndContext>
   )
 }
