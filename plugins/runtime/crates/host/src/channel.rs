@@ -199,6 +199,26 @@ fn serve<R: Read + 'static, W: Write + 'static>(
                     return e;
                 }
             }
+            Ok(Some(ToHost::State {
+                invocation_id,
+                action,
+                params,
+            })) => {
+                if invocation_id <= last_invocation {
+                    return violation("invocation ids must increase");
+                }
+                last_invocation = invocation_id;
+                let outcome = match plugin.state(invocation_id, &action, &params) {
+                    Ok(o) => o,
+                    Err(f) => return fault_exit(f),
+                };
+                if let Err(e) = send(&ToSupervisor::StateResult {
+                    invocation_id,
+                    outcome,
+                }) {
+                    return e;
+                }
+            }
             // The optional dp_shutdown hook runs once, under the usual
             // limits; a fault there is reported like any other.
             Ok(Some(ToHost::Shutdown {})) | Ok(None) => {

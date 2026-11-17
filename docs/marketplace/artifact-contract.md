@@ -77,8 +77,9 @@ without being compiled or run (`deckpilot_plugin_package::wasm`):
   (no WASI, no other host function);
 - required exports: `memory` (its single memory), `dp_abi_version: () -> i32`,
   `dp_alloc: (i32) -> i32`, `dp_invoke: (i32, i32) -> i64`; the optional
-  `dp_describe: () -> i64`, `dp_init: () -> i32`, `dp_shutdown: () -> ()`
-  and `dp_features: () -> i64` must have exactly these types;
+  `dp_describe: () -> i64`, `dp_init: () -> i32`, `dp_shutdown: () -> ()`,
+  `dp_features: () -> i64` and `dp_state: (i32, i32) -> i64` must have
+  exactly these types;
 - at most one table.
 
 Everything the module reaches outside itself goes through that one import

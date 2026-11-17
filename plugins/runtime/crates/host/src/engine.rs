@@ -14,14 +14,18 @@ use std::time::Duration;
 use deckpilot_plugin_abi::describe::PluginDescriptor;
 use deckpilot_plugin_abi::guest::{
     EXPORT_ABI_VERSION, EXPORT_ALLOC, EXPORT_DESCRIBE, EXPORT_FEATURES, EXPORT_INIT, EXPORT_INVOKE,
-    EXPORT_MEMORY, EXPORT_SHUTDOWN, IMPORT_HOST_CALL, IMPORT_MODULE, InvokeInput, features, pack,
-    unpack,
+    EXPORT_MEMORY, EXPORT_SHUTDOWN, EXPORT_STATE, IMPORT_HOST_CALL, IMPORT_MODULE, InvokeInput,
+    features, pack, unpack,
 };
 use deckpilot_plugin_abi::limits::{
     MAX_DESCRIPTOR, MAX_GUEST_INPUT, MAX_GUEST_OUTPUT, MAX_HOST_CALL_REPLY, MAX_HOST_CALL_REQUEST,
-    MAX_HOST_CALLS_PER_INVOCATION, MAX_MODULE_BYTES,
+    MAX_HOST_CALLS_PER_INVOCATION, MAX_MODULE_BYTES, MAX_STATE_HOST_CALLS, MAX_STATE_OUTPUT,
+    STATE_FUEL_DIVISOR,
 };
 use deckpilot_plugin_abi::protocol::{FatalReason, GuestLimits};
+use deckpilot_plugin_abi::state::{
+    STATE_INVALID, STATE_UNSUPPORTED, StateOutcome, allowed_in_state,
+};
 use deckpilot_plugin_abi::value::{validate_name, validate_params};
 use deckpilot_plugin_abi::{
     ABI_VERSION, ActionOutcome, CallErrorCode, CallResult, CapabilityRequest, Params,
@@ -172,6 +176,9 @@ struct HostState {
     /// What the guest reported from `dp_features` (0 without it): replies
     /// carry only the additions it reads ([`CallResult::for_features`]).
     features: u64,
+    /// Inside `dp_state`: only the operations a state call may use are
+    /// relayed, and only a few of them.
+    in_state: bool,
 }
 
 /// The wasmtime engine plus the epoch ticker thread. Create it **before**
@@ -245,6 +252,7 @@ impl PluginEngine {
             next_call_id: 0,
             in_lifecycle: false,
             features: 0,
+            in_state: false,
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|s| &mut s.limits);
@@ -286,12 +294,14 @@ impl PluginEngine {
         let describe = optional_func::<(), i64>(&instance, &mut store, EXPORT_DESCRIBE)?;
         let init = optional_func::<(), i32>(&instance, &mut store, EXPORT_INIT)?;
         let shutdown = optional_func::<(), ()>(&instance, &mut store, EXPORT_SHUTDOWN)?;
+        let state = optional_func::<(i32, i32), i64>(&instance, &mut store, EXPORT_STATE)?;
         let mut plugin = LoadedPlugin {
             store,
             _instance: instance,
             memory,
             alloc,
             invoke,
+            state,
             shutdown,
             descriptor: None,
             limits,
@@ -388,6 +398,7 @@ pub struct LoadedPlugin {
     memory: Memory,
     alloc: TypedFunc<i32, i32>,
     invoke: TypedFunc<(i32, i32), i64>,
+    state: Option<TypedFunc<(i32, i32), i64>>,
     shutdown: Option<TypedFunc<(), ()>>,
     descriptor: Option<PluginDescriptor>,
     limits: EffectiveLimits,
@@ -528,6 +539,103 @@ impl LoadedPlugin {
         Ok(self.read_outcome(packed as u64))
     }
 
+    /// Whether the module exports `dp_state`.
+    pub fn has_state(&self) -> bool {
+        self.state.is_some()
+    }
+
+    /// Asks the module for the state of a key bound to `action` with
+    /// `params` (`dp_state`, plugin API 1.2). `Ok` covers every answer,
+    /// including a failure for a module without the export and
+    /// `invalid-state` for output that breaks a bound; `Err` is a fault
+    /// after which the host exits, as for [`LoadedPlugin::invoke`].
+    ///
+    /// The call runs under the invocation's deadline with a fraction of
+    /// its fuel; its host calls are limited to reads
+    /// ([`allowed_in_state`]) and to [`MAX_STATE_HOST_CALLS`].
+    pub fn state(
+        &mut self,
+        invocation_id: u64,
+        action: &str,
+        params: &Params,
+    ) -> Result<StateOutcome, Fault> {
+        let Some(state) = self.state.clone() else {
+            return Ok(StateOutcome::failed(
+                STATE_UNSUPPORTED,
+                "the plugin reports no key state",
+            ));
+        };
+        if validate_name(action).is_err() || validate_params(params).is_err() {
+            return Ok(StateOutcome::failed(
+                "invalid-params",
+                "action or parameters out of bounds",
+            ));
+        }
+        let input = serde_json::to_vec(&InvokeInput {
+            action: action.to_owned(),
+            params: params.clone(),
+        })
+        .map_err(|e| Fault::Channel(e.to_string()))?;
+        if input.len() > MAX_GUEST_INPUT {
+            return Ok(StateOutcome::failed(
+                "invalid-params",
+                "parameters too large",
+            ));
+        }
+        {
+            let s = self.store.data_mut();
+            s.invocation_id = invocation_id;
+            s.calls_this_invocation = 0;
+            s.next_call_id = 0;
+            s.in_state = true;
+        }
+        let result = self.call_state(&state, &input);
+        self.store.data_mut().in_state = false;
+        result
+    }
+
+    fn call_state(
+        &mut self,
+        state: &TypedFunc<(i32, i32), i64>,
+        input: &[u8],
+    ) -> Result<StateOutcome, Fault> {
+        self.store
+            .set_fuel((self.limits.fuel / STATE_FUEL_DIVISOR).max(1))
+            .map_err(|e| Fault::Trap(format!("{e:#}")))?;
+        self.store.set_epoch_deadline(self.limits.deadline_ticks);
+        let ptr = self
+            .alloc
+            .call(&mut self.store, input.len() as i32)
+            .map_err(Fault::from_runtime)?;
+        if ptr == 0 {
+            return Err(Fault::GuestAbi("dp_alloc failed".into()));
+        }
+        self.memory
+            .write(&mut self.store, ptr as u32 as usize, input)
+            .map_err(|_| Fault::GuestAbi("dp_alloc returned an out-of-bounds buffer".into()))?;
+        self.store.set_epoch_deadline(self.limits.deadline_ticks);
+        let packed = state
+            .call(&mut self.store, (ptr, input.len() as i32))
+            .map_err(Fault::from_runtime)?;
+        let (ptr, len) = unpack(packed as u64);
+        let (ptr, len) = (ptr as usize, len as usize);
+        if len > MAX_STATE_OUTPUT {
+            return Ok(StateOutcome::failed(
+                STATE_INVALID,
+                "the state is too large",
+            ));
+        }
+        Ok(
+            match ptr
+                .checked_add(len)
+                .and_then(|end| self.memory.data(&self.store).get(ptr..end))
+            {
+                Some(bytes) => StateOutcome::from_guest(bytes),
+                None => StateOutcome::failed(STATE_INVALID, "the state is out of bounds"),
+            },
+        )
+    }
+
     fn read_outcome(&self, packed: u64) -> ActionOutcome {
         let invalid = |why: &str| ActionOutcome::failed("invalid-result", why.to_owned());
         let (ptr, len) = unpack(packed);
@@ -581,6 +689,11 @@ fn host_call(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) -> wasmtime:
             return Err(abi_error("too many host calls in one invocation"));
         }
     }
+    // A state call gets few capability calls; the rest are refused here.
+    let state_budget_spent = {
+        let s = caller.data();
+        s.in_state && s.calls_this_invocation > MAX_STATE_HOST_CALLS
+    };
     let (ptr, len) = (ptr as u32 as usize, len as u32 as usize);
     if len > MAX_HOST_CALL_REQUEST {
         return Err(abi_error("host_call request too large"));
@@ -602,6 +715,16 @@ fn host_call(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) -> wasmtime:
         _ if caller.data().in_lifecycle => CallResult::error(
             CallErrorCode::Unavailable,
             "capabilities are not available during dp_describe, dp_init or dp_shutdown",
+        ),
+        Ok(_) if state_budget_spent => CallResult::error(
+            CallErrorCode::Throttled,
+            "a state call makes at most 8 capability calls",
+        ),
+        // A state call reads: nothing else is relayed (the supervisor and
+        // the broker refuse it too).
+        Ok(req) if caller.data().in_state && !allowed_in_state(&req) => CallResult::error(
+            CallErrorCode::NotPermitted,
+            "not available while a key's state is read",
         ),
         Ok(req) => {
             op = req.op();

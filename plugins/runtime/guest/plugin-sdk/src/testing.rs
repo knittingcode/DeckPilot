@@ -129,6 +129,25 @@ impl MockHost {
     ) -> ActionOutcome {
         plugin.run(self, action, params)
     }
+
+    /// Asks for the state of a key bound to `action` with `params` (a
+    /// JSON object) as the host would ([`Action::state`](crate::Action::state)).
+    /// The mock answers whatever the handler asks; the real agent answers
+    /// only reads inside a state call, so answer the others with
+    /// `not-permitted` to test that a handler copes.
+    ///
+    /// # Panics
+    /// If `params` is not a valid parameter object.
+    pub fn key_state(
+        &mut self,
+        plugin: &Plugin,
+        action: &str,
+        params: serde_json::Value,
+    ) -> crate::StateOutcome {
+        let params: Params =
+            serde_json::from_value(params).expect("params must be a JSON object of values");
+        plugin.key_state(self, action, &params)
+    }
 }
 
 /// Every difference between a plugin's definition and its `manifest.json`
