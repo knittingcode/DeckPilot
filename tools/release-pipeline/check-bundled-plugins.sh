@@ -65,7 +65,7 @@ for entry in "$bundled"/* "$bundled"/.[!.]*; do
   [ -e "$entry" ] || continue
   name=$(basename "$entry")
   [ "$name" = pins.json ] && continue
-  printf '%s\n' "$ids" | grep -q -x -F -- "$name" \
+  printf '%s\n' "$ids" | grep -x -F -- "$name" >/dev/null \
     || fail "bundled/$name is not listed in pins.json"
   [ -d "$entry" ] || fail "bundled/$name is not a directory"
 done
@@ -81,13 +81,13 @@ while IFS=$'\t' read -r id version class; do
   pinned=$(jq -r --arg id "$id" '.plugins[] | select(.id == $id) | .files | keys[]' "$pins" | LC_ALL=C sort)
   present=$(cd "$dir" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)
   for required in manifest.json plugin.wasm LICENSE; do
-    printf '%s\n' "$pinned" | grep -q -x -F -- "$required" || fail "$id does not pin $required"
+    printf '%s\n' "$pinned" | grep -x -F -- "$required" >/dev/null || fail "$id does not pin $required"
   done
   while IFS= read -r file; do
     [ -n "$file" ] || continue
     [[ "$file" =~ ^(manifest\.json|plugin\.wasm|LICENSE|assets/[a-z0-9-]+\.png)$ ]] \
       || fail "$id: $file is not allowed in a bundled plugin (manifest.json, plugin.wasm, LICENSE and assets/<name>.png icons only)"
-    printf '%s\n' "$pinned" | grep -q -x -F -- "$file" || fail "$id: $file is not pinned"
+    printf '%s\n' "$pinned" | grep -x -F -- "$file" >/dev/null || fail "$id: $file is not pinned"
   done <<< "$present"
   while IFS= read -r file; do
     [ -f "$dir/$file" ] || fail "$id: pinned $file is missing"

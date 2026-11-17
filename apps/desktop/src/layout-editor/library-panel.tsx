@@ -1,10 +1,13 @@
 import { useDraggable } from "@dnd-kit/core"
-import { ArrowLeft, Folder, FolderPlus, ListOrdered } from "lucide-react"
+import { ArrowLeft, ChevronDown, ChevronRight, Folder, FolderPlus, ListOrdered } from "lucide-react"
+import { useState, type ReactNode } from "react"
 
 import { ActionIcon } from "@/components/action-icon"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 
+import { catalogDragId, filterCatalog, type CatalogEntry, type CatalogGroup } from "./catalog"
 import type { DragSource } from "./editing"
 import type { TargetGroup, TargetOption } from "./targets"
 
@@ -14,6 +17,9 @@ function OptionIcon({ option }: { option: TargetOption }) {
   if (option.target.type === "back") return <ArrowLeft className="size-4 shrink-0" />
   return <Folder className="size-4 shrink-0" />
 }
+
+const ENTRY =
+  "flex min-w-0 cursor-grab items-center gap-2 rounded-md border bg-card px-2 py-1.5 text-sm hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
 
 function LibraryEntry({ option }: { option: TargetOption }) {
   const source: DragSource = { type: "target", target: option.target }
@@ -43,10 +49,7 @@ function LibraryEntry({ option }: { option: TargetOption }) {
   return (
     <li
       ref={setNodeRef}
-      className={cn(
-        "flex min-w-0 cursor-grab items-center gap-2 rounded-md border bg-card px-2 py-1.5 text-sm hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-        isDragging && "opacity-60",
-      )}
+      className={cn(ENTRY, isDragging && "opacity-60")}
       {...attributes}
       {...listeners}
       aria-label={`Drag ${option.label} onto a control`}
@@ -73,31 +76,122 @@ function NewFolderEntry() {
     data: source,
   })
   return (
-    <section className="grid gap-1" aria-label="Folders">
-      <h3 className="text-xs font-medium text-muted-foreground">Folders</h3>
-      <ul className="grid gap-1">
-        <li
-          ref={setNodeRef}
-          className={cn(
-            "flex min-w-0 cursor-grab items-center gap-2 rounded-md border border-dashed bg-card px-2 py-1.5 text-sm hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-            isDragging && "opacity-60",
-          )}
-          {...attributes}
-          {...listeners}
-          aria-label="Drag New folder onto an empty control"
-          title="Drop on an empty key to create a folder there. Double-click the key to enter it."
+    <li
+      ref={setNodeRef}
+      className={cn(ENTRY, "border-dashed", isDragging && "opacity-60")}
+      {...attributes}
+      {...listeners}
+      aria-label="Drag New folder onto an empty control"
+      title="Drop on an empty key to create a folder there. Double-click the key to enter it."
+    >
+      <FolderPlus className="size-4 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">New folder</span>
+    </li>
+  )
+}
+
+/**
+ * An action type: dropped on a control, an action of it with its default
+ * settings is created (or the one that exists is reused) and bound.
+ */
+function CatalogItem({ entry }: { entry: CatalogEntry }) {
+  const source: DragSource = { type: "actionType", actionType: entry.type.id }
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: catalogDragId(entry.type.id),
+    data: source,
+  })
+  return (
+    <li
+      ref={setNodeRef}
+      className={cn(ENTRY, "border-dashed", isDragging && "opacity-60")}
+      {...attributes}
+      {...listeners}
+      aria-label={`Drag ${entry.type.name} onto a control`}
+      title={`${entry.type.description} (${entry.module})`}
+    >
+      <ActionIcon name={entry.type.node?.icon} className="size-4 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">{entry.type.name}</span>
+    </li>
+  )
+}
+
+/** A group of the library that can be folded away. */
+function Section({
+  label,
+  count,
+  open,
+  onToggle,
+  children,
+}: {
+  label: string
+  count: number
+  open: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  return (
+    <section className="grid gap-1" aria-label={label}>
+      <h3>
+        <button
+          type="button"
+          className="flex w-full items-center gap-1 rounded-sm text-left text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          aria-expanded={open}
+          onClick={onToggle}
         >
-          <FolderPlus className="size-4 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">New folder</span>
-        </li>
-      </ul>
+          {open ? (
+            <ChevronDown className="size-3" aria-hidden />
+          ) : (
+            <ChevronRight className="size-3" aria-hidden />
+          )}
+          <span className="flex-1">{label}</span>
+          <span aria-hidden>{count}</span>
+        </button>
+      </h3>
+      {open && <ul className="grid gap-1">{children}</ul>}
     </section>
   )
 }
 
-/** Actions, workflows and navigation targets that can be dragged onto controls. */
-export function LibraryPanel({ groups }: { groups: TargetGroup[] }) {
+const matches = (text: string, needle: string) => text.toLowerCase().includes(needle)
+
+/**
+ * What can be dragged onto controls, in one searchable list: the
+ * profile's actions and workflows, navigation (pages, Back, a new folder)
+ * and, under "New: …", the action types that need no settings.
+ */
+export function LibraryPanel({
+  groups,
+  catalog = [],
+}: {
+  groups: TargetGroup[]
+  /** Action types that can be placed directly; see `catalogGroups`. */
+  catalog?: CatalogGroup[]
+}) {
+  const [query, setQuery] = useState("")
+  const [closed, setClosed] = useState<Set<string>>(new Set())
+  const needle = query.trim().toLowerCase()
+  const searching = needle !== ""
+  const shown = groups
+    .map((group) => ({
+      ...group,
+      options: group.options.filter((o) => matches(`${o.label} ${group.label}`, needle)),
+    }))
+    .filter((group) => group.options.length > 0 || (group.label === "Navigation" && !searching))
+  const types = filterCatalog(catalog, query)
+  const folder = !searching || matches("new folder folders navigation", needle)
   const hasItems = groups.some((g) => g.label !== "Navigation")
+  // A search shows what it found, whatever is folded.
+  const isOpen = (id: string) => searching || !closed.has(id)
+  const toggle = (id: string) => {
+    setClosed((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  const nothing = searching && shown.length === 0 && types.length === 0 && !folder
+
   return (
     <Card className="h-fit xl:row-span-2 2xl:row-span-1">
       <CardHeader>
@@ -106,23 +200,80 @@ export function LibraryPanel({ groups }: { groups: TargetGroup[] }) {
           Drag onto a control, or select a control and choose in the inspector.
         </CardDescription>
       </CardHeader>
-      <CardContent className="grid max-h-[28rem] gap-3 overflow-y-auto">
-        {!hasItems && (
-          <p className="text-sm text-muted-foreground">
-            No actions or workflows yet. Create them in the Action Library.
-          </p>
-        )}
-        <NewFolderEntry />
-        {groups.map((group) => (
-          <section key={group.label} className="grid gap-1" aria-label={group.label}>
-            <h3 className="text-xs font-medium text-muted-foreground">{group.label}</h3>
-            <ul className="grid gap-1">
-              {group.options.map((option) => (
-                <LibraryEntry key={option.value} option={option} />
-              ))}
-            </ul>
-          </section>
-        ))}
+      <CardContent className="grid gap-3">
+        <Input
+          type="search"
+          className="h-8"
+          placeholder="Search the library"
+          aria-label="Search the library"
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value)
+          }}
+        />
+        <div className="grid max-h-[28rem] gap-3 overflow-y-auto">
+          {!hasItems && !searching && catalog.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              No actions or workflows yet. Create them in the Action Library.
+            </p>
+          )}
+          {nothing && <p className="text-sm text-muted-foreground">Nothing matches.</p>}
+          {shown
+            .filter((group) => group.label !== "Navigation")
+            .map((group) => (
+              <Section
+                key={group.label}
+                label={group.label}
+                count={group.options.length}
+                open={isOpen(group.label)}
+                onToggle={() => {
+                  toggle(group.label)
+                }}
+              >
+                {group.options.map((option) => (
+                  <LibraryEntry key={option.value} option={option} />
+                ))}
+              </Section>
+            ))}
+          {(folder || shown.some((group) => group.label === "Navigation")) && (
+            <Section
+              label="Navigation"
+              count={
+                (shown.find((group) => group.label === "Navigation")?.options.length ?? 0) +
+                (folder ? 1 : 0)
+              }
+              open={isOpen("Navigation")}
+              onToggle={() => {
+                toggle("Navigation")
+              }}
+            >
+              {folder && <NewFolderEntry />}
+              {shown
+                .find((group) => group.label === "Navigation")
+                ?.options.map((option) => (
+                  <LibraryEntry key={option.value} option={option} />
+                ))}
+            </Section>
+          )}
+          {types.map((group) => {
+            const id = `New: ${group.label}`
+            return (
+              <Section
+                key={id}
+                label={id}
+                count={group.entries.length}
+                open={isOpen(id)}
+                onToggle={() => {
+                  toggle(id)
+                }}
+              >
+                {group.entries.map((entry) => (
+                  <CatalogItem key={entry.type.id} entry={entry} />
+                ))}
+              </Section>
+            )
+          })}
+        </div>
       </CardContent>
     </Card>
   )

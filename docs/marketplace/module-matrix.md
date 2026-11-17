@@ -485,6 +485,13 @@ remaining differences: `plugins/first-party/github/README.md`.
 8. **Referenced ids.** All six.
 9. **Complexity and risk.** Medium and low. **Plugin**, after G2 and G6.
 
+*Status (P11):* `plugins/first-party/gitlab` (`deckpilot.gitlab`)
+reproduces the six actions for GitLab.com and for a self-managed GitLab
+the user enters (G2, with its path and, by its own consent, a private
+network), with the credential slot `token` (`PRIVATE-TOKEN`) and pages of
+50; bundled with class `migration`, not routed yet. Parity and the
+remaining differences: `plugins/first-party/gitlab/README.md`.
+
 ### `jira`
 
 1. **Actions.** `jira.myself`, `.issue`, `.issues` (fixed JQL templates only,
