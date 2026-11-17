@@ -10,6 +10,12 @@
 //! frames by face and size, so a face that comes back (e.g. a state that
 //! flips between two values) is not drawn again.
 //!
+//! A state's further marks ([`crate::marks`]) are an accent background
+//! from a fixed palette, a glyph from a closed set of shapes above the
+//! title, a badge in the top left corner and a series drawn as a line
+//! behind the texts. What the user chose for the key wins: its background
+//! over the accent, its icon over the glyph.
+//!
 //! A face's [`KeyAppearance`] sets its background and text colours, the
 //! title's size and position (or hides it) and an icon, drawn below the
 //! title and the state marks, scaled to the key (see [`crate::icons`]).
@@ -21,6 +27,7 @@ use deckpilot_device::Frame;
 use font8x8::legacy::BASIC_LEGACY;
 
 use crate::icons::{self, Icons};
+use crate::marks;
 
 const GLYPH: u32 = 8;
 /// `…` in one cell (the font is ASCII only), e.g. for "Checking…".
@@ -76,8 +83,9 @@ fn text_scale(size: FontSize, width: u32) -> u32 {
 pub fn render_with(face: &KeyFace, width: u32, height: u32, icons: &Icons) -> Frame {
     let default_look = KeyAppearance::default();
     let look = face.appearance.as_ref().unwrap_or(&default_look);
-    let fill = match look.background {
-        Some(color) if !face.is_empty() => color.rgb(),
+    let fill = match (look.background, face.accent) {
+        (Some(color), _) if !face.is_empty() => color.rgb(),
+        (None, Some(accent)) if !face.is_empty() => marks::accent_color(accent),
         _ => background(face.style),
     };
     let mut frame = Frame::filled(width, height, fill);
@@ -90,17 +98,40 @@ pub fn render_with(face: &KeyFace, width: u32, height: u32, icons: &Icons) -> Fr
     if let Some((image, fit)) = icon {
         draw_icon(&mut frame, &icons::scale(image, width, height, fit));
     }
+    let ink = look.text_color.map_or(WHITE, deckpilot_core::Color::rgb);
+    if let Some(series) = &face.series {
+        marks::draw_series(&mut frame, series, marks::lighten(fill, 35));
+    }
+    // The user's icon wins over a state's glyph.
+    let glyph = face.glyph.filter(|_| icon.is_none());
+    if let Some(glyph) = glyph {
+        marks::draw_glyph(&mut frame, glyph, ink);
+    }
     if face.highlighted {
         border(&mut frame, ACCENT, 3);
     }
     if look.shows_title() {
-        draw_title(&mut frame, face, look, icon.is_some());
+        // Under a glyph the title goes to the bottom, as under an icon.
+        let align = look
+            .title_align
+            .unwrap_or(if icon.is_some() || glyph.is_some() {
+                TitleAlign::Bottom
+            } else {
+                TitleAlign::Middle
+            });
+        draw_title(&mut frame, face, look, align, icon.is_some());
     }
     draw_state(&mut frame, face);
     frame
 }
 
-fn draw_title(frame: &mut Frame, face: &KeyFace, look: &KeyAppearance, over_icon: bool) {
+fn draw_title(
+    frame: &mut Frame,
+    face: &KeyFace,
+    look: &KeyAppearance,
+    align: TitleAlign,
+    over_icon: bool,
+) {
     let (width, height) = (frame.width(), frame.height());
     let scale = text_scale(look.font_size.unwrap_or_default(), width);
     let columns = ((width.saturating_sub(4)) / (GLYPH * scale)).max(1) as usize;
@@ -115,7 +146,7 @@ fn draw_title(frame: &mut Frame, face: &KeyFace, look: &KeyAppearance, over_icon
     // Room for the toggle mark at the top and the progress bar at the
     // bottom.
     let margin = (height / 12).max(3);
-    let mut y = match look.title_align() {
+    let mut y = match align {
         TitleAlign::Top => margin,
         TitleAlign::Middle => height.saturating_sub(block) / 2,
         TitleAlign::Bottom => height.saturating_sub(block + margin),
@@ -174,9 +205,14 @@ fn draw_text(
     draw_centered_at(frame, text, y, scale, color, 0);
 }
 
-/// The indicator, progress and toggle marks of a face.
+/// The indicator, progress, toggle and badge marks of a face.
 fn draw_state(frame: &mut Frame, face: &KeyFace) {
     let (w, h) = (frame.width(), frame.height());
+    if let Some(badge) = &face.badge {
+        // Below the toggle mark, when there is one.
+        let below = face.toggle.map_or(0, |_| (h / 24).max(2));
+        marks::draw_badge(frame, badge, below, WHITE);
+    }
     if let Some(on) = face.toggle {
         let thickness = (h / 24).max(2);
         let color = if on { GREEN } else { GREY };
@@ -426,6 +462,124 @@ mod tests {
         let frame = render(&face, 72, 72);
         assert_eq!(frame.pixel(0, 0), Some(ACCENT));
         assert_eq!(frame.pixel(71, 71), Some(ACCENT));
+    }
+
+    /// Accent, glyph, badge and series: drawn from the typed face at any
+    /// size, and never over what the user chose for the key.
+    #[test]
+    fn accent_glyph_badge_and_series_are_drawn_and_the_users_look_wins() {
+        use deckpilot_core::{Accent, Color, Glyph};
+        let count = |frame: &Frame, color: [u8; 3]| {
+            (0..frame.height())
+                .flat_map(|y| (0..frame.width()).map(move |x| (x, y)))
+                .filter(|(x, y)| frame.pixel(*x, *y) == Some(color))
+                .count()
+        };
+        let plain = KeyFace::new(FaceStyle::Action, "Focus");
+        let base = render(&plain, 96, 96);
+
+        // An accent is the background; the title stays light on it.
+        let mut accented = plain.clone();
+        accented.accent = Some(Accent::Green);
+        let frame = render(&accented, 96, 96);
+        let green = marks::accent_color(Accent::Green);
+        assert_eq!(frame.pixel(1, 50), Some(green));
+        assert_eq!(count(&frame, WHITE), count(&base, WHITE));
+        assert_eq!(count(&frame, background(FaceStyle::Action)), 0);
+
+        // A glyph is drawn in the upper part and moves the title down.
+        let mut with_glyph = plain.clone();
+        with_glyph.glyph = Some(Glyph::Timer);
+        let frame = render(&with_glyph, 96, 96);
+        let rows = |frame: &Frame| -> Vec<u32> {
+            (0..frame.height())
+                .filter(|y| (0..frame.width()).any(|x| frame.pixel(x, *y) == Some(WHITE)))
+                .collect()
+        };
+        assert!(count(&frame, WHITE) > count(&base, WHITE) + 100);
+        assert!(rows(&frame).first().unwrap() < &20, "{:?}", rows(&frame));
+        assert!(rows(&frame).last().unwrap() > rows(&base).last().unwrap());
+
+        // A badge in the top left corner, below the toggle mark.
+        let mut badged = plain.clone();
+        badged.badge = Some("7".into());
+        let frame = render(&badged, 96, 96);
+        assert_ne!(frame.pixel(3, 3), base.pixel(3, 3));
+        badged.toggle = Some(true);
+        let frame = render(&badged, 96, 96);
+        assert_eq!(frame.pixel(48, 0), Some(GREEN));
+        assert_eq!(
+            frame.pixel(3, 1),
+            Some(GREEN),
+            "the toggle mark is not covered"
+        );
+
+        // A series is a lighter line behind the title: the title's pixels
+        // are all still there.
+        let mut charted = plain.clone();
+        charted.series = Some(vec![10, 80, 30, 100, 0]);
+        let frame = render(&charted, 96, 96);
+        let line = marks::lighten(background(FaceStyle::Action), 35);
+        assert!(count(&frame, line) > 60);
+        assert_eq!(count(&frame, WHITE), count(&base, WHITE));
+
+        // The user's background and icon win over accent and glyph; the
+        // user's text colour is the glyph's.
+        let mut users = with_glyph.clone();
+        users.accent = Some(Accent::Red);
+        users.appearance = Some(KeyAppearance {
+            background: Some(Color([1, 2, 3])),
+            text_color: Some(Color([250, 250, 0])),
+            ..KeyAppearance::default()
+        });
+        let frame = render(&users, 96, 96);
+        assert_eq!(frame.pixel(1, 50), Some([1, 2, 3]));
+        assert_eq!(count(&frame, marks::accent_color(Accent::Red)), 0);
+        assert!(count(&frame, [250, 250, 0]) > 100);
+        let icon =
+            icons::import("Halves", &icons::tests::png(&icons::tests::halves(64, 64))).unwrap();
+        let mut profile = deckpilot_core::Profile::new("P");
+        let id = icon.id;
+        profile.icons.push(icon);
+        let mut iconed = with_glyph.clone();
+        iconed.appearance = Some(KeyAppearance {
+            icon: Some(deckpilot_core::IconRef {
+                id,
+                fit: deckpilot_core::IconFit::Fill,
+            }),
+            ..KeyAppearance::default()
+        });
+        let with_icon = render_with(&iconed, 96, 96, &Icons::from_profile(&profile));
+        iconed.glyph = None;
+        let without_glyph = render_with(&iconed, 96, 96, &Icons::from_profile(&profile));
+        assert_eq!(with_icon.rgb(), without_glyph.rgb());
+
+        // Empty and tiny faces: nothing is drawn, nothing panics.
+        let mut empty = KeyFace::empty();
+        empty.accent = Some(Accent::Blue);
+        empty.glyph = Some(Glyph::Star);
+        empty.badge = Some("1".into());
+        empty.series = Some(vec![1, 2]);
+        assert_eq!(lit(&render(&empty, 72, 72), [0, 0, 0]), 0);
+        let mut all = accented.clone();
+        all.glyph = Some(Glyph::Heart);
+        all.badge = Some("9999".into());
+        all.series = Some(vec![100; 32]);
+        all.progress = Some(40);
+        all.toggle = Some(false);
+        all.indicator = Some(Indicator::Running);
+        for (w, h) in [(1, 1), (8, 8), (72, 72), (144, 144), (200, 100), (100, 30)] {
+            let frame = render(&all, w, h);
+            assert_eq!((frame.width(), frame.height()), (w, h));
+        }
+        // Faces differ by their marks, so the cache keeps them apart.
+        let mut cache = FrameCache::new(4);
+        let icons = Icons::default();
+        assert_ne!(
+            cache.frame(&accented, 72, 72, &icons).rgb(),
+            cache.frame(&plain, 72, 72, &icons).rgb()
+        );
+        assert_eq!(cache.rendered(), 2);
     }
 
     #[test]

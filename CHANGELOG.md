@@ -209,6 +209,9 @@ CHANGELOG.md.
   named `knittingcode/deckpilot`: releases still announce their downloads
   under the address earlier versions accept, and the app accepts the
   repository's name in any case.
+- A duplicated profile appears in the agent's profile list (the tray, the
+  dashboard) at once, as a new one does; before, it showed only after
+  something else made the agent reload.
 
 ## [0.5.0] - Not released (draft prereleases 0.5.0-1 and 0.5.0-2 only)
 

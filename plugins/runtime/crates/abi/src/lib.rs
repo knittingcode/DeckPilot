@@ -44,5 +44,8 @@ pub use value::{ActionOutcome, ParamValue, Params, ValidationError};
 /// operation `run.context` ([`capability::RunContext`], G8), which only a
 /// guest that reads it sends; and, for a guest that reports
 /// [`guest::features::NOTIFY_DELIVERY`], where a `notify` was shown
-/// ([`capability::NotifyDelivery`], G9) instead of `null`.
+/// ([`capability::NotifyDelivery`], G9) instead of `null`; and the
+/// capability operations `time.now` ([`capability::Timestamp`]) and
+/// `random.bytes` ([`capability::RandomReply`]) of plugin API 1.1, which
+/// only a guest that uses them sends.
 pub const ABI_VERSION: u32 = 1;

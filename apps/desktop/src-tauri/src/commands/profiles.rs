@@ -135,6 +135,8 @@ pub fn duplicate_profile(
     let store = state.store()?;
     let copy = load_profile(&store, profile_id)?.duplicate(&name);
     store.save_profile(&copy)?;
+    // As after creating one: the agent publishes its profile list again.
+    crate::agent::notify_reload(&state.paths);
     summary(&store, copy.id)
 }
 

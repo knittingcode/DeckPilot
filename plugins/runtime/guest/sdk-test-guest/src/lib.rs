@@ -86,6 +86,14 @@ fn plugin() -> Plugin {
         // What started the run (G8), and `url.open` only when the user did.
         .action(Action::new("run-context", run_context))
         .action(Action::new("open-if-user", open_if_user).param(Param::text("url").required()))
+        // The clock and the random source (plugin API 1.1).
+        .action(Action::new("clock", clock))
+        .action(
+            Action::new("random", random)
+                .param(Param::integer("length").min(0.0).max(1000.0).default(16))
+                .param(Param::integer("times").min(1.0).max(200.0).default(1)),
+        )
+        .action(Action::new("dice", dice).param(Param::integer("sides").min(1.0).default(6)))
         // A plain GET whose failure goes through `?`: the code a plugin
         // reports without handling the error itself.
         .action(Action::new("get", get).param(Param::text("url").required()))
@@ -241,6 +249,53 @@ fn store_fill(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
         written += 1;
     }
     Ok(Output::ok().with("written", written))
+}
+
+fn clock(ctx: &mut Context<'_>, _: &Args<'_>) -> ActionResult {
+    let now = match ctx.now() {
+        Ok(now) => now,
+        Err(e) => return Ok(refused(&e)),
+    };
+    Ok(Output::ok()
+        .with("unixMs", i64::try_from(now.unix_ms).unwrap_or(i64::MAX))
+        .with("utcOffsetMinutes", i64::from(now.utc_offset_minutes))
+        .with("minuteOfDay", i64::from(now.local_minutes_of_day()))
+        .with("weekday", i64::from(now.local_weekday())))
+}
+
+/// Asks for `length` random bytes `times` times; reports them as hex and
+/// how many calls were answered before one was refused.
+fn random(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
+    let length = usize::try_from(args.get::<i64>("length")?).unwrap_or(0);
+    let times: i64 = args.get("times")?;
+    let mut hex = String::new();
+    let mut answered = 0i64;
+    let mut refusal = None;
+    for _ in 0..times {
+        match ctx.random_bytes(length) {
+            Ok(bytes) => {
+                answered += 1;
+                hex = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            }
+            Err(e) => {
+                refusal = Some(e);
+                break;
+            }
+        }
+    }
+    let out = match &refusal {
+        Some(e) => refused(e),
+        None => Output::ok(),
+    };
+    Ok(out.with("hex", hex).with("answered", answered))
+}
+
+fn dice(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
+    let sides = u64::try_from(args.get::<i64>("sides")?).unwrap_or(1);
+    match ctx.random_below(sides) {
+        Ok(n) => Ok(Output::ok().with("roll", i64::try_from(n + 1).unwrap_or(i64::MAX))),
+        Err(e) => Ok(refused(&e)),
+    }
 }
 
 fn store_usage(ctx: &mut Context<'_>, _: &Args<'_>) -> ActionResult {

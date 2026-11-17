@@ -1,0 +1,30 @@
+---
+/**
+ * LanguageSwitcher: links to the same page in each language. The choice is
+ * remembered (scripts/ui.ts) so the root URL can forward to it next time.
+ */
+import { LANGS, LANG_NAMES, t, type Lang } from '@/i18n';
+import { page, routeOf } from '@/lib/paths';
+
+type Props = { lang: Lang };
+const { lang } = Astro.props;
+const dict = t(lang);
+const route = routeOf(Astro.url.pathname);
+---
+
+<nav class="lang-switch" aria-label={dict.a11y.languageSwitcher}>
+  {
+    LANGS.map((code) => (
+      <a
+        href={page(code, route)}
+        hreflang={code}
+        lang={code}
+        data-set-lang={code}
+        aria-current={code === lang ? 'true' : undefined}
+      >
+        {code.toUpperCase()}
+        <span class="sr-only">: {LANG_NAMES[code]}</span>
+      </a>
+    ))
+  }
+</nav>

@@ -1,0 +1,94 @@
+---
+/**
+ * Base layout: document head (SEO, canonical, hreflang, Open Graph, theme
+ * before first paint), skip link, header, main, footer.
+ */
+import '@/styles/global.css';
+import { getImage } from 'astro:assets';
+import iconPng from '@/assets/brand/icon.png';
+import iconSvg from '@/assets/brand/icon.svg';
+import ogPng from '@/assets/og.png';
+import Footer from '@/components/Footer.astro';
+import Header from '@/components/Header.astro';
+import { LANGS, OG_LOCALE, t, type Lang } from '@/i18n';
+import { page, routeOf, absolute, withBase } from '@/lib/paths';
+
+type Props = {
+  lang: Lang;
+  title: string;
+  description: string;
+  /** Set for pages that must stay out of search engines. */
+  noindex?: boolean;
+  ogType?: 'website' | 'article';
+};
+
+const { lang, title, description, ogType = 'website', noindex = false } = Astro.props;
+const dict = t(lang);
+const route = routeOf(Astro.url.pathname);
+const canonical = absolute(Astro.site, page(lang, route));
+const touchIcon = await getImage({ src: iconPng, width: 180, height: 180, format: 'png' });
+const ogImage = await getImage({ src: ogPng, width: 1200, height: 630, format: 'png' });
+const fullTitle = title.includes('DeckPilot') ? title : `${title} · ${dict.site.name}`;
+---
+
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    {noindex && <meta name="robots" content="noindex" />}
+    <link rel="canonical" href={canonical} />
+    {LANGS.map((code) => <link rel="alternate" hreflang={code} href={absolute(Astro.site, page(code, route))} />)}
+    <link rel="alternate" hreflang="x-default" href={absolute(Astro.site, page('en', route))} />
+
+    <meta property="og:type" content={ogType} />
+    <meta property="og:site_name" content={dict.site.name} />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:locale" content={OG_LOCALE[lang]} />
+    {LANGS.filter((code) => code !== lang).map((code) => <meta property="og:locale:alternate" content={OG_LOCALE[code]} />)}
+    <meta property="og:image" content={absolute(Astro.site, ogImage.src)} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={dict.site.tagline} />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <link rel="sitemap" href={withBase('/sitemap-index.xml')} />
+    <link rel="icon" href={iconSvg.src} type="image/svg+xml" />
+    <link rel="apple-touch-icon" href={touchIcon.src} />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#07112f" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+
+    <script is:inline>
+      // Apply a stored theme choice before first paint; no choice means the
+      // system preference (styles/shared/tokens.css). The key is the one the
+      // Marketplace site uses; both sites share an origin, so the choice
+      // made on one applies on the other.
+      try {
+        var theme = localStorage.getItem('dp-theme');
+        if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+      } catch (e) {}
+    </script>
+    <slot name="head" />
+  </head>
+  <body
+    data-label-copy={dict.a11y.copyCode}
+    data-label-copied={dict.a11y.copied}
+    data-label-copy-failed={dict.a11y.copyFailed}
+    data-label-table={dict.a11y.table}
+  >
+    <a class="skip-link" href="#main">{dict.a11y.skipToContent}</a>
+    <Header lang={lang} />
+    <main id="main" tabindex="-1">
+      <slot />
+    </main>
+    <Footer lang={lang} />
+    <script>
+      import '@/scripts/ui';
+    </script>
+  </body>
+</html>

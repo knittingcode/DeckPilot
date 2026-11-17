@@ -32,6 +32,8 @@ export const PRIVATE_NETWORK_KEY = "network:private-network"
 
 /** The prefix of an origin setting's grant key (G2). */
 export const USER_ORIGIN_PREFIX = "network:user-origin:"
+/** The grant to open pages of the server entered in an origin setting. */
+export const OPEN_USER_ORIGIN_PREFIX = "openUrl:user-origin:"
 
 /** One grant the user consents to and can revoke. */
 export interface Grant {
@@ -139,6 +141,15 @@ function describe(key: string, facts: Facts): Omit<Grant, "key" | "justification
         detail: "Raises the plugin's own storage above the default.",
       }
     case "openUrl":
+      if (key.startsWith(OPEN_USER_ORIGIN_PREFIX)) {
+        const setting = key.slice(OPEN_USER_ORIGIN_PREFIX.length)
+        return {
+          tier: "medium",
+          title: `Open pages of the server you enter in its setting “${setting}” in your browser`,
+          detail:
+            "None until you enter a server and allow exactly it. Only https pages of that server, and only in an action you start (a key, a gesture or the app, or a workflow you start); never from a schedule, an event or startup. At most one every 2 seconds.",
+        }
+      }
       return {
         tier: "medium",
         title: `Open links to ${describeHost(target)} in your browser`,
@@ -215,6 +226,9 @@ export function grantsOf(permissions: ManifestPermission[]): Grant[] {
         break
       case "openUrl":
         for (const host of permission.hosts) add(`openUrl:${host}`, justification)
+        for (const setting of permission.userOrigins ?? []) {
+          add(`${OPEN_USER_ORIGIN_PREFIX}${setting}`, justification)
+        }
         break
       case "background":
         add("background", justification, { minIntervalSeconds: permission.minIntervalSeconds })

@@ -48,6 +48,7 @@ plugins = [
     "dep:deckpilot-plugin-store",
     "dep:deckpilot-plugin-supervisor",
     "dep:deckpilot-net",
+    "dep:getrandom",
     "dep:hkdf",
     "dep:reqwest",
     "dep:rustls",
@@ -100,6 +101,7 @@ deckpilot-plugin-supervisor = { workspace = true, optional = true }
 # bodies) carries out the fetches the broker allowed. Not a module crate,
 # and already part of every agent build through the HTTP module.
 deckpilot-net = { workspace = true, optional = true }
+getrandom = { workspace = true, optional = true }
 hkdf = { workspace = true, optional = true }
 # deckpilot-net's request type names reqwest's methods. The registry's
 # HTTPS source (plugins/fetch.rs) uses reqwest and rustls directly: the
