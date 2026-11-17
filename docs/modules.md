@@ -56,6 +56,7 @@ and nothing is added to the Action Library automatically.
 | `deck.brightness` | `change` (`set` \| `brighter` \| `dimmer`, default `set`), `level` (0–100), `step` (1–100, default 10) | sets the display brightness of the devices or steps it, within 0–100; output `brightness` |
 | `general.log` | `message` | the rendered message |
 | `general.wait` | `seconds` (1–300) | waits; output `waitedMs`; stops at once when cancelled (the reference workflow node) |
+| `general.delay` | `milliseconds` (10–300000, default 500) | waits; output `waitedMs`; stops at once when cancelled. The delay row of a Multi Action's step list: the step sets its own `milliseconds` as an override |
 | `projects.cycle` | `direction` (`next` \| `previous`, default `next`) | switches along the project order (respects `wrapAround`) |
 | `projects.select` | `project_id` (optional) | with a project: selects it; without: reports the current project and changes nothing |
 | `projects.current` | — | reports the current project: `projectId`, `projectKey`, `projectName`, `profileId` |

@@ -74,6 +74,8 @@ interface InspectorProps {
    * assign; see `GestureEditorProps.resolveDrop`.
    */
   resolveDrop?: (dragged: unknown) => Promise<BindingTarget | null> | BindingTarget | null
+  /** Opens the steps of a Multi Action a gesture runs. */
+  onEditWorkflow?: (workflow: string) => void
 }
 
 /** Settings of the selected control, or a summary of a multi-selection. */
@@ -144,6 +146,7 @@ function ControlInspector({
   gestureDefaults = DEFAULT_TIMINGS,
   issues = [],
   resolveDrop,
+  onEditWorkflow,
 }: InspectorProps & { control: ControlId }) {
   const bindings = bindingsFor(draft, pageId, control)
   const gestures = acceptsGestures(model, control)
@@ -178,6 +181,7 @@ function ControlInspector({
             issues={controlMessages}
             onChange={onChange}
             resolveDrop={resolveDrop}
+            onEditWorkflow={onEditWorkflow}
           />
         )}
         {!gestures && controlMessages.length > 0 && (

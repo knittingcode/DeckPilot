@@ -413,22 +413,23 @@ export function duplicateControls(
 
 /**
  * What is being dragged: a library entry, the bindings of a control,
- * "New folder" (a folder that does not exist yet; see `createFolder`) or an
+ * "New folder" (a folder that does not exist yet; see `createFolder`), an
  * action type of the catalog (an action that may not exist yet; see
- * `catalog.ts`).
+ * `catalog.ts`) or "Multi Action" (a step workflow the editor creates).
  */
 export type DragSource =
   | { type: "target"; target: BindingTarget }
   | { type: "control"; control: ControlId }
   | { type: "newFolder" }
   | { type: "actionType"; actionType: string }
+  | { type: "newMultiAction" }
 
 /**
  * Drops a library entry (assigned to the first free trigger) or a control
  * (moved, swapping with the destination). `null` when the drop is refused.
  * A new folder needs an id of its own (the caller makes it with
- * `createFolder`) and an action type an action: the caller creates or
- * finds it and drops that.
+ * `createFolder`), an action type an action and a Multi Action its
+ * workflow: the caller creates or finds it and drops that.
  */
 export function dropOnControl(
   model: DeviceModel,
@@ -437,7 +438,13 @@ export function dropOnControl(
   source: DragSource,
   over: ControlId,
 ): DeviceLayout | null {
-  if (source.type === "newFolder" || source.type === "actionType") return null
+  if (
+    source.type === "newFolder" ||
+    source.type === "actionType" ||
+    source.type === "newMultiAction"
+  ) {
+    return null
+  }
   if (source.type === "control") return moveControl(model, layout, pageId, source.control, over)
   if (!targetFits(layout, pageId, source.target)) return null
   return assignTarget(model, layout, pageId, [over], source.target)

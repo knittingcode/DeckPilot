@@ -84,6 +84,7 @@ fn builtin_modules_register_with_namespaced_action_types() {
             "docker.logs",
             "general.log",
             "general.wait",
+            "general.delay",
             "git.status",
             "git.branch",
             "git.changes",

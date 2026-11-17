@@ -14,6 +14,12 @@ pub const LOG: &str = "general.log";
 pub const WAIT: &str = "general.wait";
 /// Longest wait, in seconds.
 pub const MAX_WAIT_SECONDS: i64 = 300;
+pub const DELAY: &str = "general.delay";
+/// Shortest delay, in milliseconds.
+pub const MIN_DELAY_MS: i64 = 10;
+/// Longest delay, in milliseconds: as long as the longest wait, which keeps
+/// the timeout inside the limit every action has.
+pub const MAX_DELAY_MS: i64 = MAX_WAIT_SECONDS * 1000;
 
 /// # Panics
 ///
@@ -34,6 +40,13 @@ pub fn log_id() -> ActionTypeId {
 /// Never: the identifier is a valid constant.
 pub fn wait_id() -> ActionTypeId {
     ActionTypeId::new(WAIT).expect("the action type id is valid")
+}
+
+/// # Panics
+///
+/// Never: the identifier is a valid constant.
+pub fn delay_id() -> ActionTypeId {
+    ActionTypeId::new(DELAY).expect("the action type id is valid")
 }
 
 #[derive(Debug)]
@@ -82,7 +95,11 @@ impl FeatureModule for GeneralModule {
     }
 
     fn action_handlers(&self, _config: &ActionParameters) -> Vec<Box<dyn ActionHandler>> {
-        vec![Box::new(LogMessage::new()), Box::new(Wait::new())]
+        vec![
+            Box::new(LogMessage::new()),
+            Box::new(Wait::new()),
+            Box::new(Delay::new()),
+        ]
     }
 }
 
@@ -257,6 +274,104 @@ impl ActionHandler for Wait {
     }
 }
 
+/// Waits a number of milliseconds: the delay row of a step list (a Multi
+/// Action). A type of its own rather than a new parameter of [`Wait`], so
+/// that an older build, which refuses parameters it does not know, shows
+/// the step as unavailable instead of refusing the whole action.
+#[derive(Debug)]
+pub struct Delay(ActionType);
+
+impl Delay {
+    pub fn new() -> Self {
+        Self(ActionType {
+            id: delay_id(),
+            name: "Delay".into(),
+            description: "Waits a number of milliseconds between steps; stops at once when the \
+                          workflow is cancelled."
+                .into(),
+            category: "General".into(),
+            parameters: vec![ParameterSpec {
+                key: "milliseconds".into(),
+                label: "Milliseconds".into(),
+                description: Some(format!("{MIN_DELAY_MS} to {MAX_DELAY_MS}")),
+                kind: ParameterKind::Integer {
+                    min: Some(MIN_DELAY_MS),
+                    max: Some(MAX_DELAY_MS),
+                },
+                required: true,
+                default: Some(deckpilot_core::ParameterValue::Integer(500)),
+            }],
+            requires_project: false,
+            deprecated: false,
+            node: deckpilot_core::graph::NodeSpec {
+                version: 1,
+                icon: Some("timer".into()),
+                outputs: vec![deckpilot_core::graph::OutputSpec {
+                    key: "waitedMs".into(),
+                    label: "Waited (ms)".into(),
+                    kind: deckpilot_core::graph::ValueKind::Integer,
+                    always: true,
+                    sensitive: false,
+                }],
+                // The longest delay plus a margin.
+                timeout_ms: u32::try_from(MAX_DELAY_MS + 10_000).unwrap_or(u32::MAX),
+                retry_safe: true,
+                idempotent: true,
+                changes_context: false,
+                cancellable: true,
+                effect: deckpilot_core::graph::ActionEffect::ReadOnly,
+            },
+        })
+    }
+}
+
+impl Default for Delay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ActionHandler for Delay {
+    fn definition(&self) -> &ActionType {
+        &self.0
+    }
+
+    fn execute(
+        &self,
+        parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> ActionResult {
+        let ms = parameters
+            .integer("milliseconds")
+            .unwrap_or(MIN_DELAY_MS)
+            .clamp(MIN_DELAY_MS, MAX_DELAY_MS);
+        let total = std::time::Duration::from_millis(ms.unsigned_abs());
+        let step = std::time::Duration::from_secs(1);
+        let begun = std::time::Instant::now();
+        let mut waited = std::time::Duration::ZERO;
+        while waited < total {
+            // Short delays are over before progress would mean anything.
+            if total > step {
+                let percent =
+                    u8::try_from(waited.as_millis() * 100 / total.as_millis()).unwrap_or(100);
+                context
+                    .report_progress(Some(percent), format!("{} of {ms} ms", waited.as_millis()));
+            }
+            if !context.wait(step.min(total.saturating_sub(waited))) {
+                // Stopped by a cancellation or the timeout; the engine
+                // reports which.
+                return ActionResult::failure(format!(
+                    "stopped after {} ms",
+                    begun.elapsed().as_millis()
+                ));
+            }
+            waited = begun.elapsed().min(total);
+        }
+        ActionResult::success(format!("waited {ms} ms"))
+            .with_data("waitedMs", begun.elapsed().as_millis().to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,5 +474,53 @@ mod wait_tests {
         assert!(!spec.changes_context);
         assert_eq!(spec.outputs[0].key, "waitedMs");
         assert!(u64::from(spec.timeout_ms) > MAX_WAIT_SECONDS.unsigned_abs() * 1000);
+    }
+
+    fn delay(ms: i64) -> ActionParameters {
+        Delay::new()
+            .definition()
+            .normalize(&ActionParameters::new().with("milliseconds", ParameterValue::Integer(ms)))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_delay_waits_its_milliseconds_and_stops_when_cancelled() {
+        let profile = Profile::new("Work");
+        let machine = MachineConfig::new(Os::Linux);
+        let token = CancellationToken::new();
+        let progress = |_: Progress| {};
+        let control = ExecutionControl::new(&token, &progress);
+        let context = ExecutionContext::new(&profile, None, &machine).with_control(&control);
+        let begun = Instant::now();
+        let result = Delay::new().execute(&delay(50), &context);
+        assert!(result.is_success(), "{}", result.message);
+        assert!(begun.elapsed() >= Duration::from_millis(50));
+        assert!(begun.elapsed() < Duration::from_secs(1));
+
+        let canceller = {
+            let token = token.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(100));
+                token.cancel();
+            })
+        };
+        let begun = Instant::now();
+        let result = Delay::new().execute(&delay(MAX_DELAY_MS), &context);
+        canceller.join().unwrap();
+        assert!(!result.is_success());
+        assert!(begun.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_delay_refuses_values_out_of_range() {
+        let handler = Delay::new();
+        for ms in [0, MIN_DELAY_MS - 1, MAX_DELAY_MS + 1] {
+            let parameters =
+                ActionParameters::new().with("milliseconds", ParameterValue::Integer(ms));
+            assert!(handler.definition().normalize(&parameters).is_err(), "{ms}");
+        }
+        let spec = &handler.definition().node;
+        assert!(spec.cancellable && spec.idempotent);
+        assert!(u64::from(spec.timeout_ms) > MAX_DELAY_MS.unsigned_abs());
     }
 }
