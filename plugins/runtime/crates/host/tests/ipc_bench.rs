@@ -51,6 +51,8 @@ fn broker() -> Broker {
         variables: plenty,
         open_url: plenty,
         open_url_window: plenty,
+        time: plenty,
+        random_bytes: plenty,
     };
     let b = Broker::new(
         Arc::new(MemoryAudit::new(10)),

@@ -250,8 +250,17 @@ pub enum Permission {
         justification: String,
     },
     /// Opening https URLs on the listed hosts in the browser.
+    #[serde(rename_all = "camelCase")]
     OpenUrl {
+        /// May be empty only when `user_origins` names at least one
+        /// setting.
         hosts: Vec<String>,
+        /// Settings of the `network` permission's user-origin slots (G2):
+        /// pages on the server the user entered there, and allowed, may be
+        /// opened too. Never granted at install: it follows the user's
+        /// consent to that exact server.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_origins: Option<Vec<String>>,
         justification: String,
     },
     /// Timers while the plugin is active.
@@ -342,6 +351,31 @@ pub struct UserOriginSlot {
     /// tier); loopback and link-local addresses are never reachable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_network: Option<bool>,
+}
+
+impl Permission {
+    /// The origin settings whose server's pages an `openUrl` permission
+    /// may open.
+    pub fn open_url_user_origins(&self) -> &[String] {
+        match self {
+            Self::OpenUrl {
+                user_origins: Some(settings),
+                ..
+            } => settings,
+            _ => &[],
+        }
+    }
+}
+
+impl Manifest {
+    /// Whether pages on the server the user entered in `setting` may be
+    /// opened in the browser (`openUrl.userOrigins`).
+    pub fn opens_user_origin(&self, setting: &str) -> bool {
+        self.permissions
+            .iter()
+            .flat_map(Permission::open_url_user_origins)
+            .any(|s| s == setting)
+    }
 }
 
 impl UserOriginSlot {

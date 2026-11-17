@@ -47,7 +47,7 @@ user grants and revokes.
 | `storage` | `quotaKb` (257-10,240) | `storage` | Raises the storage quota from 256 KiB to `quotaKb` KiB. Storage itself needs no permission |
 | `profile` | `read` (`profile`, `project`) | `profile` | Nothing yet: no ABI 1 capability reads the profile or project |
 | `variables` | `read` (variable ids of other owners, a final `.*` allowed) | `variables:<entry>` | Nothing yet: ABI 1 has no capability to read variables. Own variables need no permission |
-| `openUrl` | `hosts` (1-16 exact DNS names, optional `:port`) | `openUrl:<host>` per host | `url.open` ([`Context::open_url`](capabilities.md#open-url)) for `https://<host>` URLs: no other scheme, no userinfo, at most 2,048 bytes, 1 per 2 s and 20 per 10 minutes, 3 per invocation, and only in a run the user started (a key, a gesture, the app, or a workflow the user started; never a schedule, a lifecycle event, the agent's start or a work session). Exact hosts only: **wildcard hosts validate but are never granted**. It gives no `network` access to the host, and `network` gives no `openUrl` |
+| `openUrl` | `hosts` (1-16 exact DNS names, optional `:port`; may be empty with `userOrigins`), `userOrigins` (settings of the `network` permission's origin slots, [below](#pages-of-a-server-the-user-entered)) | `openUrl:<host>` per host; `openUrl:user-origin:<setting>` per origin setting | `url.open` ([`Context::open_url`](capabilities.md#open-url)) for `https://<host>` URLs: no other scheme, no userinfo, at most 2,048 bytes, 1 per 2 s and 20 per 10 minutes, 3 per invocation, and only in a run the user started (a key, a gesture, the app, or a workflow the user started; never a schedule, a lifecycle event, the agent's start or a work session). Exact hosts only: **wildcard hosts validate but are never granted**. It gives no `network` access to the host, and `network` gives no `openUrl` |
 | `background` | `minIntervalSeconds` (15-86,400) | `background` | Nothing yet: no background work or timers in ABI 1 |
 | `device` | `state`, `icons` (booleans) | `device:state`, `device:icons` | Nothing yet |
 
@@ -185,6 +185,46 @@ Every address a name resolves to must pass, and the connection uses
 exactly those, so DNS rebinding cannot swap one in. A server the plugin
 declares in `hosts` (the default) needs no consent of its own; there is no
 wildcard or unconsented user origin.
+
+### Pages of a server the user entered
+
+`openUrl.hosts` are fixed names, so a plugin for a self-managed GitLab or a
+Jira site could not open a merge request or an issue: the web host is the
+server only the user knows. The `openUrl` permission may name the origin
+settings whose server's pages it opens:
+
+```json
+{ "kind": "openUrl", "hosts": ["gitlab.com"], "userOrigins": ["apiUrl"],
+  "justification": "Opens a project or a merge request on GitLab in your browser." }
+```
+
+- Each entry must be the `setting` of a `network.userOrigins` slot
+  (`unknown-reference` otherwise); at most 4; `hosts` may then be empty.
+- It is a declared permission of its own, `openUrl:user-origin:<setting>`
+  (medium tier), shown and granted like every other. An update that adds
+  it is an escalation.
+- By itself it opens nothing. Pages open only on the server the user
+  entered in that setting **and allowed** (the consent above), while this
+  permission is granted: `https` pages of exactly that scheme, host and
+  port. The consent dialog says so ("It may also open pages of
+  `https://code.example.com` in your browser").
+- It is by server, not by the slot's path prefix, like every `openUrl`
+  grant is by host: a server's pages are usually not under its API's path
+  (`https://code.example.com/gitlab/api/v4` and
+  `https://code.example.com/gitlab/group/project`). It allows no request:
+  `http.fetch` stays within the methods and path prefix the user allowed.
+- A server on a private network (an IP literal or a local name) is opened
+  only when it is exactly the one the user allowed on a private network;
+  every other private or local host, `localhost` and link-local addresses
+  stay refused by the URL check.
+- Everything else of [`url.open`](capabilities.md#open-url) applies: only
+  in a run the user started, 1 per 2 s, 20 per 10 minutes, 3 per
+  invocation, audited by origin.
+- Revoking the permission, revoking the consent to the server, changing
+  the setting or uninstalling ends it on the next call. Revoking this
+  permission does not end the consent to the server (requests still go
+  there); revoking the slot's own permission ends both.
+- An agent older than this refuses the manifest (unknown field).
 
 ## What the broker checks for `http.fetch`
 

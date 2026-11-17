@@ -81,6 +81,13 @@ pub enum ApprovedPermission {
         private_network: bool,
         #[serde(default)]
         credentials: BTreeSet<String>,
+        /// Pages of this server may be opened in the user's browser
+        /// (`openUrl.userOrigins`): any https URL of exactly this scheme,
+        /// host and port. Like every `openUrl` grant it is by origin, not
+        /// by path (a server's pages are rarely under its API's path), and
+        /// it gives no request beyond `methods` and `path_prefix`.
+        #[serde(default)]
+        open_url: bool,
     },
 }
 
@@ -162,6 +169,8 @@ pub struct UserOriginGrant {
     pub(crate) private_network: bool,
     /// Credential slots whose secrets may be injected there.
     pub(crate) credentials: BTreeSet<String>,
+    /// Its pages may be opened in the browser.
+    pub(crate) open_url: bool,
 }
 
 impl UserOriginGrant {
@@ -171,6 +180,11 @@ impl UserOriginGrant {
 
     pub fn private_network(&self) -> bool {
         self.private_network
+    }
+
+    /// Whether pages of this server may be opened in the browser.
+    pub fn open_url(&self) -> bool {
+        self.open_url
     }
 
     pub fn methods(&self) -> impl Iterator<Item = HttpMethod> + '_ {
@@ -264,6 +278,7 @@ impl Grants {
                     methods,
                     private_network,
                     credentials,
+                    open_url,
                 } => {
                     if methods.is_empty() {
                         return Err(GrantError::NoMethods);
@@ -286,6 +301,7 @@ impl Grants {
                         methods: methods.clone(),
                         private_network: *private_network,
                         credentials: credentials.clone(),
+                        open_url: *open_url,
                     });
                 }
                 ApprovedPermission::Storage { quota_kb } => {

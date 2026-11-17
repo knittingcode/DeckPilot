@@ -1,0 +1,13 @@
+---
+/** Notice: an inline status message. `role` is set by the caller when needed. */
+import { Info, TriangleAlert, CircleAlert } from '@lucide/astro';
+
+type Props = { variant?: 'info' | 'warning' | 'danger'; class?: string; role?: 'status' | 'alert' | 'note' };
+const { variant = 'info', class: extra, role = 'note' } = Astro.props;
+const Icon = variant === 'warning' ? TriangleAlert : variant === 'danger' ? CircleAlert : Info;
+---
+
+<div class:list={['notice', variant !== 'info' && `notice-${variant}`, extra]} role={role}>
+  <Icon aria-hidden="true" />
+  <div><slot /></div>
+</div>

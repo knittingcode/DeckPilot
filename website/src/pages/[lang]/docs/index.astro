@@ -1,0 +1,63 @@
+---
+import { ArrowUpRight } from '@lucide/astro';
+import Badge from '@/components/Badge.astro';
+import Card from '@/components/Card.astro';
+import DocsSidebar from '@/components/DocsSidebar.astro';
+import Notice from '@/components/Notice.astro';
+import { marketplace } from '@/data/site';
+import { langPaths, t, type Lang } from '@/i18n';
+import Base from '@/layouts/Base.astro';
+import { docsOf, grouped, slugOf } from '@/lib/docs';
+import { page } from '@/lib/paths';
+
+export const getStaticPaths = langPaths;
+const lang = Astro.params.lang as Lang;
+const dict = t(lang);
+const docs = await docsOf(lang);
+---
+
+<Base lang={lang} title={dict.docs.metaTitle} description={dict.docs.description}>
+  <div class="container docs-layout">
+    <DocsSidebar lang={lang} docs={docs} />
+    <div class="min-w-0">
+      <h1 class="section-title">{dict.docs.title}</h1>
+      <p class="section-lead max-w-2xl">{dict.docs.lead}</p>
+      <Notice class="mt-8 max-w-3xl">
+        <strong>{dict.docs.statusTitle}.</strong>{' '}
+        {dict.docs.status}
+        {' '}{dict.docs.uiLanguage}
+      </Notice>
+      {
+        grouped(docs).map(({ group, docs: pages }) => (
+          <section class="mt-12" aria-labelledby={`group-${group}`}>
+            <h2 class="text-2xl" id={`group-${group}`}>
+              {dict.docs.groups[group]}
+            </h2>
+            <ul class="mt-5 grid list-none gap-4 p-0 sm:grid-cols-2">
+              {pages.map((doc) => (
+                <Card as="li" title={doc.data.title} href={page(lang, `docs/${slugOf(doc)}`)}>
+                  <p class="card-text text-sm">{doc.data.description}</p>
+                  {doc.data.experimental && (
+                    <p class="mt-4">
+                      <Badge variant="warning">{dict.home.marketplace.badge}</Badge>
+                    </p>
+                  )}
+                </Card>
+              ))}
+            </ul>
+          </section>
+        ))
+      }
+      <section class="mt-12 max-w-3xl" aria-labelledby="developers-title">
+        <h2 class="text-2xl" id="developers-title">{dict.docs.developersTitle}</h2>
+        <p class="mt-3 text-muted">{dict.docs.developers}</p>
+        <p class="mt-4">
+          <a class="link-arrow" href={marketplace(lang, 'developers')} rel="noopener" data-marketplace-link>
+            {dict.docs.developersLink}
+            <ArrowUpRight aria-hidden="true" class="h-4 w-4" />
+          </a>
+        </p>
+      </section>
+    </div>
+  </div>
+</Base>

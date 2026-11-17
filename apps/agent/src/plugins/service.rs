@@ -66,8 +66,10 @@ const DECIDED_BY: &str = "user";
 /// The shared code of an invocation whose parameters do not match the
 /// action's declaration (refused by the agent, before the host).
 const INVALID_PARAMETERS: &str = "invalid-parameters";
-/// The plugin API level this agent provides (`deckpilot-plugin-sdk` 1.0).
-const PLUGIN_API: ApiLevel = ApiLevel::new(1, 0);
+/// The plugin API level this agent provides: 1.1 adds `time.now` and
+/// `random.bytes` (`docs/marketplace/plugin-key-state.md`). A plugin whose
+/// manifest asks for a higher minor is `incompatible`.
+const PLUGIN_API: ApiLevel = ApiLevel::new(1, 1);
 /// Longest any invocation may take, whatever the manifest says.
 const MAX_INVOCATION: Duration = Duration::from_secs(600);
 /// Where the registry's verified state is kept (outside `plugins/`,

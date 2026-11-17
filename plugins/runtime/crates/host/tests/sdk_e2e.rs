@@ -9,7 +9,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use deckpilot_plugin_abi::capability::{AuthScheme, RunCause, RunContext, RunTrigger};
+use deckpilot_plugin_abi::capability::{
+    AuthScheme, RandomReply, RunCause, RunContext, RunTrigger, Timestamp,
+};
 use deckpilot_plugin_abi::describe::ParamKind;
 use deckpilot_plugin_abi::protocol::{FatalReason, exit_code};
 use deckpilot_plugin_abi::{ActionOutcome, CallResult, HttpMethod, ParamValue, Params};
@@ -53,6 +55,15 @@ impl CapabilityExecutor for StubExecutor {
                 CallResult::Ok(json!({"status": 200}))
             }
             Allowed::RunContext(run) => CallResult::Ok(serde_json::to_value(run).unwrap()),
+            // A fixed instant and counting bytes: the agent's executor
+            // reads the real clock and the real random source.
+            Allowed::TimeNow => CallResult::Ok(
+                serde_json::to_value(Timestamp::new(1_794_821_400_000, -150)).unwrap(),
+            ),
+            Allowed::RandomBytes { length } => {
+                let bytes: Vec<u8> = (0..*length).map(|i| i as u8).collect();
+                CallResult::Ok(serde_json::to_value(RandomReply::new(&bytes)).unwrap())
+            }
             _ => CallResult::Ok(Value::Null),
         }
     }
@@ -757,4 +768,73 @@ fn shutdown_hook_runs_on_clean_shutdown() {
     h.invoke("arm-shutdown-panic", &Params::new(), T, &mut ex)
         .unwrap();
     assert_eq!(h.shutdown(T).and_then(|s| s.code()), Some(exit_code::TRAP));
+}
+
+/// `time.now` and `random.bytes` (plugin API 1.1) through the real host,
+/// supervisor and broker: allowed without any permission, bounded per
+/// call by the SDK and the host, and by the broker's byte budget.
+#[test]
+fn the_clock_and_random_bytes_need_no_permission_and_are_bounded() {
+    let f = fixture("[]");
+    let mut h = spawn(&config(SDK_TEST_GUEST), &f);
+    let mut ex = StubExecutor::default();
+    let int = |o: &ActionOutcome, key: &str| match &data(o)[key] {
+        ParamValue::Integer(n) => *n,
+        other => panic!("{key}: {other:?}"),
+    };
+    let text = |o: &ActionOutcome, key: &str| match data(o).get(key) {
+        Some(ParamValue::String(t)) => t.clone(),
+        other => panic!("{key}: {other:?}"),
+    };
+
+    let o = h.invoke("clock", &Params::new(), T, &mut ex).unwrap();
+    assert_eq!(int(&o, "unixMs"), 1_794_821_400_000);
+    assert_eq!(int(&o, "utcOffsetMinutes"), -150);
+    // 09:30 UTC is 07:00 two and a half hours west, on the same Monday.
+    assert_eq!(int(&o, "minuteOfDay"), 7 * 60);
+    assert_eq!(int(&o, "weekday"), 0);
+
+    let length = |n: i64, times: i64| {
+        Params::from([
+            ("length".to_owned(), ParamValue::Integer(n)),
+            ("times".to_owned(), ParamValue::Integer(times)),
+        ])
+    };
+    let o = h.invoke("random", &length(4, 1), T, &mut ex).unwrap();
+    assert_eq!(text(&o, "hex"), "00010203");
+
+    // Too many or no bytes: refused by the SDK before any host call.
+    let before = ex.executed.len();
+    for n in [0, 65, 1000] {
+        let o = h.invoke("random", &length(n, 1), T, &mut ex).unwrap();
+        assert_eq!(text(&o, "error"), "BadRequest", "{n}");
+    }
+    assert_eq!(ex.executed.len(), before);
+
+    // The byte budget: 4,096 a minute. 4 are spent; 63 more calls of 64
+    // fit (4,032), the next one is throttled, and no bytes come back.
+    let o = h.invoke("random", &length(64, 70), T, &mut ex).unwrap();
+    assert_eq!(text(&o, "error"), "Throttled");
+    assert_eq!(int(&o, "answered"), 63);
+
+    let one = Params::from([("sides".to_owned(), ParamValue::Integer(1))]);
+    let o = h.invoke("dice", &one, T, &mut ex).unwrap();
+    assert_eq!(int(&o, "roll"), 1);
+
+    // Audited by operation only: no length, no bytes, no time.
+    let records = f.audit.records();
+    let ops = |op: &str, allowed: bool| {
+        records
+            .iter()
+            .filter(|r| {
+                r.op == op
+                    && (r.decision == AuditDecision::Allowed) == allowed
+                    && r.target.is_none()
+            })
+            .count()
+    };
+    assert_eq!(ops("time.now", true), 1);
+    assert_eq!(ops("random.bytes", true), 64);
+    assert_eq!(ops("random.bytes", false), 1);
+    assert_eq!(h.shutdown(T).and_then(|s| s.code()), Some(exit_code::CLEAN));
 }

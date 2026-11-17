@@ -1,0 +1,110 @@
+---
+import { render } from 'astro:content';
+import { ArrowLeft, ArrowRight } from '@lucide/astro';
+import DocsSidebar from '@/components/DocsSidebar.astro';
+import Notice from '@/components/Notice.astro';
+import { LINKS, REPO_APP } from '@/data/site';
+import { fill, LANGS, t, type Lang } from '@/i18n';
+import Base from '@/layouts/Base.astro';
+import { DOCS_VERIFIED_COMMIT, docsOf, slugOf, type Doc } from '@/lib/docs';
+import { page } from '@/lib/paths';
+
+export async function getStaticPaths() {
+  const paths = [];
+  for (const lang of LANGS) {
+    const docs = await docsOf(lang);
+    for (const [i, doc] of docs.entries()) {
+      paths.push({
+        params: { lang, slug: slugOf(doc) },
+        props: { doc, docs, previous: docs[i - 1], next: docs[i + 1] },
+      });
+    }
+  }
+  return paths;
+}
+
+type Props = { doc: Doc; docs: Doc[]; previous?: Doc; next?: Doc };
+const { doc, docs, previous, next } = Astro.props;
+const lang = Astro.params.lang as Lang;
+const dict = t(lang);
+const { Content, headings } = await render(doc);
+const toc = headings.filter((heading) => heading.depth === 2 || heading.depth === 3);
+---
+
+<Base lang={lang} title={doc.data.title} description={doc.data.description} ogType="article">
+  <div class:list={['container', 'docs-layout', toc.length > 1 && 'has-toc']}>
+    <DocsSidebar lang={lang} docs={docs} current={slugOf(doc)} />
+
+    <article class="min-w-0">
+      <nav class="breadcrumb" aria-label={dict.a11y.breadcrumb}>
+        <ol>
+          <li><a href={page(lang, 'docs')}>{dict.docs.title}</a></li>
+          <li>{dict.docs.groups[doc.data.group]}</li>
+        </ol>
+      </nav>
+      <h1 class="section-title mt-4">{doc.data.title}</h1>
+      <p class="section-lead">{doc.data.description}</p>
+
+      <div class="prose mt-8 max-w-[46rem]">
+        <Content />
+      </div>
+
+      <footer class="mt-14 max-w-[46rem]">
+        <Notice>
+          <strong>{dict.docs.statusTitle}.</strong>{' '}
+          {dict.docs.status}
+          {' '}{dict.docs.uiLanguage}
+          <span class="mt-2 block">
+            <a href={`${REPO_APP}/tree/${DOCS_VERIFIED_COMMIT}`} rel="noopener">
+              {fill(dict.docs.verified, { commit: DOCS_VERIFIED_COMMIT.slice(0, 7) })}
+            </a>{' '}
+            <a href={LINKS.docsIndex} rel="noopener">{dict.docs.source}</a>
+          </span>
+        </Notice>
+        <nav class="mt-8 grid gap-4 sm:grid-cols-2" aria-label={dict.docs.pagination}>
+          {
+            previous ? (
+              <a class="card card-link !p-4 no-underline" href={page(lang, `docs/${slugOf(previous)}`)} rel="prev">
+                <span class="flex items-center gap-1 text-sm text-subtle">
+                  <ArrowLeft class="h-4 w-4" aria-hidden="true" />
+                  {dict.docs.previous}
+                </span>
+                <span class="mt-1 font-semibold text-fg">{previous.data.title}</span>
+              </a>
+            ) : (
+              <span />
+            )
+          }
+          {
+            next && (
+              <a class="card card-link !p-4 text-right no-underline" href={page(lang, `docs/${slugOf(next)}`)} rel="next">
+                <span class="flex items-center justify-end gap-1 text-sm text-subtle">
+                  {dict.docs.next}
+                  <ArrowRight class="h-4 w-4" aria-hidden="true" />
+                </span>
+                <span class="mt-1 font-semibold text-fg">{next.data.title}</span>
+              </a>
+            )
+          }
+        </nav>
+      </footer>
+    </article>
+
+    {
+      toc.length > 1 && (
+        <nav class="docs-toc" aria-labelledby="toc-title">
+          <p class="side-heading !pl-0" id="toc-title">
+            {dict.docs.onThisPage}
+          </p>
+          <ul class="toc-list">
+            {toc.map((heading) => (
+              <li class={`depth-${heading.depth}`}>
+                <a href={`#${heading.slug}`}>{heading.text}</a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      )
+    }
+  </div>
+</Base>

@@ -53,10 +53,13 @@ encrypted configuration database and its key handling, the IPC between app
 and agent, the update mechanism (manifest, signatures, installation), the
 built-in modules, the release workflows and signing in this repository.
 
-DeckPilot has no third-party plugins: every module is built in and
-compiled into the application. A plugin marketplace exists only as a design
-proposal; if plugins are added, they will be treated as untrusted code that
-runs behind a sandbox and a permission broker.
+Published releases have no third-party plugins: every module is built in
+and compiled into the application. A plugin marketplace is being developed
+on `main` as an experimental feature that is compiled out of release builds
+and off by default; plugins are treated as untrusted code that runs in a
+separate process behind a sandbox and a permission broker. Reports about
+that code on `main` (the plugin host, sandbox, broker, package and registry
+verification) are in scope.
 
 Out of scope: vulnerabilities in third-party dependencies that do not
 affect DeckPilot (report those upstream), attacks that require full control

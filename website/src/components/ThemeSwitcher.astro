@@ -1,0 +1,25 @@
+---
+/**
+ * ThemeSwitcher: toggles between light and dark. Without a stored choice
+ * the system preference applies (tokens.css); the choice is stored in
+ * localStorage under `dp-theme` and applied before first paint by the
+ * inline script in layouts/Base.astro.
+ */
+import { Moon, Sun } from '@lucide/astro';
+import { t, type Lang } from '@/i18n';
+
+type Props = { lang: Lang };
+const dict = t(Astro.props.lang);
+---
+
+<button
+  type="button"
+  class="btn btn-ghost btn-icon theme-toggle"
+  data-theme-toggle
+  data-label-dark={dict.a11y.switchToDark}
+  data-label-light={dict.a11y.switchToLight}
+  aria-label={dict.a11y.switchToDark}
+>
+  <Moon class="icon-moon" aria-hidden="true" />
+  <Sun class="icon-sun" aria-hidden="true" />
+</button>
