@@ -371,6 +371,14 @@ fn probe_state(ctx: &mut Context<'_>, args: &Args<'_>) -> Result<KeyState, Plugi
             let answered = (0..40).filter(|_| ctx.storage_get("count").is_ok()).count();
             format!("{answered}")
         }
+        // Well behaved until an action stores how to misbehave.
+        "armed" => match ctx.storage_get_as::<String>("armed")?.as_deref() {
+            Some("spin") => loop {
+                core::hint::black_box(0);
+            },
+            Some("panic") => panic!("an armed state handler panicked"),
+            _ => "calm".to_owned(),
+        },
         "error" => return Err(PluginError::new("not-configured", "Choose a city")),
         "long" => "x".repeat(200),
         "panic" => panic!("a state handler panicked"),

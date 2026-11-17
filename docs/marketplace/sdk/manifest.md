@@ -63,7 +63,7 @@ At most 64 actions (`MAX_ACTIONS`). Each:
 | `parameters` | yes | ≤ 32 (`MAX_PARAMS`); see [actions.md](actions.md#parameters) |
 | `node` | no | Workflow node contract: `version` (≥ 1), `icon` (`[a-z0-9-]{1,64}`), `outputs` (≤ 32), `timeoutMs` (1,000-600,000, default 30,000: the invocation's wall-clock limit), `retrySafe`, `idempotent`, `effect` (`readOnly`, `opens`, `modifies`; a warning when `modifies` is `retrySafe`). `cancellable` is accepted; the agent treats every plugin action as cancellable. There is no `changesContext` |
 | `requiresProject`, `deprecated`, `replacedBy` | no | `replacedBy` names another action of this plugin and needs `deprecated: true` |
-| `state` | no | Button state refresh (`onEvents` or `every` with `intervalSeconds`; needs `effect: readOnly`). Accepted and validated; **ABI 1 has no state call**, so no button state is ever pulled from a plugin |
+| `state` | no | Key state refresh (`onEvents` or `every` with `intervalSeconds` 1-86,400; needs `effect: readOnly`). From plugin API 1.2 the agent asks the action's state handler for keys shown on a device ([actions.md](actions.md#key-state)), never more often than every 5 s; it needs the `device` permission with `state: true`. An agent below 1.2 accepts it and asks nothing |
 | `device` | no | `{ "requires": [...] }`. Accepted, not used |
 
 ### Outputs (`node.outputs[]`)
@@ -135,7 +135,7 @@ shared code (`SHARED_ERROR_CODES`). See
 | Field | Rule | Checked |
 | --- | --- | --- |
 | `engines.deckpilot` | One comparator or a lower and an upper bound separated by one space: `>=`, `>`, `<=`, `<`, `=` (or none, meaning `=`) followed by `MAJOR.MINOR.PATCH` without leading zeros or pre-release, e.g. `">=0.5.0 <1.0.0"`; ≤ 64 characters; must be satisfiable (`VersionRange`). Matching uses semver precedence **including DeckPilot pre-releases**: `0.6.0-alpha.3` satisfies `>=0.5.0 <1.0.0`, and `0.8.0-beta.1` does not satisfy `>=0.8.0` | By the registry client before install (`incompatible`) and by the agent (`HostEnvironment.app_version` = the agent's version) |
-| `engines.pluginApi` | `^MAJOR.MINOR`: same major, at least this minor (`ApiRequirement`). The agent provides **1.1** (`PLUGIN_API` in `apps/agent/src/plugins/service.rs`), so `^1.0` and `^1.1` install; declare `^1.1` only when the plugin cannot work without the time or random bytes ([errors-and-versions.md](errors-and-versions.md#versions)) | Same |
+| `engines.pluginApi` | `^MAJOR.MINOR`: same major, at least this minor (`ApiRequirement`). The agent provides **1.2** (`PLUGIN_API` in `apps/agent/src/plugins/service.rs`), so `^1.0`, `^1.1` and `^1.2` install; declare `^1.1` only when the plugin cannot work without the time or random bytes, and `^1.2` only when it is useless without key state ([errors-and-versions.md](errors-and-versions.md#versions)) | Same |
 | `engines.sdk` | Informational semver of the SDK used (`deckpilot_plugin_sdk::SDK_VERSION`, 0.1.0) | `testing::manifest_mismatches` only |
 | `platforms` | Omitted means macOS, Windows and Linux | Same; a mismatch is `Incompatibility::Platform` |
 
