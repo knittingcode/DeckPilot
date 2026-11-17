@@ -449,7 +449,7 @@ fn origin_of(host: &str) -> Option<String> {
 
 /// What the broker may allow, from the effective grants of an enabled
 /// plugin (granted ∩ declared). Kinds the broker does not decide
-/// (profile, variables, background, device) are not passed; their
+/// (profile, variables, background, `device:icons`) are not passed; their
 /// capabilities do not exist in ABI 1 or are refused by the executor. An
 /// `openUrl` grant is passed per exact host, like `network`; a wildcard
 /// host is not (the broker opens exact origins only).
@@ -485,6 +485,11 @@ pub fn approved_with(
                 None => skipped.push(key.to_string()),
             },
             (PermissionKind::Notifications, _) => out.push(ApprovedPermission::Notifications {}),
+            // Key state (plugin API 1.2): the plugin describes what its
+            // keys show. `device:icons` gives nothing yet.
+            (PermissionKind::Device, _) if key.key == "state" => {
+                out.push(ApprovedPermission::KeyState {});
+            }
             // Passed with the consented origin itself (`user_origins`).
             (PermissionKind::OpenUrl, GrantScope::OpenUrl)
                 if deckpilot_plugin_store::open_url_user_origin_setting(key).is_some() => {}
