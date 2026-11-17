@@ -371,6 +371,19 @@ mod tests {
                 .unwrap();
         let current = v(env!("CARGO_PKG_VERSION"));
         let next = Version::new(current.major, current.minor, current.patch);
+        // On a release preparation branch (and on main after it) the
+        // version's section is already dated; check it as it was before.
+        let dated = format!("## [{next}] - ");
+        let own: String = own
+            .split_inclusive('\n')
+            .map(|line| {
+                if line.starts_with(&dated) {
+                    format!("## [{next}] - Unreleased\n")
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect();
         let stable = prepare_changelog(&own, &next, "2026-11-12").unwrap();
         // Without "Unreleased" notes only the version's heading changes.
         if !own.contains("## [Unreleased]") {
