@@ -54,8 +54,8 @@ pub use appearance::{
     MAX_ICON_NAME, MAX_ICON_SIZE, MAX_ICONS, TitleAlign,
 };
 pub use button_state::{
-    ButtonState, Indicator, MAX_REFRESH_INTERVAL, MIN_REFRESH_INTERVAL, RefreshPolicy, StateError,
-    StateSnapshot,
+    Accent, ButtonState, Glyph, Indicator, MAX_REFRESH_INTERVAL, MAX_STATE_BADGE, MAX_STATE_SERIES,
+    MIN_REFRESH_INTERVAL, RefreshPolicy, StateError, StateSnapshot,
 };
 pub use cancel::{CancelReason, CancellationToken};
 pub use credentials::{

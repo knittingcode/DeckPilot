@@ -82,6 +82,8 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
   entered in an origin setting (G2) is passed only while the user's consent
   to exactly it (`plugin_user_origins`) matches what the setting holds and
   its slot permission is granted ([permissions.md](sdk/permissions.md#user-entered-origins)).
+  With it goes whether its pages may be opened (`openUrl:user-origin:<setting>`
+  granted and still declared); that grant alone is passed as nothing.
 - **Execution.** Only in the host, through the supervisor: the active
   version's files are re-verified against their integrity record and the
   module re-validated before the host is spawned; the supervisor checks
@@ -541,7 +543,8 @@ empty (older answers parse unchanged):
 
 Permission keys are grant keys: `network:<host>`, `notifications`,
 `credentials:<ref>`, `variables:<entry>`, `storage`, `profile`,
-`openUrl:<host>`, `background`, `device:state`, `device:icons`.
+`openUrl:<host>`, `openUrl:user-origin:<setting>`, `background`,
+`device:state`, `device:icons`.
 `PluginDetails.permissions` lists each declared one with `tier`, `status`
 (`granted`, `revoked`, `notGranted`), `scope` and `justification`;
 `PermissionChanges` (`added`, `broadened`, `removed`, `escalation`)

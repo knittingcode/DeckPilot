@@ -1,0 +1,9 @@
+{
+  "tag": "v1.0.0",
+  "version": "1.0.0",
+  "channel": "stable",
+  "platforms": {
+    "aarch64-apple-darwin": { "codesign": "developer-id", "notarized": true },
+    "x86_64-pc-windows-msvc": { "codesign": "authenticode", "notarized": null }
+  }
+}

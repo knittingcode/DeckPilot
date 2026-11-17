@@ -74,6 +74,7 @@
     {
       "kind": "openUrl",
       "hosts": ["example.org", "*.example.org"],
+      "userOrigins": ["serverUrl"],
       "justification": "Opens the dashboard of a service."
     },
     {

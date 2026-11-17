@@ -1,0 +1,11 @@
+{
+  "repository": "knittingcode/deckpilot-plugins",
+  "branch": "main",
+  "path": "website/src/styles",
+  "commit": "829a885e30418793a8970fb57eb90c15f3580c18",
+  "files": {
+    "tokens.css": "aa4ce8638778bd5b8b712789b4f5fa435415d5c1616f5b675bd5450ebb23ac80",
+    "base.css": "552c91f31204f7143fedfd7ba496a5d631ae81b4d50bd28d3effa1bf6e2fb7f4",
+    "components.css": "aa2eff5eb4a6fa48c2b4c8bb1fd80fa9f1c157c1872ddb6a7b080865d792a8fd"
+  }
+}

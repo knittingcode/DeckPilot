@@ -1,0 +1,62 @@
+---
+/** Header: brand, main navigation, language and theme switchers, mobile menu. */
+import { Menu, X } from '@lucide/astro';
+import wordmark from '@/assets/brand/wordmark.svg';
+import wordmarkDark from '@/assets/brand/wordmark-dark.svg';
+import { LINKS } from '@/data/site';
+import { t, type Lang } from '@/i18n';
+import { page } from '@/lib/paths';
+import GitHubMark from './GitHubMark.astro';
+import LanguageSwitcher from './LanguageSwitcher.astro';
+import Navigation from './Navigation.astro';
+import ThemeSwitcher from './ThemeSwitcher.astro';
+
+type Props = { lang: Lang };
+const { lang } = Astro.props;
+const dict = t(lang);
+---
+
+<header class="site-header">
+  <div class="container site-header-inner">
+    <a class="brand" href={page(lang)} aria-label={dict.a11y.homeLink}>
+      <img class="only-light" src={wordmark.src} alt="" width="167" height="28" />
+      <img class="only-dark" src={wordmarkDark.src} alt="" width="167" height="28" />
+    </a>
+
+    <nav class="desktop-nav" aria-label={dict.a11y.mainNav}>
+      <Navigation lang={lang} />
+    </nav>
+
+    <div class="header-tools">
+      <LanguageSwitcher lang={lang} />
+      <ThemeSwitcher lang={lang} />
+      <a class="btn btn-ghost btn-icon max-sm:!hidden" href={LINKS.app} rel="noopener" aria-label={`${dict.nav.github}: DeckPilot`}>
+        <GitHubMark />
+      </a>
+      <button
+        type="button"
+        class="btn btn-ghost btn-icon nav-toggle"
+        data-nav-toggle
+        aria-expanded="false"
+        aria-controls="mobile-nav"
+        aria-label={dict.a11y.openMenu}
+        data-label-open={dict.a11y.openMenu}
+        data-label-close={dict.a11y.closeMenu}
+      >
+        <Menu class="icon-open" aria-hidden="true" />
+        <X class="icon-close" aria-hidden="true" style="display:none" />
+      </button>
+    </div>
+  </div>
+
+  <div class="container mobile-nav" id="mobile-nav" hidden>
+    <nav aria-label={dict.a11y.mainNav}>
+      <Navigation lang={lang} />
+      <ul class="nav-list mt-2 border-t border-line pt-2">
+        <li>
+          <a class="nav-link" href={LINKS.app} rel="noopener">{dict.footer.github}</a>
+        </li>
+      </ul>
+    </nav>
+  </div>
+</header>

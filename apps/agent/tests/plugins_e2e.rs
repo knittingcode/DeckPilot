@@ -303,6 +303,17 @@ fn sdk_actions() -> Value {
         "failedNodes",
     ]);
     let headers = outputs(HEADERS_OUTPUTS);
+    let ambient = outputs(&[
+        "error",
+        "detail",
+        "unixMs",
+        "utcOffsetMinutes",
+        "minuteOfDay",
+        "weekday",
+        "hex",
+        "answered",
+        "roll",
+    ]);
     let actions: Vec<Value> = [
         ("scale", vec![]),
         ("inits", vec![]),
@@ -350,6 +361,21 @@ fn sdk_actions() -> Value {
         ("get", vec![text("url")]),
         ("run-context", vec![]),
         ("open-if-user", vec![text("url")]),
+        ("clock", vec![]),
+        (
+            "random",
+            vec![
+                json!({"key": "length", "label": "Length", "required": false,
+                    "kind": {"type": "integer", "min": 0, "max": 1000}}),
+                json!({"key": "times", "label": "Times", "required": false,
+                    "kind": {"type": "integer", "min": 1, "max": 200}}),
+            ],
+        ),
+        (
+            "dice",
+            vec![json!({"key": "sides", "label": "Sides", "required": false,
+                "kind": {"type": "integer", "min": 1}})],
+        ),
     ]
     .into_iter()
     .map(|(id, parameters)| {
@@ -360,6 +386,7 @@ fn sdk_actions() -> Value {
             "settings" => &settings,
             "open-url" | "open-if-user" => &open,
             "run-context" => &run,
+            "clock" | "random" | "dice" => &ambient,
             "headers" | "get" => &headers,
             _ => &basic,
         };
@@ -455,7 +482,9 @@ fn origin_manifest() -> Value {
          "userOrigins": [{"setting": "serverUrl", "pathPrefix": true, "privateNetwork": true}],
          "justification": "Talks to the example API and to your server."},
         {"kind": "credentials", "refs": ["token"],
-         "justification": "Signs in to your server."}
+         "justification": "Signs in to your server."},
+        {"kind": "openUrl", "hosts": [], "userOrigins": ["serverUrl"],
+         "justification": "Opens pages of your server in the browser."}
     ]);
     manifest["contributes"]["actions"] = sdk_actions();
     manifest["contributes"]["settings"] = json!({"fields": [
@@ -4230,6 +4259,7 @@ const ORIGIN_GRANTS: &[&str] = &[
     "network:api.example.com",
     "network:user-origin:serverUrl",
     "credentials:token",
+    "openUrl:user-origin:serverUrl",
 ];
 
 impl Agent {
@@ -4606,6 +4636,203 @@ async fn a_server_the_user_enters_is_reached_only_with_its_own_consent() {
         .with_token("https://ghe.example.com/api/v3/user")
         .await;
     assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+
+    agent.stop().await;
+}
+
+/// Pages of a server the user enters (`openUrl.userOrigins`), through the
+/// real agent and host: none opens before the user allowed exactly that
+/// server; then its pages open, whatever their path, and no other
+/// server's; the permission revoked, a changed setting or a revoked
+/// consent ends it at once; a private server opens only with its own
+/// consent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // one scenario, step by step
+async fn pages_of_a_server_the_user_enters_open_only_with_its_consent() {
+    use deckpilot_ipc::plugins::UserOriginStatus as Status;
+    const OPEN_KEY: &str = "openUrl:user-origin:serverUrl";
+    let registry = shared_registry();
+    let env = Env::new("plugins-e2e-origin-pages");
+    let agent = Agent::started(&env, registry).await;
+    agent.install_enabled(ORIGIN, ORIGIN_GRANTS).await;
+    let details = agent.details(ORIGIN).await;
+    let grant = details
+        .permissions
+        .iter()
+        .find(|p| p.key == OPEN_KEY)
+        .unwrap();
+    assert_eq!(grant.status, PermissionStatus::Granted);
+    assert_eq!(grant.kind, "openUrl");
+    assert_eq!(grant.scope["type"], "openUrl", "{grant:?}");
+    let open = |url: &str| agent.run(ORIGIN, "open-url", json!({ "url": url }));
+    // One page per 2 s: a pause before every page that is to open.
+    let pause = || tokio::time::sleep(Duration::from_millis(2_100));
+
+    // ---- the server entered but not allowed: nothing opens.
+    let page = "https://code.example.com/gitlab/group/app/-/merge_requests/7";
+    let server = agent
+        .set_server("https://code.example.com/gitlab/api/v4")
+        .await;
+    assert_eq!(server.status, Status::NeedsConsent, "{server:?}");
+    assert!(server.opens_pages, "{server:?}");
+    let refused = open(page).await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    assert_eq!(env.opened_urls(), [] as [&str; 0]);
+
+    // ---- allowed: its pages open, also outside the API's path prefix.
+    agent
+        .allow_server("https://code.example.com/gitlab/api/v4", false)
+        .await
+        .unwrap();
+    let opened = open(page).await;
+    assert_eq!(opened["opened"], 1, "{opened:?}");
+    assert_eq!(env.opened_urls(), [page]);
+    // Requests stay within the prefix the user allowed.
+    let refused = agent
+        .with_token("https://code.example.com/gitlab/group/app")
+        .await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    // No other server, port or scheme.
+    for url in [
+        "https://code.example.com:8443/gitlab/",
+        "https://x.code.example.com/gitlab/",
+        "https://code.example.com.evil.example.net/gitlab/",
+        "https://api.example.com/",
+        "http://code.example.com/gitlab/",
+        "https://code.internal/gitlab/",
+        "https://10.0.0.5/",
+        "https://localhost/",
+    ] {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let refused = open(url).await;
+        assert_eq!(refused["error"], "NotPermitted", "{url}: {refused:?}");
+    }
+    assert_eq!(env.opened_urls(), [page], "a refused page was opened");
+
+    // ---- the permission revoked: requests still go there, pages do not
+    // open; granted again, they do, with the same consent to the server.
+    agent.revoke(ORIGIN, OPEN_KEY).await;
+    pause().await;
+    let refused = open(page).await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    let settings = agent
+        .origin_settings(Request::GetPluginSettings {
+            plugin: ORIGIN.into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(settings.origins[0].status, Status::Granted);
+    assert!(!settings.origins[0].opens_pages);
+    agent.grant(ORIGIN, &[OPEN_KEY]).await;
+    pause().await;
+    assert_eq!(open(page).await["opened"], 1);
+    assert_eq!(env.opened_urls(), [page, page]);
+
+    // ---- a changed setting ends it at once, for the old server and the
+    // new one.
+    let changed = agent
+        .set_server("https://code2.example.com/gitlab/api/v4")
+        .await;
+    assert_eq!(changed.status, Status::NeedsConsent, "{changed:?}");
+    pause().await;
+    for url in [page, "https://code2.example.com/gitlab/group/app"] {
+        let refused = open(url).await;
+        assert_eq!(refused["error"], "NotPermitted", "{url}: {refused:?}");
+    }
+
+    // ---- a server on a private network: only with its own consent.
+    let lan = agent
+        .set_server("https://code.internal/gitlab/api/v4")
+        .await;
+    assert!(lan.private_host, "{lan:?}");
+    let lan_page = "https://code.internal/gitlab/group/app";
+    let refused = open(lan_page).await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    agent
+        .allow_server("https://code.internal/gitlab/api/v4", true)
+        .await
+        .unwrap();
+    pause().await;
+    assert_eq!(open(lan_page).await["opened"], 1);
+    assert_eq!(env.opened_urls(), [page, page, lan_page]);
+
+    // ---- the consent revoked: refused on the very next call.
+    agent
+        .origin_settings(Request::RevokePluginUserOrigin {
+            plugin: ORIGIN.into(),
+            setting: "serverUrl".into(),
+        })
+        .await
+        .unwrap();
+    pause().await;
+    let refused = open(lan_page).await;
+    assert_eq!(refused["error"], "NotPermitted", "{refused:?}");
+    assert_eq!(env.opened_urls(), [page, page, lan_page]);
+    agent.stop().await;
+}
+
+/// Plugin API 1.1 through the real agent and sandboxed host: a plugin
+/// reads the agent's clock with the local UTC offset and takes bytes from
+/// the system's random source, within the per-call bound and the
+/// per-plugin byte budget. Neither is one of its permissions (the broker's
+/// tests show both allowed with none granted).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugins_read_the_clock_and_random_bytes_within_their_budget() {
+    use chrono::Offset as _;
+    let registry = shared_registry();
+    let env = Env::new("plugins-e2e-ambient");
+    let agent = Agent::started(&env, registry).await;
+    agent.install_enabled(OPENER, OPENER_GRANTS).await;
+
+    let unix_ms = || {
+        i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap()
+    };
+    let before = unix_ms();
+    let clock = agent.run(OPENER, "clock", json!({})).await;
+    let after = unix_ms();
+    let seen = clock["unixMs"].as_i64().unwrap();
+    assert!((before..=after).contains(&seen), "{before} {seen} {after}");
+    let offset = i64::from(chrono::Local::now().offset().fix().local_minus_utc() / 60);
+    assert_eq!(clock["utcOffsetMinutes"], offset, "{clock:?}");
+    let minute = (seen / 1000 + offset * 60).rem_euclid(86_400) / 60;
+    assert_eq!(clock["minuteOfDay"], minute, "{clock:?}");
+    assert!((0..7).contains(&clock["weekday"].as_i64().unwrap()));
+
+    // Fresh bytes of the length asked for, never the same twice.
+    let first = agent.run(OPENER, "random", json!({"length": 32})).await;
+    let second = agent.run(OPENER, "random", json!({"length": 32})).await;
+    let hex = |data: &BTreeMap<String, Value>| data["hex"].as_str().unwrap().to_owned();
+    assert_eq!(hex(&first).len(), 64, "{first:?}");
+    assert!(hex(&first).chars().all(|c| c.is_ascii_hexdigit()));
+    assert_ne!(hex(&first), hex(&second));
+    assert_ne!(hex(&first), "0".repeat(64));
+    for _ in 0..20 {
+        let roll = agent.run(OPENER, "dice", json!({"sides": 6})).await["roll"]
+            .as_i64()
+            .unwrap();
+        assert!((1..=6).contains(&roll), "{roll}");
+    }
+
+    // More than 64 bytes at once is refused before the agent is asked.
+    let too_many = agent.run(OPENER, "random", json!({"length": 65})).await;
+    assert_eq!(too_many["error"], "BadRequest", "{too_many:?}");
+    // The budget is 4,096 bytes a minute per plugin, refilled as time
+    // passes: 704 are spent, so 100 calls of 64 cannot all be answered,
+    // and the refusal is `throttled`, not an error of the action.
+    let drained = agent
+        .run(OPENER, "random", json!({"length": 64, "times": 100}))
+        .await;
+    assert_eq!(drained["error"], "Throttled", "{drained:?}");
+    let answered = drained["answered"].as_i64().unwrap();
+    assert!((40..100).contains(&answered), "{drained:?}");
+    // The clock has its own limit and still answers.
+    assert!(agent.run(OPENER, "clock", json!({})).await["unixMs"].is_i64());
 
     agent.stop().await;
 }

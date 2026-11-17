@@ -718,6 +718,32 @@ nothing changes.
   starts; the agent side of that dialog is covered by
   `plugins_cutover.rs` and P7's `plugins_migration.rs`.
 
+*As built (P11, the GitLab plugin):* `plugins/first-party/gitlab`
+(`deckpilot.gitlab`, class `migration` in `bundled.json`) reproduces all
+six actions of the built-in `gitlab` module; no variables on either side.
+It is built and pinned, and **not routed**: its alias block and migration
+plan come with its cut-over.
+
+- The API URL is a user-entered origin (G2): `gitlab.com` is the declared
+  host and the default, and a self-managed GitLab (with its path, possibly
+  on a private network) is reached, sent the token and opened only after
+  the user allowed exactly that server. The token is the slot `token`,
+  sent in `PRIVATE-TOKEN`; pages open on the same server
+  (`openUrl.userOrigins`, §7 G1).
+- `contracts.rs` (`first_party`) checks the manifest against the built-in
+  (actions, settings, and that the permissions are exactly these three);
+  `apps/agent/tests/plugins_gitlab.rs` runs every action through the agent
+  and the host against the built-in on the same canned answers, on
+  GitLab.com and on an entered GitLab under a path, with identical
+  results.
+- Lists use pages of 50 (two for more than 50 merge requests, ten for the
+  built-in's 500 jobs or uncounted merge requests), and pages of 10 when
+  an answer is over the 512 KiB a plugin gets. The differences, all on
+  failure paths, limits or the editor, are listed in
+  [`plugins/first-party/gitlab/README.md`](../../plugins/first-party/gitlab/README.md).
+- `plugins/first-party/support` holds what the plugins for a user-entered
+  server share (URLs without the `url` crate, the `Date`-based time limit).
+
 `notifications` follows as the first `default`-class bundled plugin. It is
 the one that proves seeding, tombstones and first launch.
 
@@ -766,6 +792,20 @@ key press, a gesture, the app, or a workflow the user started): the
 broker denies it as `not-permitted` in a run a schedule, a lifecycle
 event, the agent's start or a work session started, and the consent text
 says so.
+
+*Status (P11):* pages of a server the user entered. `openUrl.hosts` are
+fixed names, so `gitlab.open` on a self-managed GitLab and every
+`jira.open` (Jira has no fixed host) had no grant to open with. The
+`openUrl` permission now takes `userOrigins`, the settings of G2 slots: a
+declared medium-tier grant per setting (`openUrl:user-origin:<setting>`)
+that opens nothing by itself, and lets `url.open` open `https` pages of
+exactly the server the user entered there and allowed (G2's per-origin
+consent, whose dialog says so). By server, not by the slot's path prefix (a
+GitLab's pages are beside its `/api/v4`, not under it); requests are
+unchanged. A private server only when it is the one the user allowed on a
+private network. No schema change in `plugins.db`: the grant is an
+ordinary row, and the broker's record of the consented server carries the
+flag ([permissions.md](sdk/permissions.md#pages-of-a-server-the-user-entered)).
 
 ### G2 User-entered origins (github GHE, gitlab self-managed, jira, http)
 

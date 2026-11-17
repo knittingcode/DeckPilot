@@ -1,0 +1,91 @@
+[
+  {
+    "tag_name": "v9.9.9",
+    "name": "A draft that must never be shown",
+    "draft": true,
+    "prerelease": false,
+    "published_at": null,
+    "html_url": "https://github.com/knittingcode/deckpilot/releases/tag/untagged-draft",
+    "assets": [
+      {
+        "name": "DeckPilot_9.9.9_aarch64.dmg",
+        "size": 1,
+        "browser_download_url": "https://github.com/knittingcode/deckpilot/releases/download/untagged-draft/DeckPilot_9.9.9_aarch64.dmg",
+        "digest": null
+      }
+    ]
+  },
+  {
+    "tag_name": "v1.1.0-beta.1",
+    "name": "DeckPilot v1.1.0-beta.1",
+    "draft": false,
+    "prerelease": true,
+    "published_at": "2030-03-01T10:00:00Z",
+    "html_url": "https://github.com/knittingcode/deckpilot/releases/tag/v1.1.0-beta.1",
+    "assets": []
+  },
+  {
+    "tag_name": "v1.0.0",
+    "name": "DeckPilot v1.0.0",
+    "draft": false,
+    "prerelease": false,
+    "published_at": "2030-02-01T10:00:00Z",
+    "html_url": "https://github.com/knittingcode/deckpilot/releases/tag/v1.0.0",
+    "assets": [
+      {
+        "name": "DeckPilot_1.0.0_aarch64.dmg",
+        "size": 15728640,
+        "browser_download_url": "https://github.com/knittingcode/deckpilot/releases/download/v1.0.0/DeckPilot_1.0.0_aarch64.dmg",
+        "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      {
+        "name": "DeckPilot_1.0.0_x64-setup.exe",
+        "size": 12582912,
+        "browser_download_url": "https://github.com/knittingcode/deckpilot/releases/download/v1.0.0/DeckPilot_1.0.0_x64-setup.exe",
+        "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      {
+        "name": "DeckPilot_1.0.0_x64-setup.exe.sig",
+        "size": 460,
+        "browser_download_url": "https://github.com/knittingcode/deckpilot/releases/download/v1.0.0/DeckPilot_1.0.0_x64-setup.exe.sig",
+        "digest": null
+      },
+      {
+        "name": "DeckPilot-1.0.0-1.x86_64.rpm",
+        "size": 18874368,
+        "browser_download_url": "https://github.com/knittingcode/deckpilot/releases/download/v1.0.0/DeckPilot-1.0.0-1.x86_64.rpm",
+        "digest": null
+      },
+      {
+        "name": "DeckPilot_1.0.0_amd64.deb",
+        "size": 18874368,
+        "browser_download_url": "https://example.com/elsewhere/DeckPilot_1.0.0_amd64.deb",
+        "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      {
+        "name": "DeckPilot_aarch64.app.tar.gz",
+        "size": 15728640,
+        "browser_download_url": "https://github.com/knittingcode/deckpilot/releases/download/v1.0.0/DeckPilot_aarch64.app.tar.gz",
+        "digest": null
+      },
+      {
+        "name": "latest.json",
+        "size": 2000,
+        "browser_download_url": "https://github.com/knittingcode/deckpilot/releases/download/v1.0.0/latest.json",
+        "digest": null
+      },
+      {
+        "name": "release-meta.json",
+        "size": 600,
+        "browser_download_url": "https://github.com/knittingcode/deckpilot/releases/download/v1.0.0/release-meta.json",
+        "digest": null
+      },
+      {
+        "name": "SHA256SUMS",
+        "size": 1500,
+        "browser_download_url": "https://github.com/knittingcode/deckpilot/releases/download/v1.0.0/SHA256SUMS",
+        "digest": null
+      }
+    ]
+  }
+]

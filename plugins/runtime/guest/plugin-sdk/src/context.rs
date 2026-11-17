@@ -4,13 +4,14 @@ use std::fmt;
 
 use deckpilot_plugin_abi::capability::{
     AuthScheme, CredentialRef, Header, HttpAuth, HttpFetch, HttpResponse, Log, LogLevel, NoArgs,
-    Notify, NotifySeverity, OpenUrl, StorageKey, StoragePrefix, StorageSet, VariableClear,
-    VariablePublish,
+    Notify, NotifySeverity, OpenUrl, RandomBytes, RandomReply, StorageKey, StoragePrefix,
+    StorageSet, Timestamp, VariableClear, VariablePublish,
 };
 pub use deckpilot_plugin_abi::capability::{
     NotifyDelivery, RunCause, RunContext, RunSummary, RunTrigger, StorageUsage,
 };
 use deckpilot_plugin_abi::limits::MAX_HOST_CALLS_PER_INVOCATION;
+pub use deckpilot_plugin_abi::limits::MAX_RANDOM_BYTES;
 use deckpilot_plugin_abi::{
     CallError, CallErrorCode, CallResult, CapabilityRequest, HttpMethod, NetworkErrorKind,
 };
@@ -691,6 +692,139 @@ impl<'a> Context<'a> {
     pub fn run_context(&mut self) -> Result<RunContext, CapabilityError> {
         let v = self.call("run.context", &CapabilityRequest::RunContext(NoArgs {}))?;
         serde_json::from_value(v).map_err(|_| malformed("run.context", "a run context"))
+    }
+
+    /// The time now: the agent's wall clock (UTC) and the local UTC offset
+    /// (plugin API 1.1). Needs no permission; at most 20 calls a second.
+    /// The clock is the system's, so it can jump; ask again rather than
+    /// adding to an old answer. An agent older than API 1.1 refuses it
+    /// ([`CapabilityErrorKind::Unsupported`]): declare
+    /// `"pluginApi": "^1.1"` when the plugin cannot work without it.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::CallResult;
+    ///
+    /// // 2026-11-16 09:30:00 UTC, in a zone one hour east of UTC.
+    /// let mut host = MockHost::new(|_| CallResult::Ok(serde_json::json!({
+    ///     "unixMs": 1_794_821_400_000_u64, "utcOffsetMinutes": 60
+    /// })));
+    /// let mut ctx = host.context();
+    /// let now = ctx.now().unwrap();
+    /// assert_eq!(now.unix_seconds(), 1_794_821_400);
+    /// assert_eq!(now.local_minutes_of_day(), 10 * 60 + 30);
+    /// assert_eq!(now.local_weekday(), 0); // Monday
+    /// ```
+    pub fn now(&mut self) -> Result<Now, CapabilityError> {
+        let v = self.call("time.now", &CapabilityRequest::TimeNow(NoArgs {}))?;
+        serde_json::from_value::<Timestamp>(v)
+            .map(|t| Now::from(Timestamp::new(t.unix_ms, t.utc_offset_minutes)))
+            .map_err(|_| malformed("time.now", "a timestamp"))
+    }
+
+    /// `length` bytes (1 to [`MAX_RANDOM_BYTES`]) from the agent's
+    /// cryptographic random source (plugin API 1.1). Needs no permission;
+    /// a plugin gets at most 4,096 bytes a minute, so take a seed and
+    /// expand it rather than asking per card or per cell. Another length
+    /// is refused here without a host call.
+    pub fn random_bytes(&mut self, length: usize) -> Result<Vec<u8>, CapabilityError> {
+        if length == 0 || length > MAX_RANDOM_BYTES {
+            return Err(CapabilityError {
+                op: "random.bytes",
+                kind: CapabilityErrorKind::BadRequest,
+                detail: format!("random_bytes takes 1 to {MAX_RANDOM_BYTES} bytes"),
+                target: None,
+                network: None,
+            });
+        }
+        let request = CapabilityRequest::RandomBytes(RandomBytes {
+            length: length as u32,
+        });
+        let v = self.call("random.bytes", &request)?;
+        serde_json::from_value::<RandomReply>(v)
+            .ok()
+            .and_then(|reply| reply.decode())
+            .filter(|bytes| bytes.len() == length)
+            .ok_or_else(|| malformed("random.bytes", "the requested bytes"))
+    }
+
+    /// A random `u64` ([`Context::random_bytes`] of 8 bytes).
+    pub fn random_u64(&mut self) -> Result<u64, CapabilityError> {
+        let bytes = self.random_bytes(8)?;
+        let mut eight = [0u8; 8];
+        eight.copy_from_slice(&bytes);
+        Ok(u64::from_le_bytes(eight))
+    }
+
+    /// A random number in `0..bound`, every value equally likely
+    /// (`bound` 0 gives 0). One host call for 32 bytes; a rejected draw
+    /// (rarer than one in two) takes the next 8 of them.
+    pub fn random_below(&mut self, bound: u64) -> Result<u64, CapabilityError> {
+        if bound <= 1 {
+            return Ok(0);
+        }
+        // The largest multiple of `bound` that fits: draws at or above it
+        // would make small values more likely.
+        let zone = u64::MAX - (u64::MAX % bound + 1) % bound;
+        loop {
+            let bytes = self.random_bytes(32)?;
+            for chunk in bytes.as_chunks::<8>().0 {
+                let draw = u64::from_le_bytes(*chunk);
+                if draw <= zone {
+                    return Ok(draw % bound);
+                }
+            }
+        }
+    }
+}
+
+/// The time of one [`Context::now`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Now {
+    /// Milliseconds since the Unix epoch (UTC).
+    pub unix_ms: u64,
+    /// The local UTC offset at that instant in minutes, east positive.
+    pub utc_offset_minutes: i32,
+}
+
+impl From<Timestamp> for Now {
+    fn from(t: Timestamp) -> Self {
+        Self {
+            unix_ms: t.unix_ms,
+            utc_offset_minutes: t.utc_offset_minutes,
+        }
+    }
+}
+
+impl Now {
+    /// Seconds since the Unix epoch (UTC).
+    pub fn unix_seconds(&self) -> u64 {
+        self.unix_ms / 1000
+    }
+
+    /// Seconds since the Unix epoch shifted by the local offset: divide
+    /// and take remainders to get the local date and time.
+    pub fn local_seconds(&self) -> i64 {
+        i64::try_from(self.unix_seconds())
+            .unwrap_or(i64::MAX)
+            .saturating_add(i64::from(self.utc_offset_minutes) * 60)
+    }
+
+    /// Minutes since local midnight, 0 to 1,439 (for quiet hours).
+    pub fn local_minutes_of_day(&self) -> u32 {
+        (self.local_seconds().rem_euclid(86_400) / 60) as u32
+    }
+
+    /// The local day of the week: 0 is Monday, 6 is Sunday.
+    pub fn local_weekday(&self) -> u32 {
+        // 1970-01-01 was a Thursday (3).
+        (self.local_seconds().div_euclid(86_400) + 3).rem_euclid(7) as u32
+    }
+
+    /// Milliseconds from `earlier` to this instant; 0 when the clock went
+    /// back in between.
+    pub fn millis_since(&self, earlier_unix_ms: u64) -> u64 {
+        self.unix_ms.saturating_sub(earlier_unix_ms)
     }
 }
 

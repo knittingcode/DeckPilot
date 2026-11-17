@@ -1,0 +1,23 @@
+---
+/** NotFound: the body of the 404 pages. */
+import { Compass } from '@lucide/astro';
+import { t, type Lang } from '@/i18n';
+import { page } from '@/lib/paths';
+import Button from './Button.astro';
+import ErrorState from './ErrorState.astro';
+
+type Props = { lang: Lang };
+const { lang } = Astro.props;
+const dict = t(lang);
+---
+
+<div class="container py-20 md:py-28">
+  <ErrorState title={dict.notFound.heading} headingLevel={1}>
+    <Compass slot="icon" />
+    {dict.notFound.text}
+    <Fragment slot="actions">
+      <Button href={page(lang)}>{dict.notFound.home}</Button>
+      <Button href={page(lang, 'docs')} variant="secondary">{dict.notFound.docs}</Button>
+    </Fragment>
+  </ErrorState>
+</div>

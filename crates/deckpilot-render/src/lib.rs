@@ -6,6 +6,7 @@
 
 mod face;
 pub mod icons;
+mod marks;
 
 pub use face::{FrameCache, render, render_with};
 pub use icons::{IconError, Icons};
