@@ -1,14 +1,14 @@
 //! Plugins (experimental; `docs/marketplace/agent-integration.md`).
 //!
 //! The plugin requests of IPC protocol 10 arrive here. Without the
-//! `plugins` feature (every release build) they are answered with
-//! "plugins not available", and `getPluginRuntime` says why. With it, and
-//! with plugins enabled (`--enable-plugins`), they go to a worker thread
-//! that owns the plugin store, the registry client and the permission
-//! broker, and one lane thread per running plugin with its supervisor
-//! ([`PluginRuntime`]). Installed plugins are also feature modules of the
-//! agent's module registry ([`PluginRuntime::modules`], `engine.rs`), so
-//! keys and workflows run their actions. Plugin code never runs in the
+//! `plugins` feature they are answered with "plugins not available", and
+//! `getPluginRuntime` says why. With it plugins are on unless turned off
+//! (`--disable-plugins`, `DECKPILOT_ENABLE_PLUGINS=0`), and they go to a
+//! worker thread that owns the plugin store, the registry client and the
+//! permission broker, and one lane thread per running plugin with its
+//! supervisor ([`PluginRuntime`]). Installed plugins are also feature
+//! modules of the agent's module registry ([`PluginRuntime::modules`],
+//! `engine.rs`), so keys and workflows run their actions. Plugin code never runs in the
 //! agent: every invocation goes through the supervisor to a sandboxed
 //! `deckpilot-plugin-host` process.
 
@@ -54,8 +54,23 @@ mod worker;
 /// Whether this agent was built with the `plugins` feature.
 pub const BUILT: bool = cfg!(feature = "plugins");
 
-/// Environment variable that enables plugins like `--enable-plugins` (`1`).
+/// Whether plugins are on when neither the command line nor [`ENABLE_ENV`]
+/// says otherwise: in every build with the `plugins` feature, so the
+/// configuration app and the login item start the agent with plugins
+/// without passing anything.
+pub const ENABLED_BY_DEFAULT: bool = BUILT;
+/// Environment variable that turns plugins on (`1`, like
+/// [`ENABLE_SWITCH`]) or off (`0`, like [`DISABLE_SWITCH`]); unset, empty
+/// or anything else leaves [`ENABLED_BY_DEFAULT`].
 pub const ENABLE_ENV: &str = "DECKPILOT_ENABLE_PLUGINS";
+/// Command-line switch that turns plugins on. The default of a build with
+/// the `plugins` feature; still accepted, e.g. to override
+/// `DECKPILOT_ENABLE_PLUGINS=0`.
+pub const ENABLE_SWITCH: &str = "--enable-plugins";
+/// Command-line switch that turns plugins off: plugin requests are
+/// answered with "plugins not available" and nothing under `plugins/` in
+/// the data directory is opened or created.
+pub const DISABLE_SWITCH: &str = "--disable-plugins";
 /// Environment variable naming the plugin host executable (development;
 /// an installed application finds the host next to the agent).
 pub const HOST_ENV: &str = "DECKPILOT_PLUGIN_HOST";
@@ -75,7 +90,9 @@ pub const REGISTRY_RELEASES_URL_ENV: &str = "DECKPILOT_PLUGIN_REGISTRY_RELEASES_
 /// How plugins are set up for this agent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PluginSettings {
-    /// Plugin requests are answered (`--enable-plugins`). Off by default.
+    /// Plugin requests are answered. [`PluginSettings::from_env`] starts
+    /// from [`ENABLED_BY_DEFAULT`] (on with the `plugins` feature);
+    /// [`PluginSettings::default`] has it off, for embedders that opt in.
     pub enabled: bool,
     /// The `deckpilot-plugin-host` executable (development). Default: next
     /// to the agent's own executable, where the installers put it.
@@ -117,7 +134,7 @@ impl PluginSettings {
         };
         let text = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
         Self {
-            enabled: std::env::var(ENABLE_ENV).is_ok_and(|v| v == "1"),
+            enabled: enabled_from(std::env::var(ENABLE_ENV).ok().as_deref()),
             host: path(HOST_ENV),
             bundled: path(BUNDLED_ENV),
             registry: path(REGISTRY_ENV),
@@ -125,6 +142,28 @@ impl PluginSettings {
             registry_releases_url: text(REGISTRY_RELEASES_URL_ENV),
             registry_roots: path(REGISTRY_ROOTS_ENV),
         }
+    }
+
+    /// Applies a command-line switch that turns plugins on or off
+    /// ([`ENABLE_SWITCH`], [`DISABLE_SWITCH`]; the last one given wins,
+    /// and either wins over [`ENABLE_ENV`]). `false` for any other
+    /// argument.
+    pub fn apply_switch(&mut self, arg: &str) -> bool {
+        match arg {
+            ENABLE_SWITCH => self.enabled = true,
+            DISABLE_SWITCH => self.enabled = false,
+            _ => return false,
+        }
+        true
+    }
+}
+
+/// Whether plugins are on, given the value of [`ENABLE_ENV`].
+fn enabled_from(value: Option<&str>) -> bool {
+    match value {
+        Some("1") => true,
+        Some("0") => false,
+        _ => ENABLED_BY_DEFAULT,
     }
 }
 
@@ -237,7 +276,9 @@ fn unavailable_reason(settings: &PluginSettings) -> String {
     if !BUILT {
         "plugins are not available: this agent was built without plugin support".into()
     } else if !settings.enabled {
-        "plugins are not enabled in this agent (start it with --enable-plugins)".into()
+        "plugins are turned off in this agent (it was started with --disable-plugins or \
+         DECKPILOT_ENABLE_PLUGINS=0)"
+            .into()
     } else {
         "plugins are not available right now".into()
     }
@@ -451,5 +492,57 @@ impl PluginRuntime {
         if let Some(worker) = self.worker.take() {
             worker.stop();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugins_are_on_by_default_exactly_in_builds_with_the_feature() {
+        assert_eq!(ENABLED_BY_DEFAULT, cfg!(feature = "plugins"));
+        assert_eq!(enabled_from(None), ENABLED_BY_DEFAULT);
+        // Empty or anything but 0 and 1 leaves the default.
+        for value in ["", "yes", "true", "off", " 1"] {
+            assert_eq!(enabled_from(Some(value)), ENABLED_BY_DEFAULT, "{value:?}");
+        }
+        assert!(enabled_from(Some("1")));
+        assert!(!enabled_from(Some("0")));
+        // The library's own default stays off: embedders opt in.
+        assert!(!PluginSettings::default().enabled);
+    }
+
+    #[test]
+    fn the_last_switch_wins_and_other_arguments_are_left_alone() {
+        let mut settings = PluginSettings {
+            enabled: enabled_from(Some("0")),
+            ..PluginSettings::default()
+        };
+        assert!(settings.apply_switch("--enable-plugins"));
+        assert!(settings.enabled, "the command line wins over the variable");
+        assert!(settings.apply_switch("--disable-plugins"));
+        assert!(!settings.enabled);
+        assert!(settings.apply_switch("--enable-plugins"));
+        assert!(settings.enabled);
+        for other in ["--headless", "--plugins", "--no-plugins", "enable-plugins"] {
+            assert!(!settings.apply_switch(other), "{other}");
+        }
+        assert!(settings.enabled);
+    }
+
+    #[test]
+    fn a_disabled_agent_says_how_it_was_turned_off() {
+        let off = PluginSettings::default();
+        let reason = unavailable_reason(&off);
+        if BUILT {
+            assert!(reason.contains("--disable-plugins"), "{reason}");
+            assert!(reason.contains("DECKPILOT_ENABLE_PLUGINS=0"), "{reason}");
+        } else {
+            assert!(reason.contains("built without plugin support"), "{reason}");
+        }
+        let status = idle_status(&off);
+        assert!(!status.enabled && !status.available);
+        assert_eq!(status.built, BUILT);
     }
 }

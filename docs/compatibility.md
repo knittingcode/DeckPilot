@@ -87,7 +87,7 @@ with schema 7 and have not been recorded again for protocol 9 and schema 9.
 | agent before protocol 4 | simulated (`peers`: a protocol 3 peer) | update required; stopping it with protocol 1 still works |
 | protocol 5 agent | simulated (`peers`) | background executions without notifications |
 | protocol 9 agent (before plugins) | simulated (`peers`) | every plugin request refused locally (`Unsupported`, needs protocol 10) and never sent |
-| protocol 10 agent without plugins (any release build) | agent tests (`plugins_e2e`, `without_enable_plugins_nothing_is_available`) | `getPluginRuntime` says why; every other plugin request fails with `unsupported` and reason `pluginsUnavailable`; plugin events are a separate message sent only after `subscribePluginEvents`, so older clients never see them |
+| protocol 10 agent without plugins (any release build) | agent tests (`plugins_e2e`, `with_plugins_disabled_nothing_is_available`) | `getPluginRuntime` says why; every other plugin request fails with `unsupported` and reason `pluginsUnavailable`; plugin events are a separate message sent only after `subscribePluginEvents`, so older clients never see them |
 | agent temporarily unavailable | desktop tests (`stopped` state), connect timeouts (`deckpilot-ipc`) | stopped state; no request hangs |
 | agent restarted during a running workflow | agent test `runs_of_a_stopped_agent_are_recorded_as_interrupted` | run recorded as interrupted; history kept |
 | agent version changed while the app stays open | bridge reconnect (negotiates again); simulated peers per version | covered by the same negotiation; not tested end to end with a running app window |

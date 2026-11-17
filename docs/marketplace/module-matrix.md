@@ -537,9 +537,9 @@ decisions stay in [module-migration.md](module-migration.md).
 | `gitlab` | `deckpilot.gitlab` 0.1.0 | `migration` | `gitlab.*` → `deckpilot.gitlab.*` (6 actions) | P11, after this audit |
 | `jira` | `deckpilot.jira` 0.1.0 | `migration` | `jira.*` → `deckpilot.jira.*` (4 actions) | P11, after this audit |
 
-Released builds still have plugins off (`plugins` cargo feature,
-`--enable-plugins`, `VITE_DECKPILOT_PLUGINS=1`), so every built-in is what
-runs for 0.6.0-alpha.3 users. No built-in was removed.
+Released builds still have plugins off (they lack the `plugins` cargo
+feature, which turns plugins on, and `VITE_DECKPILOT_PLUGINS=1`), so every
+built-in is what runs for 0.6.0-alpha.3 users. No built-in was removed.
 
 ### What a plugin can use now
 

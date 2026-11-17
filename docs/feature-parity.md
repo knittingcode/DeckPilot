@@ -38,7 +38,7 @@ screenshots were available for this audit.
 The plugin system is experimental; published releases up to v0.6.0 do not
 contain it, and the release workflow builds it into the installers from
 the next release on (cargo feature `plugins`, `VITE_DECKPILOT_PLUGINS=1`,
-the plugin host and bundled plugins; `--enable-plugins`), and its sandbox
+the plugin host and bundled plugins), and its sandbox
 has no process, file system, input injection, audio or device capability
 (`docs/marketplace/module-migration.md`, G13–G16). Nothing in this document
 is a plugin today, and nothing here adds a capability to the plugin broker.

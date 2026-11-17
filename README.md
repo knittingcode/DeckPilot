@@ -22,9 +22,8 @@ Apache-2.0 &nbsp;·&nbsp; macOS · Windows · Linux &nbsp;·&nbsp; Pre-release
 </div>
 
 > [!NOTE]
-> DeckPilot is in **early development**. The first public pre-release is
-> [`v0.6.0-alpha.3`](https://github.com/knittingcode/deckpilot/releases/tag/v0.6.0-alpha.3); there
-> is no stable release yet. Only the Elgato **Stream Deck MK.2** is supported, and it has been
+> DeckPilot is in **early development**. The first stable release is
+> [`v0.6.0`](https://github.com/knittingcode/deckpilot/releases/tag/v0.6.0). Only the Elgato **Stream Deck MK.2** is supported, and it has been
 > tested on real hardware on **macOS** so far. See [Supported devices](#supported-devices) and [Known limitations](#known-limitations).
 
 ## What is DeckPilot?
@@ -130,9 +129,9 @@ a password instead. Encrypted exports are the backup and move a configuration to
 
 ## Download
 
-The first public pre-release is
-[`v0.6.0-alpha.3`](https://github.com/knittingcode/deckpilot/releases/tag/v0.6.0-alpha.3); there is
-no stable release yet. Each release on the
+The latest stable release is on the
+[latest release page](https://github.com/knittingcode/deckpilot/releases/latest); the first was
+[`v0.6.0`](https://github.com/knittingcode/deckpilot/releases/tag/v0.6.0). Each release on the
 [Releases page](https://github.com/knittingcode/deckpilot/releases) has these installers:
 
 | Platform | Installer | Notes |

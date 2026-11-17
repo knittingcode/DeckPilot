@@ -1,9 +1,10 @@
 # Plugin API 1.1 and 1.2: time, randomness and key state
 
 Status: **design**, implemented by the pull requests named in each section.
-Everything here is part of the experimental plugin runtime: off by default
-behind the cargo feature `plugins`, `--enable-plugins` and
-`VITE_DECKPILOT_PLUGINS=1`. A default build is unchanged.
+Everything here is part of the experimental plugin runtime: behind the
+cargo feature `plugins` (where it is on unless the agent is started with
+`--disable-plugins`) and `VITE_DECKPILOT_PLUGINS=1`. A default build is
+unchanged.
 
 Plugin API 1.0 gives a plugin no clock, no random source and no way to
 change what a key shows (`sdk/lifecycle.md`, "Not in ABI 1"). This adds

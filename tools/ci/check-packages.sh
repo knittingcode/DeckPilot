@@ -3,7 +3,7 @@
 # must contain:
 #
 #   tools/ci/check-packages.sh linux
-#   tools/ci/check-packages.sh windows <dir with the extracted installers>
+#   tools/ci/check-packages.sh windows <dir with the installed/extracted installers>
 #   tools/ci/check-packages.sh macos
 #   tools/ci/check-packages.sh record <binary> <format> [optional]
 #
@@ -31,7 +31,7 @@
 #   version, as installed apps require.
 #
 # Linux: .deb, AppImage and, for final versions, .rpm. Windows: <dir>/nsis
-# and <dir>/msi hold the extracted installers. macOS: the .app, its updater
+# and <dir>/msi hold the installed NSIS and extracted MSI. macOS: the .app, its updater
 # archive (.app.tar.gz) and the disk image of one architecture.
 #
 # `record <binary> <format>` checks one binary's record and prints it as

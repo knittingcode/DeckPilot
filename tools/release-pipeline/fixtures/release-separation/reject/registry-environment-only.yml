@@ -1,4 +1,4 @@
-# expect: runs in the registry environment registry-publish
+# expect: runs in the registry environment registry-release
 on:
   push:
     tags: ["v*"]
@@ -8,6 +8,6 @@ jobs:
   index:
     runs-on: ubuntu-latest
     environment:
-      name: registry-publish
+      name: registry-release
     steps:
       - run: echo deploy

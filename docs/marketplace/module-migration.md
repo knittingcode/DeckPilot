@@ -606,7 +606,12 @@ gate, not a code switch.
 | Database | What the migration changes | An older app |
 | --- | --- | --- |
 | `deckpilot.db` (schema 9) | nothing: no schema change, no rewritten document, no deleted row | opens it as before. Legacy ids find its built-ins; `modules` and `credentials` rows are as they were at migration time |
-| `plugins.db` | schema 2 → 3 (`module_migrations`, `plugin_tombstones`, `source = 'bundled'`) | refuses schema 3 with `UnsupportedSchema` (`crates/deckpilot-plugin-store/src/db.rs:163`). The agent reports the plugin store as unavailable and runs without plugins (`apps/agent/src/plugins/service.rs:294-302`). Release builds enable plugins from the first release that ships the Marketplace |
+| `plugins.db` | schema 2 → 3 (`module_migrations`, `plugin_tombstones`, `source = 'bundled'`) | refuses schema 3 with `UnsupportedSchema` (`crates/deckpilot-plugin-store/src/db.rs:163`). The agent reports the plugin store as unavailable and runs without plugins (`apps/agent/src/plugins/service.rs:294-302`). Release builds include the `plugins` feature from the first release after v0.6.0 |
+
+Turning plugins off on the same data (`--disable-plugins` or
+`DECKPILOT_ENABLE_PLUGINS=0`, see [§5.10](#510-plugins-on-by-default))
+behaves like an older app: `plugins/` is not opened, and the legacy ids
+run their built-ins again.
 
 So a **downgrade is safe**, with three documented losses:
 
@@ -622,6 +627,39 @@ that a schema 2 build refuses schema 3 without writing, and that the agent
 then starts with plugins disabled. The rule from
 [data-model.md](../data-model.md) holds: there is no in-place downgrade of
 either database. This design avoids needing one for `deckpilot.db`.
+
+### 5.10 Plugins on by default
+
+In a build with the agent's `plugins` cargo feature, plugins are **on**
+without any argument (`apps/agent/src/plugins/mod.rs`,
+`ENABLED_BY_DEFAULT`). The configuration app and the login item start the
+agent without plugin arguments (`apps/desktop/src-tauri/src/agent.rs`,
+`apps/agent/src/autostart.rs`), so the bundled plugins, their pins and the
+migrations of this document take effect on the first start of such a
+build, with the consent rules of §5.5 (B3: derived grants for low and
+medium tiers; credentials and private networks wait for the user).
+
+| Switch | Plugins |
+| --- | --- |
+| none (the app, the login item) | on with the feature, off without it |
+| `--disable-plugins`, or `DECKPILOT_ENABLE_PLUGINS=0` | off: plugin requests are refused with `pluginsUnavailable`, `plugins/` is not opened, the legacy ids run their built-ins |
+| `--enable-plugins` (kept for compatibility), or `DECKPILOT_ENABLE_PLUGINS=1` | on with the feature; nothing without it |
+
+The command line wins over the variable, and of two switches the last.
+A build without the feature is unchanged: it never answers plugin
+requests, whatever the switches.
+
+An update from 0.6.0 (an encrypted `deckpilot.db`, no `plugins/`) starts
+like any other: locked, `getPluginRuntime` says plugins are on and every
+other plugin request waits for the key (`locked`), creating nothing;
+after the unlock the agent creates `plugins.db` with the key derived from
+the configuration key, seeds the bundled plugins and runs their
+migrations. `deckpilot.db` is not written, byte for byte, so 0.6.0 still
+opens the same data. Tests: `plugins_notifications.rs`
+(`a_0_6_0_data_dir_starts_with_plugins_on_without_a_switch`, from the
+0.6.0 fixture of `crates/deckpilot-storage/tests/fixtures/v0.6.0`) and
+`plugins_e2e.rs` (`plugins_are_on_unless_turned_off`, every switch and
+value).
 
 ## 6. The first module
 
@@ -661,8 +699,9 @@ Lists use pages of 50 (two for more than 50 pull requests, ten for the
 built-in's 500 checks).
 
 *As built (P9), the cut-over.* The first behaviour change, and only in
-builds with plugins enabled; release builds keep plugins off, so for them
-nothing changes.
+builds with the `plugins` feature, where plugins are on unless turned off
+([§5.10](#510-plugins-on-by-default)); release builds include the
+feature from the first release after v0.6.0 (v0.6.0 and older do not).
 
 - `ACTION_ALIASES` (`crates/deckpilot-core/src/alias.rs`) has one block:
   `github.<action>` → `deckpilot.github.<action>` for `current-user`,
@@ -772,9 +811,10 @@ built-in `jira` module; no variables on either side. Built and pinned,
   secret, so Jira's 401 says so instead. All differences:
   [`plugins/first-party/jira/README.md`](../../plugins/first-party/jira/README.md).
 
-*As built (P11), the GitLab and Jira cut-overs.* In builds with plugins
-enabled only; release builds keep plugins off, so for them nothing
-changes.
+*As built (P11), the GitLab and Jira cut-overs.* In builds with the
+`plugins` feature only (plugins on unless turned off, §5.10); release
+builds include the feature from the first release after v0.6.0 (v0.6.0
+and older do not).
 
 - `ACTION_ALIASES` has two more blocks, `gitlab.<action>` →
   `deckpilot.gitlab.<action>` (six) and `jira.<action>` →
@@ -1206,6 +1246,7 @@ they change.
 | P9 | GitHub cut-over | one `ACTION_ALIASES` block, the `github` `MigrationPlan`, a `migration`-class entry in `bundled/pins.json` | P6, P7, P8 | The first behaviour change, in plugin-enabled builds only. The built-in stays as the legacy implementation. **Landed** ([§6](#6-the-first-module), *As built (P9)*) |
 | P10 | `deckpilot.notifications` as the first default plugin | `plugins/first-party/notifications/`, its alias block | P4 (G8, G9), P9 | Proves first launch, tombstones and fresh installs. *Done*: G9 routing and delivery, class `default` in the engine (§6 "As built (P10)") |
 | P11 | G2 user origins, then gitlab and jira | runtime, executor, settings consent UI, `plugins/first-party/{gitlab,jira}/` | P9 | *Done* for GitLab and Jira: G2 (#266), `openUrl.userOrigins`, both plugins and their cut-overs ([§6](#6-the-first-module)). GitHub Enterprise users stay on the built-in until `deckpilot.github` gets a user-origin slot (follow-up) |
+| P13 | Plugins on in builds with the `plugins` feature | `apps/agent/src/{main.rs,plugins/mod.rs}`, agent tests | P10, P11 | *Done* (§5.10): no switch needed; `--disable-plugins` / `DECKPILOT_ENABLE_PLUGINS=0` turn plugins off. The release workflow and packaging enable the feature separately |
 | P12 | Remove a legacy built-in | `modules/<name>`, `crates/deckpilot-modules/src/lib.rs` | §5.7 criteria | The alias entries stay forever |
 
 This PR touches none of `modules/`, `apps/agent/src/plugins/`, `plugins/`

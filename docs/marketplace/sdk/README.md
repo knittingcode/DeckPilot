@@ -1,7 +1,7 @@
 # DeckPilot plugin SDK
 
 Status: **experimental.** Plugins are off in every DeckPilot release build
-(the agent needs the `plugins` cargo feature and `--enable-plugins`,
+so far (the agent needs the `plugins` cargo feature, which turns them on,
 [agent-integration.md](../agent-integration.md)). Plugin API 1.1, guest
 ABI 1 and the manifest version 1 described here are what `main` implements
 today; they can still change before plugins ship. Nothing here is

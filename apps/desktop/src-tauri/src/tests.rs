@@ -3405,7 +3405,7 @@ fn plugin_commands_refuse_unless_the_agent_answers_plugin_requests() {
     }
 
     // An agent of this release without plugins (the test agent is built
-    // without the `plugins` feature and started without `--enable-plugins`).
+    // without the `plugins` feature).
     let (_runtime, _mock) = start_agent(&h.paths);
     h.unlock();
     wait_for(&h, |s| s["running"] == true);

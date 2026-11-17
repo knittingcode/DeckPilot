@@ -269,7 +269,13 @@ jobs:
           --config src-tauri/tauri.plugins.conf.json
           --config "$THROWAWAY_UPDATER_CONFIG"
           --config "$MSI_CONFIG"
-      - name: Extract the installers
+      # The NSIS installer is run silently into a directory of its own
+      # (/S, /D must come last), not unpacked with 7-Zip: the bundler
+      # compresses it solid with makensis's datablock optimization, which
+      # stores identical files (the bundled plugins' LICENSE files) once,
+      # and 7-Zip extracts such shared blocks with the wrong content. The
+      # MSI is extracted administratively, as before.
+      - name: Install and extract the installers
         shell: pwsh
         run: |
           $version = (Get-Content apps/desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
@@ -278,7 +284,8 @@ jobs:
           foreach ($file in @($nsis, $msi)) {
             if (-not (Test-Path $file)) { Write-Error "expected $file"; exit 1 }
           }
-          & 7z x -y "-o$env:RUNNER_TEMP\nsis" (Resolve-Path $nsis).Path | Out-Null
+          $process = Start-Process (Resolve-Path $nsis).Path -Wait -PassThru -ArgumentList @("/S", "/D=$env:RUNNER_TEMP\nsis")
+          if ($process.ExitCode -ne 0) { Write-Error "silent NSIS installation failed: $($process.ExitCode)"; exit 1 }
           $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @("/a", "`"$((Resolve-Path $msi).Path)`"", "/qn", "TARGETDIR=`"$env:RUNNER_TEMP\msi`"")
           if ($process.ExitCode -ne 0) { Write-Error "administrative MSI extraction failed: $($process.ExitCode)"; exit 1 }
       - name: Names, versions, app, agent, plugin runtime, distribution record and updater signatures
