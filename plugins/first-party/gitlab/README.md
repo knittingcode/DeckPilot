@@ -5,9 +5,20 @@ module (`modules/gitlab`), part of P11
 (`docs/marketplace/module-migration.md` §9). Bundled with class `migration`
 (`../bundled.json`) and pinned in builds that enable bundled plugins.
 
-**Not routed yet.** No alias maps `gitlab.<action>` to this plugin until
-its cut-over, so no build runs it for a stored key or workflow today; the
-built-in serves, as in every release build (plugins are off there).
+**Routed since the cut-over (P11)**, in builds with plugins only:
+`ACTION_ALIASES` (`crates/deckpilot-core/src/alias.rs`) maps every
+`gitlab.<action>` to `deckpilot.gitlab.<action>`, and the agent's migration
+plan for `gitlab` (`apps/agent/src/plugins/migration.rs`) installs this
+plugin, copies the module's settings with the server you had entered and,
+once you approve, imports the credential and allows exactly that server.
+From then on the stored `gitlab.*` keys, workflow nodes and actions run
+here; nothing stored is rewritten, so a build without plugins (every
+release build today) keeps running the built-in on the same data. Until
+you approve, after a decline and for every computer that is not eligible
+(a server a plugin cannot reach, a per-action credential other than the
+module's), the built-in serves.
+`apps/agent/tests/plugins_cutover_servers.rs` runs that upgrade end to
+end.
 
 Read-only. It talks to GitLab.com (`https://gitlab.com`, GET) or to the
 self-managed GitLab **you enter** in its `API URL` setting and allow, with
@@ -38,7 +49,7 @@ and opens pages on that same GitLab only.
 ## The contract
 
 Every action of the built-in, under the same name, so the alias
-`gitlab.<action>` → `deckpilot.gitlab.<action>` will be valid. Two tests
+`gitlab.<action>` → `deckpilot.gitlab.<action>` is valid. Two tests
 keep it that way:
 
 - `crates/deckpilot-modules/tests/contracts.rs` (`first_party`): the
@@ -84,7 +95,7 @@ idempotency flags and timeouts are identical.
 | --- | --- | --- |
 | `apiUrl` | `apiUrl` (same kind, default, portability) | an `https` address; the server is reached only with your consent to it (above). A plain `http` address on this computer, which the built-in accepts, is not reachable for a plugin and fails with `invalid-api-url` |
 | `timeoutSeconds` | `timeoutSeconds` (same) | the time limit of one action, counted with GitLab's `Date` headers (a guest has no clock) |
-| `credential` (a credential id, default `gitlab.token`) | the credential slot `token` (`PRIVATE-TOKEN`; GitLab.com or the allowed server only) | the per-action `credential` override will be dropped by the alias when it is empty or the module's own (`ParamRule::DropIfDefault`); any other value keeps the built-in until G5 |
+| `credential` (a credential id, default `gitlab.token`) | the credential slot `token` (`PRIVATE-TOKEN`; GitLab.com or the allowed server only) | the per-action `credential` override is dropped by the alias when it is empty or the module's own (`ParamRule::DropIfDefault`); any other value keeps the built-in until G5 |
 | `allowPrivateHost` | not declared | replaced by the private-network consent per server, which is never assumed |
 
 ## What the plugin does not reproduce

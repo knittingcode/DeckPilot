@@ -13,7 +13,8 @@ types once a computer's migration is cut over
 (`docs/marketplace/module-migration.md` §6 and §9, P9),
 `deckpilot.gitlab` (class `migration`, [gitlab/README.md](gitlab/README.md))
 and `deckpilot.jira` (class `migration`, [jira/README.md](jira/README.md)),
-built and pinned but not routed until their cut-overs (P11), and
+routed the same way through the alias blocks `gitlab.*` and `jira.*`, for
+GitLab.com or the server the user had entered and allows (P11), and
 `deckpilot.notifications` (class `default`, the first of the default set,
 [notifications/README.md](notifications/README.md)), seeded on every
 computer and routed through the alias block `notifications.*` (P10). The published release

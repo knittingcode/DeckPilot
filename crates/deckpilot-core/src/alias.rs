@@ -144,6 +144,85 @@ pub const ACTION_ALIASES: &[ActionAlias] = &[
     ),
     github("github.checks", "deckpilot.github.checks", true),
     github("github.open", "deckpilot.github.open", false),
+    // GitLab (P11): `deckpilot.gitlab` (`plugins/first-party/gitlab`), for
+    // GitLab.com or a self-managed GitLab the user enters; its contract
+    // checked by `crates/deckpilot-modules/tests/contracts.rs`. As
+    // GitHub's, the `credential` override is dropped when it is empty or
+    // the module's (the plugin uses its slot `token`); `gitlab.open` has
+    // none.
+    server(
+        "gitlab",
+        "deckpilot.gitlab",
+        "gitlab.current-user",
+        "deckpilot.gitlab.current-user",
+        true,
+    ),
+    server(
+        "gitlab",
+        "deckpilot.gitlab",
+        "gitlab.project",
+        "deckpilot.gitlab.project",
+        true,
+    ),
+    server(
+        "gitlab",
+        "deckpilot.gitlab",
+        "gitlab.merge-requests",
+        "deckpilot.gitlab.merge-requests",
+        true,
+    ),
+    server(
+        "gitlab",
+        "deckpilot.gitlab",
+        "gitlab.review-requests",
+        "deckpilot.gitlab.review-requests",
+        true,
+    ),
+    server(
+        "gitlab",
+        "deckpilot.gitlab",
+        "gitlab.pipeline",
+        "deckpilot.gitlab.pipeline",
+        true,
+    ),
+    server(
+        "gitlab",
+        "deckpilot.gitlab",
+        "gitlab.open",
+        "deckpilot.gitlab.open",
+        false,
+    ),
+    // Jira (P11): `deckpilot.jira` (`plugins/first-party/jira`), for the
+    // Jira site the user enters (the plugin's slot `credential`);
+    // `jira.open` has no `credential`.
+    server(
+        "jira",
+        "deckpilot.jira",
+        "jira.myself",
+        "deckpilot.jira.myself",
+        true,
+    ),
+    server(
+        "jira",
+        "deckpilot.jira",
+        "jira.issue",
+        "deckpilot.jira.issue",
+        true,
+    ),
+    server(
+        "jira",
+        "deckpilot.jira",
+        "jira.issues",
+        "deckpilot.jira.issues",
+        true,
+    ),
+    server(
+        "jira",
+        "deckpilot.jira",
+        "jira.open",
+        "deckpilot.jira.open",
+        false,
+    ),
     // Notifications (P10): `deckpilot.notifications`
     // (`plugins/first-party/notifications`), the first plugin of the
     // default set; its contract checked by
@@ -163,6 +242,29 @@ const fn github(legacy: &'static str, target: &'static str, credential: bool) ->
         target,
         module: "github",
         plugin: "deckpilot.github",
+        since: "0.6.0",
+        params: if credential {
+            &[ParamRule::DropIfDefault("credential")]
+        } else {
+            &[]
+        },
+    }
+}
+
+/// One alias of a module whose plugin talks to a server the user enters
+/// (the `gitlab` and `jira` blocks).
+const fn server(
+    module: &'static str,
+    plugin: &'static str,
+    legacy: &'static str,
+    target: &'static str,
+    credential: bool,
+) -> ActionAlias {
+    ActionAlias {
+        legacy,
+        target,
+        module,
+        plugin,
         since: "0.6.0",
         params: if credential {
             &[ParamRule::DropIfDefault("credential")]
@@ -622,6 +724,16 @@ mod tests {
                 "github.review-requests",
                 "github.checks",
                 "github.open",
+                "gitlab.current-user",
+                "gitlab.project",
+                "gitlab.merge-requests",
+                "gitlab.review-requests",
+                "gitlab.pipeline",
+                "gitlab.open",
+                "jira.myself",
+                "jira.issue",
+                "jira.issues",
+                "jira.open",
                 "notifications.show",
                 "notifications.workflow-summary",
             ]
@@ -633,6 +745,13 @@ mod tests {
                     "deckpilot.github",
                     &[ParamRule::DropIfDefault("credential")],
                 ),
+                "gitlab" if alias.legacy == "gitlab.open" => ("deckpilot.gitlab", &[]),
+                "gitlab" => (
+                    "deckpilot.gitlab",
+                    &[ParamRule::DropIfDefault("credential")],
+                ),
+                "jira" if alias.legacy == "jira.open" => ("deckpilot.jira", &[]),
+                "jira" => ("deckpilot.jira", &[ParamRule::DropIfDefault("credential")]),
                 "notifications" => ("deckpilot.notifications", &[]),
                 other => panic!("an unexpected block: {other}"),
             };
@@ -643,10 +762,11 @@ mod tests {
         assert_eq!(found.target, "deckpilot.github.pull-requests");
         let found = alias_of(&ActionTypeId::new("notifications.show").unwrap()).unwrap();
         assert_eq!(found.target, "deckpilot.notifications.show");
-        assert_eq!(
-            alias_of(&ActionTypeId::new("gitlab.merge-requests").unwrap()),
-            None
-        );
+        let found = alias_of(&ActionTypeId::new("gitlab.merge-requests").unwrap()).unwrap();
+        assert_eq!(found.target, "deckpilot.gitlab.merge-requests");
+        let found = alias_of(&ActionTypeId::new("jira.issues").unwrap()).unwrap();
+        assert_eq!(found.target, "deckpilot.jira.issues");
+        assert_eq!(alias_of(&ActionTypeId::new("http.request").unwrap()), None);
     }
 
     /// Every entry, shipped or fixture, parses as the ids it stands for.

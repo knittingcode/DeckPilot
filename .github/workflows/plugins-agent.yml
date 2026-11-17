@@ -159,6 +159,16 @@ jobs:
       # canned for the plugin, a stand-in on 127.0.0.1 for the built-in.
       - name: GitHub cut-over end to end
         run: cargo test -p deckpilot-agent --features plugins --test plugins_cutover --locked -- --nocapture
+      # The GitLab and Jira cut-overs (P11): an alpha.3 configuration
+      # whose module talks to a server the user entered, upgraded to a
+      # plugin-enabled build; the consent to the credential, to exactly
+      # that server and, separately, to a private network through IPC; a
+      # key and a workflow node in the plugin; downgrade, GitLab.com,
+      # servers a plugin cannot reach, disable, uninstall and decline. No
+      # server ever answers: canned for the plugin, a stand-in on
+      # 127.0.0.1 for the built-in.
+      - name: GitLab and Jira cut-over end to end
+        run: cargo test -p deckpilot-agent --features plugins --test plugins_cutover_servers --locked -- --nocapture
       # deckpilot.notifications, the first default-class plugin: parity
       # with the built-in through the real agent, first launch on a fresh
       # data directory, the user's uninstall and disable across restarts

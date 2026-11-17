@@ -494,14 +494,36 @@ export interface CredentialImport {
   slot: string
   /** The only hosts the plugin may send it to. */
   hosts: string[]
+  /** The plugin's origin setting it is bound to: also sent to the server allowed there. */
+  userOrigin?: string
+}
+
+/**
+ * The server a migration asks to allow for the plugin: what the built-in
+ * talked to, now in the plugin's origin setting.
+ */
+export interface MigrationUserOrigin {
+  /** The plugin's origin setting that holds it. */
+  setting: string
+  /** Normalized, with its path prefix. */
+  origin: string
+  /** This item is the separate consent to reach it on a private network. */
+  privateNetwork?: boolean
+  methods?: string[]
+  /** Credential slots whose secrets go there once allowed. */
+  credentials?: string[]
+  /** The plugin may also open pages of this server in the browser. */
+  opensPages?: boolean
 }
 
 /** One thing a migration waits for the user to allow. */
 export interface MigrationConsentItem {
-  /** The grant key `decideModuleMigration` names. */
+  /** What `decideModuleMigration` names: a grant key, or a server's private-network item. */
   key: string
   permission: GrantInfo
   import?: CredentialImport
+  /** The server this item allows (or allows on a private network). */
+  origin?: MigrationUserOrigin
   /** Why the migration asks, in the agent's words. */
   why: string
   decision: ConsentDecision
