@@ -15,6 +15,8 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-17
+
 ### Added
 
 - The plugin Marketplace. Settings › Extensions › Plugins lists the
