@@ -32,9 +32,9 @@ bad() {
 }
 
 if command -v sha256sum > /dev/null; then
-  sha() { sha256sum "$1" | cut -d' ' -f1; }
+  sha() { sha256sum < "$1" | cut -d' ' -f1; }
 else
-  sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+  sha() { shasum -a 256 < "$1" | cut -d' ' -f1; }
 fi
 size() { wc -c < "$1" | tr -d ' '; }
 
@@ -110,6 +110,15 @@ fresh
 jq -c . "$work/case/bundled/pins.json" > "$work/case/compact.json"
 agent_pins "$work/case/compact.json"
 passes "the same pins, formatted differently"
+# A bundle under a path with a backslash, like D:\a\_temp on Windows: GNU
+# sha256sum escapes such a file name and prefixes its digest with "\", which
+# made every digest differ from its pin.
+fresh
+rm -rf "$work/back\\slash" && mkdir -p "$work/back\\slash"
+cp -R "$work/case/bundled" "$work/back\\slash/bundled"
+if "$here/check-bundled-plugins.sh" "$work/back\\slash/bundled" "$work/case/agent" > "$work/check.log" 2>&1; then
+  ok "a bundle under a path with a backslash"
+else bad "a bundle under a path with a backslash: $(cat "$work/check.log")"; fi
 
 echo "== tampered files"
 fresh

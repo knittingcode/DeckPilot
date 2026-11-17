@@ -237,7 +237,7 @@ extract_rpm() {
   while IFS='|' read -r digest path; do
     [ -n "$digest" ] || continue # a directory
     [ -f "$dir$path" ] || fail "$rpm: $path is missing from its payload"
-    actual=$(sha256sum "$dir$path" | cut -d ' ' -f 1)
+    actual=$(sha256sum < "$dir$path" | cut -d ' ' -f 1)
     [ "$actual" = "$digest" ] || fail "$rpm: $path does not match the digest in its header"
   done < <(rpm -qp --queryformat '[%{FILEDIGESTS}|%{FILENAMES}\n]' "$rpm")
 }

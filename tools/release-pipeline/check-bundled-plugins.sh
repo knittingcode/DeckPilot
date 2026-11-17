@@ -44,10 +44,12 @@ source "$(dirname "$0")/common.sh"
 # jq on Windows ends its lines with CRLF; every value here is one line.
 jq() { command jq "$@" | tr -d '\r'; }
 
+# Digests from stdin: GNU sha256sum escapes a file name with a backslash
+# (D:\a\_temp/... on Windows) and then prefixes the digest with "\".
 if command -v sha256sum > /dev/null; then
-  sha() { sha256sum "$1" | cut -d' ' -f1; }
+  sha() { sha256sum < "$1" | cut -d' ' -f1; }
 else
-  sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+  sha() { shasum -a 256 < "$1" | cut -d' ' -f1; }
 fi
 size() { wc -c < "$1" | tr -d ' '; }
 

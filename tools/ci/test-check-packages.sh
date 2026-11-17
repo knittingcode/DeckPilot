@@ -96,7 +96,7 @@ host() {
 # them, for the release set of plugins/first-party/bundled.json: the real
 # manifests and licenses, stand-in modules, and pins.json. The stand-in
 # agents were "compiled" with these pins ($work/compiled-pins.json).
-sha() { if command -v sha256sum > /dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
+sha() { if command -v sha256sum > /dev/null; then sha256sum < "$1" | cut -d' ' -f1; else shasum -a 256 < "$1" | cut -d' ' -f1; fi; }
 bundled_source="$work/bundled-source"
 rm -rf "$bundled_source" && mkdir -p "$bundled_source"
 pins='[]'
