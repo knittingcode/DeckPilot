@@ -702,3 +702,62 @@ fn notify_deliveries_reach_only_guests_that_read_them() {
         0
     );
 }
+
+/// `dp_state` (plugin API 1.2) on the raw ABI: a valid state is read, and
+/// everything else a guest can return is `invalid-state`, never a fault
+/// and never more than the state's bound.
+#[test]
+fn key_state_output_is_bounded_and_typed() {
+    use deckpilot_plugin_abi::state::{KeyState, StateOutcome};
+    let (mut p, calls, _e) = guest();
+    assert!(p.has_state());
+    let code = |outcome: StateOutcome| match outcome {
+        StateOutcome::Error(failure) => failure.code,
+        StateOutcome::Ok(state) => panic!("{state:?}"),
+    };
+    assert_eq!(
+        p.state(1, "state-ok", &Params::new()).unwrap(),
+        StateOutcome::Ok(KeyState::new().label("raw").progress(50))
+    );
+    for (id, action) in [
+        "state-big",
+        "state-garbage",
+        "state-pixels",
+        "state-glyph",
+        "state-series",
+        "state-wild",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let outcome = p.state(2 + id as u64, action, &Params::new()).unwrap();
+        assert_eq!(code(outcome), "invalid-state", "{action}");
+    }
+    // The guest's own failure keeps its code; bad input never enters it.
+    assert_eq!(
+        code(p.state(20, "other", &Params::new()).unwrap()),
+        "unsupported"
+    );
+    assert_eq!(
+        code(p.state(21, "not a name", &Params::new()).unwrap()),
+        "invalid-params"
+    );
+    assert!(calls.borrow().requests.is_empty());
+    // The same instance still runs actions afterwards.
+    let o = p
+        .invoke(22, "echo", &params(json!({"text": "hi"})))
+        .unwrap();
+    assert!(matches!(o, ActionOutcome::Ok { .. }), "{o:?}");
+
+    // A module without the export reports no state and is never entered.
+    let (plain, _, _e) = load_with(&wat("", ""), GuestLimits::default());
+    let mut plain = plain.unwrap();
+    assert!(!plain.has_state());
+    assert_eq!(
+        code(plain.state(1, "a", &Params::new()).unwrap()),
+        "unsupported"
+    );
+    // An export of that name with another type fails the load.
+    let wrong = wat(r#"(func (export "dp_state") (result i32) i32.const 0)"#, "");
+    assert!(matches!(load_err(&wrong), Fault::Load(m) if m.contains("dp_state")));
+}

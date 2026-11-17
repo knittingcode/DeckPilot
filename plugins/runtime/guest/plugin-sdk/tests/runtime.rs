@@ -141,7 +141,7 @@ fn logging_is_best_effort_and_bounded() {
 fn versions_are_exposed() {
     assert_eq!(deckpilot_plugin_sdk::ABI_VERSION, 1);
     assert_eq!(deckpilot_plugin_sdk::API_LEVEL.to_string(), "1.0");
-    assert_eq!(deckpilot_plugin_sdk::LATEST_API_LEVEL.to_string(), "1.1");
+    assert_eq!(deckpilot_plugin_sdk::LATEST_API_LEVEL.to_string(), "1.2");
     assert_eq!(deckpilot_plugin_sdk::SDK_VERSION, env!("CARGO_PKG_VERSION"));
 }
 
@@ -194,7 +194,6 @@ fn a_plugin_declares_the_api_level_it_needs() {
     assert!(manifest_mismatches(&plugin(), &manifest("^1.0")).is_empty());
 
     let timed = plugin().requires_api(ApiLevel { major: 1, minor: 1 });
-    assert_eq!(timed.api_level(), LATEST_API_LEVEL);
     assert_eq!(timed.descriptor().api_level, "1.1");
     assert!(manifest_mismatches(&timed, &manifest("^1.1")).is_empty());
     // A manifest that still says 1.0 would install on an agent the plugin
@@ -209,6 +208,7 @@ fn a_plugin_declares_the_api_level_it_needs() {
     let level = |major, minor| plugin().requires_api(ApiLevel { major, minor }).api_level();
     assert_eq!(level(0, 9), API_LEVEL);
     assert_eq!(level(1, 0), API_LEVEL);
+    assert_eq!(level(1, 2), LATEST_API_LEVEL);
     assert_eq!(level(1, 99), LATEST_API_LEVEL);
     assert_eq!(level(2, 0), LATEST_API_LEVEL);
 }
@@ -291,4 +291,97 @@ fn b64(length: usize) -> String {
         }
     }
     out
+}
+
+/// Key state through the SDK: the handler's description, checked before
+/// it leaves the plugin; actions without a handler and unknown actions
+/// report none; a failure keeps its code.
+#[test]
+fn key_state_is_described_checked_and_optional() {
+    use deckpilot_plugin_sdk::CapabilityErrorKind;
+    fn shown(ctx: &mut Context<'_>, args: &Args<'_>) -> Result<KeyState, PluginError> {
+        let cell: i64 = args.get("cell")?;
+        match cell {
+            0 => Ok(KeyState::new()),
+            1 => {
+                let count = ctx.storage_get_as::<i64>("count")?.unwrap_or(0);
+                Ok(KeyState::new()
+                    .label(format!("{count}"))
+                    .detail("clicks")
+                    .indicator(Indicator::Ok)
+                    .progress(40)
+                    .toggle(true)
+                    .accent(Accent::Purple)
+                    .glyph(Glyph::Star)
+                    .badge("new")
+                    .series([1, 50, 100]))
+            }
+            2 => Ok(KeyState::new().label("x".repeat(33))),
+            3 => Ok(KeyState::new().series(vec![0; 33])),
+            4 => Err(PluginError::new("not-configured", "Choose a city")),
+            // What the agent refuses inside a state call.
+            _ => match ctx.storage_set("count", 1) {
+                Err(e) if e.kind() == CapabilityErrorKind::NotPermitted => {
+                    Ok(KeyState::new().label("read only"))
+                }
+                other => Err(PluginError::new("unexpected", format!("{other:?}"))),
+            },
+        }
+    }
+    let plugin = Plugin::new("acme.cells", "1.0.0")
+        .action(
+            Action::new("cell", ok)
+                .param(Param::integer("cell").min(0.0).max(9.0).default(0))
+                .state(shown),
+        )
+        .action(Action::new("plain", ok));
+    assert!(plugin.find("cell").unwrap().has_state());
+    assert!(!plugin.find("plain").unwrap().has_state());
+    // A state handler changes neither the descriptor nor the level a
+    // plugin needs: on an older agent its keys are just static.
+    assert_eq!(plugin.api_level().to_string(), "1.0");
+    let descriptor = serde_json::to_string(&plugin.descriptor()).unwrap();
+    assert!(!descriptor.contains("state"), "{descriptor}");
+
+    let mut host = MockHost::new(|req| match req {
+        CapabilityRequest::StorageGet(_) => CallResult::Ok(json!(7)),
+        CapabilityRequest::StorageSet(_) => CallResult::error(
+            CallErrorCode::NotPermitted,
+            "not available while a key's state is read",
+        ),
+        _ => CallResult::Ok(serde_json::Value::Null),
+    });
+    let mut state =
+        |action: &str, cell: i64| host.key_state(&plugin, action, json!({"cell": cell}));
+    let failed = |outcome: StateOutcome| match outcome {
+        StateOutcome::Error(failure) => (failure.code, failure.message),
+        StateOutcome::Ok(state) => panic!("{state:?}"),
+    };
+    assert_eq!(state("cell", 0), StateOutcome::Ok(KeyState::new()));
+    let StateOutcome::Ok(full) = state("cell", 1) else {
+        panic!()
+    };
+    assert_eq!(
+        serde_json::to_value(&full).unwrap(),
+        json!({"label": "7", "detail": "clicks", "indicator": "ok", "progress": 40,
+               "toggle": true, "accent": "purple", "glyph": "star", "badge": "new",
+               "series": [1, 50, 100]})
+    );
+    assert_eq!(
+        failed(state("cell", 2)),
+        ("invalid-state".into(), "label is out of bounds".into())
+    );
+    assert_eq!(failed(state("cell", 3)).1, "series is out of bounds");
+    assert_eq!(
+        failed(state("cell", 4)),
+        ("not-configured".into(), "Choose a city".into())
+    );
+    assert_eq!(
+        state("cell", 5),
+        StateOutcome::Ok(KeyState::new().label("read only"))
+    );
+    // Parameters are checked like an action's.
+    assert_eq!(failed(state("cell", 99)).0, "invalid-parameters");
+    assert_eq!(failed(state("plain", 0)).0, "unsupported");
+    assert_eq!(failed(state("missing", 0)).0, "unsupported");
 }

@@ -14,7 +14,9 @@ use deckpilot_plugin_abi::capability::{
 };
 use deckpilot_plugin_abi::describe::ParamKind;
 use deckpilot_plugin_abi::protocol::{FatalReason, exit_code};
-use deckpilot_plugin_abi::{ActionOutcome, CallResult, HttpMethod, ParamValue, Params};
+use deckpilot_plugin_abi::{
+    ActionOutcome, CallResult, HttpMethod, ParamValue, Params, StateOutcome,
+};
 use deckpilot_plugin_broker::{
     Allowed, ApprovedPermissions, AuditDecision, Broker, DenyReason, ManualClock, MemoryAudit,
     Origin, PluginId, RateLimits,
@@ -837,4 +839,169 @@ fn the_clock_and_random_bytes_need_no_permission_and_are_bounded() {
     assert_eq!(ops("random.bytes", true), 64);
     assert_eq!(ops("random.bytes", false), 1);
     assert_eq!(h.shutdown(T).and_then(|s| s.code()), Some(exit_code::CLEAN));
+}
+
+fn state_label(outcome: &StateOutcome) -> &str {
+    match outcome {
+        StateOutcome::Ok(state) => state.label.as_deref().unwrap_or(""),
+        StateOutcome::Error(failure) => panic!("{failure:?}"),
+    }
+}
+
+fn mode(mode: &str) -> Params {
+    Params::from([("mode".to_owned(), ParamValue::String(mode.to_owned()))])
+}
+
+/// Key state (plugin API 1.2) through the real sandboxed host, supervisor
+/// and broker: asked only for a plugin that may report it, the plugin's
+/// description comes back typed, and a state call reads and nothing else.
+#[test]
+fn key_state_is_granted_typed_and_read_only() {
+    // Not granted: refused before the host is asked.
+    let f = fixture(&consent_from_manifest());
+    let mut h = spawn(&config(SDK_TEST_GUEST), &f);
+    let mut ex = StubExecutor::default();
+    let refused = h
+        .key_state("counter", &Params::new(), T, &mut ex, None)
+        .unwrap();
+    let StateOutcome::Error(failure) = &refused else {
+        panic!("{refused:?}")
+    };
+    assert_eq!(failure.code, "not-permitted");
+    assert!(ex.executed.is_empty());
+    let denied = f.audit.records();
+    assert_eq!(denied.len(), 1, "{denied:?}");
+    assert_eq!(denied[0].op, "key.state");
+    assert_eq!(
+        denied[0].decision,
+        AuditDecision::Denied(DenyReason::NotGranted)
+    );
+
+    // Granted, with the network, notifications and pages granted too: a
+    // state call still reaches none of them.
+    let mut consent: Vec<Value> = serde_json::from_str(&consent_from_manifest()).unwrap();
+    consent.extend([
+        json!({"kind": "keyState"}),
+        json!({"kind": "notifications"}),
+        json!({"kind": "openUrl", "origin": "https://github.com"}),
+    ]);
+    let f = fixture(&serde_json::to_string(&consent).unwrap());
+    let mut h = spawn(&config(SDK_TEST_GUEST), &f);
+    let mut ex = StubExecutor::default();
+    let counter = h
+        .key_state("counter", &Params::new(), T, &mut ex, None)
+        .unwrap();
+    let StateOutcome::Ok(state) = &counter else {
+        panic!("{counter:?}")
+    };
+    assert_eq!(
+        serde_json::to_value(state).unwrap(),
+        json!({"label": "0", "detail": "clicks", "indicator": "unknown", "progress": 0,
+               "toggle": false, "accent": "grey", "glyph": "star", "badge": "0",
+               "series": [0]})
+    );
+    for (probe, label) in [
+        ("ok", "ok"),
+        ("clock", "clock"),
+        ("fetch", "NotPermitted"),
+        ("write", "NotPermitted"),
+        ("delete", "NotPermitted"),
+        ("notify", "NotPermitted"),
+        ("random", "NotPermitted"),
+        ("open", "NotPermitted"),
+        ("publish", "NotPermitted"),
+        // Eight capability calls, then `throttled`.
+        ("flood", "8"),
+    ] {
+        let outcome = h
+            .key_state("probe", &mode(probe), T, &mut ex, None)
+            .unwrap();
+        assert_eq!(state_label(&outcome), label, "{probe}");
+    }
+    // Only reads were carried out: the count, the clock, eight more reads.
+    assert_eq!(ex.executed.len(), 10, "{:?}", ex.executed);
+    assert!(
+        ex.executed
+            .iter()
+            .all(|allowed| matches!(allowed, Allowed::StorageGet { .. } | Allowed::TimeNow))
+    );
+    // A failure keeps its code; a state out of bounds is invalid.
+    for (probe, code) in [("error", "not-configured"), ("long", "invalid-state")] {
+        let outcome = h
+            .key_state("probe", &mode(probe), T, &mut ex, None)
+            .unwrap();
+        let StateOutcome::Error(failure) = &outcome else {
+            panic!("{probe}: {outcome:?}")
+        };
+        assert_eq!(failure.code, code, "{probe}");
+    }
+    // Actions without a state handler report none, and actions still run
+    // between state calls, on the same host.
+    let none = h
+        .key_state("inits", &Params::new(), T, &mut ex, None)
+        .unwrap();
+    assert!(matches!(&none, StateOutcome::Error(f) if f.code == "unsupported"));
+    let pid = h.pid();
+    let o = h.invoke("inits", &Params::new(), T, &mut ex).unwrap();
+    assert_eq!(data(&o)["inits"], ParamValue::Integer(1));
+    // What an action may do is unchanged by the state calls before it.
+    let o = h.invoke("random", &Params::new(), T, &mut ex).unwrap();
+    assert!(data(&o).contains_key("hex"), "{o:?}");
+    assert_eq!(h.pid(), pid);
+    assert_eq!(h.shutdown(T).and_then(|s| s.code()), Some(exit_code::CLEAN));
+}
+
+/// A state handler that panics or never returns ends the host like an
+/// action that does: a crash the supervisor counts, so a plugin whose
+/// state calls keep failing is stopped by the crash-loop breaker.
+#[test]
+fn a_misbehaving_state_handler_ends_its_host_and_trips_the_breaker() {
+    let f = fixture(r#"[{"kind":"keyState"}]"#);
+    for (probe, reasons) in [
+        ("panic", &[FatalReason::Trap][..]),
+        ("spin", &[FatalReason::Deadline, FatalReason::OutOfFuel][..]),
+    ] {
+        let mut h = spawn(&config(SDK_TEST_GUEST), &f);
+        let mut ex = StubExecutor::default();
+        let started = std::time::Instant::now();
+        match h.key_state("probe", &mode(probe), T, &mut ex, None) {
+            Err(HostError::Crashed {
+                fatal: Some((reason, _)),
+                ..
+            }) => assert!(reasons.contains(&reason), "{probe}: {reason:?}"),
+            other => panic!("{probe}: {other:?}"),
+        }
+        // Long before the caller's time limit: the host's own deadline.
+        assert!(started.elapsed() < Duration::from_secs(10), "{probe}");
+        assert!(!h.is_running());
+    }
+
+    // Under the supervisor: every crash is counted, and after five in ten
+    // minutes the plugin is disabled, for state calls and actions alike.
+    let mut sup = Supervisor::new(
+        config(SDK_TEST_GUEST),
+        f.broker.clone(),
+        plugin_id(),
+        RestartPolicy::default(),
+        Arc::new(f.clock.clone()),
+    );
+    let mut ex = StubExecutor::default();
+    for crash in 0..5 {
+        let r = sup.key_state("probe", &mode("panic"), T, &mut ex, None);
+        assert!(
+            matches!(r, Err(SupervisorError::Host(HostError::Crashed { .. }))),
+            "crash {crash}: {r:?}"
+        );
+        // Past the restart backoff.
+        f.clock.advance(Duration::from_secs(61));
+    }
+    assert_eq!(sup.state(), SupervisorState::Disabled);
+    assert!(matches!(
+        sup.key_state("counter", &Params::new(), T, &mut ex, None),
+        Err(SupervisorError::Disabled)
+    ));
+    assert!(matches!(
+        sup.invoke("inits", &Params::new(), T, &mut ex),
+        Err(SupervisorError::Disabled)
+    ));
 }

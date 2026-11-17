@@ -115,6 +115,27 @@ unchanged byte for byte (tested in `crates/abi` and `crates/host/tests/lifecycle
   the random source. Audited by operation only. SDK: `Context::now`,
   `random_bytes`, `random_u64`, `random_below`. A host or agent that
   predates them refuses the op.
+- Optional guest export `dp_state: (i32, i32) -> i64` (plugin API 1.2,
+  `crates/abi/src/state.rs`): what a key bound to an action shows, as a
+  typed `KeyState` (two texts, an indicator, progress, a toggle, an accent
+  and a glyph from closed sets, a badge, a series); never pixels. Input as
+  for `dp_invoke`, output a `StateOutcome` of at most 4 KiB
+  (`MAX_STATE_OUTPUT`); anything else a guest returns is the failure
+  `invalid-state`. Host protocol (compatible): `state` and `stateResult`
+  beside `invoke` and `result`, sharing the invocation ids.
+  `PluginHost::key_state` and `Supervisor::key_state` ask only when the
+  broker allows it (`Session::authorize_key_state`:
+  `ApprovedPermission::KeyState`, audited as `key.state`) and answer the
+  call's capability requests through `Session::authorize_state`: only
+  `storage.get`, `storage.keys`, `settings.get`, `time.now` and `log`
+  (`state::allowed_in_state`), everything else
+  `DenyReason::NotInStateCall`. The host refuses the others locally as
+  well, answers at most 8 capability calls per state call
+  (`MAX_STATE_HOST_CALLS`) and gives it a tenth of an invocation's fuel. A
+  host that dies in a state call is a crash like any other. A module
+  without the export answers `unsupported`; a host or supervisor that
+  predates it never asks. SDK: `Action::state`, `KeyState`,
+  `MockHost::key_state`.
 - `notify` takes an optional `severity` (`info`, `success`, `warning`,
   `error`; `Allowed::Notify` always carries one, `info` by default). It
   sets only how the notification looks. SDK: `Context::notify_with`.
