@@ -300,6 +300,17 @@ above.
   saved.
 - A folder's title and icon are the label and look of the control that
   opens it.
+- The library is one searchable list with groups that fold: the profile's
+  actions and workflows, navigation (pages, Back, *New folder*) and, under
+  "New: <category>", the action types that need no settings (every
+  required parameter has a default), from enabled built-in modules:
+  *Next page*, *Previous page*, *Page indicator*, *Switch profile* and the
+  like. Dropping a type on a control creates an action of it with the
+  type's defaults, saved to the profile at once (a control can only run a
+  saved action), and binds it; a profile's action that already is exactly
+  that (same type, default settings, no label of its own) is reused, so
+  the same type on five keys is one action. Types that need a value (a
+  URL, an application) are created in the Action Library.
 
 ### Key appearance
 
