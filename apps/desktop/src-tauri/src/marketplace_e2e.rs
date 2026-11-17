@@ -13,7 +13,10 @@
 //! test starts the agent itself (with the arguments the GUI test hands the
 //! app's agent) and stops it through the app's `stop_agent`.
 //!
-//! Ignored by default; `docs/marketplace/e2e.md` says how to run it.
+//! Ignored by default; `docs/marketplace/e2e.md` says how to run it. The
+//! live smoke tests (`live_*`) also do nothing unless
+//! `DECKPILOT_LIVE_REGISTRY=1`: they need the network and an agent built
+//! with the official registry's roots embedded.
 
 use serde_json::{Value, json};
 use tauri::ipc::{CallbackFn, InvokeBody};
@@ -28,7 +31,7 @@ use crate::state::AppState;
 #[path = "../tests/support/marketplace.rs"]
 mod marketplace;
 
-use marketplace::{Driver, Fixture, PASSWORD, Via};
+use marketplace::{Driver, Fixture, PASSWORD, Source, Trust, Via};
 
 const APP_ORIGIN: &str = if cfg!(windows) {
     "http://tauri.localhost"
@@ -115,5 +118,90 @@ fn the_marketplace_works_end_to_end_through_the_app_commands() {
     let mut fx = Fixture::new("marketplace-commands");
     let mut driver = Commands::default();
     marketplace::run(&mut driver, &mut fx);
+    driver.app = None;
+}
+
+/// The live smoke tests run only with `DECKPILOT_LIVE_REGISTRY=1`: they
+/// reach the official registry over the network, so `--ignored` alone (as
+/// in CI) skips them.
+fn live() -> bool {
+    let on = std::env::var_os("DECKPILOT_LIVE_REGISTRY").is_some_and(|v| v == "1");
+    if !on {
+        eprintln!("skipped: set DECKPILOT_LIVE_REGISTRY=1 to run the live registry smoke test");
+    }
+    on
+}
+
+/// The agent built with the official registry's roots embedded
+/// (`DECKPILOT_REGISTRY_ROOT_PUBKEYS` = `keys/roots.json` of
+/// knittingcode/deckpilot-plugins at build time).
+const LIVE_AGENT_BIN: &str = "DECKPILOT_E2E_LIVE_AGENT_BIN";
+
+#[test]
+#[ignore = "needs the network and an agent with the production roots embedded (docs/marketplace/e2e.md)"]
+fn live_registry_installs_and_runs_a_plugin_with_the_embedded_roots() {
+    if !live() {
+        return;
+    }
+    let mut fx = Fixture::with(
+        "marketplace-live",
+        LIVE_AGENT_BIN,
+        Source::Live,
+        Trust::Build,
+    );
+    let mut driver = Commands::default();
+    marketplace::run_live(&mut driver, &mut fx);
+    driver.app = None;
+}
+
+#[test]
+#[ignore = "needs the network (docs/marketplace/e2e.md)"]
+fn live_registry_is_refused_by_an_agent_trusting_other_roots() {
+    if !live() {
+        return;
+    }
+    // The agent without embedded roots, given throwaway ones.
+    let mut fx = Fixture::with(
+        "marketplace-live-other-roots",
+        "DECKPILOT_E2E_AGENT_BIN",
+        Source::Live,
+        Trust::Throwaway,
+    );
+    let mut driver = Commands::default();
+    marketplace::run_refused(
+        &mut driver,
+        &mut fx,
+        marketplace::LIVE_REGISTRY,
+        marketplace::MEMORY,
+    );
+    driver.app = None;
+}
+
+#[test]
+#[ignore = "needs an agent with the production roots embedded and the sample (docs/marketplace/e2e.md)"]
+fn live_production_roots_refuse_a_registry_signed_with_other_keys() {
+    if !live() {
+        return;
+    }
+    // The production-roots agent, given the local throwaway registry and
+    // no roots: its embedded roots must not accept it.
+    let mut fx = Fixture::with(
+        "marketplace-live-throwaway-registry",
+        LIVE_AGENT_BIN,
+        Source::Local,
+        Trust::Build,
+    );
+    let mut driver = Commands::default();
+    marketplace::run_refused(
+        &mut driver,
+        &mut fx,
+        "https://127.0.0.1:",
+        marketplace::HELLO,
+    );
+    assert!(
+        !fx.registry_log().is_empty(),
+        "the local registry was not asked: {:?}",
+        fx.registry_log()
+    );
     driver.app = None;
 }

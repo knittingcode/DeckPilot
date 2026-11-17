@@ -105,3 +105,53 @@ cargo test -p deckpilot-desktop --test marketplace_gui -- --ignored --nocapture 
 `DECKPILOT_E2E_ARTIFACTS` sets where screenshots, logs and the step report
 go; `DECKPILOT_E2E_KEEP=1` keeps the temporary directory. The test stops
 the agent it started, also when it fails.
+
+## The live registry (smoke test)
+
+Three more command-layer tests in `src/marketplace_e2e.rs` check the
+production trust chain. They are ignored like the others and, in addition,
+do nothing unless `DECKPILOT_LIVE_REGISTRY=1`, so `--ignored` alone (as in
+CI) never reaches the network. Run them by hand, e.g. after publishing a
+plugin or before a release; they cover macOS, Linux and Windows alike (the
+command layer), the GUI is not driven.
+
+| Test | Agent | Registry | Expected |
+| --- | --- | --- | --- |
+| `live_registry_installs_and_runs_a_plugin_with_the_embedded_roots` | production roots embedded, none given at run time | the agent's default, `https://knittingcode.github.io/deckpilot-plugins/`, packages from the GitHub releases of knittingcode/deckpilot-plugins | `deckpilot.memory` 0.1.0 discovered, installed with consent to `device:state`, enabled, configured, run from keys of the simulated MK.2 and uninstalled |
+| `live_registry_is_refused_by_an_agent_trusting_other_roots` | no embedded roots, throwaway roots given (`DECKPILOT_PLUGIN_REGISTRY_ROOTS`) | the live one, as above | refused on its signatures (`keys/1.json`), nothing listed, downloaded or installed |
+| `live_production_roots_refuse_a_registry_signed_with_other_keys` | production roots embedded, none given | the local throwaway registry of the scenario (no network) | refused the same way |
+
+The live test passes no registry URL, roots, CA or canned HTTP: the agent
+uses its embedded roots (the log says `registry root keys roots=embedded`),
+the default registry URL and the system's TLS roots, and the plugin runs in
+the real sandboxed host. The data directory is a temporary one with a
+password-protected configuration, as in the scenario. Its step report is
+`<artifacts>/commands-live-steps.txt`; the agent's log
+(`agent-stderr-1.log`) has the verification
+(`plugin registry verified: a new index registry=https://knittingcode.github.io/deckpilot-plugins/`)
+and the download
+(`plugin package downloaded; ... url=https://github.com/knittingcode/deckpilot-plugins/releases/download/...`).
+
+Build the agent once more with the production roots embedded (the content
+of `keys/roots.json` of knittingcode/deckpilot-plugins, also the repository
+variable `DECKPILOT_REGISTRY_ROOT_PUBKEYS`), and copy it apart from the one
+without:
+
+```sh
+gh api repos/knittingcode/deckpilot-plugins/contents/keys/roots.json --jq .content \
+  | base64 -d > /tmp/dp-e2e/production-roots.json
+mkdir -p /tmp/dp-e2e/live
+DECKPILOT_REGISTRY_ROOT_PUBKEYS=/tmp/dp-e2e/production-roots.json \
+  cargo build -p deckpilot-agent --features plugins,test-hooks --bin deckpilot-agent
+cp target/debug/deckpilot-agent /tmp/dp-e2e/live/
+export DECKPILOT_E2E_LIVE_AGENT_BIN=/tmp/dp-e2e/live/deckpilot-agent
+```
+
+(Build the one without embedded roots, `DECKPILOT_E2E_AGENT_BIN` above,
+with the variable unset.) Then, with the plugin host and the sample as
+above:
+
+```sh
+DECKPILOT_LIVE_REGISTRY=1 cargo test -p deckpilot-desktop --bin deckpilot-desktop \
+  marketplace_e2e::live -- --ignored --nocapture --test-threads 1
+```

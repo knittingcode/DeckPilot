@@ -232,7 +232,9 @@ impl Registry {
         registry_run(&self.work, args)
     }
 
-    fn create(root: &Path, wasm: Vec<u8>) -> Self {
+    /// Throwaway keys for every role and a key set signed by the root key,
+    /// in new directories below `root`.
+    fn keys_only(root: &Path, wasm: Vec<u8>) -> Self {
         let registry = Self {
             work: root.join("registry"),
             keys: root.join("registry-keys"),
@@ -262,6 +264,11 @@ impl Registry {
             &registry.key("timestamp.key.pub"),
         ]);
         registry.run(&["keyset", "sign", "--key", &registry.key("root.key")]);
+        registry
+    }
+
+    fn create(root: &Path, wasm: Vec<u8>) -> Self {
+        let registry = Self::keys_only(root, wasm);
         registry.run(&[
             "publisher",
             "--namespace",
@@ -383,10 +390,12 @@ pub struct Fixture {
     pub paths: AgentPaths,
     /// The configuration database's key (from the password).
     pub key: DatabaseKey,
-    pub registry: Registry,
-    server: https::HttpsServer,
-    pub ca: PathBuf,
-    pub http: PathBuf,
+    /// The local registry ([`Source::Local`]); `None` with the live one.
+    local: Option<Local>,
+    /// The `roots.json` the agent is told to trust
+    /// (`DECKPILOT_PLUGIN_REGISTRY_ROOTS`); `None`: the roots its build
+    /// embeds ([`Trust::Build`]).
+    pub roots: Option<PathBuf>,
     pub agent_bin: PathBuf,
     pub plugin_host: PathBuf,
     /// The profile the scenario edits (active, with an MK.2 layout).
@@ -407,6 +416,62 @@ impl std::fmt::Debug for Fixture {
             .finish_non_exhaustive()
     }
 }
+
+/// The throwaway registry served over local HTTPS, and the canned HTTP the
+/// sample plugin gets.
+pub struct Local {
+    pub registry: Registry,
+    server: https::HttpsServer,
+    pub ca: PathBuf,
+    pub http: PathBuf,
+}
+
+impl std::fmt::Debug for Local {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Local")
+            .field("registry", &self.registry)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The registry the agent installs from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// A registry made here with throwaway keys and the sample plugin,
+    /// served over HTTPS on 127.0.0.1 with a throwaway CA (the agent needs
+    /// `test-hooks`), with canned HTTP for the sample.
+    Local,
+    /// The agent's default: the public registry
+    /// (`https://knittingcode.github.io/deckpilot-plugins/`, packages from
+    /// its GitHub releases), over the network with the system's TLS roots.
+    /// No registry, CA or HTTP variable is passed.
+    Live,
+}
+
+/// The registry root keys the agent trusts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trust {
+    /// Throwaway roots given at run time (`DECKPILOT_PLUGIN_REGISTRY_ROOTS`):
+    /// the local registry's, or with [`Source::Live`] fresh ones that
+    /// signed nothing.
+    Throwaway,
+    /// None given: the roots compiled into the agent
+    /// (`DECKPILOT_REGISTRY_ROOT_PUBKEYS` at build time).
+    Build,
+}
+
+/// The agent's registry and test variables: removed from what the agent
+/// inherits, so that only what the fixture sets reaches it.
+const AGENT_VARIABLES: &[&str] = &[
+    "DECKPILOT_PLUGIN_REGISTRY",
+    "DECKPILOT_PLUGIN_REGISTRY_URL",
+    "DECKPILOT_PLUGIN_REGISTRY_RELEASES_URL",
+    "DECKPILOT_PLUGIN_REGISTRY_ROOTS",
+    "DECKPILOT_BUNDLED_PLUGINS",
+    "DECKPILOT_TEST_REGISTRY_CA",
+    "DECKPILOT_TEST_PLUGIN_HTTP",
+    "DECKPILOT_TEST_AGENT_ARGS",
+];
 
 /// Canned answers for the only host the sample talks to.
 fn canned_http(dir: &Path) -> PathBuf {
@@ -443,19 +508,51 @@ fn plugin_store_key(config: &DatabaseKey) -> StoreKey {
 }
 
 impl Fixture {
+    /// The scenario's fixture: the agent of `DECKPILOT_E2E_AGENT_BIN`, the
+    /// local registry and its roots.
     pub fn new(name: &str) -> Self {
-        let agent_bin = required_path("DECKPILOT_E2E_AGENT_BIN");
+        Self::with(
+            name,
+            "DECKPILOT_E2E_AGENT_BIN",
+            Source::Local,
+            Trust::Throwaway,
+        )
+    }
+
+    /// A fixture with the agent named by the variable `agent_bin`, the
+    /// registry `source` and the roots `trust`.
+    pub fn with(name: &str, agent_bin: &str, source: Source, trust: Trust) -> Self {
+        let agent_bin = required_path(agent_bin);
         let plugin_host = required_path("DECKPILOT_E2E_PLUGIN_HOST");
-        let wasm =
-            std::fs::read(required_path("DECKPILOT_E2E_WASM_DIR").join("hello_weather.wasm"))
-                .expect("hello_weather.wasm");
         let root = TempDir::new(name);
         let artifacts = artifacts_dir(root.path());
-        let registry = Registry::create(root.path(), wasm);
-        let server = https::HttpsServer::start(&registry.work);
-        let ca = registry.keys.join("ca.pem");
-        server.write_ca(&ca);
-        let http = canned_http(root.path());
+        let local = (source == Source::Local).then(|| {
+            let wasm =
+                std::fs::read(required_path("DECKPILOT_E2E_WASM_DIR").join("hello_weather.wasm"))
+                    .expect("hello_weather.wasm");
+            let registry = Registry::create(root.path(), wasm);
+            let server = https::HttpsServer::start(&registry.work);
+            let ca = registry.keys.join("ca.pem");
+            server.write_ca(&ca);
+            let http = canned_http(root.path());
+            Local {
+                registry,
+                server,
+                ca,
+                http,
+            }
+        });
+        let roots = match (trust, &local) {
+            (Trust::Build, _) => None,
+            (Trust::Throwaway, Some(local)) => Some(local.registry.roots()),
+            // Roots nobody signed the live registry with.
+            (Trust::Throwaway, None) => {
+                let keys = Registry::keys_only(&root.path().join("other-roots"), Vec::new());
+                let roots = keys.keys.join("trusted-roots.json");
+                std::fs::copy(keys.work.join("roots.json"), &roots).unwrap();
+                Some(roots)
+            }
+        };
 
         // A password-protected configuration: no credential store involved.
         let paths = AgentPaths::in_dir(root.path().join("data"));
@@ -490,10 +587,8 @@ impl Fixture {
             root,
             paths,
             key,
-            registry,
-            server,
-            ca,
-            http,
+            local,
+            roots,
             agent_bin,
             plugin_host,
             profile: profile.id,
@@ -512,25 +607,36 @@ impl Fixture {
     /// The environment the agent needs. The app passes its own on to the
     /// agent it starts.
     pub fn agent_env(&self) -> Vec<(&'static str, OsString)> {
-        vec![
+        let mut env: Vec<(&'static str, OsString)> = vec![
             ("DECKPILOT_DATA_DIR", self.paths.data_dir.clone().into()),
             ("DECKPILOT_ENABLE_PLUGINS", "1".into()),
             ("DECKPILOT_PLUGIN_HOST", self.plugin_host.clone().into()),
-            (
+        ];
+        if let Some(local) = &self.local {
+            env.push((
                 "DECKPILOT_PLUGIN_REGISTRY_URL",
-                self.server.url("site/").into(),
-            ),
-            (
+                local.server.url("site/").into(),
+            ));
+            env.push((
                 "DECKPILOT_PLUGIN_REGISTRY_RELEASES_URL",
-                self.server.url("releases/").into(),
-            ),
-            (
-                "DECKPILOT_PLUGIN_REGISTRY_ROOTS",
-                self.registry.roots().into(),
-            ),
-            ("DECKPILOT_TEST_REGISTRY_CA", self.ca.clone().into()),
-            ("DECKPILOT_TEST_PLUGIN_HTTP", self.http.clone().into()),
-        ]
+                local.server.url("releases/").into(),
+            ));
+        }
+        if let Some(roots) = &self.roots {
+            env.push(("DECKPILOT_PLUGIN_REGISTRY_ROOTS", roots.clone().into()));
+        }
+        if let Some(local) = &self.local {
+            env.push(("DECKPILOT_TEST_REGISTRY_CA", local.ca.clone().into()));
+            env.push(("DECKPILOT_TEST_PLUGIN_HTTP", local.http.clone().into()));
+        }
+        env
+    }
+
+    /// The local registry; panics with the live one.
+    pub fn local(&self) -> &Local {
+        self.local
+            .as_ref()
+            .expect("the fixture has a local registry")
     }
 
     /// What the agent runs with: no tray, no USB, a simulated MK.2.
@@ -547,10 +653,12 @@ impl Fixture {
         )
         .unwrap();
         let mut command = Command::new(&self.agent_bin);
+        for name in AGENT_VARIABLES {
+            command.env_remove(name);
+        }
         command
             .args(Self::AGENT_ARGS.split_whitespace())
             .envs(self.agent_env())
-            .env_remove("DECKPILOT_TEST_AGENT_ARGS")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(log);
@@ -680,7 +788,10 @@ impl Fixture {
 
     /// Every URL the canned HTTP answered, in order.
     pub fn fetched(&self) -> Vec<String> {
-        let mut log = self.http.as_os_str().to_owned();
+        let Some(local) = &self.local else {
+            return Vec::new();
+        };
+        let mut log = local.http.as_os_str().to_owned();
         log.push(".log");
         std::fs::read_to_string(PathBuf::from(log))
             .unwrap_or_default()
@@ -691,7 +802,29 @@ impl Fixture {
 
     /// Every path the registry server was asked for.
     pub fn registry_log(&self) -> Vec<String> {
-        self.server.log()
+        self.local
+            .as_ref()
+            .map_or_else(Vec::new, |local| local.server.log())
+    }
+
+    /// What every agent this fixture started wrote to its standard error
+    /// (its log), so far.
+    pub fn agent_log(&self) -> String {
+        (1..=self.spawned)
+            .filter_map(|n| {
+                std::fs::read_to_string(self.artifacts.join(format!("agent-stderr-{n}.log"))).ok()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The lines of [`Self::agent_log`] that contain every one of `parts`.
+    pub fn agent_log_lines(&self, parts: &[&str]) -> Vec<String> {
+        self.agent_log()
+            .lines()
+            .filter(|line| parts.iter().all(|p| line.contains(p)))
+            .map(str::to_owned)
+            .collect()
     }
 
     fn plugin_db(&self) -> PathBuf {
@@ -732,17 +865,24 @@ impl Fixture {
     /// The plugin's storage keys, credential slots with a secret and saved
     /// settings, read from `plugins.db`.
     pub fn plugin_data(&self) -> (Vec<String>, Vec<String>, BTreeMap<String, Value>) {
+        self.plugin_data_of(&hello())
+    }
+
+    /// [`Self::plugin_data`] of plugin `id`.
+    pub fn plugin_data_of(
+        &self,
+        id: &PluginId,
+    ) -> (Vec<String>, Vec<String>, BTreeMap<String, Value>) {
         let store = self.plugin_store();
-        let id = hello();
         (
-            store.storage_keys(&id).unwrap(),
+            store.storage_keys(id).unwrap(),
             store
-                .credentials(&id)
+                .credentials(id)
                 .unwrap()
                 .into_iter()
                 .map(|c| c.key)
                 .collect(),
-            store.settings(&id).unwrap(),
+            store.settings(id).unwrap(),
         )
     }
 
@@ -783,14 +923,16 @@ impl Fixture {
                 let _ = std::fs::copy(entry.path(), self.artifacts.join(entry.file_name()));
             }
         }
-        let _ = std::fs::write(
-            self.artifacts.join("canned-http.log"),
-            self.fetched().join("\n"),
-        );
-        let _ = std::fs::write(
-            self.artifacts.join("registry-server.log"),
-            self.registry_log().join("\n"),
-        );
+        if self.local.is_some() {
+            let _ = std::fs::write(
+                self.artifacts.join("canned-http.log"),
+                self.fetched().join("\n"),
+            );
+            let _ = std::fs::write(
+                self.artifacts.join("registry-server.log"),
+                self.registry_log().join("\n"),
+            );
+        }
     }
 }
 
@@ -1298,7 +1440,7 @@ pub fn run(d: &mut dyn Driver, fx: &mut Fixture) {
     );
 
     // 14. 1.1.0 asks for notifications too: staged until consented.
-    fx.registry.publish("1.1.0");
+    fx.local().registry.publish("1.1.0");
     let via = d.update(&[NOTIFICATIONS]);
     let plugin = details(d);
     assert_eq!(plugin["summary"]["version"], "1.1.0", "{plugin}");
@@ -1435,5 +1577,385 @@ pub fn run(d: &mut dyn Driver, fx: &mut Fixture) {
         "Profiles, workflows and the encrypted config intact",
         &[Via::AppIpc, Via::Fixture],
         "SQLCipher database opened with its key",
+    );
+}
+
+// --------------------------------------------------------------------- live
+
+/// The official registry, the agent's default (`DEFAULT_REGISTRY_URL` in
+/// `apps/agent/src/plugins/registry.rs`).
+pub const LIVE_REGISTRY: &str = "https://knittingcode.github.io/deckpilot-plugins/";
+/// Where every package of the official registry comes from
+/// (`DOWNLOAD_PREFIX`).
+pub const LIVE_RELEASES: &str =
+    "https://github.com/knittingcode/deckpilot-plugins/releases/download/";
+/// The plugin the live smoke test installs: published in the official
+/// registry, with no permission but `device:state` (no network).
+pub const MEMORY: &str = "deckpilot.memory";
+pub const MEMORY_VERSION: &str = "0.1.0";
+pub const DEVICE: &str = "device:state";
+
+fn memory() -> PluginId {
+    PluginId::parse(MEMORY).unwrap()
+}
+
+/// The lines of the agent's log that say which roots it trusts, once it
+/// opened the registry.
+fn roots_lines(fx: &Fixture) -> Vec<String> {
+    wait_until(
+        Duration::from_secs(30),
+        "the agent's registry roots",
+        || {
+            let lines = fx.agent_log_lines(&["registry root keys"]);
+            (!lines.is_empty()).then_some(lines)
+        },
+    )
+}
+
+/// The live smoke test (`docs/marketplace/e2e.md`, "The live registry"):
+/// an agent whose only trusted registry roots are the ones compiled into
+/// it, against the official registry over the network, installs
+/// [`MEMORY`], enables it, runs it from keys of the simulated MK.2 and
+/// uninstalls it. `fx` is [`Source::Live`], [`Trust::Build`].
+#[allow(clippy::too_many_lines)] // one path, step by step
+pub fn run_live(d: &mut dyn Driver, fx: &mut Fixture) {
+    assert!(fx.roots.is_none(), "the live smoke test passes no roots");
+    let mut report = Report::new(&fx.artifacts, &format!("{}-live", d.name()));
+    let baseline_before = fx.stored_profile(fx.baseline);
+    let id = memory();
+
+    // 1. Start the agent: no registry, roots, CA or canned HTTP given, so
+    // it uses its embedded roots and the default registry URL.
+    let via = d.start(fx);
+    assert!(fx.agent_unlocked(), "the agent is not unlocked");
+    let runtime = d.ok("get_plugin_runtime", json!({}));
+    assert_eq!(runtime["available"], true, "{runtime}");
+    assert_eq!(runtime["executionSupported"], true, "{runtime}");
+    let roots = roots_lines(fx);
+    assert!(
+        roots.iter().all(|l| l.contains("roots=embedded")),
+        "the agent does not trust its embedded roots: {roots:?}"
+    );
+    assert!(
+        fx.agent_log_lines(&["--plugin-registry-roots"]).is_empty(),
+        "a configured roots file was seen"
+    );
+    report.step(
+        1,
+        "Start the agent with an isolated data dir and its embedded roots",
+        &via,
+        "no --plugin-registry-roots, URL, CA or canned HTTP",
+    );
+
+    let via = d.open_marketplace();
+    report.step(2, "Open the Marketplace", &via, "");
+
+    // 3. Discover: the live registry, verified now against the embedded
+    // roots.
+    let available = d.ok("list_available_plugins", json!({"refresh": true}));
+    let registry = &available["registry"];
+    assert_eq!(registry["source"], LIVE_REGISTRY, "{registry}");
+    assert_eq!(registry["freshness"], "fresh", "{registry}");
+    assert!(
+        registry["seq"].as_u64().is_some_and(|s| s > 0),
+        "{registry}"
+    );
+    let verified = fx.agent_log_lines(&["plugin registry verified", LIVE_REGISTRY]);
+    assert!(
+        !verified.is_empty(),
+        "no verification of the live registry was logged"
+    );
+    let entry = available["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == MEMORY)
+        .cloned()
+        .unwrap_or_else(|| panic!("{MEMORY} is not listed: {available}"));
+    report.step(
+        3,
+        "Discover Memory in the live registry",
+        &[Via::AppIpc, Via::Fixture],
+        &format!(
+            "index seq {}, {} plugins, verified with the embedded roots (agent log)",
+            registry["seq"],
+            available["plugins"].as_array().map_or(0, Vec::len)
+        ),
+    );
+
+    // 4. Its details: the version, compatible, permissions device only.
+    let version = entry["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["version"] == MEMORY_VERSION)
+        .cloned()
+        .unwrap_or_else(|| panic!("{MEMORY} {MEMORY_VERSION} is not listed: {entry}"));
+    assert!(
+        version["incompatible"].as_array().is_none_or(Vec::is_empty),
+        "{version}"
+    );
+    assert!(version["withdrawn"].is_null(), "{version}");
+    let kinds: Vec<&str> = version["permissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|p| p["kind"].as_str())
+        .collect();
+    assert_eq!(kinds, ["device"], "{version}");
+    report.step(
+        4,
+        "Inspect its details",
+        &[Via::AppIpc],
+        "permissions: device",
+    );
+
+    // 5. Install: the package is downloaded from the registry's GitHub
+    // release and verified against the signed pins.
+    d.ok(
+        "install_plugin",
+        json!({"source": {"type": "registry", "plugin": MEMORY, "version": MEMORY_VERSION},
+               "consent": [DEVICE]}),
+    );
+    let plugin = d.ok("get_plugin", json!({"plugin": MEMORY}));
+    assert_eq!(plugin["summary"]["version"], MEMORY_VERSION, "{plugin}");
+    assert_eq!(plugin["summary"]["state"], "disabled", "{plugin}");
+    let downloads = fx.agent_log_lines(&["plugin package downloaded", LIVE_RELEASES]);
+    assert!(
+        downloads.iter().any(|l| l.contains(MEMORY)),
+        "no download from the registry's releases was logged: {downloads:?}"
+    );
+    report.step(
+        5,
+        "Install it",
+        &[Via::AppIpc, Via::Fixture],
+        "downloaded from the registry's GitHub release (agent log)",
+    );
+
+    // 6. Enable it, consenting to its permission.
+    d.ok(
+        "enable_plugin",
+        json!({"plugin": MEMORY, "consent": [DEVICE]}),
+    );
+    let plugin = d.ok("get_plugin", json!({"plugin": MEMORY}));
+    assert_eq!(plugin["summary"]["state"], "enabled", "{plugin}");
+    assert_eq!(permission(&plugin, DEVICE), "granted", "{plugin}");
+    report.step(6, "Enable it with consent", &[Via::AppIpc], "");
+
+    // 7. Configure: a board of 4 pairs; out of range is refused.
+    d.ok(
+        "set_plugin_settings",
+        json!({"plugin": MEMORY, "values": {"pairs": 4}}),
+    );
+    let refused = d
+        .invoke(
+            "set_plugin_settings",
+            json!({"plugin": MEMORY, "values": {"pairs": 99}}),
+        )
+        .expect_err("an invalid setting was accepted");
+    assert_eq!(refused["reason"], "invalidData", "{refused}");
+    report.step(
+        7,
+        "Configure",
+        &[Via::AppIpc],
+        "an out-of-range value is refused",
+    );
+
+    // 8. New game, turn card 1 and the score on keys 0 to 2.
+    let actions: Vec<Value> = [
+        ("Memory new game", "new-game", json!({})),
+        (
+            "Memory card 1",
+            "flip",
+            json!({"cell": {"type": "integer", "value": 1}}),
+        ),
+        ("Memory score", "score", json!({})),
+    ]
+    .into_iter()
+    .map(|(name, action, parameters)| {
+        d.ok(
+            "create_action",
+            json!({"profileId": fx.profile, "action": {
+                "name": name, "actionType": format!("{MEMORY}.{action}"),
+                "parameters": parameters}}),
+        )
+    })
+    .collect();
+    let profile = profile_of(d, fx.profile);
+    let mut layout: DeviceLayout = serde_json::from_value(profile["layouts"][0].clone()).unwrap();
+    layout.pages[0].bindings = actions
+        .iter()
+        .zip(0u16..)
+        .map(|(action, index)| {
+            let action: ActionInstance = serde_json::from_value(action.clone()).unwrap();
+            ControlBinding::new(
+                ControlId::Key { index },
+                Trigger::Press,
+                deckpilot_core::BindingTarget::action(action.id),
+            )
+        })
+        .collect();
+    let saved = d.ok(
+        "save_layout",
+        json!({"profileId": fx.profile, "layout": layout}),
+    );
+    assert_eq!(saved["agentReload"]["state"], "applied", "{saved}");
+    report.step(
+        8,
+        "Assign its actions to keys",
+        &[Via::AppIpc],
+        "create_action + save_layout",
+    );
+
+    // 9. Run it: keys of the simulated MK.2, the engine, the sandboxed host.
+    assert_eq!(
+        fx.press(0),
+        ("Memory new game".to_owned(), ActionStatus::Succeeded)
+    );
+    assert_eq!(
+        fx.press(1),
+        ("Memory card 1".to_owned(), ActionStatus::Succeeded)
+    );
+    let score = run_action(d, fx.profile, &actions[2]);
+    assert_eq!(score.status, ActionStatus::Succeeded, "{score:?}");
+    assert!(score.message.contains("of 4 pairs"), "{score:?}");
+    let outcome = d.ok(
+        "invoke_plugin_action",
+        json!({"plugin": MEMORY, "action": "new-game", "params": {}}),
+    );
+    assert!(
+        outcome.to_string().contains("4 pairs on cards 1 to 8"),
+        "{outcome}"
+    );
+    let (storage, _, settings) = fx.plugin_data_of(&id);
+    assert!(!storage.is_empty(), "the game was not stored");
+    assert_eq!(settings.get("pairs"), Some(&json!(4)), "{settings:?}");
+    let plugin = d.ok("get_plugin", json!({"plugin": MEMORY}));
+    assert_eq!(
+        plugin["summary"]["health"]["crashes"].as_u64().unwrap_or(0),
+        0,
+        "{plugin}"
+    );
+    report.step(
+        9,
+        "Execute it",
+        &[Via::AgentIpc, Via::AppIpc, Via::Fixture],
+        &format!(
+            "key presses on the simulated MK.2 (SimulateInput); score: {:?}",
+            score.message
+        ),
+    );
+
+    // 10. Disable and uninstall.
+    d.ok("disable_plugin", json!({"plugin": MEMORY}));
+    d.ok("uninstall_plugin", json!({"plugin": MEMORY}));
+    let installed = d.ok("list_plugins", json!({}));
+    assert!(
+        installed
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["id"] != MEMORY),
+        "{installed}"
+    );
+    let (storage, credentials, settings) = fx.plugin_data_of(&id);
+    assert!(storage.is_empty(), "{storage:?}");
+    assert!(credentials.is_empty(), "{credentials:?}");
+    assert!(settings.is_empty(), "{settings:?}");
+    let refused = run_action(d, fx.profile, &actions[0]);
+    assert!(
+        refused.message.contains("the plugin is not installed"),
+        "{refused:?}"
+    );
+    report.step(
+        10,
+        "Disable and uninstall",
+        &[Via::AppIpc, Via::Fixture],
+        "storage and settings gone (plugins.db read with the derived key)",
+    );
+
+    // 11. The rest of the configuration.
+    assert_eq!(fx.stored_profile(fx.baseline), baseline_before);
+    fx.assert_encrypted();
+    report.step(
+        11,
+        "Profiles and the encrypted config intact",
+        &[Via::AppIpc, Via::Fixture],
+        "SQLCipher database opened with its key",
+    );
+}
+
+/// An agent whose roots did not sign the registry it is given: listing
+/// and installing are refused, nothing is downloaded or installed.
+/// `source` is how the registry `list_available_plugins` names starts.
+pub fn run_refused(d: &mut dyn Driver, fx: &mut Fixture, source: &str, plugin: &str) {
+    let mut report = Report::new(&fx.artifacts, &format!("{}-refused", d.name()));
+    let via = d.start(fx);
+    assert!(fx.agent_unlocked(), "the agent is not unlocked");
+    let roots: Vec<String> = roots_lines(fx)
+        .iter()
+        .filter_map(|l| l.find("roots=").map(|at| l[at..].to_owned()))
+        .collect();
+    report.step(1, "Start the agent", &via, &roots.join(", "));
+
+    let refused = d
+        .invoke("list_available_plugins", json!({"refresh": true}))
+        .expect_err("a registry signed with other keys was accepted");
+    assert_eq!(refused["reason"], "registryUnavailable", "{refused}");
+    // Refused on its signatures, not unreachable.
+    let message = refused["message"].as_str().unwrap_or_default().to_owned();
+    assert!(
+        message.contains("failed verification") && message.contains("valid signature"),
+        "{refused}"
+    );
+    assert!(
+        !fx.agent_log_lines(&["the plugin registry was refused", "valid signature"])
+            .is_empty(),
+        "the refusal was not logged"
+    );
+    let listed = d.ok("list_available_plugins", json!({"refresh": false}));
+    assert!(
+        listed["registry"]["source"]
+            .as_str()
+            .is_some_and(|s| s.starts_with(source)),
+        "{listed}"
+    );
+    assert_ne!(listed["registry"]["freshness"], "fresh", "{listed}");
+    assert!(
+        listed["plugins"].as_array().is_none_or(Vec::is_empty),
+        "{listed}"
+    );
+    report.step(2, "The registry is refused", &[Via::AppIpc], &message);
+
+    let refused = d
+        .invoke(
+            "install_plugin",
+            json!({"source": {"type": "registry", "plugin": plugin, "version": null},
+                   "consent": []}),
+        )
+        .expect_err("a plugin was installed from a refused registry");
+    let installed = d.ok("list_plugins", json!({}));
+    assert!(
+        installed
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["id"] != plugin),
+        "{installed}"
+    );
+    assert!(
+        fx.agent_log_lines(&["plugin package downloaded"])
+            .is_empty(),
+        "a package was downloaded"
+    );
+    assert!(
+        fx.agent_log_lines(&["plugin registry verified"]).is_empty(),
+        "the registry was verified"
+    );
+    report.step(
+        3,
+        "Installing is refused, nothing downloaded",
+        &[Via::AppIpc, Via::Fixture],
+        &refused.to_string(),
     );
 }

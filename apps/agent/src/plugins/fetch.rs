@@ -331,6 +331,12 @@ impl HttpsSource {
                 digest.sha256
             )));
         }
+        tracing::info!(
+            url = %shown(&url),
+            bytes = length,
+            sha256 = %actual,
+            "plugin package downloaded; its size and sha256 are the pinned ones"
+        );
         Ok(bytes)
     }
 

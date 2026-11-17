@@ -39,7 +39,7 @@ use deckpilot_plugin_registry::{
     PluginDetail, Policy, Refresh, RegistryClient, RegistryError, RegistrySource, StaleReason,
     write_atomic,
 };
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::PluginSettings;
 use super::fetch::{DownloadError, HttpsConfig, HttpsSource, TlsRoots};
@@ -287,8 +287,15 @@ impl Registry {
             }
             _ => None,
         };
-        if let Ok(Refresh::Updated { .. }) = result {
-            self.prune_details();
+        match &result {
+            Ok(Refresh::Updated { seq }) => {
+                info!(registry = %self.name, seq, "plugin registry verified: a new index");
+                self.prune_details();
+            }
+            Ok(Refresh::Unchanged { seq }) => {
+                debug!(registry = %self.name, seq, "plugin registry verified: the index is unchanged");
+            }
+            Ok(Refresh::Offline(_)) | Err(_) => {}
         }
         result
     }
