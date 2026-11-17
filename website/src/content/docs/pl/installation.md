@@ -7,7 +7,7 @@ order: 1
 
 DeckPilot jest publikowany w postaci instalatorów w GitHub Releases. [Strona pobierania](../../download/) pokazuje pliki najnowszego opublikowanego wydania wraz z rozmiarami i sumami SHA-256.
 
-> DeckPilot jest wydaniem wstępnym i nie ma jeszcze wydania stabilnego. Jedynym obsługiwanym urządzeniem jest **Stream Deck MK.2**, a z prawdziwym urządzeniem DeckPilot był używany tylko w systemie macOS. Systemy Windows i Linux obejmują testy automatyczne.
+> Jedynym obsługiwanym urządzeniem jest **Stream Deck MK.2**, a z prawdziwym urządzeniem DeckPilot był używany tylko w systemie macOS. Systemy Windows i Linux obejmują testy automatyczne.
 
 ## Czego potrzebujesz
 

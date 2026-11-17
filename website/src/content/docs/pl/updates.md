@@ -34,7 +34,7 @@ Aktualizację stosuje przycisk **Install and restart**. Przed aktualizacją Deck
 - **Stable** oferuje wyłącznie wydania stabilne. Wydanie wstępne nigdy nie jest oferowane w tym kanale.
 - **Pre-releases** oferuje najnowsze opublikowane wydanie dowolnego rodzaju, więc przejdziesz na wydanie stabilne, gdy tylko będzie ono nowsze niż Twoje wydanie wstępne.
 
-> DeckPilot nie ma jeszcze wydania stabilnego, a kanałem domyślnym jest Stable. Jeśli zainstalowano wydanie wstępne i chcesz otrzymać propozycję kolejnego, wybierz **Pre-releases**.
+> Kanałem domyślnym jest Stable. Zainstalowane wydanie wstępne otrzyma propozycję wydania stabilnego, gdy tylko pojawi się nowsze od niego, na każdym z kanałów. Aby nadal otrzymywać także wydania wstępne, wybierz **Pre-releases**.
 
 DeckPilot nigdy nie instaluje wersji starszej niż zainstalowana. Po powrocie do kanału Stable zainstalowane wydanie wstępne pozostaje, dopóki nie pojawi się nowsze wydanie stabilne.
 

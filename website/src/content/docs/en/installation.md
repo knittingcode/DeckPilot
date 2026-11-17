@@ -7,7 +7,7 @@ order: 1
 
 DeckPilot is published as installers on GitHub Releases. The [download page](../../download/) lists the files of the latest published release with their sizes and SHA-256 checksums.
 
-> DeckPilot is a pre-release and there is no stable release yet. The only supported device is the **Stream Deck MK.2**, and DeckPilot has been used with real hardware on macOS only. On Windows and Linux it is covered by automated tests.
+> The only supported device is the **Stream Deck MK.2**, and DeckPilot has been used with real hardware on macOS only. On Windows and Linux it is covered by automated tests.
 
 ## What you need
 

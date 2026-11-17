@@ -34,7 +34,7 @@ An update is applied with **Install and restart**. DeckPilot waits for running w
 - **Stable** offers stable releases only. A pre-release is never offered on this channel.
 - **Pre-releases** offers the newest published release of either kind, so you move on to a stable release as soon as one is newer than your pre-release.
 
-> DeckPilot has no stable release yet, and the default channel is Stable. If you installed a pre-release and want to be offered the next one, select **Pre-releases**.
+> The default channel is Stable. An installed pre-release is offered a stable release as soon as one is newer than it, on either channel. To keep being offered pre-releases as well, select **Pre-releases**.
 
 DeckPilot never installs an older version than the one you have. Switching back to Stable keeps your installed pre-release until a newer stable release exists.
 

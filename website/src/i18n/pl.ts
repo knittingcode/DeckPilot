@@ -322,7 +322,7 @@ export const pl: Dictionary = {
       items: [
         {
           q: 'Czy DeckPilot nadaje się już do codziennej pracy?',
-          a: 'Jeszcze nie. DeckPilot jest na wczesnym etapie rozwoju: opublikowano wydanie wstępne, a wydania stabilnego nie ma. Z prawdziwym urządzeniem był używany tylko w systemie macOS. Trzymaj zaszyfrowany eksport swojej konfiguracji.',
+          a: 'DeckPilot ma już wydania stabilne, a strona pobierania oferuje najnowsze z nich. To wciąż młoda aplikacja: z prawdziwym urządzeniem była używana tylko w systemie macOS, a wersje dla Windows i Linuksa nie są podpisane cyfrowo. Trzymaj zaszyfrowany eksport swojej konfiguracji.',
         },
         {
           q: 'Które modele Stream Deck działają?',
@@ -520,7 +520,7 @@ export const pl: Dictionary = {
     pagination: 'Poprzednia i następna strona',
     statusTitle: 'O tej dokumentacji',
     status:
-      'DeckPilot jest wydaniem wstępnym i szybko się zmienia. Te strony opisują aplikację według stanu kodu źródłowego ze wskazanego niżej commita; nazwy w interfejsie zainstalowanej wersji mogą się nieznacznie różnić.',
+      'DeckPilot szybko się zmienia. Te strony opisują aplikację według stanu kodu źródłowego ze wskazanego niżej commita; nazwy w interfejsie zainstalowanej wersji mogą się nieznacznie różnić.',
     uiLanguage: 'Interfejs aplikacji jest dostępny wyłącznie po angielsku, dlatego nazwy ekranów i przycisków podajemy w oryginale.',
     verified: 'Sprawdzono z kodem źródłowym DeckPilota w commicie {commit}.',
     source: 'Dokumentacja techniczna w repozytorium',
