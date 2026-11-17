@@ -1,9 +1,10 @@
 # Built-in actions and Stream Deck feature parity
 
 Status: **audit and design record**. Section 1 describes `main` at
-`dc1a8a2e` (0.6.0-alpha.3 plus the changes merged since); the later
-sections are the design for what is missing and are updated as the work
-lands. Where the code differs, the code and the tests win.
+`dc1a8a2e` (0.6.0-alpha.3 plus the changes merged since), before this
+work; the parity matrix (section 2) and the designs (section 5) are kept
+up to date as the work lands, with the pull request that landed each part.
+Where the code differs, the code and the tests win.
 
 The goal is functional parity with the essential actions and interaction
 patterns people who use a Stream Deck expect — folders, pages, profile
@@ -74,13 +75,14 @@ See [Core or plugin](#3-core-or-plugin).
   `dropOnControl` (`layout-editor/editing.ts`) treats it as a library entry
   and reads `target.type` of `undefined`. Moving or swapping keys by drag
   therefore does not work; the pure function is tested with the right
-  shape, the component is not. Fixed with the folder editor work.
+  shape, the component is not. **Fixed** in #285 (`folders.test.tsx`).
 - **Deleting a page asks nothing.** "Delete page" in the page bar removes
   the page and the keys that open it at once (undo restores it until the
-  layout is saved).
+  layout is saved). **Fixed** in #285: it asks first and names what goes
+  with it.
 - **A duplicated profile is not announced to the agent** (`duplicate_profile`
   does not ask for a reload), so it is missing from the agent's profile list
-  until the next reload.
+  until the next reload. **Fixed** in #288.
 
 ## 2. Parity matrix
 
@@ -96,41 +98,41 @@ component tests). Nothing here has physical evidence yet.
 | --- | --- | --- | --- | --- |
 | **Folders**: own key layout, nesting, stable ids, no cycles, persisted with the profile | verified (integration, simulated) | core | `device_runtime.rs` tests `navigates_folders_and_ignores_unusable_input`, `back_returns_to_the_folder_and_folders_without_back_get_one`; `pages/tests.rs`; `apps/agent/tests/mock_devices.rs` | — |
 | Folder key on the device enters it; Back key | verified (integration) | core | as above; automatic Back on the first free key | — |
-| Create a folder by dragging onto an empty key or from the key menu | missing | core (app) | A page is added in the page bar, then "Open …" is dragged onto a key: two steps, and the new page is top level, not inside the page it was created from | "New folder" in the library and the key menu: creates the page inside the current one and binds the key in one undo step |
-| Double-click a folder key to enter it in the editor | missing | core (app) | Shift+Enter and the context menu | Double-click |
+| Create a folder by dragging onto an empty key or from the key menu | verified (simulated) | core (app) | "New folder" in the library and the key menu creates the page inside the current one and binds the key in one undo step; an occupied key is never overwritten (#285, `layout-editor/folders.test.tsx`) | — |
+| Double-click a folder key to enter it in the editor | verified (simulated) | core (app) | Double-click, Shift+Enter and the context menu (#285, `folders.test.tsx`) | — |
 | Custom title and icon of a folder | verified (simulated) | core | Binding label and appearance apply to folder keys like any other | — |
-| Move actions in and out of folders | incomplete | core (app) | Cut and paste across pages; move and copy whole pages | Drag between keys is broken (1.2) |
-| Rename; delete with confirmation | incomplete | core (app) | Rename in the page bar; delete without confirmation | Confirmation that names the keys and pages that go with it |
-| Automatic return after an action runs | missing | core | — | A setting of the folder page |
-| Navigation state preserved sensibly | incomplete | core | Reconnect and reload keep the page | The page a profile showed is forgotten when the profile changes and when the agent restarts |
-| **Switch Profile**: a specific profile, next, previous, wraparound | missing | built-in module | Switching over IPC, from the app and the tray | An action; the editor lists the real profiles |
+| Move actions in and out of folders | verified (simulated) | core (app) | Cut and paste across pages; move and copy whole pages; drag between keys moves or swaps (#285, `folders.test.tsx`) | — |
+| Rename; delete with confirmation | verified (simulated) | core (app) | Rename in the page bar; deleting asks first and names the keys and pages that go with it (#285, `delete-page-dialog.tsx`, `folders.test.tsx`) | — |
+| Automatic return after an action runs | verified (integration) | core | `LayoutPage.autoReturn`, a switch on the folder page (#284; `apps/agent/tests/deck.rs::a_folder_that_closes_returns_after_its_key_ran`, `deck_tests.rs`) | — |
+| Navigation state preserved sensibly | verified (integration) | core | Reconnect and reload keep the page; a profile is returned to on the page it was left on; the pages survive an agent restart (#284; `deck.rs::the_profile_and_the_pages_survive_a_restart`, `deck_tests.rs`) | — |
+| **Switch Profile**: a specific profile, next, previous, wraparound | verified (integration) | built-in module | `deck.switch-profile`; the editor lists the real profiles (#284; `deck.rs::a_key_switches_the_profile_of_every_device`, `modules/deck/profile-field.test.tsx`) | — |
 | Device selection, cross-device switching | missing | core | One active profile for every device | Per-device profiles do not exist: see [5.4](#54-switch-profile) and the owner decisions |
-| Deleted or missing profile | missing | built-in module | `setActiveProfile` answers `NotFound` | The action fails with a clear message and the key shows it |
+| Deleted or missing profile | verified (integration) | built-in module | The action fails with `profile-not-found` and changes nothing (#284, `deck.rs`) | — |
 | **Key Logic**: single press, double press, hold with their own actions, timings, deterministic recognition, cancellation, persistence | verified (integration, simulated) | core | Engine tests incl. a property test over random sequences; `apps/agent/tests/gestures.rs`, `gesture_bindings.rs`, `gesture_e2e.rs`; the click-delay trade-off is documented in `gestures-and-work-session.md` §2.3 and shown in the editor | — |
-| Key Logic editor with a visual slot per gesture, drag into slots | incomplete | core (app) | Three rows with a select each, overrides, label and timings | Slots that accept drops from the library; replace and remove in the slot |
+| Key Logic editor with a visual slot per gesture, drag into slots | verified (simulated) | core (app) | One slot per gesture that takes an action, a workflow, a page or an action type dropped from the library; replace and remove in the slot; overrides, label and timings (#298, `layout-editor/key-logic.test.tsx`) | — |
 | Visual feedback on the device | missing | core | — | A short mark on the key when a gesture is recognized |
-| **Multi Action**: run in order, delays, per-step configuration, errors, progress, cancel, nested with bounded recursion | verified (integration) | core | Step and graph workflows; `apps/agent/tests/workflow_e2e.rs`; step editor with drag reorder | Shown as "workflow", not offered as an action that can be dropped on a key and edited there |
+| **Multi Action**: run in order, delays, per-step configuration, errors, progress, cancel, nested with bounded recursion | verified (integration, simulated) | core | Step and graph workflows; `apps/agent/tests/workflow_e2e.rs`; *Multi Action* in the editor's library creates a step workflow on a key or gesture slot, *Edit steps* opens its step list from the key (#300; `apps/agent/tests/multi_action.rs`, `layout-editor/multi-action.test.tsx`) | — |
 | Run supported actions in parallel | verified (integration) | core | Graph workflows (Parallel, Join) | Not available in the step list |
-| Delay between steps | incomplete | core | Graph `delay` (ms); `general.wait` (1–300 s) in a step list | A delay row in the step list |
+| Delay between steps | verified (integration, simulated) | core | Graph `delay` (ms); a delay row in the step list: a `general.delay` step (10 ms–5 min, cancellable) with its own duration (#300; `multi_action.rs`, `lib/multi-action.test.ts`) | — |
 | **Page navigation**: go to a page | verified (integration) | core | `OpenPage` | — |
-| Next page, previous page | missing | built-in module | — | Actions over the layout's top-level pages |
-| Page indicator | missing | built-in module | The editor shows "Page n of m" | A key that shows it on the device |
+| Next page, previous page | verified (integration) | built-in module | `deck.next-page`, `deck.previous-page` with wraparound (#284; `deck.rs::keys_turn_pages_and_the_indicator_follows`, `deck_tests.rs`) | — |
+| Page indicator | verified (integration) | built-in module | `deck.page-indicator`; `{page.number}`, `{page.count}`, `{page.name}` in any label (#284; `deck.rs`, `deck_tests.rs::labels_show_where_the_device_is`) | — |
 | Page creation, deletion, reordering | verified (integration, simulated) | core | Page bar, page tree, `reorder_pages`, `move_page`, `copy_page` | — |
-| Per-profile page state | incomplete | core | Per device, reset on profile change | See navigation state above |
+| Per-profile page state | verified (integration) | core | Per profile and device, restored when the profile becomes active again (#284) | — |
 
 ### 2.2 P1
 
 | Feature | Status | Home | What exists | What is missing |
 | --- | --- | --- | --- | --- |
 | **Multi Action Switch** | missing | core | Stateful keys exist for the Work Session only | A key with two or more states, each with its own workflow, title and icon; see [5.7](#57-multi-action-switch) |
-| **Random Action** | missing | built-in module | — | See [5.8](#58-random-action) |
+| **Random Action** | verified (integration, simulated) | built-in module | `deck.random` (#301; `modules/deck/src/random.rs` tests, `deck.rs::a_random_key_runs_what_it_picked_as_a_key_would`, `modules/deck/candidates-field.test.tsx`) | — |
 | **Website** | verified (simulated) | built-in module (`system`) | `system.open-url`: `http`, `https`, `mailto` | — |
 | **Open** (file, folder) | verified (simulated) | built-in module (`system`) | `system.open-file`, `system.open-directory`, inside bound locations | — |
 | **Open Application** | verified (simulated), platform | built-in module (`system`) | `system.open-app` with a bound application and arguments | — |
 | **Close Application** | missing, platform | built-in module (`system`) | `system.process-status` reports whether it runs | A graceful quit request; see [5.9](#59-system-actions) |
 | **Hotkey**, **Hotkey Switch**, **Text** | missing, platform | built-in module | — | Keystroke injection; see [5.10](#510-hotkey-hotkey-switch-and-text) |
 | **Multimedia** | missing, platform | built-in module | — | Media keys; see 5.10 |
-| **Device: brightness** | incomplete | built-in module | A global setting and `setBrightness` | An action (set, step up, step down) |
+| **Device: brightness** | verified (integration) | built-in module | `deck.brightness`: set a level or step brighter or dimmer, the same setting the app changes (#299; `deck.rs::keys_set_and_step_the_brightness_of_the_devices`) | — |
 | **Device: sleep, wake, timer** | missing | core + built-in module | — | A sleep state of the device in the agent; see [5.11](#511-device-actions) |
 | **Device status** | incomplete | core | The app's Devices page and dashboard | A key face |
 | Virtual device toggle | missing | — | Simulated devices are a development tool | Not planned: there is no virtual device for users |
@@ -146,9 +148,9 @@ component tests). Nothing here has physical evidence yet.
 
 | Feature | Status | What exists | What is missing |
 | --- | --- | --- | --- |
-| One searchable catalog with categories | incomplete | Two lists: the profile's instances (Action Library, the editor's library) and the types (when creating an action) | One catalog in the layout editor that offers types as well as saved actions |
-| Expand and collapse, search | incomplete | Search in the Action Library and the type chooser | Collapsible categories; search in the editor's library |
-| Drag and drop | incomplete | Saved actions, workflows and navigation targets onto keys | Types onto keys (creates the action and binds it) |
+| One searchable catalog with categories | verified (simulated) | The editor's library offers the profile's actions and workflows, navigation and, under "New: …", the action types that need no settings (#296, `layout-editor/catalog.test.tsx`) | — |
+| Expand and collapse, search | verified (simulated) | Groups that fold; search in the editor's library, the Action Library and the type chooser (#296) | — |
+| Drag and drop | verified (simulated) | Saved actions, workflows, navigation targets and action types onto keys and gesture slots; a type creates its action or reuses the one that is exactly it (#296) | — |
 | Keyboard navigation | incomplete | Canvas and library entries are focusable; `KeyboardSensor` | Arrow keys in the catalog |
 | Platform and permission indicators, disabled states | incomplete | Plugin actions that cannot run are shown disabled with the reason | The same for built-in types (unsupported platform, permission not given) |
 | Inspector adapts to the action; nested actions editable in place | incomplete | Parameter overrides per binding; the gesture editor | Editing the action's own parameters from the key |
@@ -237,22 +239,24 @@ navigation, profile switching and, later, device actions. It is enabled by
 default and works offline.
 
 A handler cannot reach the device runtime. As with `ContextEffect` for
-projects, it *asks*: `ActionResult` gains `requests: Vec<DeckRequest>`
-(never serialized: it does not cross IPC, is not stored in history and
-cannot be produced by a plugin, whose results come back as JSON). The
-registry lets a request through only for a module that holds the new
-`Capability::DeckControl`.
+projects, it *asks*: `ActionResult` has one optional request,
+`request: Option<Box<DeckRequest>>` (boxed so that results without one
+stay small; never serialized: it does not cross IPC, is not stored in
+history and cannot be produced by a plugin, whose results come back as
+JSON). The registry lets a request through only for a module that holds
+the new `Capability::DeckControl`.
 
 | Request | Applied by | Effect |
 | --- | --- | --- |
-| `NextPage { wrap }`, `PreviousPage { wrap }` | `Runtime` | Moves the pressing device along the top-level pages |
-| `SwitchProfile { target, wrap }` | agent | Activates a profile, as `setActiveProfile` does |
+| `NextPage { wrap_around }`, `PreviousPage { wrap_around }` | `Runtime` | Moves the pressing device along the top-level pages |
+| `SwitchProfile { target, wrap_around }` | agent | Activates a profile, as `setActiveProfile` does |
+| `Brightness { set, step }` | agent | Sets the brightness to a level or steps it, within 0–100, through the path `setBrightness` takes |
 
 A request needs the device whose key ran the action. Run from the app
 ("Run" in the Action Library) or from a workflow without a device, a
 navigation request fails with `no-device` rather than guessing a device;
-a profile switch needs no device and works everywhere an action runs on
-the service task.
+a profile switch and a brightness change need no device and work
+everywhere an action runs on the service task.
 
 ### 5.2 Pages and folders
 
@@ -295,7 +299,7 @@ so it is set once and applies to every key in it.
 **Navigation state.** The runtime keeps, per profile and device, the page
 stack a device showed when the profile was left, and restores it when the
 profile becomes active again, if every page still exists. The stacks of
-the active profile are saved in `settings` (`navigation`) and restored
+the active profile are saved in `settings` (`navigation.pages`) and restored
 after an agent restart with the same check. Disconnect, reconnect and
 reload behave as before.
 
@@ -303,8 +307,10 @@ reload behave as before.
 
 - "New folder" in the library (draggable) and in the key menu creates a
   page inside the current one, named "Folder" (then "Folder 2", …), and
-  binds the key to open it, as one undo step. An occupied key is refused
-  by the drag and offered as "Replace with a new folder" in the menu.
+  binds the key to open it, as one undo step. An occupied key is refused,
+  by the drag and in the menu (where the entry says to clear the key
+  first); nothing is ever overwritten. (As built in #285; the design
+  first offered "Replace with a new folder" in the menu.)
 - Double-click on a folder key enters it; the breadcrumb and Back in the
   page bar leave it.
 - Deleting a page asks first, naming the keys that open it and the pages
@@ -354,6 +360,19 @@ it; its steps are edited in a sequence editor opened from the key (the
 existing step editor, with a delay row and with errors and progress of the
 last run). Parallel steps remain the graph editor's.
 
+As built (#300): the library's *Multi Action* entry saves
+an empty step workflow ("Multi Action", "Multi Action 2", …) and binds it
+to the key or gesture slot it was dropped on; the step editor opens in a
+dialog with its own Run button, and *Edit steps* on a gesture opens any
+step workflow it runs (graph workflows stay in the workflow builder).
+*Add delay* adds a step that uses the profile's default *Delay* action
+(`general.delay`, created once) with the step's own `milliseconds`
+override. A delay is an action type rather than a new step field or a new
+parameter of `general.wait`, so the stored workflow stays an ordinary
+step list (rule 1) and an older build, which refuses parameters it does
+not know, shows the delay step as unavailable instead of refusing the
+action (rule 2).
+
 ### 5.7 Multi Action Switch
 
 Owner-visible behaviour to settle before coding:
@@ -371,12 +390,50 @@ It needs a representation that an older build can read (rule 1), so it is
 an action type whose parameters name the states, with the agent starting
 the runs through a deck request. Designed in detail with its pull request.
 
+**Not built yet.** The parts it needs and where they stand:
+
+- Starting a state's target: the `RunAction`/`RunWorkflow` deck requests
+  of the Random Action (5.8) already do this, as a key would.
+- States as parameters: a `lines` parameter like the Random Action's
+  candidates, one `action:<id>` or `workflow:<id>` per state, with the
+  title and icon of each state as further `lines` parameters of the same
+  length (an older build keeps them as text).
+- Advancing on success needs the run's outcome: immediate for an action;
+  for a workflow, the agent's `ExecutionFinished`, matched to the key that
+  started it. The state (per profile, page, control and gesture) goes in
+  `settings` (`switch.states`), so it survives a restart.
+- Showing the current state's title and icon on the key is live key state
+  (`button_state.rs`, `crates/deckpilot-render`), which the plugin key-state
+  work (#290–#295) is changing now. The switch is sequenced after it, so
+  that both use one representation of a key's state.
+
 ### 5.8 Random Action
 
 `deck.random`: a list of candidates (saved actions and workflows) with
 optional weights and "never the same twice in a row". Uniform by default.
 An empty list fails with `no-candidates` when saved and when run. The
 random source is injected into the handler, so tests are deterministic.
+
+As built (#301):
+
+- `candidates` is a `lines` parameter: one `action:<id>` or
+  `workflow:<id>` per line, optionally followed by a weight (1–100), at
+  most 32. The Action Library edits it as rows of the profile's actions
+  and workflows with a weight; a candidate that no longer exists stays in
+  its row as missing. It is required, so an empty list is refused when
+  saved; when run it fails with `no-candidates`, `invalid-candidate`,
+  `candidate-not-found` or `nested-random`.
+- The pick comes from the operating system's random source (`getrandom`,
+  already a dependency), without modulo bias; *never the same twice* is
+  remembered per list while the agent runs.
+- The handler only picks. It asks with a new deck request,
+  `RunAction { action }` or `RunWorkflow { workflow }`. From a key, the
+  agent runs the pick as that key's own binding would, for the same
+  device (`Runtime::run_picked`), so a picked *Next page* turns that
+  device's page and a picked workflow starts in the background. Run from
+  the app, the pick runs as from the app.
+- Picks do not nest: a candidate that is a Random Action is refused, so a
+  pick never recurses.
 
 ### 5.9 System actions
 
@@ -388,6 +445,23 @@ module; sequence the merges):
   desktop's close request where available, otherwise `SIGTERM`). Never
   `SIGKILL`/`TerminateProcess`. Fails with `not-running` when it is not
   running. Unsaved-changes dialogs stay the application's.
+
+**Not built yet; what is still to decide.** The workspace forbids
+`unsafe`, so each platform's request comes from a program or a
+dependency, and each choice needs the review this section asks for:
+
+| | Without new dependencies | With a dependency |
+| --- | --- | --- |
+| macOS | `/usr/bin/osascript` with a fixed script that takes the bound application's bundle identifier as an argument (`tell application id … to quit`); the identifier comes from the resource bound on this computer, never from the action. Sending Apple events asks the user once (Automation permission) | an Apple-event crate |
+| Windows | `taskkill.exe /PID <pid>` **without** `/F`, which posts `WM_CLOSE`; the process is the one `system.process-status` finds for the bound program | `windows` crate (`PostMessage`) |
+| Linux | `kill -TERM <pid>` (no shell, the pid from the process table) | `nix` |
+
+The program route reuses the System module's bounded command runner (no
+shell, argument list, time limit), so it adds no new power; the action is
+off until allowed on this computer like commands (`allowCommands`), since
+closing an application can lose its unsaved state when it does not ask.
+Which route, and whether closing shares `allowCommands` or gets its own
+switch, are decisions for that pull request.
 
 ### 5.10 Hotkey, Hotkey Switch and Text
 
@@ -420,11 +494,13 @@ request.
 ### 5.11 Device actions
 
 - `deck.brightness`: set, step up, step down; changes the same setting the
-  app changes, only for devices with the `brightness` capability.
+  app changes, only for devices with the `brightness` capability. Built:
+  parameters `change` (`set`, `brighter`, `dimmer`), `level` (0–100) and
+  `step` (1–100, default 10); output `brightness`.
 - Sleep and wake: the agent blanks a device (brightness 0 and cleared
   keys) and restores it on the next press, which is swallowed. A sleep
   timer is a setting of this computer. Needs agent state and a status
-  field, so it comes with protocol 11.
+  field, so it comes with protocol 11. **Not built yet.**
 - Actions a device cannot do are listed as unavailable for it, with the
   reason, from its capability descriptor.
 

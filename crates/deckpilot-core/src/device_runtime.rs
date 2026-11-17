@@ -650,7 +650,10 @@ impl Runtime {
             Some(crate::DeckRequest::NextPage { wrap_around }) => (true, wrap_around),
             Some(crate::DeckRequest::PreviousPage { wrap_around }) => (false, wrap_around),
             Some(
-                crate::DeckRequest::SwitchProfile { .. } | crate::DeckRequest::Brightness { .. },
+                crate::DeckRequest::SwitchProfile { .. }
+                | crate::DeckRequest::Brightness { .. }
+                | crate::DeckRequest::RunAction { .. }
+                | crate::DeckRequest::RunWorkflow { .. },
             )
             | None => return,
         };
@@ -852,6 +855,23 @@ impl Runtime {
             self.go_back(device);
         }
         Ok(outcome)
+    }
+
+    /// Runs `target` for `device` as a key bound to it would, without
+    /// closing a folder after it: what a Random Action picked. The pick ran
+    /// from a key of the page, which already closed it if it closes.
+    ///
+    /// # Errors
+    ///
+    /// As a key's binding: no active profile, an unknown action or
+    /// workflow.
+    pub fn run_picked(
+        &mut self,
+        device: &DeviceId,
+        target: BindingTarget,
+        origin: crate::RunOrigin,
+    ) -> Result<RuntimeOutcome, EngineError> {
+        self.dispatch_target(device, target, origin)
     }
 
     fn dispatch_target(
