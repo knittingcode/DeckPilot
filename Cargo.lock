@@ -1189,7 +1189,7 @@ name = "deckpilot-module-deck"
 version = "0.6.0-alpha.4"
 dependencies = [
  "deckpilot-core",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
 ]
 
 [[package]]
