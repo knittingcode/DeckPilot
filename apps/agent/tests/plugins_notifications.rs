@@ -47,7 +47,7 @@ use deckpilot_core::{
 };
 use deckpilot_ipc::plugins::{
     MigrationPhase, MigrationRoute, ModuleMigrationInfo, PluginActionOutcome, PluginDetails,
-    PluginOrigin, PluginState, PluginSummary,
+    PluginOrigin, PluginState, PluginSummary, reason,
 };
 use deckpilot_ipc::{
     AgentClient, AgentEvent, AgentPaths, ClientError, ClientKind, KeyMaterial, Request, Response,
@@ -56,6 +56,8 @@ use deckpilot_modules::notifications;
 use deckpilot_plugin_bundled::{BundleClass, Pins};
 use deckpilot_plugin_manifest::PluginId;
 use deckpilot_plugin_store::{GrantStatus, PluginStore, TombstoneDecision};
+use deckpilot_storage::crypto::Password;
+use deckpilot_storage::vault::Vault;
 use deckpilot_storage::{ConfigStore, DatabaseKey};
 use serde_json::{Value, json};
 use support::TempDir;
@@ -183,6 +185,28 @@ impl Env {
         env
     }
 
+    /// A data directory as 0.6.0 left it: the database and vault of its
+    /// validation seed (`crates/deckpilot-storage/tests/fixtures/v0.6.0`),
+    /// no `plugins/`, and the bundle of this build.
+    fn from_v0_6_0(name: &str) -> Self {
+        let dir = TempDir::new(name);
+        let paths = AgentPaths::in_dir(dir.path().join("data"));
+        paths.create_dirs().unwrap();
+        let fixture = repo().join("crates/deckpilot-storage/tests/fixtures/v0.6.0");
+        std::fs::copy(fixture.join("deckpilot.db"), &paths.database).unwrap();
+        std::fs::copy(
+            fixture.join("deckpilot.vault.json"),
+            paths.data_dir.join("deckpilot.vault.json"),
+        )
+        .unwrap();
+        let key = Vault::new(&paths.database)
+            .unlock(&Password::new("deckpilot-dev"))
+            .unwrap();
+        let env = Self { dir, paths, key };
+        env.stage(None);
+        env
+    }
+
     fn bundled(&self) -> PathBuf {
         self.dir.path().join("resources/bundled")
     }
@@ -261,9 +285,23 @@ impl Env {
         std::fs::write(self.pins_file(), pins.to_json_pretty()).unwrap();
     }
 
-    /// Starts the agent; `plugins` off is an older build (or a release
-    /// build today) on the same data.
+    /// Starts the agent and unlocks it; `plugins` off is an older build
+    /// (or one without the feature) on the same data.
     async fn start(&self, plugins: bool) -> Agent {
+        let agent = self.spawn(plugins);
+        agent
+            .request(Request::Unlock {
+                key: KeyMaterial::new(self.key.to_hex()),
+            })
+            .await
+            .unwrap();
+        agent
+    }
+
+    /// Starts the agent, locked. With `plugins` it gets no plugin switch,
+    /// as the configuration app and the login item start it; without,
+    /// `--disable-plugins`.
+    fn spawn(&self, plugins: bool) -> Agent {
         let log = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -290,22 +328,15 @@ impl Env {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(log);
-        if plugins {
-            command.arg("--enable-plugins");
+        if !plugins {
+            command.arg("--disable-plugins");
         }
-        let agent = Agent {
+        Agent {
             child: command.spawn().expect("the agent starts"),
             paths: self.paths.clone(),
             log: self.dir.path().join("agent.log"),
             app: Mutex::new(None),
-        };
-        agent
-            .request(Request::Unlock {
-                key: KeyMaterial::new(self.key.to_hex()),
-            })
-            .await
-            .unwrap();
-        agent
+        }
     }
 
     fn plugin_store(&self) -> PluginStore {
@@ -1541,4 +1572,131 @@ async fn an_alpha3_user_keeps_notifications_through_the_alias() {
     assert_eq!(again.attempts, 0);
     agent.stop().await;
     assert_eq!(env.legacy(), before);
+}
+
+// ------------------------------------------------------- 0.6.0 upgrade
+
+/// `deckpilot.db` (and its write-ahead log, when there is one), byte for
+/// byte.
+fn database_files(paths: &AgentPaths) -> BTreeMap<String, Vec<u8>> {
+    let name = paths.database.file_name().unwrap().to_string_lossy();
+    ["", "-wal"]
+        .into_iter()
+        .filter_map(|suffix| {
+            let file = paths.data_dir.join(format!("{name}{suffix}"));
+            std::fs::read(&file)
+                .ok()
+                .map(|bytes| (format!("{name}{suffix}"), bytes))
+        })
+        .collect()
+}
+
+/// A 0.6.0 user (an encrypted `deckpilot.db`, no `plugins.db`) updates to
+/// a build with the `plugins` feature, started as the configuration app
+/// and the login item start it: with no plugin switch at all. Locked, the
+/// agent says plugins are on and waits for the key, creating nothing;
+/// unlocked, it creates `plugins.db`, seeds the bundled default plugin and
+/// cuts its module over. `deckpilot.db` is not written, byte for byte, so
+/// 0.6.0 on the same data still works; `--disable-plugins` turns plugins
+/// off again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_0_6_0_data_dir_starts_with_plugins_on_without_a_switch() {
+    let env = Env::from_v0_6_0("plugins-notifications-v060");
+    let plugins_dir = env.paths.data_dir.join("plugins");
+
+    // 0.6.0 itself (here: plugins off) brings the database to this
+    // build's schema, as the 0.6.0 release did; plugins create nothing.
+    let older = env.start(false).await;
+    let Response::PluginRuntime { status } = older.ok(Request::GetPluginRuntime).await else {
+        panic!("status")
+    };
+    assert!(
+        status.built && !status.enabled && !status.available,
+        "{status:?}"
+    );
+    older.stop().await;
+    assert!(!plugins_dir.exists(), "plugins off creates nothing");
+    let before = database_files(&env.paths);
+    assert!(before.contains_key("deckpilot.db"), "{:?}", before.keys());
+
+    // The update, locked: plugins are on, waiting for the key.
+    let agent = env.spawn(true);
+    let Response::PluginRuntime { status } = agent.ok(Request::GetPluginRuntime).await else {
+        panic!("status")
+    };
+    assert!(status.built && status.enabled, "{status:?}");
+    assert!(!status.available, "locked: {status:?}");
+    let locked = agent.request(Request::ListPlugins).await;
+    assert!(
+        matches!(&locked, Err(ClientError::Agent(e)) if e.reason.as_deref() == Some(reason::LOCKED)),
+        "{locked:?}"
+    );
+    assert!(
+        !plugins_dir.join("plugins.db").exists(),
+        "nothing is created without the key"
+    );
+
+    // Unlocked: plugins.db, the bundled default plugin, the cut-over.
+    agent
+        .request(Request::Unlock {
+            key: KeyMaterial::new(env.key.to_hex()),
+        })
+        .await
+        .unwrap();
+    let deadline = Instant::now() + SETTLE;
+    let status = loop {
+        let Response::PluginRuntime { status } = agent.ok(Request::GetPluginRuntime).await else {
+            panic!("status")
+        };
+        if status.available || Instant::now() >= deadline {
+            break status;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(
+        status.available && status.enabled,
+        "{status:?}\n{}",
+        agent.log()
+    );
+    let migration = agent
+        .wait_migration(MigrationPhase::CutOver, MigrationRoute::Plugin)
+        .await;
+    assert_eq!(migration.plugin, ID);
+    let summary = agent
+        .plugin()
+        .await
+        .unwrap_or_else(|| panic!("not seeded\n{}", agent.log()));
+    assert_eq!(summary.state, PluginState::Enabled);
+    assert_eq!(summary.origin, PluginOrigin::Bundled);
+    agent.stop().await;
+    assert!(plugins_dir.join("plugins.db").is_file());
+    // Recorded in plugins.db (with the other modules that can migrate,
+    // whose plugins this bundle lacks).
+    let recorded = env.plugin_store().module_migrations().unwrap();
+    assert!(
+        recorded
+            .iter()
+            .any(|m| m.module_id == MODULE
+                && m.phase == deckpilot_plugin_store::MigrationPhase::CutOver),
+        "{recorded:?}"
+    );
+
+    // deckpilot.db was not written.
+    assert_eq!(database_files(&env.paths), before, "deckpilot.db changed");
+
+    // Turned off explicitly on the same data: nothing answers, nothing
+    // changes.
+    let off = env.start(false).await;
+    let Response::PluginRuntime { status } = off.ok(Request::GetPluginRuntime).await else {
+        panic!("status")
+    };
+    assert!(status.built && !status.enabled && !status.available);
+    let refused = off.request(Request::ListPlugins).await;
+    assert!(
+        matches!(&refused, Err(ClientError::Agent(e))
+            if e.reason.as_deref() == Some(reason::PLUGINS_UNAVAILABLE)),
+        "{refused:?}"
+    );
+    off.stop().await;
+    assert_eq!(database_files(&env.paths), before, "deckpilot.db changed");
 }

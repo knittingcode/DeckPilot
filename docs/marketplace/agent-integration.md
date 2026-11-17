@@ -1,11 +1,32 @@
 # Plugins in the agent (experimental backend)
 
-Status: **experimental, off in every release build.** The agent's cargo
-feature `plugins` (default off) adds the plugin backend; even then plugins
-stay off until the agent is started with `--enable-plugins`. Release
-workflows are unchanged. `apps/agent/tests/plugins_feature.rs` checks that
-the default build depends on no plugin crate, and that no build of the
-agent links the plugin host or wasmtime.
+Status: **experimental.** The agent's cargo feature `plugins` (not a
+default feature) adds the plugin backend, and a build with it has plugins
+**on**: the configuration app and the login item start the agent without
+any plugin argument. A build without the feature is unchanged and answers
+every plugin request with "plugins not available". Release builds do not
+include the feature yet (the release workflow and packaging change
+separately). `apps/agent/tests/plugins_feature.rs` checks that the default
+build depends on no plugin crate, and that no build of the agent links the
+plugin host or wasmtime.
+
+Turning plugins on and off (`apps/agent/src/plugins/mod.rs`):
+
+| Switch | Plugins |
+| --- | --- |
+| none | on with the feature (`ENABLED_BY_DEFAULT`), off without it |
+| `--disable-plugins`, or `DECKPILOT_ENABLE_PLUGINS=0` | off: `getPluginRuntime` reports `enabled: false`, every other plugin request fails with `pluginsUnavailable`, and nothing under `plugins/` in the data directory is opened or created |
+| `--enable-plugins` (kept for compatibility), or `DECKPILOT_ENABLE_PLUGINS=1` | on with the feature; nothing without it |
+
+The command line wins over the variable (`--enable-plugins` overrides
+`DECKPILOT_ENABLE_PLUGINS=0`), and the last switch over an earlier one. Any
+other value of the variable leaves the default. Tests:
+`plugins_e2e.rs` (`plugins_are_on_unless_turned_off`,
+`with_plugins_disabled_nothing_is_available`) and
+`plugins_notifications.rs`
+(`a_0_6_0_data_dir_starts_with_plugins_on_without_a_switch`: an update
+from 0.6.0, locked first, with `deckpilot.db` left byte for byte as it
+was; [module-migration.md §5.10](module-migration.md#510-plugins-on-by-default)).
 
 The executable artifact is an ABI 1 WebAssembly module
 ([artifact-contract.md](artifact-contract.md)).
@@ -366,7 +387,9 @@ U-10) has committed `keys/roots.json` to `knittingcode/deckpilot-plugins`:
    agent") passes the variable to Cargo only when it is set. The agent
    then uses `https://knittingcode.github.io/deckpilot-plugins/` with no
    flag at all. Release builds do not enable the `plugins` feature yet, so
-   the roots take effect in the first release that ships plugins.
+   the roots take effect in the first release that ships plugins; that
+   release needs no flag for plugins either, since a build with the
+   feature has them on.
 
 Deleting the variable makes the following releases embed nothing again.
 
@@ -805,7 +828,7 @@ asking" for credentials is the app's job (the default is to delete).
 ```sh
 cargo build -p deckpilot-agent --features plugins
 (cd plugins/runtime && cargo build --locked -p deckpilot-plugin-host --bin deckpilot-plugin-host)
-target/debug/deckpilot-agent --headless --enable-plugins \
+target/debug/deckpilot-agent --headless \
   --plugin-host "$PWD/plugins/runtime/target/debug/deckpilot-plugin-host" \
   --plugin-registry <registry dir> --plugin-registry-roots <roots.json>
 # or over HTTPS:

@@ -6,7 +6,7 @@
 //! stored here. Each command opens one connection and, unless it only asks
 //! for the runtime status, first checks with `getPluginRuntime` that the
 //! agent answers plugin requests at all: an agent without the `plugins`
-//! feature, without `--enable-plugins`, or older than protocol 10 is
+//! feature, with `--disable-plugins`, or older than protocol 10 is
 //! refused here with a typed error and never receives the request.
 //!
 //! Errors reach the frontend as `{ reason, message }` ([`PluginError`]):

@@ -189,7 +189,7 @@ const HINTS: Partial<Record<string, string>> = {
   agentTooOld:
     "Restart the agent in Settings › Background Agent so that the agent of this release runs.",
   pluginsUnavailable:
-    "Plugins need an agent built with the `plugins` feature and started with --enable-plugins.",
+    "Plugins need an agent built with the `plugins` feature and not started with --disable-plugins.",
   platformUnsupported:
     "Plugins can be installed and inspected here, but only run where the plugin sandbox is verified: macOS, Linux and Windows.",
   locked: "Unlock DeckPilot, then try again.",

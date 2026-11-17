@@ -374,8 +374,8 @@ pub struct Agent {
     work: work_session::WorkSessions,
     /// Work session keys shown, and when their elapsed time changes.
     session_faces: work_session_faces::WorkSessionFaces,
-    /// Plugins (experimental; answered only with the `plugins` feature
-    /// and `--enable-plugins`).
+    /// Plugins (answered only with the `plugins` feature, and not after
+    /// `--disable-plugins`).
     plugins: crate::plugins::PluginRuntime,
     /// Detached actions (plugin actions from keys and `runAction`) running
     /// on their own threads.

@@ -91,7 +91,7 @@ describe("runtime availability", () => {
     [
       "not enabled",
       { runtime: { ...readyRuntime(), available: false, enabled: false } },
-      "Plugins are not available: they are not enabled in the agent",
+      "Plugins are not available: they are turned off in the agent",
     ],
     [
       "locked",

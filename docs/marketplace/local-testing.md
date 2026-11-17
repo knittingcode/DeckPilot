@@ -9,10 +9,11 @@ with the Plugins page. The automated version of the same flow is
 through the app's UI and commands it is [e2e.md](e2e.md).
 Section 5 serves the same registry over HTTPS.
 
-The feature is **off by default** at both ends. Without
-`VITE_DECKPILOT_PLUGINS=1` the app has no Plugins page; an agent built
-without the `plugins` feature, or started without `--enable-plugins`,
-refuses every plugin request (`pluginsUnavailable`). On Windows plugins can
+The app's side is **off by default**: without `VITE_DECKPILOT_PLUGINS=1`
+it has no Plugins page. An agent built with the `plugins` feature has
+plugins on unless started with `--disable-plugins` (or
+`DECKPILOT_ENABLE_PLUGINS=0`); one built without the feature, or turned
+off, refuses every plugin request (`pluginsUnavailable`). On Windows plugins can
 be installed and inspected but not enabled or run.
 
 Needs: the Rust toolchain, `pnpm install` done, `jq`. Run everything from
@@ -116,7 +117,6 @@ keychain service `DeckPilot Development`).
 
 ```sh
 export DECKPILOT_DATA_DIR=$DATA
-export DECKPILOT_ENABLE_PLUGINS=1
 export DECKPILOT_PLUGIN_HOST=$REPO/plugins/runtime/target/debug/deckpilot-plugin-host
 export DECKPILOT_PLUGIN_REGISTRY=$REG
 export DECKPILOT_PLUGIN_REGISTRY_ROOTS=$KEYS/roots.json
@@ -131,7 +131,7 @@ third shell with the same exports, and add `DECKPILOT_NO_AGENT_AUTOSTART=1`
 to the app's shell:
 
 ```sh
-target/debug/deckpilot-agent --headless --no-usb --enable-plugins \
+target/debug/deckpilot-agent --headless --no-usb \
   --plugin-host "$DECKPILOT_PLUGIN_HOST" \
   --plugin-registry "$REG" --plugin-registry-roots "$KEYS/roots.json"
 ```
@@ -147,8 +147,8 @@ Settings › Extensions › Plugins.
 
 1. **Runtime notice.** With everything above, none. Check the variants:
    stop the agent (Settings › Background Agent › Stop agent: *agent not
-   running*); start it without `DECKPILOT_ENABLE_PLUGINS` / `--enable-plugins`
-   (*not enabled*); `cargo build -p deckpilot-agent` without the feature
+   running*); start it with `--disable-plugins` or
+   `DECKPILOT_ENABLE_PLUGINS=0` (*turned off*); `cargo build -p deckpilot-agent` without the feature
    (*not built with plugins*; rebuild with it afterwards). *Platform
    unsupported* shows only on Windows, *agent too old* only with an agent
    before protocol 10.
@@ -268,7 +268,7 @@ unset DECKPILOT_PLUGIN_REGISTRY
 export DECKPILOT_PLUGIN_REGISTRY_URL=https://127.0.0.1:8443/site/
 export DECKPILOT_PLUGIN_REGISTRY_RELEASES_URL=https://127.0.0.1:8443/releases/
 export DECKPILOT_TEST_REGISTRY_CA=$KEYS/tls/ca.pem
-target/debug/deckpilot-agent --headless --no-usb --enable-plugins \
+target/debug/deckpilot-agent --headless --no-usb \
   --plugin-host "$DECKPILOT_PLUGIN_HOST" --plugin-registry-roots "$KEYS/roots.json"
 ```
 

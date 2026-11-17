@@ -261,8 +261,8 @@ const OWN_JIRA: &str = "https://team.atlassian.net";
 /// How one agent start is set up.
 #[derive(Default, Clone, Copy)]
 struct Start {
-    /// Plugins off (`--enable-plugins` not given): an older build, or a
-    /// release build today.
+    /// Plugins off (`--disable-plugins`): as an older build, or a build
+    /// without the `plugins` feature.
     plugins_off: bool,
 }
 
@@ -517,8 +517,9 @@ impl Env {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(log);
-        if !start.plugins_off {
-            command.arg("--enable-plugins");
+        // Plugins are on without a switch in a build with the feature.
+        if start.plugins_off {
+            command.arg("--disable-plugins");
         }
         let agent = Agent {
             module: self.module,
