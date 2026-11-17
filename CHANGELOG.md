@@ -5,9 +5,9 @@ All notable changes to DeckPilot. The format follows
 [Semantic Versioning](https://semver.org/). The section of a version is used
 as the notes of its GitHub release and of the in-app update.
 
-**Release status.** The first public pre-release is 0.6.0-alpha.3
-(0.6.0-alpha.1 and 0.6.0-alpha.2 were not published); there is no stable
-release yet. 0.5.0 existed only
+**Release status.** The first stable release is 0.6.0 (2026-11-17). The
+public pre-releases before it were 0.6.0-alpha.3 and 0.6.0-alpha.4
+(0.6.0-alpha.1 and 0.6.0-alpha.2 were not published). 0.5.0 existed only
 as two signed draft prereleases (0.5.0-1 and 0.5.0-2) made to test signing,
 notarization and packaging, since deleted; they were never made public and
 are not offered by the updater. The versions before 0.5.0 were never
