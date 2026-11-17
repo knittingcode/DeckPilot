@@ -187,6 +187,29 @@ signed_for_version() {
     ${DECKPILOT_DEV:-cargo run --release --locked -q -p deckpilot-dev --} verify-signature "$file" "$signature"
 }
 
+# extract_rpm <package> <dir>: unpacks an .rpm's payload into <dir> and
+# checks every file against the SHA-256 digest in the package header.
+# rpm2cpio's exit status is not used: the Tauri bundler writes its .rpm with
+# the `rpm` crate, which sets no archive size tag, and rpm2cpio (rpm 4.18,
+# Ubuntu 24.04) then exits 1 although it wrote the whole payload. The
+# package's own digests (rpm -K), the extraction and each file's digest are
+# checked instead, which is stricter than the exit status was.
+extract_rpm() {
+  local rpm="$1" dir="$2" algo digest path actual
+  rpm -K --nosignature "$rpm" > /dev/null || fail "$rpm: its header or payload digest does not verify"
+  rpm2cpio "$rpm" > "$dir.cpio" || true
+  (cd "$dir" && cpio -idm --quiet < "$dir.cpio") || fail "$rpm: its payload cannot be extracted"
+  rm -f "$dir.cpio"
+  algo=$(rpm -qp --queryformat '%{FILEDIGESTALGO}' "$rpm")
+  [ "$algo" = 8 ] || fail "$rpm: its file digests use algorithm $algo, expected 8 (SHA-256)"
+  while IFS='|' read -r digest path; do
+    [ -n "$digest" ] || continue # a directory
+    [ -f "$dir$path" ] || fail "$rpm: $path is missing from its payload"
+    actual=$(sha256sum "$dir$path" | cut -d ' ' -f 1)
+    [ "$actual" = "$digest" ] || fail "$rpm: $path does not match the digest in its header"
+  done < <(rpm -qp --queryformat '[%{FILEDIGESTS}|%{FILENAMES}\n]' "$rpm")
+}
+
 # fresh_dir <name>: an empty directory for extracted files.
 fresh_dir() {
   local dir="${RUNNER_TEMP:?}/$1"
@@ -312,7 +335,7 @@ case "$platform" in
       rpm_version=$(rpm -qp --queryformat '%{VERSION}' "$rpm")
       [ "$rpm_version" = "$version" ] || fail "$rpm has version $rpm_version, expected $version"
       extracted=$(fresh_dir rpm)
-      rpm2cpio "$rpm" | (cd "$extracted" && cpio -idm --quiet)
+      extract_rpm "$rpm" "$extracted"
       distribution_record "$extracted/usr/bin/deckpilot-desktop" rpm
       echo "$rpm: version $version, app, agent and udev rule"
       signed_for_version "$rpm"
