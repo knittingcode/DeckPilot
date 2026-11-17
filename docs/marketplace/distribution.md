@@ -17,7 +17,7 @@ secret or an environment.
 | What it holds | application source and application releases | the static plugin registry and the independently distributed plugin packages |
 | Served from | GitHub Releases of `knittingcode/deckpilot` (URLs keep the `knittingcode/DeckPilot` spelling installed clients require) | registry metadata: GitHub Pages, <https://knittingcode.github.io/deckpilot-plugins/v1/>; packages: GitHub Releases of `knittingcode/deckpilot-plugins` |
 | Signed with | the application updater key (minisign, `TAURI_SIGNING_PRIVATE_KEY`) and the Apple Developer ID | the registry roles: root keys (offline), index key and timestamp key (`crates/deckpilot-plugin-registry/PUBLISHING.md`) |
-| Signing environments | `production-release` | `registry-publish` (release tags `*--v*`: index and timestamp keys) and `registry-timestamp` (`main` only: the timestamp key, daily refresh), in `knittingcode/deckpilot-plugins` only |
+| Signing environments | `production-release` | `registry-release` (release tags `*--v*`: index and timestamp keys) and `registry-timestamp` (`main` only: the timestamp key, daily refresh), in `knittingcode/deckpilot-plugins` only |
 | Trusted because | the updater signature, against the public key built into the app | the registry signatures, against the root keys built into the app (`DECKPILOT_REGISTRY_ROOT_PUBKEYS`, a repository variable read at build time; [agent-integration.md](agent-integration.md#trusted-root-keys)) |
 | Lifecycle | application versions, tags `v*` of this repository | plugin versions and registry snapshots, on their own schedule |
 
@@ -134,7 +134,7 @@ made inside the tests.
   (`<id>-<version>.dpplugin`), pinned by sha256 and size in the signed
   index; one release per plugin version.
 - Its workflows sign only in its own environments, with its own keys:
-  `publish.yml` signs the index and the timestamp in `registry-publish`
+  `publish.yml` signs the index and the timestamp in `registry-release`
   (release tags `*--v*`), and `refresh-timestamp.yml` re-signs the
   timestamp daily in `registry-timestamp` (`main` only, the timestamp key
   only). The secrets of both and the production registry keys are pending

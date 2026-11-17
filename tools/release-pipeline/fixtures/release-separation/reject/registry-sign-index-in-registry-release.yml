@@ -7,6 +7,6 @@ permissions:
 jobs:
   index:
     runs-on: ubuntu-latest
-    environment: registry-publish
+    environment: registry-release
     steps:
       - run: deckpilot-registry sign-index --key "$RUNNER_TEMP/index.key" --password-env KEY_PASSWORD
