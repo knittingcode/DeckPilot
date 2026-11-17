@@ -48,6 +48,10 @@
 #   HDIUTIL           how to run hdiutil (macOS disk images); default: hdiutil
 #   DECKPILOT_DEV     how to run deckpilot-dev; default: a release build
 set -euo pipefail
+# A command that ends the script under `set -e` names itself (fail() is
+# not involved then, and the log would otherwise show only the exit code).
+set -E
+trap 'echo "::error::check-packages.sh: line $LINENO: \"$BASH_COMMAND\" failed with exit status $?"' ERR
 
 platform="${1:?usage: check-packages.sh linux|windows [extract-dir]|macos|record <binary> <format>}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
