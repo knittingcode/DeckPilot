@@ -162,9 +162,31 @@ CHANGELOG.md.
   variable that is still used cannot be deleted or retyped. A variable
   picker with live previews inserts references in action parameters and
   workflow node mappings. Sensitive values are never shown or exported.
+- Keys that turn pages: *Next page* and *Previous page* move a device
+  along the pages of its layout (the pages in no folder), with or without
+  wraparound, and *Page indicator* shows where it is, such as 2/5. Any key
+  label can use `{page.number}`, `{page.count}` and `{page.name}`. Existing
+  layouts keep their pages and folders as they are.
+- *Switch profile* on a key: the next or previous profile, or one specific
+  profile chosen from the profiles that exist. Every connected device
+  follows. A key whose profile was deleted says so and changes nothing.
+- A folder can close by itself after one of its keys ran (a switch on the
+  folder's page in the layout editor).
+- A device comes back on the page it showed: when a profile becomes active
+  again, and after the agent restarts. Folders are closed.
+- Folders in the layout editor: drag *New folder* onto an empty key or
+  choose it in the key's menu, double-click a folder key to enter it, and
+  create folders inside folders. A key that already does something is
+  never overwritten. Deleting a page asks first and says what goes with it.
+- The layout editor's library is one searchable list with groups that
+  fold, and it offers the actions that need no settings (*Next page*,
+  *Switch profile* and the like) directly: dropped on a key, the action is
+  created, or the one that exists is reused.
 
 ### Fixed
 
+- Dragging one key onto another in the layout editor moves or swaps the
+  keys again; it did nothing.
 - HTTP, GitHub, GitLab and Jira actions run from a key or with *Run* in
   the app no longer end the agent (0.6.0-alpha.3); in workflows they
   already worked.
@@ -184,6 +206,9 @@ CHANGELOG.md.
   named `knittingcode/deckpilot`: releases still announce their downloads
   under the address earlier versions accept, and the app accepts the
   repository's name in any case.
+- A duplicated profile appears in the agent's profile list (the tray, the
+  dashboard) at once, as a new one does; before, it showed only after
+  something else made the agent reload.
 
 ## [0.5.0] - Not released (draft prereleases 0.5.0-1 and 0.5.0-2 only)
 

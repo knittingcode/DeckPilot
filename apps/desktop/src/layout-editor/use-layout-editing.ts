@@ -178,6 +178,8 @@ export function useLayoutEditing(model: DeviceModel, saved: DeviceLayout) {
         commands.newFolder(over)
         return
       }
+      // An action type is placed by the editor, which creates its action.
+      if (source.type === "actionType") return
       const next = dropOnControl(model, draft, pageId, source, over)
       if (!next) {
         toast.error(`${controlLabel(over)} cannot take these bindings`)

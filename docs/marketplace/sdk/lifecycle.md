@@ -100,4 +100,6 @@ in `plugins/sdk-js`) describes more:
   pulls it) and no device access.
 - **No invocation context**: a handler does not learn whether a key, a
   workflow or the app started it, nor its deadline or attempt number.
-- **No progress reports** and no `sleep`: there is no clock.
+- **No progress reports** and no `sleep`. The time is a capability
+  ([`Context::now`](capabilities.md#time), plugin API 1.1), not a clock
+  the plugin can wait on.

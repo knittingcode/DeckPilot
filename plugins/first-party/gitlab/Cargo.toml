@@ -1,0 +1,35 @@
+# deckpilot.gitlab: the first-party GitLab plugin, the replacement of the
+# built-in `gitlab` module (docs/marketplace/module-migration.md §9, P11).
+# Bundled with class `migration` (plugins/first-party/bundled.json); not
+# routed until its cut-over.
+#
+# A member of the plugins/runtime workspace (shared Cargo.lock and the
+# `guest` profile), built for wasm32-unknown-unknown; the rlib crate type
+# lets its native unit tests run with plain `cargo test`.
+[package]
+name = "deckpilot-gitlab"
+description = "DeckPilot's first-party GitLab plugin: read-only merge requests, reviews and pipelines"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+publish = false
+workspace = "../../runtime"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+deckpilot-plugin-sdk.workspace = true
+# URLs without a URL parser, the time limit and text helpers, shared with
+# the other plugins for a server the user enters.
+deckpilot-first-party-support = { path = "../support" }
+serde_json.workspace = true
+
+[dev-dependencies]
+# `guest::features`, to check what `dp_features` reports.
+deckpilot-plugin-abi.workspace = true
+jsonschema.workspace = true
+
+[lints]
+workspace = true
