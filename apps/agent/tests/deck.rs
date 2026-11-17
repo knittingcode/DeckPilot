@@ -450,6 +450,95 @@ async fn a_key_switches_the_profile_of_every_device() {
     agent.shutdown().await;
 }
 
+fn brightness(change: &str, key: &str, value: i64) -> ActionParameters {
+    ActionParameters::new()
+        .with(deck::CHANGE, ParameterValue::Choice(change.into()))
+        .with(key, ParameterValue::Integer(value))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn keys_set_and_step_the_brightness_of_the_devices() {
+    let dir = TempDir::new("deckpilot-deck-brightness");
+    let mut work = Profile::new("Work");
+    let set = action(
+        &mut work,
+        "Dim",
+        deck::brightness_id(),
+        &brightness(deck::CHANGE_SET, deck::LEVEL, 30),
+    );
+    let brighter = action(
+        &mut work,
+        "Brighter",
+        deck::brightness_id(),
+        &brightness(deck::CHANGE_BRIGHTER, deck::STEP, 50),
+    );
+    let dimmer = action(
+        &mut work,
+        "Dimmer",
+        deck::brightness_id(),
+        &brightness(deck::CHANGE_DIMMER, deck::STEP, 25),
+    );
+    let mut layout = DeviceLayout::new("Main", models::stream_deck_mk2().id);
+    layout.pages[0]
+        .bindings
+        .extend([press(0, set), press(1, brighter), press(2, dimmer)]);
+    work.layouts.push(layout);
+    let (paths, db_key) = support::data_dir(&dir, &work, &[]);
+    let mock = MockBackend::new();
+    let (a, b) = (
+        mock.plug(&models::stream_deck_mk2(), "MK2-A"),
+        mock.plug(&models::stream_deck_mk2(), "MK2-B"),
+    );
+    let agent = TestAgent::start_unlocked(&paths, &db_key, &mock, None).await;
+    connected(&agent, &a).await;
+    connected(&agent, &b).await;
+    let level = |status: &AgentStatus| status.brightness;
+
+    // A level: the setting, saved, and sent to every device.
+    mock.tap(&a, key(0));
+    wait_status(&agent, |s| level(s) == 30).await;
+    assert_eq!(agent.store().device_brightness().unwrap(), Some(30));
+    for device in [&a, &b] {
+        assert!(
+            wait_until(|| mock.brightness(device) == Some(30)).await,
+            "{device} was not dimmed"
+        );
+    }
+    // Steps from where it is, and never past the ends.
+    mock.tap(&b, key(1));
+    wait_status(&agent, |s| level(s) == 80).await;
+    mock.tap(&b, key(1));
+    wait_status(&agent, |s| level(s) == 100).await;
+    mock.tap(&a, key(2));
+    wait_status(&agent, |s| level(s) == 75).await;
+    assert!(wait_until(|| mock.brightness(&b) == Some(75)).await);
+
+    // From the app too: it needs no device. The result says the level.
+    let result = run(&agent, action_id(&work, "Dim")).await;
+    assert!(result.is_success(), "{result:?}");
+    assert_eq!(result.message, "brightness 30 %");
+    assert_eq!(result.data["brightness"], "30");
+    agent.shutdown().await;
+
+    // The level is the setting: a new agent starts with it.
+    let agent = TestAgent::start_unlocked(&paths, &db_key, &mock, None).await;
+    connected(&agent, &a).await;
+    assert_eq!(agent.status().await.brightness, 30);
+    agent.shutdown().await;
+}
+
+/// Whether `condition` became true in time.
+async fn wait_until(condition: impl Fn() -> bool) -> bool {
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    while !condition() {
+        if tokio::time::Instant::now() > deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    true
+}
+
 fn saved_pages(paths: &AgentPaths, key: &deckpilot_storage::DatabaseKey) -> Option<String> {
     support::open_store(paths, key)
         .setting("navigation.pages")
