@@ -5,9 +5,20 @@ The first-party Jira plugin: the replacement of the built-in `jira` module
 Bundled with class `migration` (`../bundled.json`) and pinned in builds that
 enable bundled plugins.
 
-**Not routed yet.** No alias maps `jira.<action>` to this plugin until its
-cut-over, so no build runs it for a stored key or workflow today; the
-built-in serves, as in every release build (plugins are off there).
+**Routed since the cut-over (P11)**, in builds with plugins only:
+`ACTION_ALIASES` (`crates/deckpilot-core/src/alias.rs`) maps every
+`jira.<action>` to `deckpilot.jira.<action>`, and the agent's migration
+plan for `jira` (`apps/agent/src/plugins/migration.rs`) installs this
+plugin, copies the module's settings with the server you had entered and,
+once you approve, imports the credential and allows exactly that server.
+From then on the stored `jira.*` keys, workflow nodes and actions run
+here; nothing stored is rewritten, so a build without plugins (every
+release build today) keeps running the built-in on the same data. Until
+you approve, after a decline and for every computer that is not eligible
+(a server a plugin cannot reach, a per-action credential other than the
+module's), the built-in serves.
+`apps/agent/tests/plugins_cutover_servers.rs` runs that upgrade end to
+end.
 
 Read-only. It talks only to the Jira site **you enter** in its `Site`
 setting and allow (GET), with your credential from the slot `credential`
@@ -37,7 +48,7 @@ same site only. It declares no host of its own: Jira has none.
 ## The contract
 
 Every action of the built-in, under the same name, so the alias
-`jira.<action>` → `deckpilot.jira.<action>` will be valid. Two tests keep
+`jira.<action>` → `deckpilot.jira.<action>` is valid. Two tests keep
 it that way:
 
 - `crates/deckpilot-modules/tests/contracts.rs` (`first_party`): the
@@ -84,7 +95,7 @@ idempotency flags and timeouts are identical.
 | `siteUrl` | `siteUrl` (same kind, no default, portability) | an `https` address; the server is reached only with your consent to it (above). A plain `http` address on this computer, which the built-in accepts, is not reachable for a plugin and fails with `invalid-site-url` |
 | `deployment` | `deployment` (same choices, default, portability) | `cloud`: REST API 3, the credential as Basic; `data-center`: REST API 2, as Bearer |
 | `timeoutSeconds` | `timeoutSeconds` (same) | the time limit of one action, counted with Jira's `Date` headers (a guest has no clock) |
-| `credential` (a credential id, default `jira.token`) | the credential slot `credential` (Basic or Bearer; the allowed site only) | the per-action `credential` override will be dropped by the alias when it is empty or the module's own (`ParamRule::DropIfDefault`); any other value keeps the built-in until G5 |
+| `credential` (a credential id, default `jira.token`) | the credential slot `credential` (Basic or Bearer; the allowed site only) | the per-action `credential` override is dropped by the alias when it is empty or the module's own (`ParamRule::DropIfDefault`); any other value keeps the built-in until G5 |
 | `allowPrivateHost` | not declared | replaced by the private-network consent per server, which is never assumed |
 
 ## What the plugin does not reproduce

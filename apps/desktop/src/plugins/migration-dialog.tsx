@@ -5,12 +5,15 @@
 // granted until the user allows it.
 //
 // It lists exactly what the agent says waits (`MigrationConsentItem`):
-// the permission, and for a credential the stored credential's id, the
-// built-in's setting, the plugin's slot and the only hosts it is sent to.
+// the permission, for a credential the stored credential's id, the
+// built-in's setting, the plugin's slot and where it is sent, and for a
+// server the user entered in the built-in (a self-managed GitLab, a Jira
+// site) exactly that server, with reaching it on a private network as an
+// item of its own.
 // It never shows, asks for or receives a credential's value: only those
 // named fields are rendered.
 
-import { KeyRound, ShieldAlert } from "lucide-react"
+import { KeyRound, Network, Server, ShieldAlert } from "lucide-react"
 import { useState } from "react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -28,7 +31,7 @@ import { cn } from "@/lib/utils"
 
 import { pluginErrorText, type PluginErrorText } from "./api"
 import { grantOfInfo, TIERS } from "./permissions"
-import type { MigrationConsentItem, ModuleMigration } from "./types"
+import type { CredentialImport, MigrationConsentItem, ModuleMigration } from "./types"
 
 type Choice = "allow" | "decline"
 
@@ -53,11 +56,68 @@ function ImportFacts({ item }: { item: MigrationConsentItem }) {
       <dt className="text-muted-foreground">Into the plugin's slot</dt>
       <dd className="font-mono break-all">{facts.slot}</dd>
       <dt className="text-muted-foreground">Sent only to</dt>
-      <dd className="font-mono break-all">
-        {facts.hosts.length > 0 ? facts.hosts.join(", ") : "the hosts the plugin declares"}
-      </dd>
+      <dd className="font-mono break-all">{sentTo(facts)}</dd>
     </dl>
   )
+}
+
+/** Where an imported credential goes: its hosts, and the server allowed in its origin setting. */
+function sentTo(facts: CredentialImport): string {
+  const server = facts.userOrigin ? `the server you allow in ${facts.userOrigin}` : null
+  if (facts.hosts.length === 0) return server ?? "the hosts the plugin declares"
+  return server ? `${facts.hosts.join(", ")} and ${server}` : facts.hosts.join(", ")
+}
+
+/** `https://server[:port]` of an origin with a path prefix. */
+function serverOf(origin: string): string {
+  const slash = origin.indexOf("/", 8)
+  return slash < 0 ? origin : origin.slice(0, slash)
+}
+
+/** What allowing a server means, fact by fact. */
+function OriginFacts({ item }: { item: MigrationConsentItem }) {
+  const facts = item.origin
+  if (!facts) return null
+  return (
+    <dl
+      className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 text-xs"
+      aria-label="The server"
+    >
+      <dt className="text-muted-foreground">Server</dt>
+      <dd className="font-mono break-all">{facts.origin}</dd>
+      <dt className="text-muted-foreground">From the setting</dt>
+      <dd className="font-mono break-all">{facts.setting}</dd>
+      {!facts.privateNetwork && (
+        <>
+          <dt className="text-muted-foreground">Requests</dt>
+          <dd>
+            {facts.methods?.length ? facts.methods.join(", ") : "any method"}, to exactly this
+            server{facts.origin.includes("/", 8) ? " and path" : ""}
+          </dd>
+          {facts.credentials?.length ? (
+            <>
+              <dt className="text-muted-foreground">Secrets sent there</dt>
+              <dd className="font-mono break-all">{facts.credentials.join(", ")}</dd>
+            </>
+          ) : null}
+          {facts.opensPages && (
+            <>
+              <dt className="text-muted-foreground">Pages opened</dt>
+              <dd>of {serverOf(facts.origin)}, in actions you start</dd>
+            </>
+          )}
+        </>
+      )}
+    </dl>
+  )
+}
+
+/** The title of an item: what the user is asked to allow. */
+function titleOf(item: MigrationConsentItem, fallback: string): string {
+  if (item.origin?.privateNetwork) return `Reach ${item.origin.origin} on your private network`
+  if (item.origin) return `Connect to ${item.origin.origin}`
+  if (item.import) return `Use your stored credential ${item.import.credential}`
+  return fallback
 }
 
 /**
@@ -139,11 +199,15 @@ export function MigrationConsentDialog({
                   aria-labelledby={`${name}-title`}
                 >
                   <div className="flex flex-wrap items-center gap-2">
-                    {item.import && <KeyRound className="size-4" aria-hidden />}
+                    {item.origin?.privateNetwork ? (
+                      <Network className="size-4" aria-hidden />
+                    ) : item.origin ? (
+                      <Server className="size-4" aria-hidden />
+                    ) : (
+                      item.import && <KeyRound className="size-4" aria-hidden />
+                    )}
                     <span id={`${name}-title`} className="font-medium break-words">
-                      {item.import
-                        ? `Use your stored credential ${item.import.credential}`
-                        : grant.title}
+                      {titleOf(item, grant.title)}
                     </span>
                     {tier && (
                       <Badge variant={grant.tier === "high" ? "destructive" : "outline"}>
@@ -153,10 +217,11 @@ export function MigrationConsentDialog({
                   </div>
                   <span className="font-mono text-xs text-muted-foreground">{item.key}</span>
                   <p className="text-xs">{item.why}</p>
-                  {grant.detail && !item.import && (
+                  {grant.detail && !item.import && !item.origin && (
                     <p className="text-xs text-muted-foreground">{grant.detail}</p>
                   )}
                   <ImportFacts item={item} />
+                  <OriginFacts item={item} />
                   {grant.justification && (
                     <p className="text-xs">
                       <span className="text-muted-foreground">Publisher's reason: </span>

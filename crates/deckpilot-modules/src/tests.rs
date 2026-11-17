@@ -75,6 +75,7 @@ fn builtin_modules_register_with_namespaced_action_types() {
             "deck.page-indicator",
             "deck.switch-profile",
             "deck.brightness",
+            "deck.random",
             "docker.status",
             "docker.containers",
             "docker.compose-status",

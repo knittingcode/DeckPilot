@@ -49,19 +49,25 @@
 //! 1. **Eligibility.** The built-in is compiled in and enabled, the user's
 //!    data uses it (a saved `modules` row or a stored instance), no stored
 //!    value needs a translation the alias cannot make, its origin is the
-//!    plugin's default and it does not allow private hosts, and plugins
-//!    can run here. A tombstone (the user removed or disabled the plugin)
-//!    and a bundle without the plugin are reasons too.
+//!    plugin's default or (for a plugin that takes one, [`OriginPlan`]) a
+//!    server the user entered that a plugin can reach, it allows private
+//!    hosts only for such a server, and plugins can run here. A tombstone
+//!    (the user removed or disabled the plugin) and a bundle without the
+//!    plugin are reasons too.
 //! 2. **Install** the pinned bundled copy (pins plus the macOS code seal,
 //!    `bundled.rs`), or keep a copy that is not older, and record the
 //!    derived grants (below).
 //! 3. **Settings.** Copy the built-in's saved settings that the plugin
-//!    declares, only if the plugin has none yet, and record the source
+//!    declares, and the server the user entered into the plugin's origin
+//!    setting, only if the plugin has none yet, and record the source
 //!    digest. The `modules` row is never changed.
 //! 4. **Consent.** Anything not derived waits for the user
-//!    (`awaiting_consent`): high-tier permissions always, and the import
-//!    of a stored credential always. With the consent, the secret is
-//!    copied into the plugin's empty slot; the `credentials` row stays.
+//!    (`awaiting_consent`): high-tier permissions always, the import of a
+//!    stored credential always, and a server the user entered always
+//!    (with its private network as a separate item). With the consent,
+//!    the secret is copied into the plugin's empty slot (the
+//!    `credentials` row stays) and the consent to exactly that server is
+//!    recorded.
 //! 5. **Health check** (enabled, files match the pins, every alias target
 //!    declared and compatible with the built-in, required settings set),
 //!    then **cut over**: the routing becomes `Plugin`.
@@ -69,13 +75,20 @@
 //! # Consent
 //!
 //! Low-tier permissions, and medium-tier ones the built-in demonstrably
-//! used on this computer (its configured origin for `network`, its web
-//! hosts for `openUrl`), are granted as `derived`, decided by
-//! `migration:<module>`. High-tier permissions (credentials, the private
-//! network) are never derived, and a stored credential is imported only
-//! when the user granted its slot through the migration's consent
-//! (decided by `user:migration:<module>`); a grant made for other reasons
-//! does not import anything.
+//! used on this computer (its default origin for `network` and its web
+//! hosts for `openUrl`, when that is what it talked to), are granted as
+//! `derived`, decided by `migration:<module>`. High-tier permissions
+//! (credentials, the private network) are never derived, and a stored
+//! credential is imported only when the user granted its slot through the
+//! migration's consent (decided by `user:migration:<module>`); a grant
+//! made for other reasons does not import anything.
+//!
+//! A server the user entered in the built-in (a self-managed GitLab, a
+//! Jira site) is never derived either, although the built-in used it: the
+//! consent to a user-entered origin (G2) is the user's, to exactly that
+//! server. It is an item of the same dialog, recorded only by the
+//! decision that names it; reaching it on a private network is one more
+//! item, and the server is allowed only with both.
 //!
 //! The app asks with `decideModuleMigration`, item by item ([`decide`],
 //! [`infos`] lists the items). A declined item is a refusal decided by
@@ -104,6 +117,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use deckpilot_core::alias::{LegacyRoute, LegacyRouting};
 use deckpilot_core::{Capability, ModuleId, ModuleRegistry, ModuleStates, ParameterValue};
 use deckpilot_ipc::plugins as ipc;
+use deckpilot_plugin_broker::{OriginError, UserOrigin};
 use deckpilot_plugin_bundled::{BundleClass, Pin};
 use deckpilot_plugin_manifest::{Manifest, PermissionKind, PluginId};
 use deckpilot_plugin_store::{
@@ -134,19 +148,37 @@ pub(crate) struct MigrationPlan {
     pub module: &'static str,
     /// Credential settings of the built-in and the plugin's slot for each.
     pub credentials: &'static [(&'static str, &'static str)],
-    /// The setting with the origin the built-in talks to, and its default:
-    /// the only origin the plugin may use until G2 (user-entered origins).
-    pub origin: Option<(&'static str, &'static str)>,
-    /// The boolean setting that lets the built-in reach private addresses;
-    /// `true` is never migrated (G3).
+    /// The setting with the server the built-in talks to.
+    pub origin: Option<OriginPlan>,
+    /// The boolean setting that lets the built-in reach private addresses.
+    /// `true` is never migrated by itself: for a server the user entered
+    /// ([`OriginPlan::entered`]) the user is asked, for exactly that
+    /// server; otherwise the module stays on its built-in (G3).
     pub private_network: Option<&'static str>,
     /// Hosts the built-in opens pages on (`openUrl`, derived when the
     /// built-in has the `open-external` capability).
     pub open_url_hosts: &'static [&'static str],
 }
 
+/// The setting of a built-in with the server it talks to, and how its
+/// plugin takes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OriginPlan {
+    /// The built-in's setting; the plugin's setting has the same key.
+    pub setting: &'static str,
+    /// The built-in's default, a host the plugin declares (it needs no
+    /// consent of its own). `None`: the module has no fixed host (Jira).
+    pub default: Option<&'static str>,
+    /// The plugin takes any other server the user entered there, through
+    /// the user-origin slot of that setting (G2): the value is copied
+    /// into the plugin's setting and the user is asked to allow exactly
+    /// that server (never derived). `false`: only the default is
+    /// eligible.
+    pub entered: bool,
+}
+
 /// Every plan, one per module of [`deckpilot_core::alias::ACTION_ALIASES`].
-pub(crate) const PLANS: &[MigrationPlan] = &[GITHUB, NOTIFICATIONS];
+pub(crate) const PLANS: &[MigrationPlan] = &[GITHUB, GITLAB, JIRA, NOTIFICATIONS];
 
 /// GitHub (P9) to `deckpilot.github`:
 ///
@@ -168,12 +200,63 @@ pub(crate) const PLANS: &[MigrationPlan] = &[GITHUB, NOTIFICATIONS];
 const GITHUB: MigrationPlan = MigrationPlan {
     module: deckpilot_modules::github::MODULE_ID,
     credentials: &[(deckpilot_modules::github::CREDENTIAL, "token")],
-    origin: Some((
-        deckpilot_modules::github::API_URL,
-        deckpilot_modules::github::DEFAULT_API_URL,
-    )),
+    origin: Some(OriginPlan {
+        setting: deckpilot_modules::github::API_URL,
+        default: Some(deckpilot_modules::github::DEFAULT_API_URL),
+        entered: false,
+    }),
     private_network: Some(deckpilot_modules::github::ALLOW_PRIVATE),
     open_url_hosts: &["github.com"],
+};
+
+/// GitLab (P11) to `deckpilot.gitlab`:
+///
+/// - the credential setting `credential` (a credential id, default
+///   `gitlab.token`) is imported into the plugin's slot `token`, only with
+///   the user's consent;
+/// - the origin `apiUrl`: `https://gitlab.com/api/v4` is the plugin's
+///   declared host; a self-managed GitLab is carried into the plugin's
+///   `apiUrl` setting (its user-origin slot), and the user is asked to
+///   allow exactly that server;
+/// - `allowPrivateHost` on, for such a server, asks the user's separate
+///   consent to reach it on a private network; on for GitLab.com keeps
+///   the built-in;
+/// - `gitlab.com` is the web host the built-in opens pages on (`openUrl`,
+///   derived when GitLab.com is what the built-in used).
+const GITLAB: MigrationPlan = MigrationPlan {
+    module: deckpilot_modules::gitlab::MODULE_ID,
+    credentials: &[(deckpilot_modules::gitlab::CREDENTIAL, "token")],
+    origin: Some(OriginPlan {
+        setting: deckpilot_modules::gitlab::API_URL,
+        default: Some(deckpilot_modules::gitlab::DEFAULT_API_URL),
+        entered: true,
+    }),
+    private_network: Some(deckpilot_modules::gitlab::ALLOW_PRIVATE),
+    open_url_hosts: &["gitlab.com"],
+};
+
+/// Jira (P11) to `deckpilot.jira`:
+///
+/// - the credential setting `credential` (a credential id, default
+///   `jira.token`) is imported into the plugin's slot `credential`, only
+///   with the user's consent;
+/// - the origin `siteUrl` has no default (Jira has no fixed host): the
+///   site is carried into the plugin's `siteUrl` setting (its user-origin
+///   slot), and the user is asked to allow exactly that server;
+/// - `allowPrivateHost` on asks the user's separate consent to reach the
+///   site on a private network;
+/// - `deployment` and `timeoutSeconds` are declared by the plugin with the
+///   same keys and copied one to one.
+const JIRA: MigrationPlan = MigrationPlan {
+    module: deckpilot_modules::jira::MODULE_ID,
+    credentials: &[(deckpilot_modules::jira::CREDENTIAL, "credential")],
+    origin: Some(OriginPlan {
+        setting: deckpilot_modules::jira::SITE_URL,
+        default: None,
+        entered: true,
+    }),
+    private_network: Some(deckpilot_modules::jira::ALLOW_PRIVATE),
+    open_url_hosts: &[],
 };
 
 /// Notifications (P10) to `deckpilot.notifications`, class `default`:
@@ -214,14 +297,12 @@ pub(crate) fn configured(states: &ModuleStates) -> (ModuleRegistry, Vec<String>)
         return (registry, problems);
     }
     #[cfg(feature = "test-hooks")]
-    if let Some(api) = standin::api() {
+    {
         let mut registry = deckpilot_modules::builtin(deckpilot_core::Os::current());
-        registry.unregister(&deckpilot_modules::github::module_id());
-        registry
-            .register(Box::new(standin::StandInGithub::new(api)))
-            .expect("the stand-in replaces the github module");
-        let problems = registry.apply_states(states);
-        return (registry, problems);
+        if standin::apply(&mut registry) {
+            let problems = registry.apply_states(states);
+            return (registry, problems);
+        }
     }
     deckpilot_modules::configured(states)
 }
@@ -351,16 +432,26 @@ fn handled_keys(m: &LegacyModule) -> BTreeSet<&'static str> {
     let mut keys = BTreeSet::new();
     if let Some(plan) = m.plan {
         keys.extend(plan.credentials.iter().map(|(setting, _)| *setting));
-        keys.extend(plan.origin.map(|(setting, _)| setting));
+        keys.extend(plan.origin.map(|origin| origin.setting));
         keys.extend(plan.private_network);
     }
     keys
 }
 
-/// The effective values of the settings that decide eligibility.
+/// The effective values of the settings that decide eligibility. Not the
+/// origin setting of a plan that carries the server into the plugin's
+/// settings ([`OriginPlan::entered`]): there it is part of the copied
+/// settings, so another server is a change of those, copied again like
+/// any other.
 fn builtin_part(m: &LegacyModule) -> BTreeMap<String, Value> {
+    let carried = m
+        .plan
+        .and_then(|plan| plan.origin)
+        .filter(|origin| origin.entered)
+        .map(|origin| origin.setting);
     handled_keys(m)
         .into_iter()
+        .filter(|key| Some(*key) != carried)
         .map(|key| {
             let value = m
                 .config
@@ -385,13 +476,11 @@ fn json_of(value: &ParameterValue) -> Option<Value> {
 /// The built-in's saved settings that `manifest` declares, one to one,
 /// checked against the plugin's declaration. Keys only in messages.
 fn projection(m: &LegacyModule, manifest: &Manifest) -> Step<BTreeMap<String, Value>> {
-    let Some(row) = &m.row else {
-        return Ok(BTreeMap::new());
-    };
     let handled = handled_keys(m);
     let declared = manifest.contributes.settings();
     let mut values = BTreeMap::new();
-    for (key, value) in row.config.iter() {
+    let saved = m.row.iter().flat_map(|row| row.config.iter());
+    for (key, value) in saved {
         if handled.contains(key.as_str()) || !declared.iter().any(|s| &s.key == key) {
             continue;
         }
@@ -401,6 +490,27 @@ fn projection(m: &LegacyModule, manifest: &Manifest) -> Step<BTreeMap<String, Va
             ))
         })?;
         values.insert(key.clone(), json);
+    }
+    // The server the user entered in the built-in goes into the plugin's
+    // origin setting, as the agent stores what a user saves there
+    // (normalized). It reaches nothing until the user allowed exactly it.
+    if let Some((origin, Ok(server))) = entered_origin(m) {
+        let slot = deckpilot_plugin_store::declared_slot(manifest, origin.setting)
+            .map(|(slot, _)| slot)
+            .ok_or_else(|| {
+                Stop::NotEligible(format!(
+                    "{} has no origin setting `{}`",
+                    manifest.id, origin.setting
+                ))
+            })?;
+        let server = server.to_string();
+        if let Err(problem) = super::origins::parse(slot, &server) {
+            return Err(Stop::NotEligible(format!(
+                "the server in `{}` {problem}",
+                origin.setting
+            )));
+        }
+        values.insert(origin.setting.to_owned(), Value::String(server));
     }
     super::data::merge_settings(manifest, &BTreeMap::new(), &values).map_err(|_| {
         Stop::NotEligible(format!(
@@ -423,6 +533,117 @@ fn normalized(origin: &str) -> &str {
     origin.trim().trim_end_matches('/')
 }
 
+/// The server the built-in talks to: its origin setting, else the default.
+fn configured_origin<'m>(m: &'m LegacyModule, origin: &OriginPlan) -> Option<&'m str> {
+    m.config
+        .text(origin.setting)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or(origin.default)
+}
+
+/// Whether the built-in talks to its default origin (or, without a
+/// default, to nothing yet): a host the plugin declares, nothing to carry.
+fn uses_default(m: &LegacyModule, origin: &OriginPlan) -> bool {
+    match (configured_origin(m, origin), origin.default) {
+        (None, _) => true,
+        (Some(configured), Some(default)) => normalized(configured) == normalized(default),
+        (Some(_), None) => false,
+    }
+}
+
+/// The server the user entered in the built-in, when the plugin takes
+/// such a server ([`OriginPlan::entered`]) and it is not the default: as
+/// the broker parses a user-entered origin, or why it is not one (plain
+/// `http`, this computer, a user name…). Never the value in the error.
+fn entered_origin(m: &LegacyModule) -> Option<(OriginPlan, Result<UserOrigin, OriginError>)> {
+    let origin = m.plan?.origin.filter(|origin| origin.entered)?;
+    if uses_default(m, &origin) {
+        return None;
+    }
+    let configured = configured_origin(m, &origin)?;
+    Some((origin, UserOrigin::parse(configured)))
+}
+
+/// Whether the built-in may reach private addresses (its switch is on).
+fn allows_private(m: &LegacyModule) -> bool {
+    m.plan
+        .and_then(|plan| plan.private_network)
+        .is_some_and(|setting| m.config.get(setting) == Some(&ParameterValue::Boolean(true)))
+}
+
+/// The consent item of the separate private-network consent for the
+/// server in `setting`. Not a grant: it is never stored, and decides only
+/// how the consent to that server is recorded.
+fn private_item(setting: &str) -> GrantKey {
+    GrantKey::new(
+        PermissionKind::Network,
+        format!("user-origin:{setting}:private-network"),
+    )
+}
+
+/// A server the plugin's origin setting holds that the migration must ask
+/// the user about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OriginAsk {
+    setting: String,
+    /// Normalized, with its path prefix: what the consent names.
+    origin: String,
+    /// The user allowed the server already; only the private network
+    /// waits.
+    allowed: bool,
+    /// Reaching it needs the separate private-network consent: its host
+    /// is private, or the built-in was allowed private addresses for it.
+    private: bool,
+    methods: Vec<String>,
+    credentials: Vec<String>,
+    opens_pages: bool,
+}
+
+/// What the plugin's origin setting of `m`'s plan holds that is not
+/// allowed yet. Read from the plugin's own settings (what the copy put
+/// there, or what the user saved since): the consent is always for what
+/// the plugin would talk to.
+fn origin_asks(manager: &PluginManager, m: &LegacyModule, manifest: &Manifest) -> Vec<OriginAsk> {
+    let Some(plan) = m.plan.and_then(|plan| plan.origin).filter(|o| o.entered) else {
+        return Vec::new();
+    };
+    let store = manager.store();
+    let saved = store.settings(&m.plugin).unwrap_or_default();
+    let grants = store.grants(&m.plugin).unwrap_or_default();
+    let rows = store.user_origins(&m.plugin).unwrap_or_default();
+    // The built-in's private switch counts for the server it was set for.
+    let builtin_private = allows_private(m)
+        .then(|| entered_origin(m))
+        .flatten()
+        .and_then(|(_, server)| server.ok())
+        .map(|server| server.to_string());
+    super::origins::infos(manifest, &saved, &grants, &rows)
+        .into_iter()
+        .filter(|info| info.setting == plan.setting)
+        .filter_map(|info| {
+            let origin = info.origin?;
+            let private = info.private_host || builtin_private.as_deref() == Some(&origin);
+            let allowed = match info.status {
+                ipc::UserOriginStatus::NeedsConsent | ipc::UserOriginStatus::SlotNotGranted => {
+                    false
+                }
+                ipc::UserOriginStatus::Granted if private && !info.private_network_granted => true,
+                _ => return None,
+            };
+            Some(OriginAsk {
+                setting: info.setting.clone(),
+                origin,
+                allowed,
+                private,
+                methods: info.methods,
+                credentials: info.credentials,
+                opens_pages: manifest.opens_user_origin(&info.setting),
+            })
+        })
+        .collect()
+}
+
 /// Why `m` cannot migrate on this computer, if it cannot (§5.6 step 1).
 /// `default`: the plugin is of the bundled `default` class, which replaces
 /// the built-in whether or not the user's data uses it (§4.3, §5.8).
@@ -443,16 +664,32 @@ fn eligibility(m: &LegacyModule, default: bool) -> Option<String> {
         ));
     }
     if let Some(plan) = m.plan {
-        if let Some((setting, default)) = plan.origin {
-            let configured = m.config.text(setting).unwrap_or(default);
-            if normalized(configured) != normalized(default) {
-                return Some(format!(
-                    "`{setting}` is not the default origin (user-entered origins need G2)"
-                ));
+        let entered = entered_origin(m);
+        if let Some(origin) = plan.origin
+            && !uses_default(m, &origin)
+        {
+            let setting = origin.setting;
+            match &entered {
+                None => {
+                    return Some(format!(
+                        "`{setting}` is not the default origin, the only one {} talks to",
+                        m.plugin
+                    ));
+                }
+                Some((_, Err(problem))) => {
+                    return Some(format!(
+                        "`{setting}` is not a server a plugin can reach ({problem})"
+                    ));
+                }
+                Some((_, Ok(_))) => {}
             }
         }
+        // A private network is asked for with a server the user entered,
+        // for exactly that server; there is no such consent for a host
+        // the plugin declares.
         if let Some(setting) = plan.private_network
-            && m.config.get(setting) == Some(&ParameterValue::Boolean(true))
+            && allows_private(m)
+            && !matches!(entered, Some((_, Ok(_))))
         {
             return Some(format!(
                 "`{setting}` allows private network hosts, which is never migrated (G3)"
@@ -466,7 +703,9 @@ fn eligibility(m: &LegacyModule, default: bool) -> Option<String> {
 }
 
 /// Whether the built-in demonstrably used `key` on this computer: its
-/// (default) origin for `network`, its web hosts for `openUrl`.
+/// default origin for `network` and its web hosts for `openUrl` when that
+/// is what it talked to, and opening pages of the server in its origin
+/// setting. Never a server the user entered: that is asked.
 fn demonstrated(m: &LegacyModule, key: &GrantKey) -> bool {
     let Some(manifest) = &m.manifest else {
         return false;
@@ -475,16 +714,38 @@ fn demonstrated(m: &LegacyModule, key: &GrantKey) -> bool {
     let Some(plan) = m.plan else {
         return false;
     };
+    // The default origin and its web hosts count only when the default is
+    // what the built-in talked to here.
+    let on_default = plan.origin.is_none_or(|origin| uses_default(m, &origin));
     match key.kind {
         PermissionKind::Network => {
             has(Capability::Network)
+                && on_default
                 && plan
                     .origin
-                    .and_then(|(_, default)| host_of(default))
+                    .and_then(|origin| origin.default)
+                    .and_then(host_of)
                     .is_some_and(|host| host == key.key)
         }
+        // Pages of the server in the built-in's origin setting: the
+        // built-in opened them, and the grant opens nothing until the user
+        // allowed that server.
+        PermissionKind::OpenUrl
+            if deckpilot_plugin_store::open_url_user_origin_setting(key).is_some() =>
+        {
+            has(Capability::OpenExternal)
+                && plan
+                    .origin
+                    .filter(|origin| origin.entered)
+                    .is_some_and(|origin| {
+                        deckpilot_plugin_store::open_url_user_origin_setting(key)
+                            == Some(origin.setting)
+                    })
+        }
         PermissionKind::OpenUrl => {
-            has(Capability::OpenExternal) && plan.open_url_hosts.contains(&key.key.as_str())
+            has(Capability::OpenExternal)
+                && on_default
+                && plan.open_url_hosts.contains(&key.key.as_str())
         }
         _ => false,
     }
@@ -826,6 +1087,19 @@ impl Engine<'_> {
                 ));
             }
         }
+        // The server the built-in talked to, by its setting (the value is
+        // in the consent item, not in the journal).
+        for ask in origin_asks(self.manager, m, &manifest) {
+            if !ask.allowed {
+                waiting.push(format!("the server entered in `{}`", ask.setting));
+            }
+            if ask.private {
+                waiting.push(format!(
+                    "the private network for the server entered in `{}`",
+                    ask.setting
+                ));
+            }
+        }
         Ok(waiting)
     }
 
@@ -841,7 +1115,57 @@ impl Engine<'_> {
         for credential in self.imports(m)? {
             keys.insert(GrantKey::new(PermissionKind::Credentials, &credential.slot));
         }
+        for ask in origin_asks(self.manager, m, &manifest) {
+            if !ask.allowed {
+                keys.insert(deckpilot_plugin_store::user_origin_key(&ask.setting));
+            }
+            if ask.private {
+                keys.insert(private_item(&ask.setting));
+            }
+        }
         Ok(keys)
+    }
+
+    /// Records the user's consent to each server the migration asked
+    /// about (§5.5, G2): only for a server whose item is in `approve`,
+    /// the items the user allowed in this very decision, and, when
+    /// reaching it needs a private network, only with that separate item
+    /// in it too. Nothing decided earlier or elsewhere counts: a server
+    /// is allowed by the decision that named it. The consent names
+    /// exactly what the plugin's setting holds.
+    fn allow_origins(
+        &mut self,
+        m: &LegacyModule,
+        approve: &BTreeSet<GrantKey>,
+    ) -> Result<(), Refusal> {
+        let failed = |why: String| Refusal::Failed(why);
+        let manifest = self.active_manifest(m).map_err(|stop| match stop {
+            Stop::Failed(why) | Stop::NotEligible(why) => Refusal::Failed(why),
+        })?;
+        let by = consented_by(&m.module);
+        for ask in origin_asks(self.manager, m, &manifest) {
+            let slot = deckpilot_plugin_store::user_origin_key(&ask.setting);
+            let server = ask.allowed || approve.contains(&slot);
+            let network = !ask.private || approve.contains(&private_item(&ask.setting));
+            if !server || !network {
+                continue;
+            }
+            let saved = self
+                .manager
+                .store()
+                .settings(&m.plugin)
+                .map_err(|e| failed(e.to_string()))?;
+            let consent =
+                super::origins::consent(&manifest, &saved, &ask.setting, &ask.origin, ask.private)
+                    .map_err(failed)?;
+            self.manager
+                .grant_user_origin(&m.plugin, &consent, &by)
+                .map_err(|e| failed(e.to_string()))?;
+            self.touched.insert(m.plugin.clone());
+            info!(module = %m.module, plugin = %m.plugin, setting = %ask.setting,
+                private_network = ask.private, "the user allowed the server the built-in used");
+        }
+        Ok(())
     }
 
     /// Copies each consented credential into its empty slot. The
@@ -987,6 +1311,19 @@ impl Engine<'_> {
             self.manager
                 .set_settings(&m.plugin, &values)
                 .map_err(failed)?;
+            // Another server than the user allowed: the built-in serves
+            // again until the user allowed this one too.
+            if !self.consent_needed(m)?.is_empty() {
+                return self.record(
+                    m,
+                    MigrationPhase::AwaitingConsent,
+                    Some(
+                        "the built-in's settings changed after the migration; they were copied \
+                         again, and what changed waits for your consent",
+                    ),
+                    Some(now),
+                );
+            }
             "the built-in's settings changed after the migration; they were copied again"
         } else {
             "the built-in's settings changed after the migration; the plugin's own settings \
@@ -1047,17 +1384,40 @@ impl Engine<'_> {
             )));
         }
         let by = consented_by(&m.module);
-        if !approve.is_empty() {
+        // The private-network items are not grants: they decide how the
+        // consent to their server is recorded (`allow_origins`), and a
+        // declined one declines the server.
+        let private: BTreeMap<GrantKey, GrantKey> = waiting
+            .iter()
+            .filter_map(|key| {
+                let setting = deckpilot_plugin_store::user_origin_setting(key)?
+                    .strip_suffix(":private-network")?;
+                Some((
+                    key.clone(),
+                    deckpilot_plugin_store::user_origin_key(setting),
+                ))
+            })
+            .collect();
+        let grants: Vec<GrantKey> = approve
+            .iter()
+            .filter(|key| !private.contains_key(key))
+            .cloned()
+            .collect();
+        if !grants.is_empty() {
             self.manager
-                .grant(&m.plugin, &Consent::of(approve.iter().cloned(), by.clone()))
+                .grant(&m.plugin, &Consent::of(grants, by.clone()))
                 .map_err(|e| Refusal::Failed(e.to_string()))?;
             self.touched.insert(m.plugin.clone());
         }
         for key in decline {
+            let key = private.get(key).unwrap_or(key);
             self.manager
                 .revoke(&m.plugin, key, &by)
                 .map_err(|e| Refusal::Failed(e.to_string()))?;
             self.touched.insert(m.plugin.clone());
+        }
+        if decline.is_empty() {
+            self.allow_origins(m, &approve)?;
         }
         info!(module = %m.module, plugin = %m.plugin, approved = approve.len(),
             declined = decline.len(), "the user decided on the migration");
@@ -1386,7 +1746,8 @@ fn consent_items(
         .filter(|c| c.secret.is_some() && !filled.iter().any(|f| f.key == c.slot))
         .map(|c| (c.slot.as_str(), c))
         .collect();
-    declared
+    let asks = origin_asks(manager, m, manifest);
+    let mut items: Vec<ipc::MigrationConsentItem> = declared
         .iter()
         .filter_map(|(key, scope)| {
             let decided = stored
@@ -1395,10 +1756,15 @@ fn consent_items(
             let import = (key.kind == PermissionKind::Credentials)
                 .then(|| imports.get(key.key.as_str()))
                 .flatten();
-            if !missing.contains(key) && import.is_none() && decided.is_none() {
+            // The server the plugin's origin setting holds, not allowed yet.
+            let ask = deckpilot_plugin_store::user_origin_setting(key)
+                .and_then(|setting| asks.iter().find(|a| a.setting == setting && !a.allowed));
+            if !missing.contains(key) && import.is_none() && decided.is_none() && ask.is_none() {
                 return None;
             }
             let decision = match decided.map(|g| g.status) {
+                // Granted, but its server still waits: not decided.
+                Some(GrantStatus::Granted) if ask.is_some() => ipc::ConsentDecision::Pending,
                 Some(GrantStatus::Granted) => ipc::ConsentDecision::Approved,
                 Some(GrantStatus::Revoked) => ipc::ConsentDecision::Declined,
                 _ => ipc::ConsentDecision::Pending,
@@ -1410,37 +1776,13 @@ fn consent_items(
                 Some(g) if g.status == GrantStatus::Revoked => ipc::PermissionStatus::Revoked,
                 _ => ipc::PermissionStatus::NotGranted,
             };
-            let hosts = match scope {
-                deckpilot_plugin_store::GrantScope::Credential { hosts, .. } => hosts.clone(),
-                _ => Vec::new(),
+            let (hosts, bound) = match scope {
+                deckpilot_plugin_store::GrantScope::Credential {
+                    hosts, user_origin, ..
+                } => (hosts.clone(), user_origin.clone()),
+                _ => (Vec::new(), None),
             };
-            let why = match (import, scope.tier()) {
-                (Some(c), _) => format!(
-                    "The built-in {} used your stored credential `{}`. The plugin gets a copy in \
-                     its slot `{}`, sent only to {}. The stored credential is kept.",
-                    m.module,
-                    c.id.as_ref().map(ToString::to_string).unwrap_or_default(),
-                    c.slot,
-                    if hosts.is_empty() {
-                        "the hosts the plugin declares".to_owned()
-                    } else {
-                        hosts.join(", ")
-                    }
-                ),
-                (None, Tier::High) if key.kind == PermissionKind::Credentials => format!(
-                    "The plugin's credential slot `{}`: credentials are never granted without \
-                     your consent. Nothing is imported.",
-                    key.key
-                ),
-                (None, Tier::High) => {
-                    "Private network access is never granted without your consent.".to_owned()
-                }
-                (None, _) => format!(
-                    "The built-in {} did not use this on this computer, so it is not granted \
-                     without your consent.",
-                    m.module
-                ),
-            };
+            let why = why_of(m, key, scope, import.copied(), ask.is_some());
             Some(ipc::MigrationConsentItem {
                 key: key.to_string(),
                 permission: super::convert::permission(manifest, key, scope, status),
@@ -1449,12 +1791,132 @@ fn consent_items(
                     credential: c.id.as_ref().map(ToString::to_string).unwrap_or_default(),
                     slot: c.slot.clone(),
                     hosts: hosts.clone(),
+                    user_origin: bound.clone(),
                 }),
+                origin: ask.map(|ask| origin_of_ask(ask, false)),
                 why,
                 decision,
             })
         })
+        .collect();
+    items.extend(private_items(m, manifest, &asks, &stored));
+    items
+}
+
+/// Why the migration asks for `key`, in words.
+fn why_of(
+    m: &LegacyModule,
+    key: &GrantKey,
+    scope: &deckpilot_plugin_store::GrantScope,
+    import: Option<&legacy::LegacyCredential>,
+    server: bool,
+) -> String {
+    let (hosts, bound) = match scope {
+        deckpilot_plugin_store::GrantScope::Credential {
+            hosts, user_origin, ..
+        } => (hosts.clone(), user_origin.clone()),
+        _ => (Vec::new(), None),
+    };
+    match (import, scope.tier()) {
+        _ if server => format!(
+            "The built-in {} talked to this server. The plugin may send requests there, and \
+             the credential it gets, only with your consent to exactly this server; nothing is \
+             sent before.",
+            m.module
+        ),
+        (Some(c), _) => format!(
+            "The built-in {} used your stored credential `{}`. The plugin gets a copy in its \
+             slot `{}`, sent only to {}. The stored credential is kept.",
+            m.module,
+            c.id.as_ref().map(ToString::to_string).unwrap_or_default(),
+            c.slot,
+            match (hosts.is_empty(), &bound) {
+                (true, None) => "the hosts the plugin declares".to_owned(),
+                (true, Some(setting)) => format!("the server you allow in `{setting}`"),
+                (false, None) => hosts.join(", "),
+                (false, Some(setting)) => format!(
+                    "{} and the server you allow in `{setting}`",
+                    hosts.join(", ")
+                ),
+            }
+        ),
+        (None, Tier::High) if key.kind == PermissionKind::Credentials => format!(
+            "The plugin's credential slot `{}`: credentials are never granted without your \
+             consent. Nothing is imported.",
+            key.key
+        ),
+        // The origin slot without a server to allow now (the built-in
+        // talked to the plugin's declared host).
+        (None, _) if deckpilot_plugin_store::user_origin_setting(key).is_some() => format!(
+            "The plugin may ask you to allow a server you enter in its setting `{}` later. \
+             This allows no server now; each one is asked for when you enter it.",
+            deckpilot_plugin_store::user_origin_setting(key).unwrap_or_default()
+        ),
+        (None, Tier::High) => {
+            "Private network access is never granted without your consent.".to_owned()
+        }
+        (None, _) => format!(
+            "The built-in {} did not use this on this computer, so it is not granted without \
+             your consent.",
+            m.module
+        ),
+    }
+}
+
+/// The private network, for each server that needs it: an item of its
+/// own, never part of another. Declined when the user declined the
+/// server through it.
+fn private_items(
+    m: &LegacyModule,
+    manifest: &Manifest,
+    asks: &[OriginAsk],
+    stored: &[deckpilot_plugin_store::StoredGrant],
+) -> Vec<ipc::MigrationConsentItem> {
+    let consented = consented_by(&m.module);
+    asks.iter()
+        .filter(|ask| ask.private)
+        .map(|ask| {
+            let key = private_item(&ask.setting);
+            let slot = deckpilot_plugin_store::user_origin_key(&ask.setting);
+            let declined = stored.iter().any(|g| {
+                g.key == slot && g.status == GrantStatus::Revoked && g.decided_by == consented
+            });
+            ipc::MigrationConsentItem {
+                key: key.to_string(),
+                permission: super::convert::permission(
+                    manifest,
+                    &key,
+                    &deckpilot_plugin_store::GrantScope::PrivateNetwork,
+                    ipc::PermissionStatus::NotGranted,
+                ),
+                import: None,
+                origin: Some(origin_of_ask(ask, true)),
+                why: format!(
+                    "Reaching this server needs a private network: its address is private, or \
+                     the built-in {} was allowed private addresses for it. A plugin reaches a \
+                     private network only with your separate consent, for exactly this server; \
+                     this computer and link-local addresses are never reachable.",
+                    m.module
+                ),
+                decision: if declined {
+                    ipc::ConsentDecision::Declined
+                } else {
+                    ipc::ConsentDecision::Pending
+                },
+            }
+        })
         .collect()
+}
+
+fn origin_of_ask(ask: &OriginAsk, private_network: bool) -> ipc::MigrationUserOrigin {
+    ipc::MigrationUserOrigin {
+        setting: ask.setting.clone(),
+        origin: ask.origin.clone(),
+        private_network,
+        methods: ask.methods.clone(),
+        credentials: ask.credentials.clone(),
+        opens_pages: ask.opens_pages,
+    }
 }
 
 /// Test only (feature `test-hooks`, never in a release build): the user's

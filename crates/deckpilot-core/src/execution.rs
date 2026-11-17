@@ -529,6 +529,12 @@ pub enum DeckRequest {
     /// changes too. `set`: to that level (0-100); otherwise by `step`
     /// percentage points up or down, staying within 0-100.
     Brightness { set: Option<u8>, step: i8 },
+    /// Runs a saved action of the profile, as a key bound to it would
+    /// (Random Action). The action must not itself pick one.
+    RunAction { action: crate::ActionInstanceId },
+    /// Starts a workflow of the profile in the background, as a key bound
+    /// to it would (Random Action).
+    RunWorkflow { workflow: crate::WorkflowId },
 }
 
 impl DeckRequest {
@@ -537,7 +543,10 @@ impl DeckRequest {
     pub fn needs_device(self) -> bool {
         match self {
             Self::NextPage { .. } | Self::PreviousPage { .. } => true,
-            Self::SwitchProfile { .. } | Self::Brightness { .. } => false,
+            Self::SwitchProfile { .. }
+            | Self::Brightness { .. }
+            | Self::RunAction { .. }
+            | Self::RunWorkflow { .. } => false,
         }
     }
 }

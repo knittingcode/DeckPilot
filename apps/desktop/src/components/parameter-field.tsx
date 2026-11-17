@@ -14,7 +14,16 @@ import { ReferenceValueField } from "@/components/variable-picker/reference-valu
 import { VariablePicker } from "@/components/variable-picker/variable-picker"
 import { initialValue } from "@/lib/parameters"
 import { PROFILE_PARAMETER, ProfileField, SWITCH_PROFILE_TYPE } from "@/modules/deck/profile-field"
-import type { ParameterSpec, ParameterValue, Project, ResourceRef } from "@/lib/types"
+import { CANDIDATES_PARAMETER, RANDOM_TYPE } from "@/modules/deck/candidates"
+import { CandidatesField } from "@/modules/deck/candidates-field"
+import type {
+  ActionInstance,
+  ParameterSpec,
+  ParameterValue,
+  Project,
+  ResourceRef,
+  Workflow,
+} from "@/lib/types"
 import { TEMPLATE_KIND, templateReferences } from "@/lib/variables"
 
 /**
@@ -30,24 +39,36 @@ import { TEMPLATE_KIND, templateReferences } from "@/lib/variables"
  * `actionType` is the type the parameter belongs to, when the caller knows
  * it: a parameter whose text names something of the application (the
  * profile of "Switch profile") is then drawn as a list of what exists.
+ * `targets` are the profile's actions and workflows, for the candidates of
+ * a Random Action.
  */
 export function ParameterField({
   spec,
   value,
   projects = [],
   actionType,
+  targets,
   onChange,
 }: {
   spec: ParameterSpec
   value: ParameterValue
   projects?: Project[]
   actionType?: string
+  targets?: {
+    actions: Pick<ActionInstance, "id" | "name" | "actionType">[]
+    workflows: Pick<Workflow, "id" | "name">[]
+  }
   onChange: (value: ParameterValue) => void
 }) {
   const id = `parameter-${spec.key}`
   const labelId = `${id}-label`
   const profile =
     actionType === SWITCH_PROFILE_TYPE && spec.key === PROFILE_PARAMETER && value.type === "text"
+  const candidates =
+    targets !== undefined &&
+    actionType === RANDOM_TYPE &&
+    spec.key === CANDIDATES_PARAMETER &&
+    value.type === "text"
   return (
     <div className="grid gap-2">
       <Label id={labelId} htmlFor={id}>
@@ -60,6 +81,16 @@ export function ParameterField({
           value={value.value}
           onChange={(profileId) => {
             onChange({ type: "text", value: profileId })
+          }}
+        />
+      ) : candidates ? (
+        <CandidatesField
+          id={id}
+          value={value.value}
+          actions={targets.actions}
+          workflows={targets.workflows}
+          onChange={(text) => {
+            onChange({ type: "text", value: text })
           }}
         />
       ) : value.type === "reference" ? (

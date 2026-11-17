@@ -399,7 +399,7 @@ old references keep parsing.
 | --- | --- | --- |
 | `modules` row `config` (`crates/deckpilot-storage/src/legacy.rs:67-71`) | `plugin_settings(plugin_id, values_json)` in `plugins.db` (#232) | Copy keys one to one, keeping each key's portability. Write only if the plugin has no saved settings yet. **Never** modify or delete the `modules` row |
 | A setting holding a credential id (`github.credential`, default `github.token`) | `plugin_credentials(deckpilot.github, token)` | Copy the secret only if the slot is empty, and only after the user confirms (high tier, below). **Never** delete or change the `credentials` row: `http.request` or another workflow may name the same credential, and an older app needs it |
-| Origin settings (`apiUrl`, `siteUrl`) | a `network` grant for that exact origin | Eligible only if the origin is the plugin's declared default, or G2 exists. `allowPrivateHost = true` is never migrated automatically (G3, high tier) |
+| Origin settings (`apiUrl`, `siteUrl`) | a `network` grant for that exact origin | Eligible only if the origin is the plugin's declared default, or G2 exists. `allowPrivateHost = true` is never migrated automatically (G3, high tier). *As built (P11):* for a plugin with a user-origin slot, the server the user entered is copied into the plugin's setting and **asked for**, exactly it; its private network is a separate item ([§6](#6-the-first-module), "the GitLab and Jira cut-overs") |
 | `modules.enabled` | plugin state `enabled` or `disabled` | Copied once |
 
 **Consent.** The built-in could use the stored token. The plugin gets a
@@ -768,6 +768,77 @@ built-in `jira` module; no variables on either side. Built and pinned,
   secret, so Jira's 401 says so instead. All differences:
   [`plugins/first-party/jira/README.md`](../../plugins/first-party/jira/README.md).
 
+*As built (P11), the GitLab and Jira cut-overs.* In builds with plugins
+enabled only; release builds keep plugins off, so for them nothing
+changes.
+
+- `ACTION_ALIASES` has two more blocks, `gitlab.<action>` →
+  `deckpilot.gitlab.<action>` (six) and `jira.<action>` →
+  `deckpilot.jira.<action>` (four), with
+  `ParamRule::DropIfDefault("credential")` on every action but `open`.
+  `contracts.rs` checks that the shipped blocks are exactly the ones it
+  validates.
+- The plans (`apps/agent/src/plugins/migration.rs`, `GITLAB`, `JIRA`)
+  name, beside the credential setting and the plugin's slot, the origin
+  setting with `entered: true`: the plugin takes a server the user entered
+  (`OriginPlan`). GitHub's stays `entered: false`.
+- **A server the user entered in the built-in is carried, and asked
+  for.** The value of `apiUrl` or `siteUrl` is copied into the plugin's
+  setting of the same key, normalized as the agent stores what a user
+  saves there. It allows nothing: the migration then waits
+  (`awaiting_consent`) for the user to allow exactly that server, the
+  per-origin consent of G2, as a consent item of its own
+  (`network:user-origin:<setting>`, with the server in the item). The
+  approved policy derives low- and medium-tier permissions the built-in
+  used; G2 defines the consent to an entered server as never derived, and
+  the slot is high tier (it may be on a private network). Where the two
+  could be read differently the engine asks.
+  - The consent is recorded only by the decision that names the server
+    (`decided_by = user:migration:<module>`): approving the credential, or
+    a slot grant made elsewhere, allows no server.
+  - **The private network is an item of its own**
+    (`network:user-origin:<setting>:private-network`, no grant by itself):
+    asked when the server's host is private or the built-in's
+    `allowPrivateHost` was on for it, and the server is allowed only with
+    both, in one decision. Declining it declines the server; the built-in
+    stays until Retry.
+  - A server a plugin can never reach (plain `http`, this computer, a
+    user name in the address) keeps the built-in (`not_eligible`), and so
+    does `allowPrivateHost` for the default origin, which has no
+    per-server consent.
+- Derived: on GitLab.com, `network:gitlab.com` and `openUrl:gitlab.com`
+  (the built-in used them); for both modules
+  `openUrl:user-origin:<setting>`, which opens nothing before the server
+  is allowed. Not derived, so asked: the credential import and the origin
+  slot (always), the server (when one was entered), and, for a
+  self-managed GitLab, GitLab.com's two grants, which the built-in did
+  not use there.
+- After the cut-over, another server saved by an older app is copied
+  again and the module goes back to `awaiting_consent` (the built-in
+  serves) until the user allowed that one too. The entered origin is
+  part of the copied settings, not of the eligibility digest, so it is a
+  change like any other setting's.
+- The app's consent dialog shows the server, what is sent there and that
+  its pages may be opened, and the private network as a separate item
+  (`MigrationConsentItem.origin`, [agent-integration.md](agent-integration.md#module-migrations)).
+- `apps/agent/tests/plugins_cutover_servers.rs` runs the upgrades end to
+  end from alpha.3 configurations: a self-managed GitLab under a path and
+  a Jira Cloud site (the built-in serves until the server's own item is
+  approved; then the key and the workflow node run in the plugin at
+  exactly that server with the imported credential; `deckpilot.db`
+  byte-identical; a build without plugins runs the built-in; disable and
+  uninstall withdraw the legacy actions and an upgrade does not bring the
+  plugin back); GitLab.com; a GitLab on a private network (declined,
+  restarted, Retry, allowed); servers a plugin cannot reach; and a
+  computer that does not use the module. The built-ins' requests go to
+  stand-ins on 127.0.0.1 (`DECKPILOT_TEST_BUILTIN_GITLAB_API`,
+  `DECKPILOT_TEST_BUILTIN_JIRA_SITE`, feature `test-hooks`).
+- Follow-ups: GitHub Enterprise through the same mechanism (a user-origin
+  slot in `deckpilot.github` and `entered: true` in its plan; its web
+  host is not derivable from the API URL on GitHub Enterprise Cloud, so
+  `open` needs its own decision); the desktop end-to-end suite does not
+  drive these dialogs yet.
+
 `notifications` follows as the first `default`-class bundled plugin. It is
 the one that proves seeding, tombstones and first launch.
 
@@ -1130,7 +1201,7 @@ they change.
 | P8 | `deckpilot.github` plugin source and contract test | `plugins/first-party/github/` (new), `crates/deckpilot-modules/tests/contracts.rs` | P4 (G1, G6), P5 | Built and pinned, not yet routed |
 | P9 | GitHub cut-over | one `ACTION_ALIASES` block, the `github` `MigrationPlan`, a `migration`-class entry in `bundled/pins.json` | P6, P7, P8 | The first behaviour change, in plugin-enabled builds only. The built-in stays as the legacy implementation. **Landed** ([§6](#6-the-first-module), *As built (P9)*) |
 | P10 | `deckpilot.notifications` as the first default plugin | `plugins/first-party/notifications/`, its alias block | P4 (G8, G9), P9 | Proves first launch, tombstones and fresh installs. *Done*: G9 routing and delivery, class `default` in the engine (§6 "As built (P10)") |
-| P11 | G2 user origins, then gitlab and jira | runtime, executor, settings consent UI, `plugins/first-party/{gitlab,jira}/` | P9 | GHE users become eligible |
+| P11 | G2 user origins, then gitlab and jira | runtime, executor, settings consent UI, `plugins/first-party/{gitlab,jira}/` | P9 | *Done* for GitLab and Jira: G2 (#266), `openUrl.userOrigins`, both plugins and their cut-overs ([§6](#6-the-first-module)). GitHub Enterprise users stay on the built-in until `deckpilot.github` gets a user-origin slot (follow-up) |
 | P12 | Remove a legacy built-in | `modules/<name>`, `crates/deckpilot-modules/src/lib.rs` | §5.7 criteria | The alias entries stay forever |
 
 This PR touches none of `modules/`, `apps/agent/src/plugins/`, `plugins/`
