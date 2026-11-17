@@ -13,7 +13,7 @@ Windows and Linux.
 Design your keys around what you want to happen: switch projects, open your tools,
 run workflows and time your work, all from a Stream Deck, without a cloud account.
 
-[**Download**](#download) &nbsp;&bull;&nbsp; [Documentation](docs/README.md) &nbsp;&bull;&nbsp; [Releases](https://github.com/knittingcode/deckpilot/releases) &nbsp;&bull;&nbsp; [Report an issue](https://github.com/knittingcode/deckpilot/issues/new/choose)
+[**Download**](#download) &nbsp;&bull;&nbsp; [Website](https://knittingcode.github.io/deckpilot/) &nbsp;&bull;&nbsp; [Documentation](docs/README.md) &nbsp;&bull;&nbsp; [Releases](https://github.com/knittingcode/deckpilot/releases) &nbsp;&bull;&nbsp; [Report an issue](https://github.com/knittingcode/deckpilot/issues/new/choose)
 
 [![CI](https://github.com/knittingcode/deckpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/knittingcode/deckpilot/actions/workflows/ci.yml)
 
