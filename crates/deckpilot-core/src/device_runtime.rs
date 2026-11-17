@@ -653,7 +653,8 @@ impl Runtime {
                 crate::DeckRequest::SwitchProfile { .. }
                 | crate::DeckRequest::Brightness { .. }
                 | crate::DeckRequest::RunAction { .. }
-                | crate::DeckRequest::RunWorkflow { .. },
+                | crate::DeckRequest::RunWorkflow { .. }
+                | crate::DeckRequest::RunSwitch { .. },
             )
             | None => return,
         };

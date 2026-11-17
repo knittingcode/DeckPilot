@@ -196,6 +196,11 @@ CHANGELOG.md.
 - *Random action* on a key: runs one of several saved actions or
   workflows, picked at random, optionally with weights and never the same
   twice in a row. The pick runs as its own key would.
+- *Multi Action Switch* on a key: two to eight states, each running an
+  action, a workflow or a Multi Action, with its own title and glyph on
+  the key. A press runs the current state and moves on when the run
+  succeeds (optionally also when it fails); each key keeps its state
+  across restarts. The states are edited in the Action Library.
 
 ### Fixed
 

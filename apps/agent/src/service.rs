@@ -39,6 +39,7 @@ mod gestures;
 mod security;
 mod stateful;
 mod states;
+mod switch;
 mod triggers;
 pub mod variables;
 pub mod work_session;
@@ -343,6 +344,8 @@ pub struct Agent {
     persisted_project: Option<ProjectId>,
     /// The pages devices show per profile, as last saved (see `deck.rs`).
     saved_pages: Option<String>,
+    /// The states of the Multi Action Switches (see `switch.rs`).
+    switches: switch::Switches,
     last_input_at: Option<u64>,
     /// Report of the last workflow, for the summary window.
     last_workflow: Option<deckpilot_core::WorkflowReport>,
@@ -476,6 +479,7 @@ impl Agent {
             open_failures: BTreeMap::new(),
             persisted_project,
             saved_pages: None,
+            switches: switch::Switches::default(),
             last_input_at: None,
             last_workflow: None,
             last_unlock_prompt: None,
@@ -874,8 +878,12 @@ impl Agent {
                     .run_action(action)
                     .map_err(|e| engine_error(&e))?;
                 let name = self.action_name(action);
+                let switch = switch::take_switch(&mut result);
                 self.apply_deck_request(&mut result);
                 self.report_action_as(action, name, &result);
+                if let Some(advance_on_failure) = switch {
+                    self.run_switch(None, action, advance_on_failure);
+                }
                 self.after_change();
                 Ok(Response::ActionResult { result })
             }
@@ -1015,6 +1023,7 @@ impl Agent {
         }
         // Before the profile is loaded: devices go to the page they showed.
         self.restore_pages();
+        self.restore_switches();
         self.reload_configuration()?;
         self.recover_work_session();
         Ok(())

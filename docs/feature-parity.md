@@ -124,7 +124,7 @@ component tests). Nothing here has physical evidence yet.
 
 | Feature | Status | Home | What exists | What is missing |
 | --- | --- | --- | --- | --- |
-| **Multi Action Switch** | missing | core | Stateful keys exist for the Work Session only | A key with two or more states, each with its own workflow, title and icon; see [5.7](#57-multi-action-switch) |
+| **Multi Action Switch** | verified (integration, simulated) | built-in module | `deck.multi-switch` (`apps/agent/tests/deck.rs::a_multi_action_switch_goes_through_its_states_and_keeps_them`, `modules/deck/src/switch.rs` tests, `modules/deck/switch-states-field.test.tsx`) | Reset (long press, `deck.reset-switch`) and "start at the first state after a restart", the options of 5.7 |
 | **Random Action** | verified (integration, simulated) | built-in module | `deck.random` (#301; `modules/deck/src/random.rs` tests, `deck.rs::a_random_key_runs_what_it_picked_as_a_key_would`, `modules/deck/candidates-field.test.tsx`) | — |
 | **Website** | verified (simulated) | built-in module (`system`) | `system.open-url`: `http`, `https`, `mailto` | — |
 | **Open** (file, folder) | verified (simulated) | built-in module (`system`) | `system.open-file`, `system.open-directory`, inside bound locations | — |
@@ -390,22 +390,33 @@ It needs a representation that an older build can read (rule 1), so it is
 an action type whose parameters name the states, with the agent starting
 the runs through a deck request. Designed in detail with its pull request.
 
-**Not built yet.** The parts it needs and where they stand:
+**As built** (`deck.multi-switch`), with the defaults of O5:
 
-- Starting a state's target: the `RunAction`/`RunWorkflow` deck requests
-  of the Random Action (5.8) already do this, as a key would.
-- States as parameters: a `lines` parameter like the Random Action's
-  candidates, one `action:<id>` or `workflow:<id>` per state, with the
-  title and icon of each state as further `lines` parameters of the same
-  length (an older build keeps them as text).
-- Advancing on success needs the run's outcome: immediate for an action;
-  for a workflow, the agent's `ExecutionFinished`, matched to the key that
-  started it. The state (per profile, page, control and gesture) goes in
-  `settings` (`switch.states`), so it survives a restart.
-- Showing the current state's title and icon on the key is live key state
-  (`button_state.rs`, `crates/deckpilot-render`), which the plugin key-state
-  work (#290–#295) is changing now. The switch is sequenced after it, so
-  that both use one representation of a key's state.
+- States are one `lines` parameter, `states`: per line `action:<id>` or
+  `workflow:<id>` (a Multi Action is a workflow), then optionally
+  ` | <title>` and ` | <glyph>`. One parameter rather than parallel lists,
+  so a state's title and glyph cannot drift from its target; an older
+  build keeps it as text. The icon of a state is a glyph of the renderer's
+  closed set, the same marks a key's live state uses; the key's own icon
+  (its appearance) stays the binding's.
+- The handler checks the states (2–8, existing, not a Random Action or
+  another switch, so nothing nests) and asks with a new deck request,
+  `RunSwitch { advance_on_failure }`. The agent runs the current state's
+  target exactly as a Random Action's pick (`Runtime::run_picked`), so
+  there is no second executor.
+- The key **advances when the run succeeds**: an action at once from its
+  result, a workflow when its execution finishes as succeeded (matched by
+  execution id). Failed and cancelled runs leave the state; the option
+  `advanceOnFailure` advances anyway.
+- The state is **per key binding** (profile, page, control and switch
+  action), kept in `settings` (`switch.states`) and restored after a
+  restart. Run from the app, the switch has a state of its own.
+- What the key shows is a `ButtonState` (title as the label, the glyph,
+  `n/m` as the detail), applied in the agent's `decorate_faces` like every
+  other live key state, including the plugin key state of plugin API 1.2:
+  one representation of a key's state.
+- Not built: the options of 5.7, reset by long press or `deck.reset-switch`
+  and "start at the first state after a restart".
 
 ### 5.8 Random Action
 

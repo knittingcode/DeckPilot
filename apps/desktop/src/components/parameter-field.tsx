@@ -16,6 +16,8 @@ import { initialValue } from "@/lib/parameters"
 import { PROFILE_PARAMETER, ProfileField, SWITCH_PROFILE_TYPE } from "@/modules/deck/profile-field"
 import { CANDIDATES_PARAMETER, RANDOM_TYPE } from "@/modules/deck/candidates"
 import { CandidatesField } from "@/modules/deck/candidates-field"
+import { MULTI_SWITCH_TYPE, STATES_PARAMETER } from "@/modules/deck/switch-states"
+import { SwitchStatesField } from "@/modules/deck/switch-states-field"
 import type {
   ActionInstance,
   ParameterSpec,
@@ -40,7 +42,7 @@ import { TEMPLATE_KIND, templateReferences } from "@/lib/variables"
  * it: a parameter whose text names something of the application (the
  * profile of "Switch profile") is then drawn as a list of what exists.
  * `targets` are the profile's actions and workflows, for the candidates of
- * a Random Action.
+ * a Random Action and the states of a Multi Action Switch.
  */
 export function ParameterField({
   spec,
@@ -69,6 +71,11 @@ export function ParameterField({
     actionType === RANDOM_TYPE &&
     spec.key === CANDIDATES_PARAMETER &&
     value.type === "text"
+  const states =
+    targets !== undefined &&
+    actionType === MULTI_SWITCH_TYPE &&
+    spec.key === STATES_PARAMETER &&
+    value.type === "text"
   return (
     <div className="grid gap-2">
       <Label id={labelId} htmlFor={id}>
@@ -85,6 +92,16 @@ export function ParameterField({
         />
       ) : candidates ? (
         <CandidatesField
+          id={id}
+          value={value.value}
+          actions={targets.actions}
+          workflows={targets.workflows}
+          onChange={(text) => {
+            onChange({ type: "text", value: text })
+          }}
+        />
+      ) : states ? (
+        <SwitchStatesField
           id={id}
           value={value.value}
           actions={targets.actions}
