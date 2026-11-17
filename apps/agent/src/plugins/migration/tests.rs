@@ -723,7 +723,7 @@ fn the_snapshot_reads_nothing_without_aliases() {
             .iter()
             .map(|m| m.module.as_str())
             .collect::<Vec<_>>(),
-        ["github", "notifications"]
+        ["github", "gitlab", "jira", "notifications"]
     );
     let github = &shipped.modules[0];
     assert_eq!(github.module.as_str(), "github");
@@ -1008,4 +1008,697 @@ fn a_decline_holds_until_retry() {
             ..
         }
     ));
+}
+
+// ------------------------------------------- a server the user entered
+
+/// The fixture's plan for a plugin that takes a server the user entered
+/// (as the shipped GitLab plan): `apiUrl` is the plugin's user-origin
+/// slot, `https://api.example.com` its declared default.
+static ENTERED: MigrationPlan = MigrationPlan {
+    module: MODULE,
+    credentials: &[("credential", "token")],
+    origin: Some(OriginPlan {
+        setting: "apiUrl",
+        default: Some(fixture::DEFAULT_API_URL),
+        entered: true,
+    }),
+    private_network: Some("allowPrivateHost"),
+    open_url_hosts: &[],
+};
+
+/// The server the user entered in the built-in.
+const OWN: &str = "https://code.example.com/gitlab/api/v4";
+const SLOT: &str = "network:user-origin:apiUrl";
+const PRIVATE: &str = "network:user-origin:apiUrl:private-network";
+
+impl Env {
+    /// The fixture plugin with the origin setting `apiUrl` as a
+    /// user-origin slot (a path, a private network), the token bound to
+    /// it.
+    fn entered_bundle(&self) -> Bundle {
+        self.bundle_with("0.1.0", |manifest| {
+            manifest["permissions"][1]["userOrigins"] = json!([
+                {"setting": "apiUrl", "pathPrefix": true, "privateNetwork": true}
+            ]);
+            manifest["contributes"]["settings"]["fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                    "key": "apiUrl", "label": "API URL", "required": true,
+                    "kind": {"type": "text", "maxLength": 512},
+                    "default": {"type": "text", "value": "https://api.example.com"},
+                    "portability": "machineSpecific"
+                }));
+            manifest["contributes"]["credentials"][0]["userOrigin"] = json!("apiUrl");
+        })
+    }
+
+    /// The snapshot with the [`ENTERED`] plan.
+    fn entered_snapshot(&self) -> LegacySnapshot {
+        let mut snapshot = self.snapshot();
+        snapshot.modules[0].plan = Some(&ENTERED);
+        snapshot
+    }
+}
+
+fn user_origins(manager: &PluginManager) -> Vec<(String, bool, String)> {
+    manager
+        .store()
+        .user_origins(&plugin_id())
+        .unwrap()
+        .into_iter()
+        .map(|row| {
+            (
+                row.consent.display(),
+                row.consent.private_network,
+                row.decided_by,
+            )
+        })
+        .collect()
+}
+
+fn setting(manager: &PluginManager, key: &str) -> Option<Value> {
+    manager
+        .store()
+        .settings(&plugin_id())
+        .unwrap()
+        .get(key)
+        .cloned()
+}
+
+fn waiting(info: &ipc::ModuleMigrationInfo) -> Vec<&str> {
+    info.consent
+        .iter()
+        .filter(|i| i.decision == ipc::ConsentDecision::Pending)
+        .map(|i| i.key.as_str())
+        .collect()
+}
+
+/// The server the user entered in the built-in is carried into the
+/// plugin's origin setting and allowed only by the user's decision on its
+/// own item: never derived, never by another item's approval.
+#[test]
+#[allow(clippy::too_many_lines)] // one migration, step by step
+fn an_entered_server_is_carried_and_allowed_only_by_its_own_consent() {
+    let env = Env::new();
+    env.save_module(
+        &json!({"greeting": "Hi", "apiUrl": "https://Code.Example.com:443/gitlab/api/v4/"}),
+    );
+    let bundle = env.entered_bundle();
+    let snapshot = env.entered_snapshot();
+    let mut manager = env.open();
+    start(&mut manager, &bundle, &snapshot);
+
+    // Copied, normalized as the agent stores what a user saves there.
+    let migration = record(&manager);
+    assert_eq!(
+        migration.phase,
+        MigrationPhase::AwaitingConsent,
+        "{migration:?}"
+    );
+    assert_eq!(setting(&manager, "apiUrl"), Some(json!(OWN)));
+    assert_eq!(setting(&manager, "greeting"), Some(json!("Hi")));
+    // Nothing allowed: no consent to the server, and neither the slot nor
+    // the default origin (which the built-in did not talk to) is derived.
+    assert_eq!(user_origins(&manager), []);
+    let granted = grants(manager.store());
+    assert!(
+        !granted
+            .iter()
+            .any(|(key, ..)| key == SLOT || key == "network:api.example.com"),
+        "{granted:?}"
+    );
+    // The journal names the setting, never the server.
+    let reason = migration.reason.unwrap();
+    assert!(
+        reason.contains("the server entered in `apiUrl`"),
+        "{reason}"
+    );
+    assert!(!reason.contains("code.example.com"), "{reason}");
+
+    // The app is told which server, what goes there, and why.
+    let info = infos(&manager, &bundle, Some(&snapshot)).pop().unwrap();
+    assert_eq!(
+        waiting(&info),
+        ["network:api.example.com", SLOT, "credentials:token"],
+        "{info:?}"
+    );
+    let server = info.consent.iter().find(|i| i.key == SLOT).unwrap();
+    assert_eq!(
+        server.origin,
+        Some(ipc::MigrationUserOrigin {
+            setting: "apiUrl".into(),
+            origin: OWN.into(),
+            private_network: false,
+            methods: vec!["GET".into()],
+            credentials: vec!["token".into()],
+            opens_pages: false,
+        })
+    );
+    assert_eq!(server.permission.tier, ipc::PermissionTier::High);
+    assert!(server.why.contains("exactly this server"), "{}", server.why);
+    let token = info
+        .consent
+        .iter()
+        .find(|i| i.key == "credentials:token")
+        .unwrap();
+    let import = token.import.as_ref().unwrap();
+    assert_eq!(import.user_origin.as_deref(), Some("apiUrl"));
+    assert!(
+        token
+            .why
+            .contains("api.example.com and the server you allow in `apiUrl`"),
+        "{}",
+        token.why
+    );
+
+    // Approving other items allows no server.
+    decide(
+        &mut manager,
+        &bundle,
+        &snapshot,
+        &decide_items(&["credentials:token", "network:api.example.com"], &[]),
+    )
+    .unwrap();
+    assert_eq!(record(&manager).phase, MigrationPhase::AwaitingConsent);
+    assert_eq!(user_origins(&manager), []);
+    assert_eq!(route(&manager, &bundle), LegacyRoute::Builtin);
+    let info = infos(&manager, &bundle, Some(&snapshot)).pop().unwrap();
+    assert_eq!(waiting(&info), [SLOT]);
+
+    // Its own item: allowed, exactly that server, by this consent.
+    decide(
+        &mut manager,
+        &bundle,
+        &snapshot,
+        &decide_items(&[SLOT], &[]),
+    )
+    .unwrap();
+    assert_eq!(
+        record(&manager).phase,
+        MigrationPhase::CutOver,
+        "{:?}",
+        record(&manager)
+    );
+    assert_eq!(
+        user_origins(&manager),
+        [(OWN.to_owned(), false, format!("user:migration:{MODULE}"))]
+    );
+    assert_eq!(route(&manager, &bundle), LegacyRoute::Plugin);
+    assert_eq!(
+        manager.store().credentials(&plugin_id()).unwrap().len(),
+        1,
+        "the token was imported"
+    );
+    // Nothing waits any more.
+    assert_eq!(
+        infos(&manager, &bundle, Some(&snapshot))
+            .pop()
+            .unwrap()
+            .consent,
+        []
+    );
+}
+
+/// A slot grant made elsewhere (Settings › Plugins) never allows the
+/// server: the migration still asks, and records the consent only with
+/// the decision that names it.
+#[test]
+fn a_slot_granted_elsewhere_does_not_allow_the_server() {
+    let env = Env::new();
+    env.save_module(&json!({ "apiUrl": OWN }));
+    let bundle = env.entered_bundle();
+    let snapshot = env.entered_snapshot();
+    let mut manager = env.open();
+    start(&mut manager, &bundle, &snapshot);
+    manager
+        .grant(
+            &plugin_id(),
+            &Consent::of([SLOT.parse::<GrantKey>().unwrap()], "user"),
+        )
+        .unwrap();
+    start(&mut manager, &bundle, &snapshot);
+    decide(
+        &mut manager,
+        &bundle,
+        &snapshot,
+        &decide_items(&["credentials:token", "network:api.example.com"], &[]),
+    )
+    .unwrap();
+    assert_eq!(record(&manager).phase, MigrationPhase::AwaitingConsent);
+    assert_eq!(user_origins(&manager), []);
+    let info = infos(&manager, &bundle, Some(&snapshot)).pop().unwrap();
+    assert_eq!(waiting(&info), [SLOT]);
+    decide(
+        &mut manager,
+        &bundle,
+        &snapshot,
+        &decide_items(&[SLOT], &[]),
+    )
+    .unwrap();
+    assert_eq!(record(&manager).phase, MigrationPhase::CutOver);
+    assert_eq!(user_origins(&manager).len(), 1);
+}
+
+/// A server the built-in reached on a private network: the private
+/// network is an item of its own, and the server is allowed only with
+/// both, in one decision.
+#[test]
+fn a_private_network_is_asked_separately_for_exactly_that_server() {
+    for url in [
+        // A public name the built-in was allowed private addresses for.
+        OWN,
+        // A host that is private itself.
+        "https://gitlab.internal/api/v4",
+        "https://10.0.0.5/api/v4",
+    ] {
+        let env = Env::new();
+        env.save_module(&json!({"apiUrl": url, "allowPrivateHost": true}));
+        let bundle = env.entered_bundle();
+        let snapshot = env.entered_snapshot();
+        let mut manager = env.open();
+        start(&mut manager, &bundle, &snapshot);
+        let migration = record(&manager);
+        assert_eq!(
+            migration.phase,
+            MigrationPhase::AwaitingConsent,
+            "{url}: {migration:?}"
+        );
+        assert!(
+            migration
+                .reason
+                .as_deref()
+                .unwrap()
+                .contains("the private network for the server entered in `apiUrl`"),
+            "{migration:?}"
+        );
+        let info = infos(&manager, &bundle, Some(&snapshot)).pop().unwrap();
+        let private = info.consent.iter().find(|i| i.key == PRIVATE).unwrap();
+        assert_eq!(private.permission.tier, ipc::PermissionTier::High);
+        assert_eq!(private.decision, ipc::ConsentDecision::Pending);
+        let asked = private.origin.as_ref().unwrap();
+        assert!(asked.private_network);
+        assert_eq!(asked.origin, url);
+
+        // Everything but the private network: the server is not allowed.
+        decide(
+            &mut manager,
+            &bundle,
+            &snapshot,
+            &decide_items(&["credentials:token", "network:api.example.com", SLOT], &[]),
+        )
+        .unwrap();
+        assert_eq!(
+            record(&manager).phase,
+            MigrationPhase::AwaitingConsent,
+            "{url}"
+        );
+        assert_eq!(user_origins(&manager), [], "{url}");
+        // The private network alone does not allow the server either: the
+        // server's item waits again, with it.
+        let info = infos(&manager, &bundle, Some(&snapshot)).pop().unwrap();
+        assert_eq!(waiting(&info), [SLOT, PRIVATE], "{url}");
+        decide(
+            &mut manager,
+            &bundle,
+            &snapshot,
+            &decide_items(&[PRIVATE], &[]),
+        )
+        .unwrap();
+        assert_eq!(user_origins(&manager), [], "{url}");
+        // Both, in one decision.
+        decide(
+            &mut manager,
+            &bundle,
+            &snapshot,
+            &decide_items(&[SLOT, PRIVATE], &[]),
+        )
+        .unwrap();
+        assert_eq!(
+            record(&manager).phase,
+            MigrationPhase::CutOver,
+            "{url}: {:?}",
+            record(&manager)
+        );
+        assert_eq!(
+            user_origins(&manager),
+            [(url.to_owned(), true, format!("user:migration:{MODULE}"))]
+        );
+        // The private-network item was never stored as a grant.
+        assert!(
+            !manager
+                .store()
+                .grants(&plugin_id())
+                .unwrap()
+                .iter()
+                .any(|g| g.key.to_string() == PRIVATE)
+        );
+    }
+}
+
+/// Declining the private network declines the server: the built-in
+/// stays, at every start, until Retry.
+#[test]
+fn a_declined_private_network_keeps_the_builtin() {
+    let env = Env::new();
+    env.save_module(&json!({"apiUrl": OWN, "allowPrivateHost": true}));
+    let bundle = env.entered_bundle();
+    let snapshot = env.entered_snapshot();
+    let mut manager = env.open();
+    start(&mut manager, &bundle, &snapshot);
+    decide(
+        &mut manager,
+        &bundle,
+        &snapshot,
+        &decide_items(
+            &["credentials:token", "network:api.example.com", SLOT],
+            &[PRIVATE],
+        ),
+    )
+    .unwrap();
+    let declined = record(&manager);
+    assert_eq!(declined.phase, MigrationPhase::NotEligible, "{declined:?}");
+    assert!(
+        declined
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains(&format!("you declined {SLOT}")),
+        "{declined:?}"
+    );
+    assert_eq!(user_origins(&manager), []);
+    assert_eq!(manager.store().credentials(&plugin_id()).unwrap(), []);
+    start(&mut manager, &bundle, &snapshot);
+    assert_eq!(record(&manager).phase, MigrationPhase::NotEligible);
+    assert_eq!(route(&manager, &bundle), LegacyRoute::Builtin);
+    let info = infos(&manager, &bundle, Some(&snapshot)).pop().unwrap();
+    assert!(info.can_retry);
+    let private = info.consent.iter().find(|i| i.key == PRIVATE).unwrap();
+    assert_eq!(private.decision, ipc::ConsentDecision::Declined);
+    // Retry asks again; allowing everything cuts over.
+    decide(
+        &mut manager,
+        &bundle,
+        &snapshot,
+        &Decision::Retry(MODULE.into()),
+    )
+    .unwrap();
+    assert_eq!(record(&manager).phase, MigrationPhase::AwaitingConsent);
+    decide(
+        &mut manager,
+        &bundle,
+        &snapshot,
+        &Decision::Consent(MODULE.into()),
+    )
+    .unwrap();
+    assert_eq!(
+        record(&manager).phase,
+        MigrationPhase::CutOver,
+        "{:?}",
+        record(&manager)
+    );
+    assert!(user_origins(&manager)[0].1);
+}
+
+/// What a plugin can never reach keeps the built-in: plain `http`, this
+/// computer, a user name in the address; and the private switch for the
+/// default origin, which has no per-server consent.
+#[test]
+fn servers_a_plugin_cannot_reach_stay_on_the_builtin() {
+    for (config, expect) in [
+        (
+            json!({"apiUrl": "http://code.example.com/api/v4"}),
+            "`apiUrl` is not a server a plugin can reach",
+        ),
+        (
+            json!({"apiUrl": "http://127.0.0.1:8080/api/v4", "allowPrivateHost": true}),
+            "`apiUrl` is not a server a plugin can reach",
+        ),
+        (
+            json!({"apiUrl": "https://localhost/api/v4", "allowPrivateHost": true}),
+            "`apiUrl` is not a server a plugin can reach",
+        ),
+        (
+            json!({"apiUrl": "https://user:pw@code.example.com/api/v4"}),
+            "`apiUrl` is not a server a plugin can reach",
+        ),
+        (
+            json!({"allowPrivateHost": true}),
+            "`allowPrivateHost` allows private network hosts",
+        ),
+    ] {
+        let env = Env::new();
+        env.save_module(&config);
+        let bundle = env.entered_bundle();
+        let mut manager = env.open();
+        start(&mut manager, &bundle, &env.entered_snapshot());
+        let migration = record(&manager);
+        assert_eq!(migration.phase, MigrationPhase::NotEligible, "{config}");
+        let reason = migration.reason.unwrap();
+        assert!(reason.contains(expect), "{config}: {reason}");
+        // Never the value.
+        assert!(
+            !reason.contains("example.com") && !reason.contains("pw"),
+            "{reason}"
+        );
+        assert!(
+            manager.store().plugin(&plugin_id()).unwrap().is_none(),
+            "{config}"
+        );
+    }
+    // The default origin: nothing to carry, nothing to ask about a server;
+    // its host is derived as before.
+    let env = Env::new();
+    let bundle = env.entered_bundle();
+    let snapshot = env.entered_snapshot();
+    let mut manager = env.open();
+    start(&mut manager, &bundle, &snapshot);
+    assert_eq!(setting(&manager, "apiUrl"), None);
+    assert!(grants(manager.store()).iter().any(|(key, source, _)| key
+        == "network:api.example.com"
+        && *source == GrantSource::Derived));
+    let info = infos(&manager, &bundle, Some(&snapshot)).pop().unwrap();
+    // The slot itself is high tier (a private network): asked, without a
+    // server.
+    assert_eq!(waiting(&info), [SLOT, "credentials:token"]);
+    assert_eq!(info.consent[0].origin, None);
+    decide(
+        &mut manager,
+        &bundle,
+        &snapshot,
+        &Decision::Consent(MODULE.into()),
+    )
+    .unwrap();
+    assert_eq!(record(&manager).phase, MigrationPhase::CutOver);
+    assert_eq!(user_origins(&manager), []);
+}
+
+/// An older app pointed the built-in at another server after the
+/// cut-over: the settings are copied again, the built-in serves again,
+/// and the new server waits for its own consent.
+#[test]
+fn another_server_after_the_cut_over_asks_again() {
+    let env = Env::new();
+    env.save_module(&json!({ "apiUrl": OWN }));
+    let bundle = env.entered_bundle();
+    let mut manager = env.open();
+    let snapshot = env.entered_snapshot();
+    start(&mut manager, &bundle, &snapshot);
+    decide(
+        &mut manager,
+        &bundle,
+        &snapshot,
+        &Decision::Consent(MODULE.into()),
+    )
+    .unwrap();
+    assert_eq!(record(&manager).phase, MigrationPhase::CutOver);
+
+    let other = "https://git.example.org/api/v4";
+    env.save_module(&json!({ "apiUrl": other }));
+    let snapshot = env.entered_snapshot();
+    start(&mut manager, &bundle, &snapshot);
+    let migration = record(&manager);
+    assert_eq!(
+        migration.phase,
+        MigrationPhase::AwaitingConsent,
+        "{migration:?}"
+    );
+    assert!(
+        migration
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("waits for your consent"),
+        "{migration:?}"
+    );
+    assert_eq!(route(&manager, &bundle), LegacyRoute::Builtin);
+    assert_eq!(setting(&manager, "apiUrl"), Some(json!(other)));
+    // The consent to the first server allows nothing for the second.
+    let info = infos(&manager, &bundle, Some(&snapshot)).pop().unwrap();
+    assert_eq!(waiting(&info), [SLOT], "{info:?}");
+    let server = info.consent.iter().find(|i| i.key == SLOT).unwrap();
+    assert_eq!(server.origin.as_ref().unwrap().origin, other);
+    decide(
+        &mut manager,
+        &bundle,
+        &snapshot,
+        &decide_items(&[SLOT], &[]),
+    )
+    .unwrap();
+    assert_eq!(
+        record(&manager).phase,
+        MigrationPhase::CutOver,
+        "{:?}",
+        record(&manager)
+    );
+    assert_eq!(user_origins(&manager)[0].0, other);
+    assert_eq!(route(&manager, &bundle), LegacyRoute::Plugin);
+}
+
+/// A module as an alpha.3 configuration has it: saved with `config`,
+/// enabled, and used by one action instance of `action`.
+fn shipped_module(
+    id: &str,
+    action: &str,
+    config: &[(&str, ParameterValue)],
+    credential: Option<&str>,
+) -> LegacyModule {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let mut parameters = ActionParameters::new();
+    for (key, value) in config {
+        parameters = parameters.with(*key, value.clone());
+    }
+    store
+        .set_module_state(
+            &ModuleId::new(id).unwrap(),
+            &ModuleSettings {
+                enabled: true,
+                config: parameters,
+            },
+        )
+        .unwrap();
+    let mut profile = Profile::new("Work");
+    let mut params = ActionParameters::new();
+    if let Some(credential) = credential {
+        params = params.with("credential", ParameterValue::Text(credential.into()));
+    }
+    profile.actions.push(ActionInstance {
+        id: ActionInstanceId::new(),
+        name: "Mine".into(),
+        action_type: ActionTypeId::new(action).unwrap(),
+        parameters: params,
+        description: String::new(),
+        icon: None,
+        label: None,
+    });
+    store.save_profile(&profile).unwrap();
+    let mut registry = deckpilot_modules::builtin(Os::current());
+    registry.apply_states(&store.module_states().unwrap());
+    let snapshot = LegacySnapshot::read(&store, &registry).unwrap();
+    let module = snapshot
+        .modules
+        .into_iter()
+        .find(|m| m.module.as_str() == id)
+        .unwrap();
+    assert_eq!(module.plan, plan_for(id));
+    module
+}
+
+/// The shipped GitLab and Jira plans (P11): GitLab.com and a server the
+/// user entered are eligible, also with the private switch for such a
+/// server; what a plugin cannot reach and a per-action credential other
+/// than the module's keep the built-in. Jira has no default: its site is
+/// always a server the user entered.
+#[test]
+fn the_gitlab_and_jira_plans_take_a_server_the_user_entered() {
+    let text = |s: &str| ParameterValue::Text(s.into());
+    let on = ParameterValue::Boolean(true);
+    let eligible = |m: &LegacyModule| {
+        if crate::plugins::execution_supported() {
+            assert_eq!(eligibility(m, false), None, "{:?}", m.config);
+        }
+    };
+    let gitlab = |config: &[(&str, ParameterValue)], credential: Option<&str>| {
+        shipped_module("gitlab", "gitlab.merge-requests", config, credential)
+    };
+    let jira =
+        |config: &[(&str, ParameterValue)]| shipped_module("jira", "jira.issues", config, None);
+
+    // GitLab.com: the declared host, nothing entered.
+    let m = gitlab(&[], None);
+    eligible(&m);
+    assert_eq!(entered_origin(&m), None);
+    assert_eq!(m.credentials[0].slot, "token");
+    assert_eq!(
+        m.credentials[0].id.as_ref().map(CredentialId::as_str),
+        Some("gitlab.token")
+    );
+    eligible(&gitlab(
+        &[("apiUrl", text("https://gitlab.com/api/v4/"))],
+        Some("gitlab.token"),
+    ));
+    // A self-managed GitLab, under a path, also on a private network.
+    for config in [
+        vec![("apiUrl", text("https://code.example.com/gitlab/api/v4"))],
+        vec![
+            ("apiUrl", text("https://gitlab.internal/api/v4")),
+            ("allowPrivateHost", on.clone()),
+        ],
+        vec![
+            ("apiUrl", text("https://10.0.0.5/api/v4")),
+            ("allowPrivateHost", on.clone()),
+        ],
+    ] {
+        let m = gitlab(&config, None);
+        eligible(&m);
+        assert!(matches!(entered_origin(&m), Some((_, Ok(_)))), "{config:?}");
+    }
+    // Not reachable for a plugin, each with its reason.
+    for (config, expect) in [
+        (
+            vec![("apiUrl", text("http://127.0.0.1:8080/api/v4"))],
+            "is not a server a plugin can reach",
+        ),
+        (
+            vec![("apiUrl", text("http://gitlab.example.com/api/v4"))],
+            "is not a server a plugin can reach",
+        ),
+        (
+            vec![("allowPrivateHost", on.clone())],
+            "`allowPrivateHost` allows private network hosts",
+        ),
+    ] {
+        let reason = eligibility(&gitlab(&config, None), false).unwrap();
+        assert!(reason.contains(expect), "{config:?}: {reason}");
+    }
+    let other = eligibility(&gitlab(&[], Some("other.token")), false).unwrap();
+    assert!(
+        other.contains("`Mine` sets `credential`") && other.contains("G5"),
+        "{other}"
+    );
+
+    // Jira: no default; the site is what the user entered.
+    let m = jira(&[("siteUrl", text("https://team.atlassian.net"))]);
+    eligible(&m);
+    assert!(matches!(entered_origin(&m), Some((_, Ok(_)))));
+    assert_eq!(m.credentials[0].slot, "credential");
+    assert_eq!(
+        m.credentials[0].id.as_ref().map(CredentialId::as_str),
+        Some("jira.token")
+    );
+    eligible(&jira(&[
+        ("siteUrl", text("https://jira.internal/jira")),
+        ("deployment", ParameterValue::Choice("data-center".into())),
+        ("allowPrivateHost", on.clone()),
+    ]));
+    // No site yet: nothing to carry or to ask about.
+    let unset = jira(&[]);
+    eligible(&unset);
+    assert_eq!(entered_origin(&unset), None);
+    let local = eligibility(&jira(&[("siteUrl", text("http://localhost:8080"))]), false).unwrap();
+    assert!(
+        local.contains("`siteUrl` is not a server a plugin can reach"),
+        "{local}"
+    );
 }

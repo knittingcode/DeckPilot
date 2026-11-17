@@ -983,6 +983,7 @@ async fn an_alpha3_github_user_moves_to_the_plugin_after_consent() {
             credential: CREDENTIAL.into(),
             slot: "token".into(),
             hosts: vec!["api.github.com".into()],
+            user_origin: None,
         })
     );
     assert_eq!(agent.plugin_origin().await, Some(PluginOrigin::Bundled));

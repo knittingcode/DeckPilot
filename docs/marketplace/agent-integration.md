@@ -653,7 +653,9 @@ protocol 10:
 `maxAttempts`, `canRetry`, `route` (`builtin`, `plugin`,
 `pluginWithdrawn`), `routeReason?`, `aliases: [{legacy, target}]`,
 `consent?: [{key, permission, import?: {setting, credential, slot,
-hosts}, why, decision: pending | approved | declined}]`, `updatedAt`.
+hosts, userOrigin?}, origin?: {setting, origin, privateNetwork?,
+methods?, credentials?, opensPages?}, why, decision: pending | approved |
+declined}]`, `updatedAt`.
 Credentials are named by id; no answer carries a secret. The Tauri
 commands are `list_module_migrations`, `decide_module_migration` and
 `retry_module_migration`. `PluginOrigin` gains `{"type": "bundled"}` for
@@ -670,6 +672,22 @@ or private-host configuration is `notEligible` with the reason. Once
 `cutOver`, the stored `github.*` actions, keys and workflow nodes run in
 the plugin under their legacy ids (`route: plugin`); an agent without
 plugins, or with `route: builtin`, runs the built-in on the same data.
+
+GitLab's and Jira's migrations (P11) carry the server the user entered
+in the built-in (a self-managed GitLab, a Jira site). While they wait,
+the consent items are the credential import (`credentials:token` or
+`credentials:credential`, with `import.userOrigin` naming the origin
+setting the slot is bound to) and `network:user-origin:<setting>` with
+`origin: {setting, origin, methods, credentials, opensPages}`: approving
+that item allows exactly that server for the plugin, and nothing else
+does. When reaching it needs a private network there is one more item,
+`network:user-origin:<setting>:private-network` (`origin.privateNetwork:
+true`): not a grant, but the separate decision without which the server
+is not allowed; both must be approved in one `decideModuleMigration`,
+and declining it declines the server. A self-managed GitLab also lists
+`network:gitlab.com` and `openUrl:gitlab.com` (not derived: the built-in
+did not use them there). `origin` and `userOrigin` are additive; an
+older app shows such an item by its key and the agent's `why`.
 
 The app reaches the data requests through the Tauri commands
 `list_known_plugins`, `get_plugin_settings`, `set_plugin_settings`,

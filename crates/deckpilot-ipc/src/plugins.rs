@@ -796,6 +796,39 @@ pub struct CredentialImport {
     pub slot: String,
     /// The only hosts the plugin may send it to.
     pub hosts: Vec<String>,
+    /// The plugin's origin setting the slot is bound to: it is also sent
+    /// to the server the user entered there and allowed, and nowhere else.
+    /// Additive: older agents leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_origin: Option<String>,
+}
+
+/// The server a migration asks the user to allow for the plugin: what the
+/// built-in talked to (a self-managed GitLab, a Jira site), now in the
+/// plugin's origin setting. Never granted without the user's decision on
+/// this item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationUserOrigin {
+    /// The plugin's origin setting that holds it.
+    pub setting: String,
+    /// The server, normalized, with its path prefix
+    /// (`https://code.example.com/gitlab/api/v4`).
+    pub origin: String,
+    /// This item is the separate consent to reach that server on a
+    /// private network (its key ends in `:private-network`); the server
+    /// itself is another item.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private_network: bool,
+    /// The methods requests to it may use.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub methods: Vec<String>,
+    /// The credential slots whose secrets are sent there once allowed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credentials: Vec<String>,
+    /// The plugin may also open pages of this server in the browser.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub opens_pages: bool,
 }
 
 /// One thing a migration waits for the user to allow: a permission that
@@ -814,6 +847,13 @@ pub struct MigrationConsentItem {
     /// The stored credential copied into the slot on approval.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import: Option<CredentialImport>,
+    /// The server the built-in talked to, which approving this item
+    /// allows for the plugin (with `network:user-origin:<setting>`), or
+    /// allows on a private network (the item whose key ends in
+    /// `:private-network`, which is no grant of its own). Additive: older
+    /// agents leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<MigrationUserOrigin>,
     /// Why the migration asks, in words.
     pub why: String,
     pub decision: ConsentDecision,
@@ -1449,7 +1489,9 @@ mod tests {
                     credential: "github.token".into(),
                     slot: "token".into(),
                     hosts: vec!["api.github.com".into()],
+                    user_origin: None,
                 }),
+                origin: None,
                 why: "the built-in used the stored token".into(),
                 decision: ConsentDecision::Pending,
             }],
