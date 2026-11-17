@@ -31,6 +31,7 @@ import {
 } from "@/lib/layout-model"
 import type {
   ActionType,
+  BindingTarget,
   ControlId,
   DeviceLayout,
   DeviceModel,
@@ -68,6 +69,11 @@ interface InspectorProps {
   onClose: () => void
   /** The look of the selected keys (appearance panel). */
   appearance?: ReactNode
+  /**
+   * Turns what was dragged onto a gesture's slot into the target to
+   * assign; see `GestureEditorProps.resolveDrop`.
+   */
+  resolveDrop?: (dragged: unknown) => Promise<BindingTarget | null> | BindingTarget | null
 }
 
 /** Settings of the selected control, or a summary of a multi-selection. */
@@ -137,6 +143,7 @@ function ControlInspector({
   types = [],
   gestureDefaults = DEFAULT_TIMINGS,
   issues = [],
+  resolveDrop,
 }: InspectorProps & { control: ControlId }) {
   const bindings = bindingsFor(draft, pageId, control)
   const gestures = acceptsGestures(model, control)
@@ -170,6 +177,7 @@ function ControlInspector({
             defaults={gestureDefaults}
             issues={controlMessages}
             onChange={onChange}
+            resolveDrop={resolveDrop}
           />
         )}
         {!gestures && controlMessages.length > 0 && (

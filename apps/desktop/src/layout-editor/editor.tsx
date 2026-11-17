@@ -43,6 +43,7 @@ import { DEFAULT_TIMINGS } from "@/components/gesture-editor/model"
 import type {
   ActionInstance,
   ActionType,
+  BindingTarget,
   ControlId,
   DeviceLayout,
   DeviceModel,
@@ -203,14 +204,14 @@ export function LayoutEditor({
   const catalog = useMemo(() => catalogGroups(modules), [modules])
 
   /**
-   * Puts an action of `typeId` on `control`: the profile's action that is
+   * The action a dropped type stands for: the profile's action that is
    * exactly a new one of the type, else a new action with the type's
    * default settings, saved to the profile at once (a key can only run a
-   * saved action). The key itself is part of the draft as usual.
+   * saved action). What it is put on is part of the draft as usual.
    */
-  const placeType = async (typeId: string, control: ControlId) => {
+  const actionOfType = async (typeId: string): Promise<BindingTarget | null> => {
     const type = catalog.flatMap((g) => g.entries).find((e) => e.type.id === typeId)?.type
-    if (!type) return
+    if (!type) return null
     try {
       let action = existingDefault(actions, type)
       if (!action) {
@@ -219,10 +220,34 @@ export function LayoutEditor({
         setCreated((current) => [...current, made])
         refresh()
       }
-      commands.drop({ type: "target", target: { type: "action", action: action.id } }, control)
+      return { type: "action", action: action.id }
     } catch (e) {
       toast.error(`“${type.name}” could not be added`, { description: errorMessage(e) })
+      return null
     }
+  }
+
+  const placeType = async (typeId: string, control: ControlId) => {
+    const target = await actionOfType(typeId)
+    if (target) commands.drop({ type: "target", target }, control)
+  }
+
+  /**
+   * What a gesture's slot takes from the library: an action, a workflow
+   * or a page as it is, an action type as its action. Keys and "New
+   * folder" belong on keys.
+   */
+  const resolveSlotDrop = async (dragged: unknown): Promise<BindingTarget | null> => {
+    const source = dragged as DragSource | undefined
+    if (source?.type === "actionType") return actionOfType(source.actionType)
+    if (source?.type === "target") {
+      const opensItself = source.target.type === "openPage" && source.target.page === pageId
+      if (!opensItself) return source.target
+    }
+    toast.error("A gesture takes an action, a workflow or another page", {
+      description: "Drag one from the library onto the gesture.",
+    })
+    return null
   }
 
   useEffect(() => {
@@ -519,6 +544,7 @@ export function LayoutEditor({
             if (selection.focus) commands.openFolder(selection.focus)
           }}
           onClose={commands.clearSelection}
+          resolveDrop={resolveSlotDrop}
           appearance={
             selected.length > 0 ? (
               <AppearancePanel
