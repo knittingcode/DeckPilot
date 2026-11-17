@@ -11,7 +11,7 @@ use super::keys::SigningKey;
 use super::layout::{self, Workspace, read, read_json, read_optional, sig_path, write_json};
 use super::{PublishError, Result, fail, to_json};
 use crate::client::MAX_KEYSET_SIGNATURES;
-use crate::model::{Keyset, KeysetType, Role, SPEC_VERSION, Timestamp};
+use crate::model::{FirstParty, Keyset, KeysetType, Role, SPEC_VERSION, Timestamp};
 use crate::sig::{keys_comment, same_role, verify_exact, verify_role};
 use crate::{MemoryTrustStore, Policy, RegistryClient};
 
@@ -114,12 +114,15 @@ fn write_keyset(ws: &Workspace, keyset: &Keyset) -> Result<()> {
 }
 
 /// `keyset init`: `roots.json` and an unsigned `keys/1.json`.
+/// `first_party` (`--first-party`) authorizes the reserved `deckpilot`
+/// namespace ([`FirstParty`]); nothing else ever adds it.
 pub(crate) fn init(
     ws: &Workspace,
     root: &Role,
     index: Role,
     timestamp: Role,
     seq_floor: u64,
+    first_party: bool,
 ) -> Result<Keyset> {
     if ws.roots_path().exists() || ws.newest_keyset() > 0 {
         return fail("the registry already has roots or a key set; use `keyset rotate`");
@@ -133,6 +136,7 @@ pub(crate) fn init(
         timestamp,
         seq_floor,
         seq_floor_reset: false,
+        first_party: first_party.then(FirstParty::deckpilot),
     };
     check(&keyset)?;
     write_json(&ws.roots_path(), root)?;
@@ -149,6 +153,9 @@ pub(crate) struct Rotation {
     pub timestamp: Option<Role>,
     pub seq_floor: Option<u64>,
     pub seq_floor_reset: bool,
+    /// `Some(true)`: authorize `deckpilot` (`--first-party`); `Some(false)`:
+    /// withdraw the authorization (`--no-first-party`); `None`: keep it.
+    pub first_party: Option<bool>,
 }
 
 /// `keyset rotate`: an unsigned `keys/<n+1>.json`.
@@ -174,13 +181,21 @@ pub(crate) fn rotate(ws: &Workspace, rotation: Rotation) -> Result<Keyset> {
             None => published_seq(ws)?,
         },
         seq_floor_reset: rotation.seq_floor_reset,
+        first_party: match rotation.first_party {
+            Some(true) => Some(FirstParty::deckpilot()),
+            Some(false) => None,
+            None => previous.first_party.clone(),
+        },
     };
     let unchanged = Keyset {
         version: previous.version,
         ..keyset.clone()
     };
     if unchanged == previous {
-        return fail("nothing changes; give new keys, a new seq floor or --seq-floor-reset");
+        return fail(
+            "nothing changes; give new keys, a new seq floor, --seq-floor-reset, --first-party \
+             or --no-first-party",
+        );
     }
     if !keyset.seq_floor_reset && keyset.seq_floor < previous.seq_floor {
         return fail(format!(

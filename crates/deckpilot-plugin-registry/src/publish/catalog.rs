@@ -4,7 +4,9 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use deckpilot_plugin_manifest::{Manifest, PackageDigest, PluginId, is_publisher_id};
+use deckpilot_plugin_manifest::{
+    FIRST_PARTY_PUBLISHER, Manifest, PackageDigest, PluginId, RESERVED_PUBLISHERS, is_publisher_id,
+};
 use deckpilot_plugin_package::{
     ExpectedPackage, Limits, MANIFEST, read_archive, sha256, verify_package,
 };
@@ -154,10 +156,31 @@ pub(crate) fn revocations(ws: &Workspace) -> Result<Vec<Revocation>> {
 }
 
 /// `publisher`: adds or updates `registry/publishers/<login>.json`.
-pub(crate) fn publisher(ws: &Workspace, entry: &IndexPublisher) -> Result<()> {
+///
+/// A reserved namespace is refused (no client installs its plugins), except
+/// DeckPilot's own `deckpilot` with `first_party` (`--first-party`).
+pub(crate) fn publisher(ws: &Workspace, entry: &IndexPublisher, first_party: bool) -> Result<()> {
     if !is_publisher_id(&entry.namespace) {
         return fail(format!(
             "`{}` is not a publisher namespace",
+            entry.namespace
+        ));
+    }
+    let is_first_party = entry.namespace == FIRST_PARTY_PUBLISHER;
+    if first_party && !is_first_party {
+        return fail(format!(
+            "--first-party is for the namespace {FIRST_PARTY_PUBLISHER}, not {}",
+            entry.namespace
+        ));
+    }
+    if is_first_party && !first_party {
+        return fail(format!(
+            "the namespace {FIRST_PARTY_PUBLISHER} is DeckPilot's own: give --first-party"
+        ));
+    }
+    if !is_first_party && RESERVED_PUBLISHERS.contains(&entry.namespace.as_str()) {
+        return fail(format!(
+            "the namespace {} is reserved for DeckPilot; no client installs its plugins",
             entry.namespace
         ));
     }
@@ -200,12 +223,17 @@ pub(crate) struct NewVersion {
 /// records the version (sha256, size, manifest digest, permissions and
 /// engines taken from the package itself) and stores the release asset.
 /// Returns the new entry. Re-adding the identical package is a no-op.
+///
+/// A `deckpilot.*` package needs `first_party` (`--first-party`), a current
+/// key set that authorizes the `deckpilot` namespace and a verified
+/// `deckpilot` publisher: what a client requires before it installs one.
 #[allow(clippy::too_many_lines)] // verification, then one record
 pub(crate) fn add_version(
     ws: &Workspace,
     package: &[u8],
     info: Option<PluginInfo>,
     new: NewVersion,
+    first_party: bool,
 ) -> Result<(DetailVersion, bool)> {
     let limits = Limits::default();
     let files = read_archive(package, &limits)
@@ -217,6 +245,7 @@ pub(crate) fn add_version(
         .map_err(|e| PublishError(format!("manifest.json: {e}")))?;
     let raw: serde_json::Value = serde_json::from_slice(manifest_bytes)
         .map_err(|e| PublishError(format!("manifest.json: {e}")))?;
+    check_first_party(ws, &manifest.id, first_party)?;
     let permissions = match raw.get("permissions") {
         Some(serde_json::Value::Array(list)) => list.clone(),
         Some(_) => return fail("manifest.json: permissions is not an array"),
@@ -233,6 +262,7 @@ pub(crate) fn add_version(
         package: digest.clone(),
         manifest_sha256: sha256(manifest_bytes),
         permissions: Some(permissions.clone()),
+        first_party,
     };
     let verified = verify_package(package, &expected, &limits)
         .map_err(|e| PublishError(format!("the package is invalid: {e}")))?;
@@ -320,6 +350,40 @@ pub(crate) fn add_version(
     write_json(&ws.plugin_info_path(&id), &info)?;
     write_json(&ws.version_path(&id, &entry.version), &entry)?;
     Ok((entry, true))
+}
+
+/// `add-version`'s first-party rules ([`add_version`]).
+fn check_first_party(ws: &Workspace, id: &PluginId, first_party: bool) -> Result<()> {
+    let is_first_party = id.publisher() == FIRST_PARTY_PUBLISHER;
+    if first_party && !is_first_party {
+        return fail(format!(
+            "--first-party is for {FIRST_PARTY_PUBLISHER}.* packages, not {id}"
+        ));
+    }
+    if !is_first_party {
+        return Ok(());
+    }
+    if !first_party {
+        return fail(format!(
+            "{id} is a DeckPilot first-party plugin: add it with --first-party"
+        ));
+    }
+    if !keyset::current(ws)?.authorizes_first_party() {
+        return fail(format!(
+            "the current key set does not authorize the namespace {FIRST_PARTY_PUBLISHER} \
+             (`keyset rotate --first-party`, signed by the roots); clients would refuse {id}"
+        ));
+    }
+    if !publishers(ws)?
+        .iter()
+        .any(|p| p.namespace == FIRST_PARTY_PUBLISHER && p.verified)
+    {
+        return fail(format!(
+            "no verified publisher owns {FIRST_PARTY_PUBLISHER} (`publisher --namespace \
+             {FIRST_PARTY_PUBLISHER} --verified --first-party`); clients would refuse {id}"
+        ));
+    }
+    Ok(())
 }
 
 fn check_reason(reason: &str) -> Result<()> {

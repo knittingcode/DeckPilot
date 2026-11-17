@@ -131,11 +131,23 @@ impl Fixture {
     }
 
     fn add_version(&self, plugin: &str, version: &str, at: DateTime<Utc>) -> String {
+        self.try_add_version(plugin, version, at, &[])
+            .unwrap_or_else(|e| panic!("add-version {plugin} {version} failed: {e}"))
+    }
+
+    fn try_add_version(
+        &self,
+        plugin: &str,
+        version: &str,
+        at: DateTime<Utc>,
+        extra: &[&str],
+    ) -> Result<String, String> {
         let package = self.package_file(plugin, version);
         let detail = self.plugin_detail(plugin);
         let tag = format!("v{version}");
         let commit = "1".repeat(40);
-        self.run(&[
+        let now = time(at);
+        let mut args = vec![
             "add-version",
             "--package",
             &package,
@@ -150,8 +162,10 @@ impl Fixture {
             "--builder",
             "1.0.0",
             "--now",
-            &time(at),
-        ])
+            &now,
+        ];
+        args.extend_from_slice(extra);
+        self.try_run(&args)
     }
 
     fn build_index(&self, at: DateTime<Utc>) -> String {
@@ -994,4 +1008,150 @@ fn package_builds_from_a_plugin_directory() {
     .unwrap();
     let error = fx.fails(&args(&plugin).iter().map(String::as_str).collect::<Vec<_>>());
     assert!(error.contains("artifact-contract.md"), "{error}");
+}
+
+#[test]
+fn package_needs_the_first_party_option_for_deckpilot_plugins() {
+    let fx = Fixture::new();
+    let write = |id: &str| {
+        let reference = package(id, "1.0.0");
+        let files =
+            deckpilot_plugin_package::read_archive(&reference.bytes, &Limits::default()).unwrap();
+        let dir = fx.keys.path().join(id);
+        for (path, bytes) in &files {
+            let target = dir.join(path);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::write(target, bytes).unwrap();
+        }
+        (dir, reference)
+    };
+    let run = |dir: &Path, first_party: bool| {
+        let out = fx.keys.path().join("out.dpplugin");
+        let mut args = vec![
+            "package".to_owned(),
+            "--plugin-dir".to_owned(),
+            dir.display().to_string(),
+            "--module".to_owned(),
+            dir.join("plugin.wasm").display().to_string(),
+            "--out".to_owned(),
+            out.display().to_string(),
+        ];
+        if first_party {
+            args.push("--first-party".to_owned());
+        }
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        fx.try_run(&args).map(|_| std::fs::read(&out).unwrap())
+    };
+    let (first_party, reference) = write("deckpilot.alpha");
+    let error = run(&first_party, false).unwrap_err();
+    assert!(error.contains("reserved"), "{error}");
+    assert_eq!(run(&first_party, true).unwrap(), reference.bytes);
+    let (third_party, _) = write("acme.alpha");
+    let error = run(&third_party, true).unwrap_err();
+    assert!(
+        error.contains("--first-party is for deckpilot.*"),
+        "{error}"
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // one flow, step by step
+fn first_party_versions_need_the_option_the_key_set_and_a_verified_publisher() {
+    let fx = setup();
+    let at = t0() + days(1);
+
+    // The namespace: only DeckPilot's own, and only explicitly.
+    let publisher = |namespace: &str, verified: bool, first_party: bool| {
+        let mut args = vec![
+            "publisher",
+            "--namespace",
+            namespace,
+            "--github-id",
+            "4242",
+            "--login",
+            "knittingcode",
+        ];
+        if verified {
+            args.push("--verified");
+        }
+        if first_party {
+            args.push("--first-party");
+        }
+        fx.try_run(&args)
+    };
+    let error = publisher("deckpilot", true, false).unwrap_err();
+    assert!(error.contains("--first-party"), "{error}");
+    for reserved in ["knittingcode", "test"] {
+        let error = publisher(reserved, true, true).unwrap_err();
+        assert!(error.contains("--first-party is for"), "{error}");
+        let error = publisher(reserved, true, false).unwrap_err();
+        assert!(error.contains("reserved"), "{error}");
+    }
+    publisher("deckpilot", false, true).unwrap();
+
+    // A deckpilot.* version: the option, then the key set, then a
+    // verified publisher.
+    let error = fx
+        .try_add_version("deckpilot.alpha", "1.0.0", at, &[])
+        .unwrap_err();
+    assert!(error.contains("--first-party"), "{error}");
+    let error = fx
+        .try_add_version("acme.alpha", "3.0.0", at, &["--first-party"])
+        .unwrap_err();
+    assert!(error.contains("--first-party is for"), "{error}");
+    let error = fx
+        .try_add_version("deckpilot.alpha", "1.0.0", at, &["--first-party"])
+        .unwrap_err();
+    assert!(error.contains("does not authorize"), "{error}");
+
+    // The root role authorizes the namespace in a new key set.
+    let error = fx.fails(&["keyset", "rotate", "--first-party", "--no-first-party"]);
+    assert!(error.contains("either"), "{error}");
+    let report = fx.run(&["keyset", "rotate", "--first-party"]);
+    assert!(report.contains("deckpilot authorized"), "{report}");
+    let keyset: serde_json::Value = serde_json::from_slice(&fx.read_site("keys/2.json")).unwrap();
+    assert_eq!(
+        keyset["first_party"],
+        serde_json::json!({"namespaces": ["deckpilot"]})
+    );
+    let error = fx
+        .try_add_version("deckpilot.alpha", "1.0.0", at, &["--first-party"])
+        .unwrap_err();
+    assert!(error.contains("keyset sign"), "{error}");
+    fx.run(&["keyset", "sign", "--key", &fx.key("root1.key")]);
+    let error = fx
+        .try_add_version("deckpilot.alpha", "1.0.0", at, &["--first-party"])
+        .unwrap_err();
+    assert!(error.contains("no verified publisher"), "{error}");
+    publisher("deckpilot", true, true).unwrap();
+    fx.try_add_version("deckpilot.alpha", "1.0.0", at, &["--first-party"])
+        .unwrap();
+
+    // The client installs it with the first-party rules.
+    fx.publish("index.key", at);
+    let report = fx.verify(&["--require-packages"], at).unwrap();
+    assert!(report.contains("3 plugin(s)"), "{report}");
+    let mut client = fx.client();
+    client.refresh(&SiteSource::new(fx.site()), at).unwrap();
+    assert!(client.first_party_authorized());
+    for (plugin, version, first_party) in [
+        ("deckpilot.alpha", "1.0.0", true),
+        ("acme.alpha", "1.1.0", false),
+    ] {
+        let detail = fx.read_site(&client.detail_ref(&id(plugin)).unwrap().path.clone());
+        let target = client
+            .resolve_install(&id(plugin), &v(version), &detail, None, at)
+            .unwrap();
+        assert_eq!(target.expected.first_party, first_party, "{plugin}");
+    }
+
+    // A later key set without the authorization withdraws it: the site
+    // no longer passes as long as it offers the plugin.
+    let report = fx.run(&["keyset", "rotate", "--no-first-party"]);
+    assert!(!report.contains("authorized"), "{report}");
+    fx.run(&["keyset", "sign", "--key", &fx.key("root1.key")]);
+    let later = at + days(1);
+    fx.publish("index.key", later);
+    let error = fx.verify(&[], later).unwrap_err();
+    assert!(error.contains("does not authorize"), "{error}");
 }

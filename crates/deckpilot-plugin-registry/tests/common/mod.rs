@@ -175,6 +175,11 @@ pub fn package(plugin: &str, version: &str) -> BuiltPackage {
         .unwrap()
         .add("assets/keys/pr.png", noise(50, 3))
         .unwrap();
+    // A `deckpilot.*` package is built with the first-party rules (what
+    // `deckpilot-registry package --first-party` does).
+    if plugin.starts_with("deckpilot.") {
+        builder.first_party();
+    }
     builder.build().unwrap()
 }
 
@@ -284,6 +289,7 @@ impl Registry {
             timestamp: role(&[&self.timestamp_key], 1),
             seq_floor,
             seq_floor_reset: reset,
+            first_party: None,
         }
     }
 

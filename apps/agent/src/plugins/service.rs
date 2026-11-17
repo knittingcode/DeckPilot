@@ -173,6 +173,9 @@ fn install_error(error: &InstallError) -> IpcError {
         InstallError::UnknownPlugin(_) | InstallError::UnknownVersion { .. } => {
             self::error(ErrorCode::NotFound, reason::UNKNOWN_PLUGIN, message)
         }
+        InstallError::FirstPartyNotAuthorized { .. } => {
+            self::error(ErrorCode::Failed, reason::INVALID_PACKAGE, message)
+        }
         _ => self::error(ErrorCode::Failed, reason::REGISTRY, message),
     }
 }
@@ -931,6 +934,27 @@ impl PluginService {
         id: &PluginId,
         version: &Version,
     ) -> Result<deckpilot_plugin_registry::InstallTarget, IpcError> {
+        // The plugins the application bundles come only from the bundle,
+        // verified against the pins compiled into this agent: never from a
+        // registry, even one authorized to serve `deckpilot.*`.
+        if deckpilot_plugin_bundled::is_bundled_id(id, &self.bundle.pins) {
+            return Err(error(
+                ErrorCode::InvalidRequest,
+                reason::INVALID_PACKAGE,
+                format!(
+                    "{id} is bundled with DeckPilot and comes only from the application \
+                     bundle; a registry never serves it"
+                ),
+            ));
+        }
+        // Ids of pre-schema-3 action types: never assigned to any plugin.
+        if deckpilot_core::RESERVED_MODULE_IDS.contains(&id.as_str()) {
+            return Err(error(
+                ErrorCode::InvalidRequest,
+                reason::INVALID_PACKAGE,
+                format!("{id} is reserved and never assigned to a plugin"),
+            ));
+        }
         let registry = self.registry()?;
         // Revocations first: a revoked plugin may no longer be listed at
         // all, and must be refused as revoked, not as unknown.
@@ -1490,7 +1514,10 @@ impl PluginService {
                     }));
                 }
                 self.refresh()?;
-                let expected = self.pins(&manifest.id, &manifest.version)?.expected;
+                let mut expected = self.pins(&manifest.id, &manifest.version)?.expected;
+                // A file is never first-party (refused above); the
+                // first-party rules apply only to a registry download.
+                expected.first_party = false;
                 (manifest.id, bytes, expected)
             }
         };

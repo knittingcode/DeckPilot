@@ -306,6 +306,43 @@ fn details_refused_by_the_schema_are_refused() {
 }
 
 #[test]
+fn first_party_authorizations_refused_by_the_schema_are_refused() {
+    let registry = Registry::new();
+    let mut doc = registry.keyset_doc(&registry.root_role(), 0, false);
+    doc.first_party = Some(FirstParty::deckpilot());
+    let bytes = serde_json::to_vec_pretty(&doc).unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains(r#""namespaces": ["#));
+    both_refuse(
+        "keys/2.json (first_party)",
+        &bytes,
+        schemas::KEYSET,
+        keyset_ok,
+        &[
+            ("/first_party", Some(json!(true))),
+            ("/first_party", Some(json!({}))),
+            ("/first_party/namespaces", Some(json!([]))),
+            ("/first_party/namespaces", Some(json!(["knittingcode"]))),
+            ("/first_party/namespaces", Some(json!(["test"]))),
+            ("/first_party/namespaces", Some(json!(["acme"]))),
+            (
+                "/first_party/namespaces",
+                Some(json!(["deckpilot", "deckpilot"])),
+            ),
+            (
+                "/first_party/namespaces",
+                Some(json!(["deckpilot", "knittingcode"])),
+            ),
+            ("/first_party/extra", Some(json!(1))),
+        ],
+    );
+    // Absent is valid in both, and is not serialized.
+    doc.first_party = None;
+    let bytes = serde_json::to_vec_pretty(&doc).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains("first_party"));
+    assert!(schema_errors(&validator(schemas::KEYSET), &bytes).is_empty() && keyset_ok(&bytes));
+}
+
+#[test]
 fn the_bundled_schemas_are_the_191_ones() {
     // Byte-identical copies; the README records the source commit. Here:
     // they parse, are draft 2020-12 and carry the registry `$id`s.

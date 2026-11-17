@@ -568,14 +568,25 @@ drift; what must be checked is that the registry's build of the pinned
 commit and the bundle's build give the same `plugin.wasm` (both are
 reproducible on one platform with the pinned toolchain).
 
-Not possible yet, and not changed here:
+Not possible yet:
 
-- **B6.** The registry tooling refuses the reserved publisher `deckpilot`
-  in submissions (`deckpilot-plugins` #6), and the agent installs a
-  `deckpilot.*` id only from the application bundle
-  (`FIRST_PARTY_PUBLISHER`, `crates/deckpilot-plugin-store/src/store.rs`).
-  Both are deliberate (§4.4): they stay until the registry can prove the
-  `deckpilot` publisher, which needs the owner's registry keys (B1).
+- **B6.** Before B6 the agent refused a `deckpilot.*` package from any
+  registry: not in the store (`InstallSource::allows`,
+  `crates/deckpilot-plugin-store/src/store.rs`, accepts a registry
+  source for any id) but in `verify_package`, whose manifest check
+  (`Manifest::validate`) refuses the reserved publisher; only bundled
+  files used `Manifest::validate_first_party`. Now the agent supports it:
+  `verify_package` applies the first-party rules when the registry client
+  marks the pins (`ExpectedPackage::first_party`), which it does only when
+  the registry's root-signed key set authorizes the `deckpilot` namespace
+  and its index lists `deckpilot` as a verified publisher; the bundled
+  ids (`deckpilot.github`, `deckpilot.gitlab`, `deckpilot.jira`,
+  `deckpilot.notifications`) are never taken from a registry
+  ([agent-integration.md](agent-integration.md), `PUBLISHING.md`). What
+  remains is on the registry side: the first production key set with the
+  authorization (B1's ceremony), the verified `deckpilot` publisher record,
+  and the submission checks of `deckpilot-plugins` (#6), which still
+  refuse the publisher.
 - **B1.** No production registry keys exist (U-10, U-12). Packages can be
   built and verified with disposable test keys in tests and CI only.
 

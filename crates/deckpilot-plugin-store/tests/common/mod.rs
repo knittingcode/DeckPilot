@@ -106,6 +106,7 @@ pub fn package_edited(
         package: built.integrity.package.clone(),
         manifest_sha256: built.integrity.manifest_sha256,
         permissions: Some(permissions.to_vec()),
+        first_party: false,
     };
     verify_package(
         &built.bytes,
@@ -158,6 +159,7 @@ pub fn built(id: &str, version: &str, permissions: &[Value]) -> (Vec<u8>, Expect
         package: built.integrity.package.clone(),
         manifest_sha256: built.integrity.manifest_sha256,
         permissions: Some(permissions.to_vec()),
+        first_party: false,
     };
     (built.bytes, expected)
 }

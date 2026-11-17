@@ -82,6 +82,7 @@ fn expected_for(built: &BuiltPackage) -> ExpectedPackage {
         package: built.integrity.package.clone(),
         manifest_sha256: built.integrity.manifest_sha256,
         permissions: Some(raw["permissions"].as_array().unwrap().clone()),
+        first_party: false,
     }
 }
 
@@ -748,6 +749,7 @@ fn contents_must_follow_the_manifest() {
         },
         manifest_sha256: sha256(&manifest_json("acme.github-prs", "1.0.0")),
         permissions: None,
+        first_party: false,
     };
     assert!(matches!(
         verify_package(&bytes, &expected, &Limits::default()),
@@ -918,6 +920,7 @@ fn pins_for(bytes: &[u8], list: &[(&str, Vec<u8>)]) -> ExpectedPackage {
         },
         manifest_sha256: sha256(manifest),
         permissions: None,
+        first_party: false,
     }
 }
 
@@ -1042,9 +1045,11 @@ fn bundled_files_verify_against_their_pins_with_the_first_party_rules() {
     for (path, bytes) in &files {
         builder.add(path, bytes.clone()).unwrap();
     }
-    // The builder applies the third-party rules, so it refuses the id;
-    // the archive is the same bytes either way.
+    // By default the builder applies the third-party rules, so it refuses
+    // the id; with the first-party rules it writes the same archive.
     assert!(builder.build().is_err());
+    let built = builder.first_party().build().unwrap();
+    assert_eq!(built.integrity.package, verified.integrity().package);
     assert_eq!(verified.integrity().files.len(), files.len());
 
     // Installed and checked again like any package.
@@ -1111,5 +1116,84 @@ fn bundled_files_must_be_the_pinned_first_party_plugin() {
     assert!(
         matches!(result, Err(PackageError::WrongPlugin { .. })),
         "{result:?}"
+    );
+}
+
+// ---------------------------------------------- first-party registry packages
+
+fn has_issue(
+    result: &Result<impl std::fmt::Debug, PackageError>,
+    code: deckpilot_plugin_manifest::IssueCode,
+) -> bool {
+    matches!(
+        result,
+        Err(PackageError::Manifest(deckpilot_plugin_manifest::ManifestError::Invalid(errors)))
+            if errors.has("publisher.id", code)
+    )
+}
+
+fn is_reserved(result: &Result<impl std::fmt::Debug, PackageError>) -> bool {
+    has_issue(result, deckpilot_plugin_manifest::IssueCode::Reserved)
+}
+
+#[test]
+fn a_first_party_package_verifies_only_with_the_registry_flag() {
+    // The builder needs the explicit first-party option.
+    let list = files("deckpilot.github-prs", "1.0.0");
+    let refused = build_files(&list);
+    assert!(is_reserved(&refused), "{refused:?}");
+    let mut builder = PackageBuilder::new();
+    for (path, bytes) in &list {
+        builder.add(path, bytes.clone()).unwrap();
+    }
+    let built = builder.first_party().build().unwrap();
+
+    // Without the flag (a file, a development sideload, any pins the
+    // registry client did not mark): refused as reserved.
+    let expected = expected_for(&built);
+    assert!(!expected.first_party);
+    let refused = verify_package(&built.bytes, &expected, &Limits::default());
+    assert!(is_reserved(&refused), "{refused:?}");
+
+    // With it: verified like any package.
+    let flagged = ExpectedPackage {
+        first_party: true,
+        ..expected
+    };
+    let verified = verify_package(&built.bytes, &flagged, &Limits::default()).unwrap();
+    assert_eq!(verified.manifest().id.as_str(), "deckpilot.github-prs");
+}
+
+#[test]
+fn the_first_party_flag_never_admits_another_publisher() {
+    // Every other reserved publisher stays refused, flag or not.
+    for publisher in ["knittingcode", "test", "github", "core"] {
+        let id = format!("{publisher}.github-prs");
+        let list = files(&id, "1.0.0");
+        let bytes = raw_package(&list);
+        for first_party in [false, true] {
+            let expected = ExpectedPackage {
+                first_party,
+                ..pins_for(&bytes, &list)
+            };
+            let refused = verify_package(&bytes, &expected, &Limits::default());
+            assert!(is_reserved(&refused), "{id} ({first_party}): {refused:?}");
+        }
+        let mut builder = PackageBuilder::new();
+        for (path, bytes) in &list {
+            builder.add(path, bytes.clone()).unwrap();
+        }
+        assert!(is_reserved(&builder.first_party().build()), "{id}");
+    }
+    // A third-party package marked first-party is not first-party either.
+    let built = build("acme.github-prs", "1.0.0");
+    let expected = ExpectedPackage {
+        first_party: true,
+        ..expected_for(&built)
+    };
+    let refused = verify_package(&built.bytes, &expected, &Limits::default());
+    assert!(
+        has_issue(&refused, deckpilot_plugin_manifest::IssueCode::Mismatch),
+        "{refused:?}"
     );
 }

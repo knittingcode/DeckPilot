@@ -16,7 +16,8 @@ pub const MAX_PUBLISHER_LEN: usize = 24;
 pub const MAX_PLUGIN_NAME_LEN: usize = 32;
 
 /// DeckPilot's own publisher id: reserved for every plugin but the
-/// first-party ones the application bundle ships
+/// first-party ones, which come from the application bundle or from a
+/// registry whose root-signed key set authorizes this namespace
 /// ([`Manifest::validate_first_party`](crate::Manifest::validate_first_party)).
 pub const FIRST_PARTY_PUBLISHER: &str = "deckpilot";
 

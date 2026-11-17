@@ -1867,3 +1867,256 @@ fn a_refused_answer_is_an_error_not_offline() {
         Ok(Refresh::Updated { seq: 2 })
     );
 }
+
+// ------------------------------------------------- first-party namespace
+
+const FIRST_PARTY: &str = "deckpilot.clock";
+
+/// A key set authorizing (or not) `deckpilot`, signed by the first root.
+fn rotate_first_party(registry: &Registry, authorized: bool) {
+    let mut doc = registry.keyset_doc(&registry.root_role(), 0, false);
+    doc.first_party = authorized.then(FirstParty::deckpilot);
+    registry.publish_keyset(&doc, &[&registry.roots[0]]);
+}
+
+/// Publishes the first-party and a third-party plugin, with the
+/// `deckpilot` publisher record changed by `publisher` (the index key's
+/// say alone).
+fn publish_with(
+    registry: &mut Registry,
+    now: chrono::DateTime<chrono::Utc>,
+    publisher: impl Fn(&mut Vec<IndexPublisher>),
+) {
+    let plugins = [
+        plugin(FIRST_PARTY, &["1.0.0"]),
+        plugin("acme.clock", &["1.0.0"]),
+    ];
+    let seq = registry.seq + 1;
+    let mut index = registry.index_doc(seq, now, &plugins, &[]);
+    publisher(&mut index.publishers);
+    registry.publish_index(&index, &plugins, now, &registry.index_key);
+    registry.seq = seq;
+    registry.sign_timestamp(now);
+}
+
+fn resolve(
+    c: &Client,
+    registry: &Registry,
+    plugin_id: &str,
+) -> Result<InstallTarget, InstallError> {
+    let detail = detail_of(registry, c, plugin_id);
+    c.resolve_install(&id(plugin_id), &v("1.0.0"), &detail, None, t0())
+}
+
+fn not_authorized(result: &Result<InstallTarget, InstallError>, why: &str) -> bool {
+    matches!(result, Err(InstallError::FirstPartyNotAuthorized { id, reason })
+        if id.as_str() == FIRST_PARTY && reason.contains(why))
+}
+
+#[test]
+fn key_sets_without_the_first_party_field_verify_as_before() {
+    let registry = setup();
+    // keys/1.json has no `first_party` at all (the format of every key set
+    // signed so far), and the client accepts it unchanged.
+    let bytes = registry.site.get("keys/1.json");
+    assert!(!String::from_utf8_lossy(&bytes).contains("first_party"));
+    let mut c = client(&registry);
+    c.refresh(&registry.site, t0()).unwrap();
+    assert_eq!(c.keys_version(), 1);
+    assert!(!c.first_party_authorized());
+    assert_eq!(c.state().keyset.as_ref().unwrap().first_party, None);
+    // An old stored state (no field) reads back too.
+    let c = restart(&registry, &c);
+    assert!(!c.first_party_authorized());
+}
+
+#[test]
+fn a_first_party_plugin_needs_the_root_authorization_and_a_verified_publisher() {
+    let mut registry = Registry::new();
+    publish_with(&mut registry, t0(), |_| {});
+    let mut c = client(&registry);
+    c.refresh(&registry.site, t0()).unwrap();
+
+    // Key set 1 does not authorize it: refused, whatever the index says.
+    assert!(not_authorized(
+        &resolve(&c, &registry, FIRST_PARTY),
+        "key set"
+    ));
+    let third_party = resolve(&c, &registry, "acme.clock").unwrap();
+    assert!(!third_party.expected.first_party);
+
+    // Key set 2 does: installed with the first-party rules.
+    rotate_first_party(&registry, true);
+    publish_with(&mut registry, t0(), |_| {});
+    c.refresh(&registry.site, t0()).unwrap();
+    assert!(c.first_party_authorized());
+    let target = resolve(&c, &registry, FIRST_PARTY).unwrap();
+    assert!(target.expected.first_party);
+    assert!(
+        !resolve(&c, &registry, "acme.clock")
+            .unwrap()
+            .expected
+            .first_party
+    );
+    let package = plugin(FIRST_PARTY, &["1.0.0"]).versions[0]
+        .built
+        .bytes
+        .clone();
+    let limits = deckpilot_plugin_package::Limits::default();
+    deckpilot_plugin_package::verify_package(&package, &target.expected, &limits).unwrap();
+    // The same pins without the mark: the reader refuses the reserved
+    // publisher.
+    let unmarked = deckpilot_plugin_package::ExpectedPackage {
+        first_party: false,
+        ..target.expected.clone()
+    };
+    assert!(matches!(
+        deckpilot_plugin_package::verify_package(&package, &unmarked, &limits),
+        Err(deckpilot_plugin_package::PackageError::Manifest(_))
+    ));
+
+    // The index key alone: an unverified or missing `deckpilot` publisher
+    // is refused even under an authorizing key set.
+    publish_with(&mut registry, t0(), |publishers| {
+        for p in publishers.iter_mut() {
+            p.verified = p.namespace != "deckpilot";
+        }
+    });
+    c.refresh(&registry.site, t0()).unwrap();
+    assert!(not_authorized(
+        &resolve(&c, &registry, FIRST_PARTY),
+        "verified publisher"
+    ));
+    publish_with(&mut registry, t0(), |publishers| {
+        publishers.retain(|p| p.namespace != "deckpilot");
+    });
+    c.refresh(&registry.site, t0()).unwrap();
+    assert!(not_authorized(
+        &resolve(&c, &registry, FIRST_PARTY),
+        "verified publisher"
+    ));
+    resolve(&c, &registry, "acme.clock").unwrap();
+
+    // Key set 3 drops the authorization: new installs and updates are
+    // refused again; an installed copy is left to the revocations.
+    publish_with(&mut registry, t0(), |_| {});
+    c.refresh(&registry.site, t0()).unwrap();
+    resolve(&c, &registry, FIRST_PARTY).unwrap();
+    rotate_first_party(&registry, false);
+    publish_with(&mut registry, t0(), |_| {});
+    c.refresh(&registry.site, t0()).unwrap();
+    assert_eq!(c.keys_version(), 3);
+    assert!(!c.first_party_authorized());
+    assert!(not_authorized(
+        &resolve(&c, &registry, FIRST_PARTY),
+        "key set"
+    ));
+    assert_eq!(
+        c.installed_verdict(&id(FIRST_PARTY), &v("1.0.0")),
+        InstalledVerdict::Run
+    );
+    // ...and survives a restart.
+    let c = restart(&registry, &c);
+    assert!(not_authorized(
+        &resolve(&c, &registry, FIRST_PARTY),
+        "key set"
+    ));
+}
+
+#[test]
+fn other_reserved_publishers_are_never_marked_first_party() {
+    let mut registry = Registry::new();
+    rotate_first_party(&registry, true);
+    // A registry listing a `knittingcode.*` plugin (its pins are another
+    // plugin's: only the mark matters here; the package reader refuses the
+    // reserved publisher whatever the mark, see the package tests).
+    let mut spec = plugin("acme.clock", &["1.0.0"]);
+    spec.id = "knittingcode.clock".into();
+    registry.publish(t0(), &[spec], &[]);
+    let mut c = client(&registry);
+    c.refresh(&registry.site, t0()).unwrap();
+    assert!(c.first_party_authorized());
+    let target = resolve(&c, &registry, "knittingcode.clock").unwrap();
+    assert!(!target.expected.first_party);
+}
+
+#[test]
+fn the_first_party_field_is_covered_by_the_root_signature() {
+    let mut registry = setup();
+    let mut c = client(&registry);
+    c.refresh(&registry.site, t0()).unwrap();
+    let comment = keys_comment(2);
+    let mut without = registry.keyset_doc(&registry.root_role(), 0, false);
+    without.version = 2;
+    let mut with = without.clone();
+    with.first_party = Some(FirstParty::deckpilot());
+    let signed_without = serde_json::to_vec_pretty(&without).unwrap();
+    let signed_with = serde_json::to_vec_pretty(&with).unwrap();
+
+    // The authorization added to, or removed from, a signed key set.
+    for (signed, served) in [
+        (&signed_without, &signed_with),
+        (&signed_with, &signed_without),
+    ] {
+        let signatures = vec![registry.roots[0].sign(signed, &comment)];
+        registry.site.put("keys/2.json", served.clone());
+        registry.site.put(
+            "keys/2.json.minisig",
+            serde_json::to_vec(&signatures).unwrap(),
+        );
+        assert!(
+            matches!(
+                c.refresh(&registry.site, t0()),
+                Err(RegistryError::KeysetSignature { version: 2, .. })
+            ),
+            "{}",
+            String::from_utf8_lossy(served)
+        );
+        assert_eq!(c.keys_version(), 1);
+        assert!(!c.first_party_authorized());
+    }
+    // Signed as served: accepted.
+    let signatures = vec![registry.roots[1].sign(&signed_with, &comment)];
+    registry.site.put("keys/2.json", signed_with.clone());
+    registry.site.put(
+        "keys/2.json.minisig",
+        serde_json::to_vec(&signatures).unwrap(),
+    );
+    registry.keys_version.set(2);
+    registry.publish(t0(), &[plugin("acme.clock", &["1.0.0"])], &[]);
+    c.refresh(&registry.site, t0()).unwrap();
+    assert!(c.first_party_authorized());
+}
+
+#[test]
+fn a_key_set_authorizing_another_namespace_is_invalid() {
+    let registry = setup();
+    let mut c = client(&registry);
+    c.refresh(&registry.site, t0()).unwrap();
+    for namespaces in [
+        vec!["knittingcode"],
+        vec!["test"],
+        vec!["acme"],
+        vec!["deckpilot", "knittingcode"],
+        vec!["deckpilot", "deckpilot"],
+        vec![],
+    ] {
+        let mut doc = registry.keyset_doc(&registry.root_role(), 0, false);
+        doc.first_party = Some(FirstParty {
+            namespaces: namespaces.iter().map(|n| (*n).to_owned()).collect(),
+        });
+        assert!(doc.validate().is_err(), "{namespaces:?}");
+        // Properly signed by the roots, still refused.
+        registry.publish_keyset(&doc, &[&registry.roots[0]]);
+        registry.keys_version.set(1);
+        assert!(
+            matches!(
+                c.refresh(&registry.site, t0()),
+                Err(RegistryError::Malformed { .. })
+            ),
+            "{namespaces:?}"
+        );
+        assert_eq!(c.keys_version(), 1);
+        assert!(!c.first_party_authorized());
+    }
+}

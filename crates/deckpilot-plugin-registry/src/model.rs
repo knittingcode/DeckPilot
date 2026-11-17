@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use deckpilot_plugin_manifest::{
-    Engines, MAX_PACKAGE_BYTES, Permission, Platform, PluginId, Sha256Digest, check_relative_path,
-    is_publisher_id,
+    Engines, FIRST_PARTY_PUBLISHER, MAX_PACKAGE_BYTES, Permission, Platform, PluginId,
+    Sha256Digest, check_relative_path, is_publisher_id,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -129,9 +129,79 @@ pub struct Keyset {
     /// revocations; see the crate documentation).
     #[serde(default, skip_serializing_if = "is_false")]
     pub seq_floor_reset: bool,
+    /// Reserved first-party namespaces this registry may serve, authorized
+    /// by the offline root role (it signs the key set; the online index key
+    /// cannot add this). Absent: none, and a `deckpilot.*` plugin listed by
+    /// the index is refused for install and update. See [`FirstParty`].
+    ///
+    /// Compatibility: optional and omitted when absent, so key sets
+    /// without it verify byte for byte as before. A client that predates
+    /// the field refuses a key set carrying it as unknown
+    /// (`deny_unknown_fields`, `additionalProperties: false`), and with it
+    /// every later document. No released DeckPilot reads the registry yet;
+    /// putting the field in the first production key set
+    /// (`PUBLISHING.md`, key ceremony) keeps it that way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_party: Option<FirstParty>,
+}
+
+/// `keys/<n>.json` `first_party`: the reserved publisher namespaces whose
+/// plugins this registry may serve (architecture section 7, rule 1: they
+/// are otherwise refused from every registry).
+///
+/// Only [`FIRST_PARTY_PUBLISHER`] (`deckpilot`) can ever be authorized: a
+/// key set naming any other namespace, reserved or not, is invalid. The
+/// authorization is necessary, not sufficient: the verified index must
+/// also list `deckpilot` as a verified publisher
+/// ([`RegistryClient::resolve_install`](crate::RegistryClient::resolve_install)).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FirstParty {
+    pub namespaces: Vec<String>,
+}
+
+impl FirstParty {
+    /// The only authorization there is: `{"namespaces": ["deckpilot"]}`.
+    pub fn deckpilot() -> Self {
+        Self {
+            namespaces: vec![FIRST_PARTY_PUBLISHER.to_owned()],
+        }
+    }
+
+    /// Exactly one entry, `deckpilot`.
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(other) = self
+            .namespaces
+            .iter()
+            .find(|n| n.as_str() != FIRST_PARTY_PUBLISHER)
+        {
+            return Err(format!(
+                "first_party.namespaces names `{other}`; only `{FIRST_PARTY_PUBLISHER}` may be \
+                 authorized"
+            ));
+        }
+        if self.namespaces.len() != 1 {
+            return Err(format!(
+                "first_party.namespaces must be exactly [\"{FIRST_PARTY_PUBLISHER}\"]"
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn authorizes(&self, namespace: &str) -> bool {
+        namespace == FIRST_PARTY_PUBLISHER && self.namespaces.iter().any(|n| n == namespace)
+    }
 }
 
 impl Keyset {
+    /// Whether this key set authorizes the reserved first-party namespace
+    /// `deckpilot` ([`FirstParty`]).
+    pub fn authorizes_first_party(&self) -> bool {
+        self.first_party
+            .as_ref()
+            .is_some_and(|f| f.authorizes(FIRST_PARTY_PUBLISHER))
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.spec_version != SPEC_VERSION {
             return Err(format!("spec_version {} is not 1", self.spec_version));
@@ -154,6 +224,9 @@ impl Keyset {
                     return Err(format!("{name} role shares a key with another role"));
                 }
             }
+        }
+        if let Some(first_party) = &self.first_party {
+            first_party.validate()?;
         }
         Ok(())
     }

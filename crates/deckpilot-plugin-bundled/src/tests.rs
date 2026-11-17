@@ -296,3 +296,43 @@ fn resources_are_found_next_to_an_installed_agent() {
         );
     }
 }
+
+#[test]
+fn the_bundled_ids_are_those_of_the_release_bundle() {
+    // plugins/first-party/bundled.json lists the plugin directories; each
+    // manifest names its id.
+    let first_party = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/first-party");
+    let list: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(first_party.join("bundled.json")).unwrap()).unwrap();
+    let mut ids: Vec<String> = list["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            let dir = first_party.join(entry["path"].as_str().unwrap());
+            let manifest: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(dir.join(MANIFEST)).unwrap()).unwrap();
+            manifest["id"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    ids.sort();
+    let mut listed: Vec<String> = BUNDLED_PLUGIN_IDS.iter().map(|s| (*s).to_owned()).collect();
+    listed.sort();
+    assert_eq!(ids, listed, "update BUNDLED_PLUGIN_IDS");
+
+    // Pinned plugins count too (a test or future bundle), at any version.
+    let dir = tempfile::tempdir().unwrap();
+    let (_, pins) = bundle(dir.path());
+    assert!(is_bundled_id(&id(), &pins));
+    assert!(!is_bundled_id(&id(), &Pins::empty()));
+    for listed in BUNDLED_PLUGIN_IDS {
+        assert!(is_bundled_id(
+            &PluginId::parse(listed).unwrap(),
+            &Pins::empty()
+        ));
+    }
+    assert!(!is_bundled_id(
+        &PluginId::parse("deckpilot.weather").unwrap(),
+        &Pins::empty()
+    ));
+}

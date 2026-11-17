@@ -56,12 +56,12 @@ Secret keys never belong in this directory.
 | Command | Does | Needs |
 | --- | --- | --- |
 | `keys generate --role root\|index\|timestamp --out FILE` | minisign key pair: `FILE` (mode 0600, scrypt-encrypted unless `--no-password`) and `FILE.pub` | password |
-| `keyset init --root PUB… [--root-threshold N] --index PUB --timestamp PUB [--seq-floor N]` | `roots.json` and an unsigned `keys/1.json` | public keys only |
-| `keyset rotate [--root PUB…] [--root-threshold N] [--index PUB] [--timestamp PUB] [--seq-floor N] [--seq-floor-reset]` | unsigned `keys/<n+1>.json`; unchanged roles are carried over; `seq_floor` defaults to the live seq | public keys only |
+| `keyset init --root PUB… [--root-threshold N] --index PUB --timestamp PUB [--seq-floor N] [--first-party]` | `roots.json` and an unsigned `keys/1.json`; `--first-party` adds `"first_party": {"namespaces": ["deckpilot"]}` ([first-party plugins](#first-party-plugins-deckpilot)) | public keys only |
+| `keyset rotate [--root PUB…] [--root-threshold N] [--index PUB] [--timestamp PUB] [--seq-floor N] [--seq-floor-reset] [--first-party \| --no-first-party]` | unsigned `keys/<n+1>.json`; unchanged roles and the first-party authorization are carried over (`--first-party` adds it, `--no-first-party` withdraws it); `seq_floor` defaults to the live seq | public keys only |
 | `keyset sign --key FILE [--version N]` | adds one root signature; prints how many of the previous and new root thresholds are met | a root key |
-| `package --plugin-dir DIR --module FILE.wasm --out FILE.dpplugin` | builds a package: `manifest.json`, `LICENSE` and the files the manifest names from `DIR`, the module as `plugin.wasm` (`docs/marketplace/artifact-contract.md`), deterministic and checked by every reader rule | — |
-| `publisher --namespace NS --github-id N --login L [--display-name] [--verified]` | `registry/publishers/<login>.json` | — |
-| `add-version --package F.dpplugin [--plugin-detail plugin.json] --source-repository O/N --tag T --commit SHA --builder V [--source-path P] [--attestation URL]` | verifies the package with `deckpilot-plugin-package` (`read_archive`, then `verify_package` against its own digests), takes sha256, size, manifest digest, permissions, engines and platforms from it, appends the version, stores the release asset | — |
+| `package --plugin-dir DIR --module FILE.wasm --out FILE.dpplugin [--first-party]` | builds a package: `manifest.json`, `LICENSE` and the files the manifest names from `DIR`, the module as `plugin.wasm` (`docs/marketplace/artifact-contract.md`), deterministic and checked by every reader rule; a `deckpilot.*` plugin needs `--first-party` (the first-party manifest rules) | — |
+| `publisher --namespace NS --github-id N --login L [--display-name] [--verified] [--first-party]` | `registry/publishers/<login>.json`; the namespace `deckpilot` needs `--first-party`, every other reserved namespace is refused | — |
+| `add-version --package F.dpplugin [--plugin-detail plugin.json] --source-repository O/N --tag T --commit SHA --builder V [--source-path P] [--attestation URL] [--first-party]` | verifies the package with `deckpilot-plugin-package` (`read_archive`, then `verify_package` against its own digests), takes sha256, size, manifest digest, permissions, engines and platforms from it, appends the version, stores the release asset; a `deckpilot.*` package needs `--first-party` | — |
 | `yank --id ID --version V --reason R [--advisory URL]` | marks the version `yanked` in its detail and adds a `yank` revocation (the Settings notice) | — |
 | `revoke --id ID --versions V,…\|* --action disable\|yank --reason R [--advisory URL]` | adds a revocation, or updates reason, advisory and date of an identical one; never removes or narrows | — |
 | `lift-revocation --id ID [--versions …]` | removes revocations; refused unless a root-signed key set with `seq_floor_reset` has no index yet | — |
@@ -85,7 +85,12 @@ a time.
 - **Versions**: an invalid package; a version not strictly greater than
   the latest recorded (append-only, section 11.3); another package for a
   recorded version (re-adding the identical package is a no-op); an
-  unknown publisher namespace; a detail over 256 KiB.
+  unknown publisher namespace; a detail over 256 KiB; a `deckpilot.*`
+  package without `--first-party`, or with it while the current key set
+  does not authorize `deckpilot` or no verified publisher owns it;
+  `--first-party` on any other package.
+- **Publishers**: a reserved namespace (`RESERVED_PUBLISHERS`), except
+  `deckpilot` with `--first-party`.
 - **Index**: an earlier index still unsigned; revocations of the live
   index that `registry/revocations.json` no longer covers at least as
   strongly (the client's `RevocationDropped` rule), except right after a
@@ -107,7 +112,10 @@ detail with `verify_detail`, runs `resolve_install` for every offered
 version (and checks withdrawn ones are refused), verifies each release
 asset found under `releases/` with `verify_package` against the pins
 (`--require-packages`: every one must be there), and checks that every
-listed revocation is enforced by `installed_verdict`.
+listed revocation is enforced by `installed_verdict`. A `deckpilot.*`
+plugin offered while the key set does not authorize `deckpilot`, or
+without a verified `deckpilot` publisher, fails it: `resolve_install`
+refuses it as every client would.
 
 Without `--state` it is a fresh client (trust on first use). With `--state
 DIR` it uses a `FileTrustStore`: run it once against the live site to get
@@ -115,6 +123,46 @@ the state of an existing client, then against the new site with that
 state, and it proves that existing clients accept the update: no rollback,
 no equivocation, no dropped revocation, a continuous key set chain. A
 refused site never changes the stored state.
+
+## First-party plugins (`deckpilot.*`)
+
+The publisher `deckpilot` is reserved: a manifest that names it is refused
+everywhere (`Manifest::validate`) except for the plugins the application
+bundles, verified against digests compiled into the agent. A registry may
+serve `deckpilot.*` only when **all** of these hold, checked by the client
+(`RegistryClient::resolve_install`) before any download:
+
+1. The current key set, signed by the offline root role, carries
+   `"first_party": {"namespaces": ["deckpilot"]}` (`keyset init
+   --first-party` or `keyset rotate --first-party`). The field is covered
+   by the root signatures like the rest of `keys/<n>.json`; a key set naming
+   any other namespace there is invalid. Absent means no authorization; key
+   sets without it are unchanged.
+2. The verified index lists the publisher `deckpilot` with `verified: true`
+   (`publisher --namespace deckpilot --first-party --verified`).
+3. The package then passes `verify_package` with the first-party manifest
+   rules (`ExpectedPackage::first_party`, set only by the client for such a
+   plugin); every other reserved publisher stays refused.
+
+The index key alone therefore cannot open the namespace: it needs a root
+ceremony. The agent never takes the plugins it bundles
+(`deckpilot.github`, `deckpilot.gitlab`, `deckpilot.jira`,
+`deckpilot.notifications`, `deckpilot_plugin_bundled::BUNDLED_PLUGIN_IDS`)
+from any registry, so their pinned-digest trust stays their only source;
+listing them is pointless and their installs are refused.
+
+**Withdrawing it.** `keyset rotate --no-first-party`, signed by the roots,
+refuses new installs and updates of `deckpilot.*` from then on. Installed
+copies keep running, as with a yank; stopping them takes a `disable`
+revocation (`revoke --action disable`). As long as the index still offers
+a `deckpilot.*` version, `verify-site` fails: revoke (or yank) them in the
+same publish.
+
+**Compatibility.** A client that predates the field refuses a key set
+carrying it (unknown field) and with it the rest of the chain. No released
+DeckPilot reads the registry yet, so the field belongs in the **first
+production key set** (`keyset init --first-party` in the ceremony below),
+never added after clients exist.
 
 ## Secrets
 
@@ -135,7 +183,9 @@ two root keys with threshold 1). At minimum:
 
 1. On an offline machine, create the two root keys and the first index
    and timestamp keys, each with its own strong password.
-2. `keyset init` with the public keys; `keyset sign` with one or both
+2. `keyset init --first-party` with the public keys (the first-party
+   authorization must be in this first key set,
+   [above](#first-party-plugins-deckpilot)); `keyset sign` with one or both
    roots on that machine. Commit `roots.json` and `keys/1.json(.minisig)`.
 3. Root secret keys stay offline (maintainer machine plus an offline
    backup) and never reach GitHub.
@@ -155,6 +205,7 @@ two root keys with threshold 1). At minimum:
 | Timestamp-key compromise | as above for `--timestamp`; impact was limited to freezing |
 | Root rotation | `keyset rotate --root …`; `keyset sign` with the current roots and with the new roots |
 | Root loss or compromise | app release with new embedded roots (not this tool): replace `DECKPILOT_REGISTRY_ROOT_PUBKEYS` and release |
+| Withdraw the first-party authorization | `keyset rotate --no-first-party`; `keyset sign` with a root; `revoke` (or `yank`) the offered `deckpilot.*` versions; `build-index`, `sign-index`, `timestamp`; deploy together |
 
 ## Embedding the roots in a release build
 
