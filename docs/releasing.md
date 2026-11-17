@@ -124,6 +124,13 @@ pnpm --filter @deckpilot/desktop tauri signer generate -w ~/.config/deckpilot/si
 3. Keep an offline backup of the private key. Losing it means existing
    installations can no longer verify updates; publishing it lets anyone sign
    updates.
+4. Store the plugin registry's root role as the repository **variable**
+   `DECKPILOT_REGISTRY_ROOT_PUBKEYS`: the content of `keys/roots.json` of
+   `knittingcode/deckpilot-plugins` (public keys and threshold, not a
+   secret; `crates/deckpilot-plugin-registry/PUBLISHING.md`). Every release
+   ships the plugin Marketplace and compiles it into the agent as the trust
+   anchor of the official registry; the `prepare` job **refuses a release
+   without it**, and the build fails on a malformed one.
 
 ### macOS: Developer ID signing and notarization
 
@@ -181,7 +188,8 @@ What the release workflow does on macOS:
    the bundle, every executable signed by `APPLE_TEAM_ID` with the hardened
    runtime, no entitlements on any Mach-O file
    (`tools/ci/check-macos-entitlements.sh`; the one exception, the plugin
-   host of a package with plugins, is below), the agent's fixed identifier,
+   host, which every release contains, is below), the agent's and the
+   plugin host's fixed identifiers,
    Gatekeeper's assessment (`spctl`) and the stapled ticket
    (`stapler validate`). If the bundler skipped notarization (for example
    because of incomplete credentials), this step fails the release.
@@ -198,15 +206,44 @@ approves the deployment):
 notarization; this records a submission in the developer account. On any
 other ref the environment refuses the job before a secret is read.
 
-### Packaging the plugins (opt-in, `DECKPILOT_RELEASE_PLUGINS=1`)
+### Packaging the plugins
 
-`deckpilot-dev package` with `DECKPILOT_RELEASE_PLUGINS=1` adds the plugin
-host and the bundled first-party plugins
-([plugins/first-party/README.md](../plugins/first-party/README.md)). The
-published release workflow does not do this yet: its packages contain
-neither, and nothing below changes them. Without the variable,
-`deckpilot-dev package` builds with `tauri.release.conf.json` alone, as
-before.
+Every release ships the plugin Marketplace. The release workflow (and the
+*Packaging* workflow, which checks the same configuration unsigned on pull
+requests and on the tagged commit) builds, per target:
+
+- the bundled first-party plugins of `plugins/first-party/bundled.json`
+  ([plugins/first-party/README.md](../plugins/first-party/README.md)) with
+  their `pins.json`, and the plugin host from `plugins/runtime` for the
+  target (`tools/ci/stage-plugin-runtime.sh`);
+- the agent with the `plugins` feature, `DECKPILOT_BUNDLED_PINS` (the pins
+  compiled in) and, in the release only,
+  `DECKPILOT_REGISTRY_ROOT_PUBKEYS` (the registry's root role, required;
+  the *Packaging* workflow never reads a production variable, so its
+  agent embeds no roots and uses no registry);
+- `tools/release-pipeline/check-bundled-plugins.sh` on the staged plugins
+  and that agent (for the cross-compiled Intel macOS agent from the
+  executable's bytes, `--without-running`); the release also checks that
+  the agent embeds exactly the configured roots;
+- the frontend with `VITE_DECKPILOT_PLUGINS=1` (the Plugins page), and the
+  bundle with `tauri.plugins.conf.json` on top of
+  `tauri.release.conf.json` (the host as a second external binary,
+  `bundled/` as a resource), on macOS also `tauri.plugins.macos.conf.json`.
+
+`tools/ci/check-packages.sh` requires the result in every package: the
+host next to the agent (`/usr/bin/deckpilot-plugin-host` in the `.deb`,
+`.rpm` and AppImage, `deckpilot-plugin-host.exe` next to the agent in the
+MSI and NSIS installers, `Contents/MacOS/deckpilot-plugin-host` and only
+there on macOS), and `bundled/` in the application's resources
+(`/usr/lib/DeckPilot/bundled`, the installation directory on Windows,
+`Contents/Resources/bundled`) holding exactly the plugins of
+`bundled.json`, checked against their pins and the pins compiled into the
+package's agent. The packaging matrix records this as
+`plugin_host_install` in [targets.toml](distribution/targets.toml).
+
+`deckpilot-dev package` with `DECKPILOT_RELEASE_PLUGINS=1` builds the
+same layout locally; without the variable it builds with
+`tauri.release.conf.json` alone.
 
 On macOS the host needs one entitlement under the hardened runtime,
 `com.apple.security.cs.allow-unsigned-executable-memory`
@@ -245,11 +282,25 @@ The steps on macOS:
    `verify-macos-app.sh` applies the same check to a release and also
    requires the host's identifier when the host is present.
 
-When the release workflow packages the plugins, its macOS build must sign
-the host this way before the bundler runs, with the identity in a keychain
-that step can use: the bundler imports `APPLE_CERTIFICATE` only into a
-keychain of its own, during bundling. That is a change to the signing job
-for the owner to approve; it is not made yet.
+In the release workflow's macOS builds, the step *Sign the plugin host
+(macOS)* does step 2 before the bundler runs. The bundler imports
+`APPLE_CERTIFICATE` only into a keychain of its own, during bundling, so
+this step alone gets the certificate and its password: it imports them
+into a temporary keychain (`.github/scripts/apple-certificate.sh`, which
+also checks that the certificate provides exactly `APPLE_SIGNING_IDENTITY`
+of `APPLE_TEAM_ID`), signs the host with `SIGN_KEYCHAIN` set to it, and
+deletes the keychain when the step ends, whatever the outcome. The
+certificate is never printed. Afterwards `verify-macos-app.sh` **requires**
+the host in the app, the updater archive and the disk image: signed by the
+team with the hardened runtime and a secure timestamp, its identifier, and
+exactly its entitlement. A release with `DECKPILOT_ALLOW_UNSIGNED_MACOS`
+signs nothing, and the host keeps the linker's ad hoc signature like the
+rest of that unsigned app.
+
+The *Packaging* workflow's macOS job, which has no identity, signs the
+host ad hoc (`APPLE_SIGNING_IDENTITY=-`) with the same script, so the
+bundle it checks has the release's layout and entitlements, and runs
+`tools/ci/check-macos-entitlements.sh` on the built app.
 
 ### Windows: Authenticode (not yet provisioned)
 
@@ -357,8 +408,9 @@ tag; that push starts the release workflow.
    - validates the tag (see [the tag gate](#release-tags-and-the-tag-gate));
    - checks that updater signing is configured, that `CHANGELOG.md` has
      notes for the version (they become the release notes and the notes
-     shown by the in-app updater), and that macOS signing is configured (or
-     explicitly waived);
+     shown by the in-app updater), that macOS signing is configured (or
+     explicitly waived), and that the plugin registry's root keys
+     (`DECKPILOT_REGISTRY_ROOT_PUBKEYS`) are set;
    - runs the full installer checks of the *Packaging* workflow on the
      tagged commit, unsigned and without any secret (`packaging` job, which
      calls `.github/workflows/packaging.yml`): Linux `.deb`, AppImage and
@@ -366,7 +418,8 @@ tag; that push starts the release workflow.
      and disk image (the runner's architecture), built with the release
      configuration, the distribution channel `github` and a throwaway
      updater key, checked by `tools/ci/check-packages.sh` (names, versions,
-     layout, application, bundled agent, udev rule, AppImage `AppRun`,
+     layout, application, bundled agent, plugin host and bundled
+     first-party plugins, udev rule, AppImage `AppRun`,
      macOS `Info.plist`, icon and the disk image's Applications link,
      updater signatures, and in every package's copy of the application
      the compiled distribution record — channel `github`, the version, no
@@ -391,7 +444,9 @@ tag; that push starts the release workflow.
      by a re-run;
    - builds the agent and the app for Linux (x86_64), macOS (Apple silicon
      and Intel) and Windows (x86_64), bundling the agent as an external
-     binary, and uploads to that draft (the builds never create a release);
+     binary, with the plugin host and the bundled first-party plugins
+     ([packaging the plugins](#packaging-the-plugins)), and uploads to that
+     draft (the builds never create a release);
    - signs updater artifacts; each build also hands its update-manifest
      entries (target keys, asset names, signatures) to a single job that
      assembles the manifest once, after all builds, and attaches it —

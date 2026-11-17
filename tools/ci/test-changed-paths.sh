@@ -43,6 +43,12 @@ expect "dev_tools=false keystore=false packaging=true release_manifest=false" pa
 expect "dev_tools=false keystore=false packaging=true release_manifest=false" apps/desktop/src-tauri/entitlements/plugin-host.entitlements
 expect "dev_tools=false keystore=false packaging=true release_manifest=false" apps/desktop/src-tauri/tauri.plugins.macos.conf.json
 expect "dev_tools=false keystore=false packaging=true release_manifest=false" .github/scripts/verify-macos-app.sh
+# The plugin runtime the packages contain: host, bundled plugins, pins, check.
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" plugins/runtime/crates/host/src/main.rs
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" plugins/first-party/bundled.json
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" crates/deckpilot-plugin-bundled/build.rs
+expect "dev_tools=false keystore=false packaging=true release_manifest=false" tools/release-pipeline/check-bundled-plugins.sh
+expect "$none" plugins/examples/hello-world/src/lib.rs
 # The distribution record the package checks read from the binaries.
 expect "dev_tools=false keystore=false packaging=true release_manifest=false" crates/deckpilot-distribution/src/lib.rs
 expect "dev_tools=false keystore=true packaging=false release_manifest=false" crates/deckpilot-keystore/src/lib.rs

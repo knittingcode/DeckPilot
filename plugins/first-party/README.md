@@ -80,6 +80,7 @@ agent, `bundled/` as a resource. On macOS the host is signed first with
 its one entitlement and copied into `Contents/MacOS` instead
 (`tauri.plugins.macos.conf.json`; [docs/releasing.md](../../docs/releasing.md),
 "Packaging the plugins"). Without the variable (the default) the
-package is exactly what it was. The published release workflow
-(`.github/workflows/release.yml`) is unchanged and packages neither the
-host nor bundled plugins until the owner enables the marketplace.
+package has neither. The release workflow (`.github/workflows/release.yml`)
+and the *Packaging* workflow's package checks build every installer this
+way, and `tools/ci/check-packages.sh` requires the host and exactly the
+plugins of `bundled.json` in each.

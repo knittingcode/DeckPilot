@@ -1,5 +1,6 @@
-//! Release builds contain no plugin code: with its default features the
-//! agent depends on none of the plugin crates, and even with `plugins` it
+//! The agent's plugin code is behind its `plugins` feature: with its
+//! default features the agent depends on none of the plugin crates, and
+//! even with `plugins` (which release builds enable, `release.yml`) it
 //! never links the plugin host's engine (wasmtime), which only the
 //! separate `deckpilot-plugin-host` executable contains.
 

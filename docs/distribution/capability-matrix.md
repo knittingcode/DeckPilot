@@ -50,7 +50,7 @@ Short form; the reasons are in [section 2](#2-per-capability-detail).
 | Tray / menu bar | Supported | Supported | Supported | Supported | Requires adaptation | Supported (reading) | Supported (reading) | Supported |
 | Spawning the plugin host | Requires adaptation | Requires adaptation | Requires adaptation | Requires adaptation | Requires adaptation | Requires adaptation (spawn and sandbox inheritance work [E2]) | **Unverified** | Requires adaptation |
 | Plugin host's own OS sandbox | Supported (verified on CI runners, not bundled) | as GitHub | as GitHub | as GitHub | **Unverified** | **Blocked** as designed (`sandbox_init` refused inside App Sandbox [E2]) | **Unverified** | as GitHub |
-| JIT / executable memory (wasmtime) | Requires adaptation, done in the opt-in plugin packaging: `allow-unsigned-executable-memory` (not `allow-jit` [E2]) on the host only; Developer ID **Unverified** | as GitHub | Supported | Supported | Supported (reading) | Requires adaptation: works in a sandboxed helper without the hardened runtime [E2]; review Unverified | Supported | Supported |
+| JIT / executable memory (wasmtime) | Requires adaptation, done in the plugin packaging of every release: `allow-unsigned-executable-memory` (not `allow-jit` [E2]) on the host only; Developer ID **Unverified** | as GitHub | Supported | Supported | Supported (reading) | Requires adaptation: works in a sandboxed helper without the hardened runtime [E2]; review Unverified | Supported | Supported |
 | Downloaded plugin code | Supported | Supported | Supported | Supported | Supported (reading) | **Blocked** (policy risk) | **Unverified** (policy) | Unverified (policy) |
 | Credential store | Supported | Supported | Supported | Supported | Requires adaptation | Requires adaptation | Supported (reading), Unverified | Supported |
 | File system / data location | Supported | Supported | Supported | Supported | Requires adaptation | Requires adaptation | Requires adaptation | Supported |
@@ -258,15 +258,17 @@ wasmtime 50 with Cranelift writes machine code and makes it executable
   `MAP_JIT`. It runs with `allow-unsigned-executable-memory`. The real
   host shows the same (`plugins/runtime/scripts/macos-hardened-runtime.sh`
   on a stock Mac; GitHub's macOS runners do not enforce the rule).
-  **Requires adaptation**, done in the opt-in plugin packaging
-  (`DECKPILOT_RELEASE_PLUGINS=1`): the host alone is signed with exactly
+  **Requires adaptation**, done in the plugin packaging of every release
+  (and of `DECKPILOT_RELEASE_PLUGINS=1` locally): the host alone is signed
+  with exactly
   that entitlement (`apps/desktop/src-tauri/entitlements/plugin-host.entitlements`),
   the app and the agent keep none, and `tools/ci/check-macos-entitlements.sh`
   (run by `verify-macos-app.sh`) allows exactly that on exactly
   `Contents/MacOS/deckpilot-plugin-host`. The host's own sandbox still
-  applies under it. Verified with ad hoc signatures; a Developer ID signed
-  and notarized package with the host is **Unverified**, and the release
-  workflow does not package the host yet. Why not `allow-jit` (it would
+  applies under it. Verified with ad hoc signatures (also by the
+  *Packaging* workflow's macOS package check); a Developer ID signed and
+  notarized package with the host is **Unverified** until the first
+  release that ships it, whose `verify-macos-app.sh` requires it. Why not `allow-jit` (it would
   need a custom `MAP_JIT` loader in the host) and how it is applied:
   [marketplace/distribution.md](../marketplace/distribution.md#macos-the-plugin-hosts-entitlement).
   Alternative: wasmtime's Pulley interpreter, which needs no executable

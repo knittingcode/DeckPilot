@@ -5,8 +5,9 @@
 #   tools/ci/check-macos-entitlements.sh --plugin-host <binary>
 #
 # Every Mach-O file in the bundle has no entitlements, with one exception:
-# the plugin host at exactly Contents/MacOS/deckpilot-plugin-host (present
-# only in packages built with DECKPILOT_RELEASE_PLUGINS=1) has exactly the
+# the plugin host at exactly Contents/MacOS/deckpilot-plugin-host (in every
+# release, and in local packages built with DECKPILOT_RELEASE_PLUGINS=1;
+# .github/scripts/verify-macos-app.sh requires it in a release) has exactly the
 # entitlements of apps/desktop/src-tauri/entitlements/plugin-host.entitlements
 # (com.apple.security.cs.allow-unsigned-executable-memory, true) and nothing
 # else. The application and the agent never have any. Why the host needs it:

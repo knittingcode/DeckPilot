@@ -1,11 +1,16 @@
 # Plugins in the agent (experimental backend)
 
-Status: **experimental, off in every release build.** The agent's cargo
-feature `plugins` (default off) adds the plugin backend; even then plugins
-stay off until the agent is started with `--enable-plugins`. Release
-workflows are unchanged. `apps/agent/tests/plugins_feature.rs` checks that
-the default build depends on no plugin crate, and that no build of the
-agent links the plugin host or wasmtime.
+Status: **experimental.** The agent's cargo feature `plugins` (default
+off) adds the plugin backend. Release builds enable it: `release.yml`
+builds the agent with `--features plugins`, the pins of the bundled
+first-party plugins and the registry's root role, and ships the plugin
+host and the bundled plugins in every installer
+([releasing.md](../releasing.md#packaging-the-plugins)); the *Packaging*
+workflow checks the same layout on pull requests. Whether a build answers
+plugin requests without `--enable-plugins` is the agent's setting
+(`apps/agent/src/plugins/mod.rs`). `apps/agent/tests/plugins_feature.rs`
+checks that the default build depends on no plugin crate, and that no
+build of the agent links the plugin host or wasmtime.
 
 The executable artifact is an ABI 1 WebAssembly module
 ([artifact-contract.md](artifact-contract.md)).
@@ -363,12 +368,16 @@ U-10) has committed `keys/roots.json` to `knittingcode/deckpilot-plugins`:
    cargo build --release -p deckpilot-agent --features plugins` must
    succeed (a malformed value fails here exactly as in the release).
 3. The next release's agent build (`release.yml`, "Build and stage the
-   agent") passes the variable to Cargo only when it is set. The agent
-   then uses `https://knittingcode.github.io/deckpilot-plugins/` with no
-   flag at all. Release builds do not enable the `plugins` feature yet, so
-   the roots take effect in the first release that ships plugins.
+   agent") compiles it in and checks that the agent embeds exactly that
+   text. The agent then uses
+   `https://knittingcode.github.io/deckpilot-plugins/` with no flag at
+   all.
 
-Deleting the variable makes the following releases embed nothing again.
+The variable is required: release builds ship the plugin Marketplace, and
+the release's `prepare` job refuses a release without it (an agent without
+roots would use no registry). The *Packaging* workflow, which checks the
+same installers unsigned on pull requests, never reads it and embeds no
+roots.
 
 ## Registry over HTTPS
 
@@ -914,15 +923,15 @@ Windows (not a required check).
 
 ## Not done
 
-- On macOS a package with the host (`DECKPILOT_RELEASE_PLUGINS=1`) and a
-  signing identity signs the host with the hardened runtime and its one
-  entitlement, `com.apple.security.cs.allow-unsigned-executable-memory`,
+- On macOS every package signs the host with the hardened runtime and its
+  one entitlement, `com.apple.security.cs.allow-unsigned-executable-memory`,
   which wasmtime's executable memory needs; the app and the agent keep
   none ([distribution contract](distribution.md#macos-the-plugin-hosts-entitlement)).
-  Verified with ad hoc signatures (`plugins/runtime/scripts/macos-hardened-runtime.sh`
-  and a local package); a Developer ID signed and notarized package with
-  the host has not been built, and the published release workflow does not
-  package the host yet.
+  The release workflow signs it with the Developer ID before bundling and
+  `verify-macos-app.sh` requires it; the *Packaging* workflow checks the
+  layout with an ad hoc signature on every relevant pull request. A
+  Developer ID signed and notarized package with the host is first built
+  by the next tagged release.
 - The registry trust state lives in a file, not in the encrypted database
   ([why](#trust-state-stays-a-file)).
 - No production root keys and no default trust yet: builds can embed root

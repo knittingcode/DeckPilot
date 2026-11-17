@@ -4,9 +4,21 @@
 # throwaway key, and the assertions of tools/ci/check-packages.sh (names,
 # versions, layout, app, bundled agent, udev rule, the distribution record
 # and package format compiled or patched into each package's application,
-# updater signatures). Built in the distribution channel `github`, as the
-# release builds are. Nothing is code-signed or published; no repository
-# secret is used.
+# the plugin runtime, updater signatures). Built in the distribution
+# channel `github`, as the release builds are. Nothing is code-signed or
+# published; no repository secret or variable is used.
+#
+# The plugin Marketplace, as in the release builds: the plugin host and the
+# bundled first-party plugins (tools/ci/stage-plugin-runtime.sh), the agent
+# with the `plugins` feature and their pins compiled in, the frontend with
+# VITE_DECKPILOT_PLUGINS=1, and tauri.plugins.conf.json (on macOS also
+# tauri.plugins.macos.conf.json; the host signed ad hoc with its
+# entitlement, then the entitlement policy checked on the bundle). The one
+# difference: no registry root keys are compiled in. The release embeds
+# vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS (and refuses to build without it);
+# these builds never read a production variable, so their agent uses no
+# registry. The roots' embedding is tested by the registry crate
+# (crates/deckpilot-plugin-registry/tests/embedded_roots.rs).
 #
 # Runs:
 # - on pull requests, only when packaging-relevant paths change
@@ -35,6 +47,10 @@ on:
       - apps/desktop/src-tauri/**
       - apps/agent/**
       - packaging/**
+      - plugins/first-party/**
+      - plugins/runtime/**
+      - crates/deckpilot-plugin-bundled/**
+      - tools/release-pipeline/check-bundled-plugins.sh
       - tools/ci/**
       - .github/scripts/verify-macos-app.sh
       - .github/workflows/packaging.yml
@@ -116,7 +132,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.packaging == 'true'
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 75
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -127,6 +143,8 @@ jobs:
         run: tools/ci/install-linux-deps.sh
       - name: Install Rust toolchain
         run: rustup toolchain install
+      - name: WebAssembly target (bundled plugins)
+        run: rustup target add wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: package-linux
@@ -139,11 +157,18 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Throwaway updater key (not the release key)
         run: tools/ci/throwaway-updater-key.sh
-      - name: Build and stage the agent
+      # The plugin host and the bundled first-party plugins; exports
+      # DECKPILOT_BUNDLED_PINS for the agent build.
+      - name: Build and stage the plugin runtime
         run: |
-          cargo build --release --locked -p deckpilot-agent
+          tools/ci/stage-plugin-runtime.sh "$(rustc -vV | sed -n 's/^host: //p')"
+      - name: Build and stage the agent (plugins, bundled pins)
+        run: |
+          test -n "$DECKPILOT_BUNDLED_PINS"
+          cargo build --release --locked -p deckpilot-agent --features plugins
           mkdir -p apps/desktop/src-tauri/binaries
           cp target/release/deckpilot-agent "apps/desktop/src-tauri/binaries/deckpilot-agent-$(rustc -vV | sed -n 's/^host: //p')"
+          tools/release-pipeline/check-bundled-plugins.sh target/bundled-plugins/bundled target/release/deckpilot-agent
       # A pre-release version (input, or a "-" in the version) builds no
       # .rpm: RPM does not allow "-" in versions. The AppImage is always
       # built, as in the release.
@@ -155,12 +180,15 @@ jobs:
           echo "PRERELEASE=$prerelease" >> "$GITHUB_ENV"
           echo "version $version, pre-release: $prerelease"
       - name: Build the .deb and AppImage (and .rpm for final versions)
+        env:
+          VITE_DECKPILOT_PLUGINS: "1"
         run: >
           pnpm --filter @deckpilot/desktop tauri build
           --bundles "$([ "$PRERELEASE" = true ] && echo deb,appimage || echo deb,appimage,rpm)"
           --config src-tauri/tauri.release.conf.json
+          --config src-tauri/tauri.plugins.conf.json
           --config "$THROWAWAY_UPDATER_CONFIG"
-      - name: Names, versions, layout, distribution record and updater signatures
+      - name: Names, versions, layout, plugin runtime, distribution record and updater signatures
         run: tools/ci/check-packages.sh linux
       - name: Checked version
         id: version
@@ -175,7 +203,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.packaging == 'true'
     runs-on: windows-latest
-    timeout-minutes: 75
+    timeout-minutes: 105
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -183,6 +211,9 @@ jobs:
       - name: Install Rust toolchain
         shell: bash
         run: rustup toolchain install
+      - name: WebAssembly target (bundled plugins)
+        shell: bash
+        run: rustup target add wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: package-windows
@@ -200,12 +231,20 @@ jobs:
       - name: Throwaway updater key (not the release key)
         shell: bash
         run: tools/ci/throwaway-updater-key.sh
-      - name: Build and stage the agent
+      # The plugin host and the bundled first-party plugins; exports
+      # DECKPILOT_BUNDLED_PINS for the agent build.
+      - name: Build and stage the plugin runtime
         shell: bash
         run: |
-          cargo build --release --locked -p deckpilot-agent
+          tools/ci/stage-plugin-runtime.sh "$(rustc -vV | sed -n 's/^host: //p')"
+      - name: Build and stage the agent (plugins, bundled pins)
+        shell: bash
+        run: |
+          test -n "$DECKPILOT_BUNDLED_PINS"
+          cargo build --release --locked -p deckpilot-agent --features plugins
           mkdir -p apps/desktop/src-tauri/binaries
           cp target/release/deckpilot-agent.exe "apps/desktop/src-tauri/binaries/deckpilot-agent-$(rustc -vV | sed -n 's/^host: //p').exe"
+          tools/release-pipeline/check-bundled-plugins.sh target/bundled-plugins/bundled target/release/deckpilot-agent.exe
       # WiX accepts only numeric versions: a pre-release gets the MSI
       # version from the input or tools/ci/msi-version.sh.
       - name: Pre-release or final version, MSI version
@@ -222,9 +261,12 @@ jobs:
           echo "version $version, pre-release: $prerelease, MSI version: $msi"
       - name: Build the installers
         shell: bash
+        env:
+          VITE_DECKPILOT_PLUGINS: "1"
         run: >
           pnpm --filter @deckpilot/desktop tauri build --bundles nsis,msi
           --config src-tauri/tauri.release.conf.json
+          --config src-tauri/tauri.plugins.conf.json
           --config "$THROWAWAY_UPDATER_CONFIG"
           --config "$MSI_CONFIG"
       - name: Extract the installers
@@ -239,7 +281,7 @@ jobs:
           & 7z x -y "-o$env:RUNNER_TEMP\nsis" (Resolve-Path $nsis).Path | Out-Null
           $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @("/a", "`"$((Resolve-Path $msi).Path)`"", "/qn", "TARGETDIR=`"$env:RUNNER_TEMP\msi`"")
           if ($process.ExitCode -ne 0) { Write-Error "administrative MSI extraction failed: $($process.ExitCode)"; exit 1 }
-      - name: Names, versions, app, agent, distribution record and updater signatures
+      - name: Names, versions, app, agent, plugin runtime, distribution record and updater signatures
         shell: bash
         run: tools/ci/check-packages.sh windows "$RUNNER_TEMP"
 
@@ -255,13 +297,15 @@ jobs:
     needs: changes
     if: needs.changes.outputs.packaging == 'true'
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install Rust toolchain
         run: rustup toolchain install
+      - name: WebAssembly target (bundled plugins)
+        run: rustup target add wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: package-macos
@@ -274,11 +318,18 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Throwaway updater key (not the release key)
         run: tools/ci/throwaway-updater-key.sh
-      - name: Build and stage the agent
+      # The plugin host and the bundled first-party plugins; exports
+      # DECKPILOT_BUNDLED_PINS for the agent build.
+      - name: Build and stage the plugin runtime
         run: |
-          cargo build --release --locked -p deckpilot-agent
+          tools/ci/stage-plugin-runtime.sh "$(rustc -vV | sed -n 's/^host: //p')"
+      - name: Build and stage the agent (plugins, bundled pins)
+        run: |
+          test -n "$DECKPILOT_BUNDLED_PINS"
+          cargo build --release --locked -p deckpilot-agent --features plugins
           mkdir -p apps/desktop/src-tauri/binaries
           cp target/release/deckpilot-agent "apps/desktop/src-tauri/binaries/deckpilot-agent-$(rustc -vV | sed -n 's/^host: //p')"
+          tools/release-pipeline/check-bundled-plugins.sh target/bundled-plugins/bundled target/release/deckpilot-agent
       - name: Pre-release or final version
         run: |
           version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
@@ -286,13 +337,31 @@ jobs:
           case "$version" in *-*) prerelease=true ;; esac
           echo "PRERELEASE=$prerelease" >> "$GITHUB_ENV"
           echo "version $version, pre-release: $prerelease"
+      # As in the release, where the Developer ID identity signs it: here
+      # ad hoc (APPLE_SIGNING_IDENTITY=-), with the hardened runtime, its
+      # identifier and exactly its one entitlement. The bundler, without
+      # an identity, signs nothing and copies it into Contents/MacOS as it
+      # is (tauri.plugins.macos.conf.json).
+      - name: Sign the plugin host ad hoc with its entitlement
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: tools/ci/sign-macos-plugin-host.sh apps/desktop/src-tauri/binaries/macos/deckpilot-plugin-host
       - name: Build the .app, its updater archive and the disk image
+        env:
+          VITE_DECKPILOT_PLUGINS: "1"
         run: >
           pnpm --filter @deckpilot/desktop tauri build --bundles app,dmg
           --config src-tauri/tauri.release.conf.json
+          --config src-tauri/tauri.plugins.conf.json
+          --config src-tauri/tauri.plugins.macos.conf.json
           --config "$THROWAWAY_UPDATER_CONFIG"
-      - name: Names, versions, layout, distribution record, disk image and updater signatures
+      - name: Names, versions, layout, plugin runtime, distribution record, disk image and updater signatures
         run: tools/ci/check-packages.sh macos
+      # The bundle as built: exactly the host's entitlement on exactly
+      # Contents/MacOS/deckpilot-plugin-host, none on the app or the agent
+      # (the policy verify-macos-app.sh applies to the signed release).
+      - name: Entitlement policy (the built bundle)
+        run: tools/ci/check-macos-entitlements.sh target/release/bundle/macos/DeckPilot.app
       # The entitlement policy verify-macos-app.sh applies to the signed
       # release (no entitlements, but exactly the plugin host's one on
       # exactly the host), on fake bundles signed ad hoc.

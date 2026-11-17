@@ -29,11 +29,14 @@
 #   secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD its password
 #   vars.DECKPILOT_UPDATER_PUBKEY              matching public key, compiled
 #                                              into the app to verify updates
-#
-# Optional:
 #   vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS       the plugin registry's root role
-#                                              (public keys, roots.json content),
-#                                              compiled into the agent when set
+#                                              (public keys, keys/roots.json of
+#                                              knittingcode/deckpilot-plugins),
+#                                              compiled into the agent: the
+#                                              installers ship the plugin
+#                                              Marketplace, and a release
+#                                              without the production roots
+#                                              is refused (prepare job)
 #
 # macOS Developer ID signing and notarization (all required together):
 #   secrets.APPLE_CERTIFICATE           base64 .p12: "Developer ID Application" certificate and key
@@ -181,6 +184,23 @@ jobs:
         env:
           DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
         run: cargo run --locked -p deckpilot-dev -- check-updater-key
+      # The installers ship the plugin Marketplace: the agent must trust the
+      # production registry's root role, compiled in from this variable
+      # (public keys, not a secret). Without it the agent would use no
+      # registry, so the release is refused here, before anything is built.
+      # The build checks the role in full and fails on a malformed one
+      # (crates/deckpilot-plugin-registry/build.rs).
+      - name: Plugin registry root keys are configured
+        env:
+          REGISTRY_ROOTS: ${{ vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS }}
+        run: |
+          if [ -z "$REGISTRY_ROOTS" ]; then
+            echo "::error::vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS is not set: a release ships the plugin Marketplace and must embed the production registry's root keys (keys/roots.json of knittingcode/deckpilot-plugins; docs/releasing.md)"
+            exit 1
+          fi
+          jq -e '(.keys | type == "array" and length > 0) and (.threshold | type == "number")' <<< "$REGISTRY_ROOTS" > /dev/null \
+            || { echo "::error::vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS is not a root role (JSON with keys and threshold): set it to the content of keys/roots.json"; exit 1; }
+          echo "registry root role: $(jq '.keys | length' <<< "$REGISTRY_ROOTS") keys, threshold $(jq .threshold <<< "$REGISTRY_ROOTS")"
       # The CHANGELOG.md section of the version becomes the release notes and
       # the notes of the in-app update; a release without notes is refused.
       - name: Release notes
@@ -222,8 +242,8 @@ jobs:
   # The full installer checks of the Packaging workflow (Linux .deb,
   # AppImage and .rpm, Windows NSIS and MSI, macOS .app, updater archive and
   # disk image: names, versions, layout, app, bundled agent, udev rule,
-  # distribution record and package format, updater signatures by a
-  # throwaway key) on the tagged commit,
+  # plugin host and bundled plugins, distribution record and package
+  # format, updater signatures by a throwaway key) on the tagged commit,
   # before anything is signed: the draft and every later job need it. It
   # builds github.sha, which the gate checked is the tag's commit (RUN_SHA),
   # and gets no secret. Pre-releases build no .rpm and the MSI gets the
@@ -332,7 +352,7 @@ jobs:
         shell: bash
         run: |
           rustup toolchain install
-          rustup target add ${{ matrix.target }}
+          rustup target add ${{ matrix.target }} wasm32-unknown-unknown
       # No cache: this job holds the signing secrets, and caches written by
       # other workflows (pull requests included) must not feed its build.
       # Both actions cache only on request (pnpm/action-setup `cache`
@@ -354,27 +374,77 @@ jobs:
           $perl = "C:\Strawberry\perl\bin\perl.exe"
           if (-not (Test-Path $perl)) { Write-Error "Strawberry Perl not found at $perl"; exit 1 }
           "OPENSSL_SRC_PERL=$perl" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      # The agent ships inside the bundle as a Tauri external binary.
-      # vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS (optional; public keys, not a
-      # secret) is the plugin registry's root role, keys/roots.json of
-      # knittingcode/deckpilot-plugins. Only when it is set is it passed to
-      # the build, which checks it and compiles it in (a malformed value
-      # fails the build); unset, nothing is embedded and the agent uses no
-      # registry (docs/marketplace/agent-integration.md).
+      # The plugin runtime every installer contains (docs/releasing.md,
+      # "Packaging the plugins"): the bundled first-party plugins of
+      # plugins/first-party/bundled.json in target/bundled-plugins/bundled
+      # (shipped as the resource bundled/ by tauri.plugins.conf.json), and
+      # the plugin host for this target, staged as an external binary (on
+      # macOS for Contents/MacOS, signed below). Exports
+      # DECKPILOT_BUNDLED_PINS for the agent build.
+      - name: Build and stage the plugin runtime
+        shell: bash
+        run: tools/ci/stage-plugin-runtime.sh ${{ matrix.target }}
+      # The agent ships inside the bundle as a Tauri external binary, with
+      # the `plugins` feature, the pins of the bundled plugins and the
+      # plugin registry's root role (vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS,
+      # public keys, keys/roots.json of knittingcode/deckpilot-plugins)
+      # compiled in; the build checks the role and fails on a malformed one
+      # (docs/marketplace/agent-integration.md). Then: the bundled plugins
+      # match their pins and the pins compiled into this agent (read from
+      # the file for the cross-compiled x86_64 macOS agent, which this
+      # runner does not run), and the agent embeds exactly the configured
+      # roots.
       - name: Build and stage the agent
         shell: bash
         env:
           REGISTRY_ROOTS: ${{ vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS }}
         run: |
-          if [ -n "$REGISTRY_ROOTS" ]; then
-            export DECKPILOT_REGISTRY_ROOT_PUBKEYS="$REGISTRY_ROOTS"
-            echo "Embedding the plugin registry root keys (vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS)"
-          fi
-          cargo build --release --locked -p deckpilot-agent --target ${{ matrix.target }}
+          [ -n "$REGISTRY_ROOTS" ] || { echo "::error::vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS is not set"; exit 1; }
+          [ -n "${DECKPILOT_BUNDLED_PINS:-}" ] || { echo "::error::the plugin runtime was not staged (DECKPILOT_BUNDLED_PINS)"; exit 1; }
+          export DECKPILOT_REGISTRY_ROOT_PUBKEYS="$REGISTRY_ROOTS"
+          cargo build --release --locked -p deckpilot-agent --features plugins --target ${{ matrix.target }}
           suffix=""; [ "${{ runner.os }}" = "Windows" ] && suffix=".exe"
+          agent="target/${{ matrix.target }}/release/deckpilot-agent${suffix}"
           mkdir -p apps/desktop/src-tauri/binaries
-          cp "target/${{ matrix.target }}/release/deckpilot-agent${suffix}" \
-             "apps/desktop/src-tauri/binaries/deckpilot-agent-${{ matrix.target }}${suffix}"
+          cp "$agent" "apps/desktop/src-tauri/binaries/deckpilot-agent-${{ matrix.target }}${suffix}"
+          if [ "$(rustc -vV | sed -n 's/^host: //p')" = "${{ matrix.target }}" ]; then
+            tools/release-pipeline/check-bundled-plugins.sh target/bundled-plugins/bundled "$agent"
+          else
+            tools/release-pipeline/check-bundled-plugins.sh target/bundled-plugins/bundled "$agent" --without-running
+          fi
+          python=$(command -v python3 || command -v python)
+          printf '%s' "$REGISTRY_ROOTS" | "$python" -I -c 'import sys; roots = sys.stdin.read().strip().encode(); sys.exit(0 if roots and roots in open(sys.argv[1], "rb").read() else 1)' "$agent" \
+            || { echo "::error::$agent does not embed vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS"; exit 1; }
+          echo "the plugin registry root keys (vars.DECKPILOT_REGISTRY_ROOT_PUBKEYS) are embedded in $agent"
+      # The plugin host's Developer ID signature, with the hardened runtime,
+      # a secure timestamp, its identifier and exactly its one entitlement
+      # (tools/ci/sign-macos-plugin-host.sh; docs/releasing.md, "Packaging
+      # the plugins"), before the bundler copies it into Contents/MacOS as
+      # it is (tauri.plugins.macos.conf.json) and signs the app around it:
+      # the bundler would sign an external binary with the app's
+      # entitlements, which are none. The identity must be in a keychain
+      # now; the bundler imports the certificate only into its own, during
+      # bundling. So this step alone gets the certificate, imports it into a
+      # temporary keychain (.github/scripts/apple-certificate.sh: exactly
+      # the configured identity of the configured team) and deletes the
+      # keychain again when it ends, whatever the outcome.
+      - name: Sign the plugin host (macOS)
+        if: runner.os == 'macOS' && needs.prepare.outputs.macos-signing == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          keychain="$RUNNER_TEMP/deckpilot-signing.keychain-db"
+          cleanup() {
+            if [ -e "$keychain" ]; then security delete-keychain "$keychain" || true; fi
+            rm -f "$RUNNER_TEMP/certificate.p12"
+            echo "DECKPILOT_KEYCHAIN=" >> "$GITHUB_ENV"
+          }
+          trap cleanup EXIT
+          .github/scripts/apple-certificate.sh
+          SIGN_KEYCHAIN="$keychain" tools/ci/sign-macos-plugin-host.sh apps/desktop/src-tauri/binaries/macos/deckpilot-plugin-host
       # The bundler checks the updater artifacts against the public key in
       # the configuration (empty in tauri.conf.json; the app compiles it in).
       # And the numeric MSI version: Windows Installer refuses
@@ -422,6 +492,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           DECKPILOT_UPDATER_PUBKEY: ${{ vars.DECKPILOT_UPDATER_PUBKEY }}
+          # The frontend's Plugins page (apps/desktop/src/settings/registry.ts).
+          VITE_DECKPILOT_PLUGINS: "1"
         with:
           projectPath: apps/desktop
           # The draft of the draft job; the builds never create a release.
@@ -431,9 +503,13 @@ jobs:
           # job: four jobs merging into it concurrently can lose entries.
           includeUpdaterJson: false
           # RPM does not allow "-" in versions: pre-releases build .deb and
-          # AppImage on Linux; stable releases all three.
+          # AppImage on Linux; stable releases all three. The plugin host
+          # and bundled/ (tauri.plugins.conf.json; on macOS the host as a
+          # signed file in Contents/MacOS, tauri.plugins.macos.conf.json).
           args: >-
             --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
+            --config src-tauri/tauri.plugins.conf.json
+            ${{ runner.os == 'macOS' && '--config src-tauri/tauri.plugins.macos.conf.json' || '' }}
             --config src-tauri/tauri.updater.conf.json
             ${{ (runner.os == 'Linux' && needs.validate-tag.outputs.prerelease == 'true') && '--bundles deb,appimage' || '' }}
       # Later steps need no certificate: remove it from their environment.
@@ -518,7 +594,7 @@ jobs:
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' \
             | grep -q -x -F "$(basename "$dmg")" \
             || { echo "::error::the stapled disk image did not replace the uploaded one"; exit 1; }
-      - name: Verify macOS signatures, agent identity and notarization
+      - name: Verify macOS signatures, agent and plugin host identity, entitlements and notarization
         if: runner.os == 'macOS' && needs.prepare.outputs.macos-signing == 'true'
         env:
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}

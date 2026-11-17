@@ -2,8 +2,9 @@
 # Tests the package checks without building real packages: msi-version.sh's
 # mapping, and check-packages.sh on fake packages laid out as the bundler
 # builds them, with stand-in binaries that carry a distribution record and
-# the bundler's package-format marker, signed with a throwaway key bound to
-# the version:
+# the bundler's package-format marker, the plugin host and the bundled
+# first-party plugins (stand-in modules, real manifests, pinned), signed
+# with a throwaway key bound to the version:
 #
 # - Linux (needs dpkg-deb; skipped without it): a pre-release .deb and
 #   AppImage, and what the checks must refuse in them;
@@ -74,11 +75,52 @@ app() {
   chmod 755 "$file"
 }
 
-# agent <file> <version>: a stand-in agent that reports <version>.
+# agent <file> <version>: a stand-in agent that reports <version> and
+# prints $work/compiled-pins.json as the pins it was compiled with.
 agent() {
   mkdir -p "$(dirname "$1")"
-  printf '#!/bin/sh\necho "deckpilot-agent %s"\n' "$2" > "$1"
+  # shellcheck disable=SC2016 # $1 belongs to the stand-in
+  printf '#!/bin/sh\nif [ "$1" = --print-bundled-pins ]; then cat "%s"; else echo "deckpilot-agent %s"; fi\n' \
+    "$work/compiled-pins.json" "$2" > "$1"
   chmod 755 "$1"
+}
+
+# host <file>: a stand-in plugin host.
+host() {
+  mkdir -p "$(dirname "$1")"
+  printf '#!/bin/sh\n' > "$1"
+  chmod 755 "$1"
+}
+
+# The bundled first-party plugins as plugins/first-party/build.sh stages
+# them, for the release set of plugins/first-party/bundled.json: the real
+# manifests and licenses, stand-in modules, and pins.json. The stand-in
+# agents were "compiled" with these pins ($work/compiled-pins.json).
+sha() { if command -v sha256sum > /dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
+bundled_source="$work/bundled-source"
+rm -rf "$bundled_source" && mkdir -p "$bundled_source"
+pins='[]'
+while IFS= read -r path; do
+  manifest="$root/plugins/first-party/$path/manifest.json"
+  pid=$(jq -r .id "$manifest")
+  mkdir -p "$bundled_source/$pid"
+  cp "$manifest" "$bundled_source/$pid/manifest.json"
+  cp "$root/plugins/first-party/$path/LICENSE" "$bundled_source/$pid/LICENSE"
+  printf '\0asm\1\0\0\0stand-in %s' "$pid" > "$bundled_source/$pid/plugin.wasm"
+  files='{}'
+  for file in LICENSE manifest.json plugin.wasm; do
+    files=$(jq --arg f "$file" --arg s "$(sha "$bundled_source/$pid/$file")" \
+      --argjson n "$(wc -c < "$bundled_source/$pid/$file" | tr -d ' ')" '. + {($f): {sha256: $s, size: $n}}' <<< "$files")
+  done
+  pins=$(jq --arg id "$pid" --arg v "$(jq -r .version "$manifest")" --argjson f "$files" \
+    '. + [{id: $id, version: $v, class: "default", files: $f}]' <<< "$pins")
+done < <(jq -r '.plugins[].path' "$root/plugins/first-party/bundled.json")
+jq -S -n --argjson p "$pins" '{pinsVersion: 1, plugins: ($p | sort_by(.id))}' > "$bundled_source/pins.json"
+cp "$bundled_source/pins.json" "$work/compiled-pins.json"
+# bundled <dir>: the bundled plugins at <dir> (the resources' bundled/).
+bundled() {
+  rm -rf "$1" && mkdir -p "$(dirname "$1")"
+  cp -R "$bundled_source" "$1"
 }
 
 # check <platform> <expect pass|fail> <message part> <description> <env...>
@@ -146,6 +188,9 @@ if command -v dpkg-deb > /dev/null; then
     printf 'Package: deck-pilot\nVersion: %s\nArchitecture: amd64\nMaintainer: test\nDescription: test package\n' "$version" > "$tree/DEBIAN/control"
     agent "$tree/usr/bin/deckpilot-agent" "$version"
     app "$tree/usr/bin/deckpilot-desktop" "$version" "$token" "$channel"
+    host "$tree/usr/bin/deckpilot-plugin-host"
+    bundled "$tree/usr/lib/DeckPilot/bundled"
+    [ -z "${DEB_OMIT-}" ] || rm -rf "${tree:?}/$DEB_OMIT"
     : > "$tree/usr/lib/udev/rules.d/70-deckpilot-streamdeck.rules"
     : > "$tree/usr/share/applications/DeckPilot.desktop"
     dpkg-deb --root-owner-group --build "$tree" "$bundle/deb/DeckPilot_${version}_amd64.deb" > /dev/null
@@ -161,7 +206,9 @@ if command -v dpkg-deb > /dev/null; then
     : > "$tree/DeckPilot.desktop"
     agent "$tree/usr/bin/deckpilot-agent" "$version"
     app "$tree/usr/bin/deckpilot-desktop" "$version" APP
-    [ -z "$omit" ] || rm -f "$tree/$omit"
+    host "$tree/usr/bin/deckpilot-plugin-host"
+    bundled "$tree/usr/lib/DeckPilot/bundled"
+    [ -z "$omit" ] || rm -rf "${tree:?}/$omit"
     {
       # shellcheck disable=SC2016 # the stand-in's own script
       printf '#!/bin/sh\n[ "$1" = --appimage-extract ] || exit 1\nmkdir -p squashfs-root\nbase64 -d << "PAYLOAD" | tar -xzf - -C squashfs-root\n'
@@ -211,6 +258,18 @@ if command -v dpkg-deb > /dev/null; then
   appimage 0.6.0-alpha.1
   rm "$work/bundle/appimage/DeckPilot_0.6.0-alpha.1_amd64.AppImage.sig"
   check linux fail "has no updater signature" "an AppImage without its signature fails" PRERELEASE=true PACKAGE_VERSION=0.6.0-alpha.1
+  appimage 0.6.0-alpha.1 usr/bin/deckpilot-plugin-host
+  check linux fail "lacks usr/bin/deckpilot-plugin-host" "an AppImage without the plugin host fails" PRERELEASE=true PACKAGE_VERSION=0.6.0-alpha.1
+  appimage 0.6.0-alpha.1 usr/lib/DeckPilot/bundled/deckpilot.notifications
+  check linux fail "bundled/deckpilot.notifications is missing" "an AppImage without a pinned bundled plugin fails" PRERELEASE=true PACKAGE_VERSION=0.6.0-alpha.1
+
+  echo "== the plugin runtime in the .deb"
+  DEB_OMIT=usr/bin/deckpilot-plugin-host linux 0.6.0-alpha.1
+  check linux fail "lacks usr/bin/deckpilot-plugin-host" "a .deb without the plugin host fails" PRERELEASE=true PACKAGE_VERSION=0.6.0-alpha.1
+  DEB_OMIT=usr/lib/DeckPilot/bundled linux 0.6.0-alpha.1
+  check linux fail "lacks usr/lib/DeckPilot/bundled/pins.json" "a .deb without the bundled plugins fails" PRERELEASE=true PACKAGE_VERSION=0.6.0-alpha.1
+  DEB_OMIT=usr/lib/DeckPilot/bundled/deckpilot.jira/plugin.wasm linux 0.6.0-alpha.1
+  check linux fail "pinned plugin.wasm is missing" "a .deb with a bundled plugin's module missing fails" PRERELEASE=true PACKAGE_VERSION=0.6.0-alpha.1
 else
   echo "== Linux packages: skipped (no dpkg-deb)"
 fi
@@ -239,6 +298,8 @@ plistlib.dump({"CFBundleIdentifier": "io.github.knittingcode.deckpilot", "CFBund
     "$app/Contents/Info.plist" "$shown"
   app "$app/Contents/MacOS/deckpilot-desktop" "$version" "$token"
   agent "$app/Contents/MacOS/deckpilot-agent" "$version"
+  host "$app/Contents/MacOS/deckpilot-plugin-host"
+  bundled "$app/Contents/Resources/bundled"
   : > "$app/Contents/Resources/icon.icns"
 }
 # macos <version> [<arch>]: the bundle, its signed updater archive and the
@@ -283,8 +344,29 @@ macos 0.6.0-alpha.1
 rm "$work/bundle/macos/DeckPilot.app/Contents/Resources/icon.icns"
 mac fail "lacks its icon" "a bundle without its icon fails"
 macos 0.6.0-alpha.1
-: > "$work/bundle/macos/DeckPilot.app/Contents/MacOS/deckpilot-plugin-host"
-mac fail "contains a plugin host" "a bundle with a plugin host fails"
+rm "$work/bundle/macos/DeckPilot.app/Contents/MacOS/deckpilot-plugin-host"
+mac fail "has the plugin host at '', expected exactly Contents/MacOS/deckpilot-plugin-host" "a bundle without the plugin host fails"
+macos 0.6.0-alpha.1
+host "$work/bundle/macos/DeckPilot.app/Contents/Resources/deckpilot-plugin-host-aarch64-apple-darwin"
+mac fail "expected exactly Contents/MacOS/deckpilot-plugin-host" "a bundle with a second plugin host fails"
+macos 0.6.0-alpha.1
+chmod -x "$work/bundle/macos/DeckPilot.app/Contents/MacOS/deckpilot-plugin-host"
+mac fail "lacks the plugin host" "a bundle whose plugin host is not executable fails"
+macos 0.6.0-alpha.1
+rm -rf "$work/bundle/macos/DeckPilot.app/Contents/Resources/bundled"
+mac fail "lacks the bundled plugins" "a bundle without the bundled plugins fails"
+macos 0.6.0-alpha.1
+printf '{"pinsVersion":1,"plugins":[]}\n' > "$work/bundle/macos/DeckPilot.app/Contents/Resources/bundled/pins.json"
+rm -rf "$work/bundle/macos/DeckPilot.app/Contents/Resources/bundled/"deckpilot.*
+mac fail "expected those of plugins/first-party/bundled.json" "a bundle without any bundled plugin fails"
+macos 0.6.0-alpha.1
+printf 'X' >> "$work/bundle/macos/DeckPilot.app/Contents/Resources/bundled/deckpilot.github/plugin.wasm"
+mac fail "the bundled plugins do not match their pins" "a bundle with a changed bundled plugin fails"
+macos 0.6.0-alpha.1
+cp "$work/compiled-pins.json" "$work/compiled-pins.saved"
+printf '{"pinsVersion":1,"plugins":[]}\n' > "$work/compiled-pins.json"
+mac fail "differs from the pins compiled into" "a bundle whose agent was compiled without the pins fails"
+mv "$work/compiled-pins.saved" "$work/compiled-pins.json"
 macos 0.6.0-alpha.1
 bundle_app "$work/bundle/macos/DeckPilot.app" 0.6.0-alpha.1 NSS
 mac fail "carries a patched bundle type" "a macOS app patched as another package fails"

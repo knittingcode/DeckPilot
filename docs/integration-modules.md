@@ -313,8 +313,8 @@ plugin's own credential slot; the credential here stays). Until then, if
 you decline, and with GitHub Enterprise, a private API host or an action
 that names a credential other than the module's, this module keeps
 running them. If you disable or uninstall the plugin, the `github.*`
-actions are unavailable rather than silently run by this module. Release
-builds have plugins off: there, and in an older app on the same data,
+actions are unavailable rather than silently run by this module. Releases
+up to v0.6.0 have no plugins: there, and in an older app on the same data,
 this module runs them as before.
 
 Settings: **API URL** (`apiUrl`, `https://api.github.com`; for GitHub
@@ -624,7 +624,7 @@ shown per minute (more are dropped, and the node goes on unless it is
 critical). If you turned this module off, the plugin starts off too. If
 you disable or uninstall the plugin, it stays so across restarts and
 updates, and the `notifications.*` actions are unavailable rather than
-silently run by this module. Release builds have plugins off: there, and
+silently run by this module. Releases up to v0.6.0 have no plugins: there, and
 in an older app on the same data, this module runs them as before.
 
 Settings (portable): **Desktop notifications** (on), **Status bar** (on),

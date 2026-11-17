@@ -35,8 +35,10 @@ screenshots were available for this audit.
 | default plugin | A sandboxed plugin shipped with DeckPilot as a verified package |
 | optional plugin | A plugin the user installs |
 
-The plugin system is experimental and off in released builds (cargo feature
-`plugins`, `--enable-plugins`, `VITE_DECKPILOT_PLUGINS=1`), and its sandbox
+The plugin system is experimental; published releases up to v0.6.0 do not
+contain it, and the release workflow builds it into the installers from
+the next release on (cargo feature `plugins`, `VITE_DECKPILOT_PLUGINS=1`,
+the plugin host and bundled plugins; `--enable-plugins`), and its sandbox
 has no process, file system, input injection, audio or device capability
 (`docs/marketplace/module-migration.md`, G13–G16). Nothing in this document
 is a plugin today, and nothing here adds a capability to the plugin broker.
@@ -160,7 +162,7 @@ component tests). Nothing here has physical evidence yet.
 | Requirement | Status | Evidence or plan |
 | --- | --- | --- |
 | Essential actions offline on a fresh install | verified for what exists | Built-in modules are compiled in; nothing is downloaded. The new modules are built in too |
-| No registry needed at first launch | verified | Released builds have plugins off |
+| No registry needed at first launch | verified | Published releases up to v0.6.0 have no plugins; the bundled first-party plugins of later releases are seeded offline from the installer (`plugins_bundled`) |
 | Optional integrations not installed automatically; removed plugins not reinstalled | verified (integration) | `apps/agent/tests/plugins_*.rs` (tombstones) |
 | Existing profiles, pages, layouts, bindings, workflows, variables, action ids kept | by design | See [4](#4-compatibility-rules); each pull request tests an alpha.3-style database |
 

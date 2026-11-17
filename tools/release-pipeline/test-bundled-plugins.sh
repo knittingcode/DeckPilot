@@ -208,6 +208,35 @@ fresh
 printf '#!/usr/bin/env bash\nexit 2\n' > "$work/case/agent"
 fails "an agent without --print-bundled-pins" "--print-bundled-pins failed"
 
+echo "== an agent of another architecture (--without-running)"
+check() { "$here/check-bundled-plugins.sh" "$work/case/bundled" "$work/case/agent" --without-running > "$work/check.log" 2>&1; }
+# embedded <file>: an "executable" this machine cannot run, with <file>'s
+# bytes inside, as include_bytes! leaves them.
+embedded() {
+  { printf '\317\372\355\376 not runnable here '; cat "$1"; printf ' more code'; } > "$work/case/agent"
+  chmod -x "$work/case/agent"
+}
+fresh
+embedded "$work/case/bundled/pins.json"
+passes "an agent that embeds exactly pins.json, not run"
+fresh
+jq -c . "$work/case/bundled/pins.json" > "$work/case/compact.json"
+embedded "$work/case/compact.json"
+fails "an agent that embeds other bytes" "pins.json is not compiled into"
+fresh
+printf 'X' >> "$plugin/plugin.wasm"
+cp "$work/case/bundled/pins.json" "$work/case/old.json"
+pin "$work/case/bundled"
+embedded "$work/case/old.json"
+fails "files re-pinned after the agent was built (not run)" "pins.json is not compiled into"
+fresh
+embedded "$work/case/bundled/pins.json"
+printf 'X' >> "$plugin/plugin.wasm"
+fails "a tampered file (not run)" "plugin.wasm has"
+fresh
+rm "$work/case/agent"
+fails "no agent (not run)" "does not exist"
+
 echo
 echo "$passed passed, $failures failed (work dir: $work)"
 [ "$failures" -eq 0 ]

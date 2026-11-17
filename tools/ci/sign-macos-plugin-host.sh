@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Signs the staged plugin host for a macOS package built with
-# DECKPILOT_RELEASE_PLUGINS=1, before the Tauri bundler runs:
+# Signs the staged plugin host for a macOS package (the release workflow,
+# the Packaging workflow ad hoc, DECKPILOT_RELEASE_PLUGINS=1 locally),
+# before the Tauri bundler runs:
 #
 #   APPLE_SIGNING_IDENTITY=<identity> tools/ci/sign-macos-plugin-host.sh <binary>
 #

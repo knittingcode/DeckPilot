@@ -14,6 +14,13 @@
 #   version, on Linux the udev rule (.deb, .rpm), the desktop entry (.deb,
 #   AppImage) and AppRun (AppImage), on macOS the bundle executable, icon
 #   and, in the disk image, the Applications link;
+# - the plugin runtime, an application component of every package
+#   (docs/marketplace/module-migration.md, section 4.5): the plugin host
+#   next to the agent, and the bundled first-party plugins in the
+#   application's resources (bundled/), exactly the release set of
+#   plugins/first-party/bundled.json, matching their pins and the pins
+#   compiled into the bundled agent
+#   (tools/release-pipeline/check-bundled-plugins.sh);
 # - the distribution record compiled into the application (and into the
 #   agent, once it links deckpilot-distribution): the channel
 #   DISTRIBUTION_CHANNEL, the version, no development override
@@ -167,6 +174,31 @@ expect_file() {
   [ -f "$1" ] || fail "expected $1, built: $(find "$bundle" -maxdepth 2 -type f | sed "s#^$bundle/##" | tr '\n' ' ')"
 }
 
+# The plugin ids the application must bundle: those of
+# plugins/first-party/bundled.json (never a test fixture), sorted.
+release_plugin_ids() {
+  local path
+  jq -r '.plugins[].path' plugins/first-party/bundled.json | tr -d '\r' | while IFS= read -r path; do
+    jq -r .id "plugins/first-party/$path/manifest.json" | tr -d '\r'
+  done | LC_ALL=C sort
+}
+
+# plugin_runtime <host> <bundled dir> <agent> <what>: the plugin host is
+# an executable file; bundled/ holds exactly the release set of first-party
+# plugins, matching their pins and the pins compiled into <agent>.
+plugin_runtime() {
+  local host="$1" bundled="$2" agent="$3" what="$4" ids expected
+  [ -f "$host" ] && [ -x "$host" ] || fail "$what lacks the plugin host $host"
+  [ -f "$bundled/pins.json" ] || fail "$what lacks the bundled plugins ($bundled/pins.json)"
+  ids=$(jq -r '.plugins[].id' "$bundled/pins.json" | tr -d '\r' | LC_ALL=C sort)
+  expected=$(release_plugin_ids)
+  [ "$ids" = "$expected" ] \
+    || fail "$what bundles the plugins $(echo "$ids" | tr '\n' ' '), expected those of plugins/first-party/bundled.json: $(echo "$expected" | tr '\n' ' ')"
+  "$root/tools/release-pipeline/check-bundled-plugins.sh" "$bundled" "$agent" \
+    || fail "$what: the bundled plugins do not match their pins or the agent's"
+  echo "$what: plugin host and bundled plugins $(echo "$ids" | tr '\n' ' ')"
+}
+
 agent_reports_version() {
   local agent="$1" reported
   reported=$("$agent" --version | tr -d '\r')
@@ -241,11 +273,16 @@ macos_app() {
   local icon
   icon=$(plist_value "$plist" CFBundleIconFile)
   [ -n "$icon" ] && [ -f "$app/Contents/Resources/$icon" ] || fail "$what: $app lacks its icon (CFBundleIconFile '$icon')"
-  # The plugin host is not part of the application bundle (targets.toml:
-  # plugin_host_install = "not_bundled").
-  [ -z "$(find "$app/Contents" -name 'deckpilot-plugin-host*' -print -quit)" ] \
-    || fail "$what: $app contains a plugin host"
+  # The plugin host is in Contents/MacOS, and only there (targets.toml:
+  # plugin_host_install = "contents_macos_own_entitlement"); the bundled
+  # plugins in Contents/Resources/bundled.
+  local hosts
+  hosts=$(cd "$app" && find Contents -name 'deckpilot-plugin-host*' | sort | tr '\n' ' ')
+  [ "$hosts" = "Contents/MacOS/deckpilot-plugin-host " ] \
+    || fail "$what: $app has the plugin host at '$hosts', expected exactly Contents/MacOS/deckpilot-plugin-host"
   agent_reports_version "$app/Contents/MacOS/deckpilot-agent"
+  plugin_runtime "$app/Contents/MacOS/deckpilot-plugin-host" "$app/Contents/Resources/bundled" \
+    "$app/Contents/MacOS/deckpilot-agent" "$what"
   distribution_record "$app/Contents/MacOS/deckpilot-desktop" app
   distribution_record "$app/Contents/MacOS/deckpilot-agent" none optional
   echo "$what: $identifier $version, app, agent and icon"
@@ -291,7 +328,8 @@ case "$platform" in
     contents=$(dpkg-deb --contents "$deb")
     echo "$contents"
     # dpkg-deb lists paths with or without a leading "./".
-    for path in usr/bin/deckpilot-desktop usr/bin/deckpilot-agent \
+    for path in usr/bin/deckpilot-desktop usr/bin/deckpilot-agent usr/bin/deckpilot-plugin-host \
+      usr/lib/DeckPilot/bundled/pins.json \
       usr/lib/udev/rules.d/70-deckpilot-streamdeck.rules 'usr/share/applications/.*\.desktop'; do
       echo "$contents" | grep -q -E " (\./)?$path\$" || fail "$deb lacks $path"
     done
@@ -302,7 +340,9 @@ case "$platform" in
     agent_reports_version "$extracted/usr/bin/deckpilot-agent"
     distribution_record "$extracted/usr/bin/deckpilot-desktop" deb
     distribution_record "$extracted/usr/bin/deckpilot-agent" none optional
-    echo "$deb: version $version, app, agent, udev rule and desktop entry"
+    plugin_runtime "$extracted/usr/bin/deckpilot-plugin-host" "$extracted/usr/lib/DeckPilot/bundled" \
+      "$extracted/usr/bin/deckpilot-agent" "$deb"
+    echo "$deb: version $version, app, agent, plugin host, bundled plugins, udev rule and desktop entry"
     signed_for_version "$deb"
 
     # The AppImage extracts itself (no FUSE needed): AppRun, the desktop
@@ -313,14 +353,17 @@ case "$platform" in
     (cd "$extracted" && ./DeckPilot.AppImage --appimage-extract > /dev/null) \
       || fail "$appimage does not extract (--appimage-extract)"
     squashfs="$extracted/squashfs-root"
-    for path in AppRun usr/bin/deckpilot-desktop usr/bin/deckpilot-agent; do
+    for path in AppRun usr/bin/deckpilot-desktop usr/bin/deckpilot-agent usr/bin/deckpilot-plugin-host \
+      usr/lib/DeckPilot/bundled/pins.json; do
       [ -e "$squashfs/$path" ] || fail "$appimage lacks $path"
     done
     [ -n "$(find "$squashfs" -maxdepth 1 -name '*.desktop' -print -quit)" ] || fail "$appimage lacks its desktop entry"
     agent_reports_version "$squashfs/usr/bin/deckpilot-agent"
     distribution_record "$squashfs/usr/bin/deckpilot-desktop" appimage
     distribution_record "$squashfs/usr/bin/deckpilot-agent" none optional
-    echo "$appimage: version $version, AppRun, app, agent and desktop entry"
+    plugin_runtime "$squashfs/usr/bin/deckpilot-plugin-host" "$squashfs/usr/lib/DeckPilot/bundled" \
+      "$squashfs/usr/bin/deckpilot-agent" "$appimage"
+    echo "$appimage: version $version, AppRun, app, agent, plugin host, bundled plugins and desktop entry"
     signed_for_version "$appimage"
 
     if [ "$prerelease" = true ]; then
@@ -328,8 +371,8 @@ case "$platform" in
     else
       files=$(rpm -qlp "$rpm")
       echo "$files"
-      for path in /usr/bin/deckpilot-desktop /usr/bin/deckpilot-agent \
-        /usr/lib/udev/rules.d/70-deckpilot-streamdeck.rules; do
+      for path in /usr/bin/deckpilot-desktop /usr/bin/deckpilot-agent /usr/bin/deckpilot-plugin-host \
+        /usr/lib/DeckPilot/bundled/pins.json /usr/lib/udev/rules.d/70-deckpilot-streamdeck.rules; do
         echo "$files" | grep -q -x -F "$path" || fail "$rpm lacks $path"
       done
       rpm_version=$(rpm -qp --queryformat '%{VERSION}' "$rpm")
@@ -337,7 +380,9 @@ case "$platform" in
       extracted=$(fresh_dir rpm)
       extract_rpm "$rpm" "$extracted"
       distribution_record "$extracted/usr/bin/deckpilot-desktop" rpm
-      echo "$rpm: version $version, app, agent and udev rule"
+      plugin_runtime "$extracted/usr/bin/deckpilot-plugin-host" "$extracted/usr/lib/DeckPilot/bundled" \
+        "$extracted/usr/bin/deckpilot-agent" "$rpm"
+      echo "$rpm: version $version, app, agent, plugin host, bundled plugins and udev rule"
       signed_for_version "$rpm"
     fi
     ;;
@@ -350,7 +395,7 @@ case "$platform" in
     for kind in nsis msi; do
       files=$(find "$extracted/$kind" -type f -iname '*.exe' | sed 's#.*/##' | sort -u)
       echo "$kind: $(echo "$files" | tr '\n' ' ')"
-      for exe in deckpilot-desktop.exe deckpilot-agent.exe; do
+      for exe in deckpilot-desktop.exe deckpilot-agent.exe deckpilot-plugin-host.exe; do
         echo "$files" | grep -q -i -x -F "$exe" || fail "the $kind installer lacks $exe"
       done
       agent=$(find "$extracted/$kind" -type f -iname deckpilot-agent.exe | head -n 1)
@@ -367,6 +412,9 @@ case "$platform" in
       echo "$kind: deckpilot-desktop.exe $app_version"
       distribution_record "$app" "$kind"
       distribution_record "$agent" none optional
+      # Next to the agent: the host, and bundled/ (the installation
+      # directory is the resources directory on Windows).
+      plugin_runtime "$(dirname "$agent")/deckpilot-plugin-host.exe" "$(dirname "$agent")/bundled" "$agent" "the $kind installer"
     done
     signed_for_version "$nsis"
     signed_for_version "$msi"
