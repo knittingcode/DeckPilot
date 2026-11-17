@@ -1026,7 +1026,9 @@ async fn a_multi_action_switch_goes_through_its_states_and_keeps_them() {
     }
     assert!(shows_frame(&mock, &device, 0, &lamp_on));
 
-    // The states survive a restart.
+    // The states survive a restart. The event connection goes first: on
+    // Windows an open pipe client keeps the old endpoint from the new agent.
+    drop(events);
     agent.shutdown().await;
     let agent = TestAgent::start_unlocked(&paths, &db_key, &mock, None).await;
     connected(&agent, &device).await;
