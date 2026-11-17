@@ -353,13 +353,64 @@ ctx.log(LogLevel::Warn, "rate limit almost reached");
   and returns nothing. The agent writes them to its log, attributed to the
   plugin. Never log secrets or personal data.
 
+## Time
+
+```rust
+let now = ctx.now()?;
+let quiet = (22 * 60..24 * 60).contains(&now.local_minutes_of_day());
+ctx.storage_set("snoozedUntil", &(now.unix_ms + 10 * 60_000))?;
+```
+
+- `Context::now()` (op `time.now`, plugin API 1.1) returns `Now
+  { unix_ms, utc_offset_minutes }`: the agent's wall clock in milliseconds
+  since the Unix epoch (UTC) and the local UTC offset at that instant in
+  minutes, east positive. Helpers: `unix_seconds()`, `local_seconds()`,
+  `local_minutes_of_day()` (0 to 1,439), `local_weekday()` (0 is Monday)
+  and `millis_since(earlier)`.
+- **No permission**: always allowed while the plugin is enabled. There is
+  no time zone name and there are no rules for other instants; the offset
+  of another moment (after a change to summer time) is what `now()`
+  returns then.
+- The clock is the system's: it can jump when the user or the network
+  sets it. Compare stored instants with `millis_since`, which answers 0
+  for a clock that went back, and never sleep or spin on it: a plugin has
+  no timer, and an action that waits is stopped at its time limit.
+- 20 calls per second (`throttled` beyond). `std::time::SystemTime::now()`
+  still panics in the guest; use `ctx.now()`.
+- An agent older than plugin API 1.1 answers `Unsupported`. A plugin that
+  cannot work without the time declares `"pluginApi": "^1.1"` and
+  `Plugin::requires_api(ApiLevel { major: 1, minor: 1 })`; older agents
+  then do not install it.
+
+## Randomness
+
+```rust
+let seed = ctx.random_u64()?;              // 8 bytes
+let card = ctx.random_below(52)?;          // 0..52, unbiased
+let nonce = ctx.random_bytes(16)?;         // 1 to 64 bytes
+```
+
+- `Context::random_bytes(n)` (op `random.bytes`, plugin API 1.1) returns
+  `n` bytes, 1 to 64 (`MAX_RANDOM_BYTES`), from the operating system's
+  cryptographic random source in the agent, fresh for every call.
+  `random_u64()` takes 8 of them; `random_below(bound)` gives every value
+  in `0..bound` the same chance (one call for 32 bytes).
+- **No permission**: always allowed while the plugin is enabled.
+- **4,096 bytes per minute** per plugin (a token bucket; `throttled`
+  beyond). Take a seed once and expand it in the plugin (a shuffle of 52
+  cards needs one `random_u64` and a small generator, not 52 calls). A
+  length outside 1 to 64 is refused by the SDK without a host call.
+- Random number crates that read the system (`getrandom`, `rand`'s
+  default generators) still do not link or panic in the guest; seed a
+  deterministic generator from `ctx.random_u64()`.
+
 ## What there is not (ABI 1)
 
 No file system, process, clipboard, keychain or shell access, ever. No
-clock and no random source: `std::time::SystemTime::now()` and random
-number generators fail or panic in the guest, so there is no "now", no
-random UUID (v4) and no ULID (Developer Tools uses the `Date` header of a
-response as the time of a check, and name-based UUIDs). No reading of the
+ambient clock or random source: `std::time::SystemTime::now()` and random
+number generators that read the system fail or panic in the guest; the
+time and random bytes come from the agent ([Time](#time),
+[Randomness](#randomness)). No sleep and no timers. No reading of the
 active profile or project (the run context names what started the run and
 how its workflow run is going, nothing more), of variables, no device
 access, no timers or background work, no streaming HTTP, no WebSockets.

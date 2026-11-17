@@ -45,6 +45,7 @@ fn builtin_modules_register_with_namespaced_action_types() {
     assert_eq!(
         ids,
         [
+            "deck",
             "docker",
             "general",
             "git",
@@ -69,6 +70,10 @@ fn builtin_modules_register_with_namespaced_action_types() {
     assert_eq!(
         types,
         [
+            "deck.next-page",
+            "deck.previous-page",
+            "deck.page-indicator",
+            "deck.switch-profile",
             "docker.status",
             "docker.containers",
             "docker.compose-status",

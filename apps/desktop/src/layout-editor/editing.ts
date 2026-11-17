@@ -411,13 +411,24 @@ export function duplicateControls(
   return { layout: next, controls: created }
 }
 
-/** What is being dragged: a library entry or the bindings of a control. */
+/**
+ * What is being dragged: a library entry, the bindings of a control,
+ * "New folder" (a folder that does not exist yet; see `createFolder`) or an
+ * action type of the catalog (an action that may not exist yet; see
+ * `catalog.ts`).
+ */
 export type DragSource =
-  { type: "target"; target: BindingTarget } | { type: "control"; control: ControlId }
+  | { type: "target"; target: BindingTarget }
+  | { type: "control"; control: ControlId }
+  | { type: "newFolder" }
+  | { type: "actionType"; actionType: string }
 
 /**
  * Drops a library entry (assigned to the first free trigger) or a control
  * (moved, swapping with the destination). `null` when the drop is refused.
+ * A new folder needs an id of its own (the caller makes it with
+ * `createFolder`) and an action type an action: the caller creates or
+ * finds it and drops that.
  */
 export function dropOnControl(
   model: DeviceModel,
@@ -426,9 +437,87 @@ export function dropOnControl(
   source: DragSource,
   over: ControlId,
 ): DeviceLayout | null {
+  if (source.type === "newFolder" || source.type === "actionType") return null
   if (source.type === "control") return moveControl(model, layout, pageId, source.control, over)
   if (!targetFits(layout, pageId, source.target)) return null
   return assignTarget(model, layout, pageId, [over], source.target)
+}
+
+// ---------------------------------------------------------------------------
+// Folders
+
+/** A page name no page of the layout has: "Folder", "Folder 2", … */
+export function freeFolderName(layout: DeviceLayout): string {
+  const taken = new Set(layout.pages.map((p) => p.name.trim().toLowerCase()))
+  if (!taken.has("folder")) return "Folder"
+  let n = 2
+  while (taken.has(`folder ${n}`)) n += 1
+  return `Folder ${n}`
+}
+
+/** Whether a control has no binding on the page. */
+export function isFree(layout: DeviceLayout, pageId: string, control: ControlId): boolean {
+  return bindingsFor(layout, pageId, control).length === 0
+}
+
+/**
+ * Creates a folder inside the page `pageId` and makes `control` open it:
+ * a new page with the id `id`, stored as a page of `pageId` (so Back
+ * returns there), and one binding on the control's first trigger. Other
+ * keys and pages are untouched. `null` when the control already does
+ * something: a bound control is never overwritten.
+ */
+export function createFolder(
+  model: DeviceModel,
+  layout: DeviceLayout,
+  pageId: string,
+  control: ControlId,
+  id: string,
+): DeviceLayout | null {
+  if (!findPage(layout, pageId) || findPage(layout, id) || !isFree(layout, pageId, control)) {
+    return null
+  }
+  const trigger = defaultTrigger(model, layout, pageId, control)
+  if (!trigger) return null
+  const withPage: DeviceLayout = {
+    ...layout,
+    pages: [...layout.pages, { id, name: freeFolderName(layout), parent: pageId, bindings: [] }],
+  }
+  return setBinding(withPage, pageId, {
+    control,
+    trigger,
+    target: { type: "openPage", page: id },
+    label: null,
+  })
+}
+
+/** What deleting a page takes with it, for the confirmation. */
+export interface PageDeletion {
+  name: string
+  /** Controls of the page itself that do something. */
+  controls: number
+  /** Controls on other pages that open it; they are cleared of it. */
+  openers: number
+  /** Pages stored inside it; they move up to its own folder. */
+  inside: string[]
+  /** Where those pages go: the page's folder, or `null` for the top level. */
+  folder: string | null
+}
+
+export function pageDeletion(layout: DeviceLayout, pageId: string): PageDeletion | null {
+  const target = findPage(layout, pageId)
+  if (!target || pageId === layout.homePage) return null
+  const folder = pageParents(layout).get(pageId)
+  return {
+    name: target.name,
+    controls: new Set(target.bindings.map((b) => controlKey(b.control))).size,
+    openers: layout.pages
+      .filter((p) => p.id !== pageId)
+      .flatMap((p) => p.bindings)
+      .filter((b) => b.target.type === "openPage" && b.target.page === pageId).length,
+    inside: layout.pages.filter((p) => p.parent === pageId).map((p) => p.name),
+    folder: folder ? (findPage(layout, folder)?.name ?? null) : null,
+  }
 }
 
 /** Parses a key made by `controlKey`. */
@@ -455,4 +544,33 @@ export function parentPage(layout: DeviceLayout, pageId: string): string {
 /** Keys of controls with at least one binding on a page. */
 export function boundControls(layout: DeviceLayout, pageId: string): Set<string> {
   return new Set(findPage(layout, pageId)?.bindings.map((b) => controlKey(b.control)) ?? [])
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`
+
+/** What goes with a deleted page, in sentences, for the confirmation. */
+export function deletionNotes(deletion: PageDeletion): string[] {
+  const notes: string[] = []
+  const { controls, openers, inside } = deletion
+  if (controls > 0) {
+    notes.push(
+      `${plural(controls, "control")} on it ${controls === 1 ? "is" : "are"} deleted with it.`,
+    )
+  }
+  if (openers > 0) {
+    notes.push(
+      `${plural(openers, "control")} on other pages that ${openers === 1 ? "opens" : "open"} it will do nothing afterwards.`,
+    )
+  }
+  if (inside.length > 0) {
+    const names = inside.map((name) => `“${name || "Untitled"}”`).join(", ")
+    const where = deletion.folder ? `to “${deletion.folder}”` : "to the top level"
+    notes.push(
+      inside.length === 1
+        ? `The page inside it (${names}) is kept and moves ${where}.`
+        : `The pages inside it (${names}) are kept and move ${where}.`,
+    )
+  }
+  if (notes.length === 0) notes.push("The page is empty and nothing opens it.")
+  return notes
 }

@@ -419,6 +419,12 @@ export interface LayoutPage {
   bindings: ControlBinding[]
   /** Gesture timings of controls that differ from the machine's defaults. */
   gestures?: KeyGestureSettings[]
+  /**
+   * A folder that closes by itself: after one of its keys ran an action or
+   * started a workflow, the device returns to the folder's parent. Not
+   * stored when off.
+   */
+  autoReturn?: boolean
 }
 
 export interface DeviceLayout {
@@ -857,6 +863,11 @@ export interface KeyFace {
   progress?: number | null
   toggle?: boolean | null
   appearance?: KeyAppearance | null
+  /** Marks of a live state, drawn by the renderer (as the others above). */
+  accent?: string | null
+  glyph?: string | null
+  badge?: string | null
+  series?: number[] | null
 }
 
 export interface ControlFace {

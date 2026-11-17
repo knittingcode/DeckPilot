@@ -54,8 +54,8 @@ pub use appearance::{
     MAX_ICON_NAME, MAX_ICON_SIZE, MAX_ICONS, TitleAlign,
 };
 pub use button_state::{
-    ButtonState, Indicator, MAX_REFRESH_INTERVAL, MIN_REFRESH_INTERVAL, RefreshPolicy, StateError,
-    StateSnapshot,
+    Accent, ButtonState, Glyph, Indicator, MAX_REFRESH_INTERVAL, MAX_STATE_BADGE, MAX_STATE_SERIES,
+    MIN_REFRESH_INTERVAL, RefreshPolicy, StateError, StateSnapshot,
 };
 pub use cancel::{CancelReason, CancellationToken};
 pub use credentials::{
@@ -64,10 +64,10 @@ pub use credentials::{
 };
 pub use device_runtime::{DetachedAction, LayoutStatus, Runtime, RuntimeOutcome, page_faces};
 pub use execution::{
-    ActionResult, ActionStatus, CapabilityDenied, ContextEffect, ExecutionContext,
-    ExecutionControl, Progress, RunOrigin, RunSummary, WorkflowCause,
+    ActionResult, ActionStatus, CapabilityDenied, ContextEffect, DeckRequest, ExecutionContext,
+    ExecutionControl, ProfileTarget, Progress, RunOrigin, RunSummary, WorkflowCause,
 };
-pub use face::{FaceStyle, KeyFace, render_label};
+pub use face::{FaceStyle, KeyFace, PageLabel, render_label, render_page_label};
 pub use history::{
     ExecutionRecord, ExecutionState, ExecutionSummary, ExecutionTrigger, ProjectOutcome,
     safe_event, safe_report,

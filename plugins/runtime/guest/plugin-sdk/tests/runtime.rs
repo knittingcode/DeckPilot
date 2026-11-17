@@ -141,6 +141,7 @@ fn logging_is_best_effort_and_bounded() {
 fn versions_are_exposed() {
     assert_eq!(deckpilot_plugin_sdk::ABI_VERSION, 1);
     assert_eq!(deckpilot_plugin_sdk::API_LEVEL.to_string(), "1.0");
+    assert_eq!(deckpilot_plugin_sdk::LATEST_API_LEVEL.to_string(), "1.1");
     assert_eq!(deckpilot_plugin_sdk::SDK_VERSION, env!("CARGO_PKG_VERSION"));
 }
 
@@ -175,4 +176,119 @@ fn manifest_mismatches_name_every_difference() {
     ] {
         assert!(joined.contains(needle), "{needle}\n{joined}");
     }
+}
+
+/// A plugin needs API 1.0 unless it says more; what it says is what
+/// `dp_describe` reports and what its manifest must declare.
+#[test]
+fn a_plugin_declares_the_api_level_it_needs() {
+    use deckpilot_plugin_sdk::testing::manifest_mismatches;
+    use deckpilot_plugin_sdk::{API_LEVEL, ApiLevel, LATEST_API_LEVEL};
+    let plugin = || Plugin::new("acme.check", "1.0.0");
+    let manifest = |api: &str| {
+        json!({"id": "acme.check", "version": "1.0.0", "engines": {"pluginApi": api},
+               "contributes": {"actions": []}})
+    };
+    assert_eq!(plugin().api_level(), API_LEVEL);
+    assert_eq!(plugin().descriptor().api_level, "1.0");
+    assert!(manifest_mismatches(&plugin(), &manifest("^1.0")).is_empty());
+
+    let timed = plugin().requires_api(ApiLevel { major: 1, minor: 1 });
+    assert_eq!(timed.api_level(), LATEST_API_LEVEL);
+    assert_eq!(timed.descriptor().api_level, "1.1");
+    assert!(manifest_mismatches(&timed, &manifest("^1.1")).is_empty());
+    // A manifest that still says 1.0 would install on an agent the plugin
+    // cannot work with: named.
+    let found = manifest_mismatches(&timed, &manifest("^1.0")).join("\n");
+    assert!(
+        found.contains("engines.pluginApi is \"^1.0\" in the manifest, \"^1.1\" in the plugin"),
+        "{found}"
+    );
+
+    // Never below the base level or above what the SDK implements.
+    let level = |major, minor| plugin().requires_api(ApiLevel { major, minor }).api_level();
+    assert_eq!(level(0, 9), API_LEVEL);
+    assert_eq!(level(1, 0), API_LEVEL);
+    assert_eq!(level(1, 99), LATEST_API_LEVEL);
+    assert_eq!(level(2, 0), LATEST_API_LEVEL);
+}
+
+/// `time.now` and `random.bytes` through the SDK: typed answers, bounds
+/// checked before the host is asked, and an older agent's refusal as
+/// `Unsupported`.
+#[test]
+fn the_clock_and_random_bytes_are_typed_and_bounded() {
+    use deckpilot_plugin_sdk::CapabilityErrorKind;
+    let mut host = MockHost::new(|req| match req {
+        CapabilityRequest::TimeNow(_) => CallResult::Ok(json!({
+            "unixMs": 1_794_871_799_999_u64, "utcOffsetMinutes": -480
+        })),
+        CapabilityRequest::RandomBytes(r) => {
+            CallResult::Ok(json!({"bytes": b64(r.length as usize)}))
+        }
+        _ => CallResult::Ok(serde_json::Value::Null),
+    });
+    let mut ctx = host.context();
+    // 2026-11-16 23:29:59.999 UTC is 15:29 on the same Monday eight hours
+    // west.
+    let now = ctx.now().unwrap();
+    assert_eq!(now.unix_seconds(), 1_794_871_799);
+    assert_eq!(now.local_minutes_of_day(), 15 * 60 + 29);
+    assert_eq!(now.local_weekday(), 0);
+    assert_eq!(now.millis_since(now.unix_ms - 250), 250);
+    assert_eq!(now.millis_since(now.unix_ms + 1), 0);
+
+    assert_eq!(ctx.random_bytes(3).unwrap(), [0xAB; 3]);
+    assert_eq!(ctx.random_bytes(64).unwrap().len(), 64);
+    assert_eq!(ctx.random_u64().unwrap(), 0xABAB_ABAB_ABAB_ABAB);
+    let calls = ctx.calls();
+    for length in [0, 65, usize::MAX] {
+        let e = ctx.random_bytes(length).unwrap_err();
+        assert_eq!(e.kind(), CapabilityErrorKind::BadRequest, "{length}");
+    }
+    assert_eq!(ctx.random_below(0).unwrap(), 0);
+    assert_eq!(ctx.random_below(1).unwrap(), 0);
+    assert_eq!(ctx.calls(), calls, "refused or answered without the host");
+    assert!(ctx.random_below(6).unwrap() < 6);
+
+    // A reply of another length, or not base64, is malformed, not bytes.
+    for reply in [json!({"bytes": "AAAA"}), json!({"bytes": "?"}), json!(null)] {
+        let mut wrong = MockHost::new(move |_| CallResult::Ok(reply.clone()));
+        let e = wrong.context().random_bytes(16).unwrap_err();
+        assert_eq!(e.kind(), CapabilityErrorKind::MalformedReply);
+    }
+
+    // An agent that predates plugin API 1.1.
+    let mut old =
+        MockHost::new(|_| CallResult::error(CallErrorCode::UnsupportedOp, "unsupported operation"));
+    let mut ctx = old.context();
+    assert_eq!(
+        ctx.now().unwrap_err().kind(),
+        CapabilityErrorKind::Unsupported
+    );
+    assert_eq!(
+        ctx.random_u64().unwrap_err().kind(),
+        CapabilityErrorKind::Unsupported
+    );
+}
+
+/// `length` bytes of 0xAB as padded base64, without a base64 crate.
+fn b64(length: usize) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = vec![0xAB_u8; length];
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }

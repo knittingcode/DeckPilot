@@ -466,6 +466,49 @@ fn duplicated_profiles_are_isolated() {
     );
 }
 
+/// A duplicated profile is announced by the running agent like a created
+/// one: the agent is asked to reload, and its next state lists the copy.
+/// Without that, the tray and every other client kept the old list until
+/// something else made the agent publish its state.
+#[test]
+fn a_duplicated_profile_is_announced_by_the_agent() {
+    let h = Harness::new();
+    let work = new_profile(&h, "Work");
+    let (runtime, _mock, agent) = launch_agent(&h.paths, None);
+    h.unlock();
+    wait_for(&h, |s| {
+        s["running"] == true && s["status"]["devices"][0]["state"] == "connected"
+    });
+    // Only states published from here on count.
+    let mut events = agent.subscribe();
+
+    h.ok(
+        "duplicate_profile",
+        json!({ "profileId": work, "name": "Home" }),
+    );
+    let announced = runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                match events.recv().await {
+                    Ok(deckpilot_ipc::AgentEvent::State { status })
+                        if status.profiles.iter().any(|p| p.name == "Home") =>
+                    {
+                        return true;
+                    }
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+                }
+            }
+        })
+        .await
+    });
+    assert_eq!(
+        announced,
+        Ok(true),
+        "the agent published no state with the duplicated profile"
+    );
+}
+
 #[test]
 fn projects_reorder_and_resources_are_checked() {
     let h = Harness::new();
@@ -829,6 +872,7 @@ fn fresh_installation_has_an_empty_action_library() {
     assert_eq!(
         ids,
         [
+            "deck",
             "docker",
             "general",
             "git",

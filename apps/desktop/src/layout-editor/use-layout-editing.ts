@@ -1,7 +1,14 @@
 import { useState } from "react"
 import { toast } from "sonner"
 
-import { addPage, controlLabel, deletePage, page as findPage, renamePage } from "@/lib/layout-model"
+import {
+  addPage,
+  controlLabel,
+  deletePage,
+  page as findPage,
+  renamePage,
+  setAutoReturn,
+} from "@/lib/layout-model"
 import type { BindingTarget, ControlId, DeviceLayout, DeviceModel } from "@/lib/types"
 
 import { type KeyLookChange, applyAppearance } from "./appearance"
@@ -11,6 +18,7 @@ import {
   assignTarget,
   clearControls,
   copyControls,
+  createFolder,
   dropOnControl,
   duplicateControls,
   emptySelection,
@@ -48,6 +56,8 @@ export function useLayoutEditing(model: DeviceModel, saved: DeviceLayout) {
   const [trail, setTrail] = useState<string[]>([])
   const [selection, setSelection] = useState<Selection>(emptySelection)
   const [clipboard, setClipboard] = useState<Clipboard | null>(null)
+  // The page "Delete page" asked about, until it is confirmed or cancelled.
+  const [deleting, setDeleting] = useState<string | null>(null)
 
   const draft = state.present
   // Undo can remove the open page; fall back to the home page then.
@@ -148,7 +158,28 @@ export function useLayoutEditing(model: DeviceModel, saved: DeviceLayout) {
     assign: (target: BindingTarget) => {
       change(assignTarget(model, draft, pageId, selected, target))
     },
+    /**
+     * Creates a folder in the open page and makes `control` open it, as one
+     * undo step. A control that already does something is left alone.
+     */
+    newFolder: (control: ControlId) => {
+      const next = createFolder(model, draft, pageId, control, crypto.randomUUID())
+      if (!next) {
+        toast.error(`${controlLabel(control)} already does something`, {
+          description: "Create the folder on an empty control, or clear this one first.",
+        })
+        return
+      }
+      change(next)
+      setSelection(selectOnly(control))
+    },
     drop: (source: DragSource, over: ControlId) => {
+      if (source.type === "newFolder") {
+        commands.newFolder(over)
+        return
+      }
+      // An action type is placed by the editor, which creates its action.
+      if (source.type === "actionType") return
       const next = dropOnControl(model, draft, pageId, source, over)
       if (!next) {
         toast.error(`${controlLabel(over)} cannot take these bindings`)
@@ -177,6 +208,9 @@ export function useLayoutEditing(model: DeviceModel, saved: DeviceLayout) {
     renamePage: (name: string) => {
       change(renamePage(draft, pageId, name), `page-name:${pageId}`)
     },
+    setAutoReturn: (on: boolean) => {
+      change(setAutoReturn(draft, pageId, on))
+    },
     /**
      * Replaces the draft and its history with a layout stored by a page
      * command, and shows `page` (else the home page).
@@ -186,9 +220,24 @@ export function useLayoutEditing(model: DeviceModel, saved: DeviceLayout) {
       setBaseline(layout)
       showPage(page && findPage(layout, page) ? page : layout.homePage, [])
     },
+    /** Asks before deleting the open page; see `confirmDeletePage`. */
     deletePage: () => {
-      change(deletePage(draft, pageId))
-      showPage(draft.homePage, [])
+      if (pageId !== draft.homePage) setDeleting(pageId)
+    },
+    cancelDeletePage: () => {
+      setDeleting(null)
+    },
+    /**
+     * Deletes the page that was asked about and shows the page it was in
+     * (else the home page).
+     */
+    confirmDeletePage: () => {
+      const id = deleting
+      setDeleting(null)
+      if (!id || !findPage(draft, id)) return
+      const folder = parentPage(draft, id)
+      change(deletePage(draft, id))
+      showPage(folder !== id && findPage(draft, folder) ? folder : draft.homePage, [])
     },
   }
 
@@ -200,6 +249,8 @@ export function useLayoutEditing(model: DeviceModel, saved: DeviceLayout) {
     selection,
     selected,
     clipboard,
+    /** The page whose deletion waits for confirmation, if any. */
+    deleting: deleting && findPage(draft, deleting) ? deleting : null,
     canUndo: canUndo(state),
     canRedo: canRedo(state),
     commands,

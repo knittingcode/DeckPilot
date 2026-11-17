@@ -26,6 +26,7 @@ hosts). Release builds keep plugins off, and so every module below.
 
 | Module     | Pages | Capabilities |
 | ---------- | ----- | ------------ |
+| `deck` | — | change pages and profiles on the deck |
 | `docker` | — (settings) | read profile, read machine resources, run programs (`docker`) |
 | `general`  | — | read profile |
 | `git` | — (settings) | read profile, read machine resources, run programs (`git`), open folders |
@@ -49,6 +50,9 @@ and nothing is added to the Action Library automatically.
 
 | Type | Parameters | Result |
 | ---- | ---------- | ------ |
+| `deck.next-page` / `deck.previous-page` | `wrapAround` (default on) | shows the next or previous page of the layout on the device whose key ran it; outputs `pageId`, `pageName` when it moved |
+| `deck.page-indicator` | — | nothing when pressed; its key shows the page as `2/5` |
+| `deck.switch-profile` | `target` (`next` \| `previous` \| `profile`, default `next`), `profile` (a profile id), `wrapAround` (default on) | makes another profile the active one; outputs `profileId`, `profileName` when it switched |
 | `general.log` | `message` | the rendered message |
 | `general.wait` | `seconds` (1–300) | waits; output `waitedMs`; stops at once when cancelled (the reference workflow node) |
 | `projects.cycle` | `direction` (`next` \| `previous`, default `next`) | switches along the project order (respects `wrapAround`) |
@@ -64,6 +68,57 @@ A type marked `deprecated` (`ActionType.deprecated`, sent to the app only
 when true) is replaced by another one. Saved actions, workflow nodes and
 keys of that type keep working and can still be edited, but the Action
 Library and the workflow builder no longer offer it for new ones.
+
+### Deck actions
+
+The `deck` module's actions act on the deck itself: the pages a device
+shows and the active profile. A handler cannot reach the device runtime or
+the agent, so each action *asks*, as the project actions do with
+`ContextEffect`: its result carries a `DeckRequest`
+(`crates/deckpilot-core/src/execution.rs`), which the registry lets
+through only for a module with the capability `DeckControl`.
+
+| Request | Applied by | Effect |
+| ------- | ---------- | ------ |
+| `NextPage`, `PreviousPage` | the device runtime (`Runtime::dispatch`) | moves the device whose key ran the action |
+| `SwitchProfile` | the agent (`apps/agent/src/service/deck.rs`) | activates a profile through the path of `setActiveProfile` |
+
+A request never leaves the process: it is not serialized with the result,
+so it is in no IPC answer, event or execution history, and a plugin (whose
+results arrive as data) cannot make one. Who runs an action decides what
+becomes of its request:
+
+| Run from | Page request | Profile switch |
+| -------- | ------------ | -------------- |
+| a key or a gesture | applied to that device | applied |
+| the app ("Run", IPC `runAction`) | fails with `no-device`: no device asked | applied |
+| a workflow step or node | fails with `not-from-a-key` | fails with `not-from-a-key` |
+
+An action never reports a success that did nothing.
+
+**Pages.** A layout's *pages* are its top-level pages: the pages in no
+folder, in layout order (`DeviceLayout::top_level_pages`). Next and
+previous move along them and continue at the other end with `wrapAround`;
+without it the last (or first) page stays and the action still succeeds
+(“there is no next page”), as it does when the layout has one page. Inside
+a folder they are relative to the top-level page the folder belongs to and
+leave the folder. A page opened from a key of the home page of a layout
+without a stored page tree is a folder of the home page, as before, so no
+existing layout gains pages by itself. *Go to page* is not an action: a
+key that opens a page is the `openPage` binding.
+
+**Page indicator.** Key labels expand `{page.number}`, `{page.count}` and
+`{page.name}` (see [Key labels](data-model.md#key-labels)) for every key.
+The indicator is a key that shows `{page.number}/{page.count}` unless its
+label uses a page placeholder itself.
+
+**Profiles.** `target` chooses the next or previous profile in the order
+the agent lists profiles (by name), or one profile by id. The agent has
+one active profile, so every connected device follows. Switching to the
+profile that is active, or stepping past the end without `wrapAround`,
+changes nothing and succeeds. A profile that no longer exists fails with
+`profile-not-found`; the action editor lists the profiles that exist and
+marks a stored one that was deleted.
 
 ### Cycling projects
 
@@ -189,7 +244,8 @@ run's context after checking the module's capability.
 **Capability permissions.** The module manifest declares capabilities
 (`ProfileRead`, `ProjectContext`, `MachineResources`, `OpenExternal`,
 `ProcessExecution`, `ProcessInspect`, `Network`, `Notifications`,
-`Credentials`); the context refuses the rest (`CapabilityDenied`). Core
+`Credentials`, `VariablesRead`, `DeckControl`); the context refuses the
+rest (`CapabilityDenied`). Core
 helpers check them (`resolve`, `run_process`); for the others a handler
 calls `context.permit(capability)` before acting. Actions that are risky
 even for a permitted module, such as running user-chosen commands, are
@@ -328,6 +384,10 @@ pub struct ButtonState {
     pub indicator: Option<Indicator>, // ok | warning | error | running | unknown | loading
     pub progress: Option<u8>,      // 0–100, bar along the bottom edge
     pub toggle: Option<bool>,      // on/off mark along the top edge
+    pub accent: Option<Accent>,    // background: blue | green | amber | red | purple | teal | grey
+    pub glyph: Option<Glyph>,      // a shape above the title, from a closed set of 16
+    pub badge: Option<String>,     // at most 4 characters, top left corner
+    pub series: Option<Vec<u8>>,   // 2 to 32 values 0–100, a line behind the texts
 }
 
 pub enum RefreshPolicy {
@@ -341,8 +401,13 @@ pub struct StateError { pub code: String, pub message: String }
 **Who decides what.** The module decides *what* the state is; the core
 decides *when* it is asked and *how* it looks. The renderer only knows
 `ButtonState` and draws the indicator as a dot in the top-right corner, a
-ring while loading, the progress bar and the toggle mark. It knows nothing
-about Git, Docker or any other module.
+ring while loading, the progress bar and the toggle mark; the accent as the
+key's background from a fixed palette, the glyph as a vector shape at the
+key's resolution, the badge on a small plate and the series as a line
+(`crates/deckpilot-render/src/marks.rs`). A state carries no pixels, fonts
+or markup. What the user chose for the key wins: its background over the
+accent, its icon over the glyph. The renderer knows nothing about Git,
+Docker or any other module.
 
 **When providers run.** The agent asks for a key's state only while the key
 is shown on a device, off the device loop, on its own threads:
@@ -418,7 +483,8 @@ Docker module tests). The agent's scheduler is tested with explicit times
 in `apps/agent/src/service/states.rs`.
 
 **Previewing states in the app.** `KeyFace` carries `indicator`,
-`progress` and `toggle` as optional fields (omitted when unset), so stored
+`progress`, `toggle`, `accent`, `glyph`, `badge` and `series` as
+optional fields (omitted when unset), so stored
 data and the IPC protocol are unchanged. The configuration app does not
 run providers; a preview would apply a sample `ButtonState` to a face with
 `KeyFace::with_state`.
