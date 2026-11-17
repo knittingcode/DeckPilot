@@ -386,10 +386,10 @@ impl Agent {
         {
             warn!(%error, "cannot show the workflow summary");
         }
-        let _ = self
-            .handle
-            .events
-            .send(AgentEvent::ExecutionFinished { execution: summary });
+        let _ = self.handle.events.send(AgentEvent::ExecutionFinished {
+            execution: summary.clone(),
+        });
+        self.switch_run_ended(&summary);
         self.publish_execution_context(execution, context.project_id());
         if let Some((purpose, end)) = ended {
             self.work_session_run_ended(purpose, &end);
@@ -517,6 +517,7 @@ impl Agent {
             let _ = self.handle.events.send(AgentEvent::ExecutionFinished {
                 execution: run.record.summary.clone(),
             });
+            self.switch_run_ended(&run.record.summary);
             if let Some(purpose) = run.purpose {
                 self.work_session_run_ended(purpose, &RunEnd::cancelled());
             }

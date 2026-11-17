@@ -535,6 +535,10 @@ pub enum DeckRequest {
     /// Starts a workflow of the profile in the background, as a key bound
     /// to it would (Random Action).
     RunWorkflow { workflow: crate::WorkflowId },
+    /// Runs the current state of the Multi Action Switch that asked, and
+    /// moves it to its next state when the run succeeded (or always, with
+    /// `advance_on_failure`). The agent keeps which state is current.
+    RunSwitch { advance_on_failure: bool },
 }
 
 impl DeckRequest {
@@ -546,7 +550,8 @@ impl DeckRequest {
             Self::SwitchProfile { .. }
             | Self::Brightness { .. }
             | Self::RunAction { .. }
-            | Self::RunWorkflow { .. } => false,
+            | Self::RunWorkflow { .. }
+            | Self::RunSwitch { .. } => false,
         }
     }
 }

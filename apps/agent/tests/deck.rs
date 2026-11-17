@@ -870,3 +870,168 @@ async fn a_random_key_runs_what_it_picked_as_a_key_would() {
     );
     agent.shutdown().await;
 }
+
+/// The frame of a Multi Action Switch key named `name` in a state titled
+/// `title`, at `position` (`n/m`) and with `glyph`, as the agent draws it.
+fn switched(
+    name: &str,
+    title: &str,
+    position: &str,
+    glyph: deckpilot_core::Glyph,
+) -> deckpilot_device::Frame {
+    let spec = models::stream_deck_mk2()
+        .capabilities
+        .keys
+        .and_then(|keys| keys.image)
+        .unwrap();
+    let state = deckpilot_core::ButtonState::new()
+        .with_label(title)
+        .with_detail(position)
+        .with_glyph(glyph);
+    deckpilot_agent::render::render_with(
+        &KeyFace::new(FaceStyle::Action, name).with_state(&state),
+        spec.width,
+        spec.height,
+        &deckpilot_agent::render::Icons::default(),
+    )
+}
+
+fn shows_frame(
+    mock: &MockBackend,
+    device: &DeviceId,
+    index: u16,
+    frame: &deckpilot_device::Frame,
+) -> bool {
+    mock.wait_for(device, TIMEOUT, |frames, _| {
+        frames.get(&key(index)) == Some(frame)
+    })
+}
+
+/// A Multi Action Switch named `name` over `states`.
+fn multi_switch(profile: &mut Profile, name: &str, states: &str) -> BindingTarget {
+    action(
+        profile,
+        name,
+        deck::multi_switch_id(),
+        &ActionParameters::new().with(deck::switch::STATES, ParameterValue::Text(states.into())),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_multi_action_switch_goes_through_its_states_and_keeps_them() {
+    use deckpilot_core::Glyph;
+
+    let dir = TempDir::new("deckpilot-deck-switch");
+    let mut work = Profile::new("Work");
+    let on = instance(&log(&mut work, "Lamp on"));
+    let off = support::waiting_workflow("Lamp off", 10);
+    let off_id = off.id;
+    work.workflows.push(off);
+    // A log message that needs a project fails without one.
+    let fails = instance(&action(
+        &mut work,
+        "Needs a project",
+        general::log_id(),
+        &ActionParameters::new().with("message", ParameterValue::Text("{project.key}".into())),
+    ));
+    let lamp = multi_switch(
+        &mut work,
+        "Lamp",
+        &format!("action:{on} | On | play\nworkflow:{off_id} | Off | pause"),
+    );
+    let lamp_id = instance(&lamp);
+    let stuck = multi_switch(
+        &mut work,
+        "Stuck",
+        &format!("action:{fails} | First | dot\naction:{on} | Second | star"),
+    );
+    let mut layout = DeviceLayout::new("Main", models::stream_deck_mk2().id);
+    layout.pages[0]
+        .bindings
+        .extend([press(0, lamp.clone()), press(1, stuck), press(2, lamp)]);
+    work.layouts.push(layout);
+    let (paths, db_key) = support::data_dir(&dir, &work, &[]);
+    let mock = MockBackend::new();
+    let device = mock.plug(&models::stream_deck_mk2(), "MK2-A");
+    let agent = TestAgent::start_unlocked(&paths, &db_key, &mock, None).await;
+    connected(&agent, &device).await;
+    let mut events = agent.events().await;
+
+    // The first state is shown; pressing runs it and moves on.
+    let lamp_on = switched("Lamp", "On", "1/2", Glyph::Play);
+    let lamp_off = switched("Lamp", "Off", "2/2", Glyph::Pause);
+    assert!(shows_frame(&mock, &device, 0, &lamp_on));
+    mock.tap(&device, key(0));
+    assert_eq!(
+        completed(&mut events).await,
+        ("Lamp".to_owned(), ActionStatus::Succeeded)
+    );
+    assert_eq!(
+        completed(&mut events).await,
+        ("Lamp on".to_owned(), ActionStatus::Succeeded)
+    );
+    assert!(shows_frame(&mock, &device, 0, &lamp_off));
+
+    // The second state is a workflow: the switch moves on when it finished.
+    mock.tap(&device, key(0));
+    let finished = loop {
+        let event = tokio::time::timeout(TIMEOUT, events.next_event())
+            .await
+            .expect("an event in time")
+            .unwrap();
+        if let AgentEvent::ExecutionFinished { execution } = event {
+            break execution;
+        }
+    };
+    assert_eq!(finished.workflow, off_id);
+    assert!(shows_frame(&mock, &device, 0, &lamp_on));
+
+    // A state whose run fails stays the current one.
+    let first = switched("Stuck", "First", "1/2", Glyph::Dot);
+    assert!(shows_frame(&mock, &device, 1, &first));
+    mock.tap(&device, key(1));
+    assert_eq!(
+        completed(&mut events).await,
+        ("Stuck".to_owned(), ActionStatus::Succeeded)
+    );
+    assert_eq!(
+        completed(&mut events).await,
+        ("Needs a project".to_owned(), ActionStatus::Failed)
+    );
+    assert!(shows_frame(&mock, &device, 1, &first));
+
+    // The state is the key binding's: another key bound to the same switch
+    // goes its own way.
+    let other_off = switched("Lamp", "Off", "2/2", Glyph::Pause);
+    assert!(shows_frame(&mock, &device, 2, &lamp_on));
+    mock.tap(&device, key(2));
+    for name in ["Lamp", "Lamp on"] {
+        assert_eq!(
+            completed(&mut events).await,
+            (name.to_owned(), ActionStatus::Succeeded)
+        );
+    }
+    assert!(shows_frame(&mock, &device, 2, &other_off));
+    assert!(shows_frame(&mock, &device, 0, &lamp_on));
+
+    // From the app, the switch runs its own current state; the keys keep
+    // theirs.
+    let result = run(&agent, lamp_id).await;
+    assert!(result.is_success(), "{}", result.message);
+    for name in ["Lamp", "Lamp on"] {
+        assert_eq!(
+            completed(&mut events).await,
+            (name.to_owned(), ActionStatus::Succeeded)
+        );
+    }
+    assert!(shows_frame(&mock, &device, 0, &lamp_on));
+
+    // The states survive a restart.
+    agent.shutdown().await;
+    let agent = TestAgent::start_unlocked(&paths, &db_key, &mock, None).await;
+    connected(&agent, &device).await;
+    assert!(shows_frame(&mock, &device, 2, &other_off));
+    assert!(shows_frame(&mock, &device, 0, &lamp_on));
+    assert!(shows_frame(&mock, &device, 1, &first));
+    agent.shutdown().await;
+}

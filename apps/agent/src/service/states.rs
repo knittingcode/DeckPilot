@@ -298,6 +298,7 @@ impl Agent {
         now: Instant,
     ) {
         let project = self.runtime.active_project_id();
+        let page = self.runtime.current_page(device);
         let mut shown = BTreeSet::new();
         let mut session_keys = BTreeSet::new();
         for (control, target) in self.runtime.shown_targets(device) {
@@ -310,6 +311,12 @@ impl Agent {
             };
             match target {
                 BindingTarget::Action { action, .. } => {
+                    // A Multi Action Switch shows its current state.
+                    if let Some(state) = self.switch_face(page, control, action) {
+                        *face = std::mem::replace(face, KeyFace::empty())
+                            .with_snapshot(&StateSnapshot::Ready { state });
+                        continue;
+                    }
                     let Some(policy) = self
                         .runtime
                         .profile()

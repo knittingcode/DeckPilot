@@ -22,6 +22,9 @@
 //!
 //! - **Random action.** Runs one of several saved actions or workflows,
 //!   picked at random (see [`random`]).
+//! - **Multi Action Switch.** Goes through two to eight states in turn,
+//!   each running an action or workflow, and shows the current one (see
+//!   [`switch`]).
 //!
 //! These actions run from a key or from the app. As a workflow node they
 //! fail with `not-from-a-key`: nothing applies a request there.
@@ -45,8 +48,10 @@ pub const PAGE_INDICATOR: &str = "deck.page-indicator";
 pub const SWITCH_PROFILE: &str = "deck.switch-profile";
 pub const BRIGHTNESS: &str = "deck.brightness";
 pub const RANDOM: &str = "deck.random";
+pub const MULTI_SWITCH: &str = "deck.multi-switch";
 
 pub mod random;
+pub mod switch;
 
 /// Parameter of *Brightness*: what to do ([`CHANGES`]).
 pub const CHANGE: &str = "change";
@@ -140,6 +145,10 @@ pub fn random_id() -> ActionTypeId {
     type_id(RANDOM)
 }
 
+pub fn multi_switch_id() -> ActionTypeId {
+    type_id(MULTI_SWITCH)
+}
+
 #[derive(Debug)]
 pub struct DeckModule {
     manifest: ModuleManifest,
@@ -194,6 +203,7 @@ impl FeatureModule for DeckModule {
             Box::new(SwitchProfile::new()),
             Box::new(Brightness::new()),
             Box::new(random::RandomAction::new()),
+            Box::new(switch::MultiSwitch::new()),
         ]
     }
 }
@@ -640,7 +650,8 @@ mod tests {
                 PAGE_INDICATOR,
                 SWITCH_PROFILE,
                 BRIGHTNESS,
-                RANDOM
+                RANDOM,
+                MULTI_SWITCH
             ]
         );
         assert!(ids.iter().all(|id| id.starts_with("deck.")));
@@ -673,10 +684,16 @@ mod tests {
     fn nothing_is_asked_without_the_capability() {
         let nothing = BTreeSet::new();
         for handler in DeckModule::new().action_handlers(&ActionParameters::new()) {
-            // A Random Action needs something to pick from to be run at all.
-            let parameters = if handler.definition().id.as_str() == RANDOM {
+            // A Random Action and a switch need something to run to be run
+            // at all.
+            let key = match handler.definition().id.as_str() {
+                RANDOM => Some(random::CANDIDATES),
+                MULTI_SWITCH => Some(switch::STATES),
+                _ => None,
+            };
+            let parameters = if let Some(key) = key {
                 ActionParameters::new().with(
-                    random::CANDIDATES,
+                    key,
                     ParameterValue::Text(format!(
                         "action:{}",
                         deckpilot_core::ActionInstanceId::new()

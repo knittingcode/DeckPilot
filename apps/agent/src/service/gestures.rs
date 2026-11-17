@@ -191,7 +191,7 @@ impl Agent {
     /// (after applying what it asked of the agent), start a workflow in the
     /// background, and drop the device's pending gestures when the page it
     /// shows is no longer `shown`, the page the binding was on.
-    fn handle_outcome(
+    pub(super) fn handle_outcome(
         &mut self,
         device: &DeviceId,
         control: ControlId,
@@ -212,8 +212,18 @@ impl Agent {
                 // A Random Action's pick runs as the key's own binding
                 // would, for this device; picks do not nest.
                 let picked = super::deck::take_pick(&mut result);
+                // A Multi Action Switch runs its current state the same way.
+                let switch = super::switch::take_switch(&mut result);
                 self.apply_deck_request(&mut result);
                 self.report_action_as(action, name, &result);
+                if let Some(advance_on_failure) = switch {
+                    self.run_switch(
+                        Some((device, control, origin, shown)),
+                        action,
+                        advance_on_failure,
+                    );
+                    return;
+                }
                 if let Some(target) = picked {
                     let shown = self.runtime.current_page(device);
                     let outcome = self.runtime.run_picked(device, target, origin);

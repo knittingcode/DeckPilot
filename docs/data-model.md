@@ -252,6 +252,20 @@ profile that is gone and a page that is gone are ignored. A device that
 reconnects while its profile stays active keeps its whole page stack, as
 before.
 
+**Multi Action Switch.** A `deck.multi-switch` action stores its states
+in its `states` parameter, one per line: `action:<id>` or `workflow:<id>`,
+then optionally ` | <title>` and ` | <glyph>` (a glyph name of the
+renderer's set, e.g. `play`). Which state is current belongs to the key
+binding (profile, page, control and switch action), so two keys bound to
+the same switch go their own way; run from the app, the switch has a state
+of its own. The agent saves the states in the setting `switch.states` (a
+JSON list of `[profile, page, control, action, index]`) when they change
+and reads them when it starts. Like the pages devices show, this is
+runtime state of the computer: not part of a profile and never exported.
+An unreadable value is ignored (every switch starts at its first state),
+an index past the last state is the first state, and entries of switch
+actions that were deleted are dropped when the states are next saved.
+
 **Moving and copying** (`Profile::move_page`, `Profile::copy_page`) take a
 page with its bindings and every page inside it, at any depth:
 
@@ -444,7 +458,7 @@ again. Restoring the named backup returns to the previous state.
 | `active_projects`  | Active project per profile (runtime state)           |
 | `machine_config`   | Single row; JSON document + document version          |
 | `modules`          | Enabled flag and configuration per feature module     |
-| `settings`         | Key/value: active profile, device brightness, update preferences, the pages devices show (`navigation.pages`) |
+| `settings`         | Key/value: active profile, device brightness, update preferences, the pages devices show (`navigation.pages`), the states of Multi Action Switches (`switch.states`) |
 | `app_launches`     | Recent start versions per component                   |
 | `migration_notes`  | Changes a migration made to user data, shown in Settings |
 | `migration_history`| Schema upgrades: from, to, backup file, result, time  |
