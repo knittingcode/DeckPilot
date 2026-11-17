@@ -19,11 +19,18 @@
 //! | `dp_init` | `() -> i32` | lifecycle hook, called once after `dp_describe`; 0 = ready, anything else fails the load |
 //! | `dp_shutdown` | `() -> ()` | lifecycle hook, called once on `shutdown` before the host exits |
 //! | `dp_features` | `() -> i64` | the [`features`] (additions to replies) the guest reads, a bit set; called once after `dp_abi_version`, before `dp_describe`. Without it: none |
+//! | `dp_state` | `(ptr: i32, len: i32) -> i64` | the state of a key (plugin API 1.2, [`crate::state`]): input as for `dp_invoke`; returns `ptr << 32 \| len` of a [`StateOutcome`](crate::StateOutcome) JSON of at most [`MAX_STATE_OUTPUT`](crate::limits::MAX_STATE_OUTPUT) bytes. Called between invocations, never during one |
 //!
-//! All four run under the same deadline and fuel limits as an invocation.
-//! `host_call` from inside them gets an `unavailable` error reply without
-//! reaching the supervisor (there is no invocation to relay it for). An
-//! export with one of these names but another type fails the load.
+//! The first four run under the same deadline and fuel limits as an
+//! invocation. `host_call` from inside them gets an `unavailable` error
+//! reply without reaching the supervisor (there is no invocation to relay
+//! it for). `dp_state` runs under the same deadline with a fraction of the
+//! fuel ([`STATE_FUEL_DIVISOR`](crate::limits::STATE_FUEL_DIVISOR)); its
+//! `host_call`s are relayed, but only the operations of
+//! [`allowed_in_state`](crate::state::allowed_in_state) are answered, at
+//! most [`MAX_STATE_HOST_CALLS`](crate::limits::MAX_STATE_HOST_CALLS) of
+//! them. An export with one of these names but another type fails the
+//! load.
 //!
 //! A module **may** import exactly one function and nothing else:
 //!
@@ -57,6 +64,8 @@ pub const EXPORT_INIT: &str = "dp_init";
 pub const EXPORT_SHUTDOWN: &str = "dp_shutdown";
 /// Optional: `() -> i64`, the [`features`] the guest reads.
 pub const EXPORT_FEATURES: &str = "dp_features";
+/// Optional: `(i32, i32) -> i64`, the state of a key (plugin API 1.2).
+pub const EXPORT_STATE: &str = "dp_state";
 
 /// Additions to what the host **sends** within ABI 1 that a guest opts
 /// into, because a guest built before them refuses an unknown field. A

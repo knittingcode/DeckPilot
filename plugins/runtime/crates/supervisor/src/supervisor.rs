@@ -9,7 +9,7 @@ use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
 
-use deckpilot_plugin_abi::{ActionOutcome, Params};
+use deckpilot_plugin_abi::{ActionOutcome, Params, StateOutcome};
 use deckpilot_plugin_broker::{Broker, Clock, PluginId};
 
 use crate::host::{AbortSignal, CapabilityExecutor, HostConfig, HostError, PluginHost};
@@ -166,6 +166,40 @@ impl Supervisor {
     ) -> Result<ActionOutcome, SupervisorError> {
         let host = self.ensure_host()?;
         match host.invoke_abortable(action, params, timeout, executor, abort) {
+            Ok(outcome) => {
+                self.consecutive = 0;
+                Ok(outcome)
+            }
+            Err(e @ HostError::Aborted { .. }) => {
+                self.last_exit = e.status();
+                self.host = None;
+                Err(SupervisorError::Host(e))
+            }
+            Err(e) if e.host_died() => {
+                self.last_exit = e.status();
+                self.host = None;
+                self.record_crash();
+                Err(SupervisorError::Host(e))
+            }
+            Err(e) => Err(SupervisorError::Host(e)),
+        }
+    }
+
+    /// Asks for the state of a key ([`PluginHost::key_state`]), starting the
+    /// host first if needed. A host that dies in a state call (a trap, the
+    /// time limit) counts as a crash like one that dies in an action, so a
+    /// plugin whose state calls keep failing is stopped by the same
+    /// breaker.
+    pub fn key_state(
+        &mut self,
+        action: &str,
+        params: &Params,
+        timeout: Duration,
+        executor: &mut dyn CapabilityExecutor,
+        abort: Option<&AbortSignal>,
+    ) -> Result<StateOutcome, SupervisorError> {
+        let host = self.ensure_host()?;
+        match host.key_state(action, params, timeout, executor, abort) {
             Ok(outcome) => {
                 self.consecutive = 0;
                 Ok(outcome)
