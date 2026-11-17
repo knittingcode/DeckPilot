@@ -21,7 +21,11 @@ pattern() {
     # Package checks: files that change what is bundled or how. Plain
     # source changes are covered by the Rust jobs here and by the Packaging
     # runs on main and nightly.
-    packaging) echo '^apps/desktop/src-tauri/(tauri[^/]*\.json$|build\.rs$|Cargo\.toml$|capabilities/|entitlements/|icons/|app-icon\.svg$)|^\.github/scripts/verify-macos-app\.sh$|^apps/agent/(build\.rs|Cargo\.toml|Info\.plist)$|^crates/deckpilot-distribution/|^packaging/|^tools/ci/|^\.github/workflows/|^Cargo\.(lock|toml)$|^apps/desktop/package\.json$' ;;
+    # The plugin runtime is an application component: the host
+    # (plugins/runtime), the bundled first-party plugins
+    # (plugins/first-party), their pins compiled into the agent
+    # (crates/deckpilot-plugin-bundled) and their check.
+    packaging) echo '^apps/desktop/src-tauri/(tauri[^/]*\.json$|build\.rs$|Cargo\.toml$|capabilities/|entitlements/|icons/|app-icon\.svg$)|^\.github/scripts/(verify-macos-app|apple-certificate)\.sh$|^apps/agent/(build\.rs|Cargo\.toml|Info\.plist)$|^crates/deckpilot-distribution/|^crates/deckpilot-plugin-bundled/|^plugins/(first-party|runtime)/|^tools/release-pipeline/check-bundled-plugins\.sh$|^packaging/|^tools/ci/|^\.github/workflows/|^Cargo\.(lock|toml)$|^apps/desktop/package\.json$' ;;
     # Real credential stores.
     keystore) echo '^crates/deckpilot-keystore/|^tools/ci/with-keyring\.sh$|^\.github/workflows/ci\.yml$' ;;
     # Assembly of the release's latest.json, including the pinned download

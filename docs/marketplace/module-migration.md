@@ -248,11 +248,14 @@ of the above: a bundled plugin also carries the icons its manifest names
 (`assets/<name>.png`, pinned like every other file), because the manifest
 contract requires `icons.128`; and `check-release-separation.py` gained a
 rule (stricter, nothing relaxed) that refuses any step staging a
-`.dpplugin` into the bundle (`src-tauri/` or `bundled/`). Packaging the
-host and `bundled/` is opt-in: `DECKPILOT_RELEASE_PLUGINS=1` with
-`tauri.plugins.conf.json` on top of `tauri.release.conf.json`. The
-published release workflow stays unchanged, so no release contains plugins
-until the owner enables the marketplace. See
+`.dpplugin` into the bundle (`src-tauri/` or `bundled/`). The host and
+`bundled/` are packaged with `tauri.plugins.conf.json` on top of
+`tauri.release.conf.json`: by the release workflow and the *Packaging*
+workflow's package checks for every installer
+([releasing.md](../releasing.md#packaging-the-plugins)), and locally by
+`deckpilot-dev package` with `DECKPILOT_RELEASE_PLUGINS=1`.
+`tools/ci/check-packages.sh` requires the host and exactly the release set
+of `bundled/` in every package. See
 [`plugins/first-party/README.md`](../../plugins/first-party/README.md).
 
 ## 5. Compatibility and migration
@@ -603,7 +606,7 @@ gate, not a code switch.
 | Database | What the migration changes | An older app |
 | --- | --- | --- |
 | `deckpilot.db` (schema 9) | nothing: no schema change, no rewritten document, no deleted row | opens it as before. Legacy ids find its built-ins; `modules` and `credentials` rows are as they were at migration time |
-| `plugins.db` | schema 2 → 3 (`module_migrations`, `plugin_tombstones`, `source = 'bundled'`) | refuses schema 3 with `UnsupportedSchema` (`crates/deckpilot-plugin-store/src/db.rs:163`). The agent reports the plugin store as unavailable and runs without plugins (`apps/agent/src/plugins/service.rs:294-302`). Release builds do not include the `plugins` feature yet |
+| `plugins.db` | schema 2 → 3 (`module_migrations`, `plugin_tombstones`, `source = 'bundled'`) | refuses schema 3 with `UnsupportedSchema` (`crates/deckpilot-plugin-store/src/db.rs:163`). The agent reports the plugin store as unavailable and runs without plugins (`apps/agent/src/plugins/service.rs:294-302`). Release builds include the `plugins` feature from the first release after v0.6.0 |
 
 Turning plugins off on the same data (`--disable-plugins` or
 `DECKPILOT_ENABLE_PLUGINS=0`, see [§5.10](#510-plugins-on-by-default))
@@ -697,8 +700,8 @@ built-in's 500 checks).
 
 *As built (P9), the cut-over.* The first behaviour change, and only in
 builds with the `plugins` feature, where plugins are on unless turned off
-([§5.10](#510-plugins-on-by-default)); release builds do not include the
-feature yet, so for them nothing changes.
+([§5.10](#510-plugins-on-by-default)); release builds include the
+feature from the first release after v0.6.0 (v0.6.0 and older do not).
 
 - `ACTION_ALIASES` (`crates/deckpilot-core/src/alias.rs`) has one block:
   `github.<action>` → `deckpilot.github.<action>` for `current-user`,
@@ -720,9 +723,10 @@ feature yet, so for them nothing changes.
   Settings › Plugins. Until then, after a decline (until Retry) and on
   every computer that is not eligible, the built-in serves.
 - `bundled.json` lists `deckpilot.github` as class `migration`, so every
-  plugin-enabled package (`DECKPILOT_RELEASE_PLUGINS=1`) builds it, ships
-  it and compiles its pins into the agent; CI's bundle dry run checks the
-  release set is exactly that.
+  package (the release's installers, and `DECKPILOT_RELEASE_PLUGINS=1`
+  locally) builds it, ships it and compiles its pins into the agent; CI's
+  bundle dry run and `tools/ci/check-packages.sh` check the release set is
+  exactly that.
 - The plugin is built with #257's SDK: it exports `dp_features`, reads the
   network kind and reports the built-in's transport codes; P8's difference
   4 is gone. The remaining differences (save-time semantic checks, which
@@ -809,7 +813,8 @@ built-in `jira` module; no variables on either side. Built and pinned,
 
 *As built (P11), the GitLab and Jira cut-overs.* In builds with the
 `plugins` feature only (plugins on unless turned off, §5.10); release
-builds do not include the feature yet, so for them nothing changes.
+builds include the feature from the first release after v0.6.0 (v0.6.0
+and older do not).
 
 - `ACTION_ALIASES` has two more blocks, `gitlab.<action>` →
   `deckpilot.gitlab.<action>` (six) and `jira.<action>` →

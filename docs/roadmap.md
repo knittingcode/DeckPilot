@@ -144,10 +144,12 @@ Remaining:
 - Plugin marketplace: sandboxed WebAssembly plugins behind a permission
   broker, a signed registry and the move of some built-in modules to
   plugins are being developed on `main`
-  ([docs/marketplace](marketplace/agent-integration.md)). It is compiled
-  out of release builds and switched off by default elsewhere; no
-  published release contains it, no production registry key exists and no
-  plugin package has been published. The original design proposal is pull
+  ([docs/marketplace](marketplace/agent-integration.md)). The release
+  workflow builds it into every installer from the release after v0.6.0
+  on (plugin host, bundled first-party plugins, the registry's root keys;
+  [releasing.md](releasing.md#packaging-the-plugins)); no published
+  release (v0.6.0 and older) contains it, and no plugin package has been
+  published. The original design proposal is pull
   request [#191](https://github.com/knittingcode/deckpilot/pull/191).
 
 ## Out of scope

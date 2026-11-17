@@ -52,9 +52,9 @@ command -v jq > /dev/null || fail "jq is required"
 jq() { command jq "$@" | tr -d '\r'; }
 
 if command -v sha256sum > /dev/null; then
-  sha() { sha256sum "$1" | cut -d' ' -f1; }
+  sha() { sha256sum < "$1" | cut -d' ' -f1; }
 else
-  sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+  sha() { shasum -a 256 < "$1" | cut -d' ' -f1; }
 fi
 size() { wc -c < "$1" | tr -d ' '; }
 

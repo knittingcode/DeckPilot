@@ -4,12 +4,15 @@
 # unpacked files trusted by the digests compiled into the agent, never
 # plugin packages or registry metadata.
 #
-#   tools/release-pipeline/check-bundled-plugins.sh <bundled dir> <agent executable>
+#   tools/release-pipeline/check-bundled-plugins.sh <bundled dir> <agent executable> [--without-running]
 #
 # <bundled dir>: the `bundled` directory the bundler ships as a resource
 # (plugins/first-party/build.sh writes it). <agent executable>: the agent
 # built for the same bundle; its hidden --print-bundled-pins prints the
-# pins compiled into it.
+# pins compiled into it. With --without-running (an agent cross-compiled
+# for another architecture, which this machine cannot run) the agent is
+# not started: its file must contain the exact bytes of pins.json, which
+# the build embeds as they are (DECKPILOT_BUNDLED_PINS, include_bytes!).
 #
 # Fails unless:
 #   * bundled/pins.json is pins format 1, and every listed id is
@@ -24,20 +27,29 @@
 #   * there is no .dpplugin, no .minisig and no symbolic link anywhere;
 #   * the pins file equals the pins compiled into the agent.
 #
-# Needs bash, jq and sha256sum or shasum.
+# Needs bash, jq and sha256sum or shasum (and python3 for
+# --without-running).
 set -euo pipefail
 
 bundled="${1:?usage: check-bundled-plugins.sh <bundled dir> <agent executable>}"
 agent="${2:?usage: check-bundled-plugins.sh <bundled dir> <agent executable>}"
+run_agent=true
+case "${3-}" in
+  "") ;;
+  --without-running) run_agent=false ;;
+  *) echo "usage: check-bundled-plugins.sh <bundled dir> <agent executable> [--without-running]" >&2; exit 2 ;;
+esac
 # shellcheck source=tools/release-pipeline/common.sh
 source "$(dirname "$0")/common.sh"
 # jq on Windows ends its lines with CRLF; every value here is one line.
 jq() { command jq "$@" | tr -d '\r'; }
 
+# Digests from stdin: GNU sha256sum escapes a file name with a backslash
+# (D:\a\_temp/... on Windows) and then prefixes the digest with "\".
 if command -v sha256sum > /dev/null; then
-  sha() { sha256sum "$1" | cut -d' ' -f1; }
+  sha() { sha256sum < "$1" | cut -d' ' -f1; }
 else
-  sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+  sha() { shasum -a 256 < "$1" | cut -d' ' -f1; }
 fi
 size() { wc -c < "$1" | tr -d ' '; }
 
@@ -105,6 +117,13 @@ done < <(jq -r '.plugins[] | [.id, .version, .class] | @tsv' "$pins")
 
 # The agent trusts the digests compiled into it, never this file: they
 # must be the same.
+if [ "$run_agent" = false ]; then
+  [ -f "$agent" ] || fail "$agent does not exist"
+  python3 -I -c 'import sys; sys.exit(0 if open(sys.argv[1], "rb").read() in open(sys.argv[2], "rb").read() else 1)' "$pins" "$agent" \
+    || fail "pins.json is not compiled into $agent: build the agent with DECKPILOT_BUNDLED_PINS=$pins"
+  echo "$count bundled plugins match their pins, and $agent embeds exactly this pins.json (not run)"
+  exit 0
+fi
 compiled=$("$agent" --print-bundled-pins) || fail "$agent --print-bundled-pins failed"
 jq -e . > /dev/null 2>&1 <<< "$compiled" || fail "$agent printed no pins"
 [ "$(jq -S . <<< "$compiled")" = "$(jq -S . "$pins")" ] \

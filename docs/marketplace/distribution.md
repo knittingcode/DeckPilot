@@ -48,13 +48,14 @@ asset of its own and never an independently installable package.
 
 ### macOS: the plugin host's entitlement
 
-The host is the only DeckPilot executable with an entitlement, and only
-in packages built with `DECKPILOT_RELEASE_PLUGINS=1`:
+The host is the only DeckPilot executable with an entitlement (every
+release's macOS app contains it; locally, packages built with
+`DECKPILOT_RELEASE_PLUGINS=1`):
 `com.apple.security.cs.allow-unsigned-executable-memory`, from
 [`apps/desktop/src-tauri/entitlements/plugin-host.entitlements`](../../apps/desktop/src-tauri/entitlements/plugin-host.entitlements),
 on `Contents/MacOS/deckpilot-plugin-host` alone. The application and the
-agent keep the hardened runtime with **no** entitlements, and a package
-without the variable is exactly what it was (no host, no entitlement).
+agent keep the hardened runtime with **no** entitlements; a local package
+without the variable has no host and no entitlement.
 
 - **Why.** wasmtime 50.0.1 (Cranelift) maps the compiled plugin code with
   `mmap` and makes it executable with `mprotect`, without `MAP_JIT`. The

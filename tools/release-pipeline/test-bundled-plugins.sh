@@ -32,9 +32,9 @@ bad() {
 }
 
 if command -v sha256sum > /dev/null; then
-  sha() { sha256sum "$1" | cut -d' ' -f1; }
+  sha() { sha256sum < "$1" | cut -d' ' -f1; }
 else
-  sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+  sha() { shasum -a 256 < "$1" | cut -d' ' -f1; }
 fi
 size() { wc -c < "$1" | tr -d ' '; }
 
@@ -110,6 +110,15 @@ fresh
 jq -c . "$work/case/bundled/pins.json" > "$work/case/compact.json"
 agent_pins "$work/case/compact.json"
 passes "the same pins, formatted differently"
+# A bundle under a path with a backslash, like D:\a\_temp on Windows: GNU
+# sha256sum escapes such a file name and prefixes its digest with "\", which
+# made every digest differ from its pin.
+fresh
+rm -rf "$work/back\\slash" && mkdir -p "$work/back\\slash"
+cp -R "$work/case/bundled" "$work/back\\slash/bundled"
+if "$here/check-bundled-plugins.sh" "$work/back\\slash/bundled" "$work/case/agent" > "$work/check.log" 2>&1; then
+  ok "a bundle under a path with a backslash"
+else bad "a bundle under a path with a backslash: $(cat "$work/check.log")"; fi
 
 echo "== tampered files"
 fresh
@@ -207,6 +216,35 @@ fails "files re-pinned after the agent was built" "differs from the pins compile
 fresh
 printf '#!/usr/bin/env bash\nexit 2\n' > "$work/case/agent"
 fails "an agent without --print-bundled-pins" "--print-bundled-pins failed"
+
+echo "== an agent of another architecture (--without-running)"
+check() { "$here/check-bundled-plugins.sh" "$work/case/bundled" "$work/case/agent" --without-running > "$work/check.log" 2>&1; }
+# embedded <file>: an "executable" this machine cannot run, with <file>'s
+# bytes inside, as include_bytes! leaves them.
+embedded() {
+  { printf '\317\372\355\376 not runnable here '; cat "$1"; printf ' more code'; } > "$work/case/agent"
+  chmod -x "$work/case/agent"
+}
+fresh
+embedded "$work/case/bundled/pins.json"
+passes "an agent that embeds exactly pins.json, not run"
+fresh
+jq -c . "$work/case/bundled/pins.json" > "$work/case/compact.json"
+embedded "$work/case/compact.json"
+fails "an agent that embeds other bytes" "pins.json is not compiled into"
+fresh
+printf 'X' >> "$plugin/plugin.wasm"
+cp "$work/case/bundled/pins.json" "$work/case/old.json"
+pin "$work/case/bundled"
+embedded "$work/case/old.json"
+fails "files re-pinned after the agent was built (not run)" "pins.json is not compiled into"
+fresh
+embedded "$work/case/bundled/pins.json"
+printf 'X' >> "$plugin/plugin.wasm"
+fails "a tampered file (not run)" "plugin.wasm has"
+fresh
+rm "$work/case/agent"
+fails "no agent (not run)" "does not exist"
 
 echo
 echo "$passed passed, $failures failed (work dir: $work)"

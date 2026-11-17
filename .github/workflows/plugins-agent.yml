@@ -1,5 +1,5 @@
-# The agent's experimental plugin backend (feature `plugins`, off in every
-# release build): the dependency gate, clippy with the feature, and the
+# The agent's experimental plugin backend (feature `plugins`, which the
+# release builds enable): the dependency gate, clippy with the feature, and the
 # end-to-end test through the real agent, the real sandboxed plugin host
 # (built from plugins/runtime, a separate workspace) and the sample plugin,
 # with a local registry signed by throwaway keys made in the test.
@@ -92,7 +92,7 @@ jobs:
           $perl = "C:\Strawberry\perl\bin\perl.exe"
           if (-not (Test-Path $perl)) { Write-Error "Strawberry Perl not found at $perl"; exit 1 }
           "OPENSSL_SRC_PERL=$perl" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Release builds pull in no plugin crates
+      - name: The default build pulls in no plugin crates
         run: cargo test -p deckpilot-agent --test plugins_feature --locked
       - name: Clippy with plugins
         run: cargo clippy -p deckpilot-agent --features plugins --all-targets --locked -- -D warnings
@@ -176,8 +176,8 @@ jobs:
       # older build on the same data.
       - name: Notifications plugin end to end
         run: cargo test -p deckpilot-agent --features plugins --test plugins_notifications --locked -- --nocapture
-      # The bundle layout as a release with DECKPILOT_RELEASE_PLUGINS=1
-      # would build it, with the test fixture: built twice from clean
+      # The bundle layout as the release builds it (and
+      # DECKPILOT_RELEASE_PLUGINS=1 locally), with the test fixture: built twice from clean
       # target directories (reproducible on this platform), the agent
       # compiled with the pins, and the release check against both. Last,
       # because it rebuilds the agent.

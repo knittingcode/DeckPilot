@@ -1,8 +1,8 @@
 //! Builds installable packages that contain both executables.
 //!
-//! With `DECKPILOT_RELEASE_PLUGINS=1` (off by default, and off in the
-//! published release pipeline until the owner enables the marketplace) the
-//! package also contains the plugin runtime as app components
+//! With `DECKPILOT_RELEASE_PLUGINS=1` (off by default here; the release
+//! workflow always builds this layout, `tools/ci/stage-plugin-runtime.sh`)
+//! the package also contains the plugin runtime as app components
 //! (`docs/marketplace/module-migration.md` §4.5): the agent with the
 //! `plugins` feature and the pins of the bundled first-party plugins
 //! compiled in, the `deckpilot-plugin-host` external binary next to it,
@@ -280,10 +280,10 @@ mod tests {
         }
     }
 
-    /// The published release builds with `tauri.release.conf.json` alone:
-    /// the agent and nothing else. Only the plugins configuration, applied
-    /// on top with `DECKPILOT_RELEASE_PLUGINS=1`, adds the plugin host next
-    /// to the agent and `bundled/` as a resource.
+    /// `tauri.release.conf.json` alone bundles the agent and nothing else.
+    /// The plugins configuration, applied on top (by the release and
+    /// Packaging workflows, and with `DECKPILOT_RELEASE_PLUGINS=1` here),
+    /// adds the plugin host next to the agent and `bundled/` as a resource.
     #[test]
     fn the_release_configuration_has_no_plugins_and_the_plugins_one_adds_them() {
         let release = config("tauri.release.conf.json");
