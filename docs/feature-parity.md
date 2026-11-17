@@ -109,11 +109,11 @@ component tests). Nothing here has physical evidence yet.
 | Device selection, cross-device switching | missing | core | One active profile for every device | Per-device profiles do not exist: see [5.4](#54-switch-profile) and the owner decisions |
 | Deleted or missing profile | verified (integration) | built-in module | The action fails with `profile-not-found` and changes nothing (#284, `deck.rs`) | — |
 | **Key Logic**: single press, double press, hold with their own actions, timings, deterministic recognition, cancellation, persistence | verified (integration, simulated) | core | Engine tests incl. a property test over random sequences; `apps/agent/tests/gestures.rs`, `gesture_bindings.rs`, `gesture_e2e.rs`; the click-delay trade-off is documented in `gestures-and-work-session.md` §2.3 and shown in the editor | — |
-| Key Logic editor with a visual slot per gesture, drag into slots | verified (simulated) | core (app) | One slot per gesture that takes an action, a workflow, a page or an action type dropped from the library; replace and remove in the slot; overrides, label and timings (`feat/key-logic-slots`, `layout-editor/key-logic.test.tsx`) | — |
+| Key Logic editor with a visual slot per gesture, drag into slots | verified (simulated) | core (app) | One slot per gesture that takes an action, a workflow, a page or an action type dropped from the library; replace and remove in the slot; overrides, label and timings (#298, `layout-editor/key-logic.test.tsx`) | — |
 | Visual feedback on the device | missing | core | — | A short mark on the key when a gesture is recognized |
-| **Multi Action**: run in order, delays, per-step configuration, errors, progress, cancel, nested with bounded recursion | verified (integration, simulated) | core | Step and graph workflows; `apps/agent/tests/workflow_e2e.rs`; *Multi Action* in the editor's library creates a step workflow on a key or gesture slot, *Edit steps* opens its step list from the key (`feat/multi-action`; `apps/agent/tests/multi_action.rs`, `layout-editor/multi-action.test.tsx`) | — |
+| **Multi Action**: run in order, delays, per-step configuration, errors, progress, cancel, nested with bounded recursion | verified (integration, simulated) | core | Step and graph workflows; `apps/agent/tests/workflow_e2e.rs`; *Multi Action* in the editor's library creates a step workflow on a key or gesture slot, *Edit steps* opens its step list from the key (#300; `apps/agent/tests/multi_action.rs`, `layout-editor/multi-action.test.tsx`) | — |
 | Run supported actions in parallel | verified (integration) | core | Graph workflows (Parallel, Join) | Not available in the step list |
-| Delay between steps | verified (integration, simulated) | core | Graph `delay` (ms); a delay row in the step list: a `general.delay` step (10 ms–5 min, cancellable) with its own duration (`feat/multi-action`; `multi_action.rs`, `lib/multi-action.test.ts`) | — |
+| Delay between steps | verified (integration, simulated) | core | Graph `delay` (ms); a delay row in the step list: a `general.delay` step (10 ms–5 min, cancellable) with its own duration (#300; `multi_action.rs`, `lib/multi-action.test.ts`) | — |
 | **Page navigation**: go to a page | verified (integration) | core | `OpenPage` | — |
 | Next page, previous page | verified (integration) | built-in module | `deck.next-page`, `deck.previous-page` with wraparound (#284; `deck.rs::keys_turn_pages_and_the_indicator_follows`, `deck_tests.rs`) | — |
 | Page indicator | verified (integration) | built-in module | `deck.page-indicator`; `{page.number}`, `{page.count}`, `{page.name}` in any label (#284; `deck.rs`, `deck_tests.rs::labels_show_where_the_device_is`) | — |
@@ -125,14 +125,14 @@ component tests). Nothing here has physical evidence yet.
 | Feature | Status | Home | What exists | What is missing |
 | --- | --- | --- | --- | --- |
 | **Multi Action Switch** | missing | core | Stateful keys exist for the Work Session only | A key with two or more states, each with its own workflow, title and icon; see [5.7](#57-multi-action-switch) |
-| **Random Action** | verified (integration, simulated) | built-in module | `deck.random` (`feat/random-action`; `modules/deck/src/random.rs` tests, `deck.rs::a_random_key_runs_what_it_picked_as_a_key_would`, `modules/deck/candidates-field.test.tsx`) | — |
+| **Random Action** | verified (integration, simulated) | built-in module | `deck.random` (#301; `modules/deck/src/random.rs` tests, `deck.rs::a_random_key_runs_what_it_picked_as_a_key_would`, `modules/deck/candidates-field.test.tsx`) | — |
 | **Website** | verified (simulated) | built-in module (`system`) | `system.open-url`: `http`, `https`, `mailto` | — |
 | **Open** (file, folder) | verified (simulated) | built-in module (`system`) | `system.open-file`, `system.open-directory`, inside bound locations | — |
 | **Open Application** | verified (simulated), platform | built-in module (`system`) | `system.open-app` with a bound application and arguments | — |
 | **Close Application** | missing, platform | built-in module (`system`) | `system.process-status` reports whether it runs | A graceful quit request; see [5.9](#59-system-actions) |
 | **Hotkey**, **Hotkey Switch**, **Text** | missing, platform | built-in module | — | Keystroke injection; see [5.10](#510-hotkey-hotkey-switch-and-text) |
 | **Multimedia** | missing, platform | built-in module | — | Media keys; see 5.10 |
-| **Device: brightness** | verified (integration) | built-in module | `deck.brightness`: set a level or step brighter or dimmer, the same setting the app changes (`feat/deck-brightness`; `deck.rs::keys_set_and_step_the_brightness_of_the_devices`) | — |
+| **Device: brightness** | verified (integration) | built-in module | `deck.brightness`: set a level or step brighter or dimmer, the same setting the app changes (#299; `deck.rs::keys_set_and_step_the_brightness_of_the_devices`) | — |
 | **Device: sleep, wake, timer** | missing | core + built-in module | — | A sleep state of the device in the agent; see [5.11](#511-device-actions) |
 | **Device status** | incomplete | core | The app's Devices page and dashboard | A key face |
 | Virtual device toggle | missing | — | Simulated devices are a development tool | Not planned: there is no virtual device for users |
@@ -360,7 +360,7 @@ it; its steps are edited in a sequence editor opened from the key (the
 existing step editor, with a delay row and with errors and progress of the
 last run). Parallel steps remain the graph editor's.
 
-As built (`feat/multi-action`): the library's *Multi Action* entry saves
+As built (#300): the library's *Multi Action* entry saves
 an empty step workflow ("Multi Action", "Multi Action 2", …) and binds it
 to the key or gesture slot it was dropped on; the step editor opens in a
 dialog with its own Run button, and *Edit steps* on a gesture opens any
@@ -414,7 +414,7 @@ optional weights and "never the same twice in a row". Uniform by default.
 An empty list fails with `no-candidates` when saved and when run. The
 random source is injected into the handler, so tests are deterministic.
 
-As built (`feat/random-action`):
+As built (#301):
 
 - `candidates` is a `lines` parameter: one `action:<id>` or
   `workflow:<id>` per line, optionally followed by a weight (1–100), at
