@@ -274,7 +274,7 @@ fn sdk_actions() -> Value {
             .map(|key| json!({"key": key, "label": key, "kind": "text"}))
             .collect()
     };
-    let basic = outputs(&["inits", "refused", "status", "first", "second"]);
+    let basic = outputs(&["inits", "refused", "status", "first", "second", "count"]);
     let store = outputs(&[
         "error",
         "detail",
@@ -375,6 +375,12 @@ fn sdk_actions() -> Value {
             "dice",
             vec![json!({"key": "sides", "label": "Sides", "required": false,
                 "kind": {"type": "integer", "min": 1}})],
+        ),
+        ("counter", vec![]),
+        (
+            "probe",
+            vec![json!({"key": "mode", "label": "Mode", "required": false,
+                "kind": {"type": "text"}})],
         ),
     ]
     .into_iter()

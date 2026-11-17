@@ -96,8 +96,9 @@ in `plugins/sdk-js`) describes more:
   permission in effect. A plugin runs only while one of its actions runs.
 - **No `settingsChanged`**: read `Context::settings()` in each
   invocation.
-- **No button state** (`state` in the manifest validates, but nothing
-  pulls it) and no device access.
+- **No device access.** A plugin can describe what its keys show
+  ([key state](actions.md#key-state), plugin API 1.2: a typed description
+  the agent draws); it never draws, and learns nothing about devices.
 - **No invocation context**: a handler does not learn whether a key, a
   workflow or the app started it, nor its deadline or attempt number.
 - **No progress reports** and no `sleep`. The time is a capability

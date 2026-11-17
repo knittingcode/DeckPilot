@@ -16,11 +16,12 @@ use deckpilot_plugin_abi::describe::PluginDescriptor;
 use deckpilot_plugin_abi::frame::{FrameError, read_frame, write_frame};
 use deckpilot_plugin_abi::limits::{
     MAX_FRAME_TO_SUPERVISOR, MAX_HOST_CALL_REPLY, MAX_HOST_CALLS_PER_INVOCATION, MAX_LOAD_FRAME,
-    MAX_MODULE_BYTES,
+    MAX_MODULE_BYTES, MAX_STATE_HOST_CALLS,
 };
 use deckpilot_plugin_abi::protocol::{
     Enforcement, FatalReason, GuestLimits, PROTOCOL_VERSION, SandboxReport, ToHost, ToSupervisor,
 };
+use deckpilot_plugin_abi::state::{STATE_NOT_PERMITTED, StateOutcome};
 use deckpilot_plugin_abi::value::{validate_name, validate_params};
 use deckpilot_plugin_abi::{ABI_VERSION, ActionOutcome, CallErrorCode, CallResult, Params};
 use deckpilot_plugin_broker::{Allowed, Decision, PluginId, RunContext, Session};
@@ -313,6 +314,18 @@ impl fmt::Display for HostError {
 
 impl std::error::Error for HostError {}
 
+/// What the host is asked for: an action's run or a key's state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ask {
+    Action,
+    State,
+}
+
+enum Answer {
+    Action(ActionOutcome),
+    State(StateOutcome),
+}
+
 enum Recv {
     Msg(ToSupervisor),
     Closed,
@@ -544,6 +557,52 @@ impl PluginHost {
         executor: &mut dyn CapabilityExecutor,
         abort: Option<&AbortSignal>,
     ) -> Result<ActionOutcome, HostError> {
+        match self.run(Ask::Action, action, params, timeout, executor, abort)? {
+            Answer::Action(outcome) => Ok(outcome),
+            Answer::State(_) => Err(self.protocol("a state for an invocation".into())),
+        }
+    }
+
+    /// Asks the plugin for the state of a key bound to `action` with
+    /// `params` (`dp_state`, plugin API 1.2). Refused without reaching
+    /// the host unless the plugin may report key state
+    /// ([`Session::authorize_key_state`]). Inside the call the broker
+    /// answers only reads ([`Session::authorize_state`]), at most
+    /// [`MAX_STATE_HOST_CALLS`] of them. `timeout` and `abort` are those
+    /// of [`PluginHost::invoke_abortable`]: a state call that outlives its
+    /// time is a host that is killed.
+    pub fn key_state(
+        &mut self,
+        action: &str,
+        params: &Params,
+        timeout: Duration,
+        executor: &mut dyn CapabilityExecutor,
+        abort: Option<&AbortSignal>,
+    ) -> Result<StateOutcome, HostError> {
+        if self.dead {
+            return Err(HostError::NotRunning);
+        }
+        if let Err(reason) = self.session.authorize_key_state() {
+            return Ok(StateOutcome::failed(
+                STATE_NOT_PERMITTED,
+                format!("key state: {reason}"),
+            ));
+        }
+        match self.run(Ask::State, action, params, timeout, executor, abort)? {
+            Answer::State(outcome) => Ok(outcome),
+            Answer::Action(_) => Err(self.protocol("a result for a state call".into())),
+        }
+    }
+
+    fn run(
+        &mut self,
+        ask: Ask,
+        action: &str,
+        params: &Params,
+        timeout: Duration,
+        executor: &mut dyn CapabilityExecutor,
+        abort: Option<&AbortSignal>,
+    ) -> Result<Answer, HostError> {
         if self.dead {
             return Err(HostError::NotRunning);
         }
@@ -553,10 +612,21 @@ impl PluginHost {
         let deadline = Instant::now() + timeout;
         let id = self.next_invocation;
         self.next_invocation += 1;
-        let msg = ToHost::Invoke {
-            invocation_id: id,
-            action: action.to_owned(),
-            params: params.clone(),
+        let msg = match ask {
+            Ask::Action => ToHost::Invoke {
+                invocation_id: id,
+                action: action.to_owned(),
+                params: params.clone(),
+            },
+            Ask::State => ToHost::State {
+                invocation_id: id,
+                action: action.to_owned(),
+                params: params.clone(),
+            },
+        };
+        let most_calls = match ask {
+            Ask::Action => MAX_HOST_CALLS_PER_INVOCATION,
+            Ask::State => MAX_STATE_HOST_CALLS,
         };
         if let Err(e) = self.send(&msg, deckpilot_plugin_abi::limits::MAX_FRAME_TO_HOST) {
             return Err(self.after_send_failure(e));
@@ -593,7 +663,7 @@ impl PluginHost {
                         );
                     }
                     last_call = call_id;
-                    if call_id > u64::from(MAX_HOST_CALLS_PER_INVOCATION) {
+                    if call_id > u64::from(most_calls) {
                         return Err(self.protocol("too many capability calls".into()));
                     }
                     let interrupt = CallInterrupt::new(abort.cloned(), deadline);
@@ -609,7 +679,15 @@ impl PluginHost {
                         // grants are read now, so a permission revoked
                         // while the invocation runs denies this call. The
                         // run context is the executor's, never the guest's.
-                        match self.session.authorize_in(&request, executor.run_context()) {
+                        // A state call only reads, whatever the host
+                        // relays.
+                        let decision = match ask {
+                            Ask::Action => {
+                                self.session.authorize_in(&request, executor.run_context())
+                            }
+                            Ask::State => self.session.authorize_state(&request),
+                        };
+                        match decision {
                             Decision::Allow(allowed) => {
                                 let r = executor.execute_interruptible(
                                     self.session.plugin(),
@@ -650,12 +728,19 @@ impl PluginHost {
                 Recv::Msg(ToSupervisor::Result {
                     invocation_id,
                     outcome,
-                }) if invocation_id == id => {
+                }) if invocation_id == id && ask == Ask::Action => {
                     // The host is assumed compromised: re-check the bounds.
-                    return Ok(match outcome.validate() {
+                    return Ok(Answer::Action(match outcome.validate() {
                         Ok(()) => outcome,
                         Err(_) => ActionOutcome::failed("invalid-result", "result breaks a bound"),
-                    });
+                    }));
+                }
+                Recv::Msg(ToSupervisor::StateResult {
+                    invocation_id,
+                    outcome,
+                }) if invocation_id == id && ask == Ask::State => {
+                    // Checked again here, for the same reason.
+                    return Ok(Answer::State(outcome.checked()));
                 }
                 Recv::Msg(ToSupervisor::Fatal { reason, detail }) => {
                     let status = self.reap();
@@ -805,6 +890,7 @@ fn kind(m: &ToSupervisor) -> &'static str {
         ToSupervisor::Loaded { .. } => "loaded",
         ToSupervisor::Call { .. } => "call",
         ToSupervisor::Result { .. } => "result",
+        ToSupervisor::StateResult { .. } => "stateResult",
         ToSupervisor::Fatal { .. } => "fatal",
     }
 }

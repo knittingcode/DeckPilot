@@ -60,6 +60,11 @@ pub enum ApprovedPermission {
     /// [`DEFAULT_STORAGE_QUOTA_BYTES`].
     #[serde(rename_all = "camelCase")]
     Storage { quota_kb: u64 },
+    /// The plugin may report the state of keys bound to its own actions
+    /// (plugin API 1.2; the manifest's `device` permission with
+    /// `state: true`): a typed description the agent draws, never pixels
+    /// and nothing of a device (`rawDevice` stays never grantable).
+    KeyState {},
     /// Opening https URLs of one exact origin in the user's browser
     /// (design §5.2 `openUrl`). Independent of `network`: it gives no
     /// request to that origin, and a network grant gives no `openUrl`.
@@ -146,6 +151,8 @@ impl ApprovedPermissions {
 pub struct Grants {
     pub(crate) network: BTreeMap<Origin, BTreeSet<HttpMethod>>,
     pub(crate) notifications: bool,
+    /// Whether the agent may ask the plugin for key state.
+    pub(crate) key_state: bool,
     pub(crate) credentials: BTreeMap<String, CredentialGrant>,
     /// A granted larger quota, in bytes.
     pub(crate) storage_quota: Option<u64>,
@@ -243,6 +250,7 @@ impl Grants {
                         .extend(methods.iter().copied());
                 }
                 ApprovedPermission::Notifications {} => g.notifications = true,
+                ApprovedPermission::KeyState {} => g.key_state = true,
                 ApprovedPermission::Credential {
                     key,
                     origins,
