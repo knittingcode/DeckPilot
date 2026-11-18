@@ -7,6 +7,12 @@
 # timeouts, and when the configured mirrors fail the job switches every
 # Ubuntu source — the runner's mirror list (/etc/apt/apt-mirrors.txt) and
 # the security source — to mirrors outside Canonical's network, in turn.
+#
+# Every package DeckPilot's jobs install comes from Ubuntu. The runner image
+# also lists third-party sources (packages.microsoft.com and others); with
+# APT::Update::Error-Mode=any one of them failing (it answers 429 Too Many
+# Requests at times) failed the job, and no Ubuntu mirror helps with that.
+# Those sources are therefore set aside for the rest of the job.
 set -euo pipefail
 
 PACKAGES=(libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libudev-dev)
@@ -18,6 +24,20 @@ printf '%s\n' \
   'Acquire::https::Timeout "10";' \
   'Acquire::Retries "2";' |
   sudo tee /etc/apt/apt.conf.d/99deckpilot-network >/dev/null
+
+# Sets aside every source file that names a server outside ubuntu.com (the
+# runner's mirror list, mirror+file:, is Ubuntu's).
+ubuntu_sources_only() {
+  local file aside=/etc/apt/sources.list.d.deckpilot-aside
+  for file in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+    [ -f "$file" ] || continue
+    if grep -Eo 'https?://[^/[:space:]]+' "$file" | grep -Eqv '://([a-z0-9.-]+\.)?ubuntu\.com$'; then
+      sudo mkdir -p "$aside"
+      sudo mv "$file" "$aside/"
+      echo "set aside $(basename "$file") (not an Ubuntu source)"
+    fi
+  done
+}
 
 install() {
   timeout 600 sudo apt-get update -o APT::Update::Error-Mode=any &&
@@ -35,6 +55,7 @@ use_mirror() {
   done
 }
 
+ubuntu_sources_only
 if install; then
   exit 0
 fi
