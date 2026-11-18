@@ -21,9 +21,9 @@ released either. 0.6.0 is the first version intended for publication.
   including tunnel and translation ranges (6to4, Teredo, local-use NAT64,
   site-local IPv6 and the 6to4 relay range), not only private ones.
 - A plugin request under a server path the user allowed (such as
-  `https://ghe.example.com/api/v3`) is refused when its path holds an
-  encoded `/`, `\` or `.` (`%2f`, `%5c`, `%2e`), which a server could
-  decode into a path outside it.
+  `https://ghe.example.com/api/v3`) is refused when an encoded `/`, `\` or
+  `.` (`%2f`, `%5c`, `%2e`) would make a `..` segment once a server
+  decodes it, such as `/api/v3/..%2fadmin`, which leads outside that path.
 - Control characters in a plugin's log messages are escaped, so a plugin
   cannot forge lines in DeckPilot's log.
 - The plugin module the host runs is checked against its integrity record

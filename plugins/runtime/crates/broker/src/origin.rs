@@ -180,9 +180,11 @@ impl UserOrigin {
     }
 
     /// Whether a request to `origin` with the normalized `url` is within
-    /// this user origin. Under a path prefix, a path with an encoded `/`,
-    /// `\` or `.` is outside it: a server that decodes them would see
-    /// `/api/v3/..%2fadmin` as `/api/admin`. The query is not checked.
+    /// this user origin. Under a path prefix, a path that has a `.` or `..`
+    /// segment once its encoded `/`, `\` and `.` are decoded is outside it:
+    /// a server that decodes them would see `/api/v3/..%2fadmin` as
+    /// `/api/admin`. An encoded `/` within a segment stays allowed (GitLab
+    /// names projects `group%2Fapp`). The query is not checked.
     pub fn matches(&self, origin: &Origin, url: &Url) -> bool {
         if *origin != self.origin {
             return false;
@@ -195,7 +197,7 @@ impl UserOrigin {
                     || path
                         .strip_prefix(prefix.as_str())
                         .is_some_and(|rest| rest.starts_with('/'));
-                within && !has_encoded_separator(path)
+                within && !dot_segment_when_decoded(path)
             }
         }
     }
@@ -212,11 +214,34 @@ impl fmt::Display for UserOrigin {
     }
 }
 
-/// Whether a path holds an encoded `/`, `\` or `.` (any case), which a
-/// server may decode into a separator or a `..` segment.
+/// Whether a path holds an encoded `/`, `\` or `.` (any case).
 fn has_encoded_separator(path: &str) -> bool {
     let lowered = path.to_ascii_lowercase();
     ["%2f", "%5c", "%2e"].iter().any(|e| lowered.contains(e))
+}
+
+/// Whether a path has a `.` or `..` segment as a server would see it after
+/// decoding `%2f`, `%5c` and `%2e` (any case, also when they are encoded
+/// again as `%25…`) and treating `\` as `/`.
+fn dot_segment_when_decoded(path: &str) -> bool {
+    let mut decoded = path.to_ascii_lowercase();
+    for _ in 0..3 {
+        let once = decoded.replace("%25", "%");
+        if once == decoded {
+            break;
+        }
+        decoded = once;
+    }
+    if !has_encoded_separator(&decoded) {
+        return false;
+    }
+    let decoded = decoded
+        .replace("%2f", "/")
+        .replace("%5c", "/")
+        .replace("%2e", ".");
+    decoded
+        .split(['/', '\\'])
+        .any(|segment| segment == "." || segment == "..")
 }
 
 /// The path prefix of a user origin: `None` for `/`, otherwise the
@@ -479,7 +504,19 @@ mod tests {
             (false, "https://ghe.example.com/api/v3/..%5Cadmin"),
             (false, "https://ghe.example.com/api/v3/%2e%2e/admin"),
             (false, "https://ghe.example.com/api/v3/%2E./admin"),
-            (false, "https://ghe.example.com/api/v3/a%2eb"),
+            (false, "https://ghe.example.com/api/v3/x/..%2f..%2fadmin"),
+            (false, "https://ghe.example.com/api/v3/.%2fadmin"),
+            (false, "https://ghe.example.com/api/v3/..%252fadmin"),
+            (false, "https://ghe.example.com/api/v3/x%2f..%2f..%2fadmin"),
+            // An encoded `/` or `.` within a segment cannot leave the
+            // prefix: GitLab's `projects/group%2Fapp`.
+            (true, "https://ghe.example.com/api/v3/projects/group%2Fapp"),
+            (
+                true,
+                "https://ghe.example.com/api/v3/projects/group%2Fsub%2Fapp/x",
+            ),
+            (true, "https://ghe.example.com/api/v3/a%2eb"),
+            (true, "https://ghe.example.com/api/v3/files/v1%2E2%2Ftar.gz"),
             (
                 true,
                 "https://ghe.example.com/api/v3/repos?path=..%2f..%2fadmin",
