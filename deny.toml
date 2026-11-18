@@ -1,0 +1,24 @@
+# cargo-deny policy for this workspace's Cargo.lock: RustSec advisories only
+# (the Advisories workflow, .github/workflows/advisories.yml). The plugin
+# runtime workspace has its own, plugins/runtime/deny.toml, with the same
+# rules and no ignores.
+#
+# Every advisory fails the check, unmaintained and unsound notices included,
+# unless it is ignored below. An ignore is only for an advisory with no
+# usable fix that has been judged tolerable; each names why and when it is
+# reviewed again. Remove an entry as soon as the fix is taken: cargo-deny
+# warns about ignores that no longer match anything.
+[advisories]
+unmaintained = "all"
+unsound = "all"
+yanked = "warn"
+ignore = [
+    { id = "RUSTSEC-2024-0429", reason = "glib 0.18 (unsound VariantStrIter) comes only through tauri, muda, tray-icon and gtk 0.18, on Linux; DeckPilot never calls VariantStrIter and the fix (glib >= 0.20) needs the gtk-rs upgrade of tauri. Review by 2027-02-01." },
+    { id = "RUSTSEC-2026-0502", reason = "sqlcipher-src 419.0.6 bundles SQLite 3.53.4 (WAL page-size bug fixed in 3.54). The fix, sqlcipher-src 420 via libsqlite3-sys 0.40 / rusqlite 0.42, changes the SQLCipher and SQLite bundle that holds users' encrypted data; it is deferred until it can ship with a migration test that opens existing encrypted databases. Review by 2027-01-15." },
+    # Unmaintained notices: no vulnerability, no maintained release to move to yet.
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained (no known vulnerability); replacing it (jiff or time) is a separate migration across the workspace. Review by 2027-02-01." },
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is unmaintained (no known vulnerability); a build-time proc macro of glib-macros 0.18, through tauri's gtk-rs, on Linux. Review with RUSTSEC-2024-0429 by 2027-02-01." },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 5 is unmaintained as a standalone crate (merged into zbus 6; no known vulnerability); it comes with zbus 5 (deckpilot-presence, secret-service for the Linux keystore). Moves with zbus 6. Review by 2027-02-01." },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names is unmaintained (merged into zbus 6; no known vulnerability); comes with zbus 5. Moves with zbus 6. Review by 2027-02-01." },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive is unmaintained (merged into zbus 6; no known vulnerability); comes with zbus 5. Moves with zbus 6. Review by 2027-02-01." },
+]
