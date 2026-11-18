@@ -22,6 +22,8 @@ import type {
   PluginEvent,
   PluginHealth,
   PluginInstallSource,
+  PluginNavigationEntry,
+  PluginNavigationItem,
   PluginRetention,
   PluginRuntimeStatus,
   PluginSettingField,
@@ -211,6 +213,10 @@ export interface FakeOptions {
   known?: KnownPlugin[]
   /** Module migrations `listModuleMigrations` reports (see `githubMigration`). */
   migrations?: ModuleMigration[]
+  /** Toolbar entries per plugin id, listed while the plugin is installed and enabled. */
+  navigation?: Record<string, PluginNavigationEntry[]>
+  /** Icons by `<plugin>/<entry>/<theme>`; any other is `null`. */
+  navigationIcons?: Record<string, string>
 }
 
 /** The settings fields of the test plugin, as the agent returns them. */
@@ -712,6 +718,22 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
       }),
     ),
     listKnownPlugins: vi.fn(() => Promise.resolve([...known.values()])),
+    listNavigation: vi.fn(() =>
+      Promise.resolve(
+        [...installed.values()]
+          .filter((p) => p.state === "enabled")
+          .flatMap((p): PluginNavigationItem[] =>
+            (options.navigation?.[p.id] ?? []).map((entry) => ({
+              ...entry,
+              plugin: p.id,
+              pluginName: available.find((a) => a.id === p.id)?.name ?? p.id,
+            })),
+          ),
+      ),
+    ),
+    getNavigationIcon: vi.fn((plugin: string, entry: string, theme: "light" | "dark") =>
+      Promise.resolve(options.navigationIcons?.[`${plugin}/${entry}/${theme}`] ?? null),
+    ),
     getSettings: vi.fn((id: string) => Promise.resolve().then(() => settingsOf(id))),
     setSettings: vi.fn((id: string, values: Record<string, PluginSettingValue | null>) =>
       Promise.resolve().then(() => {

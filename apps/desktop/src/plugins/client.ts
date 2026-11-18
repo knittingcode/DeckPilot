@@ -127,6 +127,8 @@ export function createTauriPluginClient(): PluginClient {
   return {
     getRuntime: () => call<PluginRuntimeStatus>("get_plugin_runtime"),
     listPlugins: () => call<PluginSummary[]>("list_plugins"),
+    listNavigation: listPluginNavigation,
+    getNavigationIcon: getPluginNavigationIcon,
     getPlugin: (plugin) => call<PluginDetails>("get_plugin", { plugin }),
     listAvailablePlugins: (refresh = false) =>
       call<AvailablePlugins>("list_available_plugins", { refresh }),

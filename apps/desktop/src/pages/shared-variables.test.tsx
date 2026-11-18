@@ -12,6 +12,7 @@ import { agentConnection, profileView, project } from "@/test/fixtures"
 import { renderWithApp } from "@/test/render"
 import { resetToasts, toast } from "@/test/toast"
 import { type FakeVariable, fakeVariableAgent } from "@/test/variables"
+import { VariablesTable } from "@/pages/variables-table"
 
 vi.mock("@/lib/api", async () => (await import("@/test/api-mock")).apiModule)
 vi.mock("sonner", async () => (await import("@/test/toast")).sonnerModule)
@@ -453,5 +454,42 @@ describe("Variables page with the unified registry", () => {
     expect(toast.success).toHaveBeenCalledWith("Reference copied")
     await user.click(screen.getByRole("button", { name: "Edit shared.paths.root" }))
     expect(screen.getByLabelText("Key")).toHaveValue("paths.root")
+  })
+})
+
+describe("a plugin's variables view", () => {
+  it("lists only the variables under the plugin's namespace, with their values", async () => {
+    fakeVariableAgent([
+      ...registryVariables(),
+      {
+        entry: {
+          reference: "plugins.acme.helloWeather.temperature",
+          label: "Temperature",
+          group: "module",
+          valueType: { type: "string" },
+          owner: { kind: "module", module: "acme.hello-weather" },
+          readOnly: true,
+          declaredScope: "machine",
+          availability: "available",
+        },
+        resolve: () => ({ type: "string", value: "21 °C" }),
+      },
+    ]).install(api)
+    renderWithApp(
+      <VariablesTable
+        shared={[]}
+        selected={null}
+        onEdit={() => undefined}
+        namespace="plugins.acme.helloWeather"
+      />,
+      { agent: agentConnection({ capabilities: ["variables", "variableRegistry"] }) },
+    )
+    await waitFor(() => {
+      expect(rows()).toEqual(["plugins.acme.helloWeather.temperature"])
+    })
+    const row = within(table()).getByRole("row", { name: "plugins.acme.helloWeather.temperature" })
+    await waitFor(() => {
+      expect(row).toHaveTextContent("21 °C")
+    })
   })
 })
