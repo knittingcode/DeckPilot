@@ -10,6 +10,7 @@
 // Each step is recorded in <out>/results.tsv (see common.sh); a step that
 // fails stops the flow, the rest are recorded as not reached. A session
 // that cannot be created is recorded as not covered, with the driver's error.
+import { execFileSync } from "node:child_process";
 import { appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -35,12 +36,12 @@ function record(step, result, evidence) {
   console.log(`${result.toUpperCase()}  GUI ${step}: ${clean}`);
 }
 
-async function call(method, path, body) {
+async function call(method, path, body, timeout = 180_000) {
   const response = await fetch(`http://127.0.0.1:${port}${path}`, {
     method,
     headers: body ? { "content-type": "application/json" } : {},
     body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(180_000),
+    signal: AbortSignal.timeout(timeout),
   });
   const text = await response.text();
   let answer;
@@ -149,11 +150,18 @@ async function screenshot(name) {
   shots += 1;
   const file = `${label}-gui-${String(shots).padStart(2, "0")}-${name}.png`;
   try {
-    const data = await call("GET", s("screenshot"));
+    const data = await call("GET", s("screenshot"), undefined, 30_000);
     writeFileSync(join(out, file), Buffer.from(data, "base64"));
     return file;
   } catch (e) {
-    console.log(`screenshot ${name} failed: ${e.message}`);
+    console.log(`WebDriver screenshot ${name} failed: ${e.message}`);
+    if (process.platform === "linux") {
+      // The whole (virtual) screen instead.
+      try {
+        execFileSync("import", ["-window", "root", join(out, file)], { timeout: 30_000 });
+        return `${file} (X screen; the WebDriver screenshot failed: ${e.message})`;
+      } catch {}
+    }
     return `(screenshot failed: ${e.message})`;
   }
 }
@@ -269,7 +277,13 @@ async function main() {
     await call("POST", s("timeouts"), { script: 120_000, pageLoad: 120_000, implicit: 0 });
     record("WebDriver session on the release build", "pass", `session ${session} for ${app}`);
   } catch (e) {
-    record("WebDriver session on the release build", "not-covered", `the installed release build could not be driven: ${e.message}`);
+    // Windows: msedgedriver hands WebView2 its debugging port through
+    // WEBVIEW2_* variables, which only debug builds apply
+    // (apps/desktop/src-tauri/src/windows.rs, for_webdriver).
+    const why = /DevToolsActivePort/.test(e.message)
+      ? " (release builds do not apply msedgedriver's WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS/WEBVIEW2_USER_DATA_FOLDER: windows::for_webdriver is debug-only, so the webview never opens its debugging port)"
+      : "";
+    record("WebDriver session on the release build", "not-covered", `the installed release build could not be driven: ${e.message}${why}`);
     return;
   }
   let failed = null;

@@ -143,6 +143,15 @@ inner_launch() {
   else
     record "$label: stopped" fail "processes left: $(agent_pids | tr '\n' ' ')"
   fi
+  # The app starts the agent with its output discarded: when no database
+  # was made, run the installed agent once more by hand for its stderr.
+  if [ "$os" = Linux ] && [ ! -s "$data/deckpilot.db" ] && [ -n "${SMOKE_AGENT:-}" ]; then
+    local diag libs
+    diag=$(timeout 15 "$SMOKE_AGENT" 2>&1 | tail -n 6)
+    libs=$(ldconfig -p | grep -i -E 'appindicator' | sed 's/ =>.*//' | tr -s ' \t' ' ' | tr '\n' ';')
+    record "$label: agent run by hand (diagnosis)" fail "$SMOKE_AGENT exited with: $(printf '%s' "$diag" | tr '\n' ' '); appindicator libraries installed: ${libs:-none}"
+    stop_all
+  fi
   # Logs (never the database or the token).
   mkdir -p "$SMOKE_OUT/$label-agent-logs"
   cp -R "$data/logs/." "$SMOKE_OUT/$label-agent-logs/" 2> /dev/null || true

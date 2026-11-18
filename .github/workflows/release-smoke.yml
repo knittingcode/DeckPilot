@@ -138,8 +138,24 @@ jobs:
           fi
       - name: deb - install over the previous release and check the files
         run: tools/release-smoke/linux.sh deb "$SMOKE_WORK/assets" "$VERSION" "${PREVIOUS:+$SMOKE_WORK/previous}" "${PREVIOUS:+$PREVIOUS_VERSION}"
+      # With only the package's declared dependencies installed.
       - name: deb - first launch with an isolated profile
+        env:
+          SMOKE_AGENT: /usr/bin/deckpilot-agent
         run: tools/release-smoke/session.sh deb launch /usr/bin/deckpilot-desktop
+      # The agent's tray needs libayatana-appindicator3 (loaded at run
+      # time), which the .deb does not declare; desktop installations
+      # usually have it. Installed for the remaining launches.
+      - name: Install the tray library
+        if: always()
+        run: |
+          timeout 900 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+            -o Acquire::Retries=3 libayatana-appindicator3-1
+      - name: deb - first launch with libayatana-appindicator3-1
+        if: always()
+        env:
+          SMOKE_AGENT: /usr/bin/deckpilot-agent
+        run: tools/release-smoke/session.sh deb-tray launch /usr/bin/deckpilot-desktop
       - name: AppImage - extract and check the files
         if: always()
         run: tools/release-smoke/linux.sh appimage "$SMOKE_WORK/assets" "$VERSION"
