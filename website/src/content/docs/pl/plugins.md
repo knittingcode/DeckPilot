@@ -9,7 +9,7 @@ order: 12
 
 ## Co otrzymujesz
 
-- **Gdzie**: strona **Plugins** w **Settings › Extensions**, z kartami **Discover**, **Installed** i **Updates**. Możesz przeszukiwać rejestr i przeczytać opis każdej wtyczki, jej wersję oraz uprawnienia, o które prosi.
+- **Gdzie**: przycisk **Marketplace** na pasku narzędzi, z kartami **Discover**, **Installed** i **Updates**. **Settings › Extensions › Plugins** pokazuje to samo, zaczynając od zainstalowanych wtyczek. Możesz przeszukiwać rejestr i przeczytać opis każdej wtyczki, jej wersję oraz uprawnienia, o które prosi.
 - **Skąd**: z rejestru wtyczek DeckPilota, tego samego, który pokazuje [Plugin Marketplace](https://knittingcode.github.io/deckpilot-plugins/pl/). Plik pakietu można zainstalować z dysku tylko wtedy, gdy jego zawartość odpowiada wersji wymienionej w zweryfikowanym rejestrze; instalowanie z niesprawdzonych źródeł nie istnieje.
 - **Pierwsze wtyczki**, autorstwa DeckPilota: Air Quality (stacje pomiaru jakości powietrza w Polsce, dane GIOŚ), Markets (kursy referencyjne euro EBC, przez Frankfurter), Pomodoro, Break & Hydration oraz Memory (gra na klawiszach).
 - **Wbudowane**: integracje z GitHubem, GitLabem i Jirą oraz powiadomienia są dostarczane z DeckPilotem jako wtyczki i nie można ich zastąpić wtyczkami z rejestru. Po aktualizacji z wydania bez wtyczek każda skonfigurowana integracja przechodzi do swojej wtyczki; zapisanego tokenu albo serwera w sieci prywatnej wtyczka używa dopiero po Twojej zgodzie. Konfiguracje, których wtyczka jeszcze nie obsługuje, na przykład GitHub Enterprise, zostają przy wbudowanej integracji.
