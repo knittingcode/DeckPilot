@@ -7,10 +7,11 @@
 # (`notarize`).
 #
 # The job runs in the protected production-release environment, whose
-# deployment rule allows tags v* only and which needs the approval of a
-# required reviewer: start it on a release tag,
+# deployment rule allows tags v* only and which administrators cannot
+# bypass; it has no required reviewer, and only administrators can create
+# v* tags (the "Release tag protection" ruleset). Start it on a release tag:
 #   gh workflow run "Apple signing check" --ref v<version> [-f notarize=true]
-# and approve the deployment. On any other ref the environment refuses the
+# On any other ref the environment refuses the
 # job before a secret is read. Never on pull requests.
 #
 # While a secret is in the job, no dependency installation, build script or

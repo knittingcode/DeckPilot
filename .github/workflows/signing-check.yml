@@ -12,7 +12,9 @@
 # from this repository, from forks and from Dependabot, and it runs the
 # pull request's own scripts. The real signing key meets
 # updater-key-pair.py only in the release workflow's prepare job, in the
-# protected production-release environment (tag v*, required reviewer).
+# protected production-release environment (tags v* only, no administrator
+# bypass; a release is authorized by creating its v* tag, which the "Release
+# tag protection" ruleset restricts to administrators).
 # Developer ID and notarization credentials are checked by the Apple
 # signing check workflow, in the same environment.
 #
