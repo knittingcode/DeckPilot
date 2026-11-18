@@ -11,6 +11,7 @@ import {
   Server,
   ShieldCheck,
   Store,
+  UserRound,
   Variable,
   type LucideIcon,
 } from "lucide-react"
@@ -61,6 +62,15 @@ const CORE_PAGES: SettingsPageEntry[] = [
     icon: Palette,
     keywords: ["theme", "dark", "light", "mode"],
     view: view(() => import("./pages/appearance").then((m) => ({ default: m.AppearanceSettings }))),
+  },
+  {
+    id: "profiles",
+    title: "Profiles",
+    description: "Profiles and the one active on the device",
+    category: "general",
+    icon: UserRound,
+    keywords: ["profile", "create", "rename", "duplicate", "delete", "active", "activate"],
+    view: view(() => import("@/pages/profiles").then((m) => ({ default: m.ProfilesSettings }))),
   },
   {
     id: "updates",
@@ -203,11 +213,13 @@ function experimentalPages(): SettingsPageEntry[] {
   pluginsPage ??= {
     id: "plugins",
     title: "Plugins",
-    description: "Experimental: browse, install and manage community plugins",
+    description: "Experimental: installed plugins, their permissions, settings and updates",
     category: "extensions",
     icon: Store,
     keywords: ["marketplace", "plugins", "install", "community", "registry", "experimental"],
-    view: view(() => import("@/plugins/marketplace").then((m) => ({ default: m.PluginsSettings }))),
+    view: view(() =>
+      import("@/plugins/marketplace").then((m) => ({ default: m.InstalledPluginsSettings })),
+    ),
   }
   return [pluginsPage]
 }

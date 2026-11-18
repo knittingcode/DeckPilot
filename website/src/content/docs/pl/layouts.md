@@ -1,20 +1,20 @@
 ---
 title: Układy
-description: Zaprojektuj w narzędziu Layout Designer, co pokazuje i robi każdy klawisz, korzystając ze stron, folderów, kolorów, ikon i skrótów.
+description: Zaprojektuj w narzędziu Device Editor, co pokazuje i robi każdy klawisz, korzystając ze stron, folderów, kolorów, ikon i skrótów.
 group: design
 order: 5
 ---
 
 Układ określa, co pokazuje i co robi każdy klawisz danego modelu urządzenia. Układy należą do profilu i do modelu urządzenia, a projektować je można bez podłączonego urządzenia.
 
-## Layout Designer
+## Device Editor
 
-Otwórz **Devices › Layout Designer**. Wybierz **Profile**, **Device model** i **Layout**; gwiazdka oznacza układ aktywny dla danego modelu.
+DeckPilot otwiera się w narzędziu **Device Editor**; jest ono też pierwszą pozycją paska nawigacji. Urządzenie i profil wybierasz na pasku narzędzi: lista urządzeń pokazuje najpierw podłączone urządzenia, a pozostałe modele jako **Not connected**. Następnie wybierz **Layout**; gwiazdka oznacza układ aktywny dla danego modelu.
 
 - **New layout** tworzy układ. Przełącznik **Place the profile's actions and workflows on the keys** jest domyślnie włączony i wypełnia nowy układ za Ciebie.
 - **Duplicate** kopiuje układ, **Make active** umieszcza go na urządzeniu, a **Delete** go usuwa.
 
-Edytor składa się z trzech części: biblioteki **Library** (Actions, Workflows, Navigation), obszaru urządzenia oraz panelu właściwości wybranego elementu.
+Edytor składa się z trzech części: obszaru urządzenia pośrodku, panelu właściwości wybranego elementu pod nim oraz biblioteki **Library** (Actions, Workflows, Navigation) po prawej stronie. Bibliotekę można poszerzyć, przeciągając jej krawędź, i zwinąć; w wąskim oknie otwiera ją przycisk **Library**.
 
 ## Umieszczanie czegoś na klawiszu
 

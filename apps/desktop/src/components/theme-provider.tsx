@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 
-import { ThemeContext, type ThemePreference } from "@/lib/theme"
+import { THEME_STORAGE_KEY, ThemeContext, type ThemePreference } from "@/lib/theme"
+import { THEME_EVENT, announce, onAnnouncement } from "@/lib/window-sync"
 
-const STORAGE_KEY = "deckpilot.theme"
+function isPreference(value: unknown): value is ThemePreference {
+  return value === "light" || value === "dark" || value === "system"
+}
 
 function readPreference(): ThemePreference {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored === "light" || stored === "dark" || stored === "system") return stored
+    const stored = localStorage.getItem(THEME_STORAGE_KEY)
+    if (isPreference(stored)) return stored
   } catch {
     // Storage can be unavailable; fall back to the system theme.
   }
@@ -18,6 +21,12 @@ function systemDark(): boolean {
   return window.matchMedia("(prefers-color-scheme: dark)").matches
 }
 
+/**
+ * The theme of a window. A choice made in one window (Settings ›
+ * Appearance in the settings window) applies to every open window: through
+ * the shared storage's `storage` event where the webviews share it, and
+ * through an app event where they do not.
+ */
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [preference, setPreferenceState] = useState<ThemePreference>(readPreference)
   const [dark, setDark] = useState(systemDark)
@@ -33,6 +42,23 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
+  // Choices made in other windows.
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === THEME_STORAGE_KEY && isPreference(event.newValue)) {
+        setPreferenceState(event.newValue)
+      }
+    }
+    window.addEventListener("storage", onStorage)
+    const stop = onAnnouncement(THEME_EVENT, ({ preference: next }) => {
+      if (isPreference(next)) setPreferenceState(next)
+    })
+    return () => {
+      window.removeEventListener("storage", onStorage)
+      stop()
+    }
+  }, [])
+
   const resolved = preference === "system" ? (dark ? "dark" : "light") : preference
 
   useEffect(() => {
@@ -43,10 +69,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const setPreference = useCallback((next: ThemePreference) => {
     setPreferenceState(next)
     try {
-      localStorage.setItem(STORAGE_KEY, next)
+      localStorage.setItem(THEME_STORAGE_KEY, next)
     } catch {
       // Not persisted; the choice still applies for this session.
     }
+    announce(THEME_EVENT, { preference: next })
   }, [])
 
   const value = useMemo(

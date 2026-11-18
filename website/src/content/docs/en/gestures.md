@@ -13,7 +13,7 @@ A key with only a single click fires as soon as it is pressed: **Single click (i
 
 ## Three gestures
 
-In the Layout Designer, select a key and open **Gestures** in the inspector. There are three rows: **Single click**, **Double click** and **Long press**. Each has a target (an action, a workflow or a navigation step), an optional label, and **Override parameters for this gesture** to run the same action with different values.
+In the Device Editor, select a key and open **Gestures** in the inspector. There are three rows: **Single click**, **Double click** and **Long press**. Each has a target (an action, a workflow or a navigation step), an optional label, and **Override parameters for this gesture** to run the same action with different values.
 
 Adding a double click or a long press changes how the key behaves, so DeckPilot asks first (**Switch Key N to gestures?**):
 
@@ -38,7 +38,7 @@ The gesture editor also knows turning a dial and tapping, long-pressing or swipi
 
 Work Session is a time tracker that is started and finished from one key.
 
-1. In the Layout Designer, select a key and pick **Work Session**, then **Work Session controller**.
+1. In the Device Editor, select a key and pick **Work Session**, then **Work Session controller**.
 2. Click the key (**Start Work**) to start a session. The key shows the elapsed time.
 3. To finish with an end verification workflow configured, click the key: the check runs, and when it passes the key offers **Finish Work**; click it to stop. Without a verification workflow, hold the key instead (**Hold to finish**).
 

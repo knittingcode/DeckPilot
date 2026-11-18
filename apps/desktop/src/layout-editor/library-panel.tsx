@@ -199,12 +199,18 @@ export function LibraryPanel({
   groups,
   catalog = [],
   multiAction = false,
+  variant = "card",
 }: {
   groups: TargetGroup[]
   /** Action types that can be placed directly; see `catalogGroups`. */
   catalog?: CatalogGroup[]
   /** Offers "Multi Action", which puts a new step workflow on a key. */
   multiAction?: boolean
+  /**
+   * `card`: a card of its own. `plain`: the content only, for a container
+   * that has the title and scrolls (the editor's library sidebar).
+   */
+  variant?: "card" | "plain"
 }) {
   const [query, setQuery] = useState("")
   const [closed, setClosed] = useState<Set<string>>(new Set())
@@ -233,101 +239,111 @@ export function LibraryPanel({
   }
   const nothing = searching && shown.length === 0 && types.length === 0 && !folder && !multi
 
+  const hint = "Drag onto a control, or select a control and choose in the inspector."
+  const content = (
+    <>
+      <Input
+        type="search"
+        className="h-8"
+        placeholder="Search the library"
+        aria-label="Search the library"
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value)
+        }}
+      />
+      <div className={cn("grid gap-3", variant === "card" && "max-h-[28rem] overflow-y-auto")}>
+        {!hasItems && !searching && catalog.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            No actions or workflows yet. Create them in the Action Library.
+          </p>
+        )}
+        {nothing && <p className="text-sm text-muted-foreground">Nothing matches.</p>}
+        {shown
+          .filter((group) => group.label !== "Navigation")
+          .map((group) => (
+            <Section
+              key={group.label}
+              label={group.label}
+              count={group.options.length}
+              open={isOpen(group.label)}
+              onToggle={() => {
+                toggle(group.label)
+              }}
+            >
+              {group.options.map((option) => (
+                <LibraryEntry key={option.value} option={option} />
+              ))}
+            </Section>
+          ))}
+        {(folder || shown.some((group) => group.label === "Navigation")) && (
+          <Section
+            label="Navigation"
+            count={
+              (shown.find((group) => group.label === "Navigation")?.options.length ?? 0) +
+              (folder ? 1 : 0)
+            }
+            open={isOpen("Navigation")}
+            onToggle={() => {
+              toggle("Navigation")
+            }}
+          >
+            {folder && <NewFolderEntry />}
+            {shown
+              .find((group) => group.label === "Navigation")
+              ?.options.map((option) => (
+                <LibraryEntry key={option.value} option={option} />
+              ))}
+          </Section>
+        )}
+        {multi && (
+          <Section
+            label="New: Sequence"
+            count={1}
+            open={isOpen("New: Sequence")}
+            onToggle={() => {
+              toggle("New: Sequence")
+            }}
+          >
+            <NewMultiActionEntry />
+          </Section>
+        )}
+        {types.map((group) => {
+          const id = `New: ${group.label}`
+          return (
+            <Section
+              key={id}
+              label={id}
+              count={group.entries.length}
+              open={isOpen(id)}
+              onToggle={() => {
+                toggle(id)
+              }}
+            >
+              {group.entries.map((entry) => (
+                <CatalogItem key={entry.type.id} entry={entry} />
+              ))}
+            </Section>
+          )
+        })}
+      </div>
+    </>
+  )
+  if (variant === "plain") {
+    return (
+      <div className="grid gap-3">
+        <p className="text-xs text-muted-foreground">{hint}</p>
+        {content}
+      </div>
+    )
+  }
   return (
-    <Card className="h-fit xl:row-span-2 2xl:row-span-1">
+    <Card className="h-fit">
       <CardHeader>
         <CardTitle className="text-sm">Library</CardTitle>
-        <CardDescription>
-          Drag onto a control, or select a control and choose in the inspector.
-        </CardDescription>
+        <CardDescription>{hint}</CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-3">
-        <Input
-          type="search"
-          className="h-8"
-          placeholder="Search the library"
-          aria-label="Search the library"
-          value={query}
-          onChange={(event) => {
-            setQuery(event.target.value)
-          }}
-        />
-        <div className="grid max-h-[28rem] gap-3 overflow-y-auto">
-          {!hasItems && !searching && catalog.length === 0 && (
-            <p className="text-sm text-muted-foreground">
-              No actions or workflows yet. Create them in the Action Library.
-            </p>
-          )}
-          {nothing && <p className="text-sm text-muted-foreground">Nothing matches.</p>}
-          {shown
-            .filter((group) => group.label !== "Navigation")
-            .map((group) => (
-              <Section
-                key={group.label}
-                label={group.label}
-                count={group.options.length}
-                open={isOpen(group.label)}
-                onToggle={() => {
-                  toggle(group.label)
-                }}
-              >
-                {group.options.map((option) => (
-                  <LibraryEntry key={option.value} option={option} />
-                ))}
-              </Section>
-            ))}
-          {(folder || shown.some((group) => group.label === "Navigation")) && (
-            <Section
-              label="Navigation"
-              count={
-                (shown.find((group) => group.label === "Navigation")?.options.length ?? 0) +
-                (folder ? 1 : 0)
-              }
-              open={isOpen("Navigation")}
-              onToggle={() => {
-                toggle("Navigation")
-              }}
-            >
-              {folder && <NewFolderEntry />}
-              {shown
-                .find((group) => group.label === "Navigation")
-                ?.options.map((option) => (
-                  <LibraryEntry key={option.value} option={option} />
-                ))}
-            </Section>
-          )}
-          {multi && (
-            <Section
-              label="New: Sequence"
-              count={1}
-              open={isOpen("New: Sequence")}
-              onToggle={() => {
-                toggle("New: Sequence")
-              }}
-            >
-              <NewMultiActionEntry />
-            </Section>
-          )}
-          {types.map((group) => {
-            const id = `New: ${group.label}`
-            return (
-              <Section
-                key={id}
-                label={id}
-                count={group.entries.length}
-                open={isOpen(id)}
-                onToggle={() => {
-                  toggle(id)
-                }}
-              >
-                {group.entries.map((entry) => (
-                  <CatalogItem key={entry.type.id} entry={entry} />
-                ))}
-              </Section>
-            )
-          })}
-        </div>
-      </CardContent>
+      <CardContent className="grid gap-3">{content}</CardContent>
     </Card>
   )
 }

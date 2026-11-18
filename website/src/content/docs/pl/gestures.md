@@ -13,7 +13,7 @@ Klawisz, który ma tylko pojedyncze kliknięcie, działa od razu po naciśnięci
 
 ## Trzy gesty
 
-W narzędziu Layout Designer zaznacz klawisz i otwórz część **Gestures** w panelu właściwości. Znajdują się tam trzy wiersze: **Single click**, **Double click** i **Long press**. Każdy ma cel (akcję, przepływ albo krok nawigacji), opcjonalną etykietę oraz opcję **Override parameters for this gesture**, która uruchamia tę samą akcję z innymi wartościami.
+W narzędziu Device Editor zaznacz klawisz i otwórz część **Gestures** w panelu właściwości. Znajdują się tam trzy wiersze: **Single click**, **Double click** i **Long press**. Każdy ma cel (akcję, przepływ albo krok nawigacji), opcjonalną etykietę oraz opcję **Override parameters for this gesture**, która uruchamia tę samą akcję z innymi wartościami.
 
 Dodanie podwójnego kliknięcia albo długiego naciśnięcia zmienia zachowanie klawisza, dlatego DeckPilot najpierw pyta (**Switch Key N to gestures?**):
 
@@ -38,7 +38,7 @@ Edytor gestów zna też obrót pokrętła oraz dotknięcie, długie naciśnięci
 
 Work Session to pomiar czasu pracy rozpoczynany i kończony jednym klawiszem.
 
-1. W narzędziu Layout Designer zaznacz klawisz i wybierz **Work Session**, a potem **Work Session controller**.
+1. W narzędziu Device Editor zaznacz klawisz i wybierz **Work Session**, a potem **Work Session controller**.
 2. Kliknij klawisz (**Start Work**), aby rozpocząć sesję. Klawisz pokazuje upływający czas.
 3. Jeśli skonfigurowano przepływ weryfikujący zakończenie, kliknij klawisz: sprawdzenie zostanie wykonane, a gdy się powiedzie, klawisz zaproponuje **Finish Work**; kliknij go, aby zakończyć. Bez przepływu weryfikującego przytrzymaj klawisz (**Hold to finish**).
 

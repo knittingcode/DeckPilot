@@ -19,8 +19,8 @@ use std::sync::{Mutex, PoisonError};
 
 use serde::Serialize;
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, Monitor, Runtime, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Monitor, Runtime, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder,
 };
 
 use deckpilot_core::{ModuleRegistry, WindowSize};
@@ -71,9 +71,50 @@ fn core_window(id: &str) -> Option<WindowSpec> {
         "portability.import" => spec("Import configuration", WindowSize::Medium, false),
         "updates.progress" => spec("DeckPilot update", WindowSize::Compact, false),
         "app.logs" => spec("DeckPilot logs", WindowSize::Large, false),
+        "app.settings" => spec("DeckPilot Settings", WindowSize::Large, false),
         _ => return None,
     })
 }
+
+/// Size of a workspace window, in logical pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Workspace {
+    /// The size it opens with (within the work area).
+    pub default: (f64, f64),
+    pub min: (f64, f64),
+}
+
+/// Windows that are workspaces of their own (the settings) rather than
+/// prompts: they open at a fixed default size, visible at once, and the
+/// user resizes them freely. They are never sized to their content.
+pub fn workspace(id: &str) -> Option<Workspace> {
+    match id {
+        "app.settings" => Some(Workspace {
+            default: (1040.0, 720.0),
+            min: (760.0, 520.0),
+        }),
+        _ => None,
+    }
+}
+
+/// Whether `page` may be passed to a workspace window: a page reference as
+/// the frontend's navigation uses them (`appearance`, `module:projects`,
+/// `projects/projects`). Anything else is ignored, so nothing but a page
+/// reference reaches the window's URL.
+pub fn is_page_reference(page: &str) -> bool {
+    !page.is_empty()
+        && page.len() <= 96
+        && page
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-_.:/".contains(&b))
+        && !page.contains("..")
+        && !page.contains("//")
+        && !page.starts_with(['/', ':', '.'])
+}
+
+/// Event a workspace window receives when it is asked for another page
+/// while it is open (payload: the page reference).
+pub const WORKSPACE_PAGE_EVENT: &str = "deckpilot://workspace-page";
 
 /// Whether a window may open while the configuration is locked: only the
 /// windows that unlock it.
@@ -343,12 +384,26 @@ pub fn for_webdriver<R: Runtime, M: Manager<R>>(
     builder
 }
 
-/// Opens the window `spec`, or focuses it if it is open already.
-pub fn open<R: Runtime>(app: &AppHandle<R>, spec: &WindowSpec) -> Result<(), WindowError> {
+/// Opens the window `spec`, or focuses it if it is open already. `page`
+/// (a page reference, see [`is_page_reference`]) is what a workspace window
+/// shows; other windows ignore it.
+pub fn open<R: Runtime>(
+    app: &AppHandle<R>,
+    spec: &WindowSpec,
+    page: Option<&str>,
+) -> Result<(), WindowError> {
     let label = label_for(&spec.id);
+    let workspace = workspace(&spec.id);
+    let page = page.filter(|page| workspace.is_some() && is_page_reference(page));
     if let Some(window) = app.get_webview_window(&label) {
+        if let Some(page) = page {
+            let _ = app.emit_to(label.as_str(), WORKSPACE_PAGE_EVENT, page);
+        }
         crate::lifecycle::present(&window);
         return Ok(());
+    }
+    if let Some(workspace) = workspace {
+        return open_workspace(app, spec, &label, workspace, page);
     }
     let limits = limits(spec.size);
     let work = target_monitor(app).map_or(FALLBACK_WORK_AREA, |m| logical_work_area(&m));
@@ -396,6 +451,65 @@ pub fn open<R: Runtime>(app: &AppHandle<R>, spec: &WindowSpec) -> Result<(), Win
     Ok(())
 }
 
+/// The URL of window `id`, with the page a workspace window opens at.
+pub fn window_page(id: &str, page: Option<&str>) -> String {
+    match page {
+        Some(page) => format!("index.html?window={id}&page={page}"),
+        None => format!("index.html?window={id}"),
+    }
+}
+
+/// The size a workspace window opens with on `work`.
+pub fn workspace_size(workspace: Workspace, work: Rect) -> (f64, f64) {
+    let limits = Limits {
+        min: workspace.min,
+        max: workspace.default,
+        resizable: true,
+    };
+    fit_size(workspace.default, limits, work)
+}
+
+/// Opens a workspace window: its default size, centred, visible at once.
+fn open_workspace<R: Runtime>(
+    app: &AppHandle<R>,
+    spec: &WindowSpec,
+    label: &str,
+    workspace: Workspace,
+    page: Option<&str>,
+) -> Result<(), WindowError> {
+    let work = target_monitor(app).map_or(FALLBACK_WORK_AREA, |m| logical_work_area(&m));
+    let size = workspace_size(workspace, work);
+    let (x, y) = place(size, work, None);
+    let page = window_page(&spec.id, page);
+    let url = crate::dev_server::fallback_url(app.config(), &page)
+        .unwrap_or_else(|| WebviewUrl::App(page.into()));
+    let builder = for_webdriver(WebviewWindowBuilder::new(app, label, url))
+        .title(&spec.title)
+        .inner_size(size.0, size.1)
+        .position(x, y)
+        .min_inner_size(workspace.min.0.min(size.0), workspace.min.1.min(size.1))
+        .resizable(true)
+        .maximizable(true)
+        .minimizable(true)
+        // Shown through `lifecycle::present` (the Dock icon on macOS).
+        .visible(false)
+        .focused(true);
+    // Never sized to content: registered as fitted already.
+    app.state::<WindowRegistry>()
+        .lock()
+        .insert(label.to_owned(), (spec.clone(), Some(size)));
+    match builder.build() {
+        Ok(window) => {
+            crate::lifecycle::present(&window);
+            Ok(())
+        }
+        Err(error) => {
+            app.state::<WindowRegistry>().remove(label);
+            Err(WindowError::Platform(error.to_string()))
+        }
+    }
+}
+
 /// How long a new window may stay hidden waiting for its content size.
 const SHOW_UNSIZED_AFTER: std::time::Duration = std::time::Duration::from_millis(1500);
 
@@ -418,13 +532,20 @@ pub fn fit<R: Runtime>(
         .cloned()
         .ok_or_else(|| WindowError::Unknown(label.clone()))?;
     let fitted = last_fit.is_some();
+    let scale = window.scale_factor().unwrap_or(1.0);
+    if workspace(&spec.id).is_some() {
+        // The user sizes workspace windows; their content follows.
+        return Ok(window
+            .inner_size()
+            .map(|s| (f64::from(s.width) / scale, f64::from(s.height) / scale))
+            .unwrap_or_default());
+    }
     let limits = limits(spec.size);
     let work = window
         .current_monitor()
         .ok()
         .flatten()
         .map_or(FALLBACK_WORK_AREA, |m| logical_work_area(&m));
-    let scale = window.scale_factor().unwrap_or(1.0);
     let logical = |w: u32, h: u32| (f64::from(w) / scale, f64::from(h) / scale);
     let current = window
         .inner_size()
@@ -661,6 +782,63 @@ mod tests {
         width: 1440.0,
         height: 875.0,
     };
+
+    #[test]
+    fn the_settings_are_a_workspace_window_of_their_own() {
+        let modules = registry();
+        let settings = resolve("app.settings", &modules, true).unwrap();
+        assert!(!settings.blocking);
+        assert_eq!(label_for(&settings.id), "w-app_settings");
+        // They need the open configuration.
+        assert_eq!(
+            resolve("app.settings", &modules, false),
+            Err(WindowError::Locked)
+        );
+        let settings_size = workspace("app.settings").expect("a workspace window");
+        // Its default size where it fits, the work area minus margins where not.
+        assert_eq!(workspace_size(settings_size, SCREEN), settings_size.default);
+        let small = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 900.0,
+            height: 600.0,
+        };
+        assert_eq!(workspace_size(settings_size, small), (852.0, 552.0));
+        // Prompts and other windows are not workspaces.
+        for id in ["security.unlock", "app.logs", "portability.export"] {
+            assert!(workspace(id).is_none(), "{id}");
+        }
+    }
+
+    #[test]
+    fn workspace_windows_take_only_page_references() {
+        for page in [
+            "appearance",
+            "module:projects",
+            "projects/projects",
+            "settings:security",
+        ] {
+            assert!(is_page_reference(page), "{page}");
+            assert_eq!(
+                window_page("app.settings", Some(page)),
+                format!("index.html?window=app.settings&page={page}")
+            );
+        }
+        for page in [
+            "",
+            "../index.html",
+            "a&b=c",
+            "https://example.com",
+            "Appearance",
+            "page?x",
+            "#top",
+            "a b",
+            &"x".repeat(97),
+        ] {
+            assert!(!is_page_reference(page), "{page}");
+        }
+        assert_eq!(window_page("app.logs", None), "index.html?window=app.logs");
+    }
 
     #[test]
     fn windows_fit_their_content_within_limits() {

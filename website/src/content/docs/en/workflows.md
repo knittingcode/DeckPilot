@@ -9,7 +9,7 @@ A workflow runs several actions as one unit. It runs in the background agent, so
 
 ## Creating a workflow
 
-Open **Workflows** in the sidebar.
+Open **Workflows** in the navigation rail at the left of the window.
 
 - **New workflow** opens the graph editor.
 - **New step workflow** creates a simple sequential list of steps. **Open in graph editor** converts it to a graph later; the steps are kept.
