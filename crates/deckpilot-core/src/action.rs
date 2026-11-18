@@ -349,6 +349,13 @@ pub struct ActionType {
     /// this type keep working, but the type is not offered for new ones.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deprecated: bool,
+    /// The controls and inputs the action can be bound to
+    /// ([`crate::controls`]). `None`, and not sent, for a type without a
+    /// declaration (older definitions and plugins): it gets
+    /// [`crate::ActionControls::legacy`], keys only. Every built-in type
+    /// declares its controls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controls: Option<crate::ActionControls>,
 }
 
 impl ActionType {
@@ -756,6 +763,7 @@ mod tests {
             ],
             requires_project: false,
             deprecated: false,
+            controls: None,
             node: crate::graph::NodeSpec::default(),
         }
     }
@@ -845,6 +853,7 @@ mod structured_text_tests {
             }],
             requires_project: false,
             deprecated: false,
+            controls: None,
             node: crate::graph::NodeSpec::default(),
         }
     }
@@ -988,6 +997,7 @@ mod reference_tests {
             ],
             requires_project: false,
             deprecated: false,
+            controls: None,
             node: crate::graph::NodeSpec::default(),
         }
     }

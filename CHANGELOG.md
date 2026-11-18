@@ -15,6 +15,27 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+### Added
+
+- Actions declare which controls they work on: keys, dials (encoders) or
+  touch zones, and which inputs of each (press, click, long press, a turn
+  either way, a tap…). Every built-in action does: one-shot actions work on
+  keys; Next page, Previous page, Brightness and the project switching
+  actions also work on a dial, once per turn or press. Actions of plugins
+  work on keys, as before. See `docs/device-controls.md`.
+
+### Changed
+
+- A key, dial or touch zone bound to an action that cannot run from it (a
+  dial turn bound to a key-only action, for example) no longer runs it.
+  The binding is kept as it is, shows as unavailable, and the app's status
+  bar says why the first time it is used. Saving a layout refuses a new
+  binding like that with the reason; bindings already saved stay and are
+  listed, so every existing profile can still be saved. Imports keep them
+  and warn. Nothing is removed or converted, and a binding works again as
+  soon as a compatible action is installed. Key bindings are not affected:
+  every built-in action still works on every key gesture.
+
 ### Security
 
 - Plugin requests are refused for every address the plugin broker refuses,

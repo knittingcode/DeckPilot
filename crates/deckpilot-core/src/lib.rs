@@ -11,6 +11,7 @@ pub mod alias;
 pub mod appearance;
 pub mod button_state;
 pub mod cancel;
+pub mod controls;
 pub mod credentials;
 pub mod device_runtime;
 pub mod execution;
@@ -58,6 +59,10 @@ pub use button_state::{
     MIN_REFRESH_INTERVAL, RefreshPolicy, StateError, StateSnapshot,
 };
 pub use cancel::{CancelReason, CancellationToken};
+pub use controls::{
+    ActionControls, Compatibility, IncompatibilityReason, KEY_INPUTS, MAX_INPUTS_PER_KIND,
+    STEP_ENCODER_INPUTS, compatibility,
+};
 pub use credentials::{
     CredentialError, CredentialId, CredentialInfo, CredentialSource, MemoryCredentials,
     NoCredentials, Secret,
@@ -76,7 +81,10 @@ pub use id::{
     ActionInstanceId, ExecutionId, IconId, LayoutId, PageId, ProfileId, ProjectId, VerificationId,
     WorkSessionId, WorkflowId,
 };
-pub use layout::{BindingTarget, ControlBinding, DeviceLayout, LayoutIssue, LayoutPage, Trigger};
+pub use layout::{
+    BindingTarget, ControlBinding, DeviceLayout, IncompatibleBinding, LayoutIssue, LayoutPage,
+    Trigger, binding_incompatibility,
+};
 pub use module::{
     Availability, Capability, FeatureModule, ModuleError, ModuleId, ModuleInfo, ModuleManifest,
     ModuleMigration, ModulePage, ModuleRegistry, ModuleSettings, ModuleStates, ModuleWindow,

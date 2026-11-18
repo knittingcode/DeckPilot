@@ -1114,6 +1114,7 @@ fn normalize_config(
         parameters: manifest.config.clone(),
         requires_project: false,
         deprecated: false,
+        controls: None,
         node: crate::graph::NodeSpec::default(),
     };
     schema.normalize(config).map_err(ModuleError::InvalidConfig)

@@ -371,3 +371,91 @@ async fn a_driver_registered_only_in_a_test_drives_a_layout() {
     );
     agent.shutdown().await;
 }
+
+/// The Acme dial bound to *Select project* (keys only) does not run it:
+/// the binding is refused, kept and reported in the layout status, while
+/// key 0 bound to the same action runs it (`docs/device-controls.md`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dial_bound_to_a_key_only_action_does_not_run_it() {
+    use deckpilot_core::{ActionParameters, Os, ParameterValue, Project, ProjectKey};
+    use deckpilot_modules::projects::actions;
+    use deckpilot_storage::ConfigStore;
+
+    let mut profile = profile();
+    for key in ["SHOP", "CMS"] {
+        profile
+            .projects
+            .push(Project::new(ProjectKey::new(key).unwrap(), key));
+    }
+    let cms = profile.projects[1].id;
+    let select = deckpilot_modules::builtin(Os::current())
+        .action_registry()
+        .create_instance(
+            "Select CMS",
+            actions::select_id(),
+            &ActionParameters::new().with(actions::PROJECT_ID, ParameterValue::Project(cms)),
+        )
+        .unwrap();
+    let home = &mut profile.layouts[0].pages[0].bindings;
+    // The dial now selects CMS (instead of opening the folder); key 0 too.
+    home[0].target = BindingTarget::action(select.id);
+    home.push(ControlBinding::new(
+        ControlId::Key { index: 0 },
+        Trigger::Press,
+        BindingTarget::action(select.id),
+    ));
+    profile.actions.push(select);
+    let stored_layout = profile.layouts[0].clone();
+
+    let dir = TempDir::new("deckpilot-vendor-compat");
+    let (paths, key) = support::data_dir(&dir, &profile, &[]);
+    let acme = AcmeDriver::default();
+    let device = acme.attach("ACME-2");
+    let mock = MockBackend::new();
+    let backend = CombinedBackend::default().with(Box::new(acme.clone()));
+    let agent = TestAgent::start_with_backend(&paths, &key, &mock, Box::new(backend), None, None);
+    agent.unlock().await;
+    let status = wait_status(&agent, |s| page(s, &device) == Some("Home")).await;
+    let info = status.devices.iter().find(|d| d.id == device).unwrap();
+    let deckpilot_core::LayoutStatus::Invalid { issues, .. } = &info.layout else {
+        panic!("the incompatible binding is reported: {:?}", info.layout);
+    };
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert!(
+        issues[0].contains("encoder 0") && issues[0].contains("it works on keys only"),
+        "{issues:?}"
+    );
+    let active = |status: &AgentStatus| {
+        status
+            .active_project
+            .as_ref()
+            .map(|p| p.key.as_str().to_owned())
+    };
+    assert_ne!(active(&status).as_deref(), Some("CMS"));
+
+    // Turning the dial runs nothing; key 3, sent after it, still opens
+    // the folder, so the turn was handled.
+    acme.send("ACME-2", vec![0x02, 0, 1]);
+    acme.send("ACME-2", vec![0x01, 0b1000]);
+    acme.send("ACME-2", vec![0x01, 0]);
+    let status = wait_status(&agent, |s| page(s, &device) == Some("Folder")).await;
+    assert_ne!(
+        active(&status).as_deref(),
+        Some("CMS"),
+        "the dial ran nothing"
+    );
+
+    // Back home, key 0 runs the same action.
+    acme.send("ACME-2", vec![0x01, 0b0010]);
+    acme.send("ACME-2", vec![0x01, 0]);
+    wait_status(&agent, |s| page(s, &device) == Some("Home")).await;
+    acme.send("ACME-2", vec![0x01, 0b0001]);
+    acme.send("ACME-2", vec![0x01, 0]);
+    wait_status(&agent, |s| active(s).as_deref() == Some("CMS")).await;
+
+    // The binding is kept as it was stored.
+    agent.shutdown().await;
+    let store = support::open_store(&paths, &key);
+    let stored = store.load_profile(profile.id).unwrap().unwrap();
+    assert_eq!(stored.layouts[0], stored_layout);
+}
