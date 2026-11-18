@@ -1,17 +1,25 @@
 //! How the configuration app's process lives next to the agent.
 //!
-//! The app is a window onto the agent, not the agent itself: the process
-//! runs while one of its windows is open and ends when the last one closes
-//! (Tauri's default, kept on purpose). On macOS that is what takes its icon
-//! out of the Dock again; the agent keeps running with its menu bar icon,
-//! as an accessory application that never appears in the Dock. There is no
-//! hidden window and no switching of the activation policy.
+//! The app is a window onto the agent, not the agent itself. The agent is a
+//! menu bar (accessory) application that never appears in the Dock
+//! (`LSUIElement` in its embedded `Info.plist`, and the accessory policy of
+//! its event loop).
+//!
+//! **macOS** (like Docker Desktop): closing the main window (the close
+//! button, ⌘W) hides it and switches the app to the accessory activation
+//! policy, so its icon leaves the Dock while the process keeps running.
+//! Showing any window again (the tray's *Open DeckPilot*, opening the app
+//! from Finder, Spotlight or the Dock, a password prompt) switches back to
+//! the regular policy first. The policy follows the windows: regular while
+//! at least one is visible, accessory when none is ([`in_dock`],
+//! [`sync_dock`]). **Windows and Linux** keep Tauri's default: the process
+//! ends when its last window closes.
 //!
 //! Three ways to leave, and what each one stops:
 //!
 //! | How                                   | Windows | App process | Agent |
 //! | ------------------------------------- | ------- | ----------- | ----- |
-//! | Close Window (⌘W, the close button)   | that one | when it was the last | keeps running |
+//! | Close Window (⌘W, the close button)   | that one | macOS: keeps running, out of the Dock; elsewhere: ends with the last | keeps running |
 //! | Quit DeckPilot UI (⌘Q, the app menu)  | all     | ends        | keeps running |
 //! | Quit DeckPilot (the agent's tray)     | all     | ends        | stops |
 //!
@@ -65,6 +73,42 @@ pub enum ShowTarget {
     Nothing,
 }
 
+/// What closing the main window (the close button, ⌘W) does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MainClose {
+    /// Tauri's default: the window is destroyed; the process ends with the
+    /// last window (Windows, Linux).
+    Destroy,
+    /// macOS: hide it and leave the Dock; the process keeps running.
+    HideToMenuBar,
+}
+
+pub fn main_close(macos: bool) -> MainClose {
+    if macos {
+        MainClose::HideToMenuBar
+    } else {
+        MainClose::Destroy
+    }
+}
+
+/// Whether the app belongs in the Dock (the regular activation policy):
+/// while at least one of its windows is visible.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn in_dock(visible_windows: usize) -> bool {
+    visible_windows > 0
+}
+
+/// Whether the main window may be shown by the startup fallback (shown
+/// after a while if the frontend never asks). Not once it was shown: the
+/// user may have closed it to the menu bar since.
+pub fn startup_fallback_shows(
+    main_visible: bool,
+    presented_before: bool,
+    prompts_open: bool,
+) -> bool {
+    !main_visible && !presented_before && !prompts_open
+}
+
 pub fn show_target(unlocked: bool, has_main: bool, macos: bool) -> ShowTarget {
     match (unlocked, has_main) {
         (false, _) => ShowTarget::Prompt,
@@ -72,6 +116,100 @@ pub fn show_target(unlocked: bool, has_main: bool, macos: bool) -> ShowTarget {
         (true, false) if macos => ShowTarget::CreateMain,
         (true, false) => ShowTarget::Nothing,
     }
+}
+
+/// Set once the main window was shown (see [`startup_fallback_shows`]).
+#[derive(Debug, Default)]
+pub struct MainPresented(pub std::sync::atomic::AtomicBool);
+
+/// Shows `window` and brings it to the front. On macOS the app first
+/// returns to the Dock (regular policy), so the window and its Dock icon
+/// come back together. Every path that shows a window goes through here.
+pub fn present<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use tauri::Manager;
+    let app = window.app_handle();
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+    }
+    if window.label() == crate::windows::MAIN
+        && let Some(presented) = app.try_state::<MainPresented>()
+    {
+        presented.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
+/// macOS: the activation policy that matches the visible windows, after a
+/// window was hidden or destroyed. `leaving` is a window that is going
+/// away and still counts as visible. Elsewhere nothing.
+pub fn sync_dock<R: tauri::Runtime>(app: &tauri::AppHandle<R>, leaving: Option<&str>) {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::Manager;
+        let visible = app
+            .webview_windows()
+            .values()
+            .filter(|w| Some(w.label()) != leaving && w.is_visible().unwrap_or(false))
+            .count();
+        let policy = if in_dock(visible) {
+            tauri::ActivationPolicy::Regular
+        } else {
+            tauri::ActivationPolicy::Accessory
+        };
+        let _ = app.set_activation_policy(policy);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, leaving);
+}
+
+/// macOS: the main window's close button or ⌘W. Hides the window instead
+/// of destroying it and leaves the Dock when no other window is visible.
+pub fn hide_to_menu_bar<R: tauri::Runtime>(window: &tauri::Window<R>) {
+    use tauri::Manager;
+    let _ = window.hide();
+    sync_dock(window.app_handle(), Some(window.label()));
+}
+
+/// The app's window events: on macOS the main window's close button and ⌘W
+/// hide it and take the app out of the Dock, and the Dock follows every
+/// window that is destroyed.
+pub fn on_window_event<R: tauri::Runtime>(window: &tauri::Window<R>, event: &tauri::WindowEvent) {
+    use tauri::Manager;
+    match event {
+        tauri::WindowEvent::CloseRequested { api, .. }
+            if window.label() == crate::windows::MAIN
+                && main_close(MACOS) == MainClose::HideToMenuBar =>
+        {
+            api.prevent_close();
+            hide_to_menu_bar(window);
+        }
+        tauri::WindowEvent::Destroyed => {
+            let app = window.app_handle();
+            let unlocked = app.state::<crate::state::AppState>().is_unlocked();
+            crate::windows::closed(app, window.label(), unlocked);
+            sync_dock(app, Some(window.label()));
+        }
+        _ => {}
+    }
+}
+
+/// The app's run loop events: on macOS, opening the app from Finder,
+/// Spotlight or the Dock while it runs without a visible window (closed to
+/// the menu bar) shows it again, like the tray's *Open DeckPilot*.
+pub fn on_run_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &tauri::RunEvent) {
+    #[cfg(target_os = "macos")]
+    if let tauri::RunEvent::Reopen {
+        has_visible_windows: false,
+        ..
+    } = event
+    {
+        crate::agent::show_window(app);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, event);
 }
 
 /// The macOS application menu's Quit item. It ends only this app, so it
@@ -154,6 +292,30 @@ mod tests {
         Some(ShutdownReason::Other),
         None,
     ];
+
+    #[test]
+    fn closing_the_main_window_hides_it_to_the_menu_bar_on_macos_only() {
+        assert_eq!(main_close(true), MainClose::HideToMenuBar);
+        assert_eq!(main_close(false), MainClose::Destroy);
+    }
+
+    #[test]
+    fn the_app_is_in_the_dock_while_a_window_is_visible() {
+        assert!(!in_dock(0));
+        assert!(in_dock(1));
+        assert!(in_dock(3));
+    }
+
+    #[test]
+    fn the_startup_fallback_never_reopens_a_main_window_the_user_closed() {
+        // Never shown, nothing else open: the fallback shows it.
+        assert!(startup_fallback_shows(false, false, false));
+        // Shown once and closed to the menu bar since: it stays closed.
+        assert!(!startup_fallback_shows(false, true, false));
+        // Already visible, or a password prompt is open: nothing to do.
+        assert!(!startup_fallback_shows(true, false, false));
+        assert!(!startup_fallback_shows(false, false, true));
+    }
 
     #[test]
     fn on_macos_only_quitting_deckpilot_ends_the_app_with_the_agent() {

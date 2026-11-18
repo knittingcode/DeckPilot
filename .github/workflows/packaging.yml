@@ -412,6 +412,10 @@ jobs:
           --config "$THROWAWAY_UPDATER_CONFIG"
       - name: Names, versions, layout, plugin runtime, distribution record, disk image and updater signatures
         run: tools/ci/check-packages.sh macos
+      # The packaged agent never appears in the Dock (LSUIElement), not even
+      # at startup; the app does when launched (docs/background-agent.md).
+      - name: Dock presence of the packaged app and agent
+        run: tools/ci/check-macos-dock.sh target/release/bundle/macos/DeckPilot.app
       # The bundle as built: exactly the host's entitlement on exactly
       # Contents/MacOS/deckpilot-plugin-host, none on the app or the agent
       # (the policy verify-macos-app.sh applies to the signed release).
