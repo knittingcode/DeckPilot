@@ -167,6 +167,7 @@ fn schema(id: &str, parameters: Vec<ParameterSpec>) -> ActionType {
         parameters,
         requires_project: false,
         deprecated: false,
+        controls: None,
         node: deckpilot_core::graph::NodeSpec::default(),
     }
 }
@@ -1072,6 +1073,7 @@ mod broken {
             parameters,
             requires_project: false,
             deprecated: false,
+            controls: None,
             node,
         }
     }
@@ -1185,7 +1187,7 @@ fn the_checks_find_what_they_claim_to_find() {
 /// action types three segments.
 #[test]
 fn builtin_action_types_have_two_segments_and_plugin_types_three() {
-    let launcher = Arc::new(RecordingLauncher::default());
+    let launcher = Arc::new(RecordingLauncher::new());
     let registry = builtin(Os::current());
     for module in modules(&launcher) {
         let manifest = module.manifest();
@@ -1406,6 +1408,7 @@ mod first_party {
             parameters,
             requires_project: action.requires_project.unwrap_or(false),
             deprecated: action.deprecated.unwrap_or(false),
+            controls: None,
             node,
         }
     }
@@ -1427,6 +1430,16 @@ mod first_party {
             }
         }
         expected.node.cancellable = true;
+        // Manifests declare no controls before plugin API 1.3: the plugin's
+        // type gets the legacy default, keys only, which must be what the
+        // built-in declares.
+        assert_eq!(
+            *builtin.effective_controls(),
+            deckpilot_core::ActionControls::legacy(),
+            "{}",
+            builtin.id
+        );
+        expected.controls = None;
         expected
     }
 
@@ -2019,4 +2032,72 @@ mod first_party {
         );
         assert_ne!(relabeled, expected(alias, old));
     }
+}
+
+/// The built-in action types that step once per event (a key, or a
+/// dial's detent or press); every other built-in is keys only
+/// (`docs/device-controls.md`).
+const STEP_ACTIONS: &[&str] = &[
+    "deck.brightness",
+    "deck.next-page",
+    "deck.previous-page",
+    "projects.cycle",
+    "projects.next",
+    "projects.previous",
+];
+
+/// Every built-in action type declares its controls: none relies on the
+/// legacy default of types without a declaration. Every declaration is
+/// valid and keeps every key input, so key bindings saved before
+/// declarations stay compatible; encoders are declared only for the
+/// actions that step once per event, touch zones for none.
+#[test]
+fn every_builtin_action_declares_its_controls() {
+    use deckpilot_core::{ActionControls, KEY_INPUTS};
+    use deckpilot_device::ControlKind;
+
+    let launcher = Arc::new(RecordingLauncher::new());
+    let mut table = BTreeMap::new();
+    for module in modules(&launcher) {
+        let config = safe_config(module.manifest());
+        for handler in module.action_handlers(&config) {
+            let definition = handler.definition();
+            let id = definition.id.to_string();
+            let controls = definition
+                .controls
+                .clone()
+                .unwrap_or_else(|| panic!("{id} declares no controls"));
+            assert_eq!(controls.issues(), Vec::<String>::new(), "{id}");
+            let keys = controls.inputs(ControlKind::Key).expect("keys");
+            assert!(KEY_INPUTS.iter().all(|i| keys.contains(i)), "{id}");
+            assert!(controls.inputs(ControlKind::TouchZone).is_none(), "{id}");
+            let expected = if STEP_ACTIONS.contains(&id.as_str()) {
+                ActionControls::keys_and_steps()
+            } else {
+                ActionControls::keys()
+            };
+            assert_eq!(controls, expected, "{id}");
+            table.insert(id, controls);
+        }
+    }
+    // Every step action exists.
+    for id in STEP_ACTIONS {
+        assert!(table.contains_key(*id), "{id}");
+    }
+    // The registries the agent and the app build, on every platform, hold
+    // only declared types.
+    for os in [Os::Linux, Os::MacOs, Os::Windows, Os::Other] {
+        let mut registry = builtin(os);
+        for info in registry.modules() {
+            let _ = registry.set_enabled(&info.manifest.id, true);
+        }
+        for definition in registry.action_registry().action_types() {
+            assert!(
+                definition.controls.is_some(),
+                "{} on {os:?} declares no controls",
+                definition.id
+            );
+        }
+    }
+    assert!(table.len() > 50, "{} built-in action types", table.len());
 }

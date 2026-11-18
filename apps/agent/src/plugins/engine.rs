@@ -211,6 +211,9 @@ pub(crate) fn action_type(plugin: &str, action: &Action) -> Result<ActionType, S
         parameters,
         requires_project: action.requires_project.unwrap_or(false),
         deprecated: action.deprecated.unwrap_or(false),
+        // Manifests cannot declare controls yet: the legacy default, keys
+        // only (`docs/device-controls.md`).
+        controls: None,
         node,
     })
 }

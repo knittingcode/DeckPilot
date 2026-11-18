@@ -199,6 +199,7 @@ impl RandomAction {
                 ],
                 requires_project: false,
                 deprecated: false,
+                controls: Some(deckpilot_core::ActionControls::keys()),
                 node: NodeSpec {
                     icon: Some("shuffle".into()),
                     outputs: vec![output("picked", "Picked")],

@@ -259,6 +259,7 @@ fn show_definition() -> ActionType {
         ],
         requires_project: false,
         deprecated: false,
+        controls: Some(deckpilot_core::ActionControls::keys()),
         node: node("bell", Vec::new()),
     }
 }
@@ -299,6 +300,7 @@ fn summary_definition() -> ActionType {
         ],
         requires_project: false,
         deprecated: false,
+        controls: Some(deckpilot_core::ActionControls::keys()),
         node: node(
             "list-checks",
             vec![OutputSpec::new("summary", "Summary", ValueKind::Text)],

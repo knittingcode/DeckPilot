@@ -202,6 +202,7 @@ impl MultiSwitch {
             ],
             requires_project: false,
             deprecated: false,
+            controls: Some(deckpilot_core::ActionControls::keys()),
             node: NodeSpec {
                 icon: Some("layers".into()),
                 timeout_ms: 5_000,

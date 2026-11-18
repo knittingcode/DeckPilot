@@ -6,13 +6,14 @@
 //! background agent drives it with [`DeviceEvent`]s; nothing in here talks to
 //! hardware.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use deckpilot_device::{
-    ControlId, DeviceEvent, DeviceId, DeviceModelId, DeviceRegistry, ModelCatalog,
+    ControlId, DeviceCapabilities, DeviceEvent, DeviceId, DeviceModelId, DeviceRegistry,
+    ModelCatalog,
 };
 
 use crate::gesture::{BoundGestures, Gesture, GestureTimings};
@@ -95,6 +96,20 @@ pub enum RuntimeOutcome {
     StatefulRequested {
         binding: StatefulBinding,
         gesture: Gesture,
+    },
+    /// The control is bound to an action that cannot run from it (an
+    /// encoder rotation bound to a key-only action, a gesture the action
+    /// does not support; see [`crate::compatibility`]). Nothing ran. The
+    /// binding is kept and works again once the action or device it needs
+    /// is back.
+    Unavailable {
+        action: ActionInstanceId,
+        control: ControlId,
+        trigger: Trigger,
+        reason: crate::IncompatibilityReason,
+        /// The first refusal of this binding since the profile or the
+        /// action types were loaded: the caller tells the user once.
+        first: bool,
     },
 }
 
@@ -181,6 +196,10 @@ pub struct Runtime {
     /// next shows that profile. Folders are not reopened. A device on the
     /// home page has no entry: that is where it starts anyway.
     remembered: BTreeMap<(ProfileId, DeviceId), PageId>,
+    /// Incompatible bindings refused since the profile or the engine was
+    /// last set ([`RuntimeOutcome::Unavailable`]), so each is reported
+    /// once.
+    refused: HashSet<(LayoutId, PageId, ControlId, Trigger)>,
 }
 
 /// Most pages kept in [`Runtime::remembered_pages`]: profiles times
@@ -200,6 +219,7 @@ impl Runtime {
             placeholder: None,
             gesture_defaults: GestureTimings::default(),
             remembered: BTreeMap::new(),
+            refused: HashSet::new(),
         }
     }
 
@@ -324,6 +344,9 @@ impl Runtime {
             .and_then(|(layout, page)| layout.page(page))
             .and_then(|page| page.gesture_binding(control, gesture))
             .map(|binding| binding.target.clone());
+        if let Some(refused) = self.refuse_incompatible(device, control, Trigger::from(gesture)) {
+            return Ok(refused);
+        }
         match target {
             None => ignored("gesture is not bound"),
             Some(BindingTarget::Stateful(binding)) => {
@@ -364,6 +387,7 @@ impl Runtime {
     /// disabled. The profile, project context and pages are kept.
     pub fn set_engine(&mut self, engine: Engine) {
         self.engine = Arc::new(engine);
+        self.refused.clear();
     }
 
     /// The engine, to run work on another thread.
@@ -404,6 +428,7 @@ impl Runtime {
     pub fn set_profile(&mut self, profile: Option<Profile>, project: Option<ProjectId>) {
         self.remember_pages();
         self.parked.clear();
+        self.refused.clear();
         self.session = profile.map(|profile| Session {
             projects: ActiveProjectContext::restore(&profile, project),
             profile,
@@ -425,6 +450,7 @@ impl Runtime {
             return;
         }
         let project = self.active_project_id();
+        self.refused.clear();
         self.session = Some(Session {
             projects: ActiveProjectContext::restore(&profile, project),
             profile,
@@ -563,6 +589,7 @@ impl Runtime {
         };
         let mut issues = layout.validate(&self.catalog, profile);
         issues.extend(layout.check_overrides(self.engine.registry(), profile));
+        issues.extend(layout.check_compatibility(&self.catalog, self.engine.registry(), profile));
         if issues.is_empty() {
             LayoutStatus::Compatible {
                 layout: layout.id,
@@ -729,7 +756,65 @@ impl Runtime {
             profile,
             self.active_project(),
             &controls,
+            Some(&model.capabilities),
         )
+    }
+
+    /// The bindings of the active profile's layouts that cannot run their
+    /// action on their model's controls, by model. Computed from the
+    /// loaded action types whenever it is asked, so a binding is
+    /// available again as soon as what it needs is back. Layouts of
+    /// unknown models are left out.
+    pub fn unavailable_bindings(&self) -> Vec<(DeviceModelId, crate::IncompatibleBinding)> {
+        let Some(profile) = self.profile() else {
+            return Vec::new();
+        };
+        profile
+            .layouts
+            .iter()
+            .filter_map(|layout| Some((layout, self.catalog.get(&layout.model)?)))
+            .flat_map(|(layout, model)| {
+                layout
+                    .incompatible_bindings(&model.capabilities, self.engine.registry(), profile)
+                    .into_iter()
+                    .map(|found| (layout.model.clone(), found))
+            })
+            .collect()
+    }
+
+    /// [`RuntimeOutcome::Unavailable`] when the binding of `control` for
+    /// `trigger` on the page `device` shows runs an action that cannot
+    /// run from it; `None` otherwise.
+    fn refuse_incompatible(
+        &mut self,
+        device: &DeviceId,
+        control: ControlId,
+        trigger: Trigger,
+    ) -> Option<RuntimeOutcome> {
+        let profile = self.profile()?;
+        let layout = self.layout_for(&device.model)?;
+        let page = layout.page(self.current_page(device)?)?;
+        let binding = page
+            .bindings
+            .iter()
+            .find(|binding| binding.control == control && binding.trigger == trigger)?;
+        let model = self.catalog.get(&device.model)?;
+        let reason = crate::binding_incompatibility(
+            binding,
+            &model.capabilities,
+            self.engine.registry(),
+            profile,
+        )?;
+        let action = binding.target.action_id()?;
+        let key = (layout.id, page.id, control, trigger);
+        let first = self.refused.insert(key);
+        Some(RuntimeOutcome::Unavailable {
+            action,
+            control,
+            trigger,
+            reason,
+            first,
+        })
     }
 
     /// The binding target behind each face of [`Runtime::faces`] that has
@@ -752,9 +837,21 @@ impl Runtime {
             .controls()
             .into_iter()
             .filter(|control| model.capabilities.has_display(*control))
-            .filter_map(|control| {
-                shown_binding(page, control).map(|binding| (control, binding.target.clone()))
+            .filter_map(|control| shown_binding(page, control).map(|binding| (control, binding)))
+            // A binding that cannot run its action shows as unavailable,
+            // without live state.
+            .filter(|(_, binding)| {
+                self.profile().is_none_or(|profile| {
+                    crate::binding_incompatibility(
+                        binding,
+                        &model.capabilities,
+                        self.engine.registry(),
+                        profile,
+                    )
+                    .is_none()
+                })
             })
+            .map(|(control, binding)| (control, binding.target.clone()))
             .collect()
     }
 
@@ -803,6 +900,22 @@ impl Runtime {
                 if self.session.is_none() {
                     return ignored("no active profile");
                 }
+                // A binding whose action cannot run from this control is
+                // refused, not run.
+                let trigger = self
+                    .layout_for(&device.model)
+                    .zip(self.current_page(device))
+                    .and_then(|(layout, page)| layout.page(page))
+                    .and_then(|page| page.binding_for(*control, *input))
+                    .map(|binding| binding.trigger);
+                if let Some(refused) =
+                    trigger.and_then(|trigger| self.refuse_incompatible(device, *control, trigger))
+                {
+                    return Ok(refused);
+                }
+                let Some(model) = self.catalog.get(&device.model) else {
+                    return ignored("unknown device model");
+                };
                 let (Some(layout), Some(page_id)) =
                     (self.layout_for(&device.model), self.current_page(device))
                 else {
@@ -940,7 +1053,10 @@ impl Runtime {
 }
 
 /// Faces for `controls` on one page of a layout. Unbound controls are empty.
-/// Used for devices and for previews in the layout designer.
+/// Used for devices and for previews in the layout designer. With the
+/// model's `capabilities`, a control whose shown binding runs an action
+/// that cannot run from it shows as unavailable, as an action whose type
+/// cannot run here does.
 pub fn page_faces(
     registry: &ActionRegistry,
     layout: &DeviceLayout,
@@ -948,6 +1064,7 @@ pub fn page_faces(
     profile: &Profile,
     project: Option<&Project>,
     controls: &[ControlId],
+    capabilities: Option<&DeviceCapabilities>,
 ) -> Vec<(ControlId, KeyFace)> {
     let Some(page) = layout.page(page) else {
         return controls
@@ -975,8 +1092,16 @@ pub fn page_faces(
                     }
                 },
                 |binding| {
-                    face_for(registry, binding, layout, profile, project)
-                        .with_appearance(binding.appearance.as_ref())
+                    let incompatible = capabilities.is_some_and(|capabilities| {
+                        crate::binding_incompatibility(binding, capabilities, registry, profile)
+                            .is_some()
+                    });
+                    if incompatible {
+                        unavailable_face(binding, profile, project)
+                    } else {
+                        face_for(registry, binding, layout, profile, project)
+                    }
+                    .with_appearance(binding.appearance.as_ref())
                 },
             );
             face.title = render_page_label(&face.title, label);
@@ -997,6 +1122,34 @@ fn shown_binding(page: &crate::LayoutPage, control: ControlId) -> Option<&Contro
             Trigger::Click => 1,
             _ => 2,
         })
+}
+
+/// The face of an action binding that cannot run from its control: its
+/// label, marked unavailable (the look of an action whose type cannot run
+/// here).
+fn unavailable_face(
+    binding: &ControlBinding,
+    profile: &Profile,
+    project: Option<&Project>,
+) -> KeyFace {
+    let template = binding
+        .target
+        .action_id()
+        .and_then(|action| profile.action(action))
+        .map(|instance| {
+            binding
+                .label
+                .as_deref()
+                .or(instance.label.as_deref())
+                .unwrap_or(&instance.name)
+                .to_owned()
+        })
+        .unwrap_or_default();
+    KeyFace::new(
+        FaceStyle::Notice,
+        render_label(&template, &profile.name, project),
+    )
+    .with_detail("Unavailable")
 }
 
 fn face_for(
@@ -1065,6 +1218,9 @@ fn face_for(
         ),
     }
 }
+
+#[cfg(test)]
+mod compat_tests;
 
 #[cfg(test)]
 mod deck_tests;
@@ -1518,6 +1674,7 @@ mod tests {
             &f.profile,
             None,
             &controls,
+            None,
         );
         assert_eq!(faces[1].1.appearance, Some(look));
         assert_eq!(faces[2].1.appearance, None);
@@ -1580,6 +1737,7 @@ mod tests {
             &f.profile,
             Some(cms),
             &controls,
+            None,
         );
         assert_eq!(faces.len(), 15);
         assert_eq!(faces[0].1.detail.as_deref(), Some("CMS"));
@@ -1594,6 +1752,7 @@ mod tests {
             &f.profile,
             None,
             &controls,
+            None,
         );
         assert!(missing.iter().all(|(_, face)| face.is_empty()));
     }

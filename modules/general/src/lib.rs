@@ -130,6 +130,7 @@ impl LogMessage {
             }],
             requires_project: false,
             deprecated: false,
+            controls: Some(deckpilot_core::ActionControls::keys()),
             // Only produces a message from its inputs: safe to repeat.
             node: deckpilot_core::graph::NodeSpec {
                 icon: Some("message-square".into()),
@@ -207,6 +208,7 @@ impl Wait {
             }],
             requires_project: false,
             deprecated: false,
+            controls: Some(deckpilot_core::ActionControls::keys()),
             node: deckpilot_core::graph::NodeSpec {
                 version: 1,
                 icon: Some("timer".into()),
@@ -303,6 +305,7 @@ impl Delay {
             }],
             requires_project: false,
             deprecated: false,
+            controls: Some(deckpilot_core::ActionControls::keys()),
             node: deckpilot_core::graph::NodeSpec {
                 version: 1,
                 icon: Some("timer".into()),

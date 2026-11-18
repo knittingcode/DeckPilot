@@ -828,3 +828,67 @@ fn stateful_keys_travel_with_their_profile() {
         .collect();
     assert_eq!(targets, [session.clone(), session, defaults]);
 }
+
+/// A binding whose action cannot run from its control (an exported Stream
+/// Deck + layout with a key-only action on a dial) is imported as it is
+/// and reported, never dropped or converted; a compatible one is not
+/// reported.
+#[test]
+fn incompatible_bindings_are_kept_and_reported() {
+    use deckpilot_core::{BindingTarget, ControlBinding, DeviceLayout, Trigger};
+    use deckpilot_device::{ControlId, models};
+
+    let (source, profiles) = store_with(&["Work"]);
+    let mut work = profiles[0].clone();
+    let action = work.actions[0].id;
+    let mut layout = DeviceLayout::new("Plus", models::stream_deck_plus().id);
+    layout.pages[0].bindings = vec![
+        ControlBinding::new(
+            ControlId::Encoder { index: 1 },
+            Trigger::RotateClockwise,
+            BindingTarget::action(action),
+        ),
+        ControlBinding::new(
+            ControlId::Key { index: 0 },
+            Trigger::Press,
+            BindingTarget::action(action),
+        ),
+    ];
+    work.layouts.push(layout.clone());
+    source.save_profile(&work).unwrap();
+    let payload = round_trip(&exported(&source));
+
+    // Not an error: the import goes ahead with a warning.
+    let mut warnings = validate(&payload, &catalog()).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let registry = modules().action_registry();
+    warnings.extend(compatibility_warnings(&payload, &catalog(), &registry));
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains("encoder 1")
+            && warnings[0].contains("it works on keys only")
+            && warnings[0].contains("kept"),
+        "{warnings:?}"
+    );
+    let target = SqliteStore::open_in_memory().unwrap();
+    let preview = preview(&payload, &target, &modules(), warnings).unwrap();
+    assert_eq!(preview.warnings.len(), 1);
+
+    apply(
+        &target,
+        &payload,
+        &ImportOptions {
+            profiles: vec![work.id],
+            ..ImportOptions::default()
+        },
+    );
+    let imported = target.load_profile(work.id).unwrap().unwrap();
+    assert_eq!(imported.layouts[0], layout, "kept as exported");
+    // Still incompatible, and still reported, after the import.
+    assert_eq!(
+        imported.layouts[0]
+            .check_compatibility(&catalog(), &registry, &imported)
+            .len(),
+        1
+    );
+}

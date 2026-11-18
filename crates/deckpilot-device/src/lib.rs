@@ -9,6 +9,7 @@ mod backend;
 mod capabilities;
 mod catalog;
 mod control;
+mod control_capabilities;
 mod descriptor;
 mod event;
 mod model;
@@ -28,6 +29,7 @@ pub use capabilities::{
 };
 pub use catalog::{ModelCatalog, models};
 pub use control::{ControlId, ControlInput, ControlKind, InputError};
+pub use control_capabilities::{ControlCapabilities, DisplayCapability, InputCapability};
 pub use descriptor::{DeviceDescriptor, DriverInfo};
 pub use event::{DeviceEvent, DeviceId};
 pub use model::{DeviceModel, DeviceModelId, HardwareSupport, UsbIdentity};
