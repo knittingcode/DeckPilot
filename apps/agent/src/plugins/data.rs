@@ -208,6 +208,7 @@ fn settings_schema(manifest: &Manifest) -> Result<ActionType, String> {
         requires_project: false,
         node: deckpilot_core::graph::NodeSpec::default(),
         deprecated: false,
+        controls: None,
     })
 }
 

@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use deckpilot_core::variables::{ScopeKey, VariableDefinition, VariableKey, VariableValue};
 use deckpilot_core::{
-    Availability, LayoutIssue, ModuleId, ModuleRegistry, ModuleSettings, Profile, ProfileId,
-    ProfileIssue, ProjectId, ResourceKey, ResourceKind,
+    ActionRegistry, Availability, LayoutIssue, ModuleId, ModuleRegistry, ModuleSettings, Profile,
+    ProfileId, ProfileIssue, ProjectId, ResourceKey, ResourceKind,
 };
 use deckpilot_device::ModelCatalog;
 use deckpilot_storage::{ConfigChanges, ConfigStore, SqliteStore};
@@ -94,7 +94,8 @@ pub fn validate(
                         LayoutIssue::UnknownModel(_)
                         | LayoutIssue::UnknownControl { .. }
                         | LayoutIssue::UnsupportedTrigger { .. }
-                        | LayoutIssue::DuplicateBinding { .. },
+                        | LayoutIssue::DuplicateBinding { .. }
+                        | LayoutIssue::IncompatibleAction { .. },
                     ..
                 } => warnings.push(format!("{name}: {issue}")),
                 // Broken references would violate referential integrity.
@@ -104,6 +105,30 @@ pub fn validate(
     }
     validate_variables(payload)?;
     Ok(warnings)
+}
+
+/// Warnings for the bindings of `payload` whose action cannot run from the
+/// control it is bound to (`docs/device-controls.md`), with the action
+/// types of `registry`. Such bindings are imported as they are, never
+/// dropped or converted; the agent does not run them, and they work once
+/// a compatible action type is installed. Call after [`validate`].
+pub fn compatibility_warnings(
+    payload: &Payload,
+    catalog: &ModelCatalog,
+    registry: &ActionRegistry,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for profile in &payload.profiles {
+        for layout in &profile.layouts {
+            for issue in layout.check_compatibility(catalog, registry, profile) {
+                warnings.push(format!(
+                    "{}: layout `{}`: {issue}; it is kept and does not run",
+                    profile.name, layout.name
+                ));
+            }
+        }
+    }
+    warnings
 }
 
 /// The shared variables of an untrusted payload: valid user definitions,

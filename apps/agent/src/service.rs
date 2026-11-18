@@ -1146,6 +1146,7 @@ impl Agent {
         self.states.reset();
         self.invalidate_gestures(deckpilot_core::gesture::GestureCancel::ProfileChanged);
         self.runtime.set_profile(Some(profile), project);
+        self.log_unavailable_bindings();
         self.reload_icons();
         self.persisted_project = self.runtime.active_project_id();
         self.after_change();
@@ -1245,6 +1246,7 @@ impl Agent {
             other => self.runtime.set_profile(other, project),
         }
         stages.done("engine");
+        self.log_unavailable_bindings();
         self.reload_icons();
         self.work_session_settings_reloaded();
         stages.done("faces");
@@ -1402,6 +1404,56 @@ impl Agent {
             let _ = reply.send(answer);
         }
         self.after_change();
+    }
+
+    /// Tells the open app windows (status bar only, never a desktop
+    /// notification) that a binding was not run because its action cannot
+    /// run from its control.
+    fn notify_unavailable(
+        &self,
+        action: &str,
+        control: deckpilot_device::ControlId,
+        reason: &deckpilot_core::IncompatibilityReason,
+    ) {
+        let mut notification = deckpilot_core::notify::Notification::new(
+            &format!("{action} did not run"),
+            &format!("{control}: {reason}. The binding is kept; change it in the layout."),
+            deckpilot_core::notify::Severity::Warning,
+        );
+        notification.desktop = false;
+        let notifier = crate::notifications::AgentNotifier {
+            events: self.handle.events.clone(),
+            desktop_clients: self.handle.desktop_clients.clone(),
+            native: None,
+        };
+        if let Err(problem) = deckpilot_core::notify::Notifier::notify(&notifier, &notification) {
+            debug!(%problem, "the unavailable binding was not shown");
+        }
+    }
+
+    /// Logs the bindings of the active profile that cannot run their
+    /// action from their control, after the configuration was loaded.
+    /// They are kept and refused when used.
+    fn log_unavailable_bindings(&self) {
+        let unavailable = self.runtime.unavailable_bindings();
+        if unavailable.is_empty() {
+            return;
+        }
+        for (model, found) in &unavailable {
+            info!(
+                %model,
+                page = %found.page_name,
+                control = %found.control,
+                trigger = ?found.trigger,
+                action = %self.action_name(found.action),
+                reason = %found.reason,
+                "binding unavailable: its action cannot run from this control"
+            );
+        }
+        warn!(
+            count = unavailable.len(),
+            "some bindings cannot run their action from their control; they are kept and not run"
+        );
     }
 
     /// The name of `action` in the active profile.

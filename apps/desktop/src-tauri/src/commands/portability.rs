@@ -165,7 +165,14 @@ pub fn preview_import(
     }
     let bytes = std::fs::read(&path).map_err(|e| CommandError::Invalid(e.to_string()))?;
     let content = payload::open(&bytes, &password)?;
-    let warnings = import::validate(&content, &state.catalog)?;
+    let mut warnings = import::validate(&content, &state.catalog)?;
+    // Bindings whose action cannot run from their control are imported as
+    // they are and reported.
+    warnings.extend(import::compatibility_warnings(
+        &content,
+        &state.catalog,
+        &state.actions(),
+    ));
     let preview = {
         let store = state.store()?;
         let modules = state.modules();

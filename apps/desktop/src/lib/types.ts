@@ -76,7 +76,29 @@ export interface ActionType {
    * it is not offered for new ones. Omitted when false.
    */
   deprecated?: boolean
+  /**
+   * Per control kind, the inputs the action can be bound to
+   * (docs/device-controls.md). Omitted: keys only, with press, release,
+   * click, double click and long press.
+   */
+  controls?: ActionControls
 }
+
+/** An input a control can produce, as actions declare them. */
+export type InputCapability =
+  | "press"
+  | "release"
+  | "rotate-clockwise"
+  | "rotate-counter-clockwise"
+  | "tap"
+  | "long-touch"
+  | "swipe"
+  | "click"
+  | "double-click"
+  | "long-press"
+
+/** A kind that is absent is not supported. */
+export type ActionControls = Partial<Record<ControlId["kind"], InputCapability[]>>
 
 export interface ActionInstance {
   id: string
@@ -875,6 +897,11 @@ export interface ControlFace {
   face: KeyFace
   /** With `render`: the key image as a PNG data URL. */
   image?: string
+  /**
+   * Bindings of this control on the page whose action cannot run from it,
+   * with the reason (docs/device-controls.md). Omitted when there are none.
+   */
+  incompatible?: { trigger: Trigger; reason: { type: string }; message: string }[]
 }
 
 export type ConnectionState = "connected" | "disconnected"
