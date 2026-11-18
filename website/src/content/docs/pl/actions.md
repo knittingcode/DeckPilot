@@ -46,7 +46,7 @@ Czego moduły celowo nie robią:
 
 W **Settings › Extensions › Modules** każdy moduł ma przełącznik. Wyłączenie modułu ukrywa jego strony i typy akcji; używające go akcje, przepływy i układy zostają zachowane i są oznaczone jako **Unavailable**, dopóki nie włączysz go ponownie. Modułu nie da się wyłączyć, gdy zależy od niego inny włączony moduł.
 
-Wszystkie moduły są wbudowane w DeckPilota. Instalowanie modułów z innych źródeł nie jest obsługiwane; o eksperymentalnym systemie wtyczek przeczytasz na stronie [Wtyczki](../plugins/).
+Wszystkie moduły są wbudowane w DeckPilota. Kolejne akcje dostarczają wtyczki instalowane z podpisanego Marketplace DeckPilota; przeczytasz o nich na stronie [Wtyczki](../plugins/).
 
 ## Co jest wyłączone, dopóki na to nie zezwolisz
 

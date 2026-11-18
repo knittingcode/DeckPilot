@@ -81,7 +81,7 @@ export const pl: Dictionary = {
       'DeckPilot to otwartoźródłowa aplikacja dla systemów macOS, Windows i Linux, która konfiguruje Stream Decka i automatyzuje pracę za pomocą akcji i przepływów. Lokalnie i w zaszyfrowanej postaci.',
     hero: {
       headline: 'Twój Stream Deck. Twój sposób pracy.',
-      lead: 'DeckPilot to otwartoźródłowa, wieloplatformowa aplikacja do konfigurowania urządzeń Stream Deck i automatyzowania zadań za pomocą akcji i przepływów. Rozszerzanie jej wtyczkami jest na etapie eksperymentalnym.',
+      lead: 'DeckPilot to otwartoźródłowa, wieloplatformowa aplikacja do konfigurowania urządzeń Stream Deck i automatyzowania zadań za pomocą akcji i przepływów. Rozszerzają ją wtyczki z podpisanego Marketplace, działające w piaskownicy.',
       download: 'Pobierz DeckPilota',
       plugins: 'Przeglądaj wtyczki',
       github: 'Zobacz w serwisie GitHub',
@@ -249,11 +249,11 @@ export const pl: Dictionary = {
     },
     marketplace: {
       eyebrow: 'Plugin Marketplace',
-      badge: 'Wersja eksperymentalna',
-      title: 'Wtyczki, gdy będą gotowe',
-      lead: 'Wtyczki pozwolą DeckPilotowi wyjść z integracjami poza wbudowane moduły: kod WebAssembly w piaskownicy, podpisany rejestr i uprawnienia, które zatwierdzasz jedno po drugim.',
+      badge: 'Nowość',
+      title: 'Wtyczki z podpisanego Marketplace',
+      lead: 'Wtyczki pozwalają DeckPilotowi wyjść z integracjami poza wbudowane moduły: kod WebAssembly w piaskownicy, podpisany rejestr i uprawnienia, które zatwierdzasz jedno po drugim.',
       status:
-        'Obsługa wtyczek jest wyłączona we wszystkich wydanych wersjach DeckPilota i nie opublikowano jeszcze żadnej wtyczki. Witryna Marketplace pokazuje, jak będzie to działać, i zawiera dokumentację SDK dla twórców.',
+        'DeckPilot instaluje wtyczki w Settings › Extensions › Plugins. Pierwsze z nich, autorstwa DeckPilota, to Air Quality, Markets, Pomodoro, Break & Hydration i Memory; integracje z GitHubem, GitLabem i Jirą oraz powiadomienia to wtyczki wbudowane. Witryna Marketplace je przedstawia i zawiera dokumentację SDK dla twórców.',
       explore: 'Otwórz Marketplace',
       developers: 'Portal dla twórców wtyczek',
       points: ['WebAssembly w piaskownicy, poza procesem aplikacji', 'Podpisany rejestr: żadnego instalowania z niesprawdzonych źródeł', 'Każde uprawnienie wymaga Twojej zgody'],
@@ -337,8 +337,8 @@ export const pl: Dictionary = {
           a: 'Nie. DeckPilot to niezależny projekt open source. Nie jest powiązany z firmami Elgato i Corsair ani przez nie wspierany.',
         },
         {
-          q: 'Czy mogę już instalować wtyczki?',
-          a: 'Nie. System wtyczek jest eksperymentalny i wyłączony we wszystkich wydanych wersjach, a w rejestrze nie ma opublikowanych wtyczek. Wszystko, co DeckPilot dziś potrafi, pochodzi z wbudowanych modułów.',
+          q: 'Czy mogę instalować wtyczki?',
+          a: 'Tak: w Settings › Extensions › Plugins, z podpisanego rejestru DeckPilota. Każda wtyczka działa w piaskownicy i tylko z uprawnieniami, na które się zgodzisz.',
         },
         {
           q: 'Dlaczego Windows ostrzega mnie przy uruchamianiu instalatora?',
