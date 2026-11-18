@@ -23,6 +23,22 @@ released either. 0.6.0 is the first version intended for publication.
   Finder, Spotlight or the Dock, brings the window and the Dock icon back
   at once, still unlocked. ⌘Q (Quit DeckPilot UI) and the tray's Quit work
   as before.
+- A new main window. DeckPilot opens with the Device Editor. The toolbar
+  at the top chooses the device (connected devices first, the other
+  models as "Not connected") and the profile to edit, and has
+  notifications, the Marketplace and the settings at the right; the
+  Dashboard, the Action Library, Workflows and module pages are in a slim
+  navigation rail at the left.
+- In the Device Editor, the Action Library is a sidebar at the right that
+  can be resized and collapsed (an overlay in narrow windows), and the
+  key inspector is below the device. The device follows the light or
+  dark theme.
+- The settings open in a window of their own, at the page asked for, and
+  now include Profiles. A theme chosen there applies to every window.
+- The Marketplace opens from the toolbar as a view of the main window;
+  installed plugins are also managed in Settings › Extensions › Plugins.
+- Notifications are in the toolbar, with the number of unread ones,
+  instead of the status bar.
 
 ### Fixed
 
