@@ -1,8 +1,15 @@
-import { Check, ChevronDown, Cpu, Puzzle, Settings, Store, UserRound } from "lucide-react"
+import { Check, ChevronDown, Cpu, Ellipsis, Puzzle, Settings, Store, UserRound } from "lucide-react"
+import { useState, useSyncExternalStore } from "react"
 
 import { CONTROL, CONTROL_ICON } from "@/components/app-titlebar"
 import { NotificationsButton } from "@/components/notifications"
 import { Button } from "@/components/ui/button"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,6 +17,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Separator } from "@/components/ui/separator"
@@ -21,7 +31,16 @@ import { cn } from "@/lib/utils"
 
 import { type DeviceOption, currentOption, deviceOptions } from "./device-options"
 import { useEditorSelection } from "./editor-selection-context"
-import type { PluginNavigationItem } from "./plugin-navigation"
+import {
+  type PluginNavigationItem,
+  loadNavigationOrder,
+  moveInOrder,
+  navigationKey,
+  orderedItems,
+  saveNavigationOrder,
+  splitEntries,
+  useNavigationIcon,
+} from "./plugin-navigation"
 
 const SELECTOR = cn(CONTROL, "max-w-56 justify-start font-normal")
 
@@ -167,32 +186,156 @@ export function ProfileSelector() {
 
 function PluginIcon({ item }: { item: PluginNavigationItem }) {
   const { resolved } = useTheme()
-  const source =
-    resolved === "dark"
-      ? (item.icon?.dark ?? item.icon?.light)
-      : (item.icon?.light ?? item.icon?.dark)
-  if (!source) return <Puzzle aria-hidden />
-  return <img src={source} alt="" aria-hidden className="size-(--titlebar-icon)" />
+  const source = useNavigationIcon(item, resolved === "dark" ? "dark" : "light")
+  // Only ever an image: the agent's sanitised data URL, else the app's own icon.
+  if (!source) return <Puzzle aria-hidden data-slot="plugin-icon-fallback" />
+  return (
+    <img
+      src={source}
+      alt=""
+      aria-hidden
+      data-slot="plugin-icon"
+      className="size-(--titlebar-icon) object-contain"
+    />
+  )
 }
 
-/** The entries plugins contribute; nothing at all when there are none. */
-export function PluginNavigation({ items }: { items: PluginNavigationItem[] }) {
+/** Below this window width every entry is in "More" (CSS pixels). */
+export const NARROW_TOOLBAR_BELOW = 720
+
+const NARROW = `(max-width: ${NARROW_TOOLBAR_BELOW - 1}px)`
+
+function subscribeNarrow(listener: () => void) {
+  if (typeof window.matchMedia !== "function") return () => undefined
+  const media = window.matchMedia(NARROW)
+  media.addEventListener("change", listener)
+  return () => {
+    media.removeEventListener("change", listener)
+  }
+}
+
+function isNarrow() {
+  return typeof window.matchMedia === "function" && window.matchMedia(NARROW).matches
+}
+
+/**
+ * The entries plugins contribute (docs/device-controls.md section 4), in
+ * the order the user gave them (kept per computer), with a "More" menu
+ * when they do not fit. Nothing at all when there are none.
+ */
+export function PluginNavigation({
+  items,
+  current,
+  onSelect,
+}: {
+  items: PluginNavigationItem[]
+  /** The entry whose view is open (its `navigationKey`). */
+  current?: string | null
+  onSelect: (item: PluginNavigationItem) => void
+}) {
+  const [order, setOrderState] = useState(loadNavigationOrder)
+  const narrow = useSyncExternalStore(subscribeNarrow, isNarrow, () => false)
   if (items.length === 0) return null
+  const ordered = orderedItems(items, order)
+  const { inline, overflow } = splitEntries(ordered, narrow)
+  const move = (item: PluginNavigationItem, index: number) => {
+    const next = moveInOrder(ordered, navigationKey(item), index)
+    setOrderState(next)
+    saveNavigationOrder(next)
+  }
   return (
     <nav aria-label="Plugins" className="flex items-center gap-(--titlebar-gap)">
-      {items.map((item) => (
-        <Button
-          key={item.id}
-          variant="ghost"
-          size="icon"
-          className={CONTROL_ICON}
-          aria-label={item.label}
-          title={item.label}
-          onClick={item.onSelect}
-        >
-          <PluginIcon item={item} />
-        </Button>
-      ))}
+      {inline.map((item, index) => {
+        const open = current === navigationKey(item)
+        return (
+          <ContextMenu key={navigationKey(item)}>
+            <ContextMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn(CONTROL_ICON, open && "bg-accent text-accent-foreground")}
+                aria-label={item.label}
+                aria-pressed={open}
+                title={item.label}
+                data-plugin-entry={navigationKey(item)}
+                onClick={() => {
+                  onSelect(item)
+                }}
+              >
+                <PluginIcon item={item} />
+              </Button>
+            </ContextMenuTrigger>
+            <ContextMenuContent>
+              <ContextMenuItem
+                disabled={index === 0}
+                onSelect={() => {
+                  move(item, index - 1)
+                }}
+              >
+                Move left
+              </ContextMenuItem>
+              <ContextMenuItem
+                disabled={index === ordered.length - 1}
+                onSelect={() => {
+                  move(item, index + 1)
+                }}
+              >
+                Move right
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
+        )
+      })}
+      {overflow.length > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className={CONTROL_ICON}
+              aria-label="More plugin views"
+              title="More plugin views"
+            >
+              <Ellipsis />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel>Plugins</DropdownMenuLabel>
+            {overflow.map((item) => (
+              <DropdownMenuItem
+                key={navigationKey(item)}
+                aria-current={current === navigationKey(item) ? "page" : undefined}
+                onSelect={() => {
+                  onSelect(item)
+                }}
+              >
+                <PluginIcon item={item} />
+                <span className="truncate">{item.label}</span>
+              </DropdownMenuItem>
+            ))}
+            {inline.length > 0 && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>Move to the toolbar</DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    {overflow.map((item) => (
+                      <DropdownMenuItem
+                        key={navigationKey(item)}
+                        onSelect={() => {
+                          move(item, inline.length - 1)
+                        }}
+                      >
+                        {item.label}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
     </nav>
   )
 }
@@ -204,11 +347,17 @@ export function PluginNavigation({ items }: { items: PluginNavigationItem[] }) {
  */
 export function ToolbarEnd({
   plugins,
+  pluginOpen = null,
+  onPlugin = () => undefined,
   marketplace,
   marketplaceOpen = false,
   onMarketplace,
 }: {
   plugins: PluginNavigationItem[]
+  /** The plugin entry whose view is open (its `navigationKey`). */
+  pluginOpen?: string | null
+  /** Opens a plugin entry's view. */
+  onPlugin?: (item: PluginNavigationItem) => void
   /** The build has the plugin marketplace. */
   marketplace: boolean
   marketplaceOpen?: boolean
@@ -220,7 +369,7 @@ export function ToolbarEnd({
   const settingsLabel = updateAvailable ? "Settings, an update is available" : "Settings"
   return (
     <div role="group" aria-label="App" className="flex items-center gap-(--titlebar-gap)">
-      <PluginNavigation items={plugins} />
+      <PluginNavigation items={plugins} current={pluginOpen} onSelect={onPlugin} />
       {plugins.length > 0 && (
         <Separator
           orientation="vertical"

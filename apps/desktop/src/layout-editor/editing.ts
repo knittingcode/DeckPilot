@@ -22,6 +22,7 @@ import type {
   DeviceLayout,
   DeviceModel,
   KeyGestureSettings,
+  Trigger,
 } from "@/lib/types"
 
 // ---------------------------------------------------------------------------
@@ -216,11 +217,19 @@ export function assignTarget(
   pageId: string,
   controls: ControlId[],
   target: BindingTarget,
+  /** The triggers of a control the target can run from; see `defaultTrigger`. */
+  accepts?: (control: ControlId, trigger: Trigger) => boolean,
 ): DeviceLayout {
   if (!targetFits(layout, pageId, target)) return layout
   let next = layout
   for (const control of controls) {
-    const trigger = defaultTrigger(model, next, pageId, control)
+    const trigger = defaultTrigger(
+      model,
+      next,
+      pageId,
+      control,
+      accepts && ((t: Trigger) => accepts(control, t)),
+    )
     if (!trigger) continue
     // Replacing a binding keeps how the key looks.
     const replaced = bindingsFor(next, pageId, control).find((b) => sameTrigger(b.trigger, trigger))
@@ -437,6 +446,7 @@ export function dropOnControl(
   pageId: string,
   source: DragSource,
   over: ControlId,
+  accepts?: (control: ControlId, trigger: Trigger) => boolean,
 ): DeviceLayout | null {
   if (
     source.type === "newFolder" ||
@@ -447,7 +457,7 @@ export function dropOnControl(
   }
   if (source.type === "control") return moveControl(model, layout, pageId, source.control, over)
   if (!targetFits(layout, pageId, source.target)) return null
-  return assignTarget(model, layout, pageId, [over], source.target)
+  return assignTarget(model, layout, pageId, [over], source.target, accepts)
 }
 
 // ---------------------------------------------------------------------------

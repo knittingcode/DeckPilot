@@ -286,5 +286,33 @@ export function controlIssues(
   const name = new RegExp(`\\b${backendName(control)}(?!\\d)`)
   return messages
     .filter((m) => m.startsWith(prefix) && name.test(m.slice(prefix.length)))
-    .map((m) => m.slice(prefix.length).replace(name, controlLabel(control)))
+    .map((m) => readableTriggers(m.slice(prefix.length).replace(name, controlLabel(control))))
+}
+
+/** Backend trigger names (Rust `Debug`) in parentheses, as the editor labels them. */
+const BACKEND_TRIGGERS: Record<string, string> = {
+  Press: "Press",
+  Release: "Release",
+  RotateClockwise: "Turn right",
+  RotateCounterClockwise: "Turn left",
+  Click: "Click",
+  DoubleClick: "Double click",
+  LongPress: "Long press",
+  "Touch { gesture: Tap }": "Tap",
+  "Touch { gesture: LongPress }": "Long press",
+  "Touch { gesture: Swipe }": "Swipe",
+}
+
+/**
+ * A layout issue with its trigger named as in the editor, e.g. "encoder 0
+ * (RotateClockwise): …" reads "encoder 0 (Turn right): …".
+ */
+export function readableTriggers(message: string): string {
+  return message.replace(
+    /\(([A-Za-z]+(?: \{ gesture: [A-Za-z]+ \})?)\)/g,
+    (match, name: string) => {
+      const label = BACKEND_TRIGGERS[name]
+      return label ? `(${label})` : match
+    },
+  )
 }

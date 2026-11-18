@@ -28,7 +28,13 @@ import { MODULE_VIEWS, isModulePageAvailable, moduleStatusItems } from "@/module
 import { resolveEditingProfile, useAppData } from "@/shell/app-data"
 import { EditorSelectionProvider } from "@/shell/editor-selection"
 import { UNSAVED_WARNING } from "@/shell/editor-selection-context"
-import { usePluginNavigation } from "@/shell/plugin-navigation"
+import {
+  PluginNavigationContext,
+  navigationKey,
+  parsePluginViewPage,
+  pluginViewPage,
+  usePluginNavigation,
+} from "@/shell/plugin-navigation"
 import { DeviceSelector, ProfileSelector, ToolbarEnd } from "@/shell/toolbar"
 
 type View = React.LazyExoticComponent<() => React.JSX.Element>
@@ -65,6 +71,11 @@ const PAGE_TITLES: Partial<Record<CorePageId, string>> = {
 }
 
 const DEFAULT_VIEW = PAGES.designer as View
+
+/** The view of a plugin's toolbar entry (`plugin-view/<plugin>/<entry>`). */
+const PLUGIN_VIEW: View = lazy(() =>
+  import("@/pages/plugin-view").then((m) => ({ default: m.PluginViewPage })),
+)
 
 /** Shown while a page loads; the titlebar shows progress meanwhile. */
 function PageLoading() {
@@ -114,7 +125,9 @@ function Studio() {
         ? null
         : (location: Location) =>
             location.mode === "workspace" &&
-            (Object.hasOwn(PAGES, location.page) || isModulePageAvailable(modules, location.page)),
+            (Object.hasOwn(PAGES, location.page) ||
+              isModulePageAvailable(modules, location.page) ||
+              (MARKETPLACE && parsePluginViewPage(location.page) !== null)),
     [modules],
   )
   const navigation = useNavigation(exists, openSettingsWindow)
@@ -123,7 +136,8 @@ function Studio() {
   const [executions] = useState(() => new ExecutionStore())
   const [rail, setRailState] = useState(storedRail)
   const chrome = useWindowChrome()
-  const plugins = usePluginNavigation()
+  // Plugin toolbar entries, read again whenever the plugins are.
+  const plugins = usePluginNavigation(data.pluginModules)
   const { go } = navigation
 
   const setRail = useCallback((open: boolean) => {
@@ -196,17 +210,23 @@ function Studio() {
 
   const page = navigation.location.page
   // A module page disappears when its module is disabled.
+  const pluginView = MARKETPLACE ? parsePluginViewPage(page) : null
   const Current = Object.hasOwn(PAGES, page)
     ? PAGES[page as CorePageId]
     : isModulePageAvailable(context.modules, page)
       ? MODULE_VIEWS[page]
-      : undefined
+      : pluginView
+        ? PLUGIN_VIEW
+        : undefined
   const ViewComponent = Current ?? DEFAULT_VIEW
   const fallbackTitle =
     PAGE_TITLES[page as CorePageId] ??
     context.modules
       .flatMap((m) => m.pages.map((p) => ({ id: `${m.id}/${p.id}`, title: p.title })))
       .find((p) => p.id === page)?.title ??
+    plugins.find(
+      (p) => pluginView && navigationKey(p) === `${pluginView.plugin}/${pluginView.entry}`,
+    )?.label ??
     "DeckPilot"
   const openEditor = () => {
     context.navigate("designer")
@@ -237,6 +257,10 @@ function Studio() {
                   trailing={
                     <ToolbarEnd
                       plugins={plugins}
+                      pluginOpen={pluginView ? `${pluginView.plugin}/${pluginView.entry}` : null}
+                      onPlugin={(item) => {
+                        context.navigate(pluginViewPage(item) as PageId)
+                      }}
                       marketplace={MARKETPLACE}
                       marketplaceOpen={page === "marketplace"}
                       onMarketplace={() => {
@@ -248,10 +272,14 @@ function Studio() {
                 <div className="flex min-h-0 flex-1">
                   <AppSidebar current={page as PageId} onNavigate={context.navigate} />
                   <SidebarInset className="min-h-0 overflow-y-auto">
-                    <Suspense fallback={<PageLoading />}>
-                      {/* Remount on profile change: open editors never write to another profile. */}
-                      <ViewComponent key={context.editingProfileId ?? "none"} />
-                    </Suspense>
+                    <PluginNavigationContext value={{ items: plugins, page }}>
+                      <Suspense fallback={<PageLoading />}>
+                        {/* Remount on profile change: open editors never write to another profile. */}
+                        <ViewComponent
+                          key={`${context.editingProfileId ?? "none"}${pluginView ? `:${page}` : ""}`}
+                        />
+                      </Suspense>
+                    </PluginNavigationContext>
                   </SidebarInset>
                 </div>
                 <AppStatusBar stores={status} />
