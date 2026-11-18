@@ -13,8 +13,8 @@ The app's side is **off by default**: without `VITE_DECKPILOT_PLUGINS=1`
 it has no Plugins page. An agent built with the `plugins` feature has
 plugins on unless started with `--disable-plugins` (or
 `DECKPILOT_ENABLE_PLUGINS=0`); one built without the feature, or turned
-off, refuses every plugin request (`pluginsUnavailable`). On Windows plugins can
-be installed and inspected but not enabled or run.
+off, refuses every plugin request (`pluginsUnavailable`). Plugins run on
+macOS, Windows and Linux.
 
 Needs: the Rust toolchain, `pnpm install` done, `jq`. Run everything from
 the repository root. Every shell used below starts with these variables:
@@ -150,8 +150,8 @@ Settings › Extensions › Plugins.
    running*); start it with `--disable-plugins` or
    `DECKPILOT_ENABLE_PLUGINS=0` (*turned off*); `cargo build -p deckpilot-agent` without the feature
    (*not built with plugins*; rebuild with it afterwards). *Platform
-   unsupported* shows only on Windows, *agent too old* only with an agent
-   before protocol 10.
+   unsupported* shows only on a system other than macOS, Windows and Linux,
+   *agent too old* only with an agent before protocol 10.
 2. **Discover** lists Hello Weather with *by acme*, **Verified publisher**,
    *DeckPilot >=0.5.0 <1.0.0* and its platforms; the category filter offers
    *Other*. Its details show the description, license, homepage, source,
