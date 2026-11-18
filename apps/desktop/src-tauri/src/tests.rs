@@ -1661,6 +1661,33 @@ fn native_windows_are_opened_by_identifier_and_reused() {
     windows::closed(&app, &label, true);
     assert!(registry.spec(&label).is_none());
     assert_eq!(registry.open_labels().len(), 1);
+
+    // The settings: a workspace window, opened at a page and reused for
+    // the next one. They are never sized to their content.
+    h.ok(
+        "open_window",
+        json!({ "id": "app.settings", "page": "security" }),
+    );
+    let settings_label = windows::label_for("app.settings");
+    let settings = app
+        .get_webview_window(&settings_label)
+        .expect("settings window created");
+    let windows_open = count();
+    h.ok(
+        "open_window",
+        json!({ "id": "app.settings", "page": "module:projects" }),
+    );
+    // A page that is no page reference is ignored, not refused.
+    h.ok(
+        "open_window",
+        json!({ "id": "app.settings", "page": "../index.html" }),
+    );
+    assert_eq!(count(), windows_open, "one settings window");
+    let before_fit = settings.inner_size().unwrap();
+    let fitted = windows::fit(&settings, (200.0, 100.0), (200.0, 100.0)).unwrap();
+    assert_eq!(settings.inner_size().unwrap(), before_fit, "not resized");
+    assert_ne!(fitted, (200.0, 100.0), "not sized to its content");
+    windows::closed(&app, &settings_label, true);
 }
 
 // System-managed keys and sensitive operations. The agent's credential store

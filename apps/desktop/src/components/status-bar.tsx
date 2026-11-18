@@ -1,16 +1,5 @@
-import {
-  Bell,
-  BellDot,
-  CircleAlert,
-  CircleCheck,
-  CircleSlash,
-  Ellipsis,
-  Info,
-  Loader2,
-  TriangleAlert,
-  X,
-} from "lucide-react"
-import { useEffect, useState } from "react"
+import { CircleAlert, CircleCheck, CircleSlash, Ellipsis, Loader2 } from "lucide-react"
+import { useEffect } from "react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -23,11 +12,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { type StatusStores, useSnapshot } from "@/hooks/use-status"
 import { formatTimestamp } from "@/lib/format"
 import {
-  type AppNotification,
-  NotificationStore,
   type Operation,
   OperationStore,
-  type Severity,
   type StatusItem,
   StatusItemStore,
   type StatusTone,
@@ -55,14 +41,14 @@ const SEGMENT =
 
 /**
  * The bottom bar of the main window: status of the agent, devices and
- * context on the left, background operations in the center, updates and
- * notifications on the right. It renders what core services and enabled
- * modules registered and imports no module.
+ * context on the left, background operations in the center, updates on
+ * the right. Notifications are in the toolbar (`NotificationsButton`). It
+ * renders what core services and enabled modules registered and imports no
+ * module.
  */
 export function AppStatusBar({ stores }: { stores: StatusStores }) {
   const items = useSnapshot(stores.items)
   const operations = useSnapshot(stores.operations)
-  const notifications = useSnapshot(stores.notifications)
 
   // Finished operations disappear after a while.
   const finished = operations.some((o) => o.status !== "running")
@@ -104,7 +90,6 @@ export function AppStatusBar({ stores }: { stores: StatusStores }) {
         {right.map((item) => (
           <StatusSegment key={item.id} item={item} />
         ))}
-        <Notifications store={stores.notifications} notifications={notifications} />
         {overflow.length > 0 && <Overflow items={overflow} />}
       </div>
     </footer>
@@ -291,120 +276,6 @@ function Operations({ operations }: { operations: Operation[] }) {
             </li>
           ))}
         </ul>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-const SEVERITY: Record<Severity, { icon: typeof Info; className: string }> = {
-  info: { icon: Info, className: "text-muted-foreground" },
-  warning: { icon: TriangleAlert, className: "text-amber-600 dark:text-amber-400" },
-  error: { icon: CircleAlert, className: "text-destructive" },
-}
-
-function Notifications({
-  store,
-  notifications,
-}: {
-  store: NotificationStore
-  notifications: AppNotification[]
-}) {
-  const [open, setOpen] = useState(false)
-  const unread = notifications.filter((n) => !n.read)
-  const worst = unread.some((n) => n.severity === "error")
-    ? "error"
-    : unread.some((n) => n.severity === "warning")
-      ? "warning"
-      : null
-  const list = NotificationStore.newestFirst(notifications)
-  return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next)
-        // Seen once the list closes.
-        if (!next) store.markAllRead()
-      }}
-    >
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={SEGMENT}
-          aria-label={
-            unread.length > 0 ? `Notifications, ${unread.length} unread` : "Notifications"
-          }
-        >
-          {unread.length > 0 ? (
-            <BellDot className={worst ? SEVERITY[worst].className : undefined} />
-          ) : (
-            <Bell />
-          )}
-          {unread.length > 0 && <span className="tabular-nums">{unread.length}</span>}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        side="top"
-        align="end"
-        sideOffset={6}
-        collisionPadding={8}
-        className="w-96 p-0 text-sm"
-      >
-        <div className="flex items-center border-b px-3 py-2">
-          <h2 className="flex-1 text-xs font-medium text-muted-foreground uppercase">
-            Notifications
-          </h2>
-          {list.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 text-xs"
-              onClick={() => {
-                store.clear()
-              }}
-            >
-              <X /> Clear
-            </Button>
-          )}
-        </div>
-        {list.length === 0 ? (
-          <p className="px-3 py-6 text-center text-sm text-muted-foreground">No notifications</p>
-        ) : (
-          <ul className="grid max-h-80 overflow-y-auto" aria-label="Notifications">
-            {list.map((n) => {
-              const { icon: Icon, className } = SEVERITY[n.severity]
-              return (
-                <li
-                  key={n.key}
-                  className={cn(
-                    "flex gap-2 border-b px-3 py-2 last:border-b-0",
-                    !n.read && "bg-accent/40",
-                  )}
-                >
-                  <Icon
-                    className={cn("mt-0.5 size-4 shrink-0", className)}
-                    aria-label={n.severity}
-                  />
-                  <div className="grid min-w-0 flex-1 gap-0.5">
-                    <span className="font-medium">
-                      {n.title}
-                      {n.count > 1 && (
-                        <span className="ml-1 text-xs font-normal text-muted-foreground">
-                          ×{n.count}
-                        </span>
-                      )}
-                    </span>
-                    {n.message && (
-                      <span className="text-xs text-muted-foreground">{n.message}</span>
-                    )}
-                    <span className="text-xs text-muted-foreground">
-                      {formatTimestamp(Math.floor(n.at / 1000))}
-                    </span>
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
-        )}
       </PopoverContent>
     </Popover>
   )

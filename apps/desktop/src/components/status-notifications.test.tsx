@@ -5,6 +5,7 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { NotificationsButton } from "@/components/notifications"
 import { AppStatusBar } from "@/components/status-bar"
 import { CoreStatusItems } from "@/components/status-sources"
 import { StatusContext, createStatusStores } from "@/hooks/use-status"
@@ -36,6 +37,7 @@ async function renderStatusBar() {
       <SecurityContext value={security}>
         <StatusContext value={stores}>
           <AppStatusBar stores={stores} />
+          <NotificationsButton store={stores.notifications} />
           <CoreStatusItems />
         </StatusContext>
       </SecurityContext>
@@ -60,7 +62,7 @@ function notify(notification: Partial<ActionNotification>) {
   })
 }
 
-describe("status bar notifications", () => {
+describe("toolbar notifications", () => {
   it("counts unread notifications, lists them newest first and marks them read", async () => {
     const user = userEvent.setup()
     await renderStatusBar()

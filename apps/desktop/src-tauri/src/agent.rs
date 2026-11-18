@@ -423,7 +423,8 @@ async fn subscribe<R: Runtime>(app: &AppHandle<R>, paths: &AgentPaths) -> Result
             AgentEvent::OpenWindow { window } => {
                 // Only an identifier arrives; the catalog decides.
                 if let Some(state) = app.try_state::<crate::state::AppState>()
-                    && let Err(error) = crate::commands::windows::open_by_id(app, &state, &window)
+                    && let Err(error) =
+                        crate::commands::windows::open_by_id(app, &state, &window, None)
                 {
                     eprintln!("the agent asked for window `{window}`: {error}");
                 }
@@ -559,7 +560,7 @@ pub(crate) fn show_window<R: Runtime>(app: &AppHandle<R>) {
         ShowTarget::Prompt => {
             if let Some(state) = state {
                 let id = crate::commands::security::prompt_window(&state);
-                if let Err(error) = crate::commands::windows::open_by_id(app, &state, id) {
+                if let Err(error) = crate::commands::windows::open_by_id(app, &state, id, None) {
                     eprintln!("cannot open the password prompt: {error}");
                 }
             }

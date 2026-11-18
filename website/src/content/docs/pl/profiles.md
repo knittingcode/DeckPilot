@@ -9,7 +9,7 @@ order: 4
 
 Profil to niezależny zestaw akcji, przepływów, projektów i układów, z własnymi ikonami. Profile służą do rozdzielania konfiguracji, które nie mają ze sobą nic wspólnego.
 
-Otwórz **Configure › Profiles**.
+Otwórz **Settings › General › Profiles**.
 
 - **New profile** tworzy profil: podaj **Name** i **Description**, a potem wybierz **Save**.
 - **Make active** umieszcza profil na urządzeniu. Aktywny profil ma znacznik **On device**.
@@ -19,7 +19,7 @@ Po usunięciu aktywnego profilu urządzenie nie ma układu, dopóki nie uaktywni
 
 ### Edycja jednego profilu, gdy aktywny jest inny
 
-Profil do edycji wybierasz z listy u góry paska bocznego; widnieje tam napis **Editing** i nazwa profilu. Jest on niezależny od profilu działającego na urządzeniu, więc możesz przygotowywać profil, nie zakłócając tego, który jest w użyciu.
+Profil do edycji wybierasz z listy profili na pasku narzędzi, obok listy urządzeń; polecenie **Manage profiles…** otwiera tam **Settings › General › Profiles**. Jest on niezależny od profilu działającego na urządzeniu, więc możesz przygotowywać profil, nie zakłócając tego, który jest w użyciu.
 
 ## Projekty
 

@@ -19,8 +19,18 @@ import type { SecurityView } from "@/lib/types"
  * compact native windows of their own; this gate opens the right one and
  * shows the main window once a prompt reports success. It also provides
  * the authentication of sensitive operations.
+ *
+ * In a `secondary` window (the settings) the gate opens no prompt: the
+ * main window does. The window closes itself when the configuration is
+ * locked.
  */
-export function SecurityGate({ children }: { children: ReactNode }) {
+export function SecurityGate({
+  secondary = false,
+  children,
+}: {
+  secondary?: boolean
+  children: ReactNode
+}) {
   const [view, setView] = useState<SecurityView | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -43,6 +53,10 @@ export function SecurityGate({ children }: { children: ReactNode }) {
   const unlocked = view?.unlocked ?? false
   useEffect(() => {
     if (!view) return
+    if (secondary) {
+      if (!view.unlocked) void api.closeWindow().catch(() => undefined)
+      return
+    }
     if (view.unlocked) {
       void api.showMainWindow()
     } else {
@@ -51,11 +65,11 @@ export function SecurityGate({ children }: { children: ReactNode }) {
         setError(failureMessage("The unlock window did not open", e, "Restart DeckPilot"))
       })
     }
-  }, [view, unlocked])
+  }, [view, unlocked, secondary])
 
   useEffect(() => {
-    if (error) void api.showMainWindow()
-  }, [error])
+    if (error && !secondary) void api.showMainWindow()
+  }, [error, secondary])
 
   if (error) {
     return (
