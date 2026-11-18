@@ -142,17 +142,20 @@ function updateItems(changes: PermissionChanges): ReviewRequest["items"] {
 }
 
 /**
- * Settings › Extensions › Plugins: the experimental marketplace. Only
- * reachable in builds with VITE_DECKPILOT_PLUGINS=1 (see the settings
- * registry). Everything comes from the agent; the page says why when the
- * agent cannot answer plugin requests.
+ * The experimental plugin marketplace: the catalog (Discover, search,
+ * details, install with permission review) and the installed plugins
+ * (enable, permissions, configure, updates, uninstall). Shown as the main
+ * window's Marketplace and, starting at the installed plugins, as Settings
+ * › Extensions › Plugins. Only reachable in builds with
+ * VITE_DECKPILOT_PLUGINS=1. Everything comes from the agent; the page says
+ * why when the agent cannot answer plugin requests.
  */
-export function PluginsSettings() {
+export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab } = {}) {
   const override = usePluginClientOverride()
   const [client] = useState<PluginClient>(() => override ?? createTauriPluginClient())
   const { agent } = useAppContext()
   const [load, setLoad] = useState<Load>({ status: "loading" })
-  const [tab, setTab] = useState<Tab>("discover")
+  const [tab, setTab] = useState<Tab>(initialTab)
   const [selected, setSelected] = useState<string | null>(null)
   const [review, setReview] = useState<ReviewRequest | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -582,4 +585,9 @@ export function PluginsSettings() {
       </AlertDialog>
     </>
   )
+}
+
+/** Settings › Extensions › Plugins: the marketplace, at the installed plugins. */
+export function InstalledPluginsSettings() {
+  return <PluginsSettings initialTab="installed" />
 }

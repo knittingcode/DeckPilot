@@ -57,6 +57,6 @@ An export does not contain paths and other settings of this computer, keys or pa
 1. Connect a Stream Deck MK.2. It appears under **Settings › Devices** ([Devices](../devices/)).
 2. Create a profile and add your projects ([Profiles and projects](../profiles/)).
 3. Create actions from the modules you need ([Actions](../actions/)).
-4. Place them on keys in the Layout Designer ([Layouts](../layouts/)).
+4. Place them on keys in the Device Editor ([Layouts](../layouts/)).
 5. Combine actions into workflows when one action is not enough ([Workflows](../workflows/)).
 6. Make an encrypted export.

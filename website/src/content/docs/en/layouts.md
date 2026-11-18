@@ -1,20 +1,20 @@
 ---
 title: Layouts
-description: Design what each key shows and does in the Layout Designer, with pages, folders, colours, your own icons and keyboard shortcuts.
+description: Design what each key shows and does in the Device Editor, with pages, folders, colours, your own icons and keyboard shortcuts.
 group: design
 order: 5
 ---
 
 A layout says what every key of a device model shows and does. Layouts belong to a profile and to a device model, and can be designed without the device being connected.
 
-## The Layout Designer
+## The Device Editor
 
-Open **Devices › Layout Designer**. Choose the **Profile**, the **Device model** and the **Layout**; a star marks the layout that is active for that model.
+DeckPilot opens with the **Device Editor**; it is also the first entry of the navigation rail. Choose the device and the profile in the toolbar: the device selector lists connected devices first and the other models as **Not connected**. Then choose the **Layout**; a star marks the layout that is active for that model.
 
 - **New layout** creates a layout. The switch **Place the profile's actions and workflows on the keys** is on by default and fills the new layout for you.
 - **Duplicate** copies the layout, **Make active** puts it on the device, **Delete** removes it.
 
-The editor has three parts: the **Library** (Actions, Workflows, Navigation), the device canvas, and the inspector for the selected control.
+The editor has three parts: the device canvas in the middle, the inspector for the selected control below it, and the **Library** (Actions, Workflows, Navigation) at the right. The Library can be resized by dragging its edge and collapsed; in a narrow window it opens with the **Library** button.
 
 ## Putting something on a key
 

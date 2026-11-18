@@ -3,7 +3,7 @@ import { useState } from "react"
 import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { EmptyState, ErrorNotice, Loading, Page } from "@/components/page"
+import { EmptyState, ErrorNotice, Loading } from "@/components/page"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { useEditingProfile } from "@/hooks/use-profile"
+import { useTitlebar } from "@/hooks/use-titlebar"
 import { api } from "@/lib/api"
 import { failureMessage, toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
@@ -39,7 +40,11 @@ type DialogState =
   | { mode: "duplicate"; profile: ProfileSummary }
   | null
 
-export function ProfilesPage() {
+/**
+ * Settings › Profiles: every profile, the one active on the device, and
+ * the one the editors work on (chosen in the main window's toolbar).
+ */
+export function ProfilesSettings() {
   const { profiles, refresh, editingProfileId, setEditingProfileId } = useAppContext()
   const [dialog, setDialog] = useState<DialogState>(null)
   const { state } = useEditingProfile()
@@ -56,28 +61,28 @@ export function ProfilesPage() {
     )
   }
 
-  return (
-    <Page
-      title="Profiles"
-      description="Independent sets of actions, workflows, projects and layouts"
-      actions={[
-        {
-          id: "profiles.new",
-          label: "New profile",
-          icon: Plus,
-          placement: "primary",
-          onSelect: () => {
-            setDialog({ mode: "create" })
-          },
+  useTitlebar({
+    actions: [
+      {
+        id: "profiles.new",
+        label: "New profile",
+        icon: Plus,
+        placement: "primary",
+        onSelect: () => {
+          setDialog({ mode: "create" })
         },
-      ]}
-    >
+      },
+    ],
+  })
+
+  return (
+    <>
       <Card>
         <CardHeader>
           <CardTitle>All profiles</CardTitle>
           <CardDescription>
-            The active profile runs on the device. Any profile can be edited; pick it in the
-            sidebar.
+            The active profile runs on the device. Any profile can be edited; pick it in the toolbar
+            of the main window.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -228,7 +233,7 @@ export function ProfilesPage() {
           refresh()
         }}
       />
-    </Page>
+    </>
   )
 }
 
