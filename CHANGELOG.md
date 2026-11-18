@@ -30,6 +30,12 @@ released either. 0.6.0 is the first version intended for publication.
   for a moment when it starts, or for the whole life of a second agent
   process that stops because one is already running.
 
+- A plugin update whose module the plugin host refuses (for example one
+  that does not implement the actions its manifest declares) is no longer
+  installed: the update fails and the installed version keeps running.
+  Before, the update was applied and every action of the plugin failed
+  until it was rolled back by hand.
+
 ### Security
 
 - Plugin requests are refused for every address the plugin broker refuses,
