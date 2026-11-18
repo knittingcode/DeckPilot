@@ -19,6 +19,22 @@ updates:
       cargo-minor-and-patch:
         update-types: [minor, patch]
 
+  # The plugin runtime (plugins/runtime) is a separate Cargo workspace with
+  # its own lock file.
+  - package-ecosystem: cargo
+    directory: /plugins/runtime
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      plugin-runtime-cargo-minor-and-patch:
+        update-types: [minor, patch]
+
   # The pnpm workspace (apps/*) has a single lockfile at the root.
   - package-ecosystem: npm
     directory: /
@@ -32,6 +48,22 @@ updates:
       prefix: chore(deps)
     groups:
       npm-minor-and-patch:
+        update-types: [minor, patch]
+
+  # The website is not part of the pnpm workspace: npm, with its own
+  # package-lock.json.
+  - package-ecosystem: npm
+    directory: /website
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      website-npm-minor-and-patch:
         update-types: [minor, patch]
 
   - package-ecosystem: github-actions
