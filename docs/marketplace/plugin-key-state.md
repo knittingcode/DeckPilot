@@ -249,7 +249,7 @@ at worst), and a state call never fills the action queue.
 | Situation | Key shows |
 | --- | --- |
 | Device or control without a display | nothing; no state call is made |
-| Plugins off, plugin disabled, quarantined, uninstalled, unsupported platform (Windows: plugins do not run) | the static face |
+| Plugins off, plugin disabled, quarantined, uninstalled, unsupported platform (other than macOS, Windows and Linux) | the static face |
 | `device:state` not granted or revoked | the static face (asked again after 30 s) |
 | Module without `dp_state`, an action without a state handler, or an agent older than API 1.2 | the static face |
 | Error, timeout, invalid or oversized state | the static face with the error mark; back-off |
