@@ -227,15 +227,18 @@ jobs:
         with:
           name: linux-packages
           path: ${{ runner.temp }}/packages
-      # Xvfb and D-Bus for starting the agent, FUSE for the AppImage: the
-      # test's tools, none of them pulls in the tray library.
-      - name: Test tools
+      # Xvfb and D-Bus for starting the agent, FUSE for the AppImage, and
+      # the WebKitGTK runtime: an AppImage expects the system's own base
+      # graphics libraries (libEGL and others linuxdeploy never bundles),
+      # which a desktop has and a bare runner does not. None of them pulls
+      # in the tray library (checked before each start).
+      - name: Test tools and a desktop's base libraries
         run: |
           # No man page index rebuilds (minutes on hosted runners).
           sudo rm -f /var/lib/man-db/auto-update
           sudo apt-get update -q
           timeout 900 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
-            -o Acquire::Retries=3 xvfb xauth dbus libfuse2t64
+            -o Acquire::Retries=3 xvfb xauth dbus libfuse2t64 libwebkit2gtk-4.1-0
       # Without the tray library on the system: the agent keeps running
       # without a tray icon (the .deb's agent, not installed), and the
       # AppImage's agent uses the library it bundles.
