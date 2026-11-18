@@ -290,6 +290,8 @@ impl TurnPage {
                 parameters: vec![wrap_around(wrap)],
                 requires_project: false,
                 deprecated: false,
+                // One page per event: a key, or a dial's detent or press.
+                controls: Some(deckpilot_core::ActionControls::keys_and_steps()),
                 // Set by the runtime when the device moved.
                 node: view_node(
                     icon,
@@ -341,6 +343,7 @@ impl PageIndicator {
             parameters: Vec::new(),
             requires_project: false,
             deprecated: false,
+            controls: Some(deckpilot_core::ActionControls::keys()),
             node: view_node("layers", Vec::new()),
         })
     }
@@ -430,6 +433,7 @@ impl SwitchProfile {
             ],
             requires_project: false,
             deprecated: false,
+            controls: Some(deckpilot_core::ActionControls::keys()),
             // The active profile is the agent's state. The outputs are set
             // by the agent when it switched.
             node: NodeSpec {
@@ -560,6 +564,9 @@ impl Brightness {
             ],
             requires_project: false,
             deprecated: false,
+            // One step (or the set level) per event: a key, or a dial's
+            // detent or press. The rotation's amount is not used.
+            controls: Some(deckpilot_core::ActionControls::keys_and_steps()),
             // Changes a setting of this computer. The output is set by the
             // agent when it applied the change.
             node: NodeSpec {

@@ -132,25 +132,30 @@ Remaining:
 - Workflow triggers, sub-workflows with inputs and outputs, and workflow
   variables; GitHub, GitLab and Jira modules (read-only)
 
+## Plugin Marketplace (done in 0.7.0)
+
+- Sandboxed WebAssembly plugins in a separate plugin host behind a
+  permission broker, on by default, installed from DeckPilot's signed
+  Marketplace (checked against root keys built into DeckPilot), with
+  consent, updates, rollback and uninstall
+  ([docs/marketplace](marketplace/agent-integration.md))
+- The GitHub, GitLab and Jira integrations and notifications run as
+  bundled first-party plugins
+
+## System monitor keys (done; not released yet)
+
+- CPU, memory, network and disk keys in the System module (`system.cpu`,
+  `system.memory`, `system.network`, `system.disk`): read-only actions
+  whose keys show the value live with warning and critical thresholds,
+  from one shared sampler that reads only while such a key is shown
+  ([integration-modules.md](integration-modules.md#system-system))
+
 ## Later
 
 - Drivers for more Stream Deck models (XL, Stream Deck +, encoders and
   touch surfaces), after hardware testing; today only the MK.2 has a
   driver
 - Hardware testing on Windows and Linux
-
-## Experimental (off by default)
-
-- Plugin marketplace: sandboxed WebAssembly plugins behind a permission
-  broker, a signed registry and the move of some built-in modules to
-  plugins are being developed on `main`
-  ([docs/marketplace](marketplace/agent-integration.md)). The release
-  workflow builds it into every installer from the release after v0.6.0
-  on (plugin host, bundled first-party plugins, the registry's root keys;
-  [releasing.md](releasing.md#packaging-the-plugins)); no published
-  release (v0.6.0 and older) contains it, and no plugin package has been
-  published. The original design proposal is pull
-  request [#191](https://github.com/knittingcode/deckpilot/pull/191).
 
 ## Out of scope
 

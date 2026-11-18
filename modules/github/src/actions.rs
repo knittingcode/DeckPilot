@@ -315,6 +315,7 @@ fn definition(kind: Kind) -> ActionType {
         parameters,
         requires_project: false,
         deprecated: false,
+        controls: Some(deckpilot_core::ActionControls::keys()),
         node,
     }
 }
