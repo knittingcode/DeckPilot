@@ -27,6 +27,12 @@ released either. 0.6.0 is the first version intended for publication.
   showed that the background agent was not running. Installing
   `libayatana-appindicator3-1` by hand works around it in 0.7.0.
 
+- A plugin update whose module the plugin host refuses (for example one
+  that does not implement the actions its manifest declares) is no longer
+  installed: the update fails and the installed version keeps running.
+  Before, the update was applied and every action of the plugin failed
+  until it was rolled back by hand.
+
 ### Security
 
 - Plugin requests are refused for every address the plugin broker refuses,

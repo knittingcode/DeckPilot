@@ -102,8 +102,11 @@ impl Driver for Commands {
     }
 
     fn restart(&mut self, fx: &mut Fixture) -> Vec<Via> {
-        self.ok("stop_agent", json!({}));
-        fx.wait_for_agent(false);
+        // An agent stopped by a test failpoint is gone already.
+        if fx.agent_running() {
+            self.ok("stop_agent", json!({}));
+            fx.wait_for_agent(false);
+        }
         fx.stop_agent();
         self.app = None;
         fx.spawn_agent();
@@ -118,6 +121,19 @@ fn the_marketplace_works_end_to_end_through_the_app_commands() {
     let mut fx = Fixture::new("marketplace-commands");
     let mut driver = Commands::default();
     marketplace::run(&mut driver, &mut fx);
+    driver.app = None;
+}
+
+/// Updates that fail or need fresh consent, downgrades, rollbacks of the
+/// registry and to a revoked version, a revocation of the installed
+/// version and the uninstall after it (`docs/marketplace/e2e.md`, "Update
+/// failures and protections").
+#[test]
+#[ignore = "needs an agent built with plugins,test-hooks, the plugin host and the sample (docs/marketplace/e2e.md)"]
+fn plugin_updates_fail_safely_and_need_consent_through_the_app_commands() {
+    let mut fx = Fixture::new("marketplace-update-failures");
+    let mut driver = Commands::default();
+    marketplace::lifecycle::run(&mut driver, &mut fx);
     driver.app = None;
 }
 
