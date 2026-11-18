@@ -27,17 +27,31 @@ if [ "$(uname -m)" != "$machine" ]; then
 fi
 [ -f "$dmg" ] || { record "dmg: file" error "$dmg was not downloaded"; exit 0; }
 
+# checked <step> <evidence: all|last> <command...>: records the command's
+# outcome. Gatekeeper and stapler ask Apple's ticket service: a request
+# that times out is retried (3 attempts), and if it still cannot reach the
+# service it is a test error, not a failed check.
+checked() {
+  local step="$1" show="$2" out="" status=0 attempt evidence
+  shift 2
+  for attempt in 1 2 3; do
+    out=$("$@" 2>&1) && status=0 || status=$?
+    if [ "$status" -eq 0 ] || ! grep -q -E 'NSURLErrorDomain|timed out|network connection' <<< "$out"; then break; fi
+    [ "$attempt" -lt 3 ] && sleep 20
+  done
+  if [ "$show" = last ]; then evidence=$(printf '%s' "$out" | tail -n1); else evidence=$(printf '%s' "$out" | tr '\n' ' '); fi
+  if [ "$status" -eq 0 ]; then
+    record "$step" pass "$evidence"
+  elif grep -q -E 'NSURLErrorDomain|timed out|network connection' <<< "$out"; then
+    record "$step" error "Apple's service could not be reached (3 attempts): $(printf '%s' "$out" | tr '\n' ' ')"
+  else
+    record "$step" fail "$(printf '%s' "$out" | tr '\n' ' ')"
+  fi
+}
+
 # The disk image as downloaded.
-if out=$(spctl --assess --type open --context context:primary-signature -vv "$dmg" 2>&1); then
-  record "dmg: Gatekeeper (spctl open)" pass "$(printf '%s' "$out" | tr '\n' ' ')"
-else
-  record "dmg: Gatekeeper (spctl open)" fail "$(printf '%s' "$out" | tr '\n' ' ')"
-fi
-if out=$(xcrun stapler validate "$dmg" 2>&1); then
-  record "dmg: stapled ticket" pass "$(printf '%s' "$out" | tail -n1)"
-else
-  record "dmg: stapled ticket" fail "$(printf '%s' "$out" | tr '\n' ' ')"
-fi
+checked "dmg: Gatekeeper (spctl open)" all spctl --assess --type open --context context:primary-signature -vv "$dmg"
+checked "dmg: stapled ticket" last xcrun stapler validate "$dmg"
 
 mount="$SMOKE_WORK/dmg-mount"
 mkdir -p "$mount"
@@ -59,25 +73,18 @@ if out=$(codesign --verify --deep --strict --verbose=2 "$app" 2>&1); then
 else
   record "app: codesign --verify --deep --strict" fail "$(printf '%s' "$out" | tr '\n' ' ')"
 fi
-if out=$(spctl -a -vvv -t execute "$app" 2>&1); then
-  record "app: Gatekeeper (spctl -a -t execute)" pass "$(printf '%s' "$out" | tr '\n' ' ')"
-else
-  record "app: Gatekeeper (spctl -a -t execute)" fail "$(printf '%s' "$out" | tr '\n' ' ')"
-fi
-if out=$(xcrun stapler validate "$app" 2>&1); then
-  record "app: stapled ticket" pass "$(printf '%s' "$out" | tail -n1)"
-else
-  record "app: stapled ticket" fail "$(printf '%s' "$out" | tr '\n' ' ')"
-fi
+checked "app: Gatekeeper (spctl -a -t execute)" all spctl -a -vvv -t execute "$app"
+checked "app: stapled ticket" last xcrun stapler validate "$app"
 team=$(codesign --display --verbose=2 "$app/Contents/MacOS/deckpilot-desktop" 2>&1 | sed -n 's/^TeamIdentifier=//p')
 authority=$(codesign --display --verbose=2 "$app/Contents/MacOS/deckpilot-desktop" 2>&1 | sed -n 's/^Authority=//p' | head -n1)
 # The release's own check, with the team of the app's signature: every
 # executable signed by that one team, hardened runtime, entitlements, the
 # agent's and the host's identifiers, Gatekeeper and the ticket.
-if [ -n "$team" ] && out=$(APPLE_TEAM_ID="$team" "$SMOKE_ROOT/.github/scripts/verify-macos-app.sh" "$app" 2>&1); then
-  record "app: verify-macos-app.sh (release check)" pass "team $team ($authority); $(printf '%s' "$out" | tail -n1)"
+if [ -n "$team" ]; then
+  checked "app: verify-macos-app.sh (release check, team $team, $authority)" last \
+    env APPLE_TEAM_ID="$team" "$SMOKE_ROOT/.github/scripts/verify-macos-app.sh" "$app"
 else
-  record "app: verify-macos-app.sh (release check)" fail "team '${team}': $(printf '%s' "${out-}" | grep -E 'error|rejected|invalid' | head -n3 | tr '\n' ' ')"
+  record "app: verify-macos-app.sh (release check)" fail "the app has no TeamIdentifier"
 fi
 host="$app/Contents/MacOS/deckpilot-plugin-host"
 if [ -f "$host" ]; then

@@ -64,7 +64,9 @@ native() { if command -v cygpath > /dev/null; then cygpath -m "$1"; else printf 
 root_keys() {
   local file="$SMOKE_OUT/.registry-root-role.json"
   if [ ! -s "$file" ]; then
-    curl -fsSL --retry 3 -o "$file" "$ROOTS_URL" || return 1
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o "$file" "$ROOTS_URL" \
+      || gh api repos/knittingcode/deckpilot-plugins/contents/keys/roots.json --jq .content | base64 -d > "$file" \
+      || return 1
   fi
   jq -r '.keys[]' "$file" | tr -d '\r'
 }
