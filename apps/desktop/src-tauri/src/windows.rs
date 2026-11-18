@@ -347,9 +347,7 @@ pub fn for_webdriver<R: Runtime, M: Manager<R>>(
 pub fn open<R: Runtime>(app: &AppHandle<R>, spec: &WindowSpec) -> Result<(), WindowError> {
     let label = label_for(&spec.id);
     if let Some(window) = app.get_webview_window(&label) {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
+        crate::lifecycle::present(&window);
         return Ok(());
     }
     let limits = limits(spec.size);
@@ -392,8 +390,7 @@ pub fn open<R: Runtime>(app: &AppHandle<R>, spec: &WindowSpec) -> Result<(), Win
             .get(&label)
             .is_some_and(|(_, last_fit)| last_fit.is_none());
         if not_sized && let Some(window) = handle.get_webview_window(&label) {
-            let _ = window.show();
-            let _ = window.set_focus();
+            crate::lifecycle::present(&window);
         }
     });
     Ok(())
@@ -473,8 +470,7 @@ pub fn fit<R: Runtime>(
         entry.1 = Some(target);
     }
     if !fitted {
-        let _ = window.show();
-        let _ = window.set_focus();
+        crate::lifecycle::present(window);
     }
     Ok(target)
 }
@@ -511,9 +507,7 @@ pub fn show_main<R: Runtime>(app: &AppHandle<R>) -> bool {
     let Some(main) = app.get_webview_window(MAIN) else {
         return false;
     };
-    let _ = main.unminimize();
-    let _ = main.show();
-    let _ = main.set_focus();
+    crate::lifecycle::present(&main);
     true
 }
 

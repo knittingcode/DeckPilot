@@ -173,6 +173,34 @@ The page part of check 7 needs #62. Checks 4 and 5 matter in particular
 for the protocol implementation in #55 (held until it passes this
 checklist); `main` drives the device through `elgato-streamdeck`.
 
+## 3a. macOS Dock and window lifecycle (installed app)
+
+Automated on every macOS package check (`tools/ci/check-macos-dock.sh`):
+the bundled agent never registers as a Dock application (from its first
+moment, and a second agent stops at the lock without appearing), and the
+app registers as one when launched. The rest needs a person, because it
+clicks the window's close button, the tray and the Dock. On the **installed,
+signed** app (not a development build), with the agent's tray icon visible:
+
+| # | Step | Expected |
+| --- | --- | --- |
+| 1 | Open DeckPilot from Finder | window shown, DeckPilot in the Dock, one tray icon |
+| 2 | Click the red close button | window gone, **icon leaves the Dock**, tray icon stays; `pgrep -fl deckpilot` still lists the app and one agent |
+| 3 | Tray › Open DeckPilot | the same window returns (no password prompt if it was unlocked), icon back in the Dock |
+| 4 | ⌘W | as step 2 |
+| 5 | Spotlight: "DeckPilot", Return | as step 3 |
+| 6 | Finder › Applications › DeckPilot (double click), after closing again | as step 3; still one window |
+| 7 | Repeat 2–6 five times | never a second window, Dock icon, tray icon or agent (`pgrep -fl deckpilot-agent`: one) |
+| 8 | Settings › Background Agent › Restart agent | the window stays, reconnects; one tray icon |
+| 9 | With the window closed: restart the agent from the tray, then Open DeckPilot | window returns; Dock follows |
+| 10 | ⌘Q (Quit DeckPilot UI) | window and Dock icon gone, app process ends, agent and tray icon stay |
+| 11 | Tray › Quit DeckPilot | app (if running) and agent end, tray icon gone |
+| 12 | Log out and in (agent starts at login) | tray icon only, **no Dock icon at any moment** |
+| 13 | Install an update from the app | after the restart the window is back, Dock and tray as in step 1 |
+
+Record the macOS version and the result of each step in the release notes
+of the validation run.
+
 ## 4. Windows and Linux
 
 Automated: CI builds and tests on Windows and Linux; it builds the Linux
