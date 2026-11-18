@@ -15,6 +15,18 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+### Fixed
+
+- Linux: the `.deb` and `.rpm` packages now depend on the AppIndicator
+  library the background agent's tray icon uses
+  (`libayatana-appindicator3-1` on Debian and Ubuntu; the `.rpm` requires
+  `libayatana-appindicator3.so.1`, on Fedora from
+  `libayatana-appindicator-gtk3`). Where it was not installed,
+  for example on a fresh Ubuntu 24.04, the agent of 0.7.0 stopped right
+  after starting ("Failed to load ayatana-appindicator3"), and the app
+  showed that the background agent was not running. Installing
+  `libayatana-appindicator3-1` by hand works around it in 0.7.0.
+
 ## [0.7.0] - 2026-11-17
 
 ### Added
