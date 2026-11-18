@@ -118,7 +118,7 @@ inner_launch() {
   if encrypted_db "$data/deckpilot.db"; then
     record "$label: encrypted database in the isolated profile" pass "$data/deckpilot.db ($(wc -c < "$data/deckpilot.db" | tr -d ' ') bytes, no 'SQLite format 3' header); data dir: $listing"
   elif [ -s "$data/deckpilot.db" ]; then
-    record "$label: encrypted database in the isolated profile" fail "$data/deckpilot.db is a plain SQLite file"
+    record "$label: encrypted database in the isolated profile" fail "$data/deckpilot.db is a plain SQLite file: $(wc -c < "$data/deckpilot.db" | tr -d ' ') bytes, header $(head -c 16 "$data/deckpilot.db" | od -An -tx1 | tr -d ' \n')"
   else
     record "$label: encrypted database in the isolated profile" fail "no $data/deckpilot.db; data dir: ${listing:-empty}; agent log: $(tail -n 3 "$data"/logs/* 2> /dev/null | tr '\n' ' ')"
   fi
@@ -194,29 +194,53 @@ case "$os" in
       xvfb-run -a -s "-screen 0 1440x900x24" dbus-run-session -- bash "$0" "$@"
     ;;
   Darwin)
-    keychain="$SMOKE_WORK/smoke-$label.keychain-db"
+    # The Keychain looks for the default keychain under $HOME: with HOME
+    # in the profile (run 44272472526: "A default keychain could not be
+    # found") it must exist there. The keychain is the profile's login
+    # keychain, and is also made the user's default for the run in case
+    # the lookup does not follow HOME; both are restored afterwards.
+    keychain="$profile/home/Library/Keychains/login.keychain-db"
+    mkdir -p "$profile/home/Library/Keychains" "$profile/home/Library/Preferences"
     original_default=$(security default-keychain -d user | tr -d ' "')
     original_list=$(security list-keychains -d user | tr -d '"' | xargs)
     security create-keychain -p "" "$keychain"
     security set-keychain-settings "$keychain"
     security unlock-keychain -p "" "$keychain"
+    HOME="$profile/home" security list-keychains -d user -s "$keychain"
+    HOME="$profile/home" security default-keychain -d user -s "$keychain"
     # shellcheck disable=SC2086 # the list is whitespace-separated paths
     security list-keychains -d user -s "$keychain" $original_list
     security default-keychain -d user -s "$keychain"
     SMOKE_IN_SESSION=1 SMOKE_PROFILE="$profile" bash "$0" "$@"
+    # With DECKPILOT_DATA_DIR set the agent uses the service name
+    # "DeckPilot Development" (apps/agent/src/service/security.rs); an
+    # installed DeckPilot's is "DeckPilot".
     if [ "$mode" = launch ]; then
-      if security find-generic-password -s DeckPilot "$keychain" > /dev/null 2>&1; then
-        record "$label: system key in the temporary keychain" pass "a 'DeckPilot' item is in $(basename "$keychain") ($(security find-generic-password -s DeckPilot "$keychain" 2>&1 | grep -m1 '"acct"' | tr -s ' '))"
+      found=""
+      for service in "DeckPilot Development" DeckPilot; do
+        if security find-generic-password -s "$service" "$keychain" > /dev/null 2>&1; then
+          found="service '$service', $(security find-generic-password -s "$service" "$keychain" 2>&1 | grep -m1 '"acct"' | tr -s ' ')"
+          break
+        fi
+      done
+      if [ -n "$found" ]; then
+        record "$label: system key in the temporary keychain" pass "item in $(basename "$keychain"): $found"
       else
-        record "$label: system key in the temporary keychain" fail "no 'DeckPilot' item in the temporary default keychain"
+        record "$label: system key in the temporary keychain" fail "no DeckPilot item in the temporary default keychain"
       fi
     fi
     login="$real_home/Library/Keychains/login.keychain-db"
-    if [ -f "$login" ] && security find-generic-password -s DeckPilot "$login" > /dev/null 2>&1; then
-      record "$label: login keychain untouched" fail "a 'DeckPilot' item appeared in the runner's login keychain; removing it"
-      security delete-generic-password -s DeckPilot "$login" > /dev/null 2>&1 || true
+    leaked=""
+    for service in "DeckPilot Development" DeckPilot; do
+      if [ -f "$login" ] && security find-generic-password -s "$service" "$login" > /dev/null 2>&1; then
+        leaked="$leaked '$service'"
+        security delete-generic-password -s "$service" "$login" > /dev/null 2>&1 || true
+      fi
+    done
+    if [ -n "$leaked" ]; then
+      record "$label: login keychain untouched" fail "items of service$leaked appeared in the runner's login keychain (removed)"
     else
-      record "$label: login keychain untouched" pass "no 'DeckPilot' item in $login"
+      record "$label: login keychain untouched" pass "no DeckPilot item in $login"
     fi
     security default-keychain -d user -s "$original_default"
     # shellcheck disable=SC2086
@@ -230,9 +254,29 @@ esac
 # the profile itself excluded).
 leaked=$(find "$real_home" -maxdepth 5 \( -path "$real_home/work" -o -path "$real_home/.cargo" -o -path "$real_home/.rustup" \
   -o -path "$SMOKE_WORK" -o -path "$real_home/Library/Keychains" \) -prune -o -newer "$marker" -iname '*deckpilot*' -print 2> /dev/null | head -n 20)
-if [ -z "$leaked" ]; then
-  record "$label: real home untouched" pass "no new *deckpilot* path in $real_home (depth 5) during the run"
+# On macOS WebKit (Library/WebKit, Library/Caches) and the preferences
+# daemon (Library/Preferences) use the account's home directory whatever
+# HOME says, so those cannot be isolated by HOME: reported as not covered
+# and removed (they were created by this run on a throwaway runner).
+system=""
+other=""
+while IFS= read -r path; do
+  [ -n "$path" ] || continue
+  case "$os:$path" in
+    "Darwin:$real_home/Library/WebKit/"* | "Darwin:$real_home/Library/Caches/"* | "Darwin:$real_home/Library/Preferences/"* | "Darwin:$real_home/Library/HTTPStorages/"*)
+      system="$system $path" ;;
+    *) other="$other $path" ;;
+  esac
+done <<< "$leaked"
+if [ -n "$other" ]; then
+  record "$label: real home untouched" fail "new paths in the real home:$other"
+elif [ -n "$system" ]; then
+  record "$label: real home untouched" not-covered "nothing else appeared, but WebKit and the preferences daemon ignore HOME and created:$system (removed)"
 else
-  record "$label: real home untouched" fail "new paths in the real home: $(echo "$leaked" | tr '\n' ' ')"
+  record "$label: real home untouched" pass "no new *deckpilot* path in $real_home (depth 5) during the run"
+fi
+if [ -n "$system" ]; then
+  # shellcheck disable=SC2086 # paths without spaces, collected above
+  rm -rf $system
 fi
 exit 0

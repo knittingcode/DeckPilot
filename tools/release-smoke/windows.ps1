@@ -139,6 +139,8 @@ function Real-ProfileLeaks([datetime]$Since) {
 }
 
 $dirFile = Join-Path $work "$Label.dir"
+# msiexec refuses paths with forward slashes (error 1619).
+if ($File) { $File = [IO.Path]::GetFullPath($File) }
 switch ($Command) {
   'install-msi' {
     $log = Join-Path $out "$Label-msiexec.log"
@@ -221,12 +223,18 @@ switch ($Command) {
     for ($i = 0; $i -lt 30 -and -not (Test-Path $db); $i++) { Start-Sleep 1 }
     $listing = (Get-ChildItem -LiteralPath $data -Name -Recurse -Depth 1 -ErrorAction SilentlyContinue) -join ' '
     if (Test-Path $db) {
-      $bytes = [IO.File]::ReadAllBytes($db)
-      $header = [Text.Encoding]::ASCII.GetString($bytes, 0, [Math]::Min(15, $bytes.Length))
-      if ($bytes.Length -gt 0 -and $header -ne 'SQLite format 3') {
-        Record "${Label}: encrypted database in the isolated profile" 'pass' "$db ($($bytes.Length) bytes, no 'SQLite format 3' header); data dir: $listing"
+      # The agent holds the file open: read it with sharing allowed.
+      $stream = [IO.File]::Open($db, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+      $bytes = New-Object byte[] 16
+      $read = $stream.Read($bytes, 0, 16)
+      $length = $stream.Length
+      $stream.Close()
+      $header = [Text.Encoding]::ASCII.GetString($bytes, 0, [Math]::Min(15, $read))
+      if ($length -gt 0 -and $header -ne 'SQLite format 3') {
+        Record "${Label}: encrypted database in the isolated profile" 'pass' "$db ($length bytes, no 'SQLite format 3' header); data dir: $listing"
       } else {
-        Record "${Label}: encrypted database in the isolated profile" 'fail' "$db is empty or a plain SQLite file"
+        $hex = ($bytes[0..([Math]::Max(0, $read - 1))] | ForEach-Object { $_.ToString('x2') }) -join ''
+        Record "${Label}: encrypted database in the isolated profile" 'fail' "$db is empty or a plain SQLite file: $length bytes, header $hex; data dir: $listing"
       }
     } else {
       $agentLog = Get-ChildItem (Join-Path $data 'logs') -File -ErrorAction SilentlyContinue | Select-Object -First 1 | Get-Content -Tail 3 -ErrorAction SilentlyContinue

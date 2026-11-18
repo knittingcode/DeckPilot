@@ -101,7 +101,7 @@ jobs:
     name: Linux (deb, AppImage, rpm)
     needs: resolve
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     env:
@@ -123,8 +123,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/smoke/out" "$RUNNER_TEMP/smoke/work"
       - name: Install test tools
         run: |
+          # No man page index rebuilds (minutes on hosted runners).
+          sudo rm -f /var/lib/man-db/auto-update
           sudo apt-get update -q
-          timeout 900 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
+          timeout 1800 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+            -o Acquire::Retries=3 \
             xvfb imagemagick x11-apps gnome-keyring dbus-x11 libfuse2t64 webkit2gtk-driver rpm rpm2cpio cpio
           echo "NATIVE_DRIVER=$(command -v WebKitWebDriver || dpkg -L webkit2gtk-driver | grep -m1 '/WebKitWebDriver$')" >> "$GITHUB_ENV"
       - name: Download the assets

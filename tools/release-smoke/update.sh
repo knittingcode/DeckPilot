@@ -78,10 +78,16 @@ while IFS=$'\t' read -r platform url signature; do
   fi
   if out=$(minisign -V -q -p "$pub" -m "$file" -x "$work/$platform.minisig" 2>&1); then
     comment=$(sed -n 's/^trusted comment: //p' "$work/$platform.minisig")
-    if printf '%s' "$comment" | grep -q -F "file:$name" && printf '%s' "$comment" | grep -q -E "version:${version//./\\.}([[:space:]]|$)"; then
-      record "$step" pass "$name: sha256 ok, minisign ok with key $key_id; trusted comment: $comment"
+    # The app binds a signature to the announced version only
+    # (crates/deckpilot-update/src/signature.rs); the file name in the
+    # comment is the bundler's, which for the macOS archives is the name
+    # before the asset was renamed per architecture.
+    note=""
+    printf '%s' "$comment" | grep -q -F "file:$name" || note=" (the comment names the bundler's file name, not $name; the app checks only the version)"
+    if printf '%s' "$comment" | grep -q -E "version:${version//./\\.}([[:space:]]|$)"; then
+      record "$step" pass "$name: sha256 ok, minisign ok with key $key_id; trusted comment: $comment$note"
     else
-      record "$step" fail "signature verifies but the trusted comment does not name $name and version $version: $comment"
+      record "$step" fail "signature verifies but the trusted comment does not name version $version: $comment"
     fi
   else
     record "$step" fail "minisign: $out"
