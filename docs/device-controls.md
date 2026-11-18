@@ -181,7 +181,11 @@ seeded Stream Deck + layout has a tap on the touch strip bound to *Log*
 (keys only): it is reported and kept. The Stream Deck + has no driver, so
 such bindings never ran before either.
 
-## 4. Plugin manifest (planned, plugin API 1.3)
+## 4. Plugin manifest (plugin API 1.3)
+
+Status: implemented. The agent provides plugin API 1.3 (`PLUGIN_API` in
+`apps/agent/src/plugins/service.rs`); the author reference is
+[marketplace/sdk/manifest.md](marketplace/sdk/manifest.md#controls).
 
 `contributes.actions[].controls` (optional), the same shape as
 `ActionControls`:
@@ -191,21 +195,45 @@ such bindings never ran before either.
               "encoder": ["rotate-clockwise", "rotate-counter-clockwise"] }
 ```
 
-- Using `controls` (or `contributes.navigation`) requires
-  `engines.pluginApi` `^1.3`; agents up to 1.2 refuse such a manifest
-  (unknown fields).
+- Using `controls`, `contributes.navigation` or `contributes.views`
+  requires `engines.pluginApi` `^1.3` (a validator rule of
+  `deckpilot-plugin-manifest`); agents up to 1.2 refuse such a manifest
+  (unknown fields), which is the intended gate.
 - Without `controls`: the legacy default of section 2. A plugin declaring
   `device.requires: ["dials"]` without `controls` still gets no encoder
   binding.
-- Validation (`ActionControls::issues` holds the core of it): kinds are
-  `key`, `encoder`, `touchZone`; inputs valid for the kind (no rotation on
-  a key, no tap on an encoder); no empty set; at most
-  `MAX_INPUTS_PER_KIND` (8) inputs per kind.
-- Plugin navigation entries and host-rendered views
-  (`contributes.navigation`) are specified with that change.
+- Validation (the rules of `ActionControls::issues`, in the manifest
+  validator with JSON paths): kinds are `key`, `encoder`, `touchZone`;
+  inputs valid for the kind (no rotation on a key, no tap on an encoder);
+  no empty set; each input once; at most `MAX_INPUTS_PER_KIND` (8) inputs
+  per kind.
+- The agent registers a plugin action's `ActionType.controls` from the
+  manifest's `controls` as sets (`apps/agent/src/plugins/engine.rs`);
+  `None` without them.
 
-Until then the agent converts manifest actions with `controls: None`
-(`apps/agent/src/plugins/engine.rs`).
+`contributes.navigation` (≤ 4 entries: `id`, `label` ≤ 24 characters,
+`icon`, `view`) and `contributes.views` (≤ 8: `id`, `kind` ∈ `variables`,
+`actions`, `settings`) add toolbar entries that open host-rendered views:
+
+- `view` names a declared view; ids are unique local ids (≤ 32
+  characters).
+- Icons are package files under `assets/` (`.png`, `.webp`, `.svg`; no
+  absolute path, scheme, `..` or backslash) and so in the integrity
+  record. PNG/WebP ≤ 256 KiB and ≤ 512×512 (from the header); SVG ≤ 64 KiB,
+  parsed (quick-xml) and rebuilt from an allow-list; scripts,
+  `foreignObject`, event handlers, links other than `#id`, `<style>` with
+  `url(`/`@import`, DTDs and entities are refused
+  (`deckpilot_plugin_manifest::sanitize_svg`). The package reader refuses
+  such a file at build and install time; the agent re-checks the digest
+  and sanitizes again on every request.
+- IPC (feature `navigation` in `PluginRuntimeStatus.features`):
+  `PluginSummary.navigation` lists the entries with their views;
+  `getPluginIcon` with `navigation: { entry, theme }` sends the icon in
+  chunks (`image/png`, `image/webp` or `image/svg+xml`).
+- Desktop commands: `list_plugin_navigation` (entries of enabled plugins)
+  and `get_plugin_navigation_icon` (a `data:` URL for `<img>`, `null` on
+  any failure so the app shows a fallback icon). The toolbar itself comes
+  with the app shell (section 5).
 
 ## 5. App shell (planned)
 

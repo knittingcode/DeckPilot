@@ -1377,7 +1377,9 @@ dependencies = [
 name = "deckpilot-plugin-manifest"
 version = "0.7.0"
 dependencies = [
+ "deckpilot-device",
  "jsonschema",
+ "quick-xml",
  "semver",
  "serde",
  "serde_json",

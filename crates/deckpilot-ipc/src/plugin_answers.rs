@@ -348,15 +348,47 @@ pub async fn plugin_icon(
     client: &mut AgentClient,
     plugin: &str,
 ) -> Result<Option<String>, ClientError> {
+    read_icon(client, plugin, None).await
+}
+
+/// The icon of `plugin`'s navigation entry `entry` for `theme` as a
+/// `data:` URL (`image/png`, `image/webp` or `image/svg+xml`, an SVG
+/// sanitized by the agent), read in chunks; `None` when the agent has none
+/// to show (no such entry, a missing, oversized, unsafe or modified file).
+/// Only for an agent that lists [`plugins::feature::NAVIGATION`]: an
+/// older one would answer with the plugin's own icon.
+pub async fn navigation_icon(
+    client: &mut AgentClient,
+    plugin: &str,
+    entry: &str,
+    theme: plugins::NavigationIconTheme,
+) -> Result<Option<String>, ClientError> {
+    let navigation = plugins::NavigationIconRef {
+        entry: entry.to_owned(),
+        theme,
+    };
+    read_icon(client, plugin, Some(navigation)).await
+}
+
+async fn read_icon(
+    client: &mut AgentClient,
+    plugin: &str,
+    navigation: Option<plugins::NavigationIconRef>,
+) -> Result<Option<String>, ClientError> {
     let broken = || ClientError::Protocol(format!("the chunks of {plugin}'s icon do not add up"));
+    let media_ok = |media: &str| match navigation {
+        None => media == "image/png",
+        Some(_) => plugins::NAVIGATION_ICON_MEDIA_TYPES.contains(&media),
+    };
     'attempt: for _ in 0..ATTEMPTS {
         let mut offset = 0;
-        let mut file: Option<(u64, String)> = None;
+        let mut file: Option<(u64, String, String)> = None;
         let mut data = String::new();
         loop {
             let request = Request::GetPluginIcon {
                 plugin: plugin.to_owned(),
                 offset,
+                navigation: navigation.clone(),
             };
             let Response::PluginIcon { icon, .. } = client.request(request).await? else {
                 return Err(unexpected("getPluginIcon"));
@@ -364,15 +396,21 @@ pub async fn plugin_icon(
             let Some(chunk) = icon else {
                 return Ok(None);
             };
-            if chunk.media_type != "image/png"
+            if !media_ok(&chunk.media_type)
                 || chunk.offset != offset
                 || chunk.size > MAX_ICON_BYTES as u64
             {
                 return Err(broken());
             }
             match &file {
-                None => file = Some((chunk.size, chunk.sha256.clone())),
-                Some((size, sha256)) if *size != chunk.size || *sha256 != chunk.sha256 => {
+                None => {
+                    file = Some((chunk.size, chunk.sha256.clone(), chunk.media_type.clone()));
+                }
+                Some((size, sha256, media))
+                    if *size != chunk.size
+                        || *sha256 != chunk.sha256
+                        || *media != chunk.media_type =>
+                {
                     continue 'attempt;
                 }
                 Some(_) => {}
@@ -382,7 +420,9 @@ pub async fn plugin_icon(
                 return Err(broken());
             }
             match chunk.next {
-                None => return Ok(Some(format!("data:image/png;base64,{data}"))),
+                None => {
+                    return Ok(Some(format!("data:{};base64,{data}", chunk.media_type)));
+                }
                 Some(next) if next == offset + ICON_CHUNK_BYTES as u64 && next < chunk.size => {
                     offset = next;
                 }
@@ -444,6 +484,7 @@ mod tests {
             actions,
             action_count: None,
             health: None,
+            navigation: Vec::new(),
         }
     }
 
@@ -703,6 +744,7 @@ mod tests {
             Request::GetPluginIcon {
                 plugin: "acme.x".into(),
                 offset: 0,
+                navigation: None,
             },
         ] {
             assert_eq!(request.since_protocol(), 10);

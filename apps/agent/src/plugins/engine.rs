@@ -23,9 +23,9 @@ use std::time::{Duration, Instant};
 use deckpilot_core::graph::{MAX_TIMEOUT_MS, NodeSpec};
 use deckpilot_core::variables::{VariableSource, module_namespace};
 use deckpilot_core::{
-    ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, ButtonState,
-    ExecutionContext, FeatureModule, ModuleId, ModuleManifest, ParameterValue, Portability,
-    RefreshPolicy, StateError,
+    ActionControls, ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId,
+    ButtonState, ExecutionContext, FeatureModule, ModuleId, ModuleManifest, ParameterValue,
+    Portability, RefreshPolicy, StateError,
 };
 use deckpilot_core::{RunOrigin, WorkflowCause};
 use deckpilot_plugin_abi::capability::{
@@ -211,9 +211,12 @@ pub(crate) fn action_type(plugin: &str, action: &Action) -> Result<ActionType, S
         parameters,
         requires_project: action.requires_project.unwrap_or(false),
         deprecated: action.deprecated.unwrap_or(false),
-        // Manifests cannot declare controls yet: the legacy default, keys
-        // only (`docs/device-controls.md`).
-        controls: None,
+        // The manifest's `controls` (plugin API 1.3), as declared; without
+        // them the legacy default, keys only. `device.requires` adds no
+        // control kind (`docs/device-controls.md` §4).
+        controls: action.controls.as_ref().map(|controls| ActionControls {
+            bindings: controls.as_sets(),
+        }),
         node,
     })
 }
@@ -586,6 +589,67 @@ mod tests {
                     &ActionParameters::new().with("city", ParameterValue::Choice("paris".into()))
                 )
                 .is_err()
+        );
+        // No `controls` in the manifest: the legacy default, keys only,
+        // whatever `device.requires` says.
+        assert_eq!(greet.controls, None);
+        assert_eq!(*greet.effective_controls(), ActionControls::legacy());
+    }
+
+    /// Plugin API 1.3: the manifest's `controls` become the action type's,
+    /// as sets; `device.requires` adds nothing.
+    #[test]
+    fn manifest_controls_become_the_action_types_controls() {
+        use deckpilot_device::{ControlKind, InputCapability};
+        let manifest = sample();
+        let mut action = manifest.contributes.actions()[0].clone();
+        action.device = Some(deckpilot_plugin_manifest::ActionDevice {
+            requires: Some(vec![deckpilot_plugin_manifest::DeviceFamily::Dials]),
+        });
+        let legacy = action_type("acme.hello-weather", &action).unwrap();
+        assert_eq!(legacy.controls, None);
+        assert!(
+            !legacy
+                .effective_controls()
+                .kinds()
+                .contains(&ControlKind::Encoder)
+        );
+
+        action.controls = Some(
+            serde_json::from_value(serde_json::json!({
+                "key": ["press", "click", "press"],
+                "encoder": ["rotate-counter-clockwise", "rotate-clockwise"],
+                "touchZone": ["swipe"]
+            }))
+            .unwrap(),
+        );
+        let declared = action_type("acme.hello-weather", &action).unwrap();
+        let expected = ActionControls::new()
+            .with(
+                ControlKind::Key,
+                [InputCapability::Press, InputCapability::Click],
+            )
+            .with(
+                ControlKind::Encoder,
+                [
+                    InputCapability::RotateClockwise,
+                    InputCapability::RotateCounterClockwise,
+                ],
+            )
+            .with(ControlKind::TouchZone, [InputCapability::Swipe]);
+        assert_eq!(declared.controls, Some(expected));
+        // What the manifest validator accepts, the core's rules accept.
+        assert_eq!(
+            declared.controls.as_ref().unwrap().issues(),
+            Vec::<String>::new()
+        );
+        // It travels in the action type's JSON (IPC, stored definitions).
+        let json = serde_json::to_value(&declared).unwrap();
+        assert_eq!(
+            json["controls"],
+            serde_json::json!({"key": ["press", "click"],
+                "encoder": ["rotate-clockwise", "rotate-counter-clockwise"],
+                "touchZone": ["swipe"]})
         );
     }
 

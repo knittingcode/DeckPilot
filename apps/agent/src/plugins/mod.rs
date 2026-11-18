@@ -319,7 +319,10 @@ fn idle_status(settings: &PluginSettings) -> PluginRuntimeStatus {
 /// (`PluginRuntimeStatus::features`).
 #[cfg(feature = "plugins")]
 pub(crate) fn features() -> Vec<String> {
-    vec![deckpilot_ipc::plugins::feature::PAGED_ANSWERS.to_owned()]
+    vec![
+        deckpilot_ipc::plugins::feature::PAGED_ANSWERS.to_owned(),
+        deckpilot_ipc::plugins::feature::NAVIGATION.to_owned(),
+    ]
 }
 
 type Reply = oneshot::Sender<Result<Response, IpcError>>;
