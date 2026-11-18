@@ -15,6 +15,41 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+### Changed
+
+- macOS: closing DeckPilot's window (the close button or ⌘W) now keeps the
+  app running in the background and takes its icon out of the Dock, like
+  Docker Desktop. The tray's *Open DeckPilot*, or opening DeckPilot from
+  Finder, Spotlight or the Dock, brings the window and the Dock icon back
+  at once, still unlocked. ⌘Q (Quit DeckPilot UI) and the tray's Quit work
+  as before.
+
+### Fixed
+
+- macOS: the background agent no longer shows a DeckPilot icon in the Dock
+  for a moment when it starts, or for the whole life of a second agent
+  process that stops because one is already running.
+
+- A plugin update whose module the plugin host refuses (for example one
+  that does not implement the actions its manifest declares) is no longer
+  installed: the update fails and the installed version keeps running.
+  Before, the update was applied and every action of the plugin failed
+  until it was rolled back by hand.
+
+### Security
+
+- Plugin requests are refused for every address the plugin broker refuses,
+  including tunnel and translation ranges (6to4, Teredo, local-use NAT64,
+  site-local IPv6 and the 6to4 relay range), not only private ones.
+- A plugin request under a server path the user allowed (such as
+  `https://ghe.example.com/api/v3`) is refused when an encoded `/`, `\` or
+  `.` (`%2f`, `%5c`, `%2e`) would make a `..` segment once a server
+  decodes it, such as `/api/v3/..%2fadmin`, which leads outside that path.
+- Control characters in a plugin's log messages are escaped, so a plugin
+  cannot forge lines in DeckPilot's log.
+- The plugin module the host runs is checked against its integrity record
+  byte for byte as it is loaded, not only before it is read.
+
 ## [0.7.0] - 2026-11-17
 
 ### Added

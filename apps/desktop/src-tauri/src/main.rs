@@ -64,11 +64,17 @@ pub(crate) fn create_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Resul
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(15)).await;
         let prompts = handle.state::<windows::WindowRegistry>().open_labels();
-        if prompts.is_empty()
-            && let Some(main) = handle.get_webview_window(windows::MAIN)
-            && !main.is_visible().unwrap_or(true)
+        let presented = handle
+            .try_state::<lifecycle::MainPresented>()
+            .is_some_and(|p| p.0.load(std::sync::atomic::Ordering::SeqCst));
+        if let Some(main) = handle.get_webview_window(windows::MAIN)
+            && lifecycle::startup_fallback_shows(
+                main.is_visible().unwrap_or(true),
+                presented,
+                !prompts.is_empty(),
+            )
         {
-            let _ = main.show();
+            lifecycle::present(&main);
         }
     });
     Ok(())
@@ -108,6 +114,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(updates::UpdateManager::default())
         .manage(windows::WindowRegistry::default())
+        .manage(lifecycle::MainPresented::default())
         .manage(commands::portability::PendingImport::default())
         .manage(commands::plugins::PluginEvents::default())
         .setup(move |app| {
@@ -157,14 +164,9 @@ fn main() {
             updates::spawn_background(app.handle().clone());
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                let app = window.app_handle();
-                let unlocked = app.state::<state::AppState>().is_unlocked();
-                windows::closed(app, window.label(), unlocked);
-            }
-        })
+        .on_window_event(lifecycle::on_window_event)
         .invoke_handler(commands::handler())
-        .run(tauri::generate_context!())
-        .expect("failed to run DeckPilot");
+        .build(tauri::generate_context!())
+        .expect("failed to build DeckPilot")
+        .run(|app, event| lifecycle::on_run_event(app, &event));
 }

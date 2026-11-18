@@ -399,9 +399,7 @@ pub fn open<R: Runtime>(
         if let Some(page) = page {
             let _ = app.emit_to(label.as_str(), WORKSPACE_PAGE_EVENT, page);
         }
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
+        crate::lifecycle::present(&window);
         return Ok(());
     }
     if let Some(workspace) = workspace {
@@ -447,8 +445,7 @@ pub fn open<R: Runtime>(
             .get(&label)
             .is_some_and(|(_, last_fit)| last_fit.is_none());
         if not_sized && let Some(window) = handle.get_webview_window(&label) {
-            let _ = window.show();
-            let _ = window.set_focus();
+            crate::lifecycle::present(&window);
         }
     });
     Ok(())
@@ -494,17 +491,23 @@ fn open_workspace<R: Runtime>(
         .resizable(true)
         .maximizable(true)
         .minimizable(true)
-        .visible(true)
+        // Shown through `lifecycle::present` (the Dock icon on macOS).
+        .visible(false)
         .focused(true);
     // Never sized to content: registered as fitted already.
     app.state::<WindowRegistry>()
         .lock()
         .insert(label.to_owned(), (spec.clone(), Some(size)));
-    if let Err(error) = builder.build() {
-        app.state::<WindowRegistry>().remove(label);
-        return Err(WindowError::Platform(error.to_string()));
+    match builder.build() {
+        Ok(window) => {
+            crate::lifecycle::present(&window);
+            Ok(())
+        }
+        Err(error) => {
+            app.state::<WindowRegistry>().remove(label);
+            Err(WindowError::Platform(error.to_string()))
+        }
     }
-    Ok(())
 }
 
 /// How long a new window may stay hidden waiting for its content size.
@@ -588,8 +591,7 @@ pub fn fit<R: Runtime>(
         entry.1 = Some(target);
     }
     if !fitted {
-        let _ = window.show();
-        let _ = window.set_focus();
+        crate::lifecycle::present(window);
     }
     Ok(target)
 }
@@ -626,9 +628,7 @@ pub fn show_main<R: Runtime>(app: &AppHandle<R>) -> bool {
     let Some(main) = app.get_webview_window(MAIN) else {
         return false;
     };
-    let _ = main.unminimize();
-    let _ = main.show();
-    let _ = main.set_focus();
+    crate::lifecycle::present(&main);
     true
 }
 

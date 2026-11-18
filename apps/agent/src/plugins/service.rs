@@ -1640,6 +1640,7 @@ impl PluginService {
             self.progress(id.as_str(), PluginOperation::Update, PluginStage::Verifying);
             let verified = verify_package(&bytes, &expected, &Limits::default())
                 .map_err(|e| package_error(&e))?;
+            self.trial_load(id, &verified)?;
             self.progress(
                 id.as_str(),
                 PluginOperation::Update,
@@ -1692,6 +1693,70 @@ impl PluginService {
             plugin: id.to_string(),
             outcome,
         })
+    }
+
+    /// Loads the module of an update in a host of its own, as the next
+    /// invocation would, before anything is installed: an update whose
+    /// module the host refuses (actions other than the manifest's, a
+    /// failing `dp_init`, a broken descriptor) is refused, so the running
+    /// version stays active instead of being replaced by one that cannot
+    /// run. Problems of this computer rather than of the module (no host
+    /// sandbox, a host that cannot start) do not block the update: they
+    /// would refuse the running version alike.
+    fn trial_load(
+        &self,
+        id: &PluginId,
+        verified: &deckpilot_plugin_package::VerifiedPackage,
+    ) -> Result<(), IpcError> {
+        if platform_gate().is_err() {
+            return Ok(());
+        }
+        let Some(module) = verified.files().get(deckpilot_plugin_package::ARTIFACT) else {
+            return Ok(());
+        };
+        let Ok(broker_id) = deckpilot_plugin_broker::PluginId::new(id.as_str()) else {
+            return Ok(());
+        };
+        let actions = verified
+            .manifest()
+            .contributes
+            .actions()
+            .iter()
+            .map(|a| a.id.clone());
+        let config = host_config(&self.host, Arc::from(module.as_slice()), actions);
+        let mut supervisor = Supervisor::new(
+            config,
+            self.broker.clone(),
+            broker_id,
+            RestartPolicy::default(),
+            Arc::new(SystemClock::default()),
+        );
+        let started = supervisor.start();
+        supervisor.shutdown();
+        match started {
+            Ok(()) => Ok(()),
+            Err(SupervisorError::Host(
+                e @ (HostError::ActionMismatch { .. }
+                | HostError::LoadFailed { .. }
+                | HostError::Protocol { .. }
+                | HostError::ModuleTooLarge),
+            )) => {
+                let version = &verified.manifest().version;
+                warn!(plugin = %id, %version, error = %e, "update refused: the host refused its module");
+                Err(error(
+                    ErrorCode::Failed,
+                    reason::BROKEN,
+                    format!(
+                        "{id} {version} was not installed: the plugin host refused its module \
+                         ({e}); the installed version stays"
+                    ),
+                ))
+            }
+            Err(e) => {
+                warn!(plugin = %id, error = %e, "the update's module could not be tried");
+                Ok(())
+            }
+        }
     }
 
     fn approve(&mut self, id: &PluginId, consent: &[String]) -> Result<Response, IpcError> {
@@ -1863,6 +1928,14 @@ impl PluginService {
                     format!("the plugin module cannot be read: {e}"),
                 )
             })?;
+            // `verify` read the files once; the host gets these bytes, read
+            // again, so they are checked themselves: a module swapped on disk
+            // in between is never compiled.
+            if let Err(why) = module_matches_record(&active.integrity, &module) {
+                let _ = self.manager.mark_broken(&record.id, &why);
+                self.changed(&record.id);
+                return Err(error(ErrorCode::Failed, reason::BROKEN, why));
+            }
             bundled::check_module(&mut self.manager, record, pin.as_ref(), &module).map_err(
                 |why| {
                     self.changed(&record.id);
@@ -2525,9 +2598,46 @@ impl Drop for PluginService {
     }
 }
 
+/// Whether the module bytes about to be compiled are the installed
+/// version's `plugin.wasm` as its integrity record holds it.
+fn module_matches_record(
+    integrity: &deckpilot_plugin_manifest::PackageIntegrity,
+    module: &[u8],
+) -> Result<(), String> {
+    integrity
+        .verify_file(
+            deckpilot_plugin_package::ARTIFACT,
+            &deckpilot_plugin_package::sha256(module),
+        )
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_recorded_module_bytes_are_compiled() {
+        let module = b"\0asm\x01\0\0\0";
+        let digest = deckpilot_plugin_package::sha256(module);
+        let integrity = deckpilot_plugin_manifest::PackageIntegrity {
+            manifest_sha256: digest,
+            package: deckpilot_plugin_manifest::PackageDigest {
+                sha256: digest,
+                size: 1,
+            },
+            files: [(deckpilot_plugin_package::ARTIFACT.to_owned(), digest)].into(),
+        };
+        module_matches_record(&integrity, module).unwrap();
+        // A module swapped after `verify` read the directory is refused.
+        let why = module_matches_record(&integrity, b"\0asm\x01\0\0\0\x01").unwrap_err();
+        assert!(why.contains("plugin.wasm was modified"), "{why}");
+        let none = deckpilot_plugin_manifest::PackageIntegrity {
+            files: BTreeMap::new(),
+            ..integrity
+        };
+        assert!(module_matches_record(&none, module).is_err());
+    }
 
     #[test]
     fn errors_carry_reasons() {
