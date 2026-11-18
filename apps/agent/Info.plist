@@ -7,6 +7,12 @@
   with the database key is bound to that identity: without it, codesign would
   derive an identifier from the build's UUID, and macOS would ask for Keychain
   access after every update. Never change the identifier.
+
+  LSUIElement: the agent is a menu bar (accessory) application and never
+  belongs in the Dock. Without it every agent process starts as a regular
+  application and shows a Dock icon until its event loop switches to the
+  accessory policy (tray.rs); a short-lived one, such as a second instance
+  that stops at the instance lock, keeps that icon for its whole life.
 -->
 <plist version="1.0">
 <dict>
@@ -16,5 +22,7 @@
   <string>DeckPilot Agent</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
+  <key>LSUIElement</key>
+  <true/>
 </dict>
 </plist>

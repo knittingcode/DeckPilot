@@ -1,0 +1,436 @@
+# Smoke test of a PUBLISHED release: the installers users download from the
+# GitHub release (not a build of this commit), installed and started on
+# GitHub-hosted runners.
+#
+# - Linux (ubuntu-24.04): .deb installed with apt over the previous
+#   release's .deb (the package upgrade); AppImage extracted and run; .rpm
+#   inspected and installed in a Fedora container; first launch with an
+#   isolated profile under Xvfb with a private GNOME Keyring; the installed
+#   app driven with tauri-driver/WebKitWebDriver against the production
+#   plugin Marketplace.
+# - Windows (windows-latest): MSI (msiexec /qn) and NSIS (/S) installed,
+#   checked, started with an isolated profile and uninstalled in turn; the
+#   MSI-installed app driven with tauri-driver/msedgedriver.
+# - macOS arm64 (macos-15) and x64 (macos-15-intel): the disk image's
+#   Gatekeeper assessment, signatures and stapled tickets, the app copied
+#   to a temporary Applications folder and started with an isolated profile
+#   and a temporary default keychain. No WebDriver exists for WKWebView:
+#   the macOS GUI is not driven (reported as not covered).
+# - Update path (ubuntu-24.04): latest.json's packages download from their
+#   public URLs, match SHA256SUMS and verify with the pinned updater key
+#   (.github/updater.pub); the previous release embeds that key.
+#
+# Each job writes a table of its checks to the job summary (pass, fail,
+# test error or not covered, with evidence) and uploads its logs and
+# screenshots; the Report job lists the failed checks of all platforms
+# first. Test errors (a download, a checksum mismatch, a missing tool)
+# always fail a job. Failed product checks (defects of the release) fail
+# it on manual runs, which validate a release; on pull requests, which
+# test this workflow against the already published PULL_REQUEST_TAG, they
+# are reported as warnings and in the summaries. Not a required check. No secrets, no environment, read-only token: the release
+# is public. Nothing is built from this commit except tauri-driver.
+#
+#   gh workflow run "Release smoke" -f tag=v0.7.0   (default: the latest release)
+name: Release smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to test (default the latest release)
+        required: false
+        default: latest
+  pull_request:
+    paths:
+      - .github/workflows/release-smoke.yml
+      - tools/release-smoke/**
+
+permissions: {}
+
+concurrency:
+  group: release-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned; installed with `cargo install --locked`.
+  TAURI_DRIVER_VERSION: 2.1.0
+  # The release a pull request's run tests.
+  PULL_REQUEST_TAG: v0.7.0
+  # Whether failed product checks fail the jobs (tools/release-smoke/common.sh).
+  SMOKE_STRICT: ${{ github.event_name == 'workflow_dispatch' }}
+
+jobs:
+  resolve:
+    name: Resolve the release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tags.outputs.tag }}
+      version: ${{ steps.tags.outputs.version }}
+      previous: ${{ steps.tags.outputs.previous }}
+      previous_version: ${{ steps.tags.outputs.previous_version }}
+    steps:
+      - name: Tag and previous release
+        id: tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          pattern='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'
+          tag="${INPUT_TAG:-latest}"
+          [ "$EVENT" = pull_request ] && tag="$PULL_REQUEST_TAG"
+          if [ "$tag" = latest ]; then
+            tag=$(gh release view -R "$REPO" --json tagName --jq .tagName)
+          fi
+          [[ "$tag" =~ $pattern ]] || { echo "::error::'$tag' is not a release tag"; exit 1; }
+          gh release view "$tag" -R "$REPO" --json isDraft --jq '.isDraft' | grep -q -x false \
+            || { echo "::error::$tag is not a published release"; exit 1; }
+          # The published stable release before it (by publication date).
+          previous=$(gh api --paginate "repos/$REPO/releases?per_page=100" \
+            --jq '.[] | select(.draft | not) | select(.prerelease | not) | [.published_at, .tag_name] | @tsv' \
+            | sort | awk -F '\t' -v t="$tag" '$2 == t { print last; exit } { last = $2 }')
+          if [ -n "$previous" ]; then
+            [[ "$previous" =~ $pattern ]] || { echo "::error::'$previous' is not a release tag"; exit 1; }
+          fi
+          echo "release $tag, previous ${previous:-none}"
+          {
+            echo "tag=$tag"
+            echo "version=${tag#v}"
+            echo "previous=$previous"
+            echo "previous_version=${previous#v}"
+          } >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Linux (deb, AppImage, rpm)
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      PREVIOUS: ${{ needs.resolve.outputs.previous }}
+      PREVIOUS_VERSION: ${{ needs.resolve.outputs.previous_version }}
+      SMOKE_PLATFORM: linux
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Work directories
+        run: |
+          echo "SMOKE_OUT=$RUNNER_TEMP/smoke/out" >> "$GITHUB_ENV"
+          echo "SMOKE_WORK=$RUNNER_TEMP/smoke/work" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/smoke/out" "$RUNNER_TEMP/smoke/work"
+      - name: Install test tools
+        run: |
+          # No man page index rebuilds (minutes on hosted runners).
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get update -q
+          timeout 1800 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+            -o Acquire::Retries=3 \
+            xvfb imagemagick x11-apps gnome-keyring dbus-x11 libfuse2t64 webkit2gtk-driver rpm rpm2cpio cpio
+          echo "NATIVE_DRIVER=$(command -v WebKitWebDriver || dpkg -L webkit2gtk-driver | grep -m1 '/WebKitWebDriver$')" >> "$GITHUB_ENV"
+      - name: Download the assets
+        run: |
+          tools/release-smoke/download.sh "$TAG" "$SMOKE_WORK/assets" 'DeckPilot_*_amd64.deb' 'DeckPilot_*_amd64.AppImage' 'DeckPilot-*.rpm'
+          if [ -n "$PREVIOUS" ]; then
+            tools/release-smoke/download.sh "$PREVIOUS" "$SMOKE_WORK/previous" 'DeckPilot_*_amd64.deb'
+          fi
+      - name: deb - install over the previous release and check the files
+        run: tools/release-smoke/linux.sh deb "$SMOKE_WORK/assets" "$VERSION" "${PREVIOUS:+$SMOKE_WORK/previous}" "${PREVIOUS:+$PREVIOUS_VERSION}"
+      # With only the package's declared dependencies installed.
+      - name: deb - first launch with an isolated profile
+        env:
+          SMOKE_AGENT: /usr/bin/deckpilot-agent
+        run: tools/release-smoke/session.sh deb launch /usr/bin/deckpilot-desktop
+      # The agent's tray needs libayatana-appindicator3 (loaded at run
+      # time), which the .deb does not declare; desktop installations
+      # usually have it. Installed for the remaining launches.
+      - name: Install the tray library
+        if: always()
+        run: |
+          timeout 900 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+            -o Acquire::Retries=3 libayatana-appindicator3-1
+      - name: deb - first launch with libayatana-appindicator3-1
+        if: always()
+        env:
+          SMOKE_AGENT: /usr/bin/deckpilot-agent
+        run: tools/release-smoke/session.sh deb-tray launch /usr/bin/deckpilot-desktop
+      - name: AppImage - extract and check the files
+        if: always()
+        run: tools/release-smoke/linux.sh appimage "$SMOKE_WORK/assets" "$VERSION"
+      - name: AppImage - first launch with an isolated profile
+        if: always()
+        env:
+          SMOKE_AGENT: ${{ runner.temp }}/smoke/work/assets/DeckPilot_${{ needs.resolve.outputs.version }}_amd64.AppImage
+          SMOKE_AGENT_ARGS: --agent
+        run: tools/release-smoke/session.sh appimage launch "$SMOKE_WORK/assets/DeckPilot_${VERSION}_amd64.AppImage"
+      - name: rpm - inspect, extract and install in Fedora
+        if: always()
+        run: tools/release-smoke/linux.sh rpm "$SMOKE_WORK/assets" "$VERSION"
+      - name: Install tauri-driver
+        if: always()
+        working-directory: ${{ runner.temp }}
+        run: |
+          cargo install tauri-driver --locked --version "$TAURI_DRIVER_VERSION"
+          echo "TAURI_DRIVER=$HOME/.cargo/bin/tauri-driver" >> "$GITHUB_ENV"
+      - name: deb - GUI against the production Marketplace
+        if: always()
+        run: tools/release-smoke/session.sh deb-gui gui /usr/bin/deckpilot-desktop
+      - name: Summary
+        if: always()
+        run: tools/release-smoke/summary.sh "Linux, $TAG"
+      - name: Upload logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-smoke-linux
+          path: ${{ runner.temp }}/smoke/out
+          if-no-files-found: ignore
+          retention-days: 14
+
+  windows:
+    name: Windows (MSI, NSIS)
+    needs: resolve
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      SMOKE_PLATFORM: windows
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Work directories
+        run: |
+          temp=$(cygpath -m "$RUNNER_TEMP")
+          echo "SMOKE_OUT=$temp/smoke/out" >> "$GITHUB_ENV"
+          echo "SMOKE_WORK=$temp/smoke/work" >> "$GITHUB_ENV"
+          mkdir -p "$temp/smoke/out" "$temp/smoke/work"
+      - name: Download the assets
+        run: tools/release-smoke/download.sh "$TAG" "$SMOKE_WORK/assets" 'DeckPilot_*_x64_en-US.msi' 'DeckPilot_*_x64-setup.exe'
+      - name: MSI - install
+        shell: pwsh
+        run: ./tools/release-smoke/windows.ps1 install-msi msi "$env:SMOKE_WORK/assets/DeckPilot_$($env:VERSION)_x64_en-US.msi"
+      - name: MSI - check the files
+        run: tools/release-smoke/windows.sh layout msi "$SMOKE_INSTALL_DIR" "$VERSION"
+      - name: MSI - first launch with an isolated profile
+        shell: pwsh
+        run: ./tools/release-smoke/windows.ps1 launch msi
+      - name: Install tauri-driver
+        if: always()
+        working-directory: ${{ runner.temp }}
+        run: |
+          cargo install tauri-driver --locked --version "$TAURI_DRIVER_VERSION"
+          echo "TAURI_DRIVER=$(cygpath -m "$HOME/.cargo/bin/tauri-driver.exe")" >> "$GITHUB_ENV"
+      # msedgedriver must match the WebView2 runtime exactly (as in
+      # desktop-e2e.yml).
+      - name: Install msedgedriver for WebView2
+        if: always()
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $version = (Get-ItemProperty -Path $key -Name pv -ErrorAction SilentlyContinue).pv
+          if (-not $version) {
+            $version = (Get-Item "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe").VersionInfo.ProductVersion
+          }
+          Write-Host "WebView2 runtime $version"
+          $dir = Join-Path $env:RUNNER_TEMP 'msedgedriver'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $zip = Join-Path $dir 'edgedriver.zip'
+          $urls = @(
+            "https://msedgedriver.microsoft.com/$version/edgedriver_win64.zip",
+            "https://msedgewebdriverstorage.blob.core.windows.net/edgewebdriver/$version/edgedriver_win64.zip"
+          )
+          $done = $false
+          foreach ($url in $urls) {
+            try { Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing; $done = $true; break }
+            catch { Write-Host "::warning::$url failed: $_" }
+          }
+          if ($done) {
+            Expand-Archive -Path $zip -DestinationPath $dir -Force
+            $driver = Join-Path $dir 'msedgedriver.exe'
+          } else {
+            $driver = Join-Path $env:EDGEWEBDRIVER 'msedgedriver.exe'
+            Write-Host "::warning::using the runner's msedgedriver"
+          }
+          & $driver --version
+          "NATIVE_DRIVER=$driver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: MSI - GUI against the production Marketplace
+        if: always()
+        shell: pwsh
+        run: ./tools/release-smoke/windows.ps1 gui msi
+      - name: MSI - uninstall
+        if: always()
+        shell: pwsh
+        run: ./tools/release-smoke/windows.ps1 uninstall-msi msi "$env:SMOKE_WORK/assets/DeckPilot_$($env:VERSION)_x64_en-US.msi"
+      - name: NSIS - install
+        if: always()
+        shell: pwsh
+        run: ./tools/release-smoke/windows.ps1 install-nsis nsis "$env:SMOKE_WORK/assets/DeckPilot_$($env:VERSION)_x64-setup.exe"
+      - name: NSIS - check the files
+        if: always()
+        run: tools/release-smoke/windows.sh layout nsis "$SMOKE_INSTALL_DIR" "$VERSION"
+      - name: NSIS - first launch with an isolated profile
+        if: always()
+        shell: pwsh
+        run: ./tools/release-smoke/windows.ps1 launch nsis
+      - name: NSIS - uninstall
+        if: always()
+        shell: pwsh
+        run: ./tools/release-smoke/windows.ps1 uninstall-nsis nsis
+      - name: Summary
+        if: always()
+        run: tools/release-smoke/summary.sh "Windows, $TAG"
+      - name: Upload logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-smoke-windows
+          path: ${{ runner.temp }}/smoke/out
+          if-no-files-found: ignore
+          retention-days: 14
+
+  macos:
+    name: macOS ${{ matrix.arch }} (${{ matrix.os }})
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: aarch64
+            platform: macos-arm64
+          - os: macos-15-intel
+            arch: x64
+            platform: macos-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      SMOKE_PLATFORM: ${{ matrix.platform }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Work directories
+        run: |
+          echo "SMOKE_OUT=$RUNNER_TEMP/smoke/out" >> "$GITHUB_ENV"
+          echo "SMOKE_WORK=$RUNNER_TEMP/smoke/work" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/smoke/out" "$RUNNER_TEMP/smoke/work"
+      - name: Download the assets
+        run: tools/release-smoke/download.sh "$TAG" "$SMOKE_WORK/assets" "DeckPilot_*_${ARCH}.dmg" "DeckPilot_${ARCH}.app.tar.gz"
+      - name: Disk image, signatures, Gatekeeper, install by copying
+        run: tools/release-smoke/macos.sh "$SMOKE_WORK/assets" "$VERSION" "$ARCH"
+      - name: First launch with an isolated profile
+        if: always()
+        run: tools/release-smoke/session.sh app launch "$SMOKE_WORK/Applications/DeckPilot.app/Contents/MacOS/deckpilot-desktop"
+      - name: GUI
+        if: always()
+        run: |
+          source tools/release-smoke/common.sh
+          record "GUI against the production Marketplace" not-covered "no WebDriver exists for WKWebView (tauri-driver supports Linux and Windows only; docs/marketplace/e2e.md)"
+      - name: Summary
+        if: always()
+        run: tools/release-smoke/summary.sh "macOS $ARCH, $TAG"
+      - name: Upload logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-smoke-${{ matrix.platform }}
+          path: ${{ runner.temp }}/smoke/out
+          if-no-files-found: ignore
+          retention-days: 14
+
+  update:
+    name: Update path (latest.json, signatures, continuity)
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+      PREVIOUS: ${{ needs.resolve.outputs.previous }}
+      SMOKE_PLATFORM: update
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Work directories
+        run: |
+          echo "SMOKE_OUT=$RUNNER_TEMP/smoke/out" >> "$GITHUB_ENV"
+          echo "SMOKE_WORK=$RUNNER_TEMP/smoke/work" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/smoke/out" "$RUNNER_TEMP/smoke/work"
+      - name: Install test tools
+        run: |
+          sudo apt-get update -q
+          timeout 600 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q minisign msitools p7zip-full
+      - name: Download the assets
+        run: |
+          tools/release-smoke/download.sh "$TAG" "$SMOKE_WORK/assets" 'latest.json' '*.sig'
+          if [ -n "$PREVIOUS" ]; then
+            tools/release-smoke/download.sh "$PREVIOUS" "$SMOKE_WORK/previous" 'DeckPilot_*_amd64.deb' 'DeckPilot_*.app.tar.gz' 'DeckPilot_*_x64_en-US.msi' 'DeckPilot_*_x64-setup.exe'
+          fi
+      - name: latest.json, signatures and continuity
+        run: tools/release-smoke/update.sh "$TAG" "$SMOKE_WORK/assets" "$PREVIOUS" "${PREVIOUS:+$SMOKE_WORK/previous}"
+      - name: Summary
+        if: always()
+        run: tools/release-smoke/summary.sh "Update path, $TAG"
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-smoke-update
+          path: ${{ runner.temp }}/smoke/out
+          if-no-files-found: ignore
+          retention-days: 14
+
+  report:
+    name: Report
+    needs: [resolve, linux, windows, macos, update]
+    if: always() && needs.resolve.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+      SMOKE_PLATFORM: all
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-smoke-*
+          path: ${{ runner.temp }}/smoke/all
+      - name: All platforms
+        run: |
+          export SMOKE_OUT="$RUNNER_TEMP/smoke/out"
+          mkdir -p "$SMOKE_OUT"
+          mapfile -t files < <(find "$RUNNER_TEMP/smoke/all" -name results.tsv | sort)
+          tools/release-smoke/summary.sh "Release smoke, $TAG: all platforms (${#files[@]} jobs reported)" "${files[@]}"
