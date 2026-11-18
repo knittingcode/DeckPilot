@@ -4,7 +4,9 @@
 #
 #   tools/ci/check-linux-install.sh deb <package.deb>   (Ubuntu/Debian runner, sudo)
 #   tools/ci/check-linux-install.sh rpm <package.rpm>   (any host with docker: Fedora container)
+#   tools/ci/check-linux-install.sh appimage <file.AppImage>
 #   tools/ci/check-linux-install.sh agent <agent> [<args>...]
+#   tools/ci/check-linux-install.sh without-tray <agent>
 #
 # The agent's tray loads libayatana-appindicator3 at run time; a package
 # that does not declare it installs fine and then has an agent that cannot
@@ -15,7 +17,16 @@
 # session with an isolated profile (HOME, XDG directories and
 # DECKPILOT_DATA_DIR in a temporary directory), as a desktop session would,
 # and fails unless it is still running after 15 s and has not reported a
-# missing tray library. Used by the other two.
+# missing tray library. Used by the other commands.
+#
+# `appimage`: the agent of an AppImage, started as the app starts it
+# (`<AppImage> --agent`, through FUSE). The AppImage bundles the tray
+# library with the GLib it was built against: the system's copy cannot be
+# loaded next to the AppImage's GLib (DeckPilot 0.7.0 on Ubuntu 24.04:
+# "libayatana-ido3-0.4.so.0: undefined symbol: g_once_init_leave_pointer").
+#
+# `without-tray`: on a system without the tray library, the agent must keep
+# running without a tray icon (and say so in its log).
 #
 # Environment: FEDORA_IMAGE (rpm; default fedora:42).
 set -euo pipefail
@@ -32,7 +43,7 @@ alive() {
 }
 
 agent() {
-  local agent="$1" profile log pid
+  local agent="$1" profile log pid expect_no_tray="${EXPECT_NO_TRAY:-}"
   shift
   profile=$(mktemp -d "${TMPDIR:-/tmp}/deckpilot-install-check.XXXXXX")
   mkdir -p "$profile"/{home,data,run,xdg-data,xdg-config,xdg-cache}
@@ -55,8 +66,13 @@ agent() {
   if [ -z "$pid" ] || ! alive "$pid"; then
     echo "::error::the agent did not keep running; its output:" >&2
     status=1
-  elif grep -q -E 'Failed to load ayatana-appindicator3|undefined symbol' "$log"; then
-    echo "::error::the agent reported a library it could not load:" >&2
+  elif [ -n "$expect_no_tray" ]; then
+    if ! cat "$log" "$profile"/data/logs/* 2> /dev/null | grep -q 'running without a tray icon'; then
+      echo "::error::the agent did not report that it runs without a tray icon:" >&2
+      status=1
+    fi
+  elif cat "$log" "$profile"/data/logs/* 2> /dev/null | grep -q -E 'Failed to load ayatana-appindicator3|undefined symbol|running without a tray icon'; then
+    echo "::error::the agent could not load its tray library:" >&2
     status=1
   fi
   sed 's/^/  | /' "$log" >&2
@@ -68,7 +84,7 @@ agent() {
   wait "$wrapper" 2> /dev/null || true
   rm -rf "$profile"
   [ "$status" -eq 0 ] || exit 1
-  echo "the agent ($agent) started and kept running for 15 s"
+  echo "the agent ($agent $*) started and kept running for 15 s${expect_no_tray:+, without a tray icon}"
 }
 
 case "${1-}" in
@@ -76,6 +92,22 @@ case "${1-}" in
     shift
     [ "$#" -ge 1 ] || fail "usage: check-linux-install.sh agent <agent> [<args>...]"
     agent "$@"
+    ;;
+  appimage)
+    file="${2:?usage: check-linux-install.sh appimage <file.AppImage>}"
+    chmod +x "$file"
+    if ldconfig -p | grep -q 'libayatana-appindicator3\.so\.1 '; then
+      echo "the system has its own libayatana-appindicator3: $(ldconfig -p | grep 'libayatana-appindicator3\.so\.1 ' | head -n 1)"
+    else
+      echo "the system has no libayatana-appindicator3"
+    fi
+    agent "$(cd "$(dirname "$file")" && pwd)/$(basename "$file")" --agent
+    ;;
+  without-tray)
+    [ -n "${2-}" ] || fail "usage: check-linux-install.sh without-tray <agent>"
+    ! ldconfig -p | grep -q -E 'lib(ayatana-)?appindicator3\.so' \
+      || fail "an appindicator library is installed: this check needs a system without one"
+    EXPECT_NO_TRAY=1 agent "$2"
     ;;
   deb)
     package="${2:?usage: check-linux-install.sh deb <package.deb>}"

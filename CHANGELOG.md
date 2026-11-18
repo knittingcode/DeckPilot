@@ -26,6 +26,16 @@ released either. 0.6.0 is the first version intended for publication.
   after starting ("Failed to load ayatana-appindicator3"), and the app
   showed that the background agent was not running. Installing
   `libayatana-appindicator3-1` by hand works around it in 0.7.0.
+- Linux: the AppImage's background agent could not start on newer
+  systems such as Ubuntu 24.04: the AppImage did not include the
+  AppIndicator library, and the system's copy cannot be loaded next to the
+  older GLib the AppImage carries ("undefined symbol:
+  g_once_init_leave_pointer"). The AppImage now includes the library and
+  the libraries it needs.
+- The background agent keeps running without a tray icon when the tray
+  cannot be created, for example when the AppIndicator library is
+  missing, instead of stopping. The app can still be opened from the
+  application menu.
 
 ## [0.7.0] - 2026-11-17
 
