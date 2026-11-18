@@ -3,11 +3,18 @@
 # .github/workflows/release-smoke.yml.
 #
 # Every check is recorded as one line of $SMOKE_OUT/results.tsv:
-#   <platform> TAB <step> TAB pass|fail|not-covered TAB <evidence>
+#   <platform> TAB <step> TAB pass|fail|error|not-covered TAB <evidence>
+# - fail: the release failed a product check (a defect of the release);
+# - error: the test itself could not work (a download, a checksum
+#   mismatch, a missing tool or service on the runner);
+# - not-covered: the check cannot be made on this runner, with the
+#   reason; never counted as a pass.
 # A failed check does not stop the job; tools/release-smoke/summary.sh
-# writes the table to the job summary at the end and fails the job if any
-# check failed. "not-covered" means the check could not be made on this
-# runner, with the reason; it is never counted as a pass.
+# writes the table to the job summary at the end and decides the job's
+# outcome: errors always fail it, failed product checks only when
+# SMOKE_STRICT=true (a manual run validating a release; on pull requests,
+# which test the workflow against an already published release, they are
+# reported as warnings).
 #
 # Environment: SMOKE_OUT (results, logs, screenshots), SMOKE_PLATFORM (the
 # row label, e.g. linux, windows, macos-arm64).
@@ -33,7 +40,10 @@ record() {
   printf '%s\t%s\t%s\t%s\n' "$SMOKE_PLATFORM" "$step" "$result" "$evidence" >> "$SMOKE_OUT/results.tsv"
   case "$result" in
     pass) echo "PASS  $step: $evidence" ;;
-    fail) echo "::error title=$step::$evidence" ;;
+    fail)
+      if [ "${SMOKE_STRICT:-true}" = true ]; then echo "::error title=$step::$evidence"
+      else echo "::warning title=product defect: $step::$evidence"; fi ;;
+    error) echo "::error title=test error: $step::$evidence" ;;
     not-covered) echo "::notice title=$step::not covered: $evidence" ;;
     *) echo "::error::record: unknown result $result for $step" ;;
   esac
@@ -63,8 +73,8 @@ root_keys() {
 check_roots() {
   local step="$1" agent="$2" key missing="" count=0
   local keys
-  keys=$(root_keys) || { record "$step" fail "cannot fetch $ROOTS_URL"; return; }
-  [ -n "$keys" ] || { record "$step" fail "no keys in $ROOTS_URL"; return; }
+  keys=$(root_keys) || { record "$step" error "cannot fetch $ROOTS_URL"; return; }
+  [ -n "$keys" ] || { record "$step" error "no keys in $ROOTS_URL"; return; }
   while IFS= read -r key; do
     [ -n "$key" ] || continue
     if grep -q -a -F -- "$key" "$agent"; then count=$((count + 1)); else missing="$missing ${key:0:24}..."; fi

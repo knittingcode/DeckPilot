@@ -88,7 +88,7 @@ inner() {
         string:org.freedesktop.Secret.Service string:Collections > /dev/null 2>&1; then ready=1; break; fi
       sleep 0.5
     done
-    [ -n "$ready" ] || record "$label: credential store" fail "the private GNOME Keyring did not answer within 30 s"
+    [ -n "$ready" ] || record "$label: credential store" error "the private GNOME Keyring did not answer within 30 s"
   fi
   case "$mode" in
     launch) inner_launch ;;
@@ -145,7 +145,7 @@ inner_launch() {
   if [ -n "$shot" ]; then
     record "$label: screenshot" pass "artifact file $shot"
   else
-    record "$label: screenshot" fail "no screenshot could be taken"
+    record "$label: screenshot" error "no screenshot could be taken"
   fi
   stop_all
   if [ -z "$(agent_pids)" ] && ! kill -0 "$desktop_pid" 2> /dev/null; then

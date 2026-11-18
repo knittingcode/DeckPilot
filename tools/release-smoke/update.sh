@@ -70,7 +70,7 @@ while IFS=$'\t' read -r platform url signature; do
   fi
   want=$(awk -v n="$name" '{ f = $2; sub(/^\*/, "", f); if (f == n) print $1 }' "$dir/SHA256SUMS")
   got=$(sha256_of "$file")
-  [ "$got" = "$want" ] || { record "$step" fail "$name downloaded from $url has sha256 $got, SHA256SUMS says $want"; continue; }
+  [ "$got" = "$want" ] || { record "$step" error "$name downloaded from $url has sha256 $got, SHA256SUMS says $want"; continue; }
   printf '%s' "$signature" | base64 -d > "$work/$platform.minisig"
   if [ -f "$dir/$name.sig" ] && [ "$(tr -d '\r\n' < "$dir/$name.sig")" != "$(printf '%s' "$signature" | tr -d '\r\n')" ]; then
     record "$step" fail "the manifest's signature differs from the asset $name.sig"

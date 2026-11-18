@@ -23,9 +23,9 @@ applications="${SMOKE_WORK:?}/Applications"
 installed="$applications/DeckPilot.app"
 
 if [ "$(uname -m)" != "$machine" ]; then
-  record "runner architecture" fail "this runner is $(uname -m), the $arch build needs $machine"
+  record "runner architecture" error "this runner is $(uname -m), the $arch build needs $machine"
 fi
-[ -f "$dmg" ] || { record "dmg: file" fail "$dmg was not downloaded"; exit 0; }
+[ -f "$dmg" ] || { record "dmg: file" error "$dmg was not downloaded"; exit 0; }
 
 # The disk image as downloaded.
 if out=$(spctl --assess --type open --context context:primary-signature -vv "$dmg" 2>&1); then
@@ -142,6 +142,6 @@ if [ -f "$archive" ]; then
     record "updater archive: same signed app as the disk image" fail "contents '$top', CDHash '$a' vs disk image '$b'"
   fi
 else
-  record "updater archive: same signed app as the disk image" fail "$archive was not downloaded"
+  record "updater archive: same signed app as the disk image" error "$archive was not downloaded"
 fi
 exit 0

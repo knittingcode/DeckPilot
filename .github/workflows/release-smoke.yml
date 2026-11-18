@@ -20,9 +20,14 @@
 #   public URLs, match SHA256SUMS and verify with the pinned updater key
 #   (.github/updater.pub); the previous release embeds that key.
 #
-# Each job writes a table of its checks to the job summary (pass, fail or
-# not covered, with evidence) and uploads its logs and screenshots. Not a
-# required check. No secrets, no environment, read-only token: the release
+# Each job writes a table of its checks to the job summary (pass, fail,
+# test error or not covered, with evidence) and uploads its logs and
+# screenshots; the Report job lists the failed checks of all platforms
+# first. Test errors (a download, a checksum mismatch, a missing tool)
+# always fail a job. Failed product checks (defects of the release) fail
+# it on manual runs, which validate a release; on pull requests, which
+# test this workflow against the already published PULL_REQUEST_TAG, they
+# are reported as warnings and in the summaries. Not a required check. No secrets, no environment, read-only token: the release
 # is public. Nothing is built from this commit except tauri-driver.
 #
 #   gh workflow run "Release smoke" -f tag=v0.7.0   (default: the latest release)
@@ -51,6 +56,8 @@ env:
   TAURI_DRIVER_VERSION: 2.1.0
   # The release a pull request's run tests.
   PULL_REQUEST_TAG: v0.7.0
+  # Whether failed product checks fail the jobs (tools/release-smoke/common.sh).
+  SMOKE_STRICT: ${{ github.event_name == 'workflow_dispatch' }}
 
 jobs:
   resolve:
@@ -401,3 +408,29 @@ jobs:
           path: ${{ runner.temp }}/smoke/out
           if-no-files-found: ignore
           retention-days: 14
+
+  report:
+    name: Report
+    needs: [resolve, linux, windows, macos, update]
+    if: always() && needs.resolve.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+      SMOKE_PLATFORM: all
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-smoke-*
+          path: ${{ runner.temp }}/smoke/all
+      - name: All platforms
+        run: |
+          export SMOKE_OUT="$RUNNER_TEMP/smoke/out"
+          mkdir -p "$SMOKE_OUT"
+          mapfile -t files < <(find "$RUNNER_TEMP/smoke/all" -name results.tsv | sort)
+          tools/release-smoke/summary.sh "Release smoke, $TAG: all platforms (${#files[@]} jobs reported)" "${files[@]}"

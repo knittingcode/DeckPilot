@@ -21,7 +21,7 @@ step="download $tag"
 args=(-p SHA256SUMS)
 for glob in "$@"; do args+=(-p "$glob"); done
 if ! out=$(gh release download "$tag" -R "$REPOSITORY" -D "$dir" --clobber "${args[@]}" 2>&1); then
-  record "$step" fail "gh release download failed: $out"
+  record "$step" error "gh release download failed: $out"
   exit 0
 fi
 
@@ -37,9 +37,9 @@ done < <(find "$dir" -maxdepth 1 -type f -print0)
 
 names=$(cd "$dir" && find . -maxdepth 1 -type f ! -name SHA256SUMS | sed 's#^\./##' | LC_ALL=C sort | tr '\n' ' ')
 if [ -n "$bad" ]; then
-  record "$step + SHA256SUMS" fail "$bad"
+  record "$step + SHA256SUMS" error "$bad"
 elif [ "$checked" -eq 0 ]; then
-  record "$step + SHA256SUMS" fail "nothing matched $*"
+  record "$step + SHA256SUMS" error "nothing matched $*"
 else
   record "$step + SHA256SUMS" pass "$checked files match SHA256SUMS: $names"
 fi

@@ -34,7 +34,7 @@ layout() {
 case "$kind" in
   deb)
     deb="$dir/DeckPilot_${version}_amd64.deb"
-    [ -f "$deb" ] || { record "deb: package" fail "$deb was not downloaded"; exit 0; }
+    [ -f "$deb" ] || { record "deb: package" error "$deb was not downloaded"; exit 0; }
     package=$(dpkg-deb -f "$deb" Package)
     if [ -n "${4-}" ] && [ -n "${5-}" ]; then
       previous="$4/DeckPilot_${5}_amd64.deb"
@@ -67,7 +67,7 @@ case "$kind" in
     ;;
   appimage)
     appimage="$dir/DeckPilot_${version}_amd64.AppImage"
-    [ -f "$appimage" ] || { record "AppImage: file" fail "$appimage was not downloaded"; exit 0; }
+    [ -f "$appimage" ] || { record "AppImage: file" error "$appimage was not downloaded"; exit 0; }
     chmod +x "$appimage"
     extracted="${SMOKE_WORK:?}/appimage-extracted"
     rm -rf "$extracted" && mkdir -p "$extracted"
@@ -81,7 +81,7 @@ case "$kind" in
     ;;
   rpm)
     rpm="$dir/DeckPilot-${version}-1.x86_64.rpm"
-    [ -f "$rpm" ] || { record "rpm: package" fail "$rpm was not downloaded"; exit 0; }
+    [ -f "$rpm" ] || { record "rpm: package" error "$rpm was not downloaded"; exit 0; }
     if out=$(rpm -K --nosignature "$rpm" 2>&1); then
       record "rpm: header and payload digests (rpm -K)" pass "$out"
     else

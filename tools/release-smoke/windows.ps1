@@ -35,7 +35,13 @@ function Record([string]$Step, [string]$Result, [string]$Evidence) {
   [IO.File]::AppendAllText((Join-Path $out 'results.tsv'), "$platform`t$Step`t$Result`t$clean`n")
   switch ($Result) {
     'pass' { Write-Host "PASS  ${Step}: $clean" }
-    'fail' { Write-Host "::error title=${Step}::$clean" }
+    'fail' {
+      # A product defect: an error when validating a release, a warning on
+      # pull requests (tools/release-smoke/common.sh).
+      if ($env:SMOKE_STRICT -eq 'false') { Write-Host "::warning title=product defect: ${Step}::$clean" }
+      else { Write-Host "::error title=${Step}::$clean" }
+    }
+    'error' { Write-Host "::error title=test error: ${Step}::$clean" }
     default { Write-Host "::notice title=${Step}::not covered: $clean" }
   }
 }
@@ -241,7 +247,7 @@ switch ($Command) {
       Record "${Label}: encrypted database in the isolated profile" 'fail' "no $db; data dir: $listing; agent log: $agentLog"
     }
     $shot = Screenshot "$Label-first-launch"
-    if ($shot) { Record "${Label}: screenshot" 'pass' "artifact file $shot" } else { Record "${Label}: screenshot" 'fail' 'no screenshot could be taken' }
+    if ($shot) { Record "${Label}: screenshot" 'pass' "artifact file $shot" } else { Record "${Label}: screenshot" 'error' 'no screenshot could be taken' }
     if (Stop-DeckPilot) { Record "${Label}: stopped" 'pass' 'desktop and agent terminated' } else { Record "${Label}: stopped" 'fail' 'processes left' }
     New-Item -ItemType Directory -Force -Path (Join-Path $out "$Label-agent-logs") | Out-Null
     Copy-Item -Recurse -Force -Path (Join-Path $data 'logs\*') -Destination (Join-Path $out "$Label-agent-logs") -ErrorAction SilentlyContinue
