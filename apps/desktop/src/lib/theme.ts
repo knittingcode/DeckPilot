@@ -1,5 +1,8 @@
 import { createContext, useContext } from "react"
 
+/** Where the preference is kept; shared by every window of the app. */
+export const THEME_STORAGE_KEY = "deckpilot.theme"
+
 export type ThemePreference = "system" | "light" | "dark"
 
 export interface ThemeContextValue {

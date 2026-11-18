@@ -114,7 +114,7 @@ describe("settings registry", () => {
 })
 
 describe("settings sidebar", () => {
-  it("lists the categories, searches and returns to the workspace", async () => {
+  it("lists the categories, searches and returns to the main window", async () => {
     const value = context([projects, general])
     renderWith(value, <SettingsSidebar current="security" />)
     expect(screen.getByText("Security & Data")).toBeInTheDocument()
@@ -184,58 +184,69 @@ describe("modules page", () => {
 })
 
 describe("navigation hook", () => {
-  it("opens settings and goes back with the keyboard and mouse buttons", () => {
-    const { result } = renderHook(() => useNavigation(() => true))
+  it("opens the settings window with the keyboard and goes back with keyboard and mouse", () => {
+    const openSettings = vi.fn()
+    const { result } = renderHook(() => useNavigation(() => true, openSettings))
+    // The device editor first.
+    expect(result.current.location).toEqual({ mode: "workspace", page: "designer" })
     act(() => {
       result.current.navigate("workflows")
     })
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", ctrlKey: true }))
     })
-    expect(result.current.location).toEqual({ mode: "settings", page: "appearance" })
+    expect(openSettings).toHaveBeenCalledWith(undefined)
+    // The settings are not part of the main window's history.
+    expect(result.current.location).toEqual({ mode: "workspace", page: "workflows" })
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true }))
     })
-    expect(result.current.location).toEqual({ mode: "workspace", page: "workflows" })
+    expect(result.current.location).toEqual({ mode: "workspace", page: "designer" })
     act(() => {
       window.dispatchEvent(new MouseEvent("mouseup", { button: 4 }))
-    })
-    expect(result.current.location).toEqual({ mode: "settings", page: "appearance" })
-    act(() => {
-      result.current.closeSettings()
     })
     expect(result.current.location).toEqual({ mode: "workspace", page: "workflows" })
   })
 
   it("restores the location of the last session", () => {
-    const first = renderHook(() => useNavigation(() => true))
+    const first = renderHook(() => useNavigation(() => true, vi.fn()))
     act(() => {
-      first.result.current.openSettings("storage")
+      first.result.current.navigate("actions")
     })
     first.unmount()
-    const second = renderHook(() => useNavigation(() => true))
-    expect(second.result.current.location).toEqual({ mode: "settings", page: "storage" })
+    const second = renderHook(() => useNavigation(() => true, vi.fn()))
+    expect(second.result.current.location).toEqual({ mode: "workspace", page: "actions" })
     expect(second.result.current.canGoBack).toBe(true)
   })
 
-  it("redirects links to the former Device Models page to Settings › Devices", () => {
-    const { result } = renderHook(() => useNavigation(() => true))
+  it("opens settings pages, and pages that moved there, in the settings window", () => {
+    const openSettings = vi.fn()
+    const { result } = renderHook(() => useNavigation(() => true, openSettings))
     act(() => {
-      result.current.navigate("designer")
+      result.current.navigate("dashboard")
     })
+    const references: [string, string][] = [
+      ["models", "devices"],
+      ["devices", "devices"],
+      ["profiles", "profiles"],
+      ["settings:security", "security"],
+    ]
+    for (const [reference, page] of references) {
+      act(() => {
+        result.current.navigate(reference)
+      })
+      expect(openSettings).toHaveBeenLastCalledWith(page)
+    }
     act(() => {
-      result.current.navigate("models")
+      result.current.go({ mode: "settings", page: "updates" })
     })
-    expect(result.current.location).toEqual({ mode: "settings", page: "devices" })
-    act(() => {
-      result.current.closeSettings()
-    })
-    expect(result.current.location).toEqual({ mode: "workspace", page: "designer" })
+    expect(openSettings).toHaveBeenLastCalledWith("updates")
+    expect(result.current.location).toEqual({ mode: "workspace", page: "dashboard" })
   })
 
   it("leaves pages that disappear, e.g. of a disabled module", () => {
     let exists: (location: { page: string }) => boolean = () => true
-    const { result, rerender } = renderHook(({ check }) => useNavigation(check), {
+    const { result, rerender } = renderHook(({ check }) => useNavigation(check, vi.fn()), {
       initialProps: { check: exists },
     })
     act(() => {
@@ -243,7 +254,7 @@ describe("navigation hook", () => {
     })
     exists = (location) => location.page !== "projects/projects"
     rerender({ check: exists })
-    expect(result.current.location).toEqual({ mode: "workspace", page: "dashboard" })
+    expect(result.current.location).toEqual({ mode: "workspace", page: "designer" })
     expect(result.current.canGoBack).toBe(false)
   })
 })

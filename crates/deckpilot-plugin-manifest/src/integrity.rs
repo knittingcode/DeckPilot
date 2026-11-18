@@ -174,7 +174,18 @@ impl Manifest {
             files.extend(assets.readme.as_deref());
             files.extend(assets.changelog.as_deref());
         }
+        files.extend(self.navigation_icon_files());
         files
+    }
+
+    /// Every icon file of `contributes.navigation`.
+    pub fn navigation_icon_files(&self) -> BTreeSet<&str> {
+        self.contributes
+            .navigation()
+            .iter()
+            .flat_map(|entry| entry.icon.files())
+            .map(|(_, file)| file)
+            .collect()
     }
 }
 

@@ -9,7 +9,7 @@ Przepływ wykonuje kilka akcji jako całość. Działa w agencie w tle, więc ok
 
 ## Tworzenie przepływu
 
-Otwórz **Workflows** na pasku bocznym.
+Otwórz **Workflows** na pasku nawigacji po lewej stronie okna.
 
 - **New workflow** otwiera edytor grafu.
 - **New step workflow** tworzy prostą, sekwencyjną listę kroków. Polecenie **Open in graph editor** zamienia ją później w graf; kroki zostają zachowane.

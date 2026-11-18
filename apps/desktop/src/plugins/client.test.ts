@@ -7,9 +7,11 @@ import {
   PLUGIN_EVENT,
   createTauriPluginClient,
   deletePluginCredential,
+  getPluginNavigationIcon,
   getPluginSettings,
   listKnownPlugins,
   listPluginCredentials,
+  listPluginNavigation,
   setPluginCredential,
   setPluginSettings,
   uninstallPluginKeeping,
@@ -137,6 +139,13 @@ describe("the Tauri plugin client", () => {
 
   it.each([
     ["listKnownPlugins", () => listKnownPlugins(), "list_known_plugins", undefined],
+    ["listPluginNavigation", () => listPluginNavigation(), "list_plugin_navigation", undefined],
+    [
+      "getPluginNavigationIcon",
+      () => getPluginNavigationIcon("acme.x", "dashboard", "dark"),
+      "get_plugin_navigation_icon",
+      { plugin: "acme.x", entry: "dashboard", theme: "dark" },
+    ],
     [
       "uninstallPluginKeeping",
       () => uninstallPluginKeeping("acme.x", { credentials: true }),

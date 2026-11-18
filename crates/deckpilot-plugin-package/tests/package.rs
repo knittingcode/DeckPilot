@@ -1197,3 +1197,127 @@ fn the_first_party_flag_never_admits_another_publisher() {
         "{refused:?}"
     );
 }
+
+// ------------------------------------------------------- navigation icons
+
+const NAV_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24H0z" fill="#333"/></svg>"##;
+
+fn png_header(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    bytes.extend(width.to_be_bytes());
+    bytes.extend(height.to_be_bytes());
+    bytes.extend([8, 6, 0, 0, 0, 0, 0, 0, 0]);
+    bytes
+}
+
+/// The fixture at plugin API 1.3 with a navigation entry whose icon is
+/// `assets/nav.svg` (light) and `assets/nav.png` (dark).
+fn navigation_files(svg: &[u8], png: Vec<u8>) -> Vec<(&'static str, Vec<u8>)> {
+    let mut value: Value =
+        serde_json::from_slice(&manifest_json("acme.github-prs", "1.0.0")).unwrap();
+    value["engines"]["pluginApi"] = Value::from("^1.3");
+    value["contributes"]["navigation"] = serde_json::json!([{
+        "id": "dashboard", "label": "GitHub", "view": "dashboard",
+        "icon": {"light": "assets/nav.svg", "dark": "assets/nav.png"}
+    }]);
+    value["contributes"]["views"] = serde_json::json!([{"id": "dashboard", "kind": "variables"}]);
+    let mut list = files("acme.github-prs", "1.0.0");
+    list[0].1 = serde_json::to_vec_pretty(&value).unwrap();
+    list.push(("assets/nav.svg", svg.to_vec()));
+    list.push(("assets/nav.png", png));
+    list
+}
+
+fn icon_refusal(result: Result<impl std::fmt::Debug, PackageError>) -> String {
+    match result {
+        Err(PackageError::NavigationIcon { path, error }) => format!("{path}: {error}"),
+        other => panic!("expected a navigation icon refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn navigation_icons_are_checked_when_building() {
+    let built = build_files(&navigation_files(NAV_SVG.as_bytes(), png_header(64, 64))).unwrap();
+    assert!(built.integrity.files.contains_key("assets/nav.svg"));
+    verify_package(&built.bytes, &expected_for(&built), &Limits::default()).unwrap();
+
+    for (svg, png, refused) in [
+        (
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#,
+            png_header(64, 64),
+            "assets/nav.svg: is not a safe SVG: it has a <script> element",
+        ),
+        (
+            r#"<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>"#,
+            png_header(64, 64),
+            "assets/nav.svg: is not a safe SVG: it has an event handler `onload`",
+        ),
+        (
+            NAV_SVG,
+            png_header(1024, 64),
+            "assets/nav.png: is 1024×64 pixels; icons are 1 to 512 pixels a side",
+        ),
+        (
+            NAV_SVG,
+            {
+                let mut big = png_header(64, 64);
+                big.resize(256 * 1024 + 1, 0);
+                big
+            },
+            "assets/nav.png: is 262145 bytes; the limit for this format is 262144 bytes",
+        ),
+        (
+            NAV_SVG,
+            NAV_SVG.as_bytes().to_vec(),
+            "assets/nav.png: is not a valid PNG file",
+        ),
+    ] {
+        let result = build_files(&navigation_files(svg.as_bytes(), png));
+        assert_eq!(icon_refusal(result), refused);
+    }
+}
+
+/// A package a registry pinned (bug or compromise) with an unsafe icon is
+/// refused when it is read for installation.
+#[test]
+fn navigation_icons_are_checked_when_installing() {
+    let good = build_files(&navigation_files(NAV_SVG.as_bytes(), png_header(64, 64))).unwrap();
+    let expected = expected_for(&good);
+    let hostile = navigation_files(
+        br#"<svg xmlns="http://www.w3.org/2000/svg"><use href="https://evil.example/x.svg#a"/></svg>"#,
+        png_header(64, 64),
+    );
+    let mut tar = Vec::new();
+    for (path, bytes) in &hostile {
+        push_entry(
+            &mut tar,
+            &raw_header(path.as_bytes(), b'0', bytes.len() as u64),
+            bytes,
+        );
+    }
+    end_marker(&mut tar);
+    let bytes = gzip(&tar);
+    let refused = icon_refusal(verify_package(
+        &bytes,
+        &repinned(&bytes, &expected),
+        &Limits::default(),
+    ));
+    assert!(
+        refused.starts_with("assets/nav.svg: is not a safe SVG: `href` links to"),
+        "{refused}"
+    );
+}
+
+/// The icon files must be in the package (and so in its integrity
+/// record).
+#[test]
+fn a_missing_navigation_icon_is_refused() {
+    let mut list = navigation_files(NAV_SVG.as_bytes(), png_header(64, 64));
+    list.retain(|(path, _)| *path != "assets/nav.png");
+    let refused = build_files(&list);
+    assert!(
+        matches!(&refused, Err(PackageError::Contents(errors))
+            if errors.to_string().contains("`assets/nav.png` is missing")),
+        "{refused:?}"
+    );
+}

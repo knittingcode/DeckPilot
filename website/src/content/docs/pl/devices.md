@@ -21,7 +21,7 @@ Modele XL i Stream Deck + nie mają sterownika. DeckPilot zna ich kształt, wię
 
 Podłącz Stream Decka. DeckPilot szuka urządzeń co dwie sekundy, więc pojawi się ono po chwili samo; niczego nie trzeba parować.
 
-Podłączone urządzenia znajdziesz w **Settings › Devices**, na karcie **Connected devices**: nazwa modelu, numer seryjny i znacznik **Connected** albo **Disconnected**. Przycisk **Edit layout** otwiera Layout Designer dla danego urządzenia. Urządzenia pokazuje też ekran Dashboard.
+Podłączone urządzenia znajdziesz w **Settings › Devices**, na karcie **Connected devices**: nazwa modelu, numer seryjny i znacznik **Connected** albo **Disconnected**. Przycisk **Edit layout** otwiera Device Editor w oknie głównym. Podłączone urządzenia pokazuje też lista urządzeń na pasku narzędzi. Urządzenia pokazuje też ekran Dashboard.
 
 Jeśli lista jest pusta, karta zawiera komunikat **No Stream Deck detected**. Użyj przycisku **Refresh devices** na pasku tytułu albo polecenia **Refresh Devices** w menu zasobnika i zajrzyj na stronę [Rozwiązywanie problemów](../troubleshooting/#stream-deck-nie-jest-wykrywany).
 

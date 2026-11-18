@@ -62,6 +62,21 @@ fn tab(name: &str) -> String {
 
 const DIALOG: &str = "//*[@role='dialog' or @role='alertdialog']";
 
+/// The toolbar's Settings button (its label mentions an available update).
+const SETTINGS: &str =
+    "//header[@aria-label='Toolbar']//button[starts-with(@aria-label,'Settings')]";
+/// The toolbar's Marketplace button.
+const MARKETPLACE: &str = "//header[@aria-label='Toolbar']//button[@aria-label='Marketplace']";
+/// The device editor, the main window's default view: the device drawn
+/// from its descriptor, the Action Library at the right.
+const EDITOR: &str =
+    "//*[@data-slot='device-editor']//*[@role='group' and contains(@aria-label,'controls')]";
+/// The library beside the editor, or (narrow windows) its overlay toggle.
+const LIBRARY: &str = "//aside[@aria-label='Action Library'] | //*[@data-slot='device-editor']//button[normalize-space(.)='Library' and @aria-expanded]";
+
+/// The identifier of the settings window (`src-tauri/src/windows.rs`).
+const SETTINGS_WINDOW: &str = "app.settings";
+
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -163,9 +178,7 @@ impl Gui {
         wait_until(LONG, "the unlocked agent", || {
             fx.agent_unlocked().then_some(())
         });
-        self.wd()
-            .wait(&button("Settings"), LONG)
-            .expect("the main window");
+        self.wd().wait(SETTINGS, LONG).expect("the main window");
         via
     }
 
@@ -182,9 +195,7 @@ impl Gui {
         fx.unlock_agent();
         let wd = WebDriver::start(self.port, &self.app).expect("a WebDriver session");
         self.wd = Some(wd);
-        self.wd()
-            .wait(&button("Settings"), LONG)
-            .expect("the main window");
+        self.wd().wait(SETTINGS, LONG).expect("the main window");
         eprintln!("[gui] the agent was started and unlocked by the test (Windows)");
         vec![Via::Fixture, Via::AgentIpc]
     }
@@ -271,7 +282,7 @@ impl Gui {
         });
     }
 
-    /// Settings › Extensions › Plugins, unless it is open already.
+    /// The Marketplace (toolbar › Marketplace), unless it is open already.
     fn marketplace(&mut self) {
         if self.visible(&tab("Discover")) || self.visible(&button("Back to plugins")) {
             if self.visible(&button("Back to plugins")) {
@@ -279,11 +290,49 @@ impl Gui {
             }
             return;
         }
-        if !self.visible(&button("Plugins")) {
-            self.click(&button("Settings"));
-        }
-        self.click(&button("Plugins"));
+        self.click(MARKETPLACE);
         self.wait(&tab("Discover"));
+    }
+
+    /// The main window's default view: the device editor with the Action
+    /// Library at the right and the key inspector below the device.
+    /// Without a layout for the device (a fresh configuration may have
+    /// none) the editor offers to create one instead.
+    fn editor(&mut self) {
+        self.wait("//header[@aria-label='Toolbar']//h1[normalize-space(.)='Device Editor']");
+        if self.wd().wait(EDITOR, Duration::from_secs(10)).is_ok() {
+            self.wait(LIBRARY);
+            self.wait("//*[@data-slot='device-editor-main']//*[normalize-space(.)='Control']");
+        } else {
+            eprintln!("[gui] no layout for the device yet: the editor shows its empty state");
+        }
+    }
+
+    /// Opens the settings window from the toolbar and switches to it.
+    /// Returns the main window's handle.
+    fn settings_window(&mut self) -> String {
+        let main = self.wd().current_window().unwrap();
+        self.click(SETTINGS);
+        let handle = wait_until(LONG, "the settings window", || {
+            self.wd()
+                .windows()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|handle| *handle != main)
+                .find(|handle| {
+                    self.wd().switch_to(handle).is_ok()
+                        && self
+                            .wd()
+                            .execute("return document.documentElement.dataset.window || ''", &[])
+                            .ok()
+                            .and_then(|id| id.as_str().map(str::to_owned))
+                            .as_deref()
+                            == Some(SETTINGS_WINDOW)
+                })
+        });
+        self.wd().switch_to(&handle).unwrap();
+        self.wait(&button("Back to DeckPilot"));
+        main
     }
 
     fn installed_tab(&mut self) {
@@ -366,12 +415,21 @@ impl Driver for Gui {
     }
 
     fn restart(&mut self, fx: &mut Fixture) -> Vec<Via> {
-        // Settings › Background Agent › Stop agent.
-        if !self.visible(&button("Background Agent")) {
-            self.click(&button("Settings"));
-        }
-        self.click(&button("Background Agent"));
-        self.click(&button("Stop agent"));
+        let stopped_via = if PROMPT_UNREACHABLE {
+            // A second WebView2 window does not load under msedgedriver
+            // (see `launch_unlocked`): the settings window's command.
+            self.ok("stop_agent", json!({}));
+            Via::AppIpc
+        } else {
+            // Toolbar › Settings (its own window) › Background Agent ›
+            // Stop agent.
+            self.settings_window();
+            self.wait(&button("Appearance"));
+            self.screenshot("11-settings-window");
+            self.click(&button("Background Agent"));
+            self.click(&button("Stop agent"));
+            Via::Ui
+        };
         fx.wait_for_agent(false);
         self.screenshot("12-agent-stopped");
         // Close the app and start it again: it starts the agent again,
@@ -382,8 +440,13 @@ impl Driver for Gui {
         if PROMPT_UNREACHABLE {
             fx.stop_agent();
         }
-        let mut via = vec![Via::Ui];
+        let mut via = vec![stopped_via];
         via.extend(self.launch(fx));
+        // The device editor again, now with the layout the scenario made:
+        // the device, the Action Library at the right, the inspector below.
+        self.click(&button("Device Editor"));
+        self.editor();
+        self.screenshot("12-shell-editor");
         via
     }
 
@@ -400,8 +463,12 @@ impl Driver for Gui {
     }
 
     fn open_marketplace(&mut self) -> Vec<Via> {
+        // The shell first: the device editor is what the app opens with.
+        self.editor();
+        self.screenshot("02-shell-editor");
         self.marketplace();
         self.wait("//*[@role='note' and @aria-label='Experimental']");
+        self.screenshot("02-marketplace");
         vec![Via::Ui]
     }
 

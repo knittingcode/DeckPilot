@@ -410,6 +410,7 @@ async fn a_protocol_9_agent_is_never_asked_about_plugins() {
         Request::GetPluginIcon {
             plugin: plugin(),
             offset: 0,
+            navigation: None,
         },
         Request::ListAvailablePlugins { refresh: true },
         Request::InstallPlugin {

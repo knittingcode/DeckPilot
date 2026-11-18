@@ -368,7 +368,7 @@ describe("status bar", () => {
     expect(stores.notifications.get("update.failed")?.message).toBe("signature invalid")
   })
 
-  it("lists concurrent operations and notifications in keyboard-accessible popovers", async () => {
+  it("lists concurrent operations in a keyboard-accessible popover", async () => {
     const stores = createStatusStores()
     render(<Shell stores={stores} value={context({})} />)
     act(() => {
@@ -384,12 +384,8 @@ describe("status bar", () => {
     await userEvent.keyboard("{Escape}")
     expect(screen.queryByText("Background activity")).not.toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole("button", { name: "Notifications, 1 unread" }))
-    expect(
-      within(screen.getByRole("list", { name: "Notifications" })).getByText("Workflow failed"),
-    ).toBeInTheDocument()
-    await userEvent.keyboard("{Escape}")
-    expect(screen.getByRole("button", { name: "Notifications" })).toBeInTheDocument()
+    // Notifications moved to the toolbar.
+    expect(screen.queryByRole("button", { name: /Notifications/ })).not.toBeInTheDocument()
   })
 
   it("moves lower-priority items into the overflow menu", async () => {

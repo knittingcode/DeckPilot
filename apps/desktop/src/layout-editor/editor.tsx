@@ -7,7 +7,7 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core"
 import { Redo2, RotateCcw, Save, Undo2 } from "lucide-react"
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react"
+import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { DeviceCanvas } from "@/components/device-canvas"
@@ -77,6 +77,7 @@ import {
   type DragSource,
 } from "./editing"
 import { Inspector } from "./inspector"
+import { LibraryDock } from "./library-dock"
 import { LibraryPanel } from "./library-panel"
 import { PageBar } from "./page-bar"
 import { PageTreePanel } from "./page-tree-panel"
@@ -163,6 +164,7 @@ export function LayoutEditor({
   view,
   model,
   saved,
+  header,
   onDirtyChange,
   onSaved,
 }: {
@@ -170,6 +172,8 @@ export function LayoutEditor({
   view: ProfileView
   model: DeviceModel
   saved: DeviceLayout
+  /** Shown above the device, e.g. the layout chooser. */
+  header?: ReactNode
   onDirtyChange: (dirty: boolean) => void
   onSaved: () => void
 }) {
@@ -401,212 +405,224 @@ export function LayoutEditor({
 
   return (
     <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-      <div className="grid gap-4 xl:grid-cols-[14rem_1fr] 2xl:grid-cols-[16rem_1fr_20rem]">
-        <LibraryPanel groups={groups} catalog={catalog} multiAction />
-
-        <Card>
-          <CardHeader className="gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Input
-                aria-label="Layout name"
-                className="h-8 w-56 font-medium"
-                value={draft.name}
-                onChange={(e) => {
-                  commands.change({ ...draft, name: e.target.value }, "layout-name")
-                }}
-              />
-              {dirty && <Badge variant="outline">Unsaved</Badge>}
-              <div className="flex-1" />
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Undo"
-                title={`Undo (${shortcutLabel("Z")})`}
-                disabled={!editing.canUndo}
-                onClick={commands.undo}
-              >
-                <Undo2 />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Redo"
-                title={`Redo (${shortcutLabel("Z", true)})`}
-                disabled={!editing.canRedo}
-                onClick={commands.redo}
-              >
-                <Redo2 />
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!dirty}
-                onClick={() => {
-                  commands.revert()
-                  setErrors([])
-                }}
-              >
-                <RotateCcw /> Revert
-              </Button>
-              <Button size="sm" disabled={!dirty} onClick={() => void save()}>
-                <Save /> Save
-              </Button>
-            </div>
-            <PageBar
-              draft={draft}
-              pageId={pageId}
-              trail={editing.trail}
-              onOpen={commands.openPage}
-              onBack={commands.back}
-              onAdd={commands.addPage}
-              onRename={commands.renamePage}
-              onDelete={commands.deletePage}
-              onAutoReturn={commands.setAutoReturn}
-            />
-            <PageTreePanel
-              profileId={profileId}
-              draft={draft}
-              layouts={view.profile.layouts}
-              dirty={dirty}
-              pageId={pageId}
-              onOpen={commands.openPage}
-              onStored={(layout, page) => {
-                if (layout) commands.reset(layout, page)
-                onSaved()
-                refresh()
-              }}
-            />
-          </CardHeader>
-          <CardContent className="grid gap-4">
-            {errors.length > 0 && <ErrorNotice error={errors.join(" ")} />}
-            {hasControls ? (
-              <div className="overflow-x-auto p-1">
-                <DeviceCanvas
-                  model={model}
-                  images={images}
-                  faces={faces}
-                  icons={icons}
-                  captions={summaries}
-                  summaries={summaries}
-                  selection={selection.controls}
-                  focused={selection.focus}
-                  onSelect={commands.select}
-                  onOpen={commands.openFolder}
-                  onControlKeyDown={onControlKeyDown}
-                  droppable
-                  draggable
-                  wrapControl={(control, element) => (
-                    <ControlMenu
-                      label={controlLabel(control)}
-                      groups={groups}
-                      state={{
-                        count: selected.length,
-                        hasBindings: selected.some((c) => bound.has(controlKey(c))),
-                        canPaste: editing.clipboard !== null,
-                        folderName: (() => {
-                          const id = folderOf(draft, pageId, control)
-                          return id ? findPage(draft, id)?.name : undefined
-                        })(),
-                        canCreateFolder: isFree(draft, pageId, control),
-                      }}
-                      commands={{
-                        onOpen: () => {
-                          commands.selectForMenu(control)
-                        },
-                        assign: commands.assign,
-                        copy: commands.copy,
-                        cut: commands.cut,
-                        paste: commands.paste,
-                        duplicate: commands.duplicate,
-                        clear: commands.clear,
-                        openFolder: () => {
-                          commands.openFolder(control)
-                        },
-                        newFolder: () => {
-                          commands.newFolder(control)
-                        },
-                      }}
-                    >
-                      {element}
-                    </ControlMenu>
-                  )}
+      {/*
+        One drag and drop context for the whole editor: the library (right)
+        drops onto the device (centre) and onto the gestures of the
+        inspector (below the device).
+      */}
+      <div data-slot="device-editor" className="relative flex min-h-0 flex-1">
+        <div
+          data-slot="device-editor-main"
+          className="grid min-w-0 flex-1 content-start gap-4 overflow-y-auto p-4"
+        >
+          {header}
+          <Card>
+            <CardHeader className="gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  aria-label="Layout name"
+                  className="h-8 w-56 font-medium"
+                  value={draft.name}
+                  onChange={(e) => {
+                    commands.change({ ...draft, name: e.target.value }, "layout-name")
+                  }}
                 />
+                {dirty && <Badge variant="outline">Unsaved</Badge>}
+                <div className="flex-1" />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Undo"
+                  title={`Undo (${shortcutLabel("Z")})`}
+                  disabled={!editing.canUndo}
+                  onClick={commands.undo}
+                >
+                  <Undo2 />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Redo"
+                  title={`Redo (${shortcutLabel("Z", true)})`}
+                  disabled={!editing.canRedo}
+                  onClick={commands.redo}
+                >
+                  <Redo2 />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!dirty}
+                  onClick={() => {
+                    commands.revert()
+                    setErrors([])
+                  }}
+                >
+                  <RotateCcw /> Revert
+                </Button>
+                <Button size="sm" disabled={!dirty} onClick={() => void save()}>
+                  <Save /> Save
+                </Button>
               </div>
-            ) : (
-              <EmptyState title={`${model.name} has no configurable controls`} />
-            )}
-            {hasControls && bound.size === 0 && (
-              <EmptyState title={isFolderPage ? "This folder is empty" : "This page is empty"}>
-                Drag an action, a workflow or “New folder” from the library onto a control, or
-                select a control and choose in the inspector.
-              </EmptyState>
-            )}
-            {isFolderPage && !hasWayBack(draft, pageId) && (
-              <p className="text-xs text-muted-foreground" role="note">
-                This folder has no “Back” binding. On the device, DeckPilot adds one on its first
-                free key. To choose the key, drag “Back” from the library onto a control.
-              </p>
-            )}
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <Label htmlFor="preview-project">Preview with project</Label>
-              <Select
-                value={previewProject ?? "none"}
-                onValueChange={(value) => {
-                  setPreviewProject(value === "none" ? null : value)
-                }}
-              >
-                <SelectTrigger id="preview-project" className="h-8 w-40">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">No project</SelectItem>
-                  {projects.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.key}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <span className="text-xs text-muted-foreground">
-                Labels such as {"{project.key}"} follow the selected project.
-              </span>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Inspector
-          model={model}
-          draft={draft}
-          pageId={pageId}
-          selection={selected}
-          focus={selection.focus}
-          groups={groups}
-          folder={folder}
-          profile={profile}
-          types={gestureContext.types}
-          gestureDefaults={gestureContext.defaults}
-          issues={errors}
-          onChange={commands.change}
-          onClear={commands.clear}
-          onOpenFolder={() => {
-            if (selection.focus) commands.openFolder(selection.focus)
-          }}
-          onClose={commands.clearSelection}
-          resolveDrop={resolveSlotDrop}
-          onEditWorkflow={setStepsOf}
-          appearance={
-            selected.length > 0 ? (
-              <AppearancePanel
+              <PageBar
                 draft={draft}
                 pageId={pageId}
-                controls={selected}
-                images={images}
-                icons={iconState}
-                onChange={commands.restyle}
+                trail={editing.trail}
+                onOpen={commands.openPage}
+                onBack={commands.back}
+                onAdd={commands.addPage}
+                onRename={commands.renamePage}
+                onDelete={commands.deletePage}
+                onAutoReturn={commands.setAutoReturn}
               />
-            ) : undefined
-          }
-        />
+              <PageTreePanel
+                profileId={profileId}
+                draft={draft}
+                layouts={view.profile.layouts}
+                dirty={dirty}
+                pageId={pageId}
+                onOpen={commands.openPage}
+                onStored={(layout, page) => {
+                  if (layout) commands.reset(layout, page)
+                  onSaved()
+                  refresh()
+                }}
+              />
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              {errors.length > 0 && <ErrorNotice error={errors.join(" ")} />}
+              {hasControls ? (
+                <div className="overflow-x-auto p-1">
+                  <DeviceCanvas
+                    model={model}
+                    images={images}
+                    faces={faces}
+                    icons={icons}
+                    captions={summaries}
+                    summaries={summaries}
+                    selection={selection.controls}
+                    focused={selection.focus}
+                    onSelect={commands.select}
+                    onOpen={commands.openFolder}
+                    onControlKeyDown={onControlKeyDown}
+                    droppable
+                    draggable
+                    wrapControl={(control, element) => (
+                      <ControlMenu
+                        label={controlLabel(control)}
+                        groups={groups}
+                        state={{
+                          count: selected.length,
+                          hasBindings: selected.some((c) => bound.has(controlKey(c))),
+                          canPaste: editing.clipboard !== null,
+                          folderName: (() => {
+                            const id = folderOf(draft, pageId, control)
+                            return id ? findPage(draft, id)?.name : undefined
+                          })(),
+                          canCreateFolder: isFree(draft, pageId, control),
+                        }}
+                        commands={{
+                          onOpen: () => {
+                            commands.selectForMenu(control)
+                          },
+                          assign: commands.assign,
+                          copy: commands.copy,
+                          cut: commands.cut,
+                          paste: commands.paste,
+                          duplicate: commands.duplicate,
+                          clear: commands.clear,
+                          openFolder: () => {
+                            commands.openFolder(control)
+                          },
+                          newFolder: () => {
+                            commands.newFolder(control)
+                          },
+                        }}
+                      >
+                        {element}
+                      </ControlMenu>
+                    )}
+                  />
+                </div>
+              ) : (
+                <EmptyState title={`${model.name} has no configurable controls`} />
+              )}
+              {hasControls && bound.size === 0 && (
+                <EmptyState title={isFolderPage ? "This folder is empty" : "This page is empty"}>
+                  Drag an action, a workflow or “New folder” from the library onto a control, or
+                  select a control and choose in the inspector.
+                </EmptyState>
+              )}
+              {isFolderPage && !hasWayBack(draft, pageId) && (
+                <p className="text-xs text-muted-foreground" role="note">
+                  This folder has no “Back” binding. On the device, DeckPilot adds one on its first
+                  free key. To choose the key, drag “Back” from the library onto a control.
+                </p>
+              )}
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <Label htmlFor="preview-project">Preview with project</Label>
+                <Select
+                  value={previewProject ?? "none"}
+                  onValueChange={(value) => {
+                    setPreviewProject(value === "none" ? null : value)
+                  }}
+                >
+                  <SelectTrigger id="preview-project" className="h-8 w-40">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No project</SelectItem>
+                    {projects.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.key}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="text-xs text-muted-foreground">
+                  Labels such as {"{project.key}"} follow the selected project.
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Inspector
+            model={model}
+            draft={draft}
+            pageId={pageId}
+            selection={selected}
+            focus={selection.focus}
+            groups={groups}
+            folder={folder}
+            profile={profile}
+            types={gestureContext.types}
+            gestureDefaults={gestureContext.defaults}
+            issues={errors}
+            onChange={commands.change}
+            onClear={commands.clear}
+            onOpenFolder={() => {
+              if (selection.focus) commands.openFolder(selection.focus)
+            }}
+            onClose={commands.clearSelection}
+            resolveDrop={resolveSlotDrop}
+            onEditWorkflow={setStepsOf}
+            appearance={
+              selected.length > 0 ? (
+                <AppearancePanel
+                  draft={draft}
+                  pageId={pageId}
+                  controls={selected}
+                  images={images}
+                  icons={iconState}
+                  onChange={commands.restyle}
+                />
+              ) : undefined
+            }
+          />
+        </div>
+        <LibraryDock>
+          <LibraryPanel groups={groups} catalog={catalog} multiAction variant="plain" />
+        </LibraryDock>
       </div>
       <DeletePageDialog
         deletion={editing.deleting ? pageDeletion(draft, editing.deleting) : null}

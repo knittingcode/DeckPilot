@@ -175,6 +175,7 @@ mod tests {
             }],
             action_count: None,
             health: None,
+            navigation: Vec::new(),
         }
     }
 

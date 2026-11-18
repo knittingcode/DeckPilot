@@ -135,7 +135,13 @@ fn cargo_build(test: &str, release: bool, features: &[&str], embed: Option<&str>
         .env_remove(BUILD_ENV)
         .env_remove(RUNTIME_ENV);
     if release {
-        command.arg("--release");
+        // Still a release build (no debug assertions, which is what the
+        // roots depend on), without the workspace's LTO and single codegen
+        // unit: they change nothing here and made each build take minutes.
+        command
+            .arg("--release")
+            .env("CARGO_PROFILE_RELEASE_LTO", "false")
+            .env("CARGO_PROFILE_RELEASE_CODEGEN_UNITS", "16");
     }
     if !features.is_empty() {
         command.args(["--features", &features.join(",")]);

@@ -33,6 +33,20 @@ released either. 0.6.0 is the first version intended for publication.
   keys; Next page, Previous page, Brightness and the project switching
   actions also work on a dial, once per turn or press. Actions of plugins
   work on keys, as before. See `docs/device-controls.md`.
+- Plugin API 1.3: a plugin's manifest can declare which controls and
+  inputs each of its actions works on (`controls`, for example a dial's
+  turns), and up to four toolbar entries (`navigation`) that open views
+  DeckPilot draws itself: the plugin's variables, its actions or its
+  settings (`views`). A manifest using them needs `"pluginApi": "^1.3"`.
+  Without `controls` a plugin action still works on keys only, and
+  `device.requires` grants no dial. The Rust plugin SDK has
+  `Action::controls(..)`. See `docs/marketplace/sdk/manifest.md`.
+- Toolbar icons of plugins are checked when a package is built and
+  installed: PNG or WebP up to 256 KiB and 512×512 pixels, or SVG up to
+  64 KiB without scripts, event handlers, external, `data:` or
+  `javascript:` links, style imports or entities. The agent re-checks and
+  sanitizes them each time it serves one, and the app shows them only as
+  images, with its own icon when there is none to show.
 
 ### Changed
 
@@ -51,6 +65,22 @@ released either. 0.6.0 is the first version intended for publication.
   Finder, Spotlight or the Dock, brings the window and the Dock icon back
   at once, still unlocked. ⌘Q (Quit DeckPilot UI) and the tray's Quit work
   as before.
+- A new main window. DeckPilot opens with the Device Editor. The toolbar
+  at the top chooses the device (connected devices first, the other
+  models as "Not connected") and the profile to edit, and has
+  notifications, the Marketplace and the settings at the right; the
+  Dashboard, the Action Library, Workflows and module pages are in a slim
+  navigation rail at the left.
+- In the Device Editor, the Action Library is a sidebar at the right that
+  can be resized and collapsed (an overlay in narrow windows), and the
+  key inspector is below the device. The device follows the light or
+  dark theme.
+- The settings open in a window of their own, at the page asked for, and
+  now include Profiles. A theme chosen there applies to every window.
+- The Marketplace opens from the toolbar as a view of the main window;
+  installed plugins are also managed in Settings › Extensions › Plugins.
+- Notifications are in the toolbar, with the number of unread ones,
+  instead of the status bar.
 
 ### Fixed
 
@@ -71,12 +101,21 @@ released either. 0.6.0 is the first version intended for publication.
 - macOS: the background agent no longer shows a DeckPilot icon in the Dock
   for a moment when it starts, or for the whole life of a second agent
   process that stops because one is already running.
-
 - A plugin update whose module the plugin host refuses (for example one
   that does not implement the actions its manifest declares) is no longer
   installed: the update fails and the installed version keeps running.
   Before, the update was applied and every action of the plugin failed
   until it was rolled back by hand.
+- Linux: the AppImage's background agent could not start on newer
+  systems such as Ubuntu 24.04: the AppImage did not include the
+  AppIndicator library, and the system's copy cannot be loaded next to the
+  older GLib the AppImage carries ("undefined symbol:
+  g_once_init_leave_pointer"). The AppImage now includes the library and
+  the libraries it needs.
+- The background agent keeps running without a tray icon when the tray
+  cannot be created, for example when the AppIndicator library is
+  missing, instead of stopping. The app can still be opened from the
+  application menu.
 
 ### Security
 
