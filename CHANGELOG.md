@@ -15,6 +15,19 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+### Added
+
+- System monitor keys. The System module has four new read-only actions,
+  CPU usage, Memory usage, Network throughput and Disk space, whose keys
+  show the value live: `CPU 37%` with a chart of the recent values,
+  `RAM 62%`, the bytes per second received and sent (of one network
+  interface, or of all but loopback added up), and the free space of the
+  volume a folder is on. A status mark turns amber or red at thresholds
+  you choose (CPU and memory 70% and 90% by default, disk 20% and 10%
+  free). Pressing the key reports the value, which later workflow nodes
+  can use. The values are read only while such a key is shown, at most
+  every 2 seconds (disk: every 30 seconds), once for all keys.
+
 ## [0.7.0] - 2026-11-17
 
 ### Added

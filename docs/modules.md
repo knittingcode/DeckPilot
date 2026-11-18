@@ -482,10 +482,16 @@ back does not draw its image again.
 | `docker.status` | green when the engine answers, red (`Unavailable`) otherwise | 30 s |
 | `docker.containers` | `N running`; green when any runs, grey otherwise | 30 s |
 | `docker.compose-status`, `-up`, `-down`, `-restart` | `running/total up`; green all, amber some, grey none; up and down keys also toggle (on when all run) | 30 s |
+| `system.cpu` | `CPU n%`, the use as a bar and its recent values as a chart; green, amber from the warning threshold, red from the critical one | 2 s |
+| `system.memory` | `RAM n%` and the use as a bar; thresholds as CPU | 2 s |
+| `system.network` | `In <rate>` as the label and `Out <rate>` as detail (bytes per second, e.g. `1.2M`) | 2 s |
+| `system.disk` | `n% free` and the used share as a bar; amber and red at or below the free-space thresholds | 30 s |
 
 Each reads with the module's existing read-only command (`git status`
 without optional locks; `docker version`, `docker ps`, `docker compose
-ps`).
+ps`). The System monitor keys share one in-process `sysinfo` sampler,
+which reads a value at most every 1.5 s and only while such a key is shown
+([integration-modules.md](integration-modules.md#system-system)).
 
 **Testing a provider.** Call `ActionHandler::button_state` with an
 `ExecutionContext`, or `ActionRegistry::button_state` to include the
