@@ -255,6 +255,24 @@ impl Agent {
                 debug!(%device, %control, %reason, "input ignored");
                 return;
             }
+            // Refused, not run: the binding's action cannot run from this
+            // control (`docs/device-controls.md`). Told once per binding.
+            Ok(RuntimeOutcome::Unavailable {
+                action,
+                trigger,
+                reason,
+                first,
+                ..
+            }) => {
+                let name = self.action_name(action);
+                if first {
+                    warn!(%device, %control, ?trigger, action = %name, %reason, "binding not run: its action cannot run from this control");
+                    self.notify_unavailable(&name, control, &reason);
+                } else {
+                    debug!(%device, %control, ?trigger, action = %name, "unavailable binding not run");
+                }
+                return;
+            }
             Ok(_) => {}
             Err(error) => warn!(%error, "input could not be handled"),
         }

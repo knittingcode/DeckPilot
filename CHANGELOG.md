@@ -15,8 +15,36 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+### Added
+
+- System monitor keys. The System module has four new read-only actions,
+  CPU usage, Memory usage, Network throughput and Disk space, whose keys
+  show the value live: `CPU 37%` with a chart of the recent values,
+  `RAM 62%`, the bytes per second received and sent (of one network
+  interface, or of all but loopback added up), and the free space of the
+  volume a folder is on. A status mark turns amber or red at thresholds
+  you choose (CPU and memory 70% and 90% by default, disk 20% and 10%
+  free). Pressing the key reports the value, which later workflow nodes
+  can use. The values are read only while such a key is shown, at most
+  every 2 seconds (disk: every 30 seconds), once for all keys.
+- Actions declare which controls they work on: keys, dials (encoders) or
+  touch zones, and which inputs of each (press, click, long press, a turn
+  either way, a tap…). Every built-in action does: one-shot actions work on
+  keys; Next page, Previous page, Brightness and the project switching
+  actions also work on a dial, once per turn or press. Actions of plugins
+  work on keys, as before. See `docs/device-controls.md`.
+
 ### Changed
 
+- A key, dial or touch zone bound to an action that cannot run from it (a
+  dial turn bound to a key-only action, for example) no longer runs it.
+  The binding is kept as it is, shows as unavailable, and the app's status
+  bar says why the first time it is used. Saving a layout refuses a new
+  binding like that with the reason; bindings already saved stay and are
+  listed, so every existing profile can still be saved. Imports keep them
+  and warn. Nothing is removed or converted, and a binding works again as
+  soon as a compatible action is installed. Key bindings are not affected:
+  every built-in action still works on every key gesture.
 - macOS: closing DeckPilot's window (the close button or ⌘W) now keeps the
   app running in the background and takes its icon out of the Dock, like
   Docker Desktop. The tray's *Open DeckPilot*, or opening DeckPilot from
@@ -42,6 +70,15 @@ released either. 0.6.0 is the first version intended for publication.
 
 ### Fixed
 
+- Linux: the `.deb` and `.rpm` packages now depend on the AppIndicator
+  library the background agent's tray icon uses
+  (`libayatana-appindicator3-1` on Debian and Ubuntu; the `.rpm` requires
+  `libayatana-appindicator3.so.1`, on Fedora from
+  `libayatana-appindicator-gtk3`). Where it was not installed,
+  for example on a fresh Ubuntu 24.04, the agent of 0.7.0 stopped right
+  after starting ("Failed to load ayatana-appindicator3"), and the app
+  showed that the background agent was not running. Installing
+  `libayatana-appindicator3-1` by hand works around it in 0.7.0.
 - macOS: the background agent no longer shows a DeckPilot icon in the Dock
   for a moment when it starts, or for the whole life of a second agent
   process that stops because one is already running.

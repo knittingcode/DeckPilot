@@ -354,7 +354,9 @@ fn plus_layout(ids: &WorkIds) -> DeviceLayout {
             Trigger::Touch {
                 gesture: TouchGesture::Tap,
             },
-            BindingTarget::action(ids.announce),
+            // A workflow: no built-in action is declared for touch zones
+            // (`docs/device-controls.md`).
+            BindingTarget::Workflow { workflow: ids.end },
             None,
         ),
     ];
@@ -784,6 +786,17 @@ mod tests {
         }
         let registry = engine.registry();
         assert_eq!(work.layouts.len(), 3);
+        // Every binding can run its action from its control.
+        for profile in [&work, &personal] {
+            for layout in &profile.layouts {
+                assert_eq!(
+                    layout.check_compatibility(&catalog, registry, profile),
+                    Vec::new(),
+                    "{}",
+                    layout.name
+                );
+            }
+        }
         assert_eq!(work.workflows[0].name, personal.workflows[0].name);
         assert_ne!(work.workflows[0].id, personal.workflows[0].id);
         assert_ne!(work.workflows[0].steps, personal.workflows[0].steps);

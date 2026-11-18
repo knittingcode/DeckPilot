@@ -125,7 +125,7 @@ fn code(result: &ActionResult) -> Option<&str> {
 #[test]
 fn every_action_type_declares_its_node_contract() {
     let launcher: Arc<dyn Launcher> = Arc::new(RecordingLauncher::new());
-    let handlers = handlers(&launcher, false);
+    let handlers = handlers(&launcher, &Arc::new(Sampler::new()), false);
     let ids: Vec<_> = handlers
         .iter()
         .map(|h| h.definition().id.to_string())
@@ -138,7 +138,11 @@ fn every_action_type_declares_its_node_contract() {
             OPEN_FILE,
             OPEN_DIRECTORY,
             RUN_COMMAND,
-            PROCESS_STATUS
+            PROCESS_STATUS,
+            CPU,
+            MEMORY,
+            NETWORK,
+            DISK
         ]
     );
     for handler in &handlers {
@@ -147,10 +151,18 @@ fn every_action_type_declares_its_node_contract() {
         assert!(definition.node.icon.is_some());
         let expected = match definition.id.as_str() {
             RUN_COMMAND => ActionEffect::Modifies,
-            PROCESS_STATUS => ActionEffect::ReadOnly,
+            PROCESS_STATUS | CPU | MEMORY | NETWORK | DISK => ActionEffect::ReadOnly,
             _ => ActionEffect::Opens,
         };
         assert_eq!(definition.node.effect, expected, "{}", definition.id);
+        // Only the monitor keys show a live state.
+        let monitor = [CPU, MEMORY, NETWORK, DISK].contains(&definition.id.as_str());
+        assert_eq!(
+            handler.state_policy(&ActionParameters::new()).is_some(),
+            monitor,
+            "{}",
+            definition.id
+        );
     }
     let command = RunCommand::new(true);
     let spec = &command.definition().node;
@@ -535,4 +547,150 @@ fn links_out_of_the_resource_are_not_opened() {
     assert!(inside.is_success(), "{}", inside.message);
     assert_eq!(launcher.plans().len(), 2);
     let _ = std::fs::remove_dir_all(&outside);
+}
+
+fn monitor(metric: Metric) -> Monitor {
+    Monitor::new(metric, Arc::new(Sampler::new()))
+}
+
+fn percent_of(result: &ActionResult, key: &str) -> u64 {
+    let value: u64 = result.data[key].parse().unwrap();
+    assert!(value <= 100, "{key} = {value}");
+    value
+}
+
+/// The monitor actions read this computer: only the shape of the values
+/// is checked, never the load.
+#[test]
+fn monitors_report_this_computers_values() {
+    let fixture = fixture();
+    let context = fixture.context();
+    let cpu = run(&monitor(Metric::Cpu), ActionParameters::new(), &context);
+    assert!(cpu.is_success(), "{}", cpu.message);
+    percent_of(&cpu, "usagePercent");
+    assert!(["ok", "warning", "critical"].contains(&cpu.data["level"].as_str()));
+
+    let memory = run(&monitor(Metric::Memory), ActionParameters::new(), &context);
+    assert!(memory.is_success(), "{}", memory.message);
+    percent_of(&memory, "usedPercent");
+    let total: u64 = memory.data["totalBytes"].parse().unwrap();
+    assert!(total > 0);
+
+    let network = run(&monitor(Metric::Network), ActionParameters::new(), &context);
+    assert!(network.is_success(), "{}", network.message);
+    for key in ["receivedPerSecond", "transmittedPerSecond"] {
+        network.data[key].parse::<u64>().unwrap();
+    }
+
+    let disk = run(&monitor(Metric::Disk), ActionParameters::new(), &context);
+    assert!(disk.is_success(), "{}", disk.message);
+    percent_of(&disk, "freePercent");
+    assert_ne!(disk.data["mountPoint"], "");
+
+    // The key shows the same reading.
+    let handler = monitor(Metric::Memory);
+    let parameters = handler
+        .definition()
+        .normalize(&ActionParameters::new())
+        .unwrap();
+    let state = handler.button_state(&parameters, &context).unwrap();
+    assert!(state.detail.unwrap().starts_with("RAM "));
+    assert!(state.indicator.is_some() && state.progress.is_some());
+}
+
+#[test]
+fn disk_space_of_a_folder_resource() {
+    let fixture = fixture();
+    let handler = monitor(Metric::Disk);
+    let at = |reference: ParameterValue| ActionParameters::new().with("location", reference);
+    let result = run(&handler, at(role("repository")), &fixture.context());
+    assert!(result.is_success(), "{}", result.message);
+    assert!(
+        result.data["freeBytes"].parse::<u64>().unwrap()
+            <= result.data["totalBytes"].parse::<u64>().unwrap()
+    );
+    let unbound = run(&handler, at(fixed("tools.nowhere")), &fixture.context());
+    assert!(!unbound.is_success());
+    assert!(code(&unbound).is_some());
+
+    std::fs::remove_dir_all(&fixture.dir).unwrap();
+    let gone = run(&handler, at(role("repository")), &fixture.context());
+    assert_eq!(code(&gone), Some(codes::NOT_FOUND), "{}", gone.message);
+}
+
+#[test]
+fn an_unknown_network_interface_is_not_found() {
+    let fixture = fixture();
+    let handler = monitor(Metric::Network);
+    let parameters = ActionParameters::new().with("interface", text("deckpilot-no-such-if"));
+    let result = run(&handler, parameters.clone(), &fixture.context());
+    assert_eq!(code(&result), Some(codes::NOT_FOUND), "{}", result.message);
+    let state = handler.button_state(&parameters, &fixture.context());
+    assert_eq!(state.unwrap_err().code, codes::NOT_FOUND);
+}
+
+#[test]
+fn thresholds_must_be_in_order() {
+    let with = |warning: i64, critical: i64| {
+        ActionParameters::new()
+            .with("warningPercent", ParameterValue::Integer(warning))
+            .with("criticalPercent", ParameterValue::Integer(critical))
+    };
+    let cpu = monitor(Metric::Cpu);
+    assert_eq!(cpu.validate(&with(70, 90)), Vec::new());
+    assert_eq!(cpu.validate(&with(80, 80)), Vec::new());
+    assert_eq!(cpu.validate(&with(90, 70)).len(), 1);
+    let disk = monitor(Metric::Disk);
+    assert_eq!(disk.validate(&with(20, 10)), Vec::new());
+    assert_eq!(disk.validate(&with(10, 20)).len(), 1);
+    // The defaults are in order.
+    for metric in [Metric::Cpu, Metric::Memory, Metric::Disk] {
+        let handler = monitor(metric);
+        let defaults = handler
+            .definition()
+            .normalize(&ActionParameters::new())
+            .unwrap();
+        assert_eq!(handler.validate(&defaults), Vec::new(), "{metric:?}");
+    }
+}
+
+#[test]
+fn keys_share_one_reading() {
+    let fixture = fixture();
+    let sampler = Arc::new(Sampler::new());
+    let first = sampler.cpu(&fixture.context()).unwrap();
+    let again = sampler.cpu(&fixture.context()).unwrap();
+    // Read once: the second call shares the first reading.
+    assert_eq!(first, again);
+    assert_eq!(first.1.len(), 1);
+    let cpu = Monitor::new(Metric::Cpu, sampler.clone());
+    let memory = Monitor::new(Metric::Memory, sampler);
+    let parameters = ActionParameters::new();
+    assert!(cpu.button_state(&parameters, &fixture.context()).is_ok());
+    assert!(memory.button_state(&parameters, &fixture.context()).is_ok());
+    assert_eq!(
+        cpu.state_policy(&parameters).unwrap().min_interval(),
+        crate::monitor::STATE_INTERVAL
+    );
+    assert_eq!(
+        monitor(Metric::Disk)
+            .state_policy(&parameters)
+            .unwrap()
+            .min_interval(),
+        crate::monitor::DISK_STATE_INTERVAL
+    );
+}
+
+#[test]
+fn a_first_reading_stops_when_cancelled() {
+    let fixture = fixture();
+    let token = CancellationToken::new();
+    token.cancel();
+    let progress = |_: Progress| {};
+    let control = ExecutionControl::new(&token, &progress);
+    let context = fixture.context().with_control(&control);
+    for metric in [Metric::Cpu, Metric::Network] {
+        let result = run(&monitor(metric), ActionParameters::new(), &context);
+        assert_eq!(code(&result), Some("cancelled"), "{metric:?}");
+    }
 }

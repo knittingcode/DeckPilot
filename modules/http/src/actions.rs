@@ -234,6 +234,7 @@ fn request_definition() -> ActionType {
         parameters,
         requires_project: false,
         deprecated: false,
+        controls: Some(deckpilot_core::ActionControls::keys()),
         node: NodeSpec {
             icon: Some("globe".into()),
             outputs: vec![
@@ -301,6 +302,7 @@ fn health_definition() -> ActionType {
         parameters,
         requires_project: false,
         deprecated: false,
+        controls: Some(deckpilot_core::ActionControls::keys()),
         node: NodeSpec {
             icon: Some("activity".into()),
             outputs: vec![

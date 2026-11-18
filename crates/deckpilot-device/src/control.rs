@@ -6,12 +6,27 @@ use thiserror::Error;
 use crate::TouchGesture;
 
 /// Family of a physical control.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ControlKind {
     Key,
     Encoder,
     TouchZone,
+}
+
+impl ControlKind {
+    /// Every kind, in a stable order.
+    pub const ALL: [Self; 3] = [Self::Key, Self::Encoder, Self::TouchZone];
+}
+
+impl fmt::Display for ControlKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Key => "key",
+            Self::Encoder => "encoder",
+            Self::TouchZone => "touch zone",
+        })
+    }
 }
 
 /// Identifies one control on a device, independent of any particular model.

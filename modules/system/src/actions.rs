@@ -7,10 +7,12 @@ use deckpilot_core::graph::{ActionEffect, MAX_TIMEOUT_MS, NodeSpec, OutputSpec, 
 use deckpilot_core::launch::{self, Launcher, OpenTarget};
 use deckpilot_core::process::{ProcessLimits, minimal_environment};
 use deckpilot_core::{
-    ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, Capability,
-    ExecutionContext, Os, ParameterKind, ParameterSpec, ParameterValue, ResourceKind,
+    ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, ButtonState,
+    Capability, ExecutionContext, Os, ParameterError, ParameterKind, ParameterSpec, ParameterValue,
+    RefreshPolicy, ResourceKind, StateError,
 };
 
+use crate::monitor::{self, Report, Sampler, Thresholds};
 use crate::support::{self, Failure, fail};
 use crate::{ALLOW_COMMANDS, codes};
 
@@ -20,6 +22,10 @@ pub const OPEN_FILE: &str = "system.open-file";
 pub const OPEN_DIRECTORY: &str = "system.open-directory";
 pub const RUN_COMMAND: &str = "system.run-command";
 pub const PROCESS_STATUS: &str = "system.process-status";
+pub const CPU: &str = "system.cpu";
+pub const MEMORY: &str = "system.memory";
+pub const NETWORK: &str = "system.network";
+pub const DISK: &str = "system.disk";
 
 /// Longest time limit of a command, in seconds.
 pub const MAX_COMMAND_SECONDS: i64 = 3600;
@@ -33,7 +39,11 @@ pub fn id(value: &str) -> ActionTypeId {
     ActionTypeId::new(value).expect("the action type id is valid")
 }
 
-pub fn handlers(launcher: &Arc<dyn Launcher>, allow_commands: bool) -> Vec<Box<dyn ActionHandler>> {
+pub fn handlers(
+    launcher: &Arc<dyn Launcher>,
+    sampler: &Arc<Sampler>,
+    allow_commands: bool,
+) -> Vec<Box<dyn ActionHandler>> {
     vec![
         Box::new(OpenApp::new(launcher.clone())),
         Box::new(OpenUrl::new(launcher.clone())),
@@ -41,6 +51,10 @@ pub fn handlers(launcher: &Arc<dyn Launcher>, allow_commands: bool) -> Vec<Box<d
         Box::new(OpenDirectory::new(launcher.clone())),
         Box::new(RunCommand::new(allow_commands)),
         Box::new(ProcessStatus::new()),
+        Box::new(Monitor::new(Metric::Cpu, sampler.clone())),
+        Box::new(Monitor::new(Metric::Memory, sampler.clone())),
+        Box::new(Monitor::new(Metric::Network, sampler.clone())),
+        Box::new(Monitor::new(Metric::Disk, sampler.clone())),
     ]
 }
 
@@ -59,6 +73,7 @@ fn definition(
         parameters,
         requires_project: false,
         deprecated: false,
+        controls: Some(deckpilot_core::ActionControls::keys()),
         node,
     }
 }
@@ -680,6 +695,334 @@ impl ActionHandler for ProcessStatus {
             .with_data("running", (count > 0).to_string())
             .with_data("count", count.to_string())
             .with_data("pids", shown.join(","))
+    }
+}
+
+/// What a monitor action reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Metric {
+    Cpu,
+    Memory,
+    Network,
+    Disk,
+}
+
+const WARNING: &str = "warningPercent";
+const CRITICAL: &str = "criticalPercent";
+
+fn percent_parameter(key: &str, label: &str, default: i64, description: &str) -> ParameterSpec {
+    let mut spec = described(
+        parameter(
+            key,
+            label,
+            ParameterKind::Integer {
+                min: Some(0),
+                max: Some(100),
+            },
+            true,
+        ),
+        description,
+    );
+    spec.default = Some(ParameterValue::Integer(default));
+    spec
+}
+
+/// The warning and critical thresholds: of use, or with `free` of free
+/// space.
+fn threshold_parameters(free: bool) -> Vec<ParameterSpec> {
+    if free {
+        vec![
+            percent_parameter(
+                WARNING,
+                "Warning at (% free)",
+                20,
+                "The key turns amber when this share of the volume or less is free.",
+            ),
+            percent_parameter(
+                CRITICAL,
+                "Critical at (% free)",
+                10,
+                "The key turns red when this share of the volume or less is free.",
+            ),
+        ]
+    } else {
+        vec![
+            percent_parameter(
+                WARNING,
+                "Warning at (%)",
+                70,
+                "The key turns amber at this use or more.",
+            ),
+            percent_parameter(
+                CRITICAL,
+                "Critical at (%)",
+                90,
+                "The key turns red at this use or more.",
+            ),
+        ]
+    }
+}
+
+fn thresholds(parameters: &ActionParameters, warning: u8, critical: u8) -> Thresholds {
+    let read = |key: &str, default: u8| {
+        parameters
+            .integer(key)
+            .and_then(|value| u8::try_from(value.clamp(0, 100)).ok())
+            .unwrap_or(default)
+    };
+    Thresholds {
+        warning: read(WARNING, warning),
+        critical: read(CRITICAL, critical),
+    }
+}
+
+/// A read-only monitor node: quick and safe to retry. CPU and network wait
+/// for a second reading, and that wait ends when the run is cancelled.
+fn monitors(icon: &str, outputs: Vec<OutputSpec>, cancellable: bool) -> NodeSpec {
+    NodeSpec {
+        icon: Some(icon.into()),
+        outputs,
+        timeout_ms: 10_000,
+        retry_safe: true,
+        idempotent: true,
+        cancellable,
+        effect: ActionEffect::ReadOnly,
+        ..NodeSpec::default()
+    }
+}
+
+fn level_output() -> OutputSpec {
+    OutputSpec::new("level", "Level (ok, warning, critical)", ValueKind::Text)
+}
+
+fn monitor_definition(metric: Metric) -> ActionType {
+    match metric {
+        Metric::Cpu => definition(
+            CPU,
+            "CPU usage",
+            "Reports the total CPU use of this computer in percent. A key shows it live, with \
+             the recent values as a chart.",
+            threshold_parameters(false),
+            monitors(
+                "cpu",
+                vec![
+                    OutputSpec::new("usagePercent", "CPU use (%)", ValueKind::Integer),
+                    level_output(),
+                ],
+                true,
+            ),
+        ),
+        Metric::Memory => definition(
+            MEMORY,
+            "Memory usage",
+            "Reports how much of this computer's memory is in use, in percent and GiB. A key \
+             shows it live.",
+            threshold_parameters(false),
+            monitors(
+                "memory-stick",
+                vec![
+                    OutputSpec::new("usedPercent", "Memory used (%)", ValueKind::Integer),
+                    OutputSpec::new("usedBytes", "Memory used (bytes)", ValueKind::Integer),
+                    OutputSpec::new("totalBytes", "Memory installed (bytes)", ValueKind::Integer),
+                    level_output(),
+                ],
+                false,
+            ),
+        ),
+        Metric::Network => definition(
+            NETWORK,
+            "Network throughput",
+            "Reports how many bytes per second this computer receives and sends. A key shows \
+             it live.",
+            vec![described(
+                parameter("interface", "Interface", text(64, false), false),
+                "A network interface, e.g. en0, eth0 or Wi-Fi; case is ignored. Empty: all \
+                 interfaces except loopback, added up.",
+            )],
+            monitors(
+                "network",
+                vec![
+                    OutputSpec::new(
+                        "receivedPerSecond",
+                        "Received (bytes/s)",
+                        ValueKind::Integer,
+                    ),
+                    OutputSpec::new("transmittedPerSecond", "Sent (bytes/s)", ValueKind::Integer),
+                    OutputSpec::new("interfaces", "Interfaces", ValueKind::Text),
+                ],
+                true,
+            ),
+        ),
+        Metric::Disk => {
+            let mut parameters = vec![described(
+                parameter(
+                    "location",
+                    "Folder",
+                    resource(Some(ResourceKind::Directory)),
+                    false,
+                ),
+                "A folder resource on the volume, e.g. the project's repository. Empty: the \
+                 volume of your home folder.",
+            )];
+            parameters.extend(threshold_parameters(true));
+            definition(
+                DISK,
+                "Disk space",
+                "Reports the free space of the volume a folder is on. A key shows it live.",
+                parameters,
+                monitors(
+                    "hard-drive",
+                    vec![
+                        OutputSpec::new("freePercent", "Free (%)", ValueKind::Integer),
+                        OutputSpec::new("freeBytes", "Free (bytes)", ValueKind::Integer),
+                        OutputSpec::new("totalBytes", "Size (bytes)", ValueKind::Integer),
+                        OutputSpec::new("mountPoint", "Volume", ValueKind::Path),
+                        level_output(),
+                    ],
+                    false,
+                ),
+            )
+        }
+    }
+}
+
+/// `system.cpu`, `system.memory`, `system.network` and `system.disk`: a
+/// value read through the module's shared [`Sampler`]. Pressing the key
+/// reports it as the message and outputs; the key shows it live.
+#[derive(Debug)]
+pub struct Monitor {
+    definition: ActionType,
+    metric: Metric,
+    sampler: Arc<Sampler>,
+}
+
+impl Monitor {
+    pub fn new(metric: Metric, sampler: Arc<Sampler>) -> Self {
+        Self {
+            definition: monitor_definition(metric),
+            metric,
+            sampler,
+        }
+    }
+
+    fn measure(
+        &self,
+        parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> Result<Report, Failure> {
+        let failed = |error: StateError| fail(&error.code, error.message);
+        match self.metric {
+            Metric::Cpu => {
+                let (usage, history) = self.sampler.cpu(context).map_err(failed)?;
+                Ok(monitor::cpu_report(
+                    usage,
+                    &history,
+                    thresholds(parameters, 70, 90),
+                ))
+            }
+            Metric::Memory => {
+                let memory = self.sampler.memory().map_err(failed)?;
+                monitor::memory_report(memory, thresholds(parameters, 70, 90)).map_err(failed)
+            }
+            Metric::Network => {
+                let rates = self.sampler.network(context).map_err(failed)?;
+                monitor::network_report(&rates, parameters.text("interface")).map_err(failed)
+            }
+            Metric::Disk => {
+                let folder: std::path::PathBuf = match parameters.resource("location") {
+                    Some(reference) => support::resolve(
+                        context,
+                        Some(reference),
+                        Some(ResourceKind::Directory),
+                        "folder",
+                    )?
+                    .into(),
+                    None => std::env::home_dir().ok_or_else(|| {
+                        fail(codes::NOT_FOUND, "this computer has no home folder")
+                    })?,
+                };
+                let canonical = std::fs::canonicalize(&folder).map_err(|_| {
+                    fail(
+                        codes::NOT_FOUND,
+                        format!("{} does not exist", folder.display()),
+                    )
+                })?;
+                let volumes = self.sampler.volumes();
+                let volume = monitor::volume_for(&canonical, &volumes).ok_or_else(|| {
+                    fail(
+                        codes::UNAVAILABLE,
+                        format!("no volume with a size was found for {}", folder.display()),
+                    )
+                })?;
+                monitor::disk_report(volume, thresholds(parameters, 20, 10)).map_err(failed)
+            }
+        }
+    }
+}
+
+impl ActionHandler for Monitor {
+    fn definition(&self) -> &ActionType {
+        &self.definition
+    }
+
+    /// The critical threshold is beyond the warning one.
+    fn validate(&self, parameters: &ActionParameters) -> Vec<ParameterError> {
+        let (Some(warning), Some(critical)) =
+            (parameters.integer(WARNING), parameters.integer(CRITICAL))
+        else {
+            return Vec::new();
+        };
+        let (ordered, reason) = if self.metric == Metric::Disk {
+            (
+                critical <= warning,
+                "must not be above the warning threshold",
+            )
+        } else {
+            (
+                critical >= warning,
+                "must not be below the warning threshold",
+            )
+        };
+        if ordered {
+            Vec::new()
+        } else {
+            vec![ParameterError::Invalid {
+                key: CRITICAL.into(),
+                reason: reason.into(),
+            }]
+        }
+    }
+
+    fn execute(
+        &self,
+        parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> ActionResult {
+        outcome(self.measure(parameters, context).map(|report| {
+            report.data.into_iter().fold(
+                ActionResult::success(report.message),
+                |result, (key, value)| result.with_data(key, value),
+            )
+        }))
+    }
+
+    /// Every key shows its value, read at most every
+    /// [`STATE_INTERVAL`](monitor::STATE_INTERVAL), a disk key's every
+    /// [`DISK_STATE_INTERVAL`](monitor::DISK_STATE_INTERVAL).
+    fn state_policy(&self, _parameters: &ActionParameters) -> Option<RefreshPolicy> {
+        Some(RefreshPolicy::every(if self.metric == Metric::Disk {
+            monitor::DISK_STATE_INTERVAL
+        } else {
+            monitor::STATE_INTERVAL
+        }))
+    }
+
+    fn button_state(
+        &self,
+        parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> Result<ButtonState, StateError> {
+        Ok(self.measure(parameters, context)?.state)
     }
 }
 

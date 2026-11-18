@@ -270,9 +270,16 @@ export const api = {
 
   createLayout: (profileId: string, modelId: string, name: string, generate: boolean) =>
     invoke<DeviceLayout>("create_layout", { profileId, modelId, name, generate }),
-  /** Resolves once the agent has read the layout, so its keys work right away. */
+  /**
+   * Resolves once the agent has read the layout, so its keys work right away.
+   * `incompatible`: stored bindings kept although their action cannot run
+   * from their control (new ones are refused).
+   */
   saveLayout: (profileId: string, layout: DeviceLayout) =>
-    invoke<Saved<DeviceLayout>>("save_layout", { profileId, layout }),
+    invoke<Saved<DeviceLayout & { incompatible?: string[] }>>("save_layout", {
+      profileId,
+      layout,
+    }),
   duplicateLayout: (profileId: string, layoutId: string, name: string) =>
     invoke<string>("duplicate_layout", { profileId, layoutId, name }),
   deleteLayout: (profileId: string, layoutId: string) =>
