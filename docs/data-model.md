@@ -34,7 +34,10 @@ references, so the copy is fully independent.
 ## Actions
 
 - **ActionType** – defined in code by an `ActionHandler`: id, name,
-  description, category, `parameters: ParameterSpec[]`, `requiresProject`.
+  description, category, `parameters: ParameterSpec[]`, `requiresProject`,
+  optional `controls` (per control kind, the inputs the action can be bound
+  to, e.g. `{ "key": ["press", "click"], "encoder": ["rotate-clockwise"] }`;
+  omitted: keys only, see [Device controls](device-controls.md)).
 - **ParameterSpec** – `key`, `label`, `kind`, `required`, optional `default`.
 - **ParameterKind** – `text` (multiline, maxLength), `integer` (min, max),
   `boolean`, `choice` (options), `resource` (optional `ResourceKind`),
@@ -139,7 +142,13 @@ bound on this machine, kind mismatch.
 Folders are pages opened with `openPage` and left with `back`. Layout
 validation checks that controls and triggers exist on the model, that each
 control/trigger pair is bound at most once per page, that targets exist and
-that icons a binding shows are in the profile (`MissingIcon`).
+that icons a binding shows are in the profile (`MissingIcon`). With the
+action types at hand (saving in the app, the agent), a binding whose action
+cannot run from its control or input is `IncompatibleAction`: refused when
+it is new, kept and reported when it was stored, never removed or
+converted, and not run by the agent (see
+[Device controls](device-controls.md)). Bindings are stored as before; the
+document version is unchanged.
 
 **Gestures** (see `docs/gestures-and-work-session.md`). `press` and
 `release` are raw edges and fire at once; every binding from before 0.7 is

@@ -119,6 +119,7 @@ fn action_type(id: ActionTypeId, name: &str, description: &str) -> ActionType {
         parameters: Vec::new(),
         requires_project: false,
         deprecated: false,
+        controls: Some(deckpilot_core::ActionControls::keys()),
         node: NodeSpec::default(),
     }
 }
@@ -288,6 +289,8 @@ impl Cycle {
         definition.parameters.push(direction_parameter());
         // Cycling twice moves two projects on: neither idempotent nor safe to retry.
         definition.node = node(project_outputs(), true, false);
+        // One project per event: a key, or a dial's detent or press.
+        definition.controls = Some(deckpilot_core::ActionControls::keys_and_steps());
         Self {
             definition,
             wrap_around,
@@ -411,6 +414,8 @@ impl Step {
         let definition = ActionType {
             node: node(project_outputs(), true, false),
             deprecated: true,
+            // As `projects.cycle`: one project per event.
+            controls: Some(deckpilot_core::ActionControls::keys_and_steps()),
             ..definition
         };
         Self {

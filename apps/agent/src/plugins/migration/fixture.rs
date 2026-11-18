@@ -115,6 +115,8 @@ pub fn whoami_type() -> ActionType {
         requires_project: false,
         node,
         deprecated: false,
+        // As the built-in it stands in for: keys only.
+        controls: Some(deckpilot_core::ActionControls::keys()),
     }
 }
 
