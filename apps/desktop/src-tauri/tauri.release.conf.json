@@ -2,6 +2,13 @@
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
     "externalBin": ["binaries/deckpilot-agent"],
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "linux": {
+      "appimage": {
+        "files": {
+          "/usr/lib/libayatana-appindicator3.so.1": "/usr/lib/x86_64-linux-gnu/libayatana-appindicator3.so.1"
+        }
+      }
+    }
   }
 }

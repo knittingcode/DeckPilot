@@ -208,12 +208,14 @@ jobs:
   # The packages built above, installed on clean systems with only the
   # dependencies they declare, and their agent started (under Xvfb, with an
   # isolated profile): the .deb with apt on a fresh Ubuntu 24.04 runner,
-  # the .rpm with dnf in a Fedora container. The agent's tray loads
-  # libayatana-appindicator3 at run time; 0.7.0's packages did not declare
-  # it, and their agent could not start where it was not installed
-  # (tools/ci/check-linux-install.sh).
+  # the .rpm with dnf in a Fedora container, the AppImage's agent with and
+  # without the system's own tray library, and the agent on a system
+  # without any (it must keep running without a tray icon). The agent's
+  # tray loads libayatana-appindicator3 at run time; 0.7.0's packages did
+  # not declare it, its AppImage did not bundle it, and the agent could not
+  # start without it (tools/ci/check-linux-install.sh).
   install-linux:
-    name: Package install (Linux .deb on Ubuntu 24.04, .rpm on Fedora)
+    name: Package install (Linux .deb and AppImage on Ubuntu 24.04, .rpm on Fedora)
     needs: package-linux
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -225,14 +227,43 @@ jobs:
         with:
           name: linux-packages
           path: ${{ runner.temp }}/packages
-      - name: Install the .deb with its declared dependencies and start the agent
+      # Xvfb and D-Bus for starting the agent, FUSE for the AppImage, and
+      # the WebKitGTK runtime: an AppImage expects the system's own base
+      # graphics libraries (libEGL and others linuxdeploy never bundles),
+      # which a desktop has and a bare runner does not. None of them pulls
+      # in the tray library (checked before each start).
+      - name: Test tools and a desktop's base libraries
         run: |
           # No man page index rebuilds (minutes on hosted runners).
           sudo rm -f /var/lib/man-db/auto-update
           sudo apt-get update -q
+          timeout 900 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+            -o Acquire::Retries=3 xvfb xauth dbus libfuse2t64 libwebkit2gtk-4.1-0
+      # Without the tray library on the system: the agent keeps running
+      # without a tray icon (the .deb's agent, not installed), and the
+      # AppImage's agent uses the library it bundles.
+      - name: The agent without a tray library
+        run: |
+          deb=$(find "$RUNNER_TEMP/packages" -name '*.deb' | head -n 1)
+          test -n "$deb"
+          dpkg-deb -x "$deb" "$RUNNER_TEMP/deb-files"
+          tools/ci/check-linux-install.sh without-tray "$RUNNER_TEMP/deb-files/usr/bin/deckpilot-agent"
+      - name: The AppImage's agent on a system without the tray library
+        run: |
+          appimage=$(find "$RUNNER_TEMP/packages" -name '*.AppImage' | head -n 1)
+          test -n "$appimage"
+          tools/ci/check-linux-install.sh appimage "$appimage"
+      - name: Install the .deb with its declared dependencies and start the agent
+        run: |
           deb=$(find "$RUNNER_TEMP/packages" -name '*.deb' | head -n 1)
           test -n "$deb"
           timeout 1200 tools/ci/check-linux-install.sh deb "$deb"
+      # Now with the system's own libayatana-appindicator3 (installed with
+      # the .deb), built against Ubuntu 24.04's newer GLib.
+      - name: The AppImage's agent on a system with its own tray library
+        run: |
+          appimage=$(find "$RUNNER_TEMP/packages" -name '*.AppImage' | head -n 1)
+          tools/ci/check-linux-install.sh appimage "$appimage"
       - name: Install the .rpm in Fedora and start the agent
         run: |
           rpm=$(find "$RUNNER_TEMP/packages" -name '*.rpm' | head -n 1)

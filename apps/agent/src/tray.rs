@@ -73,10 +73,7 @@ fn run_loop(
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
-            Event::NewEvents(StartCause::Init) => match build_tray() {
-                Ok(icon) => tray = Some(icon),
-                Err(error) => error!(%error, "cannot create the tray icon"),
-            },
+            Event::NewEvents(StartCause::Init) => tray = create_tray(),
             Event::UserEvent(UserEvent::Ready(agent)) => handle = Some(agent),
             Event::UserEvent(UserEvent::State(status)) => {
                 if let Some(tray) = &tray {
@@ -164,6 +161,32 @@ fn command_for(id: &str) -> Option<TrayCommand> {
             .parse()
             .ok()
             .map(TrayCommand::SelectProfile),
+    }
+}
+
+/// The tray icon, or none: the agent keeps running without one, and the
+/// configuration app (or its desktop entry) still opens. On Linux,
+/// tray-icon loads libayatana-appindicator3 (or libappindicator3) when the
+/// first icon is made and panics if it cannot be loaded: not installed
+/// (DeckPilot 0.7.0's packages did not declare it), or not loadable (the
+/// system's copy next to an AppImage's older `GLib`). A missing tray must
+/// never stop the agent.
+fn create_tray() -> Option<TrayIcon> {
+    match std::panic::catch_unwind(build_tray) {
+        Ok(Ok(icon)) => Some(icon),
+        Ok(Err(error)) => {
+            error!(%error, "cannot create the tray icon; running without a tray icon");
+            None
+        }
+        Err(panic) => {
+            let reason = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                .unwrap_or_default();
+            error!(%reason, "the tray icon is unavailable; running without a tray icon");
+            None
+        }
     }
 }
 

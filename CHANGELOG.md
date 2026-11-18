@@ -82,12 +82,21 @@ released either. 0.6.0 is the first version intended for publication.
 - macOS: the background agent no longer shows a DeckPilot icon in the Dock
   for a moment when it starts, or for the whole life of a second agent
   process that stops because one is already running.
-
 - A plugin update whose module the plugin host refuses (for example one
   that does not implement the actions its manifest declares) is no longer
   installed: the update fails and the installed version keeps running.
   Before, the update was applied and every action of the plugin failed
   until it was rolled back by hand.
+- Linux: the AppImage's background agent could not start on newer
+  systems such as Ubuntu 24.04: the AppImage did not include the
+  AppIndicator library, and the system's copy cannot be loaded next to the
+  older GLib the AppImage carries ("undefined symbol:
+  g_once_init_leave_pointer"). The AppImage now includes the library and
+  the libraries it needs.
+- The background agent keeps running without a tray icon when the tray
+  cannot be created, for example when the AppIndicator library is
+  missing, instead of stopping. The app can still be opened from the
+  application menu.
 
 ### Security
 
