@@ -95,13 +95,19 @@ case "${1-}" in
     ;;
   appimage)
     file="${2:?usage: check-linux-install.sh appimage <file.AppImage>}"
+    file="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
     chmod +x "$file"
+    # What the AppImage carries for the tray, and its GLib.
+    extracted=$(mktemp -d)
+    (cd "$extracted" && "$file" --appimage-extract > /dev/null)
+    echo "the AppImage bundles: $(cd "$extracted/squashfs-root" && find usr/lib -maxdepth 1 \( -name 'libayatana-*' -o -name 'libdbusmenu-*' -o -name 'libglib-2.0.so*' \) | sort | tr '\n' ' ')"
+    rm -rf "$extracted"
     if ldconfig -p | grep -q 'libayatana-appindicator3\.so\.1 '; then
       echo "the system has its own libayatana-appindicator3: $(ldconfig -p | grep 'libayatana-appindicator3\.so\.1 ' | head -n 1)"
     else
       echo "the system has no libayatana-appindicator3"
     fi
-    agent "$(cd "$(dirname "$file")" && pwd)/$(basename "$file")" --agent
+    agent "$file" --agent
     ;;
   without-tray)
     [ -n "${2-}" ] || fail "usage: check-linux-install.sh without-tray <agent>"
