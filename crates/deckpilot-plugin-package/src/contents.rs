@@ -120,7 +120,8 @@ pub(crate) fn parse_manifest(files: &Files, first_party: bool) -> Result<Manifes
 
 /// The integrity record of `files` as `package`, checked against the
 /// manifest: only files the manifest names (plus the required ones and
-/// README/CHANGELOG), every named file present, size range.
+/// README/CHANGELOG), every named file present, size range; and every
+/// navigation icon one the app may show ([`check_navigation_icons`]).
 pub(crate) fn integrity(
     files: &Files,
     manifest: &Manifest,
@@ -138,5 +139,33 @@ pub(crate) fn integrity(
     integrity
         .validate(manifest)
         .map_err(PackageError::Contents)?;
+    check_navigation_icons(files, manifest)?;
     Ok(integrity)
+}
+
+/// Every `contributes.navigation` icon file: its format matches its
+/// extension, PNG and WebP within 256 KiB and 512×512 pixels, SVG within
+/// 64 KiB and free of scripts, event handlers, external or `data:` links
+/// and the rest [`deckpilot_plugin_manifest::sanitize_svg`] refuses. A
+/// package with such a file is refused when it is built and when it is
+/// read for installation.
+pub(crate) fn check_navigation_icons(
+    files: &Files,
+    manifest: &Manifest,
+) -> Result<(), PackageError> {
+    for path in manifest.navigation_icon_files() {
+        let bytes = files
+            .get(path)
+            .ok_or_else(|| PackageError::NavigationIcon {
+                path: path.to_owned(),
+                error: deckpilot_plugin_manifest::IconError::Malformed("package"),
+            })?;
+        deckpilot_plugin_manifest::check_icon(path, bytes).map_err(|error| {
+            PackageError::NavigationIcon {
+                path: path.to_owned(),
+                error,
+            }
+        })?;
+    }
+    Ok(())
 }

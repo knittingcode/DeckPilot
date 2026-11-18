@@ -111,6 +111,9 @@ hkdf = "0.12"
 hidapi = "2.6"
 image = { version = "0.25", default-features = false }
 minisign-verify = "0.3"
+# Plugin navigation icons (SVG allow-list sanitizer); already in the tree
+# through plist.
+quick-xml = { version = "0.42", default-features = false }
 semver = { version = "1", features = ["serde"] }
 interprocess = { version = "2.4", features = ["tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "signal"] }

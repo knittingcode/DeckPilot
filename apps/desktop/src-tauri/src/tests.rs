@@ -3304,6 +3304,7 @@ fn plugin_refusal(h: &Harness, cmd: &str, args: Value) -> (String, String) {
 fn plugin_commands() -> Vec<(&'static str, Value)> {
     vec![
         ("list_plugins", json!({})),
+        ("list_plugin_navigation", json!({})),
         ("get_plugin", json!({ "plugin": "example.hello" })),
         ("list_available_plugins", json!({ "refresh": true })),
         (
@@ -3393,6 +3394,14 @@ fn plugin_commands_refuse_unless_the_agent_answers_plugin_requests() {
     let h = Harness::new();
     let commands = plugin_commands();
 
+    // A navigation icon is never refused: no icon, and the app shows its
+    // fallback.
+    let icon = json!({ "plugin": "example.hello", "entry": "dashboard", "theme": "dark" });
+    assert_eq!(
+        h.ok("get_plugin_navigation_icon", icon.clone()),
+        Value::Null
+    );
+
     // No agent: typed, and nothing is sent anywhere.
     let (reason, _) = plugin_refusal(&h, "get_plugin_runtime", json!({}));
     assert_eq!(reason, "agentNotRunning");
@@ -3419,6 +3428,7 @@ fn plugin_commands_refuse_unless_the_agent_answers_plugin_requests() {
         assert_eq!(reason, "pluginsUnavailable", "{cmd}: {message}");
         assert!(!message.is_empty(), "{cmd}");
     }
+    assert_eq!(h.ok("get_plugin_navigation_icon", icon), Value::Null);
     // Watching events against such an agent subscribes to nothing and
     // fails nothing.
     h.ok("watch_plugin_events", json!({}));

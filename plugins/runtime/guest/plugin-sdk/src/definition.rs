@@ -14,8 +14,9 @@ use deckpilot_plugin_abi::{ActionOutcome, ParamValue, Params};
 
 use crate::args::{Args, normalize};
 use crate::context::{Context, Transport};
+use crate::controls::Controls;
 use crate::output::{ActionResult, IntoValue, PluginError, codes};
-use crate::{API_LEVEL, ApiLevel, LATEST_API_LEVEL, SDK_NAME, SDK_VERSION};
+use crate::{API_LEVEL, ApiLevel, CONTROLS_API_LEVEL, LATEST_API_LEVEL, SDK_NAME, SDK_VERSION};
 
 /// An action handler. Plain functions and non-capturing closures coerce to
 /// it.
@@ -163,6 +164,9 @@ impl Plugin {
                 return Err(DefinitionError::DuplicateAction(a.id.clone()));
             }
             a.validate()?;
+            if a.controls.is_some() && self.api_level() < CONTROLS_API_LEVEL {
+                return Err(DefinitionError::ControlsNeedApi(a.id.clone()));
+            }
         }
         // The wire form must pass the host's check too.
         self.descriptor()
@@ -266,6 +270,7 @@ pub struct Action {
     params: Vec<Param>,
     handler: Handler,
     state: Option<StateHandler>,
+    controls: Option<Controls>,
 }
 
 impl fmt::Debug for Action {
@@ -285,6 +290,7 @@ impl Action {
             params: Vec::new(),
             handler,
             state: None,
+            controls: None,
         }
     }
 
@@ -336,6 +342,47 @@ impl Action {
         self
     }
 
+    /// The controls the action can be bound to (plugin API 1.3): per
+    /// control kind, the inputs it reacts to. Without a declaration the
+    /// agent offers the action on keys only (press, release, click,
+    /// double click, long press), never on encoders or touch zones; the
+    /// manifest's `device.requires` grants nothing on its own.
+    ///
+    /// The manifest entry needs the same `controls`
+    /// ([`Controls::to_json`];
+    /// [`manifest_mismatches`](crate::testing::manifest_mismatches)
+    /// compares them) and `"engines": { "pluginApi": "^1.3" }`, so the
+    /// plugin calls [`Plugin::requires_api`] with 1.3
+    /// ([`Plugin::validate`] refuses controls below it). Agents below
+    /// plugin API 1.3 refuse such a manifest.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::prelude::*;
+    /// use deckpilot_plugin_sdk::ApiLevel;
+    ///
+    /// fn next(_: &mut Context<'_>, _: &Args<'_>) -> ActionResult {
+    ///     Ok(Output::ok())
+    /// }
+    /// let plugin = Plugin::new("acme.pager", "1.0.0")
+    ///     .requires_api(ApiLevel { major: 1, minor: 3 })
+    ///     .action(Action::new("next", next).controls(
+    ///         Controls::new()
+    ///             .key([Input::Press, Input::Click])
+    ///             .encoder([Input::RotateClockwise]),
+    ///     ));
+    /// assert_eq!(plugin.validate(), Ok(()));
+    /// ```
+    #[must_use]
+    pub fn controls(mut self, controls: Controls) -> Self {
+        self.controls = Some(controls);
+        self
+    }
+
+    /// What [`Action::controls`] declared; `None`: keys only.
+    pub fn declared_controls(&self) -> Option<&Controls> {
+        self.controls.as_ref()
+    }
+
     /// Whether the action has a state handler.
     pub fn has_state(&self) -> bool {
         self.state.is_some()
@@ -366,6 +413,11 @@ impl Action {
     }
 
     fn validate(&self) -> Result<(), DefinitionError> {
+        if let Some(controls) = &self.controls {
+            controls
+                .check()
+                .map_err(|why| DefinitionError::Controls(self.id.clone(), why))?;
+        }
         if self.params.len() > MAX_PARAMS {
             return Err(DefinitionError::TooManyParams(self.id.clone()));
         }
@@ -597,6 +649,11 @@ pub enum DefinitionError {
     Kind(String, &'static str),
     Default(String, &'static str),
     Descriptor(String),
+    /// An action's controls break a rule: the action id and what is wrong.
+    Controls(String, String),
+    /// An action declares controls but the plugin needs a plugin API below
+    /// 1.3: the action id.
+    ControlsNeedApi(String),
 }
 
 impl fmt::Display for DefinitionError {
@@ -615,6 +672,13 @@ impl fmt::Display for DefinitionError {
             Self::Misuse(at, why) | Self::Kind(at, why) => write!(f, "parameter `{at}`: {why}"),
             Self::Default(at, why) => write!(f, "parameter `{at}`: default for {why}"),
             Self::Descriptor(why) => write!(f, "descriptor: {why}"),
+            Self::Controls(id, why) => write!(f, "action `{id}`: controls: {why}"),
+            Self::ControlsNeedApi(id) => write!(
+                f,
+                "action `{id}` declares controls, which need plugin API {CONTROLS_API_LEVEL}: \
+                 call `requires_api(ApiLevel {{ major: 1, minor: 3 }})` and declare \
+                 `\"pluginApi\": \"^1.3\"` in the manifest"
+            ),
         }
     }
 }
@@ -810,5 +874,47 @@ mod tests {
             !json.contains("acme.xy"),
             "no plugin id on the wire: {json}"
         );
+    }
+
+    #[test]
+    fn controls_are_checked_and_need_api_1_3() {
+        use crate::{Controls, Input};
+        let keys = || Controls::new().key([Input::Press, Input::Click]);
+        let declared = Action::new("next", noop).controls(keys());
+        assert_eq!(declared.declared_controls(), Some(&keys()));
+        assert_eq!(Action::new("plain", noop).declared_controls(), None);
+
+        let at = |level: ApiLevel, action: Action| {
+            Plugin::new("acme.pager", "1.0.0")
+                .requires_api(level)
+                .action(action)
+                .validate()
+        };
+        let v1_3 = ApiLevel { major: 1, minor: 3 };
+        assert_eq!(at(v1_3, declared.clone()), Ok(()));
+        let below = at(ApiLevel { major: 1, minor: 2 }, declared.clone()).unwrap_err();
+        assert_eq!(below, DefinitionError::ControlsNeedApi("next".into()));
+        assert!(below.to_string().contains("^1.3"), "{below}");
+        // Without controls any level is fine.
+        assert_eq!(at(API_LEVEL, Action::new("plain", noop)), Ok(()));
+
+        let bad = Action::new("dial", noop).controls(Controls::new().key([Input::RotateClockwise]));
+        assert_eq!(
+            at(v1_3, bad),
+            Err(DefinitionError::Controls(
+                "dial".into(),
+                "key: a key has no rotate-clockwise".into()
+            ))
+        );
+        let empty = Action::new("none", noop).controls(Controls::new());
+        assert!(matches!(
+            at(v1_3, empty),
+            Err(DefinitionError::Controls(..))
+        ));
+        // The descriptor does not carry controls.
+        let plugin = Plugin::new("acme.pager", "1.0.0")
+            .requires_api(v1_3)
+            .action(declared);
+        assert_eq!(plugin.descriptor().api_level, "1.3");
     }
 }

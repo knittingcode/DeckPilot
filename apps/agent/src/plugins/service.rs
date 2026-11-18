@@ -67,9 +67,11 @@ const DECIDED_BY: &str = "user";
 /// action's declaration (refused by the agent, before the host).
 const INVALID_PARAMETERS: &str = "invalid-parameters";
 /// The plugin API level this agent provides: 1.1 adds `time.now` and
-/// `random.bytes`, 1.2 key state (`docs/marketplace/plugin-key-state.md`).
-/// A plugin whose manifest asks for a higher minor is `incompatible`.
-const PLUGIN_API: ApiLevel = ApiLevel::new(1, 2);
+/// `random.bytes`, 1.2 key state (`docs/marketplace/plugin-key-state.md`),
+/// 1.3 the manifest's action `controls`, `navigation` and `views`
+/// (`docs/device-controls.md` §4). A plugin whose manifest asks for a
+/// higher minor is `incompatible`.
+const PLUGIN_API: ApiLevel = ApiLevel::new(1, 3);
 /// Longest any invocation may take, whatever the manifest says.
 const MAX_INVOCATION: Duration = Duration::from_secs(600);
 /// Where the registry's verified state is kept (outside `plugins/`,
@@ -787,14 +789,21 @@ impl PluginService {
     }
 
     /// `getPluginIcon`: the chunk of the icon at `offset`.
-    fn icon_chunk(&self, id: &PluginId, offset: u64) -> Result<Response, IpcError> {
+    fn icon_chunk(
+        &self,
+        id: &PluginId,
+        offset: u64,
+        navigation: Option<&ipc::NavigationIconRef>,
+    ) -> Result<Response, IpcError> {
         let record = self.record(id)?;
         let icon = record.active().and_then(|v| {
-            convert::icon_chunk(
-                &self.manager.layout().resolve(&v.install_dir),
-                &record,
-                offset,
-            )
+            let dir = self.manager.layout().resolve(&v.install_dir);
+            match navigation {
+                None => convert::icon_chunk(&dir, &record, offset),
+                Some(navigation) => {
+                    convert::navigation_icon_chunk(&dir, &record, navigation, offset)
+                }
+            }
         });
         Ok(Response::PluginIcon {
             plugin: id.to_string(),
@@ -1238,9 +1247,11 @@ impl PluginService {
             Request::GetPluginActions { plugin, from } => {
                 self.actions_page(&plugin_id(&plugin)?, from)
             }
-            Request::GetPluginIcon { plugin, offset } => {
-                self.icon_chunk(&plugin_id(&plugin)?, offset)
-            }
+            Request::GetPluginIcon {
+                plugin,
+                offset,
+                navigation,
+            } => self.icon_chunk(&plugin_id(&plugin)?, offset, navigation.as_ref()),
             Request::ListAvailablePlugins { refresh } => self.available(refresh),
             Request::InstallPlugin { source, consent } => self.install(&source, &consent),
             Request::EnablePlugin { plugin, consent } => {

@@ -4,12 +4,13 @@
 //! where the schema has a default) so a manifest serializes back to the same
 //! JSON value it was read from; accessors return the effective default.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+pub use deckpilot_device::{ControlKind, InputCapability};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-use crate::compat::{ApiRequirement, Platform, VersionRange};
+use crate::compat::{ApiLevel, ApiRequirement, Platform, VersionRange};
 use crate::identity::PluginId;
 use crate::unique_map;
 
@@ -500,9 +501,28 @@ pub struct Contributes {
         skip_serializing_if = "Option::is_none"
     )]
     pub error_codes: Option<BTreeMap<String, String>>,
+    /// Toolbar entries (plugin API 1.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub navigation: Option<Vec<NavigationEntry>>,
+    /// Host-rendered views the navigation entries open (plugin API 1.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub views: Option<Vec<View>>,
 }
 
 impl Contributes {
+    pub fn navigation(&self) -> &[NavigationEntry] {
+        self.navigation.as_deref().unwrap_or_default()
+    }
+
+    pub fn views(&self) -> &[View] {
+        self.views.as_deref().unwrap_or_default()
+    }
+
+    /// The view a navigation entry opens.
+    pub fn view_of(&self, entry: &NavigationEntry) -> Option<&View> {
+        self.views().iter().find(|v| v.id == entry.view)
+    }
+
     pub fn actions(&self) -> &[Action] {
         self.actions.as_deref().unwrap_or_default()
     }
@@ -820,6 +840,135 @@ pub struct Action {
     pub state: Option<StateRefresh>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<ActionDevice>,
+    /// The controls and inputs the action can be bound to (plugin API
+    /// 1.3). Absent: keys only, with press, release, click, double click
+    /// and long press (`ActionControls::legacy` in `deckpilot-core`);
+    /// `device.requires` never adds a control kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controls: Option<ActionControls>,
+}
+
+/// Most inputs an action may declare for one control kind (the core's
+/// `MAX_INPUTS_PER_KIND`).
+pub const MAX_INPUTS_PER_KIND: usize = 8;
+
+/// `contributes.actions[].controls`: per control kind, the inputs the
+/// action can be bound to, e.g. `{"key": ["press", "click"], "encoder":
+/// ["rotate-clockwise"]}`. A kind that is absent is not supported. The
+/// same shape as `deckpilot_core::ActionControls`; the lists keep their
+/// order (and any repeated input) so validation can report them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ActionControls {
+    #[serde(deserialize_with = "unique_map::deserialize_keyed")]
+    pub bindings: BTreeMap<ControlKind, Vec<InputCapability>>,
+}
+
+impl ActionControls {
+    /// The declaration as sets, the form the agent registers.
+    pub fn as_sets(&self) -> BTreeMap<ControlKind, BTreeSet<InputCapability>> {
+        self.bindings
+            .iter()
+            .map(|(kind, inputs)| (*kind, inputs.iter().copied().collect()))
+            .collect()
+    }
+}
+
+/// The plugin API level that introduced `controls`, `navigation` and
+/// `views`.
+pub const NAVIGATION_API: ApiLevel = ApiLevel::new(1, 3);
+
+/// Most `contributes.navigation` entries.
+pub const MAX_NAVIGATION_ENTRIES: usize = 4;
+/// Most `contributes.views`.
+pub const MAX_VIEWS: usize = 8;
+/// Longest navigation label, in characters.
+pub const MAX_NAVIGATION_LABEL: usize = 24;
+/// Longest navigation entry and view id.
+pub const MAX_NAVIGATION_ID: usize = 32;
+
+/// One entry the plugin adds to the app's toolbar (plugin API 1.3). It
+/// opens a host-rendered view; the plugin ships no UI code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NavigationEntry {
+    pub id: String,
+    pub label: String,
+    pub icon: NavigationIcon,
+    /// The id of one of `contributes.views`.
+    pub view: String,
+}
+
+/// A navigation icon: one file for both themes, or one per theme (at least
+/// one of them). Files are package-relative PNG, WebP or SVG under
+/// `assets/`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum NavigationIcon {
+    Single(String),
+    Themed(ThemedIcon),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ThemedIcon {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub light: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dark: Option<String>,
+}
+
+/// The theme an icon is shown in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IconTheme {
+    Light,
+    Dark,
+}
+
+impl NavigationIcon {
+    /// The file for `theme`: the theme's own, else the other theme's.
+    pub fn file(&self, theme: IconTheme) -> Option<&str> {
+        match self {
+            Self::Single(path) => Some(path),
+            Self::Themed(ThemedIcon { light, dark }) => match theme {
+                IconTheme::Light => light.as_deref().or(dark.as_deref()),
+                IconTheme::Dark => dark.as_deref().or(light.as_deref()),
+            },
+        }
+    }
+
+    /// Every file the icon names, with its field (`""` for a single file,
+    /// `light`, `dark`).
+    pub fn files(&self) -> Vec<(&'static str, &str)> {
+        match self {
+            Self::Single(path) => vec![("", path.as_str())],
+            Self::Themed(ThemedIcon { light, dark }) => [("light", light), ("dark", dark)]
+                .into_iter()
+                .filter_map(|(field, path)| Some((field, path.as_deref()?)))
+                .collect(),
+        }
+    }
+}
+
+/// What a view shows. Host-rendered only: no HTML, URLs or plugin code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ViewKind {
+    /// The plugin's variables, live.
+    Variables,
+    /// The Action Library filtered to the plugin's actions.
+    Actions,
+    /// The plugin's configuration page.
+    Settings,
+}
+
+/// A view a navigation entry opens (plugin API 1.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct View {
+    pub id: String,
+    pub kind: ViewKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

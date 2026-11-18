@@ -141,7 +141,7 @@ fn logging_is_best_effort_and_bounded() {
 fn versions_are_exposed() {
     assert_eq!(deckpilot_plugin_sdk::ABI_VERSION, 1);
     assert_eq!(deckpilot_plugin_sdk::API_LEVEL.to_string(), "1.0");
-    assert_eq!(deckpilot_plugin_sdk::LATEST_API_LEVEL.to_string(), "1.2");
+    assert_eq!(deckpilot_plugin_sdk::LATEST_API_LEVEL.to_string(), "1.3");
     assert_eq!(deckpilot_plugin_sdk::SDK_VERSION, env!("CARGO_PKG_VERSION"));
 }
 
@@ -178,6 +178,58 @@ fn manifest_mismatches_name_every_difference() {
     }
 }
 
+/// An action's controls are compared with the manifest entry's as sets
+/// per kind; absent on both sides is equal.
+#[test]
+fn manifest_mismatches_compare_controls() {
+    use deckpilot_plugin_sdk::testing::manifest_mismatches;
+    use deckpilot_plugin_sdk::{ApiLevel, Controls, Input};
+    let plugin = |controls: Option<Controls>| {
+        let action = Action::new("next", ok);
+        Plugin::new("acme.pager", "1.0.0")
+            .requires_api(ApiLevel { major: 1, minor: 3 })
+            .action(match controls {
+                Some(c) => action.controls(c),
+                None => action,
+            })
+    };
+    let manifest = |controls: Option<serde_json::Value>| {
+        let mut action = json!({"id": "next", "parameters": []});
+        if let Some(c) = controls {
+            action["controls"] = c;
+        }
+        json!({"id": "acme.pager", "version": "1.0.0", "engines": {"pluginApi": "^1.3"},
+               "contributes": {"actions": [action]}})
+    };
+    let dial = Controls::new()
+        .key([Input::Press, Input::Click])
+        .encoder([Input::RotateClockwise, Input::RotateCounterClockwise]);
+    assert!(manifest_mismatches(&plugin(None), &manifest(None)).is_empty());
+    // Another order in the manifest is the same declaration.
+    let reordered = json!({"encoder": ["rotate-counter-clockwise", "rotate-clockwise"],
+                           "key": ["click", "press"]});
+    assert!(
+        manifest_mismatches(&plugin(Some(dial.clone())), &manifest(Some(reordered))).is_empty()
+    );
+
+    let missing = manifest_mismatches(&plugin(Some(dial.clone())), &manifest(None)).join("\n");
+    assert!(
+        missing.contains("next: controls is null in the manifest"),
+        "{missing}"
+    );
+    let extra =
+        manifest_mismatches(&plugin(None), &manifest(Some(json!({"key": ["press"]})))).join("\n");
+    assert!(
+        extra.contains("next: controls is {\"key\":[\"press\"]} in the manifest, null"),
+        "{extra}"
+    );
+    let other = manifest_mismatches(
+        &plugin(Some(dial)),
+        &manifest(Some(json!({"key": ["press"]}))),
+    );
+    assert_eq!(other.len(), 1, "{other:?}");
+}
+
 /// A plugin needs API 1.0 unless it says more; what it says is what
 /// `dp_describe` reports and what its manifest must declare.
 #[test]
@@ -208,7 +260,7 @@ fn a_plugin_declares_the_api_level_it_needs() {
     let level = |major, minor| plugin().requires_api(ApiLevel { major, minor }).api_level();
     assert_eq!(level(0, 9), API_LEVEL);
     assert_eq!(level(1, 0), API_LEVEL);
-    assert_eq!(level(1, 2), LATEST_API_LEVEL);
+    assert_eq!(level(1, 3), LATEST_API_LEVEL);
     assert_eq!(level(1, 99), LATEST_API_LEVEL);
     assert_eq!(level(2, 0), LATEST_API_LEVEL);
 }

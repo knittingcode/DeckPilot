@@ -492,10 +492,15 @@ pub enum Request {
     },
     /// One chunk of an installed plugin's icon, from byte `offset` on.
     /// Since protocol 10, feature [`plugins::feature::PAGED_ANSWERS`].
+    /// With `navigation` (feature [`plugins::feature::NAVIGATION`]), the
+    /// icon of one of its navigation entries instead; omitted when absent,
+    /// so the request is the original one.
     GetPluginIcon {
         plugin: String,
         #[serde(default)]
         offset: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        navigation: Option<plugins::NavigationIconRef>,
     },
     /// The plugins the verified registry offers; `refresh` re-reads the
     /// registry first. Since protocol 10.
@@ -2272,6 +2277,15 @@ mod tests {
             Request::GetPluginIcon {
                 plugin: "acme.x".into(),
                 offset: crate::plugins::MAX_ICON_BYTES as u64 + 1,
+                navigation: None,
+            },
+            Request::GetPluginIcon {
+                plugin: "acme.x".into(),
+                offset: 0,
+                navigation: Some(crate::plugins::NavigationIconRef {
+                    entry: "two words".into(),
+                    theme: crate::plugins::NavigationIconTheme::Dark,
+                }),
             },
             Request::EnablePlugin {
                 plugin: "acme.x".into(),

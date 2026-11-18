@@ -207,7 +207,46 @@ export interface PluginSummary {
   actions: PluginActionInfo[]
   /** Host failures the agent saw since it started; absent when none. */
   health?: PluginHealth
+  /**
+   * Toolbar entries of the active version (`contributes.navigation`,
+   * plugin API 1.3), whatever the plugin's state; absent when none or
+   * from older agents.
+   */
+  navigation?: PluginNavigationEntry[]
 }
+
+/**
+ * What a plugin view shows; rendered by the app, never by the plugin.
+ * Ignore kinds this app does not know (a later agent may add some).
+ */
+export type PluginViewKind = "variables" | "actions" | "settings"
+
+/** A host-rendered view (`contributes.views`). */
+export interface PluginView {
+  id: string
+  kind: PluginViewKind | (string & {})
+}
+
+/** One toolbar entry of a plugin (`PluginNavigationEntry`). */
+export interface PluginNavigationEntry {
+  /** Unique within the plugin. */
+  id: string
+  /** At most 24 characters. */
+  label: string
+  view: PluginView
+}
+
+/**
+ * `list_plugin_navigation`: an entry of an installed, enabled plugin, in
+ * the agent's plugin order and the manifest's entry order.
+ */
+export interface PluginNavigationItem extends PluginNavigationEntry {
+  plugin: string
+  pluginName: string
+}
+
+/** The theme a navigation icon is shown in. */
+export type NavigationIconTheme = "light" | "dark"
 
 /** `PluginHealth`: what the agent saw of the plugin's host since it started. */
 export interface PluginHealth {
