@@ -63,6 +63,37 @@ the test). The report is `<artifacts>/<driver>-steps.txt`.
 | 21 | Verify cleanup: storage, credentials, settings gone, `plugin_known` kept | `plugins.db` read with the derived key, app IPC |
 | 22 | Profiles, workflows and the encrypted configuration intact | app IPC and the SQLCipher database opened with its key |
 
+## Update failures and protections
+
+A second command-layer scenario
+(`plugin_updates_fail_safely_and_need_consent_through_the_app_commands` in
+`src/marketplace_e2e.rs`, steps in `tests/support/marketplace_lifecycle.rs`)
+uses the same fixture with versions of the sample made for it: 1.0.0;
+1.1.0, which adds `notifications` and broadens the network grant to `POST`;
+1.2.0, which declares an action its module does not implement. It runs
+wherever the command layer runs (macOS, Linux, Windows); the GUI is not
+driven. Its report is `<artifacts>/commands-update-failures-steps.txt`.
+
+| # | Step | Expected |
+| --- | --- | --- |
+| 1 | Install 1.0.0 with consent, enable, configure, bind to keys | runs from the simulated MK.2 |
+| 2 | Update while the registry's timestamp signature fails | `registryUnavailable`, nothing downloaded |
+| 3 | Update with a package that is not the pinned one | `invalidPackage` |
+| 4 | Update whose download is cut off | `registryUnavailable` |
+| 5 | The agent killed mid-update (`DECKPILOT_TEST_PLUGIN_CRASH=update:files_unpacked`), restarted | recovery stages 1.1.0, which still waits for consent; 1.0.0 runs; declined |
+| 6 | Update to 1.1.0 without consent, then with consent to part of it | staged, `consentRequired`; 1.0.0 runs, nothing granted |
+| 7 | Restart, decline | still staged after the restart; declined: files gone, nothing granted |
+| 8 | Update with consent to everything it asks for | applied in one step, data kept |
+| 9 | Update to 1.0.0, install 1.0.0 again, rollback after the registry revoked 1.0.0 | `invalidState`, `alreadyInstalled`, `revoked` |
+| 10 | Serve the older, validly signed site | refused (`rollback`), seq kept |
+| 11 | Update to 1.2.0 (module refused by the host) | `broken`, 1.1.0 stays active and runs |
+| 12 | The registry revokes 1.1.0; uninstall | quarantined, nothing runs or fetches, cannot be enabled; uninstall removes storage, settings, credentials and files; profiles and the encrypted configuration intact |
+
+After each failed or refused step the test checks that the running version
+is still enabled with its grants, settings, credential and storage, runs
+from its key, that the version directories on disk are exactly the
+expected ones and that the store's journal and staging are empty.
+
 The CI workflow is `.github/workflows/desktop-e2e.yml` (not a required
 check); it uploads the step report, screenshots, the agent's and
 tauri-driver's logs as artifacts.

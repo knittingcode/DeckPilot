@@ -1640,6 +1640,7 @@ impl PluginService {
             self.progress(id.as_str(), PluginOperation::Update, PluginStage::Verifying);
             let verified = verify_package(&bytes, &expected, &Limits::default())
                 .map_err(|e| package_error(&e))?;
+            self.trial_load(id, &verified)?;
             self.progress(
                 id.as_str(),
                 PluginOperation::Update,
@@ -1692,6 +1693,70 @@ impl PluginService {
             plugin: id.to_string(),
             outcome,
         })
+    }
+
+    /// Loads the module of an update in a host of its own, as the next
+    /// invocation would, before anything is installed: an update whose
+    /// module the host refuses (actions other than the manifest's, a
+    /// failing `dp_init`, a broken descriptor) is refused, so the running
+    /// version stays active instead of being replaced by one that cannot
+    /// run. Problems of this computer rather than of the module (no host
+    /// sandbox, a host that cannot start) do not block the update: they
+    /// would refuse the running version alike.
+    fn trial_load(
+        &self,
+        id: &PluginId,
+        verified: &deckpilot_plugin_package::VerifiedPackage,
+    ) -> Result<(), IpcError> {
+        if platform_gate().is_err() {
+            return Ok(());
+        }
+        let Some(module) = verified.files().get(deckpilot_plugin_package::ARTIFACT) else {
+            return Ok(());
+        };
+        let Ok(broker_id) = deckpilot_plugin_broker::PluginId::new(id.as_str()) else {
+            return Ok(());
+        };
+        let actions = verified
+            .manifest()
+            .contributes
+            .actions()
+            .iter()
+            .map(|a| a.id.clone());
+        let config = host_config(&self.host, Arc::from(module.as_slice()), actions);
+        let mut supervisor = Supervisor::new(
+            config,
+            self.broker.clone(),
+            broker_id,
+            RestartPolicy::default(),
+            Arc::new(SystemClock::default()),
+        );
+        let started = supervisor.start();
+        supervisor.shutdown();
+        match started {
+            Ok(()) => Ok(()),
+            Err(SupervisorError::Host(
+                e @ (HostError::ActionMismatch { .. }
+                | HostError::LoadFailed { .. }
+                | HostError::Protocol { .. }
+                | HostError::ModuleTooLarge),
+            )) => {
+                let version = &verified.manifest().version;
+                warn!(plugin = %id, %version, error = %e, "update refused: the host refused its module");
+                Err(error(
+                    ErrorCode::Failed,
+                    reason::BROKEN,
+                    format!(
+                        "{id} {version} was not installed: the plugin host refused its module \
+                         ({e}); the installed version stays"
+                    ),
+                ))
+            }
+            Err(e) => {
+                warn!(plugin = %id, error = %e, "the update's module could not be tried");
+                Ok(())
+            }
+        }
     }
 
     fn approve(&mut self, id: &PluginId, consent: &[String]) -> Result<Response, IpcError> {
