@@ -1863,6 +1863,14 @@ impl PluginService {
                     format!("the plugin module cannot be read: {e}"),
                 )
             })?;
+            // `verify` read the files once; the host gets these bytes, read
+            // again, so they are checked themselves: a module swapped on disk
+            // in between is never compiled.
+            if let Err(why) = module_matches_record(&active.integrity, &module) {
+                let _ = self.manager.mark_broken(&record.id, &why);
+                self.changed(&record.id);
+                return Err(error(ErrorCode::Failed, reason::BROKEN, why));
+            }
             bundled::check_module(&mut self.manager, record, pin.as_ref(), &module).map_err(
                 |why| {
                     self.changed(&record.id);
@@ -2525,9 +2533,46 @@ impl Drop for PluginService {
     }
 }
 
+/// Whether the module bytes about to be compiled are the installed
+/// version's `plugin.wasm` as its integrity record holds it.
+fn module_matches_record(
+    integrity: &deckpilot_plugin_manifest::PackageIntegrity,
+    module: &[u8],
+) -> Result<(), String> {
+    integrity
+        .verify_file(
+            deckpilot_plugin_package::ARTIFACT,
+            &deckpilot_plugin_package::sha256(module),
+        )
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_recorded_module_bytes_are_compiled() {
+        let module = b"\0asm\x01\0\0\0";
+        let digest = deckpilot_plugin_package::sha256(module);
+        let integrity = deckpilot_plugin_manifest::PackageIntegrity {
+            manifest_sha256: digest,
+            package: deckpilot_plugin_manifest::PackageDigest {
+                sha256: digest,
+                size: 1,
+            },
+            files: [(deckpilot_plugin_package::ARTIFACT.to_owned(), digest)].into(),
+        };
+        module_matches_record(&integrity, module).unwrap();
+        // A module swapped after `verify` read the directory is refused.
+        let why = module_matches_record(&integrity, b"\0asm\x01\0\0\0\x01").unwrap_err();
+        assert!(why.contains("plugin.wasm was modified"), "{why}");
+        let none = deckpilot_plugin_manifest::PackageIntegrity {
+            files: BTreeMap::new(),
+            ..integrity
+        };
+        assert!(module_matches_record(&none, module).is_err());
+    }
 
     #[test]
     fn errors_carry_reasons() {
