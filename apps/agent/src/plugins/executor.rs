@@ -346,6 +346,36 @@ impl deckpilot_net::policy::AddressPolicy for PrivateNetworkOrigin {
     }
 }
 
+/// The addresses every other plugin request may connect to: globally
+/// routable unicast only, judged by the broker's `check_connect_addr` (the
+/// one definition of the plugin boundary, which also refuses tunnel and
+/// translation ranges such as 6to4, Teredo and local-use NAT64 that embed
+/// or reach other addresses). Every address the name resolves to must pass.
+pub(super) struct PublicOrigin;
+
+impl deckpilot_net::policy::AddressPolicy for PublicOrigin {
+    fn check(
+        &self,
+        host: &str,
+        addresses: &[std::net::IpAddr],
+    ) -> Result<(), (&'static str, String)> {
+        use deckpilot_net::codes;
+        if addresses.is_empty() {
+            return Err((codes::DNS_FAILED, format!("{host} did not resolve")));
+        }
+        match addresses
+            .iter()
+            .find(|a| deckpilot_plugin_broker::check_connect_addr(**a).is_err())
+        {
+            Some(address) => Err((
+                codes::BLOCKED_ADDRESS,
+                format!("{host} is not a public internet address ({address})"),
+            )),
+            None => Ok(()),
+        }
+    }
+}
+
 /// The address check of one hop: public addresses only, unless the broker
 /// allowed it within a user origin on a private network.
 pub(super) fn address_policy(
@@ -356,11 +386,27 @@ pub(super) fn address_policy(
     } else {
         // No `privateNetwork` grant of the G3 kind is implemented: every
         // resolved address must be public.
-        Box::new(deckpilot_net::policy::NetworkPolicy {
-            allow_private: false,
-            private_hosts: Vec::new(),
-        })
+        Box::new(PublicOrigin)
     }
+}
+
+/// A plugin's log message as written to the agent's log: control
+/// characters (newlines, carriage returns, escape sequences, …) are
+/// escaped, so a plugin cannot forge log lines or drive a terminal. Tabs
+/// are kept.
+fn loggable(message: &str) -> std::borrow::Cow<'_, str> {
+    if !message.chars().any(|c| c.is_control() && c != '\t') {
+        return std::borrow::Cow::Borrowed(message);
+    }
+    let mut out = String::with_capacity(message.len() + 8);
+    for c in message.chars() {
+        if c.is_control() && c != '\t' {
+            out.extend(c.escape_default());
+        } else {
+            out.push(c);
+        }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 fn method(method: HttpMethod) -> reqwest::Method {
@@ -1071,6 +1117,7 @@ impl Executor {
             } => self.notify(plugin, title, body, *severity),
             Allowed::Log { level, message } => {
                 let plugin = plugin.as_str();
+                let message = loggable(message);
                 match level {
                     LogLevel::Error | LogLevel::Warn => warn!(plugin, "{message}"),
                     LogLevel::Info => info!(plugin, "{message}"),
@@ -1191,6 +1238,93 @@ mod tests {
             SendFailure::from_transport(check(false, "10.0.0.5").unwrap_err(), &fetch(false));
         assert!(!failure.message.contains("10.0.0.5"), "{}", failure.message);
         assert!(failure.message.contains("allowed on a private network"));
+    }
+
+    #[test]
+    fn plugin_requests_refuse_every_range_the_broker_refuses() {
+        let fetch = |private_network: bool| AllowedFetch {
+            url: url::Url::parse("https://api.example.com/x").unwrap(),
+            origin: deckpilot_plugin_broker::Origin::parse_grant("https://api.example.com")
+                .unwrap(),
+            method: HttpMethod::Get,
+            headers: Vec::new(),
+            body: None,
+            auth: None,
+            private_network,
+        };
+        let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
+        // Tunnel, translation and special ranges that are not plainly
+        // private: refused with or without private-network consent.
+        for address in [
+            "2002:c0a8:0101::1",   // 6to4 2002::/16 (embeds 192.168.1.1)
+            "2002:8c52:7005::1",   // 6to4 of a public address
+            "2001:0:4136:e378::1", // Teredo 2001::/32
+            "fec0::1",             // site-local fec0::/10
+            "64:ff9b:1::a00:1",    // local-use NAT64 64:ff9b:1::/48
+            "64:ff9b::7f00:1",     // NAT64 of 127.0.0.1
+            "192.88.99.1",         // 6to4 relay anycast
+            "::a00:1",             // IPv4-compatible ::/96
+            "100::1",              // discard-only 100::/64
+            "2001:2::1",           // benchmarking 2001:2::/48
+            "3fff::1",             // documentation 3fff::/20
+            "2001:db8::1",         // documentation
+            "198.18.0.1",          // benchmarking
+            "192.0.0.8",           // protocol assignments
+            "240.0.0.1",           // reserved
+            "255.255.255.255",
+            "224.0.0.1",
+            "ff02::1",
+            "::ffff:127.0.0.1",
+        ] {
+            for private in [false, true] {
+                let (code, _) = address_policy(&fetch(private))
+                    .check("api.example.com", &[ip(address)])
+                    .unwrap_err();
+                assert_eq!(code, deckpilot_net::codes::BLOCKED_ADDRESS, "{address}");
+            }
+        }
+        // Agrees with the broker on public and non-public addresses alike.
+        for address in [
+            "140.82.112.5",
+            "2606:4700::1111",
+            "64:ff9b::8c52:7005",
+            "::ffff:140.82.112.5",
+            "10.0.0.1",
+            "fd00::1",
+            "fe80::1",
+            "169.254.169.254",
+            "2002:c0a8:0101::1",
+            "2001:0:4136:e378::1",
+            "fec0::1",
+        ] {
+            let address = ip(address);
+            assert_eq!(
+                address_policy(&fetch(false))
+                    .check("api.example.com", &[address])
+                    .is_ok(),
+                deckpilot_plugin_broker::check_connect_addr(address).is_ok(),
+                "{address}"
+            );
+        }
+        assert_eq!(
+            address_policy(&fetch(false))
+                .check("api.example.com", &[])
+                .unwrap_err()
+                .0,
+            deckpilot_net::codes::DNS_FAILED
+        );
+    }
+
+    #[test]
+    fn plugin_log_messages_cannot_forge_lines() {
+        assert!(matches!(
+            loggable("plain\tmessage ✓"),
+            std::borrow::Cow::Borrowed("plain\tmessage ✓")
+        ));
+        assert_eq!(
+            loggable("ok\n2026-11-18 ERROR forged\r\u{1b}[2Jx\u{0}\u{7f}\u{85}"),
+            "ok\\n2026-11-18 ERROR forged\\r\\u{1b}[2Jx\\u{0}\\u{7f}\\u{85}"
+        );
     }
 
     #[test]

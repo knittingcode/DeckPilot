@@ -180,7 +180,9 @@ impl UserOrigin {
     }
 
     /// Whether a request to `origin` with the normalized `url` is within
-    /// this user origin.
+    /// this user origin. Under a path prefix, a path with an encoded `/`,
+    /// `\` or `.` is outside it: a server that decodes them would see
+    /// `/api/v3/..%2fadmin` as `/api/admin`. The query is not checked.
     pub fn matches(&self, origin: &Origin, url: &Url) -> bool {
         if *origin != self.origin {
             return false;
@@ -189,10 +191,11 @@ impl UserOrigin {
             None => true,
             Some(prefix) => {
                 let path = url.path();
-                path == prefix
+                let within = path == prefix
                     || path
                         .strip_prefix(prefix.as_str())
-                        .is_some_and(|rest| rest.starts_with('/'))
+                        .is_some_and(|rest| rest.starts_with('/'));
+                within && !has_encoded_separator(path)
             }
         }
     }
@@ -209,6 +212,13 @@ impl fmt::Display for UserOrigin {
     }
 }
 
+/// Whether a path holds an encoded `/`, `\` or `.` (any case), which a
+/// server may decode into a separator or a `..` segment.
+fn has_encoded_separator(path: &str) -> bool {
+    let lowered = path.to_ascii_lowercase();
+    ["%2f", "%5c", "%2e"].iter().any(|e| lowered.contains(e))
+}
+
 /// The path prefix of a user origin: `None` for `/`, otherwise the
 /// normalized path without a trailing `/`. Refused: `.` and `..` segments
 /// (the parser would resolve them, so the user would consent to a path
@@ -222,12 +232,11 @@ fn path_prefix(input: &str, url: &Url) -> Result<Option<String>, OriginError> {
     if raw.is_empty() {
         return Ok(None);
     }
-    let lowered = raw.to_ascii_lowercase();
     let bad = raw
         .split('/')
         .skip(1)
         .any(|segment| segment.is_empty() || segment == "." || segment == "..")
-        || ["%2f", "%5c", "%2e"].iter().any(|e| lowered.contains(e));
+        || has_encoded_separator(raw);
     if bad {
         return Err(OriginError::InvalidPath);
     }
@@ -464,6 +473,18 @@ mod tests {
             (false, "https://ghe.example.com/"),
             (false, "https://ghe.example.com/api/v3/../../admin"),
             (false, "https://ghe.example.com/api/v3%2F..%2Fadmin"),
+            (false, "https://ghe.example.com/api/v3/..%2fadmin"),
+            (false, "https://ghe.example.com/api/v3/..%2Fadmin"),
+            (false, "https://ghe.example.com/api/v3/..%5cadmin"),
+            (false, "https://ghe.example.com/api/v3/..%5Cadmin"),
+            (false, "https://ghe.example.com/api/v3/%2e%2e/admin"),
+            (false, "https://ghe.example.com/api/v3/%2E./admin"),
+            (false, "https://ghe.example.com/api/v3/a%2eb"),
+            (
+                true,
+                "https://ghe.example.com/api/v3/repos?path=..%2f..%2fadmin",
+            ),
+            (true, "https://ghe.example.com/api/v3/a%20b"),
             (false, "https://ghe.example.com:444/api/v3"),
             (false, "https://ghe2.example.com/api/v3"),
             (false, "https://x.ghe.example.com/api/v3"),
@@ -471,6 +492,10 @@ mod tests {
             let (u, origin) = url(request);
             assert_eq!(o.matches(&origin, &u), inside, "{request}");
         }
+        // Without a prefix the whole origin is consented to: an encoded
+        // separator cannot leave it.
+        let (u, origin) = url("https://ghe.example.com:8443/a%2Fb");
+        assert!(plain.matches(&origin, &u));
         for (bad, why) in [
             ("http://ghe.example.com", OriginError::SchemeNotAllowed),
             (
