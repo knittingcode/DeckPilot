@@ -54,6 +54,11 @@ released either. 0.6.0 is the first version intended for publication.
 
 ### Fixed
 
+- Opening the plugin database no longer takes its write lock when its
+  schema is already current, and waits for another process's lock while it
+  checks the key. Before, the agent and anything else opening it at the
+  same time could wait on one another until one failed with "database is
+  locked", and a busy database could be reported as a wrong key.
 - Linux: the `.deb` and `.rpm` packages now depend on the AppIndicator
   library the background agent's tray icon uses
   (`libayatana-appindicator3-1` on Debian and Ubuntu; the `.rpm` requires
