@@ -46,6 +46,20 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* The device drawn in the editor (components/device-canvas.tsx): its
+     body, touch strip and dials, and the marks of selection, keyboard
+     focus and a drop target. The key faces show what the device's own
+     screens show and keep their colours. */
+  --device-body: oklch(0.32 0 0);
+  --device-body-border: oklch(0.42 0 0);
+  --device-strip: oklch(0.2 0 0);
+  --device-dial: oklch(0.27 0 0);
+  --device-dial-border: oklch(0.5 0 0);
+  --device-dial-foreground: oklch(0.92 0 0);
+  --device-selected: oklch(0.769 0.188 70.08);
+  --device-focus: oklch(0.685 0.169 237.32);
+  --device-drop: oklch(0.696 0.17 162.48);
 }
 
 .dark {
@@ -75,6 +89,16 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+
+  --device-body: oklch(0.12 0 0);
+  --device-body-border: oklch(0.36 0 0);
+  --device-strip: oklch(0.08 0 0);
+  --device-dial: oklch(0.22 0 0);
+  --device-dial-border: oklch(0.45 0 0);
+  --device-dial-foreground: oklch(0.9 0 0);
+  --device-selected: oklch(0.828 0.189 84.43);
+  --device-focus: oklch(0.746 0.16 232.66);
+  --device-drop: oklch(0.765 0.177 163.22);
 }
 
 @theme inline {
@@ -108,6 +132,15 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-device-body: var(--device-body);
+  --color-device-body-border: var(--device-body-border);
+  --color-device-strip: var(--device-strip);
+  --color-device-dial: var(--device-dial);
+  --color-device-dial-border: var(--device-dial-border);
+  --color-device-dial-foreground: var(--device-dial-foreground);
+  --color-device-selected: var(--device-selected);
+  --color-device-focus: var(--device-focus);
+  --color-device-drop: var(--device-drop);
 }
 
 @layer base {
@@ -126,6 +159,12 @@
   html[data-window] #root {
     height: auto;
     min-height: 100%;
+  }
+  /* Workspace windows (the settings) fill the window the user sizes. */
+  html[data-window][data-window-kind="workspace"],
+  html[data-window][data-window-kind="workspace"] body,
+  html[data-window][data-window-kind="workspace"] #root {
+    height: 100%;
   }
   body {
     @apply bg-background text-foreground antialiased select-none;

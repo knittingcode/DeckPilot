@@ -17,11 +17,25 @@ afterEach(() => {
 })
 
 describe("main navigation", () => {
-  it("keeps the Layout Designer and no longer lists Device Models", async () => {
+  it("leads to the device editor and the other workspace pages", async () => {
     const onNavigate = vi.fn()
     const { user } = renderWithApp(<AppSidebar current="dashboard" onNavigate={onNavigate} />)
-    expect(screen.queryByText("Device Models")).not.toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Layout Designer" }))
+    expect(screen.getByRole("button", { name: "Dashboard" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    )
+    await user.click(screen.getByRole("button", { name: "Device Editor" }))
     expect(onNavigate).toHaveBeenCalledWith("designer")
+    for (const name of ["Action Library", "Workflows"]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument()
+    }
+  })
+
+  it("leaves out what moved to the toolbar and the settings window", () => {
+    renderWithApp(<AppSidebar current="designer" onNavigate={vi.fn()} />)
+    for (const name of ["Device Models", "Profiles", "Settings", "Layout Designer"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument()
+    }
+    expect(screen.queryByRole("button", { name: /Choose the profile/ })).not.toBeInTheDocument()
   })
 })

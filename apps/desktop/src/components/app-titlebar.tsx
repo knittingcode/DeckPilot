@@ -28,9 +28,9 @@ import {
 import { cn } from "@/lib/utils"
 
 /** One height and icon size for every control (tokens in index.css). */
-const CONTROL =
+export const CONTROL =
   "h-(--titlebar-control) gap-1.5 px-2.5 text-[0.8125rem] [&_svg:not([class*='size-'])]:size-(--titlebar-icon)"
-const CONTROL_ICON =
+export const CONTROL_ICON =
   "size-(--titlebar-control) [&_svg:not([class*='size-'])]:size-(--titlebar-icon)"
 
 const TONES: Record<TitlebarTone, string> = {
@@ -47,24 +47,29 @@ export interface TitlebarHistory {
 }
 
 /**
- * The shared toolbar of the main window, in Workspace and Settings mode.
- * It shows what the current page registered (`useTitlebar`) and knows no
- * page or module itself. On macOS it is the window's titlebar.
+ * The toolbar of the main window: navigation (sidebar toggle, back and
+ * forward), then `leading` (the device and profile selectors), the context
+ * of the current page — what it registered with `useTitlebar` — and
+ * `trailing` (the app's own commands). It knows no page or module itself.
+ * On macOS it is the window's titlebar.
  */
 export function AppTitlebar({
   store,
   chrome,
   history,
   fallbackTitle,
-  indicator,
+  leading,
+  trailing,
 }: {
   store: TitlebarStore
   chrome: WindowChrome
   history: TitlebarHistory
   /** Shown until the page registers its own title, e.g. while it loads. */
   fallbackTitle: string
-  /** Rightmost element, e.g. the connection state. */
-  indicator?: React.ReactNode
+  /** Shown after the navigation, before the page's context. */
+  leading?: React.ReactNode
+  /** Rightmost elements: the app's commands (notifications, settings, …). */
+  trailing?: React.ReactNode
 }) {
   const config = useTitlebarState(store)
   const { state, isMobile } = useSidebar()
@@ -131,6 +136,14 @@ export function AppTitlebar({
             : "w-0",
         )}
       />
+      {leading && (
+        <div
+          data-slot="titlebar-leading"
+          className="flex shrink-0 items-center gap-(--titlebar-gap) pl-(--titlebar-padding-x)"
+        >
+          {leading}
+        </div>
+      )}
       <div className="@container flex min-w-0 flex-1 items-center gap-2 px-(--titlebar-padding-x)">
         <Heading config={config} fallbackTitle={fallbackTitle} />
         {config.status && (
@@ -149,8 +162,15 @@ export function AppTitlebar({
           </span>
         )}
         <Actions actions={config.actions} select={select} />
-        {indicator}
       </div>
+      {trailing && (
+        <div
+          data-slot="titlebar-trailing"
+          className="flex shrink-0 items-center gap-(--titlebar-gap) pr-(--titlebar-padding-x)"
+        >
+          {trailing}
+        </div>
+      )}
       {config.progress !== undefined && <ProgressLine progress={config.progress} />}
     </header>
   )

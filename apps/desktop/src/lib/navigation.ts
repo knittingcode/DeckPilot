@@ -1,8 +1,9 @@
 /**
- * Where the main window is: a workspace page (dashboard, editors, module
- * pages) or a settings page. Settings replace the workspace sidebar in the
- * same window; leaving them returns to the workspace page that was open
- * before.
+ * Where the main window is: a workspace page (the device editor, dashboard,
+ * module pages). Settings pages are locations too (`settings:<page>`), but
+ * they open in the settings window; the main window keeps only workspace
+ * pages in its history (see `useNavigation`). The settings-mode functions
+ * below remain for page references from other windows and older versions.
  *
  * Navigation keeps a browser-style history with back and forward. The model
  * is pure so that it can be tested without React.
@@ -26,7 +27,8 @@ export interface NavigationState {
 /** Pages kept in the history; older entries are dropped. */
 export const HISTORY_LIMIT = 50
 
-export const DEFAULT_WORKSPACE_PAGE = "dashboard"
+/** The device editor: what the main window shows first. */
+export const DEFAULT_WORKSPACE_PAGE = "designer"
 export const DEFAULT_SETTINGS_PAGE = "appearance"
 
 export function initialNavigation(
@@ -136,8 +138,16 @@ export function sanitize(
   return withWorkspace({ entries: kept, index, workspace })
 }
 
-/** Former workspace pages that are now part of Settings › Devices. */
-const MOVED_TO_DEVICES = new Set(["devices", "models"])
+/** Former workspace pages that are now settings pages. */
+const MOVED_TO_SETTINGS: Record<string, string> = {
+  devices: "devices",
+  models: "devices",
+  profiles: "profiles",
+}
+
+function movedToSettings(page: string) {
+  return Object.hasOwn(MOVED_TO_SETTINGS, page) ? MOVED_TO_SETTINGS[page] : undefined
+}
 
 /** Translates a page reference from an event or older state. */
 export function locationOf(reference: string): Location {
@@ -145,9 +155,10 @@ export function locationOf(reference: string): Location {
   if (reference.startsWith("settings:")) {
     return { mode: "settings", page: reference.slice("settings:".length) }
   }
-  // Connected devices and the device models moved from the workspace to
-  // the settings.
-  if (MOVED_TO_DEVICES.has(reference)) return { mode: "settings", page: "devices" }
+  // Connected devices, the device models and the profiles moved from the
+  // workspace to the settings.
+  const moved = movedToSettings(reference)
+  if (moved) return { mode: "settings", page: moved }
   return { mode: "workspace", page: reference }
 }
 
@@ -177,7 +188,7 @@ export function loadNavigation(storage: Pick<Storage, "getItem"> | null): Naviga
     const stored = typeof value.index === "number" ? value.index : entries.length - 1
     const index = Math.min(Math.max(0, Math.trunc(stored) - dropped), kept.length - 1)
     const workspace =
-      typeof value.workspace === "string" && !MOVED_TO_DEVICES.has(value.workspace)
+      typeof value.workspace === "string" && !movedToSettings(value.workspace)
         ? value.workspace
         : DEFAULT_WORKSPACE_PAGE
     return withWorkspace({ entries: kept, index, workspace })

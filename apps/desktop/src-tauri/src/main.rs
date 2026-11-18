@@ -128,7 +128,9 @@ fn main() {
                         if let Some(key) = agent::fetch_key(&paths).await {
                             let _ = state.attach(key, false);
                         }
-                        if let Err(error) = commands::windows::open_by_id(&handle, &state, &id) {
+                        if let Err(error) =
+                            commands::windows::open_by_id(&handle, &state, &id, None)
+                        {
                             eprintln!("cannot open window `{id}`: {error}");
                             handle.exit(1);
                         }

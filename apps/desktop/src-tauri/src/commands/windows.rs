@@ -15,13 +15,19 @@ impl From<windows::WindowError> for CommandError {
     }
 }
 
-/// Opens (or focuses) the window `id` if the catalog allows it now.
-pub fn open_by_id<R: Runtime>(app: &AppHandle<R>, state: &AppState, id: &str) -> CommandResult<()> {
+/// Opens (or focuses) the window `id` if the catalog allows it now; a
+/// workspace window (the settings) at `page`.
+pub fn open_by_id<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    id: &str,
+    page: Option<&str>,
+) -> CommandResult<()> {
     let spec = {
         let modules = state.modules();
         windows::resolve(id, &modules, state.is_unlocked())?
     };
-    windows::open(app, &spec)?;
+    windows::open(app, &spec, page)?;
     Ok(())
 }
 
@@ -30,8 +36,9 @@ pub fn open_window<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
     id: String,
+    page: Option<String>,
 ) -> CommandResult<()> {
-    open_by_id(&app, &state, &id)
+    open_by_id(&app, &state, &id, page.as_deref())
 }
 
 /// What the calling window is; `None` for the main window.

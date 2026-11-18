@@ -186,11 +186,14 @@ Tauri 2 application. The Rust side (`src-tauri`) exposes commands that load
 configuration from storage, apply one change through the domain model,
 persist it and notify the agent. Runtime changes and action execution are
 forwarded to the agent; a background task subscribes to agent events and
-forwards them to the window. The core sections are Dashboard, Action
-Library, Workflows, Profiles, Layout Designer and Settings (appearance,
-devices, modules, agent, updates). Settings › Devices shows the connected
-devices and the supported models; the former Device Models page and links
-to it lead there. Further pages come
+forwards them to the window. The main window opens with the device editor;
+Dashboard, Action Library and Workflows are in its navigation rail, the
+plugin Marketplace (builds with plugins) in its toolbar. The settings
+(general, profiles, devices, agent, security, updates, plugins, diagnostics,
+modules, …) are a window of their own. Settings › Devices shows the
+connected devices and the supported models, Settings › Profiles the
+profiles; the former Device Models and Profiles pages and links to them lead
+there. Further pages come
 from enabled modules (Projects, including this machine's resource mappings).
 Profile-scoped pages show the profile they edit and are re-created when
 another profile is chosen, so an open editor never writes to a different
@@ -203,17 +206,45 @@ Native windows besides the main window come from one catalog
 (`src-tauri/src/windows.rs`) and are opened by identifier only — by the app,
 or by the agent over IPC: the prompts that open the configuration
 (`security.*`), export and import (`portability.*`), update progress
-(`updates.progress`), the agent log (`app.logs`), the workflow summary, and
-windows declared by enabled modules. Every window renders through the shared
-`ModalShell` and is sized to its content by the window manager (no
-per-window dimensions); the catalog decides whether a window may open while
-the configuration is locked. Only the export and import windows may use file
-dialogs.
+(`updates.progress`), the agent log (`app.logs`), the workflow summary, the
+settings (`app.settings`) and windows declared by enabled modules. Prompts
+render through the shared `ModalShell` and are sized to their content by the
+window manager (no per-window dimensions). The settings are a *workspace
+window*: a default size, resizable, never sized to content, opened at a page
+(`open_window` with `page`, a validated page reference; an open settings
+window gets `deckpilot://workspace-page` instead). The catalog decides
+whether a window may open while the configuration is locked. Only the export
+and import windows may use file dialogs.
+
+Windows keep their own copy of the app's state (profiles, modules, the
+profile being edited, the theme) and announce their changes to each other
+with app events (`lib/window-sync.ts`): a module enabled or a profile created
+in the settings window shows in the main window at once, and a theme chosen
+there applies everywhere. The main window refuses another window's choice of
+the profile to edit while the device editor has unsaved changes.
 
 ### Main window shell
 
-The main window has one shared titlebar (`AppTitlebar`), the workspace or
-settings sidebar, and the page. Pages render only their content; their title,
+The main window has one toolbar (`AppTitlebar`), a slim navigation rail
+(`AppSidebar`, collapsed to icons by default) and the page. The toolbar, left
+to right: the navigation region (rail toggle, back, forward), the device and
+profile selectors (`shell/toolbar.tsx`), the page's context, then plugin
+navigation entries (`shell/plugin-navigation.ts`; with a separator only when
+there are any), notifications, the Marketplace and the settings. The device
+selector lists connected devices (named by their descriptor) and the
+catalog's models without a device ("not connected"); device, profile and
+layout of the editor are one shell-level selection
+(`shell/editor-selection.tsx`) that refuses to switch over unsaved layout
+changes.
+
+The device editor (`layout-editor/editor.tsx`) has the device and its pages
+in the centre, the key inspector below it and the Action Library at the
+right (`LibraryDock`: resizable and collapsible, both remembered; an overlay
+in windows narrower than 1100 px). One drag and drop context spans all
+three, so library entries drop onto controls and onto gesture slots. The
+device's colours are theme tokens (`--device-*` in `index.css`).
+
+Pages render only their content; their title,
 subtitle, breadcrumbs, status and commands go to the titlebar through
 `useTitlebar` (`lib/titlebar.ts`). Any component of a page may contribute —
 including module pages — and the titlebar imports no page or module. Actions
@@ -236,13 +267,15 @@ Sizes are tokens in `index.css` (`--titlebar-height`, `--titlebar-control`,
 `--titlebar-icon`, …). The navigation region (traffic-light safe area,
 sidebar toggle, back, forward) has a fixed width, so it never moves when the
 sidebar collapses; a separate element continues the expanded sidebar's
-background and divider. Native dialog windows (`ModalShell`) have no app
-titlebar.
+background and divider. The settings window has the same toolbar (without
+selectors) under its native titlebar; native dialog windows (`ModalShell`)
+have no app titlebar.
 
 ### Status bar
 
-A compact bar at the bottom of the main window (`AppStatusBar`), in workspace
-and settings mode, never in dialog windows. It renders three shared stores
+A compact bar at the bottom of the main window (`AppStatusBar`), never in
+other windows. It renders two of three shared stores (the third,
+notifications, is the toolbar's `NotificationsButton`)
 (`lib/status.ts`) and imports no module:
 
 - **Status items**, registered with `useStatusItem` by core services
