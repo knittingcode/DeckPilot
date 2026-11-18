@@ -391,7 +391,13 @@ held by one process at a time with a lock directory (macOS has no `flock`;
 the shell creates a file in it with `O_EXCL`, since not every `mkdir`
 command is exclusive) that records the owner's PID and start time; a lock
 whose owner is gone, or whose PID now belongs to another process, is taken
-over. A worktree gets the slot it used last when that one is free, so its
+over. On Linux the start time is the one in `/proc/<pid>/stat` (clock
+ticks since boot): the one that `ps -o lstart` prints is the boot time
+plus those ticks, and the boot time follows adjustments of the system
+clock, so two calls for one live process were seen to print times a
+second apart. That made a live owner look gone and let two runs share a
+slot.
+A worktree gets the slot it used last when that one is free, so its
 incremental state is reused.
 
 ```sh
@@ -433,6 +439,15 @@ and `cargo build -v` in A says `Fresh` for both crates. Dependencies from
 crates.io and git are not affected: their hash covers the version and the
 source, and their fingerprint is that version, not an mtime.
 
+Cargo 1.100 changed the layout of a profile directory: each package has
+one directory, `build/<package>/<hash>/` with `fingerprint/`, `out/` and
+`run/` in it, instead of entries in `.fingerprint/`, `deps/` and `build/`.
+The hash is still computed from the relative path, so the bug is the same.
+Which layout a slot holds depends on the cargo that built in it: this
+repository pins 1.99.1 (`rust-toolchain.toml`), but a crate outside it, or
+a later pin, uses another toolchain. The scrub handles both, and empties
+a profile directory that is in neither layout.
+
 So `target-slot.sh` gives each slot an affinity: it records the worktree
 that used it last (`.deckpilot-slot-user`), and when another worktree
 acquires it, it first removes the output of that worktree's own packages:
@@ -447,7 +462,9 @@ removed, acquisition fails. A slot that the same worktree used last is not
 touched. `tools/dev/tests/target-slot.test.sh` reproduces the bug with two
 copies of a small workspace built alternately through one slot (a member
 with a `rerun-if-changed` build script and an excluded path crate) and
-checks that each build runs its own code.
+checks that each build runs its own code. It builds with the toolchain
+that is the default outside the repository and says which layout that
+cargo wrote.
 
 The alternatives considered:
 
