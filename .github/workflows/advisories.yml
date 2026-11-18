@@ -1,0 +1,61 @@
+# RustSec advisories for both lock files: the DeckPilot workspace
+# (Cargo.lock, policy deny.toml) and the plugin runtime workspace
+# (plugins/runtime/Cargo.lock, policy plugins/runtime/deny.toml), with
+# `cargo deny check advisories`. Ignored advisories are listed in the policy
+# files, each with its reason and review date. Also weekly, since advisories
+# are published without any change here. Not a required check. No secrets,
+# read-only token. cargo-deny is built from crates.io at a pinned version,
+# with its own lock file.
+name: Advisories
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.lock
+      - deny.toml
+      - plugins/runtime/Cargo.lock
+      - plugins/runtime/deny.toml
+      - .github/workflows/advisories.yml
+  pull_request:
+    paths:
+      - Cargo.lock
+      - deny.toml
+      - plugins/runtime/Cargo.lock
+      - plugins/runtime/deny.toml
+      - .github/workflows/advisories.yml
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: advisories-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_DENY_VERSION: 0.21.0
+
+jobs:
+  advisories:
+    name: RustSec advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Install cargo-deny
+        run: cargo install --locked "cargo-deny@${CARGO_DENY_VERSION}"
+      # The advisory database is fetched fresh by each run.
+      - name: DeckPilot workspace (Cargo.lock)
+        run: cargo deny --locked --all-features --config deny.toml check advisories
+      - name: Plugin runtime workspace (plugins/runtime/Cargo.lock)
+        run: >
+          cargo deny --manifest-path plugins/runtime/Cargo.toml --locked --all-features
+          --config plugins/runtime/deny.toml check advisories

@@ -180,7 +180,11 @@ impl UserOrigin {
     }
 
     /// Whether a request to `origin` with the normalized `url` is within
-    /// this user origin.
+    /// this user origin. Under a path prefix, a path that has a `.` or `..`
+    /// segment once its encoded `/`, `\` and `.` are decoded is outside it:
+    /// a server that decodes them would see `/api/v3/..%2fadmin` as
+    /// `/api/admin`. An encoded `/` within a segment stays allowed (GitLab
+    /// names projects `group%2Fapp`). The query is not checked.
     pub fn matches(&self, origin: &Origin, url: &Url) -> bool {
         if *origin != self.origin {
             return false;
@@ -189,10 +193,11 @@ impl UserOrigin {
             None => true,
             Some(prefix) => {
                 let path = url.path();
-                path == prefix
+                let within = path == prefix
                     || path
                         .strip_prefix(prefix.as_str())
-                        .is_some_and(|rest| rest.starts_with('/'))
+                        .is_some_and(|rest| rest.starts_with('/'));
+                within && !dot_segment_when_decoded(path)
             }
         }
     }
@@ -209,6 +214,36 @@ impl fmt::Display for UserOrigin {
     }
 }
 
+/// Whether a path holds an encoded `/`, `\` or `.` (any case).
+fn has_encoded_separator(path: &str) -> bool {
+    let lowered = path.to_ascii_lowercase();
+    ["%2f", "%5c", "%2e"].iter().any(|e| lowered.contains(e))
+}
+
+/// Whether a path has a `.` or `..` segment as a server would see it after
+/// decoding `%2f`, `%5c` and `%2e` (any case, also when they are encoded
+/// again as `%25…`) and treating `\` as `/`.
+fn dot_segment_when_decoded(path: &str) -> bool {
+    let mut decoded = path.to_ascii_lowercase();
+    for _ in 0..3 {
+        let once = decoded.replace("%25", "%");
+        if once == decoded {
+            break;
+        }
+        decoded = once;
+    }
+    if !has_encoded_separator(&decoded) {
+        return false;
+    }
+    let decoded = decoded
+        .replace("%2f", "/")
+        .replace("%5c", "/")
+        .replace("%2e", ".");
+    decoded
+        .split(['/', '\\'])
+        .any(|segment| segment == "." || segment == "..")
+}
+
 /// The path prefix of a user origin: `None` for `/`, otherwise the
 /// normalized path without a trailing `/`. Refused: `.` and `..` segments
 /// (the parser would resolve them, so the user would consent to a path
@@ -222,12 +257,11 @@ fn path_prefix(input: &str, url: &Url) -> Result<Option<String>, OriginError> {
     if raw.is_empty() {
         return Ok(None);
     }
-    let lowered = raw.to_ascii_lowercase();
     let bad = raw
         .split('/')
         .skip(1)
         .any(|segment| segment.is_empty() || segment == "." || segment == "..")
-        || ["%2f", "%5c", "%2e"].iter().any(|e| lowered.contains(e));
+        || has_encoded_separator(raw);
     if bad {
         return Err(OriginError::InvalidPath);
     }
@@ -464,6 +498,30 @@ mod tests {
             (false, "https://ghe.example.com/"),
             (false, "https://ghe.example.com/api/v3/../../admin"),
             (false, "https://ghe.example.com/api/v3%2F..%2Fadmin"),
+            (false, "https://ghe.example.com/api/v3/..%2fadmin"),
+            (false, "https://ghe.example.com/api/v3/..%2Fadmin"),
+            (false, "https://ghe.example.com/api/v3/..%5cadmin"),
+            (false, "https://ghe.example.com/api/v3/..%5Cadmin"),
+            (false, "https://ghe.example.com/api/v3/%2e%2e/admin"),
+            (false, "https://ghe.example.com/api/v3/%2E./admin"),
+            (false, "https://ghe.example.com/api/v3/x/..%2f..%2fadmin"),
+            (false, "https://ghe.example.com/api/v3/.%2fadmin"),
+            (false, "https://ghe.example.com/api/v3/..%252fadmin"),
+            (false, "https://ghe.example.com/api/v3/x%2f..%2f..%2fadmin"),
+            // An encoded `/` or `.` within a segment cannot leave the
+            // prefix: GitLab's `projects/group%2Fapp`.
+            (true, "https://ghe.example.com/api/v3/projects/group%2Fapp"),
+            (
+                true,
+                "https://ghe.example.com/api/v3/projects/group%2Fsub%2Fapp/x",
+            ),
+            (true, "https://ghe.example.com/api/v3/a%2eb"),
+            (true, "https://ghe.example.com/api/v3/files/v1%2E2%2Ftar.gz"),
+            (
+                true,
+                "https://ghe.example.com/api/v3/repos?path=..%2f..%2fadmin",
+            ),
+            (true, "https://ghe.example.com/api/v3/a%20b"),
             (false, "https://ghe.example.com:444/api/v3"),
             (false, "https://ghe2.example.com/api/v3"),
             (false, "https://x.ghe.example.com/api/v3"),
@@ -471,6 +529,10 @@ mod tests {
             let (u, origin) = url(request);
             assert_eq!(o.matches(&origin, &u), inside, "{request}");
         }
+        // Without a prefix the whole origin is consented to: an encoded
+        // separator cannot leave it.
+        let (u, origin) = url("https://ghe.example.com:8443/a%2Fb");
+        assert!(plain.matches(&origin, &u));
         for (bad, why) in [
             ("http://ghe.example.com", OriginError::SchemeNotAllowed),
             (

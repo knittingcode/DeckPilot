@@ -166,6 +166,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate-tag.outputs.sha }}
+          persist-credentials: false
       # First, before any build or dependency runs in this job: the signing
       # key and its password belong to the public key pinned in
       # .github/updater.pub, and DECKPILOT_UPDATER_PUBKEY (compiled into the
@@ -345,6 +346,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate-tag.outputs.sha }}
+          persist-credentials: false
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: tools/ci/install-linux-deps.sh
@@ -699,6 +701,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate-tag.outputs.sha }}
+          persist-credentials: false
       - name: Download the updater manifest fragments
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -734,6 +737,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate-tag.outputs.sha }}
+          persist-credentials: false
       - name: Install Rust toolchain
         run: rustup toolchain install
       - name: Download the draft release

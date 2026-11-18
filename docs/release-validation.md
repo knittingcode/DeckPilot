@@ -96,7 +96,8 @@ Developer ID (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
 continuity* workflow (`.github/workflows/update-continuity.yml`) runs it on a
 macOS runner with a temporary keychain: no Apple submission, no release,
 nothing public. It runs only when started by hand on a release tag, in the
-`production-release` environment (approve the deployment):
+`production-release` environment (no approval step: it has no required
+reviewer, and only administrators can create `v*` tags):
 `gh workflow run "Update continuity" --ref v<version>`, never on pull
 requests or branches:
 it builds the app (dependency installation, build scripts) in the job that
