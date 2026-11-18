@@ -290,8 +290,10 @@ impl Database {
             std::fs::create_dir_all(parent).map_err(|e| StoreError::io(parent, &e))?;
         }
         let connection = Connection::open(path)?;
-        apply_key(&connection, key)?;
+        // Before the key: checking the key reads the first page, which has
+        // to wait for another process's lock like every later statement.
         connection.busy_timeout(busy_timeout)?;
+        apply_key(&connection, key)?;
         connection.pragma_update(None, "foreign_keys", true)?;
         let found = user_version(&connection)?;
         let supported = schema_version_of(migrations);
@@ -364,9 +366,16 @@ impl Database {
     /// switched back on whatever the outcome.
     fn migrate(&mut self, migrations: &[&str]) -> Result<()> {
         let supported = schema_version_of(migrations);
-        if user_version(&self.connection)? >= supported {
-            // Nothing to apply; a newer version is refused inside the
-            // transaction below.
+        let found = user_version(&self.connection)?;
+        if found == supported {
+            // Current: nothing to write. Every open used to take the write
+            // lock here, so the agent, the app and anything polling the
+            // store waited on one another for nothing.
+            return Ok(());
+        }
+        if found > supported {
+            // Refused inside the transaction, as another process may have
+            // migrated it since `open` read the version.
             return self.apply(migrations);
         }
         self.connection.pragma_update(None, "foreign_keys", false)?;
@@ -475,6 +484,23 @@ fn apply_key(_connection: &Connection, _key: &StoreKey) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "sqlcipher")]
+    #[test]
+    fn a_current_store_opens_while_another_connection_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plugins.db");
+        let key = StoreKey::from_bytes([3; 32]);
+        let mut writer = Database::open(&path, &key, DEFAULT_BUSY_TIMEOUT).unwrap();
+        let tx = writer.write().unwrap();
+        tx.execute_batch("CREATE TABLE held (x INTEGER)").unwrap();
+        // The writer keeps its write lock; a second open must not need it.
+        let started = std::time::Instant::now();
+        let reader = Database::open(&path, &key, Duration::from_millis(200)).unwrap();
+        assert_eq!(reader.schema_version().unwrap(), supported_schema_version());
+        assert!(started.elapsed() < Duration::from_secs(2));
+        tx.commit().unwrap();
+    }
 
     #[cfg(feature = "sqlcipher")]
     #[test]
