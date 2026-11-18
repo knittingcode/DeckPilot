@@ -54,6 +54,15 @@ released either. 0.6.0 is the first version intended for publication.
 
 ### Fixed
 
+- Linux: the `.deb` and `.rpm` packages now depend on the AppIndicator
+  library the background agent's tray icon uses
+  (`libayatana-appindicator3-1` on Debian and Ubuntu; the `.rpm` requires
+  `libayatana-appindicator3.so.1`, on Fedora from
+  `libayatana-appindicator-gtk3`). Where it was not installed,
+  for example on a fresh Ubuntu 24.04, the agent of 0.7.0 stopped right
+  after starting ("Failed to load ayatana-appindicator3"), and the app
+  showed that the background agent was not running. Installing
+  `libayatana-appindicator3-1` by hand works around it in 0.7.0.
 - macOS: the background agent no longer shows a DeckPilot icon in the Dock
   for a moment when it starts, or for the whole life of a second agent
   process that stops because one is already running.
