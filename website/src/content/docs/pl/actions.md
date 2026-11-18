@@ -24,7 +24,7 @@ Typy akcji, które coś zmieniają, przed zapisaniem pokazują informację **Thi
 | --- | --- |
 | General | Log message, Wait |
 | Projects | Cycle projects, Select project, Current project, Project repository, Project documentation, Resolve project resource |
-| System | Open application, Open URL, Open file, Open folder, Run command, Program status |
+| System | Open application, Open URL, Open file, Open folder, Run command, Program status, CPU usage, Memory usage, Network throughput, Disk space |
 | Workspace | Open in editor, Open pages, Open project workspace |
 | Git | Repository status, Current branch, Changed files, Last commit, Remote status, Open repository |
 | Docker | Docker status, Containers, Compose status, Compose up, Compose down, Compose restart, Container logs |
@@ -41,6 +41,7 @@ Czego moduły celowo nie robią:
 - **GitHub**, **GitLab** i **Jira** tylko odczytują, żądaniami GET. GitHub Enterprise, GitLab na własnym serwerze i Jira Data Center są obsługiwane przez ustawienia modułu.
 - **Docker** korzysta z programu Docker CLI z Compose v2. Compose down nigdy nie usuwa wolumenów ani obrazów.
 - **Open URL** przyjmuje wyłącznie adresy `http`, `https` i `mailto`.
+- **CPU usage**, **Memory usage**, **Network throughput** i **Disk space** tylko odczytują. Ich klawisze pokazują wartość na bieżąco, a znacznik stanu zmienia kolor na bursztynowy lub czerwony po osiągnięciu ustawionych progów (procesor i pamięć: domyślnie 70% i 90%; dysk: 20% i 10% wolnego miejsca). Wartości są odczytywane tylko wtedy, gdy taki klawisz jest widoczny, najwyżej co 2 sekundy (dysk: co 30 sekund), a naciśnięcie klawisza podaje bieżącą wartość.
 
 ## Włączanie i wyłączanie modułów
 

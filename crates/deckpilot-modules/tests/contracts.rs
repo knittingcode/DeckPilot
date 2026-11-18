@@ -65,6 +65,37 @@ const KNOWN: &[(&str, &str, &str)] = &[
         "action-cancellable",
         "reads the process list in-process; it starts no program and has nothing to cancel",
     ),
+    (
+        "system.memory",
+        "action-cancellable",
+        "reads the memory figures in-process; it starts no program and has nothing to cancel",
+    ),
+    (
+        "system.disk",
+        "action-cancellable",
+        "reads the volume sizes in-process; it starts no program and has nothing to cancel",
+    ),
+    (
+        "system.cpu",
+        "run-denied-succeeds",
+        "reads only this computer's total CPU use, which needs no capability",
+    ),
+    (
+        "system.memory",
+        "run-denied-succeeds",
+        "reads only this computer's total memory use, which needs no capability",
+    ),
+    (
+        "system.network",
+        "run-denied-succeeds",
+        "reads only byte counts of the network interfaces, which needs no capability",
+    ),
+    (
+        "system.disk",
+        "run-denied-succeeds",
+        "without a folder resource it reads the home folder's volume size, which needs no \
+         capability; a folder resource needs machine resources",
+    ),
     // Findings in modules outside the integration modules, kept until their
     // owners decide.
     (

@@ -24,7 +24,7 @@ Action types that modify something show the notice **This action changes things*
 | --- | --- |
 | General | Log message, Wait |
 | Projects | Cycle projects, Select project, Current project, Project repository, Project documentation, Resolve project resource |
-| System | Open application, Open URL, Open file, Open folder, Run command, Program status |
+| System | Open application, Open URL, Open file, Open folder, Run command, Program status, CPU usage, Memory usage, Network throughput, Disk space |
 | Workspace | Open in editor, Open pages, Open project workspace |
 | Git | Repository status, Current branch, Changed files, Last commit, Remote status, Open repository |
 | Docker | Docker status, Containers, Compose status, Compose up, Compose down, Compose restart, Container logs |
@@ -41,6 +41,7 @@ What the modules deliberately do not do:
 - **GitHub**, **GitLab** and **Jira** only read, with GET requests. GitHub Enterprise, self-managed GitLab and Jira Data Center are supported through the module's settings.
 - **Docker** uses the Docker CLI with Compose v2. Compose down never removes volumes or images.
 - **Open URL** accepts `http`, `https` and `mailto` addresses only.
+- **CPU usage**, **Memory usage**, **Network throughput** and **Disk space** only read. Their keys show the value live, with a status mark that turns amber or red at the thresholds you set (CPU and memory: 70 % and 90 % by default; disk: 20 % and 10 % free). The values are read only while such a key is shown, at most every 2 seconds (disk: every 30 seconds), and pressing the key reports the current value.
 
 ## Turning modules on and off
 
