@@ -37,6 +37,14 @@ interface CanvasProps {
   droppable?: boolean
   /** Controls can be dragged onto other controls. */
   draggable?: boolean
+  /**
+   * Why what is dragged (its drag data) cannot be dropped on `control`;
+   * `null` when it can. A control that refuses shows it while the drag is
+   * over it.
+   */
+  dropRejection?: (control: ControlId, dragged: unknown) => string | null
+  /** A control that just refused a drop, shown as refused for a moment. */
+  rejected?: ControlId | null
   /** Wraps each control, e.g. in a context menu. */
   wrapControl?: (control: ControlId, element: ReactElement) => ReactNode
   size?: "sm" | "md"
@@ -81,6 +89,12 @@ function Control({
   const face = props.faces?.get(key)
   const image = props.images?.get(key)
   const summary = props.summaries?.get(key) ?? (shape === "dial" ? props.captions?.get(key) : "")
+  const refusal =
+    drop.isOver && props.dropRejection
+      ? props.dropRejection(control, drop.active?.data.current)
+      : null
+  const refused =
+    refusal !== null || (props.rejected ? sameControl(props.rejected, control) : false)
   // Only pointer dragging: Enter and Space keep selecting the control.
   const onPointerDown = props.draggable
     ? (drag.listeners?.onPointerDown as React.PointerEventHandler | undefined)
@@ -93,6 +107,7 @@ function Control({
       }}
       type="button"
       data-control={key}
+      data-drop={refused ? "rejected" : drop.isOver ? "accepted" : undefined}
       disabled={!interactive}
       tabIndex={interactive ? (tabStop ? 0 : -1) : undefined}
       aria-label={controlLabel(control)}
@@ -105,7 +120,8 @@ function Control({
         shape === "dial" && "aspect-square rounded-full",
         "ring-offset-2 ring-offset-device-body focus-visible:ring-2 focus-visible:ring-device-focus",
         selected && "ring-2 ring-device-selected",
-        drop.isOver && "ring-2 ring-device-drop",
+        drop.isOver && !refused && "ring-2 ring-device-drop",
+        refused && "ring-2 ring-destructive",
         drag.isDragging && "opacity-50",
       )}
       onPointerDown={onPointerDown}

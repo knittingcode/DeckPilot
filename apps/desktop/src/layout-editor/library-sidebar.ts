@@ -66,3 +66,22 @@ export function saveLibraryCollapsed(collapsed: boolean, store: Storage | null =
     // Remembered for this session only.
   }
 }
+
+export const LIBRARY_COMPATIBLE_ONLY_KEY = "deckpilot.editor.compatibleOnly"
+
+/** Whether the library hides what cannot go on the selected control. */
+export function loadCompatibleOnly(store: Storage | null = storage()) {
+  try {
+    return store?.getItem(LIBRARY_COMPATIBLE_ONLY_KEY) === "true"
+  } catch {
+    return false
+  }
+}
+
+export function saveCompatibleOnly(on: boolean, store: Storage | null = storage()) {
+  try {
+    store?.setItem(LIBRARY_COMPATIBLE_ONLY_KEY, String(on))
+  } catch {
+    // Remembered for this session only.
+  }
+}
