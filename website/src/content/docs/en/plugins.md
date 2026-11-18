@@ -9,7 +9,7 @@ order: 12
 
 ## What you get
 
-- **Where**: the **Plugins** page in **Settings › Extensions**, with the tabs **Discover**, **Installed** and **Updates**. Search the registry, read each plugin's description, version and the permissions it asks for.
+- **Where**: the **Marketplace** button in the toolbar, with the tabs **Discover**, **Installed** and **Updates**. **Settings › Extensions › Plugins** shows the same, starting with the installed plugins. Search the registry, read each plugin's description, version and the permissions it asks for.
 - **From where**: DeckPilot's plugin registry, the one the [Plugin Marketplace](https://knittingcode.github.io/deckpilot-plugins/en/) shows. A package file can be installed from disk only if its bytes are a version that the verified registry lists; there is no unverified sideloading.
 - **The first plugins**, by DeckPilot: Air Quality (Polish air quality stations, data from GIOŚ), Markets (ECB euro reference rates, via Frankfurter), Pomodoro, Break & Hydration, and Memory (a game on your keys).
 - **Built in**: the GitHub, GitLab and Jira integrations and notifications come with DeckPilot as plugins and cannot be replaced from a registry. When you update from a release without plugins, each configured integration moves to its plugin; a stored token or a server on a private network is used by the plugin only after you agree. Configurations a plugin cannot serve yet, such as GitHub Enterprise, stay on the built-in integration.

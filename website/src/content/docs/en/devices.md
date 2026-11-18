@@ -21,7 +21,7 @@ The XL and the Stream Deck + have no driver. DeckPilot knows their shape, so you
 
 Plug the Stream Deck in. DeckPilot looks for devices every two seconds, so it appears automatically after a moment; there is nothing to pair.
 
-Connected devices are listed under **Settings › Devices** in the **Connected devices** card, with the model name, the serial number and a **Connected** or **Disconnected** badge. **Edit layout** opens the Layout Designer for that device. The Dashboard lists the devices too.
+Connected devices are listed under **Settings › Devices** in the **Connected devices** card, with the model name, the serial number and a **Connected** or **Disconnected** badge. **Edit layout** opens the Device Editor in the main window. The device selector in the toolbar lists the connected devices too. The Dashboard lists the devices too.
 
 If nothing is listed, the card says **No Stream Deck detected**. Use **Refresh devices** in the title bar, or **Refresh Devices** in the tray menu, and see [Troubleshooting](../troubleshooting/#the-stream-deck-is-not-detected).
 

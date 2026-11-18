@@ -57,6 +57,6 @@ Eksport nie zawiera ścieżek ani innych ustawień tego komputera, kluczy i hase
 1. Podłącz Stream Decka MK.2. Pojawi się w **Settings › Devices** ([Urządzenia](../devices/)).
 2. Utwórz profil i dodaj swoje projekty ([Profile i projekty](../profiles/)).
 3. Utwórz akcje z potrzebnych modułów ([Akcje](../actions/)).
-4. Umieść je na klawiszach w narzędziu Layout Designer ([Układy](../layouts/)).
+4. Umieść je na klawiszach w narzędziu Device Editor ([Układy](../layouts/)).
 5. Gdy jedna akcja nie wystarcza, połącz kilka w przepływ ([Przepływy](../workflows/)).
 6. Wykonaj zaszyfrowany eksport.

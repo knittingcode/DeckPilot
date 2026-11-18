@@ -9,7 +9,7 @@ order: 4
 
 A profile is an independent set of actions, workflows, projects and layouts, with its own icons. Use profiles to keep unrelated setups apart.
 
-Open **Configure › Profiles**.
+Open **Settings › General › Profiles**.
 
 - **New profile** creates one: enter a **Name** and a **Description**, then **Save**.
 - **Make active** puts a profile on the device. The active profile carries the badge **On device**.
@@ -19,7 +19,7 @@ If you delete the active profile, the device has no layout until you make anothe
 
 ### Editing one profile while another is active
 
-The profile you edit is chosen in the drop-down at the top of the sidebar; it shows **Editing** and the profile's name. It is independent of the profile that runs on the device, so you can prepare a profile without disturbing the one in use.
+The profile you edit is chosen in the profile selector in the toolbar, next to the device selector; **Manage profiles…** there opens **Settings › General › Profiles**. It is independent of the profile that runs on the device, so you can prepare a profile without disturbing the one in use.
 
 ## Projects
 
