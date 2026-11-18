@@ -72,7 +72,7 @@ case "$kind" in
     extracted="${SMOKE_WORK:?}/appimage-extracted"
     rm -rf "$extracted" && mkdir -p "$extracted"
     if (cd "$extracted" && "$appimage" --appimage-extract > /dev/null 2>&1); then
-      record "AppImage: --appimage-extract" pass "extracted to squashfs-root ($(find "$extracted/squashfs-root" -type f | wc -l) files)"
+      record "AppImage: --appimage-extract" pass "extracted to squashfs-root ($(find "$extracted/squashfs-root" -type f | wc -l) files; bundled appindicator libraries: $(find "$extracted/squashfs-root" -iname '*appindicator*' -printf '%P ' | head -c 300))"
     else
       record "AppImage: --appimage-extract" fail "$appimage does not extract"
       exit 0

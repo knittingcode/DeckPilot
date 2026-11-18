@@ -182,6 +182,8 @@ async function dialogClosed() {
 }
 
 async function installedTab() {
+  // A plugin's details replace the tabs until "Back to plugins".
+  if (await visible(button("Back to plugins"))) await click(button("Back to plugins"));
   if (!(await visible(tab("Installed")))) {
     if (!(await visible(button("Plugins")))) await click(button("Settings"));
     await click(button("Plugins"));

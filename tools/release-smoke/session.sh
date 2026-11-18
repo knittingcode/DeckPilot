@@ -147,9 +147,10 @@ inner_launch() {
   # was made, run the installed agent once more by hand for its stderr.
   if [ "$os" = Linux ] && [ ! -s "$data/deckpilot.db" ] && [ -n "${SMOKE_AGENT:-}" ]; then
     local diag libs
-    diag=$(timeout 15 "$SMOKE_AGENT" 2>&1 | tail -n 6)
+    # shellcheck disable=SC2086 # SMOKE_AGENT_ARGS: words, e.g. --agent
+    diag=$(timeout 15 "$SMOKE_AGENT" ${SMOKE_AGENT_ARGS-} 2>&1 | tail -n 6)
     libs=$(ldconfig -p | grep -i -E 'appindicator' | sed 's/ =>.*//' | tr -s ' \t' ' ' | tr '\n' ';')
-    record "$label: agent run by hand (diagnosis)" fail "$SMOKE_AGENT exited with: $(printf '%s' "$diag" | tr '\n' ' '); appindicator libraries installed: ${libs:-none}"
+    record "$label: agent run by hand (diagnosis)" fail "$SMOKE_AGENT ${SMOKE_AGENT_ARGS-} exited with: $(printf '%s' "$diag" | tr '\n' ' '); appindicator libraries installed: ${libs:-none}"
     stop_all
   fi
   # Logs (never the database or the token).

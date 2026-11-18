@@ -161,6 +161,9 @@ jobs:
         run: tools/release-smoke/linux.sh appimage "$SMOKE_WORK/assets" "$VERSION"
       - name: AppImage - first launch with an isolated profile
         if: always()
+        env:
+          SMOKE_AGENT: ${{ runner.temp }}/smoke/work/assets/DeckPilot_${{ needs.resolve.outputs.version }}_amd64.AppImage
+          SMOKE_AGENT_ARGS: --agent
         run: tools/release-smoke/session.sh appimage launch "$SMOKE_WORK/assets/DeckPilot_${VERSION}_amd64.AppImage"
       - name: rpm - inspect, extract and install in Fedora
         if: always()
