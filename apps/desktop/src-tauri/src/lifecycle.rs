@@ -93,6 +93,7 @@ pub fn main_close(macos: bool) -> MainClose {
 
 /// Whether the app belongs in the Dock (the regular activation policy):
 /// while at least one of its windows is visible.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn in_dock(visible_windows: usize) -> bool {
     visible_windows > 0
 }
