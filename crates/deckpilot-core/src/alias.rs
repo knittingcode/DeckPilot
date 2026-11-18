@@ -591,6 +591,17 @@ pub fn incompatibilities(
     if t.timeout_ms < b.timeout_ms {
         problems.push("the node's timeout is shorter".to_owned());
     }
+    // Stored bindings of the legacy type must stay available: the target
+    // supports every control input the built-in does (a plugin without a
+    // declaration supports keys only).
+    let target_controls = target.effective_controls();
+    for (kind, inputs) in &builtin.effective_controls().bindings {
+        for input in inputs {
+            if !target_controls.supports(*kind, *input) {
+                problems.push(format!("{kind}: {input} is no longer supported"));
+            }
+        }
+    }
     problems
 }
 
@@ -987,6 +998,25 @@ mod tests {
         let plugin = plugin_fetch();
         assert_eq!(
             incompatibilities(alias, &builtin, &plugin),
+            Vec::<String>::new()
+        );
+
+        // A built-in that supports dials cannot be served by a plugin
+        // without a declaration (keys only): stored dial bindings would
+        // stop working. One with the built-in's controls can.
+        let mut stepping = builtin.clone();
+        stepping.controls = Some(crate::ActionControls::keys().with(
+            deckpilot_device::ControlKind::Encoder,
+            [deckpilot_device::InputCapability::RotateClockwise],
+        ));
+        assert_eq!(
+            incompatibilities(alias, &stepping, &plugin),
+            ["encoder: rotate-clockwise is no longer supported"]
+        );
+        let mut declared = plugin.clone();
+        declared.controls.clone_from(&stepping.controls);
+        assert_eq!(
+            incompatibilities(alias, &stepping, &declared),
             Vec::<String>::new()
         );
 

@@ -49,7 +49,7 @@ Wybierz pakiet Debiana albo AppImage.
 sudo apt install ./DeckPilot_<wersja>_amd64.deb
 ```
 
-Pakiet instaluje regułę udev, która daje zalogowanemu użytkownikowi dostęp do Stream Decka MK.2 bez uprawnień roota. Po instalacji odłącz urządzenie i podłącz je ponownie.
+Pakiet instaluje regułę udev, która daje zalogowanemu użytkownikowi dostęp do Stream Decka MK.2 bez uprawnień roota. Po instalacji odłącz urządzenie i podłącz je ponownie. `apt` instaluje też pakiety, których DeckPilot potrzebuje, w tym `libayatana-appindicator3-1` dla ikony agenta w zasobniku (w Fedorze pakiet `.rpm` instaluje `libayatana-appindicator-gtk3`).
 
 ### AppImage
 

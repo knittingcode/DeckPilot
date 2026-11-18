@@ -2,8 +2,8 @@ use serde::Serialize;
 use tauri::State;
 
 use deckpilot_core::{
-    ActiveProjectContext, DeviceLayout, KeyFace, LayoutId, PageDestination, PageId, ProfileId,
-    ProjectId, page_faces,
+    ActiveProjectContext, DeviceLayout, KeyFace, LayoutId, LayoutIssue, PageDestination, PageId,
+    ProfileId, ProjectId, page_faces,
 };
 use deckpilot_device::{ControlId, DeviceModelId};
 use deckpilot_storage::ConfigStore;
@@ -55,7 +55,7 @@ pub async fn save_layout(
     state: State<'_, AppState>,
     profile_id: ProfileId,
     layout: DeviceLayout,
-) -> CommandResult<Saved<DeviceLayout>> {
+) -> CommandResult<Saved<SavedLayout>> {
     let mut layout = layout;
     super::trim_in_place(&mut layout.name);
     if layout.name.is_empty() {
@@ -80,8 +80,8 @@ pub async fn save_layout(
     }
     let registry = state.actions();
     modify_profile_and_reload(&state, profile_id, |profile| {
-        let mut issues = layout.validate(&state.catalog, profile);
-        issues.extend(layout.check_overrides(&registry, profile));
+        let stored = profile.layouts.iter().find(|l| l.id == layout.id);
+        let (issues, kept) = check_for_save(&layout, stored, &state.catalog, &registry, profile);
         if !issues.is_empty() {
             let messages: Vec<String> = issues.iter().map(ToString::to_string).collect();
             return Err(CommandError::Invalid(messages.join("\n")));
@@ -99,9 +99,49 @@ pub async fn save_layout(
             }
             None => profile.layouts.push(layout.clone()),
         }
-        Ok(layout)
+        Ok(SavedLayout {
+            layout,
+            incompatible: kept.iter().map(ToString::to_string).collect(),
+        })
     })
     .await
+}
+
+/// A saved layout, with the bindings it keeps that cannot run their
+/// action from their control. Serialized as the layout with an
+/// `incompatible` field (left out when empty), so the frontend reads it as
+/// before.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedLayout {
+    #[serde(flatten)]
+    layout: DeviceLayout,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    incompatible: Vec<String>,
+}
+
+/// What saving `layout` over `stored` (the saved version of the same
+/// layout, if any) must refuse, and the incompatible bindings it keeps.
+///
+/// Refused: problems of the layout (`validate`), of binding overrides,
+/// and bindings whose action cannot run from their control that are new in
+/// this version. An incompatible binding that is stored unchanged (same
+/// page, control, trigger and action) is kept and reported: a profile
+/// saved before compatibility existed, or imported, never becomes
+/// unsavable, and nothing is removed or converted
+/// (`docs/device-controls.md`).
+fn check_for_save(
+    layout: &DeviceLayout,
+    stored: Option<&DeviceLayout>,
+    catalog: &deckpilot_device::ModelCatalog,
+    registry: &deckpilot_core::ActionRegistry,
+    profile: &deckpilot_core::Profile,
+) -> (Vec<LayoutIssue>, Vec<LayoutIssue>) {
+    let mut issues = layout.validate(catalog, profile);
+    issues.extend(layout.check_overrides(registry, profile));
+    let (refused, kept) = layout.compatibility_for_save(stored, catalog, registry, profile);
+    issues.extend(refused);
+    (issues, kept)
 }
 
 #[tauri::command]
@@ -150,6 +190,20 @@ pub struct ControlFace {
     /// controls without a display.
     #[serde(skip_serializing_if = "Option::is_none")]
     image: Option<String>,
+    /// Why bindings of this control on the page cannot run their action
+    /// from it (`docs/device-controls.md`); left out when they all can.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    incompatible: Vec<IncompatibleReason>,
+}
+
+/// One binding of a control that cannot run its action from it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncompatibleReason {
+    trigger: deckpilot_core::Trigger,
+    reason: deckpilot_core::IncompatibilityReason,
+    /// The reason in words.
+    message: String,
 }
 
 /// The image size of `control` on `capabilities`, if it has a display.
@@ -192,24 +246,44 @@ pub fn preview_layout(
     let icons = render
         .unwrap_or(false)
         .then(|| deckpilot_render::Icons::from_profile(&profile));
-    Ok(
-        page_faces(&actions, &layout, page_id, &profile, project, &controls)
-            .into_iter()
-            .map(|(control, face)| {
-                let image = icons.as_ref().and_then(|icons| {
-                    let (width, height) = image_size(&model.capabilities, control)?;
-                    let frame = deckpilot_render::render_with(&face, width, height, icons);
-                    let png = deckpilot_render::frame_png(&frame)?;
-                    Some(deckpilot_core::IconData::new(png).data_url())
-                });
-                ControlFace {
-                    control,
-                    face,
-                    image,
-                }
-            })
-            .collect(),
+    let incompatible: Vec<deckpilot_core::IncompatibleBinding> = layout
+        .incompatible_bindings(&model.capabilities, &actions, &profile)
+        .into_iter()
+        .filter(|found| found.page == page_id)
+        .collect();
+    Ok(page_faces(
+        &actions,
+        &layout,
+        page_id,
+        &profile,
+        project,
+        &controls,
+        Some(&model.capabilities),
     )
+    .into_iter()
+    .map(|(control, face)| {
+        let image = icons.as_ref().and_then(|icons| {
+            let (width, height) = image_size(&model.capabilities, control)?;
+            let frame = deckpilot_render::render_with(&face, width, height, icons);
+            let png = deckpilot_render::frame_png(&frame)?;
+            Some(deckpilot_core::IconData::new(png).data_url())
+        });
+        ControlFace {
+            control,
+            face,
+            image,
+            incompatible: incompatible
+                .iter()
+                .filter(|found| found.control == control)
+                .map(|found| IncompatibleReason {
+                    trigger: found.trigger,
+                    message: found.reason.to_string(),
+                    reason: found.reason.clone(),
+                })
+                .collect(),
+        }
+    })
+    .collect())
 }
 
 /// One page of a layout's page tree.
@@ -382,4 +456,117 @@ pub fn copy_page(
         },
         parent_id,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use deckpilot_core::{BindingTarget, ControlBinding, Os, Profile, Trigger};
+    use deckpilot_device::{ModelCatalog, models};
+
+    use super::*;
+
+    /// A profile with a Stream Deck + layout whose dial rotation runs
+    /// `general.log` (keys only): stored before compatibility existed.
+    fn stored() -> (Profile, deckpilot_core::ActionRegistry) {
+        let registry = deckpilot_modules::builtin(Os::current()).action_registry();
+        let mut profile = Profile::new("Work");
+        let log = registry
+            .create_instance(
+                "Log",
+                deckpilot_modules::general::log_id(),
+                &deckpilot_core::ActionParameters::new().with(
+                    "message",
+                    deckpilot_core::ParameterValue::Text("hello".into()),
+                ),
+            )
+            .unwrap();
+        let mut layout = DeviceLayout::new("Plus", models::stream_deck_plus().id);
+        layout.pages[0].bindings = vec![
+            ControlBinding::new(
+                ControlId::Encoder { index: 0 },
+                Trigger::RotateClockwise,
+                BindingTarget::action(log.id),
+            ),
+            ControlBinding::new(
+                ControlId::Key { index: 0 },
+                Trigger::Press,
+                BindingTarget::action(log.id),
+            ),
+        ];
+        profile.actions.push(log);
+        profile.layouts.push(layout);
+        (profile, registry)
+    }
+
+    #[test]
+    fn a_stored_incompatible_binding_is_kept_and_a_new_one_refused() {
+        let (profile, registry) = stored();
+        let catalog = ModelCatalog::builtin();
+        let saved = &profile.layouts[0];
+
+        // Saving the stored layout as it is (or with other changes) works:
+        // the binding is reported, not removed.
+        let mut edited = saved.clone();
+        edited.name = "Plus (edited)".into();
+        let (refused, kept) = check_for_save(&edited, Some(saved), &catalog, &registry, &profile);
+        assert!(refused.is_empty(), "{refused:?}");
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].to_string().contains("encoder 0"), "{}", kept[0]);
+
+        // A new incompatible binding is refused with the reason.
+        let action = saved.pages[0].bindings[0].target.clone();
+        edited.pages[0].bindings.push(ControlBinding::new(
+            ControlId::Encoder { index: 2 },
+            Trigger::RotateCounterClockwise,
+            action.clone(),
+        ));
+        let (refused, kept) = check_for_save(&edited, Some(saved), &catalog, &registry, &profile);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(refused.len(), 1);
+        assert!(
+            refused[0]
+                .to_string()
+                .contains("the action cannot be bound to an encoder; it works on keys only"),
+            "{}",
+            refused[0]
+        );
+
+        // A new layout with the same binding: refused.
+        let mut copy = saved.clone();
+        copy.id = LayoutId::new();
+        let (refused, _) = check_for_save(&copy, None, &catalog, &registry, &profile);
+        assert_eq!(refused.len(), 1);
+
+        // Keys accept the press action.
+        let mut keys = DeviceLayout::new("Keys", models::stream_deck_mk2().id);
+        keys.pages[0].bindings.push(ControlBinding::new(
+            ControlId::Key { index: 3 },
+            Trigger::LongPress,
+            action,
+        ));
+        assert_eq!(
+            check_for_save(&keys, None, &catalog, &registry, &profile),
+            (Vec::new(), Vec::new())
+        );
+    }
+
+    #[test]
+    fn saved_layouts_serialize_as_before() {
+        let (profile, _) = stored();
+        let layout = profile.layouts[0].clone();
+        let plain = serde_json::to_value(&layout).unwrap();
+        let saved = serde_json::to_value(SavedLayout {
+            layout: layout.clone(),
+            incompatible: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(saved, plain);
+        let reported = serde_json::to_value(SavedLayout {
+            layout,
+            incompatible: vec!["why".into()],
+        })
+        .unwrap();
+        assert_eq!(reported["incompatible"], serde_json::json!(["why"]));
+        assert_eq!(reported["id"], plain["id"]);
+    }
 }

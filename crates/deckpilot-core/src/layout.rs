@@ -9,8 +9,10 @@ use thiserror::Error;
 
 use deckpilot_device::{
     ControlId, ControlInput, ControlKind, DeviceCapabilities, DeviceModel, DeviceModelId,
-    ModelCatalog, TouchGesture,
+    InputCapability, ModelCatalog, TouchGesture,
 };
+
+use crate::controls::IncompatibilityReason;
 
 use crate::gesture::{
     BoundGestures, Gesture, GestureTimingError, GestureTimings, KeyGestureSettings,
@@ -81,6 +83,21 @@ impl Trigger {
             (Self::RotateCounterClockwise, ControlInput::Rotate { delta }) => delta < 0,
             (Self::Touch { gesture }, ControlInput::Touch { gesture: actual }) => gesture == actual,
             _ => false,
+        }
+    }
+
+    /// The input this trigger reacts to, as controls and actions declare
+    /// inputs (`docs/device-controls.md`). Exactly one per trigger.
+    pub fn input_capability(self) -> InputCapability {
+        match self {
+            Self::Press => InputCapability::Press,
+            Self::Release => InputCapability::Release,
+            Self::RotateClockwise => InputCapability::RotateClockwise,
+            Self::RotateCounterClockwise => InputCapability::RotateCounterClockwise,
+            Self::Touch { gesture } => InputCapability::from_touch(gesture),
+            Self::Click => InputCapability::Click,
+            Self::DoubleClick => InputCapability::DoubleClick,
+            Self::LongPress => InputCapability::LongPress,
         }
     }
 
@@ -328,6 +345,16 @@ pub enum LayoutIssue {
         page: String,
         control: ControlId,
         reason: StatefulIssue,
+    },
+    /// The binding's action cannot be bound to this control or input
+    /// ([`DeviceLayout::check_compatibility`]). The binding is kept; the
+    /// agent does not run it.
+    #[error("page `{page}`: {control} ({trigger:?}): {reason}")]
+    IncompatibleAction {
+        page: String,
+        control: ControlId,
+        trigger: Trigger,
+        reason: IncompatibilityReason,
     },
     /// A warning ([`DeviceLayout::warnings`]): the runtime shows an
     /// automatic Back key on the page's first free key.
@@ -612,6 +639,152 @@ impl DeviceLayout {
             }
         }
         issues
+    }
+
+    /// The action bindings whose action cannot run where it is bound, on a
+    /// device with `capabilities`, with the action types of `registry`
+    /// (see [`crate::compatibility`]). Only bindings that run an action are
+    /// checked: workflows, pages, Back and stateful keys keep their own
+    /// rules. Bindings to a control the model lacks, or for an input the
+    /// control cannot produce, are left to [`DeviceLayout::validate`]
+    /// (`UnknownControl`, `UnsupportedTrigger`); so are missing actions
+    /// (`DanglingTarget`) and types that cannot run here (shown as
+    /// unavailable).
+    pub fn incompatible_bindings(
+        &self,
+        capabilities: &DeviceCapabilities,
+        registry: &ActionRegistry,
+        profile: &Profile,
+    ) -> Vec<IncompatibleBinding> {
+        let mut found = Vec::new();
+        for page in &self.pages {
+            for binding in &page.bindings {
+                let Some(action) = binding.target.action_id() else {
+                    continue;
+                };
+                if let Some(reason) =
+                    binding_incompatibility(binding, capabilities, registry, profile)
+                {
+                    found.push(IncompatibleBinding {
+                        page: page.id,
+                        page_name: page.name.clone(),
+                        control: binding.control,
+                        trigger: binding.trigger,
+                        action,
+                        reason,
+                    });
+                }
+            }
+        }
+        found
+    }
+
+    /// [`DeviceLayout::incompatible_bindings`] for the layout's model, as
+    /// issues. Nothing for a model `catalog` does not know (`validate`
+    /// reports it).
+    pub fn check_compatibility(
+        &self,
+        catalog: &ModelCatalog,
+        registry: &ActionRegistry,
+        profile: &Profile,
+    ) -> Vec<LayoutIssue> {
+        let Some(model) = catalog.get(&self.model) else {
+            return Vec::new();
+        };
+        self.incompatible_bindings(&model.capabilities, registry, profile)
+            .into_iter()
+            .map(IncompatibleBinding::into_issue)
+            .collect()
+    }
+
+    /// The incompatible bindings of this (edited) layout, split for saving
+    /// it over `stored`, the version of the same layout that is saved now
+    /// (`None`: a new layout). A binding that is in `stored` unchanged (same
+    /// page, control, trigger and action) was saved before and stays:
+    /// saving never makes a stored profile unsavable, and nothing is
+    /// removed or converted. Every other one is new and refused. Returns
+    /// `(refused, kept)`.
+    pub fn compatibility_for_save(
+        &self,
+        stored: Option<&DeviceLayout>,
+        catalog: &ModelCatalog,
+        registry: &ActionRegistry,
+        profile: &Profile,
+    ) -> (Vec<LayoutIssue>, Vec<LayoutIssue>) {
+        let Some(model) = catalog.get(&self.model) else {
+            return (Vec::new(), Vec::new());
+        };
+        let was_stored = |found: &IncompatibleBinding| {
+            stored
+                .filter(|stored| stored.model == self.model)
+                .and_then(|stored| stored.page(found.page))
+                .is_some_and(|page| {
+                    page.bindings.iter().any(|binding| {
+                        binding.control == found.control
+                            && binding.trigger == found.trigger
+                            && binding.target.action_id() == Some(found.action)
+                    })
+                })
+        };
+        let (kept, refused): (Vec<_>, Vec<_>) = self
+            .incompatible_bindings(&model.capabilities, registry, profile)
+            .into_iter()
+            .partition(was_stored);
+        (
+            refused
+                .into_iter()
+                .map(IncompatibleBinding::into_issue)
+                .collect(),
+            kept.into_iter()
+                .map(IncompatibleBinding::into_issue)
+                .collect(),
+        )
+    }
+}
+
+/// An action binding whose action cannot run where it is bound
+/// ([`DeviceLayout::incompatible_bindings`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncompatibleBinding {
+    pub page: PageId,
+    pub page_name: String,
+    pub control: ControlId,
+    pub trigger: Trigger,
+    pub action: ActionInstanceId,
+    pub reason: IncompatibilityReason,
+}
+
+impl IncompatibleBinding {
+    pub fn into_issue(self) -> LayoutIssue {
+        LayoutIssue::IncompatibleAction {
+            page: self.page_name,
+            control: self.control,
+            trigger: self.trigger,
+            reason: self.reason,
+        }
+    }
+}
+
+/// Why `binding` cannot run its action on a device with `capabilities`;
+/// `None` when it can, when it runs no action, or when that is decided
+/// elsewhere (see [`DeviceLayout::incompatible_bindings`]).
+pub fn binding_incompatibility(
+    binding: &ControlBinding,
+    capabilities: &DeviceCapabilities,
+    registry: &ActionRegistry,
+    profile: &Profile,
+) -> Option<IncompatibilityReason> {
+    let action = binding.target.action_id()?;
+    let control = capabilities.control_capabilities(binding.control)?;
+    if !control.supports(binding.trigger.input_capability()) {
+        return None;
+    }
+    let instance = profile.action(action)?;
+    let definition = registry.definition(&instance.action_type)?;
+    match crate::compatibility(definition, &control, binding.trigger) {
+        crate::Compatibility::Compatible => None,
+        crate::Compatibility::Incompatible(reason) => Some(reason),
     }
 }
 

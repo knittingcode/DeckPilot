@@ -62,6 +62,7 @@ impl Echo {
             parameters: vec![text("message", true)],
             requires_project: false,
             deprecated: false,
+            controls: None,
             node: crate::graph::NodeSpec::default(),
         })
     }
@@ -142,6 +143,7 @@ impl Select {
             }],
             requires_project: false,
             deprecated: false,
+            controls: None,
             node: crate::graph::NodeSpec {
                 changes_context: true,
                 ..crate::graph::NodeSpec::default()
@@ -322,6 +324,7 @@ impl FeatureModule for TestModule {
                 parameters: Vec::new(),
                 requires_project: false,
                 deprecated: false,
+                controls: None,
                 node: crate::graph::NodeSpec::default(),
             }))],
             "other" => vec![Box::new(Echo::new())],
@@ -362,6 +365,7 @@ fn fetch_type(id: &str, message_length: usize) -> ActionType {
         }],
         requires_project: false,
         deprecated: false,
+        controls: None,
         node: crate::graph::NodeSpec {
             outputs: vec![crate::graph::OutputSpec::new(
                 "body",

@@ -40,11 +40,13 @@
     },
     "linux": {
       "deb": {
+        "depends": ["libayatana-appindicator3-1"],
         "files": {
           "/usr/lib/udev/rules.d/70-deckpilot-streamdeck.rules": "../../../packaging/linux/70-deckpilot-streamdeck.rules"
         }
       },
       "rpm": {
+        "depends": ["libayatana-appindicator3.so.1()(64bit)"],
         "files": {
           "/usr/lib/udev/rules.d/70-deckpilot-streamdeck.rules": "../../../packaging/linux/70-deckpilot-streamdeck.rules"
         }
