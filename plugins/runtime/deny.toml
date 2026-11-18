@@ -1,0 +1,10 @@
+# cargo-deny policy for the plugin runtime workspace (plugins/runtime/
+# Cargo.lock): RustSec advisories only (the Advisories workflow,
+# .github/workflows/advisories.yml), the same rules as the root deny.toml.
+# Every advisory fails the check, unmaintained and unsound notices included.
+# No ignores: add one only for an advisory with no usable fix that has been
+# judged tolerable, with its reason and a review date, as in ../../deny.toml.
+[advisories]
+unmaintained = "all"
+unsound = "all"
+yanked = "warn"
