@@ -412,18 +412,11 @@ mod tests {
             std::fs::create_dir_all(target.parent().unwrap()).unwrap();
             std::fs::copy(root.join(file), target).unwrap();
         }
-        let mut log = std::fs::read_to_string(work.join(CHANGELOG)).unwrap();
-        // The repository's own notes for its next release are not part of
-        // the fixture: drop its "Unreleased" section, if there is one.
-        if let Some(start) = log.find("\n## [Unreleased]") {
-            let section = start + 1;
-            let end = log[section + 1..]
-                .find("\n## [")
-                .map_or(log.len(), |i| section + 1 + i + 1);
-            log.replace_range(section..end, "");
-        }
-        let first = log.find("\n## [").unwrap();
-        log.insert_str(first + 1, "## [Unreleased]\n\n- A change.\n\n");
+        // A changelog of its own, so the test does not depend on the
+        // repository's release history (its newest section, or notes for
+        // its next release under "Unreleased").
+        let log = "# Changelog\n\nIntro.\n\n## [Unreleased]\n\n- A change.\n\n\
+                   ## [0.5.0] - Not released\n\n- Old.\n";
         std::fs::write(work.join(CHANGELOG), log).unwrap();
         let run = |dir: &Path, args: &[&str]| git(dir, args).unwrap();
         run(&work, &["init", "--quiet", "-b", "main"]);
