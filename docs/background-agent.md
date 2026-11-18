@@ -57,7 +57,10 @@ closed and reopened at any time without interrupting devices.
   sleeps until the next one is due and redraws only keys whose state
   changed. Keys bound to a running workflow show a running mark with its
   progress.
-- **Tray.** On macOS the agent runs as an accessory app (no Dock icon). On
+- **Tray.** On macOS the agent runs as an accessory app (no Dock icon):
+  `LSUIElement` in the `Info.plist` embedded in its executable, so not even
+  a short-lived agent process (a second instance stopping at the lock)
+  shows one, and the accessory policy of its event loop. On
   Linux the tray uses AppIndicator; desktop environments without
   AppIndicator/StatusNotifier support (for example GNOME without the
   extension) do not show the icon, but the agent keeps working. Run with
@@ -100,16 +103,27 @@ exist yet.
 
 ### Windows, the Dock and the three quits (macOS)
 
-The configuration app is a window onto the agent. Its process runs while
-one of its windows is open and ends when the last one closes (Tauri's
-default, kept on purpose): on macOS that takes its icon out of the Dock
-again, while the agent stays in the menu bar as an accessory app that never
-appears in the Dock. Neither process sets `LSUIElement`, and the app never
-keeps a hidden window alive or switches its activation policy.
+The configuration app is a window onto the agent; the agent stays in the
+menu bar as an accessory app that never appears in the Dock.
+
+On macOS the app behaves like Docker Desktop. Closing the main window (the
+close button or ⌘W) hides it and switches the app to the **accessory**
+activation policy: its icon leaves the Dock, the process keeps running
+(still connected and unlocked) and the agent is untouched. Every path that
+shows a window switches back to the **regular** policy first, so the window
+and its Dock icon return together: the tray's *Open DeckPilot*
+(`showWindow`), opening the app from Finder, Spotlight, Launchpad or the
+Dock (the application's *reopen* event), and a password or module window.
+After any window closes, the policy follows the windows that are still
+visible (regular while one is, accessory when none is). The app's own
+`Info.plist` has no `LSUIElement`, so a launch always starts in the Dock.
+macOS keeps one process per application, so opening it again reaches the
+running one; there is never a second app or window, and the agent's
+instance lock keeps a single agent and tray icon.
 
 | How                                         | Windows        | App process          | Agent         |
 | ------------------------------------------- | -------------- | -------------------- | ------------- |
-| Close Window (⌘W, the close button)         | that one       | ends with the last   | keeps running |
+| Close Window (⌘W, the close button)         | that one       | macOS: keeps running, out of the Dock; Windows, Linux: ends with the last | keeps running |
 | Quit DeckPilot UI (⌘Q, the app menu on macOS) | all          | ends                 | keeps running |
 | Quit DeckPilot (tray)                       | all            | ends                 | stops         |
 
@@ -127,9 +141,10 @@ keeps a hidden window alive or switches its activation policy.
 - On macOS the application menu's Quit reads "Quit DeckPilot UI", so it is
   not mistaken for the tray's "Quit DeckPilot".
 
-**macOS only.** Closing the apps on the tray's Quit, creating the main
-window for `showWindow` in a single-window app, and the "Quit DeckPilot UI"
-label apply to macOS. On Windows and Linux the app behaves as before: it
+**macOS only.** Closing the main window to the menu bar, the activation
+policy, closing the apps on the tray's Quit, creating the main window for
+`showWindow` in a single-window app, and the "Quit DeckPilot UI" label
+apply to macOS. On Windows and Linux the app behaves as before: it
 stays open after the tray's Quit and reconnects, an app without a main
 window ignores `showWindow`, and the menu is Tauri's default. The agent
 sends the `reason` on every platform.

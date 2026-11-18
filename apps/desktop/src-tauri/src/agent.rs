@@ -550,7 +550,7 @@ async fn unlock_if_needed<R: Runtime>(
 /// runs): the main window when unlocked, otherwise the password prompt. A
 /// process started for one window only creates its main window on macOS,
 /// so the request is never lost and no second app is started.
-fn show_window<R: Runtime>(app: &AppHandle<R>) {
+pub(crate) fn show_window<R: Runtime>(app: &AppHandle<R>) {
     use crate::lifecycle::{MACOS, ShowTarget, show_target};
     let state = app.try_state::<crate::state::AppState>();
     let unlocked = state.as_ref().is_none_or(|state| state.is_unlocked());
