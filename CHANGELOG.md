@@ -15,6 +15,8 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-18
+
 ### Added
 
 - System monitor keys. The System module has four new read-only actions,
