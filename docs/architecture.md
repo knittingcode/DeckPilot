@@ -240,7 +240,7 @@ changes.
 The device editor (`layout-editor/editor.tsx`) has the device and its pages
 in the centre, the key inspector below it and the Action Library at the
 right (`LibraryDock`: resizable and collapsible, both remembered; an overlay
-in windows narrower than 1100 px). One drag and drop context spans all
+in windows narrower than 960 px). One drag and drop context spans all
 three, so library entries drop onto controls and onto gesture slots. The
 device's colours are theme tokens (`--device-*` in `index.css`).
 

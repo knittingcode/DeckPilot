@@ -71,7 +71,8 @@ const MARKETPLACE: &str = "//header[@aria-label='Toolbar']//button[@aria-label='
 /// from its descriptor, the Action Library at the right.
 const EDITOR: &str =
     "//*[@data-slot='device-editor']//*[@role='group' and contains(@aria-label,'controls')]";
-const LIBRARY: &str = "//aside[@aria-label='Action Library']";
+/// The library beside the editor, or (narrow windows) its overlay toggle.
+const LIBRARY: &str = "//aside[@aria-label='Action Library'] | //*[@data-slot='device-editor']//button[normalize-space(.)='Library' and @aria-expanded]";
 
 /// The identifier of the settings window (`src-tauri/src/windows.rs`).
 const SETTINGS_WINDOW: &str = "app.settings";

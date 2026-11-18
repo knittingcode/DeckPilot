@@ -14,7 +14,7 @@ export const LIBRARY_WIDTH = { min: 224, default: 288, max: 480 }
  * Below this window width the library leaves the layout and opens as an
  * overlay above the editor instead (CSS pixels).
  */
-export const LIBRARY_OVERLAY_BELOW = 1100
+export const LIBRARY_OVERLAY_BELOW = 960
 
 /** Keyboard step of the resize handle. */
 export const LIBRARY_STEP = 16
