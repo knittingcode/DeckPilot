@@ -100,7 +100,11 @@ env:
   # Empty for events without inputs (pull requests, pushes, nightly).
   PRERELEASE_INPUT: ${{ inputs.prerelease && 'true' || 'false' }}
   MSI_VERSION_INPUT: ${{ inputs.msi-version }}
-  RUST_CACHE_SAVE: ${{ github.ref == 'refs/heads/main' }}
+  # Not named RUST_*: Swatinem/rust-cache hashes every RUST*, CARGO*, CC*,
+  # CFLAGS*, CXX* and CMAKE* variable into its cache key, so a variable that
+  # differs between main and pull requests gave them different keys and no
+  # pull request ever restored main's cache.
+  SAVE_RUST_CACHE: ${{ github.ref == 'refs/heads/main' }}
   # The distribution record compiled into the app and the agent
   # (crates/deckpilot-distribution), as in the release builds; the package
   # checks read it back from every package.
@@ -148,7 +152,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: package-linux
-          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
+          save-if: ${{ env.SAVE_RUST_CACHE == 'true' }}
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -217,7 +221,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: package-windows
-          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
+          save-if: ${{ env.SAVE_RUST_CACHE == 'true' }}
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -316,7 +320,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: package-macos
-          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
+          save-if: ${{ env.SAVE_RUST_CACHE == 'true' }}
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
