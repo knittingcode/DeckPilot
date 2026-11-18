@@ -108,9 +108,9 @@ test.describe('documentation', () => {
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(await block.locator('pre').textContent());
   });
 
-  test('plugins are documented as experimental and absent from releases', async ({ page }) => {
+  test('plugins are documented as installable from the Marketplace', async ({ page }) => {
     await page.goto('en/docs/plugins/');
-    await expect(page.locator('.prose')).toContainText('Plugins cannot be installed in any released version of DeckPilot');
+    await expect(page.locator('.prose')).toContainText('DeckPilot installs plugins from its signed Marketplace');
     await expect(page.locator('.prose').getByRole('link', { name: 'plugin developer portal' })).toHaveAttribute(
       'href',
       'https://knittingcode.github.io/deckpilot-plugins/en/developers/',

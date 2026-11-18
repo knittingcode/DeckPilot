@@ -161,11 +161,11 @@ test.describe('Marketplace', () => {
     }
   });
 
-  test('the homepage says that plugins are experimental and off in releases', async ({ page }) => {
+  test('the homepage says that plugins ship with DeckPilot', async ({ page }) => {
     await page.goto('en/');
-    await expect(page.locator('#marketplace')).toContainText('Experimental preview');
-    await expect(page.locator('#marketplace')).toContainText('switched off in every released build');
-    await expect(page.locator('#marketplace')).toContainText('no plugin has been published yet');
+    await expect(page.locator('#marketplace')).toContainText('New');
+    await expect(page.locator('#marketplace')).toContainText('installs plugins from Settings › Extensions › Plugins');
+    await expect(page.locator('#marketplace')).not.toContainText('switched off');
   });
 });
 

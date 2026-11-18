@@ -83,7 +83,7 @@ export const en = {
       'DeckPilot is an open-source app for macOS, Windows and Linux that configures a Stream Deck and automates your work with actions and workflows. Local and encrypted.',
     hero: {
       headline: 'Your Stream Deck. Your workflow.',
-      lead: 'DeckPilot is an open-source, cross-platform application for configuring Stream Deck devices and automating tasks with actions and workflows. Extending it through plugins is in experimental preview.',
+      lead: 'DeckPilot is an open-source, cross-platform application for configuring Stream Deck devices and automating tasks with actions and workflows. It is extended through sandboxed plugins from a signed Marketplace.',
       download: 'Download DeckPilot',
       plugins: 'Explore Plugins',
       github: 'View on GitHub',
@@ -251,11 +251,11 @@ export const en = {
     },
     marketplace: {
       eyebrow: 'Plugin Marketplace',
-      badge: 'Experimental preview',
-      title: 'Plugins, when they are ready',
-      lead: 'Plugins are how DeckPilot will take integrations beyond the built-in modules: WebAssembly code in a sandbox, a signed registry, and permissions you approve one by one.',
+      badge: 'New',
+      title: 'Plugins from a signed Marketplace',
+      lead: 'Plugins take DeckPilot beyond its built-in modules: WebAssembly code in a sandbox, a signed registry, and permissions you approve one by one.',
       status:
-        'Plugin support is switched off in every released build of DeckPilot, and no plugin has been published yet. The Marketplace site shows how it will work and documents the SDK for developers.',
+        'DeckPilot installs plugins from Settings › Extensions › Plugins. The first ones, by DeckPilot, are Air Quality, Markets, Pomodoro, Break & Hydration and Memory; the GitHub, GitLab and Jira integrations and notifications are built-in plugins. The Marketplace site lists them and documents the SDK for developers.',
       explore: 'Explore the Marketplace',
       developers: 'Plugin developer portal',
       points: ['Sandboxed WebAssembly, outside the app’s process', 'A signed registry: no unverified sideloading', 'Every permission needs your consent'],
@@ -339,8 +339,8 @@ export const en = {
           a: 'No. DeckPilot is an independent open-source project. It is not affiliated with or endorsed by Elgato or Corsair.',
         },
         {
-          q: 'Can I install plugins today?',
-          a: 'No. The plugin system is experimental and switched off in every released build, and the registry has no published plugins. Everything DeckPilot does today comes from its built-in modules.',
+          q: 'Can I install plugins?',
+          a: 'Yes: in Settings › Extensions › Plugins, from DeckPilot’s signed registry. Each plugin runs in a sandbox and only with the permissions you agree to.',
         },
         {
           q: 'Why does Windows warn me when I start the installer?',

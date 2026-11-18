@@ -46,7 +46,7 @@ What the modules deliberately do not do:
 
 **Settings › Extensions › Modules** has a switch for each module. Disabling a module hides its pages and action types; the actions, workflows and layouts that use it are kept and shown as **Unavailable** until you enable it again. A module cannot be disabled while an enabled module depends on it.
 
-All modules are built into DeckPilot. Installing modules from other sources is not supported; see [Plugins](../plugins/) for the experimental plugin system.
+All modules are built into DeckPilot. More actions come from plugins, installed from DeckPilot's signed Marketplace; see [Plugins](../plugins/).
 
 ## Things that are off until you allow them
 
