@@ -32,7 +32,17 @@ mode="${2:?}"
 exe="${3:?}"
 os=$(uname -s)
 
-agent_pids() { pgrep -x deckpilot-agent 2> /dev/null || true; }
+# Live agents only: an agent that exited stays a zombie (state Z) until
+# the app reaps it, and must not count as running.
+agent_pids() {
+  local pid
+  for pid in $(pgrep -x deckpilot-agent 2> /dev/null); do
+    case "$(ps -o stat= -p "$pid" 2> /dev/null | tr -d ' ')" in
+      Z* | "") ;;
+      *) echo "$pid" ;;
+    esac
+  done
+}
 
 stop_all() {
   local pid pids
