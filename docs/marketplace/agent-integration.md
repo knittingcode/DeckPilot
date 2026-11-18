@@ -445,7 +445,12 @@ never counts, and no key is ever taken from the network.
   sha256 are the pinned ones (`verify_package` then checks everything
   again), so a partial or corrupt download is refused and nothing is
   written; the store stages only verified bytes. An update whose download
-  fails leaves the installed version active and running. A tampered
+  fails leaves the installed version active and running. Before an update
+  is staged or applied, its module is loaded once in a host of its own
+  (`trial_load`, on platforms that run plugins): a module the host refuses
+  (actions other than the manifest's, a failing `dp_init`, a broken
+  descriptor) fails the update with `broken` and nothing is installed;
+  a host that cannot start or lacks a full sandbox does not block it. A tampered
   package is `invalidPackage`, an unreachable or refused one
   `registryUnavailable`.
 - **Offline cache.** The crate's `FileTrustStore` (trust state, index
