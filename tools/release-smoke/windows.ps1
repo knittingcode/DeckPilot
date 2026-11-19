@@ -5,7 +5,7 @@
 #   windows.ps1 install-nsis  <label> <setup.exe>  silent install (/S)
 #   windows.ps1 uninstall-nsis <label>
 #   windows.ps1 launch        <label>              first launch with an isolated profile
-#   windows.ps1 gui           <label>              tauri-driver + msedgedriver, gui.mjs
+#   windows.ps1 gui           <label>              msedgedriver attached to the app's WebView2, gui.mjs
 #
 # install-* write the installation directory to $env:SMOKE_WORK\<label>.dir
 # and to GITHUB_ENV as SMOKE_INSTALL_DIR. Results go to
@@ -269,28 +269,43 @@ switch ($Command) {
     }
   }
   'gui' {
+    # Release builds keep their own WebView2 profile and arguments, so a
+    # webview msedgedriver (through tauri-driver) launches never opens the
+    # debugging port it waits for (DevToolsActivePort). Instead the app is
+    # started with a DevTools port for WebView2 and msedgedriver attaches
+    # to it (debuggerAddress), as Microsoft documents for WebView2 apps.
     $dir = Get-Content $dirFile -ErrorAction Stop
     $exe = Join-Path $dir 'deckpilot-desktop.exe'
     $p = New-Profile "$Label-gui"
     $envs = Profile-Env $p
     $before = @(DeckPilot-Credentials)
     $listener = [System.Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $listener.Start(); $port = $listener.LocalEndpoint.Port; $listener.Stop()
-    $listener = [System.Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $listener.Start(); $native = $listener.LocalEndpoint.Port; $listener.Stop()
-    $driverArgs = @('--port', "$port", '--native-port', "$native")
-    if ($env:NATIVE_DRIVER) { $driverArgs += @('--native-driver', $env:NATIVE_DRIVER) }
-    $log = Join-Path $out "$Label-tauri-driver.log"
-    $envs['RUST_LOG'] = 'info'
-    $server = Start-Process -FilePath $env:TAURI_DRIVER -ArgumentList $driverArgs -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err" -Environment $envs
-    $up = $false
-    for ($i = 0; $i -lt 120 -and -not $up; $i++) {
-      try { Invoke-RestMethod "http://127.0.0.1:$port/status" -TimeoutSec 2 | Out-Null; $up = $true } catch { Start-Sleep -Milliseconds 500 }
+    $listener = [System.Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $listener.Start(); $cdp = $listener.LocalEndpoint.Port; $listener.Stop()
+    $envs['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = "--remote-debugging-port=$cdp"
+    $app = Start-WithEnv $exe $envs
+    $version = $null
+    for ($i = 0; $i -lt 240 -and -not $version; $i++) {
+      try { $version = Invoke-RestMethod "http://127.0.0.1:$cdp/json/version" -TimeoutSec 2 } catch { Start-Sleep -Milliseconds 500 }
     }
-    if (-not $up) {
-      Record "${Label}: GUI tauri-driver" 'not-covered' "tauri-driver did not answer on port ${port}: $(Get-Content "$log.err" -Tail 5 -ErrorAction SilentlyContinue)"
+    $log = Join-Path $out "$Label-msedgedriver.log"
+    if (-not $version) {
+      $ports = @(Get-ChildItem -Path $p -Recurse -Filter DevToolsActivePort -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+      $running = if ($app.HasExited) { "exited with $($app.ExitCode)" } else { 'running' }
+      Record "${Label}: GUI WebDriver session on the release build" 'not-covered' "the installed release build opened no WebView2 DevTools port with WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=$cdp within 120 s (app $running; DevToolsActivePort files: $(if ($ports) { $ports -join ', ' } else { 'none' }))"
     } else {
-      node (Join-Path $PSScriptRoot 'gui.mjs') --port "$port" --app "$exe" --label "$Label" --out "$out" 2>&1 | Tee-Object -FilePath (Join-Path $out "$Label-gui.log")
+      Write-Host "WebView2 DevTools on port ${cdp}: $($version.Browser)"
+      $server = Start-Process -FilePath $env:NATIVE_DRIVER -ArgumentList @("--port=$port") -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+      $up = $false
+      for ($i = 0; $i -lt 120 -and -not $up; $i++) {
+        try { Invoke-RestMethod "http://127.0.0.1:$port/status" -TimeoutSec 2 | Out-Null; $up = $true } catch { Start-Sleep -Milliseconds 500 }
+      }
+      if (-not $up) {
+        Record "${Label}: GUI msedgedriver" 'error' "msedgedriver did not answer on port ${port}: $(Get-Content "$log.err" -Tail 5 -ErrorAction SilentlyContinue)"
+      } else {
+        node (Join-Path $PSScriptRoot 'gui.mjs') --port "$port" --attach "127.0.0.1:$cdp" --app "$exe" --label "$Label" --out "$out" 2>&1 | Tee-Object -FilePath (Join-Path $out "$Label-gui.log")
+      }
+      Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
     }
-    Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
     Get-Process msedgedriver -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     [void](Stop-DeckPilot)
     New-Item -ItemType Directory -Force -Path (Join-Path $out "$Label-gui-agent-logs") | Out-Null
