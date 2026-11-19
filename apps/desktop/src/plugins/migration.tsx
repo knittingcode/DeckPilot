@@ -44,7 +44,7 @@ export function MigrationNotice({
   if (migrations.length === 0) return null
   const sorted = [...migrations].sort((a, b) => a.moduleName.localeCompare(b.moduleName))
   return (
-    <section aria-labelledby="module-migrations-title" className="grid gap-3 rounded-xl border p-4">
+    <section aria-labelledby="module-migrations-title" className="grid gap-3">
       <div className="flex items-start gap-2">
         <ArrowRightLeft className="mt-0.5 size-4 shrink-0" aria-hidden />
         <div className="grid gap-0.5">
@@ -57,17 +57,13 @@ export function MigrationNotice({
           </p>
         </div>
       </div>
-      <ul className="grid gap-2" aria-label="Module migrations">
+      <ul className="grid divide-y border-y" aria-label="Module migrations">
         {sorted.map((m) => {
           const status = migrationStatus(m)
           const id = `migration-${m.module}`
           const declined = isDeclined(m)
           return (
-            <li
-              key={m.module}
-              aria-labelledby={`${id}-name`}
-              className="grid gap-1.5 rounded-lg border p-3"
-            >
+            <li key={m.module} aria-labelledby={`${id}-name`} className="grid gap-1.5 py-2.5">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <span id={`${id}-name`} className="font-medium">
                   {m.moduleName}

@@ -83,7 +83,7 @@ export function PluginDetailsView({
           <ArrowLeft /> Back to plugins
         </Button>
       </div>
-      <article className="grid gap-6" aria-labelledby="plugin-detail-name">
+      <article className="grid gap-5" aria-labelledby="plugin-detail-name">
         <header className="flex items-start gap-3">
           <PluginIcon muted={!offered && !installed} src={installed?.icon} />
           <div className="grid min-w-0 flex-1 gap-1">
@@ -91,13 +91,13 @@ export function PluginDetailsView({
               id="plugin-detail-name"
               ref={heading}
               tabIndex={-1}
-              className="text-lg font-semibold outline-none"
+              className="text-lg leading-7 font-semibold outline-none"
             >
               {plugin.name}
             </h3>
             <span className="font-mono text-xs text-muted-foreground select-text">{plugin.id}</span>
             <PublisherLine publisher={plugin.publisher} info={plugin.publisherInfo} />
-            <p className="text-sm whitespace-pre-line select-text">
+            <p className="mt-1 text-sm whitespace-pre-line select-text">
               {plugin.description ?? installed?.description ?? plugin.summary}
             </p>
           </div>
@@ -105,7 +105,7 @@ export function PluginDetailsView({
 
         {facts.length > 0 && (
           <dl
-            className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm"
+            className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1.5 border-t pt-4 text-sm"
             aria-label="About"
           >
             {facts.map(([term, value]) => (
@@ -123,7 +123,10 @@ export function PluginDetailsView({
           </Notice>
         )}
 
-        <section className="flex flex-wrap items-center gap-3" aria-label="Install status">
+        <section
+          className="flex flex-wrap items-center gap-3 border-y py-3"
+          aria-label="Install status"
+        >
           {installed ? (
             <>
               <Badge variant="secondary">
@@ -132,6 +135,7 @@ export function PluginDetailsView({
               </Badge>
               {update ? (
                 <Button
+                  size="sm"
                   disabled={busy || actions.blocked !== null}
                   onClick={() => {
                     actions.update(update)
@@ -146,6 +150,7 @@ export function PluginDetailsView({
             </>
           ) : (
             <Button
+              size="sm"
               disabled={busy || installReason !== null}
               aria-describedby={installReason ? "plugin-install-reason" : undefined}
               onClick={() => {
@@ -186,7 +191,7 @@ export function PluginDetailsView({
             <h4 id="plugin-detail-compatibility" className="text-sm font-medium">
               Compatibility of version {shown.version}
             </h4>
-            <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
+            <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1.5 text-sm">
               <dt className="text-muted-foreground">DeckPilot</dt>
               <dd>{shown.deckpilot ?? "Not stated by the registry"}</dd>
               <dt className="text-muted-foreground">Platforms</dt>
@@ -234,9 +239,9 @@ export function PluginDetailsView({
           <h4 id="plugin-detail-versions" className="text-sm font-medium">
             Versions
           </h4>
-          <ul className="grid gap-1.5 text-sm" aria-label="Versions">
+          <ul className="grid divide-y border-y text-sm" aria-label="Versions">
             {versions.map((v) => (
-              <li key={v.version} className="flex flex-wrap items-center gap-2">
+              <li key={v.version} className="flex flex-wrap items-center gap-2 py-1.5">
                 <span className="font-mono text-xs">{v.version}</span>
                 {v.publishedAt !== undefined && (
                   <span className="text-xs text-muted-foreground">
@@ -277,9 +282,9 @@ function ActionsSection({ installed }: { installed: PluginDetails | undefined })
       ) : installed.summary.actions.length === 0 ? (
         <p className="text-xs text-muted-foreground">This plugin adds no actions.</p>
       ) : (
-        <ul className="grid gap-2" aria-label="Actions">
+        <ul className="grid divide-y border-y" aria-label="Actions">
           {installed.summary.actions.map((action) => (
-            <li key={action.action} className="grid gap-0.5 rounded-lg border p-3 text-sm">
+            <li key={action.action} className="grid gap-0.5 py-2.5 text-sm">
               <span className="flex flex-wrap items-center gap-2">
                 <span className="font-medium">{action.name}</span>
                 <span className="font-mono text-xs text-muted-foreground">{action.actionType}</span>

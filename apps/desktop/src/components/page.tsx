@@ -42,7 +42,7 @@ export function Page({
 }) {
   const status = useProfileScope(profileScoped)
   useTitlebar({ title, subtitle: description, breadcrumbs, actions, status })
-  return <div className="flex flex-1 flex-col gap-6 p-6">{children}</div>
+  return <div className="flex flex-1 flex-col gap-6 px-6 py-5">{children}</div>
 }
 
 export function ErrorNotice({ error }: { error: string }) {
@@ -58,10 +58,31 @@ export function Loading() {
   return <p className="text-sm text-muted-foreground">Loading…</p>
 }
 
-export function EmptyState({ title, children }: { title: string; children?: ReactNode }) {
+/**
+ * Nothing to show yet. `framed` (the default) marks an empty area of a
+ * canvas or editor; `plain` is a quiet line inside a list, table or section.
+ */
+export function EmptyState({
+  title,
+  children,
+  variant = "framed",
+}: {
+  title: string
+  children?: ReactNode
+  variant?: "framed" | "plain"
+}) {
   return (
-    <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed p-8 text-center">
-      <p className="text-sm font-medium">{title}</p>
+    <div
+      data-slot="empty-state"
+      className={
+        variant === "plain"
+          ? "grid gap-1 py-4 text-sm"
+          : "flex flex-col items-center gap-2 rounded-lg border border-dashed p-8 text-center"
+      }
+    >
+      <p className={variant === "plain" ? "text-muted-foreground" : "text-sm font-medium"}>
+        {title}
+      </p>
       {children && <div className="text-sm text-muted-foreground">{children}</div>}
     </div>
   )

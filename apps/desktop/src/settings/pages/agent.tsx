@@ -4,8 +4,13 @@ import { useEffect, useState } from "react"
 import { AgentBadge, AgentCompatibilityNotice, AgentStopped } from "@/components/agent"
 import { ErrorNotice } from "@/components/page"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Label } from "@/components/ui/label"
+import {
+  Property,
+  PropertyList,
+  SettingsGroup,
+  SettingsRow,
+  SettingsSection,
+} from "@/components/settings-layout"
 import { Switch } from "@/components/ui/switch"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { api } from "@/lib/api"
@@ -71,33 +76,35 @@ export function AgentSettings() {
     <>
       <AgentCompatibilityNotice />
       {error && <ErrorNotice error={error} />}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+      <SettingsSection
+        title={
+          <>
             Status <AgentBadge />
-          </CardTitle>
-          <CardDescription>
-            The agent owns device communication and action execution and keeps running when this
-            window is closed.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          {agent && !agent.running && <AgentStopped />}
-          {status && (
-            <>
-              <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[10rem_1fr]">
-                <dt className="text-muted-foreground">Version</dt>
-                <dd>
-                  {status.version} (protocol {status.protocol})
-                </dd>
-                <dt className="text-muted-foreground">Process</dt>
-                <dd>
-                  PID {status.pid}, started {formatTimestamp(status.startedAt)}
-                </dd>
-                <dt className="text-muted-foreground">Device backend</dt>
-                <dd>{status.backend}</dd>
-              </dl>
-              <div>
+          </>
+        }
+        description="The agent owns device communication and action execution and keeps running when this window is closed."
+      >
+        {agent && !agent.running && (
+          <SettingsGroup>
+            <AgentStopped />
+          </SettingsGroup>
+        )}
+        {status && (
+          <>
+            <PropertyList className="border-t pt-3">
+              <Property label="Version">
+                {status.version} (protocol {status.protocol})
+              </Property>
+              <Property label="Process">
+                PID {status.pid}, started {formatTimestamp(status.startedAt)}
+              </Property>
+              <Property label="Device backend">{status.backend}</Property>
+            </PropertyList>
+            <SettingsGroup>
+              <SettingsRow
+                label="Stop the agent"
+                description="Stopping the agent blanks connected devices until it is started again."
+              >
                 <Button
                   variant="outline"
                   size="sm"
@@ -110,20 +117,24 @@ export function AgentSettings() {
                 >
                   <Square /> Stop agent
                 </Button>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Stopping the agent blanks connected devices until it is started again.
-                </p>
-              </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Startup</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-3">
+              </SettingsRow>
+            </SettingsGroup>
+          </>
+        )}
+      </SettingsSection>
+      <SettingsSection title="Startup">
+        <SettingsGroup>
+          <SettingsRow
+            label="Start the agent when I log in"
+            htmlFor="autostart"
+            description={
+              autostart === null
+                ? running
+                  ? "Not available on this computer."
+                  : "Start the agent to change this."
+                : undefined
+            }
+          >
             <Switch
               id="autostart"
               disabled={autostart === null}
@@ -139,15 +150,9 @@ export function AgentSettings() {
                 )
               }}
             />
-            <Label htmlFor="autostart">Start the agent when I log in</Label>
-            {autostart === null && (
-              <span className="text-xs text-muted-foreground">
-                {running ? "(not available)" : "(start the agent to change this)"}
-              </span>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+          </SettingsRow>
+        </SettingsGroup>
+      </SettingsSection>
     </>
   )
 }

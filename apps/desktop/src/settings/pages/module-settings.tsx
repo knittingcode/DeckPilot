@@ -4,7 +4,7 @@ import { toast } from "sonner"
 import { ParameterField } from "@/components/parameter-field"
 import { VariableScopeProvider } from "@/components/variable-picker/scope-provider"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SettingsSection } from "@/components/settings-layout"
 import { api } from "@/lib/api"
 import { toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
@@ -18,12 +18,8 @@ export function ModuleSettingsForm({ module }: { module: ModuleInfo }) {
   const [saving, setSaving] = useState(false)
   const changed = JSON.stringify(draft) !== JSON.stringify(module.configValues)
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{module.name}</CardTitle>
-        <CardDescription>{module.description}</CardDescription>
-      </CardHeader>
-      <CardContent className="grid max-w-xl gap-4">
+    <SettingsSection title="Settings" description={module.description}>
+      <div className="grid max-w-xl gap-4 border-t pt-4">
         {/* Module settings are read as saved; no resolver turns references
             in them into values, so the picker is off here. */}
         <VariableScopeProvider disabled>
@@ -38,41 +34,43 @@ export function ModuleSettingsForm({ module }: { module: ModuleInfo }) {
             />
           ))}
         </VariableScopeProvider>
-        <div className="flex gap-2">
-          <Button
-            disabled={!changed || saving}
-            onClick={() => {
-              setSaving(true)
-              api
-                .setModuleConfig(module.id, draft)
-                .then(
-                  (next) => {
-                    setModules(next)
-                    refresh()
-                    toast.success(`${module.name} settings saved`)
-                  },
-                  (e: unknown) => {
-                    toastFailure(`${module.name} settings were not saved`, e)
-                  },
-                )
-                .finally(() => {
-                  setSaving(false)
-                })
-            }}
-          >
-            Save
-          </Button>
-          <Button
-            variant="outline"
-            disabled={!changed || saving}
-            onClick={() => {
-              setDraft(module.configValues)
-            }}
-          >
-            Revert
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+      </div>
+      <div className="flex justify-end gap-2 border-t pt-3">
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={!changed || saving}
+          onClick={() => {
+            setDraft(module.configValues)
+          }}
+        >
+          Revert
+        </Button>
+        <Button
+          size="sm"
+          disabled={!changed || saving}
+          onClick={() => {
+            setSaving(true)
+            api
+              .setModuleConfig(module.id, draft)
+              .then(
+                (next) => {
+                  setModules(next)
+                  refresh()
+                  toast.success(`${module.name} settings saved`)
+                },
+                (e: unknown) => {
+                  toastFailure(`${module.name} settings were not saved`, e)
+                },
+              )
+              .finally(() => {
+                setSaving(false)
+              })
+          }}
+        >
+          Save
+        </Button>
+      </div>
+    </SettingsSection>
   )
 }

@@ -10,11 +10,16 @@ import {
 import { Fragment, useState } from "react"
 import { toast } from "sonner"
 
+import {
+  Property,
+  PropertyList,
+  SettingsGroup,
+  SettingsRow,
+  SettingsSection,
+} from "@/components/settings-layout"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Label } from "@/components/ui/label"
 import { Progress } from "@/components/ui/progress"
 import {
   Select,
@@ -126,122 +131,131 @@ export function UpdatesCard() {
       ? Math.round((progress.downloaded / progress.total) * 100)
       : null
 
+  const lastCheck =
+    phase === "checking"
+      ? "Checking for updates…"
+      : preferences.lastCheck
+        ? `Last checked ${formatTimestamp(preferences.lastCheck)}`
+        : "Not checked yet"
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Updates</CardTitle>
-        <CardDescription>
-          {controls.selfUpdate
-            ? "Updates come from GitHub Releases and are installed only if their signature verifies. Your configuration is never uploaded."
-            : controls.managed || controls.command
-              ? `${deliveredBy(updates)}. DeckPilot does not download or install updates itself in this installation. Your configuration is never uploaded.`
-              : "Your configuration is never uploaded."}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        <InstallationDetails state={updates} />
-        {updates.developmentOverride && <DevelopmentOverrideNotice state={updates} />}
-        {updates.updateProvider === "none" && (
-          <Alert>
-            <AlertTitle>Updates are not available in this build</AlertTitle>
-            <AlertDescription>
-              {notConfiguredExplanation(updates.notConfiguredReason)}
-            </AlertDescription>
-          </Alert>
-        )}
-        {controls.managed && <ManagedNotice state={updates} instruction={controls.managed} />}
-        {controls.command && <PackageManagerNotice state={updates} command={controls.command} />}
-        {updates.error && <UpdateErrorNotice error={updates.error} />}
+    <>
+      <p className="text-sm text-muted-foreground">
+        {controls.selfUpdate
+          ? "Updates come from GitHub Releases and are installed only if their signature verifies. Your configuration is never uploaded."
+          : controls.managed || controls.command
+            ? `${deliveredBy(updates)}. DeckPilot does not download or install updates itself in this installation. Your configuration is never uploaded.`
+            : "Your configuration is never uploaded."}
+      </p>
 
-        {controls.check && controls.checkEnabled && (
-          <p className="text-xs text-muted-foreground">
-            {phase === "checking"
-              ? "Checking for updates…"
-              : preferences.lastCheck
-                ? `Last checked ${formatTimestamp(preferences.lastCheck)}`
-                : "Not checked yet"}
-          </p>
-        )}
+      {updates.developmentOverride && <DevelopmentOverrideNotice state={updates} />}
+      {updates.updateProvider === "none" && (
+        <Alert>
+          <AlertTitle>Updates are not available in this build</AlertTitle>
+          <AlertDescription>
+            {notConfiguredExplanation(updates.notConfiguredReason)}
+          </AlertDescription>
+        </Alert>
+      )}
+      {controls.managed && <ManagedNotice state={updates} instruction={controls.managed} />}
+      {controls.command && <PackageManagerNotice state={updates} command={controls.command} />}
+      {updates.error && <UpdateErrorNotice error={updates.error} />}
 
-        {controls.versionNotice && available && (
-          <p className="text-sm">
-            Version {available.version} is available; update with your package manager.
-          </p>
-        )}
-
-        {controls.selfUpdate &&
-          (available ? (
-            <div className="grid gap-3 rounded-lg border p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">Version {available.version} is available</span>
-                {available.date && (
-                  <span className="text-xs text-muted-foreground">{available.date}</span>
-                )}
-              </div>
-              {available.notes && (
-                <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
-                  {available.notes}
-                </pre>
+      {(controls.selfUpdate ||
+        controls.versionNotice ||
+        (controls.check && controls.checkEnabled)) && (
+        <SettingsSection title="Status">
+          <SettingsGroup>
+            <SettingsRow
+              label={
+                available && (controls.selfUpdate || controls.versionNotice)
+                  ? `Version ${available.version} is available`
+                  : controls.selfUpdate
+                    ? "DeckPilot is up to date."
+                    : `Version ${updates.currentVersion}`
+              }
+              description={
+                <>
+                  {controls.versionNotice && available && (
+                    <span className="block">Update with your package manager.</span>
+                  )}
+                  {controls.selfUpdate && available?.date && (
+                    <span className="block">Released {available.date}</span>
+                  )}
+                  {controls.check && controls.checkEnabled && (
+                    <span className="block">{lastCheck}</span>
+                  )}
+                </>
+              }
+            >
+              {controls.selfUpdate && available && phase !== "ready" && (
+                <Button
+                  size="sm"
+                  disabled={busy || phase !== "idle"}
+                  onClick={() => {
+                    // Progress follows in its own window as well.
+                    void api.openWindow("updates.progress").catch(() => undefined)
+                    void run(() => api.downloadUpdate(), "The update was not downloaded", INTERNET)
+                  }}
+                >
+                  <Download /> Download
+                </Button>
               )}
-              {phase === "downloading" && (
-                <div className="grid gap-1">
-                  <Progress value={percent ?? undefined} aria-label="Download progress" />
-                  <span className="text-xs text-muted-foreground">
-                    {percent !== null ? `${percent}%` : "Downloading…"}
-                  </span>
-                </div>
+              {controls.selfUpdate && available && phase === "ready" && (
+                <Button
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => {
+                    void api.openWindow("updates.progress").catch(() => undefined)
+                    void run(() => api.installUpdate(), "The update was not installed")
+                  }}
+                >
+                  <RotateCw /> Install and restart
+                </Button>
               )}
-              <div className="flex flex-wrap gap-2">
-                {phase !== "ready" && (
-                  <Button
-                    disabled={busy || phase !== "idle"}
-                    onClick={() => {
-                      // Progress follows in its own window as well.
-                      void api.openWindow("updates.progress").catch(() => undefined)
-                      void run(
-                        () => api.downloadUpdate(),
-                        "The update was not downloaded",
-                        INTERNET,
-                      )
-                    }}
-                  >
-                    <Download /> Download
-                  </Button>
+            </SettingsRow>
+            {controls.selfUpdate && available && (
+              <div className="grid gap-2 py-3">
+                {phase === "downloading" && (
+                  <div className="grid gap-1">
+                    <Progress value={percent ?? undefined} aria-label="Download progress" />
+                    <span className="text-caption text-muted-foreground">
+                      {percent !== null ? `${percent}%` : "Downloading…"}
+                    </span>
+                  </div>
                 )}
-                {phase === "ready" && (
-                  <Button
-                    disabled={busy}
-                    onClick={() => {
-                      void api.openWindow("updates.progress").catch(() => undefined)
-                      void run(() => api.installUpdate(), "The update was not installed")
-                    }}
-                  >
-                    <RotateCw /> Install and restart
-                  </Button>
+                {available.notes && (
+                  <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap select-text">
+                    {available.notes}
+                  </pre>
                 )}
+                <p className="text-caption text-muted-foreground">
+                  {phase === "ready" ? "Downloaded and verified. " : ""}Installing stops the
+                  background agent after its current task, releases the devices, installs, and
+                  restarts DeckPilot with the new agent.
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground">
-                {phase === "ready" ? "Downloaded and verified. " : ""}Installing stops the
-                background agent after its current task, releases the devices, installs, and
-                restarts DeckPilot with the new agent.
-              </p>
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">DeckPilot is up to date.</p>
-          ))}
+            )}
+          </SettingsGroup>
+        </SettingsSection>
+      )}
 
-        {(controls.mode || controls.channelChoice || controls.schedule) && (
-          <div className="grid gap-4 sm:grid-cols-2">
+      {(controls.mode || controls.channelChoice || controls.schedule) && (
+        <SettingsSection title="Preferences">
+          <SettingsGroup>
             {controls.mode && (
-              <div className="grid gap-2">
-                <Label htmlFor="update-mode">When an update is available</Label>
+              <SettingsRow
+                label="When an update is available"
+                htmlFor="update-mode"
+                description={MODES.find((m) => m.value === preferences.mode)?.description}
+              >
                 <Select
                   value={preferences.mode}
                   onValueChange={(mode) => {
                     savePreferences({ mode: mode as UpdateMode })
                   }}
                 >
-                  <SelectTrigger id="update-mode" className="w-full">
+                  <SelectTrigger id="update-mode" size="sm" className="w-52">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -252,14 +266,14 @@ export function UpdatesCard() {
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">
-                  {MODES.find((m) => m.value === preferences.mode)?.description}
-                </p>
-              </div>
+              </SettingsRow>
             )}
             {controls.channelChoice && (
-              <div className="grid gap-2">
-                <Label htmlFor="update-channel">Update channel</Label>
+              <SettingsRow
+                label="Update channel"
+                htmlFor="update-channel"
+                description={CHANNELS.find((c) => c.value === preferences.channel)?.description}
+              >
                 <Select
                   value={preferences.channel}
                   disabled={busy || (phase !== "idle" && phase !== "ready")}
@@ -267,7 +281,7 @@ export function UpdatesCard() {
                     savePreferences({ channel: channel as UpdateChannel })
                   }}
                 >
-                  <SelectTrigger id="update-channel" className="w-full">
+                  <SelectTrigger id="update-channel" size="sm" className="w-52">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -278,51 +292,57 @@ export function UpdatesCard() {
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">
-                  {CHANNELS.find((c) => c.value === preferences.channel)?.description}
-                </p>
-              </div>
+              </SettingsRow>
             )}
             {controls.schedule && (
-              <div className="grid gap-2">
-                <Label htmlFor="update-interval">Check every</Label>
-                <Select
-                  value={String(preferences.checkIntervalHours)}
-                  disabled={!preferences.automaticChecks}
-                  onValueChange={(hours) => {
-                    savePreferences({ checkIntervalHours: Number(hours) })
-                  }}
+              <>
+                <SettingsRow
+                  label="Check automatically"
+                  htmlFor="update-automatic"
+                  description="While DeckPilot is open."
                 >
-                  <SelectTrigger id="update-interval" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {[...new Set([...INTERVALS, preferences.checkIntervalHours])]
-                      .sort((a, b) => a - b)
-                      .map((hours) => (
-                        <SelectItem key={hours} value={String(hours)}>
-                          {hours < 24
-                            ? `${hours} hours`
-                            : `${hours / 24} day${hours === 24 ? "" : "s"}`}
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
-                <label className="flex items-center gap-2 text-sm">
                   <Switch
+                    id="update-automatic"
                     checked={preferences.automaticChecks}
                     onCheckedChange={(automaticChecks) => {
                       savePreferences({ automaticChecks })
                     }}
                   />
-                  Check automatically while DeckPilot is open
-                </label>
-              </div>
+                </SettingsRow>
+                <SettingsRow label="Check every" htmlFor="update-interval">
+                  <Select
+                    value={String(preferences.checkIntervalHours)}
+                    disabled={!preferences.automaticChecks}
+                    onValueChange={(hours) => {
+                      savePreferences({ checkIntervalHours: Number(hours) })
+                    }}
+                  >
+                    <SelectTrigger id="update-interval" size="sm" className="w-52">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[...new Set([...INTERVALS, preferences.checkIntervalHours])]
+                        .sort((a, b) => a - b)
+                        .map((hours) => (
+                          <SelectItem key={hours} value={String(hours)}>
+                            {hours < 24
+                              ? `${hours} hours`
+                              : `${hours / 24} day${hours === 24 ? "" : "s"}`}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </SettingsRow>
+              </>
             )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+          </SettingsGroup>
+        </SettingsSection>
+      )}
+
+      <SettingsSection title="This installation">
+        <InstallationDetails state={updates} />
+      </SettingsSection>
+    </>
   )
 }
 
@@ -335,14 +355,13 @@ export function InstallationDetails({ state }: { state: UpdateState }) {
     ["Updates", providerLabel(state)],
   ]
   return (
-    <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
+    <PropertyList className="border-t pt-3">
       {rows.map(([term, value]) => (
-        <Fragment key={term}>
-          <dt className="text-muted-foreground">{term}</dt>
-          <dd>{value}</dd>
-        </Fragment>
+        <Property key={term} label={term}>
+          {value}
+        </Property>
       ))}
-    </dl>
+    </PropertyList>
   )
 }
 

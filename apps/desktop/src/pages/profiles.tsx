@@ -1,12 +1,17 @@
-import { Copy, Pencil, Plus, Trash2 } from "lucide-react"
+import { Copy, Ellipsis, Pencil, Plus, Trash2 } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { EmptyState, ErrorNotice, Loading } from "@/components/page"
-import { Badge } from "@/components/ui/badge"
+import {
+  InlineStatus,
+  Property,
+  PropertyList,
+  SettingsGroup,
+  SettingsSection,
+} from "@/components/settings-layout"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -15,6 +20,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -75,57 +87,78 @@ export function ProfilesSettings() {
     ],
   })
 
+  const openDetails = (profile: ProfileSummary) => {
+    api
+      .getProfile(profile.id)
+      .then((view) => {
+        setDialog({ mode: "rename", profile, description: view.profile.description })
+      })
+      .catch((e: unknown) => {
+        toastFailure(`${profile.name} could not be opened for editing`, e)
+      })
+  }
+
   return (
     <>
-      <Card>
-        <CardHeader>
-          <CardTitle>All profiles</CardTitle>
-          <CardDescription>
-            The active profile runs on the device. Any profile can be edited; pick it in the toolbar
-            of the main window.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {profiles.profiles.length === 0 ? (
-            <EmptyState title="No profiles yet">Create your first profile.</EmptyState>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead className="hidden md:table-cell">Last modified</TableHead>
-                  <TableHead className="w-0" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {profiles.profiles.map((profile) => {
-                  const active = profile.id === profiles.activeProfileId
-                  return (
-                    <TableRow
-                      key={profile.id}
-                      data-state={profile.id === editingProfileId ? "selected" : undefined}
-                    >
-                      <TableCell className="font-medium">
-                        <button
-                          type="button"
-                          className="hover:underline"
-                          onClick={() => {
-                            setEditingProfileId(profile.id)
-                          }}
-                        >
-                          {profile.name}
-                        </button>
-                        {active && <Badge className="ml-2">On device</Badge>}
-                      </TableCell>
-                      <TableCell className="hidden text-muted-foreground md:table-cell">
-                        {formatTimestamp(profile.updatedAt)}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-1">
+      <SettingsSection
+        title="All profiles"
+        description="The active profile runs on the device. Any profile can be edited: select it here or in the toolbar."
+      >
+        {profiles.profiles.length === 0 ? (
+          <EmptyState variant="plain" title="No profiles yet">
+            Create your first profile with New profile in the toolbar.
+          </EmptyState>
+        ) : (
+          <Table aria-label="Profiles" className="table-fixed">
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Name</TableHead>
+                <TableHead className="hidden w-48 sm:table-cell">Last modified</TableHead>
+                <TableHead className="w-24">Status</TableHead>
+                <TableHead className="w-36">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {profiles.profiles.map((profile) => {
+                const active = profile.id === profiles.activeProfileId
+                const editing = profile.id === editingProfileId
+                return (
+                  <TableRow key={profile.id} data-state={editing ? "selected" : undefined}>
+                    <TableCell className="truncate">
+                      <button
+                        type="button"
+                        aria-current={editing ? "true" : undefined}
+                        title={editing ? "Being edited" : `Edit ${profile.name}`}
+                        className="max-w-full truncate rounded-sm font-medium outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                        onClick={() => {
+                          setEditingProfileId(profile.id)
+                        }}
+                      >
+                        {profile.name}
+                      </button>
+                    </TableCell>
+                    <TableCell className="hidden text-caption text-muted-foreground tabular-nums sm:table-cell">
+                      {formatTimestamp(profile.updatedAt)}
+                    </TableCell>
+                    <TableCell>
+                      {active ? (
+                        <InlineStatus tone="positive" title="Runs on the device">
+                          Active
+                        </InlineStatus>
+                      ) : (
+                        <span className="sr-only">Inactive</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center justify-end gap-1">
+                        {!active && (
                           <Button
                             variant="outline"
-                            size="sm"
-                            disabled={active}
+                            size="xs"
+                            className="h-7 px-2.5 text-caption"
+                            aria-label={`Make ${profile.name} active`}
                             onClick={() => {
                               run(
                                 () => api.setActiveProfile(profile.id),
@@ -136,90 +169,68 @@ export function ProfilesSettings() {
                           >
                             Make active
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            aria-label={`Rename ${profile.name}`}
-                            onClick={() => {
-                              api
-                                .getProfile(profile.id)
-                                .then((view) => {
-                                  setDialog({
-                                    mode: "rename",
-                                    profile,
-                                    description: view.profile.description,
-                                  })
-                                })
-                                .catch((e: unknown) => {
-                                  toastFailure(`${profile.name} could not be opened for editing`, e)
-                                })
-                            }}
-                          >
-                            <Pencil />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            aria-label={`Duplicate ${profile.name}`}
-                            onClick={() => {
-                              setDialog({ mode: "duplicate", profile })
-                            }}
-                          >
-                            <Copy />
-                          </Button>
-                          <ConfirmDialog
-                            trigger={
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                aria-label={`Delete ${profile.name}`}
-                              >
-                                <Trash2 />
-                              </Button>
-                            }
-                            title={`Delete “${profile.name}”?`}
-                            description={
-                              active
-                                ? "This profile is active on the device. Its actions, workflows, projects and layouts are deleted and the device shows no layout until another profile is activated."
-                                : "Its actions, workflows, projects and layouts are deleted. This cannot be undone."
-                            }
-                            onConfirm={() => {
-                              run(
-                                () => api.deleteProfile(profile.id),
-                                "Profile deleted",
-                                `${profile.name} was not deleted`,
-                              )
-                            }}
-                          />
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+                        )}
+                        <ProfileMenu
+                          profile={profile}
+                          active={active}
+                          onRename={() => {
+                            openDetails(profile)
+                          }}
+                          onDuplicate={() => {
+                            setDialog({ mode: "duplicate", profile })
+                          }}
+                          onDelete={() => {
+                            run(
+                              () => api.deleteProfile(profile.id),
+                              "Profile deleted",
+                              `${profile.name} was not deleted`,
+                            )
+                          }}
+                        />
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </SettingsSection>
 
       {state.status === "loading" && editingProfileId && <Loading />}
       {state.status === "error" && editingProfileId && <ErrorNotice error={state.error} />}
       {state.status === "ready" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>{state.data.profile.name}</CardTitle>
-            <CardDescription>{state.data.profile.description || "No description"}</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-4">
-            <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-              <span>{state.data.profile.actions.length} actions</span>
-              <span>{state.data.profile.workflows.length} workflows</span>
-              <span>{state.data.profile.projects.length} projects</span>
-              <span>{state.data.profile.layouts.length} layouts</span>
-            </div>
-            {state.data.issues.length > 0 && <ErrorNotice error={state.data.issues.join(" ")} />}
-          </CardContent>
-        </Card>
+        <SettingsSection
+          title={state.data.profile.name}
+          description="The profile being edited."
+          actions={
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const summary = profiles.profiles.find((p) => p.id === state.data.profile.id)
+                if (summary) openDetails(summary)
+              }}
+            >
+              <Pencil /> Edit details…
+            </Button>
+          }
+        >
+          <SettingsGroup className="py-3">
+            <PropertyList aria-label={`Details of ${state.data.profile.name}`}>
+              <Property label="Description">
+                {state.data.profile.description || (
+                  <span className="text-muted-foreground">No description</span>
+                )}
+              </Property>
+              <Property label="Actions">{state.data.profile.actions.length}</Property>
+              <Property label="Workflows">{state.data.profile.workflows.length}</Property>
+              <Property label="Projects">{state.data.profile.projects.length}</Property>
+              <Property label="Layouts">{state.data.profile.layouts.length}</Property>
+            </PropertyList>
+          </SettingsGroup>
+          {state.data.issues.length > 0 && <ErrorNotice error={state.data.issues.join(" ")} />}
+        </SettingsSection>
       )}
 
       <ProfileDialog
@@ -232,6 +243,67 @@ export function ProfilesSettings() {
           if (id) setEditingProfileId(id)
           refresh()
         }}
+      />
+    </>
+  )
+}
+
+/** Rename, duplicate and delete: the less frequent commands of a profile. */
+function ProfileMenu({
+  profile,
+  active,
+  onRename,
+  onDuplicate,
+  onDelete,
+}: {
+  profile: ProfileSummary
+  active: boolean
+  onRename: () => void
+  onDuplicate: () => void
+  onDelete: () => void
+}) {
+  const [confirming, setConfirming] = useState(false)
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="size-7"
+            aria-label={`More for ${profile.name}`}
+          >
+            <Ellipsis />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={onRename}>
+            <Pencil /> Rename…
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={onDuplicate}>
+            <Copy /> Duplicate…
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            variant="destructive"
+            onSelect={() => {
+              setConfirming(true)
+            }}
+          >
+            <Trash2 /> Delete…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title={`Delete “${profile.name}”?`}
+        description={
+          active
+            ? "This profile is active on the device. Its actions, workflows, projects and layouts are deleted and the device shows no layout until another profile is activated."
+            : "Its actions, workflows, projects and layouts are deleted. This cannot be undone."
+        }
+        onConfirm={onDelete}
       />
     </>
   )

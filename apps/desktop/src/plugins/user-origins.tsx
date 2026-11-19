@@ -56,7 +56,7 @@ export function UserOriginsSection({
         The plugin reaches the server in these settings only after you allow exactly that server.
         Changing a setting ends its consent; DeckPilot then asks again.
       </p>
-      <ul className="grid gap-2" aria-label={`Servers of ${plugin}`}>
+      <ul className="grid divide-y border-y" aria-label={`Servers of ${plugin}`}>
         {origins.map((origin) => (
           <OriginRow
             key={origin.setting}
@@ -117,7 +117,7 @@ function OriginRow({
   }
 
   return (
-    <li className="grid gap-2 rounded-lg border p-3" aria-labelledby={`${id}-label`}>
+    <li className="grid gap-2 py-2.5" aria-labelledby={`${id}-label`}>
       <div className="flex flex-wrap items-center gap-2">
         <span id={`${id}-label`} className="text-sm font-medium">
           {origin.label}
