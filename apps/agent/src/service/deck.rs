@@ -11,6 +11,10 @@
 //!   in the `settings` table whenever it changed, and handed back to the
 //!   runtime after a restart. It is runtime state of this computer: not
 //!   part of a profile, never exported.
+//! - **Layouts.** The layout a device switched to in a profile (*Switch
+//!   layout*, *Back to previous layout*) is saved in `device_layouts` when
+//!   it changed and read again after a restart and every reload; the way
+//!   back is kept in memory only.
 
 use deckpilot_core::{
     ActionResult, BindingTarget, DeckRequest, ExecutionTrigger, PageId, ProfileId, ProfileTarget,
@@ -202,6 +206,36 @@ impl Agent {
                 .filter(|(profile, _, _)| known.contains(profile)),
         );
         self.saved_pages = Some(saved);
+    }
+
+    /// Hands the layouts devices switched to (*Switch layout*), as saved,
+    /// to the runtime. Entries for layouts no longer assigned to their
+    /// profile cannot be in the database (they go with the assignment);
+    /// the runtime also ignores those for another model.
+    pub(super) fn restore_device_layouts(&mut self) {
+        let Some(store) = self.store.as_ref() else {
+            return;
+        };
+        match store.device_layouts() {
+            Ok(layouts) => self.runtime.restore_device_layouts(layouts),
+            Err(error) => warn!(%error, "cannot read the layouts devices show"),
+        }
+        let _ = self.runtime.take_device_layouts_changed();
+    }
+
+    /// Saves the layouts devices switched to, if they changed. They survive
+    /// a restart of the agent; the way back (*Back to previous layout*)
+    /// does not.
+    pub(super) fn persist_device_layouts(&mut self) {
+        if !self.runtime.take_device_layouts_changed() {
+            return;
+        }
+        let Some(store) = self.store.as_ref() else {
+            return;
+        };
+        if let Err(error) = store.save_device_layouts(&self.runtime.device_layouts()) {
+            warn!(%error, "cannot save the layouts devices show");
+        }
     }
 
     /// Saves the page each device shows per profile, if it changed.
