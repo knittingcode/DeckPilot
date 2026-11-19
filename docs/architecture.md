@@ -102,11 +102,15 @@ and no file fallback.
 
 ### `deckpilot-render`
 
-Draws `KeyFace`s into `Frame`s (title, appearance, icon, live state marks)
-with a frame cache, and imports, checks and scales key icons (PNG and JPEG
-decoded with limits, re-encoded as PNG). Used by the agent for device
-images and by the configuration app for exact previews; the export import
-uses it to check icons. See [Key appearance](data-model.md#key-appearance).
+Draws `KeyFace`s into `Frame`s (icon, title, value line, appearance, live
+state marks) with a frame cache, and imports, checks and scales key icons
+(PNG and JPEG decoded with limits, re-encoded as PNG). Text is set in Inter
+(medium and semibold, OFL) and the keys' icons come from the Lucide icons
+the app uses (ISC), both subset and compiled in (`assets/`, built by
+`assets/make-fonts.py`, see `NOTICE`), rasterized with anti-aliasing by
+`ab_glyph`. Used by the agent for device images and by the configuration
+app for exact previews; the export import uses it to check icons. See
+[Key appearance](data-model.md#key-appearance).
 
 ### `deckpilot-presence`
 
@@ -198,8 +202,14 @@ from enabled modules (Projects, including this machine's resource mappings).
 Profile-scoped pages show the profile they edit and are re-created when
 another profile is chosen, so an open editor never writes to a different
 profile. Every editor saves through the backend; layouts are
-validated against the device model and previewed with the same face logic the
-agent uses. The frontend is React + TypeScript with Tailwind CSS and shadcn/ui
+validated against the device model and previewed with the same face logic and
+renderer the agent uses. Live values in the layout editor's preview (a CPU
+monitor's use, a repository's branch) come from the agent too: the editor
+watches the states of the shown page's keys (`watch_key_states`, IPC
+`watchKeyStates`, protocol 11) and draws them with `preview_layout`'s `live`
+argument. The agent reads them with the providers that serve the device,
+so the app never samples anything itself (see
+[background-agent.md](background-agent.md)). The frontend is React + TypeScript with Tailwind CSS and shadcn/ui
 components; `src/lib/types.ts` mirrors the serialized Rust types.
 
 Native windows besides the main window come from one catalog

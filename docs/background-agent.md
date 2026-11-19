@@ -57,6 +57,14 @@ closed and reopened at any time without interrupting devices.
   sleeps until the next one is due and redraws only keys whose state
   changed. Keys bound to a running workflow show a running mark with its
   progress.
+- **Live key state for previews.** A client may watch the states of
+  actions' keys (`watchKeyStates`, protocol 11): the configuration app does
+  for the page its layout editor shows. Watched keys of the active profile
+  are read like shown keys (same providers, same cache, same interval; a
+  key both shown and watched is read once) also when no device shows them,
+  and their changes are sent as `keyStates` messages to the watching
+  connection only. A watch ends when its connection closes or is replaced;
+  a watch of another profile has no states (`live: false`).
 - **Tray.** On macOS the agent runs as an accessory app (no Dock icon):
   `LSUIElement` in the `Info.plist` embedded in its executable, so not even
   a short-lived agent process (a second instance stopping at the lock)
