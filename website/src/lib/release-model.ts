@@ -133,13 +133,46 @@ export function published(list: ApiRelease[]): ApiRelease[] {
     .sort((a, b) => Date.parse(b.published_at ?? '') - Date.parse(a.published_at ?? ''));
 }
 
+type Version = { core: [number, number, number]; pre: string[] };
+
+/** A release tag, vMAJOR.MINOR.PATCH with an optional -pre.release suffix; null for anything else. */
+export function parseVersion(tag: string): Version | null {
+  const match = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(tag);
+  if (!match) return null;
+  return { core: [Number(match[1]), Number(match[2]), Number(match[3])], pre: match[4] ? match[4].split('.') : [] };
+}
+
+/** Semantic version precedence of two tags; a tag that is not a version comes last. */
+export function compareTags(a: string, b: string): number {
+  const x = parseVersion(a);
+  const y = parseVersion(b);
+  if (!x || !y) return x ? 1 : y ? -1 : 0;
+  for (let i = 0; i < 3; i++) if (x.core[i] !== y.core[i]) return x.core[i]! - y.core[i]!;
+  if (!x.pre.length || !y.pre.length) return y.pre.length - x.pre.length;
+  for (let i = 0; i < Math.min(x.pre.length, y.pre.length); i++) {
+    const [p, q] = [x.pre[i]!, y.pre[i]!];
+    if (p === q) continue;
+    const [m, n] = [/^\d+$/.test(p), /^\d+$/.test(q)];
+    if (m && n) return Number(p) - Number(q);
+    if (m !== n) return m ? -1 : 1;
+    return p < q ? -1 : 1;
+  }
+  return x.pre.length - y.pre.length;
+}
+
+/**
+ * The newest stable release by version, not by publication date: a fix of
+ * an older line, published after a newer version, never replaces it. A
+ * pre-release is offered only when no stable release exists, and mentioned
+ * only when its version is newer than the stable one.
+ */
 export function select(list: ApiRelease[]): Selection {
-  const releases = published(list);
-  const newest = releases[0];
-  if (!newest) return { primary: null, newerPrerelease: null };
+  const releases = published(list).sort((a, b) => compareTags(b.tag_name, a.tag_name));
   const stable = releases.find((release) => !release.prerelease);
-  if (!stable) return { primary: toRelease(newest), newerPrerelease: null };
-  return { primary: toRelease(stable), newerPrerelease: newest.prerelease ? toRelease(newest) : null };
+  const prerelease = releases.find((release) => release.prerelease);
+  if (!stable) return { primary: prerelease ? toRelease(prerelease) : null, newerPrerelease: null };
+  const newer = prerelease && compareTags(prerelease.tag_name, stable.tag_name) > 0 ? prerelease : null;
+  return { primary: toRelease(stable), newerPrerelease: newer ? toRelease(newer) : null };
 }
 
 const TARGETS: Record<string, `${Os}-${Arch}`> = {
