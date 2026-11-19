@@ -11,6 +11,10 @@
 #            checks the draft's assets again, publishes it in one
 #            update — as a pre-release for alpha/beta/rc, as latest only for
 #            the newest stable release — and verifies what users download.
+#   Website  after a published and verified stable release only: starts the
+#            website workflow on main, so the download page shows it now
+#            (a release published with this token raises no `release`
+#            event for other workflows).
 #
 # A failed stage B can be re-run (re-run failed jobs, or dispatch with
 # publish_only); it never changes a published release. A failed stage A
@@ -883,3 +887,30 @@ jobs:
           MANIFEST: ${{ needs.validate-tag.outputs.manifest }}
           PRERELEASE: ${{ needs.validate-tag.outputs.prerelease }}
         run: WORK="$RUNNER_TEMP/publish" tools/release-pipeline/publish.sh "$TAG"
+
+  # After a stable release is published and verified (publish.sh ends with
+  # verify-published.sh): rebuild the website so its download page offers
+  # the new version now, not at the next daily run. A release published with
+  # this workflow's token raises no `release` event for other workflows, but
+  # a workflow_dispatch is allowed. The site is started on main, because the
+  # github-pages environment deploys main only; this job checks out nothing,
+  # runs no repository code, uses no environment and no secret, and can only
+  # start workflows (actions: write). Pre-releases do not start it; the
+  # site never offers a pre-release while a stable release exists
+  # (website/src/lib/release-model.ts). Failing here leaves the release as
+  # it is; the daily run, or `gh workflow run website.yml --ref main`,
+  # catches up.
+  website:
+    name: Rebuild the website
+    needs: [validate-tag, publish]
+    if: ${{ needs.validate-tag.outputs.prerelease == 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write # start the website workflow (workflow_dispatch)
+    steps:
+      - name: Start the website workflow on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run website.yml --ref main

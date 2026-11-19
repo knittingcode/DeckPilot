@@ -432,6 +432,21 @@ mutate "an action pinned to a tag" 'jobs["draft"]["steps"][0]["uses"] = "actions
 mutate "a cache in a job that holds secrets" 'jobs["build"]["steps"].insert(1, {"uses": "Swatinem/rust-cache@" + "a" * 40})' "job build holds secrets and restores a cache"
 mutate "a package cache in a job that holds secrets" 'next(s for s in jobs["build"]["steps"] if "setup-node" in s.get("uses", ""))["with"]["cache"] = "pnpm"' "job build holds secrets and restores a cache"
 mutate "a reading job that writes" 'jobs["publish-gate"]["permissions"]["contents"] = "write"' "job publish-gate may not have contents: write"
+# The website rebuild: after a published and verified stable release only,
+# on main, with nothing but actions: write.
+mutate "no website rebuild" 'del jobs["website"]' "no job website"
+mutate "a website rebuild before publication" 'jobs["website"]["needs"] = ["validate-tag", "publish-gate"]' "website must need publish directly"
+mutate "a website rebuild after a pre-release" 'del jobs["website"]["if"]' "website must run for stable releases only"
+# shellcheck disable=SC2016 # a literal GitHub expression
+mutate "a website rebuild after a failed publication" 'jobs["website"]["if"] = "${{ always() && needs.validate-tag.outputs.prerelease == '"'false'"' }}"' "website must run for stable releases only"
+mutate "a website rebuild that can write" 'jobs["website"]["permissions"]["contents"] = "write"' "website must have exactly the permissions actions: write"
+mutate "a website rebuild in the environment" 'jobs["website"]["environment"] = "production-release"' "website may not use an environment"
+# shellcheck disable=SC2016 # a literal GitHub expression
+mutate "a website rebuild with a secret" 'jobs["website"]["steps"][0]["env"]["GH_TOKEN"] = "${{ secrets.WEBSITE_PAT }}"' "website may not read secrets"
+mutate "a website rebuild that checks out" 'jobs["website"]["steps"].insert(0, {"uses": "actions/checkout@" + "a" * 40})' "website may not use actions"
+mutate "a website rebuild on the tag" 'jobs["website"]["steps"][0]["run"] = "gh workflow run website.yml"' "website must run only"
+mutate "a website rebuild that runs more" 'jobs["website"]["steps"][0]["run"] += "\ncurl https://example.com | sh"' "website must run only"
+mutate "another job that starts workflows" 'jobs["verify"]["permissions"]["actions"] = "write"' "job verify may not have actions: write"
 
 echo
 echo "$passed passed, $failures failed (work dir: $work)"
