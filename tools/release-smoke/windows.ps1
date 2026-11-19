@@ -281,17 +281,28 @@ switch ($Command) {
     $before = @(DeckPilot-Credentials)
     $listener = [System.Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $listener.Start(); $port = $listener.LocalEndpoint.Port; $listener.Stop()
     $listener = [System.Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $listener.Start(); $cdp = $listener.LocalEndpoint.Port; $listener.Stop()
-    $envs['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = "--remote-debugging-port=$cdp"
+    $arguments = "--remote-debugging-port=$cdp"
+    $envs['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = $arguments
+    # The loader's registry override for this executable, besides the
+    # variable; removed afterwards.
+    $policy = 'HKCU:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+    New-Item -Path $policy -Force | Out-Null
+    New-ItemProperty -Path $policy -Name 'deckpilot-desktop.exe' -Value $arguments -PropertyType String -Force | Out-Null
     $app = Start-WithEnv $exe $envs
     $version = $null
     for ($i = 0; $i -lt 240 -and -not $version; $i++) {
       try { $version = Invoke-RestMethod "http://127.0.0.1:$cdp/json/version" -TimeoutSec 2 } catch { Start-Sleep -Milliseconds 500 }
     }
+    Remove-ItemProperty -Path $policy -Name 'deckpilot-desktop.exe' -ErrorAction SilentlyContinue
     $log = Join-Path $out "$Label-msedgedriver.log"
     if (-not $version) {
       $ports = @(Get-ChildItem -Path $p -Recurse -Filter DevToolsActivePort -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
       $running = if ($app.HasExited) { "exited with $($app.ExitCode)" } else { 'running' }
-      Record "${Label}: GUI WebDriver session on the release build" 'not-covered' "the installed release build opened no WebView2 DevTools port with WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=$cdp within 120 s (app $running; DevToolsActivePort files: $(if ($ports) { $ports -join ', ' } else { 'none' }))"
+      # The arguments WebView2 actually got: its browser process's command line.
+      $browser = @(Get-CimInstance Win32_Process -Filter "Name = 'msedgewebview2.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -notmatch '--type=' } | ForEach-Object { $_.CommandLine -replace '\s+--', ' --' })
+      $browser | ForEach-Object { Write-Host "WebView2 browser process: $_" }
+      $flags = if ($browser) { (($browser[0] -split ' ') | Where-Object { $_ -like '--*' -and $_ -notlike '--user-data-dir*' -and $_ -notlike '--embedded-browser-webview*' -and $_ -notlike '--webview-exe*' }) -join ' ' } else { 'no WebView2 browser process' }
+      Record "${Label}: GUI WebDriver session on the release build" 'not-covered' "the installed release build opened no WebView2 DevTools port within 120 s: it ignores WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS and the AdditionalBrowserArguments registry override ($arguments) because it passes its own browser arguments (wry), and launched by msedgedriver it ignores the profile and port msedgedriver sets (apps/desktop/src-tauri/src/windows.rs, for_webdriver is debug-only) (app $running; DevToolsActivePort files: $(if ($ports) { $ports -join ', ' } else { 'none' }); WebView2 browser flags: $flags)"
     } else {
       Write-Host "WebView2 DevTools on port ${cdp}: $($version.Browser)"
       $server = Start-Process -FilePath $env:NATIVE_DRIVER -ArgumentList @("--port=$port") -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err"
