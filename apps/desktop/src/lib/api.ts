@@ -34,6 +34,7 @@ import type {
   MigrationNote,
   ModuleInfo,
   Overview,
+  ProfileLayoutEntry,
   ProfileSummary,
   ProfilesView,
   ProfileView,
@@ -45,6 +46,7 @@ import type {
   ResourceKind,
   Saved,
   ScopeKey,
+  SharedLayoutSummary,
   SharedVariable,
   UpdateInfo,
   UpdatePreferences,
@@ -176,6 +178,38 @@ export const api = {
   setActiveProfile: (profileId: string) => invoke<null>("set_active_profile", { profileId }),
   setDefaultProject: (profileId: string, projectId: string | null) =>
     invoke<null>("set_default_project", { profileId, projectId }),
+
+  // Shared layouts: stored once, assigned to any number of profiles.
+  listSharedLayouts: () => invoke<SharedLayoutSummary[]>("list_shared_layouts"),
+  /** `assignTo`: the profile to assign it to; `null` leaves it unassigned. */
+  createSharedLayout: (modelId: string, name: string, assignTo: string | null) =>
+    invoke<SharedLayoutSummary>("create_shared_layout", { modelId, name, assignTo }),
+  renameSharedLayout: (layoutId: string, name: string) =>
+    invoke<null>("rename_shared_layout", { layoutId, name }),
+  /** An independent copy (new layout and page ids); its keys run the same actions. */
+  duplicateSharedLayout: (layoutId: string, name: string, assignTo: string | null) =>
+    invoke<SharedLayoutSummary>("duplicate_shared_layout", { layoutId, name, assignTo }),
+  /**
+   * `confirmedProfiles`: exactly the profiles using it, as shown to the
+   * user; refused if they changed meanwhile. Never deletes profiles.
+   */
+  deleteSharedLayout: (layoutId: string, confirmedProfiles: string[]) =>
+    invoke<null>("delete_shared_layout", { layoutId, confirmedProfiles }),
+  /** Appends it to the profile's layouts; refused for an unknown device model. */
+  assignLayout: (profileId: string, layoutId: string) =>
+    invoke<null>("assign_layout", { profileId, layoutId }),
+  /** Removes it from the profile; the layout itself is kept. */
+  unassignLayout: (profileId: string, layoutId: string) =>
+    invoke<null>("unassign_layout", { profileId, layoutId }),
+  /** `order`: every assigned layout id once. */
+  reorderProfileLayouts: (profileId: string, order: string[]) =>
+    invoke<null>("reorder_profile_layouts", { profileId, order }),
+  /** Makes it the profile's layout for its device model. */
+  setDefaultLayout: (profileId: string, layoutId: string) =>
+    invoke<null>("set_default_layout", { profileId, layoutId }),
+  /** The profile's layouts, in its order. */
+  profileLayouts: (profileId: string) =>
+    invoke<ProfileLayoutEntry[]>("profile_layouts", { profileId }),
 
   createAction: (profileId: string, action: ActionInput) =>
     invoke<ActionInstance>("create_action", { profileId, action }),

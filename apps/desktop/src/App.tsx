@@ -63,6 +63,7 @@ const PAGES: Partial<Record<CorePageId, View>> = {
     import("@/pages/layout-designer").then((m) => ({ default: m.LayoutDesignerPage })),
   ),
   dashboard: lazy(() => import("@/pages/dashboard").then((m) => ({ default: m.DashboardPage }))),
+  layouts: lazy(() => import("@/pages/layouts").then((m) => ({ default: m.LayoutsPage }))),
   actions: lazy(() => import("@/pages/actions").then((m) => ({ default: m.ActionsPage }))),
   workflows: lazy(() => import("@/pages/workflows").then((m) => ({ default: m.WorkflowsPage }))),
   ...(MARKETPLACE
@@ -78,6 +79,7 @@ const PAGES: Partial<Record<CorePageId, View>> = {
 const PAGE_TITLES: Partial<Record<CorePageId, string>> = {
   designer: "Device Editor",
   dashboard: "Dashboard",
+  layouts: "Layouts",
   actions: "Action Library",
   workflows: "Workflows",
   marketplace: "Marketplace",
