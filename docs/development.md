@@ -409,8 +409,38 @@ eval "$(tools/dev/target-slot.sh env --owner $$)"
 cargo clippy --workspace --all-targets --locked -- -D warnings
 tools/dev/target-slot.sh release --owner $$
 
-tools/dev/target-slot.sh status   # holders and sizes
+tools/dev/target-slot.sh status   # holders, sizes and idle time
 ```
+
+Slots do not grow without bound. Every acquisition empties the *other*
+free slots that have been idle for more than 7 days
+(`DECKPILOT_TARGET_SLOT_MAX_AGE_DAYS`; the last use is stamped in
+`.deckpilot-slot-used` on acquisition and release). When the disk holding
+the pool has less than 25 GiB free (`DECKPILOT_MIN_FREE_GB`), acquisition
+prints a warning naming the cleanup commands and also empties the free
+slots over 30 GiB (`DECKPILOT_TARGET_SLOT_MAX_SIZE`). A slot is emptied
+only while its lock is held, so a running build is never touched; the slot
+being handed out is never emptied. `DECKPILOT_TARGET_SLOT_AUTOPRUNE=0`
+turns this off.
+
+### Freeing disk space
+
+In this order, each step leaving anything in use alone:
+
+```sh
+tools/dev/target-slot.sh prune --dry-run            # free slots idle > 7 days or > 30G
+tools/dev/target-slot.sh prune --max-age 0 --max-size 1M   # empty every free slot
+tools/dev/worktree-maintenance.sh report --repo . --repo ../deckpilot-plugins
+tools/dev/worktree-maintenance.sh cleanup --fetch-pr-heads            # dry run
+tools/dev/worktree-maintenance.sh cleanup --fetch-pr-heads --apply --artifacts
+```
+
+`report` lists the build directories of inactive worktrees (stale
+`target/`, `node_modules`), and `cleanup --artifacts` deletes them; worktrees
+that are ACTIVE (a process or lock) or REQUIRED (unique commits, local
+changes, an open pull request) keep everything. The `target/` of the main
+checkout and of a worktree running `tauri dev` or a development agent are
+not slots: remove them only with that worktree idle (`cargo clean`).
 
 Two builds in different slots do not block each other, while two builds
 sharing a target directory do: `tools/dev/tests/target-slot.test.sh`
