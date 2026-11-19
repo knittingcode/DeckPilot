@@ -108,9 +108,11 @@ flate2 = "1"
 getrandom = "0.4"
 hkdf = "0.13"
 hidapi = "2.6"
-# Key texts and icons (crates/deckpilot-render): outline fonts, rasterized
-# with anti-aliasing. `std` only: no system font lookup.
-ab_glyph = { version = "0.2.32", default-features = false, features = ["std"] }
+# Key texts and icons (crates/deckpilot-render): the built-in fonts'
+# outlines (skrifa, of the maintained fontations project) filled with
+# anti-aliasing (ab_glyph_rasterizer).
+ab_glyph_rasterizer = "0.1.10"
+skrifa = { version = "0.50", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false }
 minisign-verify = "0.3"
 # Plugin navigation icons (SVG allow-list sanitizer); already in the tree

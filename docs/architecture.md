@@ -107,8 +107,8 @@ state marks) with a frame cache, and imports, checks and scales key icons
 (PNG and JPEG decoded with limits, re-encoded as PNG). Text is set in Inter
 (medium and semibold, OFL) and the keys' icons come from the Lucide icons
 the app uses (ISC), both subset and compiled in (`assets/`, built by
-`assets/make-fonts.py`, see `NOTICE`), rasterized with anti-aliasing by
-`ab_glyph`. Used by the agent for device images and by the configuration
+`assets/make-fonts.py`, see `NOTICE`), read with `skrifa` (fontations) and
+filled with anti-aliasing by `ab_glyph_rasterizer`. Used by the agent for device images and by the configuration
 app for exact previews; the export import uses it to check icons. See
 [Key appearance](data-model.md#key-appearance).
 

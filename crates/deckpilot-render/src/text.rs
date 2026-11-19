@@ -6,6 +6,7 @@
 //!   them), common punctuation (`…`, dashes, typographic quotes), the
 //!   arrows `← ↑ → ↓` and `€`. A character the font does not have is drawn
 //!   as `?`. Kerning is applied; no hinting, shadow or extra spacing.
+//!   Outlines are read with `skrifa` and filled by `ab_glyph_rasterizer`.
 //! - **Icons**: the Lucide icons listed in `assets/icons.txt`, the set the
 //!   app shows for actions, so a key on the device shows the icon the app
 //!   shows. An unknown name is drawn as the fallback icon
@@ -23,8 +24,13 @@
 
 use std::sync::LazyLock;
 
-use ab_glyph::{Font, FontRef, GlyphId, PxScale, ScaleFont, point};
+use ab_glyph_rasterizer::{Point, Rasterizer, point};
 use deckpilot_device::Frame;
+use skrifa::instance::{LocationRef, Size};
+use skrifa::outline::{DrawSettings, OutlinePen};
+use skrifa::raw::TableProvider;
+use skrifa::raw::tables::kern::SubtableKind;
+use skrifa::{FontRef, GlyphId, MetadataProvider};
 
 const MEDIUM: &[u8] = include_bytes!("../assets/Inter-Medium.ttf");
 const SEMIBOLD: &[u8] = include_bytes!("../assets/Inter-SemiBold.ttf");
@@ -62,9 +68,9 @@ impl std::fmt::Debug for Fonts {
 static FONTS: LazyLock<Fonts> = LazyLock::new(|| Fonts {
     // The fonts are part of the source tree; a broken one fails every
     // rendering test.
-    medium: FontRef::try_from_slice(MEDIUM).expect("built-in title font"),
-    semibold: FontRef::try_from_slice(SEMIBOLD).expect("built-in value font"),
-    icons: FontRef::try_from_slice(ICONS).expect("built-in icon font"),
+    medium: FontRef::new(MEDIUM).expect("built-in title font"),
+    semibold: FontRef::new(SEMIBOLD).expect("built-in value font"),
+    icons: FontRef::new(ICONS).expect("built-in icon font"),
     names: ICON_NAMES
         .lines()
         .map(str::trim)
@@ -79,16 +85,145 @@ fn font(weight: Weight) -> &'static FontRef<'static> {
     }
 }
 
-/// The scale at which the font's em is `px` pixels, as a CSS font size.
-fn scale(font: &FontRef<'static>, px: f32) -> PxScale {
-    let em = font.units_per_em().unwrap_or(1000.0);
-    PxScale::from(px * font.height_unscaled() / em)
-}
-
 /// The glyph of `ch`, `?` for a character the font does not have.
 fn glyph_of(font: &FontRef<'static>, ch: char) -> GlyphId {
-    let id = font.glyph_id(ch);
-    if id.0 == 0 { font.glyph_id('?') } else { id }
+    let charmap = font.charmap();
+    charmap
+        .map(ch)
+        .filter(|id| *id != GlyphId::NOTDEF)
+        .or_else(|| charmap.map('?'))
+        .unwrap_or(GlyphId::NOTDEF)
+}
+
+/// The kerning between two glyphs in font units (the `kern` table that
+/// `assets/make-fonts.py` writes from the font's pair adjustments).
+fn kerning(font: &FontRef<'static>, left: GlyphId, right: GlyphId) -> f32 {
+    let Ok(kern) = font.kern() else {
+        return 0.0;
+    };
+    kern.subtables()
+        .flatten()
+        .filter(|subtable| subtable.is_horizontal() && !subtable.is_cross_stream())
+        .find_map(|subtable| match subtable.kind() {
+            Ok(SubtableKind::Format0(pairs)) => pairs.kerning(left, right),
+            _ => None,
+        })
+        .map_or(0.0, |value| value as f32)
+}
+
+/// One glyph's outline as segments in frame pixels (y down).
+#[derive(Debug, Default)]
+struct Segments {
+    origin: (f32, f32),
+    start: Point,
+    current: Point,
+    lines: Vec<[Point; 2]>,
+    quads: Vec<[Point; 3]>,
+    cubics: Vec<[Point; 4]>,
+}
+
+impl Segments {
+    fn at(&self, x: f32, y: f32) -> Point {
+        point(self.origin.0 + x, self.origin.1 - y)
+    }
+
+    fn points(&self) -> impl Iterator<Item = Point> + '_ {
+        self.lines
+            .iter()
+            .flatten()
+            .chain(self.quads.iter().flatten())
+            .chain(self.cubics.iter().flatten())
+            .copied()
+    }
+
+    /// Fills the outline into `frame` in `color`, anti-aliased.
+    fn fill(&self, frame: &mut Frame, color: [u8; 3]) {
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for p in self.points() {
+            min_x = min_x.min(p.x);
+            min_y = min_y.min(p.y);
+            max_x = max_x.max(p.x);
+            max_y = max_y.max(p.y);
+        }
+        if min_x > max_x {
+            return;
+        }
+        let (x0, y0) = (min_x.floor(), min_y.floor());
+        let (width, height) = ((max_x - x0).ceil() + 1.0, (max_y - y0).ceil() + 1.0);
+        if width > 4096.0 || height > 4096.0 {
+            return;
+        }
+        let mut raster = Rasterizer::new(width as usize, height as usize);
+        let local = |p: Point| point(p.x - x0, p.y - y0);
+        for [a, b] in &self.lines {
+            raster.draw_line(local(*a), local(*b));
+        }
+        for [a, b, c] in &self.quads {
+            raster.draw_quad(local(*a), local(*b), local(*c));
+        }
+        for [a, b, c, d] in &self.cubics {
+            raster.draw_cubic(local(*a), local(*b), local(*c), local(*d));
+        }
+        raster.for_each_pixel_2d(|x, y, coverage| {
+            blend_at(frame, x0 + x as f32, y0 + y as f32, color, coverage);
+        });
+    }
+}
+
+impl OutlinePen for Segments {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.start = self.at(x, y);
+        self.current = self.start;
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        let to = self.at(x, y);
+        self.lines.push([self.current, to]);
+        self.current = to;
+    }
+
+    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+        let to = self.at(x, y);
+        self.quads.push([self.current, self.at(cx0, cy0), to]);
+        self.current = to;
+    }
+
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        let to = self.at(x, y);
+        self.cubics
+            .push([self.current, self.at(cx0, cy0), self.at(cx1, cy1), to]);
+        self.current = to;
+    }
+
+    fn close(&mut self) {
+        if self.current != self.start {
+            self.lines.push([self.current, self.start]);
+        }
+        self.current = self.start;
+    }
+}
+
+/// Draws `glyph` of `font` at `size` pixels per em with its origin at `x`
+/// on the baseline `baseline`.
+fn draw_glyph(
+    frame: &mut Frame,
+    font: &FontRef<'static>,
+    glyph: GlyphId,
+    size: f32,
+    (x, baseline): (f32, f32),
+    color: [u8; 3],
+) {
+    let Some(outline) = font.outline_glyphs().get(glyph) else {
+        return;
+    };
+    let mut segments = Segments {
+        origin: (x, baseline),
+        ..Segments::default()
+    };
+    let settings = DrawSettings::unhinted(Size::new(size), LocationRef::default());
+    if outline.draw(settings, &mut segments).is_ok() {
+        segments.fill(frame, color);
+    }
 }
 
 /// Text set at one size and weight.
@@ -107,33 +242,45 @@ impl Style {
         }
     }
 
-    /// How wide `text` is, with kerning.
-    pub(crate) fn width(self, text: &str) -> f32 {
+    /// The glyphs of `text` with the pen position of each, and the width.
+    fn layout(self, text: &str) -> (Vec<(GlyphId, f32)>, f32) {
         let font = font(self.weight);
-        let scaled = font.as_scaled(scale(font, self.size));
-        let mut width = 0.0;
+        let metrics = font.glyph_metrics(Size::new(self.size), LocationRef::default());
+        let em = font
+            .metrics(Size::unscaled(), LocationRef::default())
+            .units_per_em
+            .max(1);
+        let units = self.size / f32::from(em);
+        let mut x = 0.0;
         let mut previous: Option<GlyphId> = None;
+        let mut glyphs = Vec::new();
         for ch in text.chars().filter(|c| !c.is_control()) {
             let id = glyph_of(font, ch);
             if let Some(previous) = previous {
-                width += scaled.kern(previous, id);
+                x += kerning(font, previous, id) * units;
             }
-            width += scaled.h_advance(id);
+            glyphs.push((id, x));
+            x += metrics.advance_width(id).unwrap_or(0.0);
             previous = Some(id);
         }
-        width
+        (glyphs, x)
+    }
+
+    /// How wide `text` is, with kerning.
+    pub(crate) fn width(self, text: &str) -> f32 {
+        self.layout(text).1
+    }
+
+    fn ascent(self) -> f32 {
+        font(self.weight)
+            .metrics(Size::new(self.size), LocationRef::default())
+            .ascent
     }
 
     /// Height of a line: ascent to descent, without extra leading.
     pub(crate) fn line_height(self) -> f32 {
-        let font = font(self.weight);
-        let scaled = font.as_scaled(scale(font, self.size));
-        scaled.ascent() - scaled.descent()
-    }
-
-    fn ascent(self) -> f32 {
-        let font = font(self.weight);
-        font.as_scaled(scale(font, self.size)).ascent()
+        let metrics = font(self.weight).metrics(Size::new(self.size), LocationRef::default());
+        metrics.ascent - metrics.descent
     }
 
     /// Draws `text` with its line box's top at `top`, centred on `center_x`.
@@ -152,31 +299,9 @@ impl Style {
     /// Draws `text` with its line box's top left corner at `(left, top)`.
     pub(crate) fn draw(self, frame: &mut Frame, text: &str, left: f32, top: f32, color: [u8; 3]) {
         let font = font(self.weight);
-        let px = scale(font, self.size);
-        let scaled = font.as_scaled(px);
         let baseline = top + self.ascent();
-        let mut x = left;
-        let mut previous: Option<GlyphId> = None;
-        for ch in text.chars().filter(|c| !c.is_control()) {
-            let id = glyph_of(font, ch);
-            if let Some(previous) = previous {
-                x += scaled.kern(previous, id);
-            }
-            let glyph = id.with_scale_and_position(px, point(x, baseline));
-            if let Some(outlined) = font.outline_glyph(glyph) {
-                let bounds = outlined.px_bounds();
-                outlined.draw(|gx, gy, coverage| {
-                    blend_at(
-                        frame,
-                        bounds.min.x + gx as f32,
-                        bounds.min.y + gy as f32,
-                        color,
-                        coverage,
-                    );
-                });
-            }
-            x += scaled.h_advance(id);
-            previous = Some(id);
+        for (glyph, x) in self.layout(text).0 {
+            draw_glyph(frame, font, glyph, self.size, (left + x, baseline), color);
         }
     }
 
@@ -187,7 +312,8 @@ impl Style {
         if wide <= width || wide <= 0.0 {
             return self;
         }
-        Self::new(self.weight, self.size * (width / wide).max(least))
+        // A hair below the exact ratio, so rounding never cuts it after all.
+        Self::new(self.weight, self.size * (width / wide * 0.995).max(least))
     }
 
     /// `text` shortened with `…` until it is at most `width` wide (an
@@ -316,23 +442,15 @@ pub(crate) fn draw_icon(
         return;
     };
     let font = &FONTS.icons;
-    let px = scale(font, side);
-    let ascent = font.as_scaled(px).ascent();
-    let glyph = font
-        .glyph_id(ch)
-        .with_scale_and_position(px, point(left, top + ascent));
-    if let Some(outlined) = font.outline_glyph(glyph) {
-        let bounds = outlined.px_bounds();
-        outlined.draw(|gx, gy, coverage| {
-            blend_at(
-                frame,
-                bounds.min.x + gx as f32,
-                bounds.min.y + gy as f32,
-                color,
-                coverage,
-            );
-        });
-    }
+    let ascent = font.metrics(Size::new(side), LocationRef::default()).ascent;
+    draw_glyph(
+        frame,
+        font,
+        glyph_of(font, ch),
+        side,
+        (left, top + ascent),
+        color,
+    );
 }
 
 /// Blends `color` over the pixel at `(x, y)` with `coverage` (0–1).
@@ -405,8 +523,14 @@ mod tests {
         assert!(style.line_height() > 12.0 && style.line_height() < 18.0);
         // Polish letters are in the font, not replaced.
         for ch in "ĄĆĘŁŃÓŚŹŻąćęłńóśźż↓↑…€".chars() {
-            assert_ne!(FONTS.medium.glyph_id(ch).0, 0, "{ch}");
-            assert_ne!(FONTS.semibold.glyph_id(ch).0, 0, "{ch}");
+            for font in [&FONTS.medium, &FONTS.semibold] {
+                assert!(
+                    font.charmap()
+                        .map(ch)
+                        .is_some_and(|id| id != GlyphId::NOTDEF),
+                    "{ch}"
+                );
+            }
         }
     }
 

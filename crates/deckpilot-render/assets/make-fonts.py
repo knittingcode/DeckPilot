@@ -15,7 +15,7 @@ Usage (fontTools 4.x):
 Inter is subset to the characters keys need (Basic Latin, Latin-1, Latin
 Extended-A, common punctuation, arrows, the euro sign), without hinting. Its
 pair kerning (GPOS) is copied into a `kern` table, the kerning the
-rasterizer (`ab_glyph`) reads. Lucide is subset to the icons in
+renderer reads (`skrifa`'s `kern` table). Lucide is subset to the icons in
 `icons.txt`; the renderer maps an icon name to its code point with
 `icons.txt` order, so the list and the font always change together.
 """
