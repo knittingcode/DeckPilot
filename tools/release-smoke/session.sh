@@ -3,6 +3,7 @@
 #
 #   tools/release-smoke/session.sh <label> launch <desktop executable>
 #   tools/release-smoke/session.sh <label> gui    <desktop executable>
+#   tools/release-smoke/session.sh <label> ui     <desktop executable>   (macOS)
 #
 # The profile is a new directory under $SMOKE_WORK: HOME, the XDG
 # directories and DECKPILOT_DATA_DIR point into it.
@@ -19,6 +20,8 @@
 #   home meanwhile.
 # gui: tauri-driver (and WebKitWebDriver, Linux) drives the installed app
 #   through tools/release-smoke/gui.mjs against the production Marketplace.
+# ui: macOS; the installed app driven from outside through the
+#   Accessibility API (tools/release-smoke/macos-ui.swift).
 #
 # The agent is found by its process name, deckpilot-agent (also inside an
 # AppImage, where `<AppImage> --agent` execs the bundled agent).
@@ -70,6 +73,66 @@ screenshot() {
   [ -s "$file" ] && basename "$file"
 }
 
+# bus <method> <args...>: a call to the session bus itself (never activates
+# a service).
+bus() {
+  local method="$1"
+  shift
+  dbus-send --session --print-reply=literal --reply-timeout=2000 --dest=org.freedesktop.DBus \
+    /org/freedesktop/DBus "org.freedesktop.DBus.$method" "$@" 2> /dev/null | tr -s ' \n' ' ' | sed 's/^ //; s/ $//'
+}
+
+# private_keyring: a GNOME Keyring with the secrets component, unlocked,
+# whose files live in the profile; returns once it owns
+# org.freedesktop.secrets on this session bus with an unlocked default
+# collection.
+#
+# Run 44445902610 (deb, first launch) failed with "the Secret Service is
+# not available ... result not returned from SS API": the readiness probe
+# called a method on org.freedesktop.secrets right after
+# `gnome-keyring-daemon --daemonize`, before that daemon had claimed the
+# name, so dbus-daemon started a SECOND keyring through D-Bus activation
+# (/usr/share/dbus-1/services/org.freedesktop.secrets.service). That one
+# has the bus's environment (the runner's HOME and /run/user/1001, see
+# "couldn't access control socket: /run/user/1001/keyring/control"), no
+# password and no unlocked collection; when it won the race for the name
+# the agent got it and could not store its key. Harness race, not the
+# product: the same release passed with the private keyring in the other
+# sessions of that run. Now nothing addresses org.freedesktop.secrets
+# until the name has an owner (NameHasOwner is answered by the bus and
+# never activates anything), and the owner must be the daemon started
+# here.
+private_keyring() {
+  local log="$SMOKE_OUT/$label-keyring.log" owner="" pid="" environ="" default="" locked=""
+  echo "release-smoke" | gnome-keyring-daemon --daemonize --unlock --components=secrets > "$log" 2>&1
+  for _ in $(seq 1 60); do
+    owner=$(bus NameHasOwner string:org.freedesktop.secrets)
+    [ "$owner" = "boolean true" ] && break
+    sleep 0.5
+  done
+  if [ "$owner" != "boolean true" ]; then
+    record "$label: credential store" error "the private GNOME Keyring did not claim org.freedesktop.secrets within 30 s: $(tr '\n' ' ' < "$log")"
+    return
+  fi
+  pid=$(bus GetConnectionUnixProcessID string:org.freedesktop.secrets | sed 's/^uint32 //')
+  environ=$(tr '\0' '\n' < "/proc/$pid/environ" 2> /dev/null | grep -E '^(XDG_DATA_HOME|XDG_RUNTIME_DIR)=' | tr '\n' ' ')
+  default=$(dbus-send --session --print-reply=literal --reply-timeout=5000 --dest=org.freedesktop.secrets \
+    /org/freedesktop/secrets org.freedesktop.Secret.Service.ReadAlias string:default 2> /dev/null | tr -d ' \n')
+  if [ -n "$default" ] && [ "$default" != / ]; then
+    locked=$(dbus-send --session --print-reply=literal --reply-timeout=5000 --dest=org.freedesktop.secrets \
+      "$default" org.freedesktop.DBus.Properties.Get string:org.freedesktop.Secret.Collection string:Locked 2> /dev/null | tr -s ' \n' ' ' | sed 's/^ //; s/ $//')
+  fi
+  local evidence
+  evidence="org.freedesktop.secrets owned by pid $pid ($(ps -o args= -p "$pid" 2> /dev/null | cut -c1-80)); its ${environ:-environment unreadable}; default collection ${default:-none}, Locked: ${locked:-unknown}"
+  if ! grep -q -F "XDG_DATA_HOME=$XDG_DATA_HOME " <<< "$environ "; then
+    record "$label: credential store" error "the Secret Service on the session bus is not the private keyring: $evidence"
+  elif [ "$locked" != "variant boolean false" ]; then
+    record "$label: credential store" error "the private keyring has no unlocked default collection: $evidence"
+  else
+    record "$label: credential store" pass "private GNOME Keyring ready before the app starts: $evidence"
+  fi
+}
+
 # ---------------------------------------------------------------- inside
 inner() {
   local profile="$SMOKE_PROFILE"
@@ -79,20 +142,12 @@ inner() {
   export DECKPILOT_DATA_DIR="$profile/data"
   if [ "$os" = Linux ]; then
     export XDG_RUNTIME_DIR="$profile/run"
-    # A keyring with the secrets component, unlocked, in the profile.
-    echo "release-smoke" | gnome-keyring-daemon --daemonize --unlock --components=secrets > /dev/null 2>&1
-    local ready=""
-    for _ in $(seq 1 60); do
-      if dbus-send --session --print-reply=literal --reply-timeout=2000 --dest=org.freedesktop.secrets \
-        /org/freedesktop/secrets org.freedesktop.DBus.Properties.Get \
-        string:org.freedesktop.Secret.Service string:Collections > /dev/null 2>&1; then ready=1; break; fi
-      sleep 0.5
-    done
-    [ -n "$ready" ] || record "$label: credential store" error "the private GNOME Keyring did not answer within 30 s"
+    private_keyring
   fi
   case "$mode" in
     launch) inner_launch ;;
     gui) inner_gui ;;
+    ui) inner_ui ;;
     *) echo "unknown mode $mode" >&2; exit 2 ;;
   esac
 }
@@ -187,6 +242,19 @@ inner_gui() {
   fi
   kill "$server" 2> /dev/null
   wait "$server" 2> /dev/null
+  stop_all
+  mkdir -p "$SMOKE_OUT/$label-agent-logs"
+  cp -R "$DECKPILOT_DATA_DIR/logs/." "$SMOKE_OUT/$label-agent-logs/" 2> /dev/null || true
+}
+
+# macOS: the app started as usual, then driven from outside through the
+# Accessibility API (tools/release-smoke/macos-ui.swift, built by the
+# workflow as $SMOKE_AX_DRIVER).
+inner_ui() {
+  local bundle="${exe%/Contents/MacOS/*}"
+  "$exe" > "$SMOKE_OUT/$label-desktop.log" 2>&1 &
+  desktop_pid=$!
+  "${SMOKE_AX_DRIVER:?}" --label "$label" --out "$SMOKE_OUT" --app "$bundle" --pid "$desktop_pid" 2>&1 | tee "$SMOKE_OUT/$label-ax.log"
   stop_all
   mkdir -p "$SMOKE_OUT/$label-agent-logs"
   cp -R "$DECKPILOT_DATA_DIR/logs/." "$SMOKE_OUT/$label-agent-logs/" 2> /dev/null || true

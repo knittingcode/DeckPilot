@@ -5,17 +5,29 @@
 # - Linux (ubuntu-24.04): .deb installed with apt over the previous
 #   release's .deb (the package upgrade); AppImage extracted and run; .rpm
 #   inspected and installed in a Fedora container; first launch with an
-#   isolated profile under Xvfb with a private GNOME Keyring; the installed
-#   app driven with tauri-driver/WebKitWebDriver against the production
-#   plugin Marketplace.
+#   isolated profile under Xvfb with a private GNOME Keyring (owning
+#   org.freedesktop.secrets before the app starts); the installed app
+#   driven with tauri-driver/WebKitWebDriver against the production plugin
+#   Marketplace.
 # - Windows (windows-latest): MSI (msiexec /qn) and NSIS (/S) installed,
-#   checked, started with an isolated profile and uninstalled in turn; the
-#   MSI-installed app driven with tauri-driver/msedgedriver.
+#   checked, started with an isolated profile and uninstalled in turn.
+#   Release builds do not let msedgedriver attach to WebView2 (and must
+#   not), so WebDriver is reported as not covered; instead each installed
+#   app is driven from OUTSIDE through UI Automation, the accessibility
+#   layer (tools/release-smoke/windows-ui.ps1), against the production
+#   Marketplace.
 # - macOS arm64 (macos-15) and x64 (macos-15-intel): the disk image's
 #   Gatekeeper assessment, signatures and stapled tickets, the app copied
 #   to a temporary Applications folder and started with an isolated profile
 #   and a temporary default keychain. No WebDriver exists for WKWebView:
-#   the macOS GUI is not driven (reported as not covered).
+#   the app is driven from OUTSIDE through the Accessibility API
+#   (tools/release-smoke/macos-ui.swift), with the Dock, the activation
+#   policy and the agent's menu bar item; a probe job records what the
+#   runner grants (Accessibility, screen recording) and changes nothing.
+#
+# The external drivers enable nothing in the app (no WebDriver, DevTools
+# or remote debugging): they read the same accessibility tree a screen
+# reader does.
 # - Update path (ubuntu-24.04): latest.json's packages download from their
 #   public URLs, match SHA256SUMS and verify with the pinned updater key
 #   (.github/updater.pub); the previous release embeds that key.
@@ -55,7 +67,7 @@ env:
   # Pinned; installed with `cargo install --locked`.
   TAURI_DRIVER_VERSION: 2.1.0
   # The release a pull request's run tests.
-  PULL_REQUEST_TAG: v0.8.0
+  PULL_REQUEST_TAG: v0.8.1
   # Whether failed product checks fail the jobs (tools/release-smoke/common.sh).
   SMOKE_STRICT: ${{ github.event_name == 'workflow_dispatch' }}
 
@@ -200,7 +212,7 @@ jobs:
     name: Windows (MSI, NSIS)
     needs: resolve
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     defaults:
@@ -275,6 +287,11 @@ jobs:
         if: always()
         shell: pwsh
         run: ./tools/release-smoke/windows.ps1 gui msi
+      # External UI Automation of the installed release build (no WebDriver).
+      - name: MSI - UI Automation against the production Marketplace
+        if: always()
+        shell: pwsh
+        run: ./tools/release-smoke/windows.ps1 ui msi
       - name: MSI - uninstall
         if: always()
         shell: pwsh
@@ -290,6 +307,10 @@ jobs:
         if: always()
         shell: pwsh
         run: ./tools/release-smoke/windows.ps1 launch nsis
+      - name: NSIS - UI Automation against the production Marketplace
+        if: always()
+        shell: pwsh
+        run: ./tools/release-smoke/windows.ps1 ui nsis
       - name: NSIS - uninstall
         if: always()
         shell: pwsh
@@ -320,7 +341,7 @@ jobs:
             arch: x64
             platform: macos-x64
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 50
     permissions:
       contents: read
     env:
@@ -346,11 +367,19 @@ jobs:
       - name: First launch with an isolated profile
         if: always()
         run: tools/release-smoke/session.sh app launch "$SMOKE_WORK/Applications/DeckPilot.app/Contents/MacOS/deckpilot-desktop"
-      - name: GUI
+      - name: GUI over WebDriver
         if: always()
         run: |
           source tools/release-smoke/common.sh
-          record "GUI against the production Marketplace" not-covered "no WebDriver exists for WKWebView (tauri-driver supports Linux and Windows only; docs/marketplace/e2e.md)"
+          record "GUI against the production Marketplace (WebDriver)" not-covered "no WebDriver exists for WKWebView (tauri-driver supports Linux and Windows only; docs/marketplace/e2e.md); driven through the Accessibility API instead"
+      - name: Build the accessibility driver
+        if: always()
+        run: |
+          swiftc -O -o "$SMOKE_WORK/macos-ui" tools/release-smoke/macos-ui.swift
+          echo "SMOKE_AX_DRIVER=$SMOKE_WORK/macos-ui" >> "$GITHUB_ENV"
+      - name: GUI through the Accessibility API against the production Marketplace
+        if: always()
+        run: tools/release-smoke/session.sh app-ui ui "$SMOKE_WORK/Applications/DeckPilot.app/Contents/MacOS/deckpilot-desktop"
       - name: Summary
         if: always()
         run: tools/release-smoke/summary.sh "macOS $ARCH, $TAG"
@@ -359,6 +388,39 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-smoke-${{ matrix.platform }}
+          path: ${{ runner.temp }}/smoke/out
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # What the hosted macOS runner grants a job's processes: Accessibility
+  # (TCC), screen recording, reading another app's AX tree. Reads only;
+  # never touches the TCC database, SIP or any setting.
+  macos-probe:
+    name: macOS accessibility probe (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      SMOKE_PLATFORM: probe-${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Probe
+        run: |
+          mkdir -p "$RUNNER_TEMP/smoke/out"
+          swiftc -O -o "$RUNNER_TEMP/macos-ui" tools/release-smoke/macos-ui.swift
+          "$RUNNER_TEMP/macos-ui" --probe --label runner --out "$RUNNER_TEMP/smoke/out"
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-smoke-probe-${{ matrix.os }}
           path: ${{ runner.temp }}/smoke/out
           if-no-files-found: ignore
           retention-days: 14
@@ -411,7 +473,7 @@ jobs:
 
   report:
     name: Report
-    needs: [resolve, linux, windows, macos, update]
+    needs: [resolve, linux, windows, macos, macos-probe, update]
     if: always() && needs.resolve.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

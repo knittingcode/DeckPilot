@@ -9,9 +9,12 @@ configuration app instead of the agent's IPC alone. One scenario
 | UI | `tests/marketplace_gui.rs` | Linux, Windows | the built app (debug, `VITE_DECKPILOT_PLUGINS=1`) driven over WebDriver by `tauri-driver` (WebKitWebDriver on Linux, msedgedriver on Windows); the app starts the agent itself |
 | Command layer | `src/marketplace_e2e.rs` | macOS, Linux, Windows | the app's commands through Tauri's mock runtime, with the frontend's argument names; the test starts the agent |
 
-**The macOS GUI is not driven**: there is no WebDriver for WKWebView. On
+**The macOS GUI is not driven here**: there is no WebDriver for WKWebView. On
 macOS the scenario runs at the command layer only: the same commands, the
-same agent, IPC, storage and sandbox, without the webview.
+same agent, IPC, storage and sandbox, without the webview. The *published*
+macOS and Windows apps are driven from outside through the operating
+system's accessibility layer by the release smoke test
+([release-validation.md](../release-validation.md#6-release-smoke-the-published-release)).
 
 Both use a real agent built with `plugins,test-hooks`, the real sandboxed
 plugin host, the sample plugin (`plugins/examples/hello-weather`, packaged
