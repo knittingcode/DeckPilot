@@ -15,6 +15,8 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-19
+
 ### Security
 
 - The plugin sandbox uses Wasmtime 50.0.2 (was 50.0.1), which fixes the
