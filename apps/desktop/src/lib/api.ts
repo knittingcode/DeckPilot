@@ -11,6 +11,7 @@ import type {
   CatalogFilter,
   ControlFace,
   IconInfo,
+  LivePreview,
   PageChange,
   PageTree,
   CredentialInfo,
@@ -326,7 +327,24 @@ export const api = {
     pageId: string,
     projectId: string | null,
     render?: boolean,
-  ) => invoke<ControlFace[]>("preview_layout", { profileId, layout, pageId, projectId, render }),
+    /** Live key states the agent reported (`watchKeyStates`). */
+    live?: LivePreview | null,
+  ) =>
+    invoke<ControlFace[]>("preview_layout", {
+      profileId,
+      layout,
+      pageId,
+      projectId,
+      render,
+      live: live ?? null,
+    }),
+  /**
+   * Watches the agent's live states of these actions' keys, replacing the
+   * previous watch; none stops. Returns the watch's number, which its
+   * `key-states` events carry (layout-editor/use-live-key-states.ts).
+   */
+  watchKeyStates: (profileId: string, actions: string[]) =>
+    invoke<number>("watch_key_states", { profileId, actions }),
   pageTree: (layout: DeviceLayout) => invoke<PageTree>("page_tree", { layout }),
   reorderPages: (profileId: string, layoutId: string, order: string[]) =>
     invoke<DeviceLayout>("reorder_pages", { profileId, layoutId, order }),

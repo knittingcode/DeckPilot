@@ -9,8 +9,8 @@ use tokio::io::BufReader;
 use crate::framing::{FrameError, read_message, write_message};
 use crate::{
     AgentEvent, AgentPaths, Capability, ClientKind, ClientMessage, ErrorCode, IpcError,
-    MIN_COMPATIBLE_AGENT_PROTOCOL, PROTOCOL_VERSION, Request, Response, ServerMessage,
-    SharedStream, negotiate, plugins::PluginEvent, token,
+    KeyStateEntry, MIN_COMPATIBLE_AGENT_PROTOCOL, PROTOCOL_VERSION, Request, Response,
+    ServerMessage, SharedStream, negotiate, plugins::PluginEvent, token,
 };
 
 /// How long the agent has to answer a new connection's `hello`.
@@ -102,6 +102,8 @@ pub struct AgentClient {
     capabilities: Vec<Capability>,
     events: VecDeque<AgentEvent>,
     plugin_events: VecDeque<PluginEvent>,
+    /// `keyStates` messages after `watchKeyStates`.
+    key_states: VecDeque<Vec<KeyStateEntry>>,
 }
 
 impl Drop for AgentClient {
@@ -188,6 +190,7 @@ impl AgentClient {
             capabilities: Vec::new(),
             events: VecDeque::new(),
             plugin_events: VecDeque::new(),
+            key_states: VecDeque::new(),
         };
         let hello = ClientMessage::Hello {
             protocol,
@@ -294,6 +297,44 @@ impl AgentClient {
                 }
                 ServerMessage::Event { event } => self.events.push_back(event),
                 ServerMessage::PluginEvent { event } => self.plugin_events.push_back(event),
+                ServerMessage::KeyStates { states } => self.key_states.push_back(states),
+                other => return Err(ClientError::Protocol(format!("{other:?}"))),
+            }
+        }
+    }
+
+    /// Watches the live key states of `actions` of `profile` on this
+    /// connection (protocol 11), replacing what it watched; none stops.
+    /// Returns whether the profile has live states (it is the active one)
+    /// and what the keys show now; changes follow with
+    /// [`AgentClient::next_key_states`].
+    pub async fn watch_key_states(
+        &mut self,
+        profile: deckpilot_core::ProfileId,
+        actions: Vec<deckpilot_core::ActionInstanceId>,
+    ) -> Result<(bool, Vec<KeyStateEntry>), ClientError> {
+        match self
+            .request(Request::WatchKeyStates { profile, actions })
+            .await?
+        {
+            Response::KeyStates { live, states } => Ok((live, states)),
+            other => Err(ClientError::Protocol(format!("{other:?}"))),
+        }
+    }
+
+    /// Waits for the next change of watched key states. Events that arrive
+    /// meanwhile are kept for [`AgentClient::next_event`] and
+    /// [`AgentClient::next_plugin_event`].
+    pub async fn next_key_states(&mut self) -> Result<Vec<KeyStateEntry>, ClientError> {
+        loop {
+            if let Some(states) = self.key_states.pop_front() {
+                return Ok(states);
+            }
+            match self.receive().await? {
+                ServerMessage::KeyStates { states } => return Ok(states),
+                ServerMessage::Event { event } => self.events.push_back(event),
+                ServerMessage::PluginEvent { event } => self.plugin_events.push_back(event),
+                ServerMessage::Error { error, .. } => return Err(ClientError::Agent(error)),
                 other => return Err(ClientError::Protocol(format!("{other:?}"))),
             }
         }
@@ -330,6 +371,7 @@ impl AgentClient {
             match self.receive().await? {
                 ServerMessage::PluginEvent { event } => return Ok(event),
                 ServerMessage::Event { event } => self.events.push_back(event),
+                ServerMessage::KeyStates { states } => self.key_states.push_back(states),
                 ServerMessage::Error { error, .. } => return Err(ClientError::Agent(error)),
                 other => return Err(ClientError::Protocol(format!("{other:?}"))),
             }
@@ -354,6 +396,7 @@ impl AgentClient {
                 ServerMessage::Event { event } => return Ok(event),
                 // Kept for `next_plugin_event`.
                 ServerMessage::PluginEvent { event } => self.plugin_events.push_back(event),
+                ServerMessage::KeyStates { states } => self.key_states.push_back(states),
                 ServerMessage::Error { error, .. } => return Err(ClientError::Agent(error)),
                 other => return Err(ClientError::Protocol(format!("{other:?}"))),
             }

@@ -14,6 +14,7 @@ mod actions;
 pub(crate) mod agent;
 mod credentials;
 mod icons;
+pub(crate) mod key_states;
 mod layouts;
 mod logs;
 mod machine;
@@ -126,6 +127,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         layouts::delete_layout,
         layouts::activate_layout,
         layouts::preview_layout,
+        key_states::watch_key_states,
         layouts::page_tree,
         layouts::reorder_pages,
         layouts::move_page,

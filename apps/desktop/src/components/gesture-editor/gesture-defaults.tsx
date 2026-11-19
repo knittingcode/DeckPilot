@@ -3,9 +3,8 @@ import { toast } from "sonner"
 
 import { ErrorNotice } from "@/components/page"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SettingsGroup, SettingsRow, SettingsSection } from "@/components/settings-layout"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { api, errorMessage } from "@/lib/api"
 import type { GestureTimings } from "@/lib/types"
 
@@ -82,35 +81,46 @@ export function GestureDefaultsCard() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Gesture timing</CardTitle>
-        <CardDescription>
-          Defaults for keys with a double click or long press. A key can use other values in the
-          layout designer. Keys that only act on a press are not affected.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form
-          className="grid max-w-md gap-4"
-          onSubmit={(e) => {
-            e.preventDefault()
-            if (valid) {
-              save({
-                doubleClickMs: Number(text.doubleClickMs),
-                longPressMs: Number(text.longPressMs),
-              })
-            }
-          }}
-        >
-          {error && <ErrorNotice error={error} />}
+    <SettingsSection
+      title="Gesture timing"
+      description="Defaults for keys with a double click or long press. A key can use other values in the layout designer. Keys that only act on a press are not affected."
+    >
+      <form
+        className="grid gap-3"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (valid) {
+            save({
+              doubleClickMs: Number(text.doubleClickMs),
+              longPressMs: Number(text.longPressMs),
+            })
+          }
+        }}
+      >
+        {error && <ErrorNotice error={error} />}
+        <SettingsGroup>
           {FIELDS.map(({ field, id, hint }) => {
             const { min, max, label } = TIMING_LIMITS[field]
             const problem =
               errors[field] ?? (text[field].trim() === "" && saved ? "Enter a value." : null)
             return (
-              <div key={field} className="grid gap-1">
-                <Label htmlFor={id}>{label} (ms)</Label>
+              <SettingsRow
+                key={field}
+                label={`${label} (ms)`}
+                htmlFor={id}
+                description={
+                  <>
+                    <span id={`${id}-hint`}>
+                      {hint} {min}–{max} ms, default {DEFAULT_TIMINGS[field]} ms.
+                    </span>
+                    {problem && (
+                      <span id={`${id}-error`} className="block text-destructive" role="alert">
+                        {problem}
+                      </span>
+                    )}
+                  </>
+                }
+              >
                 <Input
                   id={id}
                   type="number"
@@ -118,7 +128,7 @@ export function GestureDefaultsCard() {
                   min={min}
                   max={max}
                   step={10}
-                  className="w-32"
+                  className="h-8 w-24 text-right tabular-nums"
                   value={text[field]}
                   disabled={saved === null}
                   aria-invalid={problem ? true : undefined}
@@ -127,40 +137,32 @@ export function GestureDefaultsCard() {
                     setText({ ...text, [field]: e.target.value })
                   }}
                 />
-                <p id={`${id}-hint`} className="text-xs text-muted-foreground">
-                  {hint} {min}–{max} ms, default {DEFAULT_TIMINGS[field]} ms.
-                </p>
-                {problem && (
-                  <p id={`${id}-error`} className="text-xs text-destructive" role="alert">
-                    {problem}
-                  </p>
-                )}
-              </div>
+              </SettingsRow>
             )
           })}
-          <div className="flex gap-2">
-            <Button type="submit" size="sm" disabled={!valid || !changed || saving}>
-              Save
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={
-                saving ||
-                saved === null ||
-                (saved.doubleClickMs === DEFAULT_TIMINGS.doubleClickMs &&
-                  saved.longPressMs === DEFAULT_TIMINGS.longPressMs)
-              }
-              onClick={() => {
-                save(DEFAULT_TIMINGS)
-              }}
-            >
-              Restore defaults
-            </Button>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
+        </SettingsGroup>
+        <div className="flex justify-end gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={
+              saving ||
+              saved === null ||
+              (saved.doubleClickMs === DEFAULT_TIMINGS.doubleClickMs &&
+                saved.longPressMs === DEFAULT_TIMINGS.longPressMs)
+            }
+            onClick={() => {
+              save(DEFAULT_TIMINGS)
+            }}
+          >
+            Restore defaults
+          </Button>
+          <Button type="submit" size="sm" disabled={!valid || !changed || saving}>
+            Save
+          </Button>
+        </div>
+      </form>
+    </SettingsSection>
   )
 }

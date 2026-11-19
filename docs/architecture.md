@@ -102,11 +102,15 @@ and no file fallback.
 
 ### `deckpilot-render`
 
-Draws `KeyFace`s into `Frame`s (title, appearance, icon, live state marks)
-with a frame cache, and imports, checks and scales key icons (PNG and JPEG
-decoded with limits, re-encoded as PNG). Used by the agent for device
-images and by the configuration app for exact previews; the export import
-uses it to check icons. See [Key appearance](data-model.md#key-appearance).
+Draws `KeyFace`s into `Frame`s (icon, title, value line, appearance, live
+state marks) with a frame cache, and imports, checks and scales key icons
+(PNG and JPEG decoded with limits, re-encoded as PNG). Text is set in Inter
+(medium and semibold, OFL) and the keys' icons come from the Lucide icons
+the app uses (ISC), both subset and compiled in (`assets/`, built by
+`assets/make-fonts.py`, see `NOTICE`), read with `skrifa` (fontations) and
+filled with anti-aliasing by `ab_glyph_rasterizer`. Used by the agent for device images and by the configuration
+app for exact previews; the export import uses it to check icons. See
+[Key appearance](data-model.md#key-appearance).
 
 ### `deckpilot-presence`
 
@@ -203,8 +207,14 @@ from enabled modules (Projects, including this machine's resource mappings).
 Profile-scoped pages show the profile they edit and are re-created when
 another profile is chosen, so an open editor never writes to a different
 profile. Every editor saves through the backend; layouts are
-validated against the device model and previewed with the same face logic the
-agent uses. The frontend is React + TypeScript with Tailwind CSS and shadcn/ui
+validated against the device model and previewed with the same face logic and
+renderer the agent uses. Live values in the layout editor's preview (a CPU
+monitor's use, a repository's branch) come from the agent too: the editor
+watches the states of the shown page's keys (`watch_key_states`, IPC
+`watchKeyStates`, protocol 11) and draws them with `preview_layout`'s `live`
+argument. The agent reads them with the providers that serve the device,
+so the app never samples anything itself (see
+[background-agent.md](background-agent.md)). The frontend is React + TypeScript with Tailwind CSS and shadcn/ui
 components; `src/lib/types.ts` mirrors the serialized Rust types.
 
 Native windows besides the main window come from one catalog
@@ -271,7 +281,9 @@ device's colours are theme tokens (`--device-*` in `index.css`).
 
 Pages render only their content; their title,
 subtitle, breadcrumbs, status and commands go to the titlebar through
-`useTitlebar` (`lib/titlebar.ts`). Any component of a page may contribute —
+`useTitlebar` (`lib/titlebar.ts`). Settings pages are the exception for the
+subtitle: the section's title and description head its content
+(`SettingsHeader`), the titlebar shows the breadcrumbs. Any component of a page may contribute —
 including module pages — and the titlebar imports no page or module. Actions
 have a placement: *primary* (always visible), *secondary* (visible while
 there is room, otherwise in the overflow menu) or *overflow*.
@@ -287,6 +299,19 @@ Platform differences live in `use-window-chrome.ts`:
   `titlebar_double_click`.
 - **Windows and Linux:** the native titlebar and window manager decorations
   stay unchanged; the app titlebar is a toolbar below them.
+
+Content pages share one flat layout vocabulary
+(`components/settings-layout.tsx`): sections with a heading, description and
+commands (`SettingsSection`, `SectionHeader`), groups of rows separated by
+hairlines (`SettingsGroup`, `SettingsRow`: label and description left, the
+control right, wrapping under the label in a narrow window), label–value
+lists (`PropertyList`), a dot-and-word state (`InlineStatus`) and one framed
+container for editors and configuration forms (`Panel`, a hairline border
+without shadow, never nested). Lists and tables separate rows with
+hairlines instead of boxing each item; `EmptyState` has a `plain` variant
+for them. Cards (`components/ui/card.tsx`) remain only in the device
+editor. Status colours (`--success`, `--warning`) and the 13 px
+`text-caption` size are tokens in `index.css`.
 
 Sizes are tokens in `index.css` (`--titlebar-height`, `--titlebar-control`,
 `--titlebar-icon`, …). Before the selectors the toolbar only leaves room

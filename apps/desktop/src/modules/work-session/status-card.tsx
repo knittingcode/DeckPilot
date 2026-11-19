@@ -2,7 +2,7 @@ import { CircleAlert, CircleCheck, CircleX } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SettingsSection } from "@/components/settings-layout"
 import { api } from "@/lib/api"
 import { toastFailure } from "@/lib/failure"
 import type { ElapsedFormat, WorkSessionSnapshot } from "@/lib/types"
@@ -35,14 +35,11 @@ export function StatusCard({
   const text = STATE_TEXT[snapshot.state]
   const notices = snapshot.notices ?? []
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Current session</CardTitle>
-        <CardDescription>
-          Operated from its key on the device; this page only shows the state.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4">
+    <SettingsSection
+      title="Current session"
+      description="Operated from its key on the device; this page only shows the state."
+    >
+      <div className="grid gap-4">
         <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
           <div className="grid gap-1">
             <span className="text-xs text-muted-foreground">State</span>
@@ -76,7 +73,7 @@ export function StatusCard({
                 return (
                   <li
                     key={`${notice.problem}:${notice.atMs}`}
-                    className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm"
+                    className="flex gap-2 border-l-2 border-warning py-1 pl-3 text-sm"
                   >
                     <CircleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden />
                     <div className="grid gap-0.5">
@@ -111,8 +108,8 @@ export function StatusCard({
             </div>
           </section>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   )
 }
 

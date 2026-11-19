@@ -23,15 +23,31 @@ import type { DragSource } from "./editing"
 import { loadCompatibleOnly, saveCompatibleOnly } from "./library-sidebar"
 import type { TargetGroup, TargetOption } from "./targets"
 
-function OptionIcon({ option }: { option: TargetOption }) {
-  if (option.kind === "action") return <ActionIcon name={option.icon} className="size-4 shrink-0" />
-  if (option.kind === "workflow") return <ListOrdered className="size-4 shrink-0" />
-  if (option.target.type === "back") return <ArrowLeft className="size-4 shrink-0" />
-  return <Folder className="size-4 shrink-0" />
+/** A 16px icon in a small neutral square, the same for every row. */
+function EntryIcon({ children }: { children: ReactNode }) {
+  return (
+    <span
+      data-slot="library-icon"
+      className="flex size-6 shrink-0 items-center justify-center rounded-md border bg-muted/60 text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0"
+    >
+      {children}
+    </span>
+  )
 }
 
+function OptionIcon({ option }: { option: TargetOption }) {
+  if (option.kind === "action") return <ActionIcon name={option.icon} />
+  if (option.kind === "workflow") return <ListOrdered aria-hidden />
+  if (option.target.type === "back") return <ArrowLeft aria-hidden />
+  return <Folder aria-hidden />
+}
+
+/** A compact row of the library, about 32px high: icon, then name. */
 const ENTRY =
-  "flex min-w-0 cursor-grab items-center gap-2 rounded-md border bg-card px-2 py-1.5 text-sm hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+  "flex h-8 min-w-0 cursor-grab items-center gap-2 rounded-md px-1 text-sm transition-colors select-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none active:cursor-grabbing"
+
+/** A row that cannot be dragged: muted, with why under the name. */
+const DISABLED_ENTRY = "grid min-w-0 gap-0.5 rounded-md px-1 py-1 text-sm text-muted-foreground"
 
 function LibraryEntry({ option }: { option: TargetOption }) {
   const source: DragSource = { type: "target", target: option.target }
@@ -54,17 +70,20 @@ function LibraryEntry({ option }: { option: TargetOption }) {
   if (option.unavailable !== undefined) {
     return (
       <li
-        className="grid min-w-0 gap-0.5 rounded-md border border-dashed px-2 py-1.5 text-sm text-muted-foreground"
+        className={DISABLED_ENTRY}
         aria-label={`${option.label}: unavailable, ${option.unavailable}`}
         aria-disabled
+        data-compatibility="unavailable"
       >
-        <span className="flex min-w-0 items-center gap-2">
-          <OptionIcon option={option} />
+        <span className="flex h-6 min-w-0 items-center gap-2">
+          <EntryIcon>
+            <OptionIcon option={option} />
+          </EntryIcon>
           <span className="min-w-0 flex-1 truncate" title={option.label}>
             {option.label}
           </span>
         </span>
-        <span className="text-xs">{option.unavailable}</span>
+        <span className="pl-8 text-xs">{option.unavailable}</span>
       </li>
     )
   }
@@ -76,7 +95,9 @@ function LibraryEntry({ option }: { option: TargetOption }) {
       {...listeners}
       aria-label={`Drag ${option.label} onto a control`}
     >
-      <OptionIcon option={option} />
+      <EntryIcon>
+        <OptionIcon option={option} />
+      </EntryIcon>
       <span className="min-w-0 flex-1 truncate" title={option.label}>
         {option.label}
       </span>
@@ -99,18 +120,18 @@ function IncompatibleEntry({
 }) {
   return (
     <li
-      className="grid min-w-0 gap-0.5 rounded-md border border-dashed px-2 py-1.5 text-sm text-muted-foreground"
+      className={DISABLED_ENTRY}
       aria-label={`${label}: not for the selected control. ${reason}`}
       aria-disabled
       data-compatibility="incompatible"
     >
-      <span className="flex min-w-0 items-center gap-2 opacity-70">
-        {icon}
+      <span className="flex h-6 min-w-0 items-center gap-2 opacity-70">
+        <EntryIcon>{icon}</EntryIcon>
         <span className="min-w-0 flex-1 truncate" title={label}>
           {label}
         </span>
       </span>
-      <span className="text-xs">{reason}</span>
+      <span className="pl-8 text-xs">{reason}</span>
     </li>
   )
 }
@@ -131,13 +152,15 @@ function NewFolderEntry() {
   return (
     <li
       ref={setNodeRef}
-      className={cn(ENTRY, "border-dashed", isDragging && "opacity-60")}
+      className={cn(ENTRY, isDragging && "opacity-60")}
       {...attributes}
       {...listeners}
       aria-label="Drag New folder onto an empty control"
       title="Drop on an empty key to create a folder there. Double-click the key to enter it."
     >
-      <FolderPlus className="size-4 shrink-0" />
+      <EntryIcon>
+        <FolderPlus aria-hidden />
+      </EntryIcon>
       <span className="min-w-0 flex-1 truncate">New folder</span>
     </li>
   )
@@ -159,13 +182,15 @@ function NewMultiActionEntry() {
   return (
     <li
       ref={setNodeRef}
-      className={cn(ENTRY, "border-dashed", isDragging && "opacity-60")}
+      className={cn(ENTRY, isDragging && "opacity-60")}
       {...attributes}
       {...listeners}
       aria-label="Drag Multi Action onto a control"
       title="Runs several actions in order, with delays between them. Drop it on a key, then add its steps."
     >
-      <ListPlus className="size-4 shrink-0" />
+      <EntryIcon>
+        <ListPlus aria-hidden />
+      </EntryIcon>
       <span className="min-w-0 flex-1 truncate">Multi Action</span>
     </li>
   )
@@ -187,20 +212,22 @@ function CatalogItem({ entry, incompatible }: { entry: CatalogEntry; incompatibl
       <IncompatibleEntry
         label={entry.type.name}
         reason={incompatible}
-        icon={<ActionIcon name={entry.type.node?.icon} className="size-4 shrink-0" />}
+        icon={<ActionIcon name={entry.type.node?.icon} />}
       />
     )
   }
   return (
     <li
       ref={setNodeRef}
-      className={cn(ENTRY, "border-dashed", isDragging && "opacity-60")}
+      className={cn(ENTRY, isDragging && "opacity-60")}
       {...attributes}
       {...listeners}
       aria-label={`Drag ${entry.type.name} onto a control`}
       title={`${entry.type.description} (${entry.module})`}
     >
-      <ActionIcon name={entry.type.node?.icon} className="size-4 shrink-0" />
+      <EntryIcon>
+        <ActionIcon name={entry.type.node?.icon} />
+      </EntryIcon>
       <span className="min-w-0 flex-1 truncate">{entry.type.name}</span>
     </li>
   )
@@ -221,11 +248,11 @@ function Section({
   children: ReactNode
 }) {
   return (
-    <section className="grid gap-1" aria-label={label}>
+    <section className="grid gap-0.5 border-t pt-2 first:border-t-0 first:pt-0" aria-label={label}>
       <h3>
         <button
           type="button"
-          className="flex w-full items-center gap-1 rounded-sm text-left text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          className="flex h-6 w-full items-center gap-1 rounded-sm px-1 text-left text-[11px] font-medium tracking-wide text-muted-foreground uppercase hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
           aria-expanded={open}
           onClick={onToggle}
         >
@@ -234,11 +261,13 @@ function Section({
           ) : (
             <ChevronRight className="size-3" aria-hidden />
           )}
-          <span className="flex-1">{label}</span>
-          <span aria-hidden>{count}</span>
+          <span className="flex-1 truncate">{label}</span>
+          <span className="tabular-nums" aria-hidden>
+            {count}
+          </span>
         </button>
       </h3>
-      {open && <ul className="grid gap-1">{children}</ul>}
+      {open && <ul className="grid gap-px">{children}</ul>}
     </section>
   )
 }
@@ -355,7 +384,7 @@ export function LibraryPanel({
           </p>
         </div>
       )}
-      <div className={cn("grid gap-3", variant === "card" && "max-h-[28rem] overflow-y-auto")}>
+      <div className={cn("grid gap-2", variant === "card" && "max-h-[28rem] overflow-y-auto")}>
         {!hasItems && !searching && catalog.length === 0 && (
           <p className="text-sm text-muted-foreground">
             No actions or workflows yet. Create them in the Action Library.

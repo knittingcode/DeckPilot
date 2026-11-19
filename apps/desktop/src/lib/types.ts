@@ -910,7 +910,43 @@ export interface KeyFace {
   glyph?: string | null
   badge?: string | null
   series?: number[] | null
+  /** The key's icon by name (lib/icons.ts), drawn by the renderer. */
+  symbol?: string | null
 }
+
+/** What the agent knows about a key's live state (`StateSnapshot`). */
+export type StateSnapshot =
+  | { type: "loading" }
+  | {
+      type: "ready"
+      state: {
+        label?: string | null
+        detail?: string | null
+        indicator?: Indicator | null
+        progress?: number | null
+      }
+    }
+  | { type: "failed"; error: { code: string; message: string } }
+
+/** A watched key's state, as the agent reported it. */
+export interface KeyStateEntry {
+  action: string
+  snapshot: StateSnapshot
+}
+
+/** Live states for `preview_layout`: current, or the last known ones (stale). */
+export interface LivePreview {
+  connected: boolean
+  states: KeyStateEntry[]
+}
+
+/** The backend's `key-states` event (commands/key_states.rs). */
+export type KeyStatesEvent = { watch: number } & (
+  | { kind: "snapshot"; live: boolean; states: KeyStateEntry[] }
+  | { kind: "changed"; states: KeyStateEntry[] }
+  | { kind: "disconnected" }
+  | { kind: "unsupported" }
+)
 
 export interface ControlFace {
   control: ControlId
@@ -1009,6 +1045,8 @@ export type AgentCapability =
   | "variables"
   | "workSession"
   | "variableRegistry"
+  | "plugins"
+  | "keyStates"
 
 /** What became of the agent's reload after a save (`commands/reload.rs`). */
 export type AgentReload =

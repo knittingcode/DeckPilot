@@ -152,6 +152,14 @@ pub(crate) enum Command {
     Execution(executions::ExecutionUpdate),
     /// A module's answer for a key's live state.
     ButtonState(states::StateUpdate),
+    /// A connection watches the live states of these actions' keys
+    /// (`watchKeyStates`); none: it stopped or closed.
+    WatchKeyStates {
+        viewer: u64,
+        profile: Option<ProfileId>,
+        actions: Vec<ActionInstanceId>,
+        reply: Option<oneshot::Sender<Response>>,
+    },
     /// The installed plugins or their availability changed: their modules
     /// are registered again.
     PluginsChanged,
@@ -194,6 +202,8 @@ pub struct AgentHandle {
     events: broadcast::Sender<AgentEvent>,
     /// Plugin progress and state (protocol 10, `subscribePluginEvents`).
     plugin_events: broadcast::Sender<deckpilot_ipc::plugins::PluginEvent>,
+    /// Watched key states that changed (protocol 11, `watchKeyStates`).
+    key_states: broadcast::Sender<Vec<deckpilot_ipc::KeyStateEntry>>,
     pub(crate) desktop_clients: Arc<AtomicUsize>,
     work_session: watch::Receiver<deckpilot_core::work_session::WorkSessionSnapshot>,
 }
@@ -215,6 +225,43 @@ impl AgentHandle {
 
     pub fn subscribe(&self) -> broadcast::Receiver<AgentEvent> {
         self.events.subscribe()
+    }
+
+    /// Watches the key states of `actions` of `profile` for the connection
+    /// `viewer` (replacing what it watched); answers with what the keys
+    /// show now.
+    pub async fn watch_key_states(
+        &self,
+        viewer: u64,
+        profile: ProfileId,
+        actions: Vec<ActionInstanceId>,
+    ) -> Result<Response, IpcError> {
+        let (reply, response) = oneshot::channel();
+        self.commands
+            .send(Command::WatchKeyStates {
+                viewer,
+                profile: Some(profile),
+                actions,
+                reply: Some(reply),
+            })
+            .map_err(|_| IpcError::new(ErrorCode::Failed, "agent is shutting down"))?;
+        response
+            .await
+            .map_err(|_| IpcError::new(ErrorCode::Failed, "agent is shutting down"))
+    }
+
+    /// The connection `viewer` closed: its watch ends.
+    pub fn unwatch_key_states(&self, viewer: u64) {
+        let _ = self.commands.send(Command::WatchKeyStates {
+            viewer,
+            profile: None,
+            actions: Vec::new(),
+            reply: None,
+        });
+    }
+
+    pub fn subscribe_key_states(&self) -> broadcast::Receiver<Vec<deckpilot_ipc::KeyStateEntry>> {
+        self.key_states.subscribe()
     }
 
     pub fn subscribe_plugins(&self) -> broadcast::Receiver<deckpilot_ipc::plugins::PluginEvent> {
@@ -356,6 +403,9 @@ pub struct Agent {
     triggers: triggers::Triggers,
     /// Live key states from module providers.
     states: states::ButtonStates,
+    /// What each connection watches with `watchKeyStates`: a profile and
+    /// its actions.
+    key_watches: BTreeMap<u64, (ProfileId, Vec<ActionInstanceId>)>,
     /// Pending key gestures.
     gestures: gestures::Gestures,
     /// Press-time states and hints of stateful keys.
@@ -444,6 +494,7 @@ impl Agent {
             commands: commands_tx,
             events,
             plugin_events: broadcast::channel(256).0,
+            key_states: broadcast::channel(64).0,
             desktop_clients: Arc::new(AtomicUsize::new(0)),
             work_session,
         };
@@ -486,6 +537,7 @@ impl Agent {
             executions: executions::Executions::default(),
             triggers: triggers::Triggers::default(),
             states: states::ButtonStates::default(),
+            key_watches: BTreeMap::new(),
             gestures: gestures::Gestures::default(),
             stateful: stateful::StatefulKeys::default(),
             frames: render::FrameCache::new(FRAME_CACHE),
@@ -675,6 +727,18 @@ impl Agent {
                 self.handle_button_state(update);
                 Flow::Continue
             }
+            Command::WatchKeyStates {
+                viewer,
+                profile,
+                actions,
+                reply,
+            } => {
+                let response = self.watch_key_states(viewer, profile, actions);
+                if let Some(reply) = reply {
+                    let _ = reply.send(response);
+                }
+                Flow::Continue
+            }
             Command::PluginsChanged => {
                 self.plugins_changed();
                 Flow::Continue
@@ -843,6 +907,11 @@ impl Agent {
             | Request::SubscribePluginEvents { .. }
             | Request::Shutdown
             | Request::PrepareForUpdate => Ok(Response::Ok),
+            // Per connection too, through `AgentHandle::watch_key_states`.
+            Request::WatchKeyStates { .. } => Err(IpcError::new(
+                ErrorCode::InvalidRequest,
+                "key states are watched per connection",
+            )),
             other => self.handle_change(other),
         }
     }
@@ -946,6 +1015,7 @@ impl Agent {
             | Request::GetAutostart
             | Request::Subscribe
             | Request::SubscribePluginEvents { .. }
+            | Request::WatchKeyStates { .. }
             | Request::Shutdown
             | Request::PrepareForUpdate
             | Request::GetWorkSession

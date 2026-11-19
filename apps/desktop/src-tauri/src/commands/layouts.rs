@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use deckpilot_core::{
@@ -237,11 +237,48 @@ fn image_size(
     Some((spec.width, spec.height))
 }
 
+/// Live key states for a preview, as the agent reported them
+/// (`watch_key_states`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LivePreview {
+    /// Whether the agent is connected and the states are current; `false`:
+    /// they are the last known ones (or none), shown as stale.
+    pub connected: bool,
+    pub states: Vec<deckpilot_ipc::KeyStateEntry>,
+}
+
+/// `face` of a key running `action` with what the agent reported: its
+/// state as the device shows it; a stale one with a grey dot instead of
+/// its status; a dash for a key whose live value is not known. Keys
+/// without live state stay as they are.
+fn with_live_state(
+    face: KeyFace,
+    action: Option<deckpilot_core::ActionInstanceId>,
+    live: &LivePreview,
+) -> KeyFace {
+    let Some(entry) = action.and_then(|action| live.states.iter().find(|e| e.action == action))
+    else {
+        return face;
+    };
+    let face = face.with_snapshot(&entry.snapshot);
+    if live.connected {
+        return face;
+    }
+    let mut stale = face.with_indicator(deckpilot_core::Indicator::Unknown);
+    if matches!(entry.snapshot, deckpilot_core::StateSnapshot::Loading) {
+        stale.detail = Some("\u{2014}".into());
+    }
+    stale
+}
+
 /// What every control of a (possibly unsaved) layout page shows for a given
 /// project, without a device and without running any action. With
 /// `render`, each face also comes as the image the device would show,
-/// drawn by the agent's renderer.
+/// drawn by the agent's renderer. With `live`, keys show the live states
+/// the agent reported for them (`watch_key_states`).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri passes each argument by name.
 pub fn preview_layout(
     state: State<'_, AppState>,
     profile_id: ProfileId,
@@ -249,6 +286,7 @@ pub fn preview_layout(
     page_id: PageId,
     project_id: Option<ProjectId>,
     render: Option<bool>,
+    live: Option<LivePreview>,
 ) -> CommandResult<Vec<ControlFace>> {
     let store = state.store()?;
     let profile = load_profile(&store, profile_id)?;
@@ -280,6 +318,16 @@ pub fn preview_layout(
     )
     .into_iter()
     .map(|(control, face)| {
+        let face = match &live {
+            Some(live) => {
+                let action = layout
+                    .page(page_id)
+                    .and_then(|page| deckpilot_core::device_runtime::shown_binding(page, control))
+                    .and_then(|binding| binding.target.action_id());
+                with_live_state(face, action, live)
+            }
+            None => face,
+        };
         let image = icons.as_ref().and_then(|icons| {
             let (width, height) = image_size(&model.capabilities, control)?;
             let frame = deckpilot_render::render_with(&face, width, height, icons);

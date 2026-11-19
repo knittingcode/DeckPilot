@@ -209,7 +209,7 @@ export function PluginConfiguration({
                 A secret goes to the agent once and is never shown again, here or anywhere. The
                 plugin never sees it: the agent adds it only to requests to the hosts listed.
               </p>
-              <ul className="grid gap-2" aria-label={`Credentials of ${name}`}>
+              <ul className="grid divide-y border-y" aria-label={`Credentials of ${name}`}>
                 {slots.credentials.map((slot) => (
                   <CredentialRow
                     key={slot.key}
@@ -594,7 +594,7 @@ function CredentialRow({
   }
 
   return (
-    <li className="grid gap-2 rounded-lg border p-3" aria-labelledby={`${id}-label`}>
+    <li className="grid gap-2 py-2.5" aria-labelledby={`${id}-label`}>
       <div className="flex flex-wrap items-center gap-2">
         <span id={`${id}-label`} className="text-sm font-medium">
           {slot.label}

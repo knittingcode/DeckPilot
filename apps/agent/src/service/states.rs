@@ -9,7 +9,8 @@
 //!   [`MAX_RUNNING`] at a time) and report back as
 //!   [`Command::ButtonState`]; the agent task never waits for one.
 //! - **Bounded.** A provider is called for a key only while the key is
-//!   shown on a device, at most once per the policy's minimum interval
+//!   shown on a device or watched by a connection (`watchKeyStates`, e.g.
+//!   the app's preview of the page), at most once per the policy's minimum interval
 //!   (measured between starts), and never while a call for that key is
 //!   still running. Nothing polls per frame: the run loop sleeps until the
 //!   next state is due.
@@ -36,6 +37,9 @@ use deckpilot_core::{
 };
 use deckpilot_device::{ControlId, DeviceId};
 use tracing::debug;
+
+use deckpilot_core::ProfileId;
+use deckpilot_ipc::{KeyStateEntry, Response};
 
 use super::{Agent, Command};
 
@@ -97,6 +101,9 @@ pub(crate) struct ButtonStates {
     entries: BTreeMap<StateKey, Entry>,
     /// Keys with live state on each device's visible page.
     shown: BTreeMap<DeviceId, BTreeSet<StateKey>>,
+    /// Keys watched by connections (`watchKeyStates`), with the active
+    /// project.
+    watched: BTreeSet<StateKey>,
     /// What calls run against; taken from the runtime when needed.
     context: Option<Arc<CallContext>>,
 }
@@ -144,7 +151,21 @@ impl ButtonStates {
     }
 
     fn is_shown(&self, key: &StateKey) -> bool {
-        self.shown.values().any(|keys| keys.contains(key))
+        self.watched.contains(key) || self.shown.values().any(|keys| keys.contains(key))
+    }
+
+    /// Replaces the keys connections watch.
+    pub(crate) fn set_watched(&mut self, keys: BTreeSet<StateKey>) {
+        self.watched = keys;
+    }
+
+    pub(crate) fn is_watched(&self, key: &StateKey) -> bool {
+        self.watched.contains(key)
+    }
+
+    /// What `key` shows now, if it is known.
+    pub(crate) fn snapshot(&self, key: &StateKey) -> Option<StateSnapshot> {
+        self.entries.get(key).map(|entry| entry.snapshot.clone())
     }
 
     /// Something happened (a key press, a project switch, a finished
@@ -354,9 +375,73 @@ impl Agent {
         self.session_faces.set_shown(device, session_keys);
     }
 
+    /// The keys connections watch now: their actions with live state, for
+    /// the active project, when they watch the active profile. Registers
+    /// them like shown keys; returns them with their policy.
+    fn sync_watches(&mut self, now: Instant) -> BTreeSet<StateKey> {
+        let project = self.runtime.active_project_id();
+        let mut keys = BTreeSet::new();
+        if let Some(profile) = self.runtime.profile() {
+            for (watched, actions) in self.key_watches.values() {
+                if *watched != profile.id {
+                    continue;
+                }
+                for action in actions {
+                    if let Some(policy) = self.runtime.engine().state_policy(profile, *action) {
+                        let key = StateKey {
+                            action: *action,
+                            project,
+                        };
+                        self.states.observe(key, policy, now);
+                        keys.insert(key);
+                    }
+                }
+            }
+        }
+        self.states.set_watched(keys.clone());
+        keys
+    }
+
+    /// `watchKeyStates` of the connection `viewer` (no profile: it closed).
+    pub(super) fn watch_key_states(
+        &mut self,
+        viewer: u64,
+        profile: Option<ProfileId>,
+        actions: Vec<ActionInstanceId>,
+    ) -> Response {
+        let watched: BTreeSet<ActionInstanceId> = actions.iter().copied().collect();
+        match profile {
+            Some(profile) if !actions.is_empty() => {
+                self.key_watches.insert(viewer, (profile, actions));
+            }
+            _ => {
+                self.key_watches.remove(&viewer);
+            }
+        }
+        let keys = self.sync_watches(Instant::now());
+        self.refresh_states();
+        let live = profile.is_some()
+            && self.runtime.profile().map(|p| p.id) == profile
+            && self.security == deckpilot_ipc::SecurityState::Unlocked;
+        let states = keys
+            .iter()
+            .filter(|key| watched.contains(&key.action))
+            .filter_map(|key| {
+                Some(KeyStateEntry {
+                    action: key.action,
+                    snapshot: self.states.snapshot(key)?,
+                })
+            })
+            .collect();
+        Response::KeyStates { live, states }
+    }
+
     /// Starts the provider calls that are due.
     pub(super) fn refresh_states(&mut self) {
         let now = Instant::now();
+        if !self.key_watches.is_empty() {
+            self.sync_watches(now);
+        }
         let due = self.states.start_due(now);
         if due.is_empty() {
             return;
@@ -403,7 +488,18 @@ impl Agent {
     }
 
     pub(super) fn handle_button_state(&mut self, update: StateUpdate) {
+        let key = update.key;
         if self.states.finish(update) {
+            // Watching connections learn it before the devices are drawn.
+            if self.states.is_watched(&key)
+                && key.project == self.runtime.active_project_id()
+                && let Some(snapshot) = self.states.snapshot(&key)
+            {
+                let _ = self.handle.key_states.send(vec![KeyStateEntry {
+                    action: key.action,
+                    snapshot,
+                }]);
+            }
             self.render_all();
         } else {
             // A slot became free.

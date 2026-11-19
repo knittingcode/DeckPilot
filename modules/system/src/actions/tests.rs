@@ -594,7 +594,7 @@ fn monitors_report_this_computers_values() {
         .normalize(&ActionParameters::new())
         .unwrap();
     let state = handler.button_state(&parameters, &context).unwrap();
-    assert!(state.detail.unwrap().starts_with("RAM "));
+    assert!(state.detail.unwrap().ends_with(" GiB"));
     assert!(state.indicator.is_some() && state.progress.is_some());
 }
 

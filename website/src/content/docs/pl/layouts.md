@@ -35,13 +35,12 @@ Nie każda akcja działa na każdym elemencie urządzenia. Akcja określa, czy u
 
 ## Strony i foldery
 
-Układ ma postać drzewa stron. Pasek stron pokazuje strony jako karty, ścieżkę do bieżącej strony oraz napis **Page N of M**.
+Układ ma postać drzewa stron. Pod podglądem urządzenia przyciski **Previous page** i **Next page** przechodzą między stronami najwyższego poziomu (tymi, po których poruszają się klawisze Next page i Previous page na urządzeniu), numer strony między nimi otwiera listę wszystkich stron, a **Add page** dodaje stronę najwyższego poziomu i ją pokazuje. W folderze widać tam też ścieżkę do niego i przycisk **Back**.
 
-- Wpisz nazwę w polu **New folder**, aby dodać stronę.
-- Folder otwiera klawisz z przypisaniem **Open** i nazwą strony. Folder bez klawisza **Back** dostaje go automatycznie na pierwszym wolnym klawiszu.
-- **Page name** zmienia nazwę strony, a **Delete page** ją usuwa. Dla strony głównej żadna z tych opcji nie jest dostępna.
+- Folder otwiera klawisz z przypisaniem **Open** i nazwą strony; dwukrotne kliknięcie takiego klawisza otwiera folder. Folder bez klawisza **Back** dostaje go automatycznie na pierwszym wolnym klawiszu.
+- **Manage pages** otwiera ustawienia stron: **Page name** zmienia nazwę strony, a **Delete page** ją usuwa (dla strony głównej żadna z tych opcji nie jest dostępna); w folderze wybierasz też, czy zamyka się po użyciu klawisza.
 
-Panel drzewa stron przesuwa strony w górę i w dół, a polecenie **Move or copy** umieszcza stronę na najwyższym poziomie, wewnątrz innej strony albo w innym układzie. Te operacje są niedostępne, gdy masz niezapisane zmiany: najpierw je zapisz albo odrzuć.
+Drzewo stron w **Manage pages** przesuwa strony w górę i w dół, a polecenie **Move or copy** umieszcza stronę na najwyższym poziomie, wewnątrz innej strony albo w innym układzie. Te operacje są niedostępne, gdy masz niezapisane zmiany: najpierw je zapisz albo odrzuć.
 
 ## Wygląd klawisza
 
@@ -55,9 +54,11 @@ Zaznacz klawisz, do którego coś przypisano, i użyj ustawień wyglądu:
 
 ### Ikony
 
-**Import icon** przyjmuje pliki PNG i JPEG o rozmiarze do 2 MiB. Ikony są skalowane do najwyżej 256 pikseli i przechowywane w profilu, który mieści ich do 64. Ikonę dopasujesz opcjami **Fit**, **Fill** i **Crop**. Używanej ikony nie da się usunąć. DeckPilot nie ma wbudowanego zestawu ikon: biblioteka zawiera to, co zaimportujesz.
+**Import icon** przyjmuje pliki PNG i JPEG o rozmiarze do 2 MiB. Ikony są skalowane do najwyżej 256 pikseli i przechowywane w profilu, który mieści ich do 64. Ikonę dopasujesz opcjami **Fit**, **Fill** i **Crop**. Używanej ikony nie da się usunąć. Biblioteka ikon zawiera to, co zaimportujesz. Klawisz bez zaimportowanej ikony pokazuje ikonę swojej akcji (tę, którą aplikacja pokazuje dla akcji); zaimportowana ikona ją zastępuje.
 
 **Preview with project** pokazuje klawisze tak, jak wyglądają dla wybranego projektu, na przykład z kluczem projektu w etykiecie.
+
+Podgląd pokazuje każdy klawisz tak jak urządzenie, rysowany tym samym rendererem: ikonę akcji, tytuł oraz, dla klawiszy z wartością na żywo, takich jak **CPU usage**, bieżącą wartość odczytaną przez agenta dla urządzenia. Wartości pochodzą od agenta, tylko dla aktywnego profilu i tylko gdy agent działa; wiersz pod nawigacją stron informuje, gdy nie są aktualne.
 
 ## Zapisywanie, cofanie i skróty
 

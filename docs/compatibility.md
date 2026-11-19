@@ -12,12 +12,13 @@ page says what happens then and how it is tested.
 | ----- | ----------------- | ------------ | --------------- |
 | Tag `v0.5.0-2` (signed draft test build, never published) | 0.5.0-2 | 4 | 5 |
 | Releases 0.6.0, 0.7.0, 0.8.0 and 0.8.1 | 0.6.0, 0.7.0, 0.8.0, 0.8.1 | 10 | 9 |
-| Current main (shared layouts) | see `Cargo.toml` | 10 | 10 |
+| Current main (shared layouts) | see `Cargo.toml` | 11 | 10 |
 
 Schema 10 moves layouts, action instances and icons into shared tables
 and rewrites the profile documents (document version 6); see
-[Shared layouts](data-model.md#shared-layouts). The IPC protocol is
-unchanged: the agent reports the layout each device shows in the existing
+[Shared layouts](data-model.md#shared-layouts). Shared layouts need no
+protocol of their own (protocol 11 is the live key states of the device
+editor): the agent reports the layout each device shows in the existing
 `DeviceInfo.layout`, and *Switch layout* and *Back to previous layout* are
 action types of the `deck` module, which need no new request. An app or
 agent of 0.6.0–0.8.1 refuses a schema 10 database before writing anything
@@ -46,7 +47,8 @@ this page means that build.
   protocol (`Capability::of_protocol`): `workflows` and `prepareForUpdate`
   (2), `moduleNamespaces` (3), `encryptedDatabase` (4),
   `backgroundExecutions` (5), `notifications` (6), `variables` (7),
-  `workSession` (8), `variableRegistry` (9). Agents from protocol 6
+  `workSession` (8), `variableRegistry` (9), `plugins` (10), `keyStates`
+  (11). Agents from protocol 6
   also list them in `welcome`; the client never credits an agent with more
   than its protocol has.
 - **No unsupported requests.** Every request has the protocol that

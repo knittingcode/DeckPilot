@@ -261,6 +261,7 @@ fn face(title: &str, detail: Option<&str>, indicator: Option<Indicator>) -> KeyF
         detail: detail.map(str::to_owned),
         indicator,
         ..KeyFace::new(FaceStyle::Action, title)
+            .with_symbol(Some(deckpilot_core::device_runtime::symbols::WORK_SESSION))
     }
 }
 

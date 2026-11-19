@@ -1346,7 +1346,7 @@ pub fn page_faces(
             let mut face = binding.map_or_else(
                 || {
                     if automatic_back == Some(*control) {
-                        KeyFace::new(FaceStyle::Back, "Back")
+                        KeyFace::new(FaceStyle::Back, "Back").with_symbol(Some(symbols::BACK))
                     } else {
                         KeyFace::empty()
                     }
@@ -1373,7 +1373,7 @@ pub fn page_faces(
 
 /// The binding a control's face shows: its press binding, else its
 /// click binding, else the first.
-fn shown_binding(page: &crate::LayoutPage, control: ControlId) -> Option<&ControlBinding> {
+pub fn shown_binding(page: &crate::LayoutPage, control: ControlId) -> Option<&ControlBinding> {
     page.bindings
         .iter()
         .filter(|binding| binding.control == control)
@@ -1430,11 +1430,17 @@ fn face_for(
                 .or(instance.label.as_deref())
                 .unwrap_or(&instance.name);
             let label = render_label(template, &profile.name, project);
+            // The action's own icon, else its type's.
+            let symbol = instance.icon.clone().or_else(|| {
+                registry
+                    .definition(&instance.action_type)
+                    .and_then(|definition| definition.node.icon.clone())
+            });
             // The owning module may add context such as the active project.
             registry
                 .decorate_face(
                     &instance.action_type,
-                    KeyFace::new(FaceStyle::Action, label.clone()),
+                    KeyFace::new(FaceStyle::Action, label.clone()).with_symbol(symbol),
                     &instance.parameters.overlay(overrides),
                     template,
                     project,
@@ -1451,7 +1457,8 @@ fn face_for(
                     &profile.name,
                     project,
                 ),
-            ),
+            )
+            .with_symbol(Some(symbols::WORKFLOW)),
             // A layout shared with a profile that has the workflow.
             None => KeyFace::new(
                 FaceStyle::Notice,
@@ -1466,11 +1473,13 @@ fn face_for(
                 .clone()
                 .or_else(|| layout.page(*page).map(|p| p.name.clone()))
                 .unwrap_or_else(|| "Folder".into()),
-        ),
+        )
+        .with_symbol(Some(symbols::FOLDER)),
         BindingTarget::Back => KeyFace::new(
             FaceStyle::Back,
             binding.label.clone().unwrap_or_else(|| "Back".into()),
-        ),
+        )
+        .with_symbol(Some(symbols::BACK)),
         // The machine's own face (its state) is the agent's; this is the
         // face without it, e.g. in the layout designer's preview.
         BindingTarget::Stateful(stateful) => KeyFace::new(
@@ -1480,8 +1489,20 @@ fn face_for(
                 &profile.name,
                 project,
             ),
-        ),
+        )
+        .with_symbol(Some(match stateful {
+            StatefulBinding::WorkSession { .. } => symbols::WORK_SESSION,
+        })),
     }
+}
+
+/// The icon names of keys that are not actions (see [`KeyFace::symbol`]),
+/// the ones the app shows for them.
+pub mod symbols {
+    pub const FOLDER: &str = "folder";
+    pub const BACK: &str = "arrow-left";
+    pub const WORKFLOW: &str = "list-ordered";
+    pub const WORK_SESSION: &str = "timer";
 }
 
 #[cfg(test)]
@@ -1770,11 +1791,13 @@ mod tests {
         assert_eq!(faces.len(), 15);
         assert_eq!(faces[0].1.title, "No profile");
         assert!(faces[1..].iter().all(|(_, face)| face.is_empty()));
+        assert_eq!(faces[0].1.symbol, None, "notices have no icon");
 
         runtime.set_profile(Some(f.profile), None);
         let faces = runtime.faces(&device());
         assert_eq!(faces[0].1.detail.as_deref(), Some("SHOP"));
         assert_eq!(faces[1].1.style, FaceStyle::Folder);
+        assert_eq!(faces[1].1.symbol.as_deref(), Some(symbols::FOLDER));
         assert!(!faces[2].1.highlighted);
         assert!(faces[3].1.is_empty());
 
@@ -2013,6 +2036,34 @@ mod tests {
             faces[2].1.highlighted,
             "the CMS selector is highlighted for CMS"
         );
+        // A key shows its action's icon, else its type's.
+        let action = layout
+            .page(layout.home_page)
+            .and_then(|page| page.bindings.iter().find(|b| b.control == faces[2].0))
+            .and_then(|binding| binding.target.action_id())
+            .unwrap();
+        let instance = f.profile.action(action).unwrap();
+        let type_icon = registry
+            .definition(&instance.action_type)
+            .and_then(|definition| definition.node.icon.clone());
+        assert_eq!(faces[2].1.symbol, instance.icon.clone().or(type_icon));
+        let mut iconed = f.profile.clone();
+        iconed
+            .actions
+            .iter_mut()
+            .find(|a| a.id == action)
+            .unwrap()
+            .icon = Some("rocket".into());
+        let faces = page_faces(
+            &registry,
+            layout,
+            layout.home_page,
+            &iconed,
+            Some(cms),
+            &controls,
+            None,
+        );
+        assert_eq!(faces[2].1.symbol.as_deref(), Some("rocket"));
         let missing = page_faces(
             &registry,
             layout,
@@ -2329,7 +2380,11 @@ mod tests {
         ));
         // Without the machine's state: its name.
         let faces = runtime.faces(&device());
-        assert_eq!(faces[4].1, KeyFace::new(FaceStyle::Action, "Work Session"));
+        assert_eq!(
+            faces[4].1,
+            KeyFace::new(FaceStyle::Action, "Work Session")
+                .with_symbol(Some(symbols::WORK_SESSION))
+        );
     }
 
     #[test]

@@ -5,7 +5,7 @@ import { toast } from "sonner"
 import { EmptyState, ErrorNotice, Loading } from "@/components/page"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SettingsSection } from "@/components/settings-layout"
 import { useAsync } from "@/hooks/use-async"
 import { api } from "@/lib/api"
 import { failureMessage, toastFailure } from "@/lib/failure"
@@ -48,15 +48,16 @@ export function HistoryCard({
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>History</CardTitle>
-        <CardDescription>
+    <SettingsSection
+      title="History"
+      description={
+        <>
           Sessions kept on this computer, newest first. Gaps longer than the review threshold are
           counted and flagged; exclude one if you did not work then.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
+        </>
+      }
+    >
+      <div className="grid gap-3">
         {history.state.status === "loading" ? (
           <Loading />
         ) : history.state.status === "error" ? (
@@ -73,7 +74,7 @@ export function HistoryCard({
           </EmptyState>
         ) : (
           <div className="grid gap-3">
-            <ul aria-label="Work sessions" className="grid gap-2">
+            <ul aria-label="Work sessions" className="grid divide-y border-y">
               {history.state.data.map((entry) => {
                 const summary = updated[entry.session] ?? entry
                 return (
@@ -103,8 +104,8 @@ export function HistoryCard({
             )}
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   )
 }
 
@@ -127,8 +128,8 @@ function SessionRow({
   const detailsId = `session-${summary.session}`
   const project = summary.project ? projectName(summary.project) : null
   return (
-    <li className="rounded-md border">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2 text-sm">
+    <li>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2 text-sm">
         <Button
           variant="ghost"
           size="sm"

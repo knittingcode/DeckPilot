@@ -168,9 +168,9 @@ function WorkflowsView({
   if (!current && shown === NEW_STEPS) {
     return (
       <div className="grid gap-4">
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/40 p-3">
+        <div className="flex flex-wrap items-center gap-3 border-b pb-3">
           {switcher}
-          <p className="flex-1 text-sm text-muted-foreground">
+          <p className="flex-1 text-caption text-muted-foreground">
             A step workflow runs its actions in order. It can be opened in the graph editor later.
           </p>
         </div>
@@ -190,9 +190,9 @@ function WorkflowsView({
   if (current && !current.graph && !conversions[current.id]) {
     return (
       <div className="grid gap-4">
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/40 p-3">
+        <div className="flex flex-wrap items-center gap-3 border-b pb-3">
           {switcher}
-          <p className="flex-1 text-sm text-muted-foreground">
+          <p className="flex-1 text-caption text-muted-foreground">
             This workflow runs its steps in order. Open it in the graph editor to add branches,
             parallel steps and loops; the steps are kept.
           </p>

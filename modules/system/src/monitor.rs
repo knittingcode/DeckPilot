@@ -158,6 +158,15 @@ pub fn compact_rate(bytes_per_second: f64) -> String {
     format!("{number}{}", RATE_UNITS[unit].to_ascii_uppercase())
 }
 
+/// A size in GiB without decimals from 10 on, e.g. `32` or `7.5`.
+pub fn short_gib(bytes: u64) -> String {
+    let text = gib(bytes);
+    match text.split_once('.') {
+        Some((whole, _)) if whole.len() >= 2 => whole.to_owned(),
+        _ => text,
+    }
+}
+
 /// A size in GiB with one decimal, e.g. `15.8`.
 pub fn gib(bytes: u64) -> String {
     #[allow(clippy::cast_precision_loss)]
@@ -174,12 +183,12 @@ pub struct Report {
     pub state: ButtonState,
 }
 
-/// `system.cpu`: `CPU 37%` with the use as a bar, the recent values as a
+/// `system.cpu`: `37%` under the key's title with the use as a bar, the recent values as a
 /// chart and the level as the indicator.
 pub fn cpu_report(usage: u8, history: &[u8], thresholds: Thresholds) -> Report {
     let level = thresholds.of_use(usage);
     let mut state = ButtonState::new()
-        .with_detail(format!("CPU {usage}%"))
+        .with_detail(format!("{usage}%"))
         .with_indicator(level.indicator())
         .with_progress(usage);
     if history.len() >= 2 {
@@ -202,8 +211,8 @@ pub struct Memory {
     pub total: u64,
 }
 
-/// `system.memory`: `RAM 62%` with the use as a bar; the message adds
-/// used and total GiB.
+/// `system.memory`: used and installed GiB under the key's title, e.g.
+/// `9.9/16 GiB`, with the used share as a bar; the message adds the share.
 ///
 /// # Errors
 ///
@@ -224,7 +233,11 @@ pub fn memory_report(memory: Memory, thresholds: Thresholds) -> Result<Report, S
             ("level", level.as_str().into()),
         ],
         state: ButtonState::new()
-            .with_detail(format!("RAM {used}%"))
+            .with_detail(format!(
+                "{}/{} GiB",
+                gib(memory.used),
+                short_gib(memory.total)
+            ))
             .with_indicator(level.indicator())
             .with_progress(used),
     })
@@ -295,10 +308,12 @@ pub fn network_report(
             ("transmittedPerSecond", whole(transmitted)),
             ("interfaces", names.join(",")),
         ],
-        // Two lines in the narrowest key's eight columns.
-        state: ButtonState::new()
-            .with_label(format!("In {}", compact_rate(received)))
-            .with_detail(format!("Out {}", compact_rate(transmitted))),
+        // Received and sent, one line each under the key's title.
+        state: ButtonState::new().with_detail(format!(
+            "\u{2193} {}\n\u{2191} {}",
+            rate(received),
+            rate(transmitted)
+        )),
     })
 }
 
@@ -345,8 +360,8 @@ pub fn volume_for<'a>(path: &Path, volumes: &'a [Volume]) -> Option<&'a Volume> 
         .map(|(_, volume)| volume)
 }
 
-/// `system.disk`: `45% free` with the used share as a bar and the level of
-/// the free share as the indicator.
+/// `system.disk`: the used share under the key's title, e.g. `55% used`,
+/// also as a bar; the level of the free share is the indicator.
 ///
 /// # Errors
 ///
@@ -369,7 +384,7 @@ pub fn disk_report(volume: &Volume, thresholds: Thresholds) -> Result<Report, St
             ("level", level.as_str().into()),
         ],
         state: ButtonState::new()
-            .with_detail(format!("{free}% free"))
+            .with_detail(format!("{}% used", 100 - free))
             .with_indicator(level.indicator())
             .with_progress(100 - free),
     })

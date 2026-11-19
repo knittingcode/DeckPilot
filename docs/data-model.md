@@ -370,8 +370,8 @@ written before it existed) serialize exactly as before.
 | Field | Values | Default |
 | ----- | ------ | ------- |
 | `background`, `textColor` | `#rrggbb` (either case; stored lower case) | the style's colours |
-| `fontSize` | `small` (the 8 px font), `medium` (8 px, 16 px from 120 px keys), `large` (one step above medium) | `medium` |
-| `titleAlign` | `top`, `middle`, `bottom` | `middle`; `bottom` with an icon |
+| `fontSize` | `small`, `medium`, `large`: 13 %, 15.5 % and 19 % of the key's shorter side (about 9, 11 and 14 px on a 72 px key) | `medium` |
+| `titleAlign` | `top`, `middle`, `bottom`; `middle` draws no icon above the title | `bottom` under an icon (the key's own or the binding's); `middle` without |
 | `showTitle` | `false` hides the title and the secondary line | shown |
 | `icon` | `{ id, fit }`: an icon of the profile; `fit` is `fit` (whole icon, aspect kept, transparent borders), `fill` (stretched to the key), `crop` (covers the key, aspect kept, overflow cut off) | no icon; `fit` |
 
@@ -379,9 +379,18 @@ Invalid colours or values make the layout unreadable and are refused when
 saving; an icon id that is not in the profile is a layout issue. The app
 does not store an appearance that sets nothing.
 
-The key is drawn in this order: background, icon (scaled to the key's image
-size), highlight border, title (in the text colour; with a dark shadow over
-an icon), then the live state marks. The same renderer
+The key is drawn in this order: background, the binding's icon (scaled to
+the key's image size), a live state's chart, the key's mark, title and value
+line (on a translucent band over the binding's icon), the highlight border,
+then the live state marks. The mark is the state's glyph, else the key's
+icon by name (`KeyFace.symbol`: the action's `icon`, else its type's; a
+folder, Back, workflow or work session icon for those keys), drawn from the
+renderer's built-in icons; a name it does not know is drawn as the
+fallback icon (`zap`), as in the app. The binding's own icon wins over
+both. Titles (Inter medium) wrap by width and end with `…` when cut; the
+value line (the face's detail, Inter semibold, at most two lines) is set
+slightly smaller before it is cut; characters outside the font are `?`.
+Stored titles are never changed. The same renderer
 (`crates/deckpilot-render`) draws device images in the agent and previews
 in the app.
 
@@ -421,7 +430,8 @@ App commands (Tauri):
 | `list_icons` | `profileId` | `IconInfo[]`: `id`, `name`, `width`, `height`, `bytes`, `dataUrl` (PNG `data:` URL), `usages` |
 | `import_icon` | `profileId`, `name`, `data` (the file as base64) | `IconInfo` |
 | `delete_icon` | `profileId`, `iconId` | — (refused while in use) |
-| `preview_layout` | as before, plus optional `render` | `ControlFace[]`; with `render: true` each also has `image`, the key as the device shows it (PNG `data:` URL at the model's image size) |
+| `preview_layout` | as before, plus optional `render` and `live` (`{ connected, states: KeyStateEntry[] }`) | `ControlFace[]`; with `render: true` each also has `image`, the key as the device shows it (PNG `data:` URL at the model's image size); with `live` keys show their reported state (stale ones, `connected: false`, with a grey mark; unknown values as `—`) |
+| `watch_key_states` | `profileId`, `actions` (none: stop) | the watch's number; `key-states` events (`snapshot`, `changed`, `disconnected`, `unsupported`) carry it |
 
 ## Shared layouts
 

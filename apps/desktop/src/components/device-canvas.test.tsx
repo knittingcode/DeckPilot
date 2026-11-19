@@ -7,7 +7,8 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { DeviceCanvas } from "./device-canvas"
-import type { DeviceModel } from "@/lib/types"
+import type { ControlId, DeviceModel } from "@/lib/types"
+import { DEVICE_MODELS } from "@/test/fixtures"
 
 const base: DeviceModel = {
   id: "elgato.streamdeck.mk2",
@@ -101,5 +102,98 @@ describe("DeviceCanvas", () => {
     renderCanvas(base)
     const keys = screen.getAllByRole("button", { name: /^Key \d+$/ })
     expect(keys.filter((k) => k.tabIndex === 0)).toHaveLength(1)
+  })
+
+  it("lays out every model from its descriptor", () => {
+    const columns = () =>
+      (document.querySelector("[data-slot=device-keys]") as HTMLElement).style.gridTemplateColumns
+    for (const [model, cols, keys] of [
+      [DEVICE_MODELS.mk2, 5, 15],
+      [DEVICE_MODELS.mini, 3, 6],
+      [DEVICE_MODELS.xl, 8, 32],
+    ] as const) {
+      renderCanvas(model)
+      expect(columns()).toBe(`repeat(${cols}, var(--key))`)
+      expect(screen.getAllByRole("button", { name: /^Key \d+$/ })).toHaveLength(keys)
+      expect(document.querySelector("[data-slot=device-strip]")).toBeNull()
+      expect(document.querySelector("[data-slot=device-dials]")).toBeNull()
+      cleanup()
+    }
+
+    renderCanvas(DEVICE_MODELS.plus)
+    expect(columns()).toBe("repeat(4, var(--key))")
+    const strip = document.querySelector<HTMLElement>("[data-slot=device-strip]")
+    const dials = document.querySelector<HTMLElement>("[data-slot=device-dials]")
+    // The strip and the dials span the four columns of keys.
+    expect(strip?.style.width).toBe("calc(var(--key) * 4.6)")
+    expect(dials?.style.width).toBe("calc(var(--key) * 4.6)")
+    expect(strip?.querySelectorAll("[data-shape=zone]")).toHaveLength(4)
+    expect(dials?.querySelectorAll("[data-shape=dial]")).toHaveLength(4)
+  })
+
+  it("scales everything from the size of one key", () => {
+    render(
+      <DndContext>
+        <DeviceCanvas model={DEVICE_MODELS.mk2} keySize={88} />
+      </DndContext>,
+    )
+    const canvas = screen.getByRole("group", { name: "Stream Deck MK.2 controls" })
+    expect(canvas.style.getPropertyValue("--key")).toBe("88px")
+    expect(canvas.style.padding).toBe("calc(var(--key) * 0.35)")
+    cleanup()
+    // Without a size: the size step, as before.
+    render(
+      <DndContext>
+        <DeviceCanvas model={DEVICE_MODELS.mk2} size="sm" />
+      </DndContext>,
+    )
+    expect(
+      screen
+        .getByRole("group", { name: "Stream Deck MK.2 controls" })
+        .style.getPropertyValue("--key"),
+    ).toBe("2.25rem")
+  })
+
+  it("marks selection, focus and drops without changing the size of a key", () => {
+    const key = (selection: ControlId[]) => {
+      render(
+        <DndContext>
+          <DeviceCanvas model={DEVICE_MODELS.mk2} selection={selection} onSelect={vi.fn()} />
+        </DndContext>,
+      )
+      const classes = screen.getByRole("button", { name: "Key 1" }).className.split(" ")
+      cleanup()
+      return classes
+    }
+    const plain = key([])
+    const selected = key([{ kind: "key", index: 0 }])
+    // A ring (a shadow) for selection, an outline for keyboard focus.
+    expect(selected).toContain("ring-device-selected")
+    expect(plain).not.toContain("ring-device-selected")
+    expect(plain).toContain("focus-visible:outline-device-focus")
+    // Everything that sizes the key is the same.
+    const sizing = (classes: string[]) =>
+      classes.filter((c) => /^(border|border-\d|w-|h-|size-|aspect-|p-|m-|rounded)/.test(c))
+    expect(sizing(selected)).toEqual(sizing(plain))
+    expect(sizing(plain)).toContain("aspect-square")
+    expect(selected.filter((c) => c.startsWith("border-") && /\d$/.test(c))).toEqual([])
+  })
+
+  it("draws the device's key image edge to edge, and neutral empty keys", () => {
+    render(
+      <DndContext>
+        <DeviceCanvas
+          model={DEVICE_MODELS.mk2}
+          images={new Map([["key:0", "data:image/png;base64,AAAA"]])}
+          faces={new Map([["key:1", { style: "empty", title: "" }]])}
+        />
+      </DndContext>,
+    )
+    const image = screen.getByRole("button", { name: "Key 1" }).querySelector("img")
+    expect(image).toHaveClass("size-full", "object-cover")
+    expect(image?.style.imageRendering).toBe("")
+    const empty = screen.getByRole("button", { name: "Key 2" })
+    expect(empty.querySelector("[data-face=empty]")).toBeInTheDocument()
+    expect(empty).toHaveTextContent("")
   })
 })

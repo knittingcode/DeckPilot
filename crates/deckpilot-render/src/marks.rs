@@ -3,8 +3,9 @@
 //!
 //! Everything here is drawn from a typed description at the key's own
 //! resolution: colours come from a fixed palette, glyphs are a closed set
-//! of shapes defined below, the badge uses the built-in bitmap font. No
-//! image, font or markup from a state provider is ever decoded.
+//! of shapes defined below, the badge uses the built-in key font
+//! ([`crate::text`]). No image, font or markup from a state provider is
+//! ever decoded.
 
 use deckpilot_core::{Accent, Glyph};
 use deckpilot_device::Frame;
@@ -142,24 +143,51 @@ fn covers(glyph: Glyph, u: f32, v: f32) -> bool {
     }
 }
 
-/// Where a glyph goes on a key: a square in the upper part, `(x, y, side)`.
+/// Where a glyph goes on a key without a title: a square in the upper
+/// part, `(x, y, side)`.
+#[cfg(test)]
 fn glyph_box(width: u32, height: u32) -> (u32, u32, u32) {
     let side = (width.min(height) * 2 / 5).max(6);
     (width.saturating_sub(side) / 2, (height / 8).max(2), side)
 }
 
-/// Draws `glyph` in the upper part of the key.
-pub(crate) fn draw_glyph(frame: &mut Frame, glyph: Glyph, color: [u8; 3]) {
-    let (x0, y0, side) = glyph_box(frame.width(), frame.height());
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "a key is a few hundred pixels wide at most"
-    )]
-    let unit = |pixel: u32| (pixel as f32 + 0.5) / side as f32;
-    for dy in 0..side {
-        for dx in 0..side {
-            if covers(glyph, unit(dx), unit(dy)) {
-                frame.put(x0 + dx, y0 + dy, color);
+/// Samples per pixel side for anti-aliased shapes.
+const SAMPLES: u16 = 4;
+
+/// Draws `glyph` into the square `(left, top, side)`, anti-aliased.
+#[expect(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a key is a few hundred pixels wide at most"
+)]
+pub(crate) fn draw_glyph_in(
+    frame: &mut Frame,
+    glyph: Glyph,
+    (left, top, side): (f32, f32, f32),
+    color: [u8; 3],
+) {
+    if side < 1.0 {
+        return;
+    }
+    let (x0, y0) = (left.max(0.0).floor() as u32, top.max(0.0).floor() as u32);
+    let (x1, y1) = ((left + side).ceil() as u32, (top + side).ceil() as u32);
+    let total = f32::from(SAMPLES * SAMPLES);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let mut hits = 0u16;
+            for sy in 0..SAMPLES {
+                for sx in 0..SAMPLES {
+                    let px = x as f32 + (f32::from(sx) + 0.5) / f32::from(SAMPLES);
+                    let py = y as f32 + (f32::from(sy) + 0.5) / f32::from(SAMPLES);
+                    let (u, v) = ((px - left) / side, (py - top) / side);
+                    if (0.0..1.0).contains(&u) && (0.0..1.0).contains(&v) && covers(glyph, u, v) {
+                        hits += 1;
+                    }
+                }
+            }
+            if hits > 0 {
+                crate::text::blend_at(frame, x as f32, y as f32, color, f32::from(hits) / total);
             }
         }
     }
@@ -203,40 +231,32 @@ pub(crate) fn draw_series(frame: &mut Frame, series: &[u8], color: [u8; 3]) {
     }
 }
 
-/// Draws `badge` (at most four characters of the built-in font) on a dark
-/// plate in the top left corner, `below` pixels from the top edge.
+/// Draws `badge` (at most four characters) in the key font on a dark plate
+/// in the top left corner, `below` pixels from the top edge.
+#[expect(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a key is a few hundred pixels wide at most"
+)]
 pub(crate) fn draw_badge(frame: &mut Frame, badge: &str, below: u32, text: [u8; 3]) {
-    const CELL: u32 = 8;
     const PLATE: [u8; 3] = [9, 9, 11];
-    let count = u32::try_from(badge.chars().take(4).count()).unwrap_or(0);
-    if count == 0 {
+    let badge: String = badge.chars().filter(|c| !c.is_control()).take(4).collect();
+    if badge.is_empty() {
         return;
     }
-    let scale = if frame.width() >= 120 { 2 } else { 1 };
-    let (x0, y0) = (2, below + 2);
-    let (plate_w, plate_h) = (count * CELL * scale + 2, CELL * scale + 2);
-    for dy in 0..plate_h {
-        for dx in 0..plate_w {
-            frame.put(x0 + dx, y0 + dy, PLATE);
+    let side = frame.width().min(frame.height()) as f32;
+    let style = crate::text::Style::new(crate::text::Weight::SemiBold, (side * 0.13).max(6.0));
+    let pad = (side * 0.03).max(1.0).round();
+    let (x0, y0) = (2.0, below as f32 + 2.0);
+    let plate_w = (style.width(&badge) + 2.0 * pad).ceil();
+    let plate_h = style.line_height().ceil();
+    for dy in 0..plate_h as u32 {
+        for dx in 0..plate_w as u32 {
+            frame.put(x0 as u32 + dx, y0 as u32 + dy, PLATE);
         }
     }
-    for (index, ch) in badge.chars().take(4).enumerate() {
-        let rows = crate::glyphs::glyph(ch);
-        let x = x0 + 1 + u32::try_from(index).unwrap_or(0) * CELL * scale;
-        for (row, bits) in rows.iter().enumerate() {
-            let row = u32::try_from(row).unwrap_or(0);
-            for column in 0..CELL {
-                if bits & (1 << column) == 0 {
-                    continue;
-                }
-                for dy in 0..scale {
-                    for dx in 0..scale {
-                        frame.put(x + column * scale + dx, y0 + 1 + row * scale + dy, text);
-                    }
-                }
-            }
-        }
-    }
+    style.draw(frame, &badge, x0 + pad, y0, text);
 }
 
 #[cfg(test)]
@@ -258,12 +278,17 @@ mod tests {
             let mut seen = std::collections::BTreeSet::new();
             for glyph in Glyph::ALL {
                 let mut frame = Frame::filled(w, h, [0, 0, 0]);
-                draw_glyph(&mut frame, glyph, INK);
-                let lit = count(&frame, INK);
+                let (x0, y0, side) = glyph_box(w, h);
+                #[expect(clippy::cast_precision_loss, reason = "small test sizes")]
+                draw_glyph_in(&mut frame, glyph, (x0 as f32, y0 as f32, side as f32), INK);
+                // Anti-aliased: pixels covered for the most part.
+                let lit = (0..h)
+                    .flat_map(|y| (0..w).map(move |x| (x, y)))
+                    .filter(|(x, y)| frame.pixel(*x, *y).is_some_and(|p| p[0] >= 120))
+                    .count();
                 if w < 16 {
                     continue; // drawn without a panic is all a 1 px key needs
                 }
-                let (x0, y0, side) = glyph_box(w, h);
                 let area = usize::try_from(side * side).unwrap();
                 assert!(lit > area / 12 && lit < area, "{glyph:?} at {w}x{h}: {lit}");
                 // Nothing outside the box.
@@ -317,28 +342,41 @@ mod tests {
 
     #[test]
     fn a_badge_is_a_plate_in_the_top_left_corner() {
-        let mut frame = Frame::filled(72, 72, [50, 50, 50]);
+        let base = [50, 50, 50];
+        let changed = |frame: &Frame| {
+            (0..frame.height())
+                .flat_map(|y| (0..frame.width()).map(move |x| (x, y)))
+                .filter(|(x, y)| frame.pixel(*x, *y) != Some(base))
+                .collect::<Vec<_>>()
+        };
+        let mut frame = Frame::filled(72, 72, base);
         draw_badge(&mut frame, "12", 0, INK);
-        assert!(count(&frame, INK) > 10);
-        // Two cells wide, in the corner, nothing elsewhere.
-        for y in 0..72 {
-            for x in 0..72 {
-                let plate = (2..20).contains(&x) && (2..12).contains(&y);
-                assert!(plate || frame.pixel(x, y) == Some([50, 50, 50]), "{x},{y}");
-            }
-        }
+        let marked = changed(&frame);
+        // A plate with text on it, in the corner and nothing elsewhere.
+        assert!(count(&frame, [9, 9, 11]) > 40);
+        assert!(marked.iter().any(|(x, y)| {
+            let p = frame.pixel(*x, *y).unwrap();
+            p[0] > 150
+        }));
+        assert!(marked.iter().all(|(x, y)| *x < 30 && *y < 16), "{marked:?}");
+        assert!(marked.iter().all(|(x, y)| *x >= 2 && *y >= 2));
+        // Below the toggle mark when asked to.
+        let mut lower = Frame::filled(72, 72, base);
+        draw_badge(&mut lower, "12", 3, INK);
+        assert!(changed(&lower).iter().all(|(_, y)| *y >= 5));
         // More than four characters are not drawn; characters outside the
         // font are `?`; an empty badge is nothing.
-        let mut long = Frame::filled(72, 72, [50, 50, 50]);
+        let (mut long, mut four) = (Frame::filled(72, 72, base), Frame::filled(72, 72, base));
         draw_badge(&mut long, "123456789", 0, INK);
-        assert_eq!(long.pixel(40, 6), Some([50, 50, 50]));
-        let (mut odd, mut question) = (frame.clone(), frame.clone());
+        draw_badge(&mut four, "1234", 0, INK);
+        assert_eq!(long.rgb(), four.rgb());
+        let (mut odd, mut question) = (Frame::filled(72, 72, base), Frame::filled(72, 72, base));
         draw_badge(&mut odd, "\u{1F600}", 0, INK);
         draw_badge(&mut question, "?", 0, INK);
         assert_eq!(odd.rgb(), question.rgb());
-        let mut empty = Frame::filled(72, 72, [50, 50, 50]);
+        let mut empty = Frame::filled(72, 72, base);
         draw_badge(&mut empty, "", 0, INK);
-        assert_eq!(count(&empty, [50, 50, 50]), 72 * 72);
+        assert_eq!(count(&empty, base), 72 * 72);
         // A key too small for it: clipped, no panic.
         draw_badge(&mut Frame::filled(4, 4, [0, 0, 0]), "9999", 3, INK);
     }

@@ -24,6 +24,7 @@ import type {
 import { catalogDragId } from "./catalog"
 import { LayoutEditor } from "./editor"
 import { NEW_FOLDER_DRAG_ID } from "./library-panel"
+import { pageNames } from "@/test/pages"
 
 Element.prototype.hasPointerCapture = () => false
 Element.prototype.releasePointerCapture = () => undefined
@@ -305,7 +306,7 @@ describe("key logic in the layout editor", { timeout: 20_000 }, () => {
     // and no folder was made.
     expect(describes("Key 3")).toBe("Key 3")
     expect(describes("Key 1")).toBe("Key 1: Press: Shop")
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Home", "Tools"])
+    expect(await pageNames(user)).toEqual(["Home", "Tools"])
     expect(slots()).toEqual(["empty", "empty", "empty"])
   })
 
