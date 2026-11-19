@@ -149,6 +149,12 @@ jobs:
         run: rustup toolchain install
       - name: WebAssembly target (bundled plugins)
         run: rustup target add wasm32-unknown-unknown
+      # rust-cache hashes every installed toolchain into its key; without
+      # this, a runner whose image preinstalls a newer stable misses main's
+      # cache (tools/ci/rust-pinned-toolchain.sh).
+      - name: Only the pinned Rust toolchain
+        shell: bash
+        run: tools/ci/rust-pinned-toolchain.sh
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: package-linux
@@ -299,6 +305,12 @@ jobs:
       - name: WebAssembly target (bundled plugins)
         shell: bash
         run: rustup target add wasm32-unknown-unknown
+      # rust-cache hashes every installed toolchain into its key; without
+      # this, a runner whose image preinstalls a newer stable misses main's
+      # cache (tools/ci/rust-pinned-toolchain.sh).
+      - name: Only the pinned Rust toolchain
+        shell: bash
+        run: tools/ci/rust-pinned-toolchain.sh
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: package-windows
@@ -398,6 +410,12 @@ jobs:
         run: rustup toolchain install
       - name: WebAssembly target (bundled plugins)
         run: rustup target add wasm32-unknown-unknown
+      # rust-cache hashes every installed toolchain into its key; without
+      # this, a runner whose image preinstalls a newer stable misses main's
+      # cache (tools/ci/rust-pinned-toolchain.sh).
+      - name: Only the pinned Rust toolchain
+        shell: bash
+        run: tools/ci/rust-pinned-toolchain.sh
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: package-macos

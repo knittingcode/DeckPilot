@@ -54,6 +54,8 @@ expect "dev_tools=false keystore=false packaging=true release_manifest=false" cr
 expect "dev_tools=false keystore=true packaging=false release_manifest=false" crates/deckpilot-keystore/src/lib.rs
 expect "dev_tools=false keystore=true packaging=false release_manifest=true" tools/ci/with-keyring.sh
 expect "dev_tools=false keystore=false packaging=true release_manifest=true" tools/ci/check-packages.sh
+# The toolchain step the package checks run before their Rust cache.
+expect "dev_tools=false keystore=false packaging=true release_manifest=true" tools/ci/rust-pinned-toolchain.sh
 expect "dev_tools=false keystore=false packaging=true release_manifest=true" .github/workflows/release.yml
 expect "dev_tools=false keystore=false packaging=false release_manifest=true" tools/release-pipeline/common.sh
 expect "dev_tools=false keystore=false packaging=false release_manifest=true" crates/deckpilot-update/src/lib.rs

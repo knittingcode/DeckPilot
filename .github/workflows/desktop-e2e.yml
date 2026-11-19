@@ -28,6 +28,7 @@ on:
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
       - rust-toolchain.toml
+      - tools/ci/rust-pinned-toolchain.sh
       - .github/workflows/desktop-e2e.yml
   pull_request:
     paths:
@@ -42,6 +43,7 @@ on:
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
       - rust-toolchain.toml
+      - tools/ci/rust-pinned-toolchain.sh
       - .github/workflows/desktop-e2e.yml
   workflow_dispatch:
 
@@ -98,6 +100,12 @@ jobs:
           rustup toolchain install
           rustup target add wasm32-unknown-unknown
           rustc --version
+      # rust-cache hashes every installed toolchain into its key; without
+      # this, a runner whose image preinstalls a newer stable misses main's
+      # cache (tools/ci/rust-pinned-toolchain.sh).
+      - name: Only the pinned Rust toolchain
+        shell: bash
+        run: tools/ci/rust-pinned-toolchain.sh
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: |

@@ -10,7 +10,9 @@
 use std::path::Path;
 
 use deckpilot_plugin_manifest::Manifest;
-use deckpilot_plugin_package::{ARTIFACT, BuiltPackage, LICENSE, MANIFEST, PackageBuilder};
+use deckpilot_plugin_package::{
+    ARTIFACT, BuiltPackage, LICENSE, MANIFEST, PackageBuilder, check_entry_path,
+};
 
 use super::{PublishError, Result};
 
@@ -37,6 +39,9 @@ pub fn package(plugin_dir: &Path, module: &Path, first_party: bool) -> Result<Bu
     add(&mut builder, LICENSE, read(&plugin_dir.join(LICENSE))?)?;
     add(&mut builder, ARTIFACT, read(module)?)?;
     for file in manifest.referenced_files() {
+        // The path rules first: a path such as `assets/../../x` must be
+        // refused before anything outside the plugin directory is read.
+        check_entry_path(file).map_err(|e| PublishError(e.to_string()))?;
         add(&mut builder, file, read(&plugin_dir.join(file))?)?;
     }
     if first_party {
