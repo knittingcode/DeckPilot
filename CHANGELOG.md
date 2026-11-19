@@ -46,6 +46,41 @@ released either. 0.6.0 is the first version intended for publication.
 - The navigation rail is always collapsed to icons, with each page's name
   as a tooltip and a clearer mark on the current page. The toolbar's sidebar
   toggle and the ⌘B / Ctrl+B shortcut are gone.
+- The encrypted storage now uses SQLCipher 4.20 (through rusqlite 0.42),
+  previously 4.19. The file format and key derivation settings are
+  unchanged, so existing databases open as before. The compatibility test
+  opens a database written by 0.8.0 with the new build, and a database
+  written by the new build with 0.8.0.
+- Keys on the device and in the editor's preview are drawn with the Inter
+  font instead of the pixel font, and show their action's icon above the
+  title (the icon the app shows for it; an imported icon still replaces
+  it). Polish letters keep working.
+- The device editor's preview is centred and scales with the window. Page
+  navigation (previous, page, next, add page) sits directly under it;
+  renaming, deleting, the page tree and Move or Copy are in Manage pages.
+- The editor's Action Library uses compact rows with category headings; a
+  drag shows the action's icon and name.
+- System monitor keys show their value under the title: `23%`,
+  `12.4/32 GiB`, `↓ 2.1 MB/s` / `↑ 340 kB/s`, `68% used`.
+
+### Added
+
+- The editor's preview shows live values (e.g. CPU usage) as the device
+  does, read by the agent; it says when values are stale or unavailable.
+  IPC protocol 11 (`watchKeyStates`); older agents and apps keep working
+  without it.
+
+### Fixed
+
+- Windows: the settings window, and any other window opened from the app
+  (export, import, logs), was created but never shown, so Settings could not
+  be opened and no profile could be created. Opening a window no longer
+  blocks the thread the window needs.
+
+### Security
+
+- Key fonts are read with skrifa (maintained) rather than ttf-parser
+  (unmaintained, RUSTSEC-2026-0192).
 
 ## [0.8.1] - 2026-11-19
 
